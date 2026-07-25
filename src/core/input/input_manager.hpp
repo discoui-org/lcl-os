@@ -44,45 +44,61 @@ public:
     InputManager& operator=(InputManager&&) noexcept;
 
     /**
-     * @brief Initialize libinput using udev seat (requires udevd) or fallback
-     *        to libinput path backend which directly opens /dev/input/eventX nodes.
+     * @brief Initialize input subsystem. Tries libinput (udev) first,
+     *        then falls back to raw Linux evdev (no udev required).
      * @param seatName Seat identifier (default: "seat0")
-     * @return true if initialized successfully, false otherwise
+     * @return true if any input backend initialized successfully
      */
     bool initialize(const std::string& seatName = "seat0");
 
-    /**
-     * @brief Register callback for input event notifications.
-     */
     void setEventCallback(EventCallback cb) { m_eventCallback = std::move(cb); }
 
     /**
-     * @brief Poll and process pending input events from evdev.
-     * @param screenWidth Current screen width for absolute coordinate transformation
-     * @param screenHeight Current screen height for absolute coordinate transformation
+     * @brief Poll and process pending input events.
+     * @param screenWidth  Screen width for absolute coordinate scaling
+     * @param screenHeight Screen height for absolute coordinate scaling
      * @return Number of events dispatched
      */
     size_t dispatchEvents(int screenWidth = 1024, int screenHeight = 768);
 
-    /**
-     * @brief Release libinput and udev resources.
-     */
     void shutdown();
 
     bool isInitialized() const { return m_initialized; }
     int getFD() const;
 
 private:
-    bool initWithUdev(const std::string& seatName);
-    bool initWithPathBackend();
+    bool initWithLibinputUdev(const std::string& seatName);
+    bool initWithEvdev();
+
+    size_t dispatchLibinputEvents(int screenWidth, int screenHeight);
+    size_t dispatchEvdevEvents(int screenWidth, int screenHeight);
+
     void cleanup();
 
+    // libinput backend
     struct udev* m_udev{nullptr};
     struct libinput* m_libinput{nullptr};
+
+    // Raw evdev backend
+    struct EvdevDevice {
+        int fd{-1};
+        std::string path;
+        std::string name;
+        bool hasRelX{false};
+        bool hasRelY{false};
+        bool hasAbsX{false};
+        bool hasAbsY{false};
+        int absXMin{0}, absXMax{1};
+        int absYMin{0}, absYMax{1};
+        int pendingAbsX{-1};
+        int pendingAbsY{-1};
+    };
+    std::vector<EvdevDevice> m_evdevDevices;
+
     std::string m_seatName;
     EventCallback m_eventCallback;
     bool m_initialized{false};
-    bool m_usingPathBackend{false};
+    bool m_usingEvdev{false};
 };
 
 } // namespace lcl::core
