@@ -91,8 +91,10 @@ private:
         bool hasAbsY{false};
         int absXMin{0}, absXMax{1};
         int absYMin{0}, absYMax{1};
-        int pendingAbsX{-1};
-        int pendingAbsY{-1};
+        int currentAbsX{-1};
+        int currentAbsY{-1};
+        bool absXUpdated{false};
+        bool absYUpdated{false};
     };
     std::vector<EvdevDevice> m_evdevDevices;
 

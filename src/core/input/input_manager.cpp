@@ -283,21 +283,33 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                 }
                 count++;
             } else if (ev.type == EV_ABS) {
-                if (ev.code == ABS_X) dev.pendingAbsX = ev.value;
-                if (ev.code == ABS_Y) dev.pendingAbsY = ev.value;
+                if (ev.code == ABS_X) {
+                    dev.currentAbsX = ev.value;
+                    dev.absXUpdated = true;
+                }
+                if (ev.code == ABS_Y) {
+                    dev.currentAbsY = ev.value;
+                    dev.absYUpdated = true;
+                }
             } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
-                if (dev.pendingAbsX >= 0 && dev.hasAbsX) {
+                if ((dev.absXUpdated || dev.absYUpdated) && (dev.hasAbsX || dev.hasAbsY)) {
                     InputEvent outEv{};
                     outEv.type = InputEventType::PointerMotion;
                     outEv.deviceName = dev.name;
-                    outEv.absoluteX = static_cast<double>(dev.pendingAbsX - dev.absXMin) /
-                                      (dev.absXMax - dev.absXMin) * screenWidth;
-                    outEv.absoluteY = dev.pendingAbsY >= 0 ?
-                                      (static_cast<double>(dev.pendingAbsY - dev.absYMin) /
-                                       (dev.absYMax - dev.absYMin) * screenHeight) : -1.0;
+
+                    double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
+                    double rangeY = static_cast<double>(dev.absYMax - dev.absYMin);
+                    if (rangeX <= 0.0) rangeX = 1.0;
+                    if (rangeY <= 0.0) rangeY = 1.0;
+
+                    outEv.absoluteX = (dev.currentAbsX >= 0) ?
+                        (static_cast<double>(dev.currentAbsX - dev.absXMin) / rangeX * screenWidth) : -1.0;
+                    outEv.absoluteY = (dev.currentAbsY >= 0) ?
+                        (static_cast<double>(dev.currentAbsY - dev.absYMin) / rangeY * screenHeight) : -1.0;
+
                     if (m_eventCallback) m_eventCallback(outEv);
-                    dev.pendingAbsX = -1;
-                    dev.pendingAbsY = -1;
+                    dev.absXUpdated = false;
+                    dev.absYUpdated = false;
                     count++;
                 }
             } else if (ev.type == EV_KEY) {
