@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -584,6 +586,137 @@ def build_only(force_docker: bool = False) -> None:
     log(f"Build complete: {BINARY}")
 
 
+def _clamp_hz(value: float | int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        hz = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+    if 30 <= hz <= 500:
+        return hz
+    return None
+
+
+def detect_host_refresh_rate() -> int:
+    """Best-effort primary display refresh rate. Falls back to 60 Hz."""
+    system = host_os()
+
+    if system == "darwin":
+        try:
+            out = subprocess.check_output(
+                ["system_profiler", "SPDisplaysDataType", "-json"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            data = json.loads(out)
+            rates: list[int] = []
+            for gpu in data.get("SPDisplaysDataType", []):
+                for disp in gpu.get("spdisplays_ndrvs", []) or []:
+                    blob = " ".join(str(v) for v in disp.values())
+                    for match in re.finditer(r"@\s*([0-9]+(?:\.[0-9]+)?)\s*Hz", blob, re.I):
+                        hz = _clamp_hz(match.group(1))
+                        if hz:
+                            rates.append(hz)
+                    for key in ("spdisplays_main",):
+                        if disp.get(key) == "spdisplays_yes" and rates:
+                            return rates[-1]
+            if rates:
+                return max(rates)
+        except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError, OSError):
+            pass
+
+    if system == "linux":
+        # xrandr: "1920x1080     60.00*+  144.00"
+        if which("xrandr"):
+            try:
+                out = subprocess.check_output(["xrandr"], text=True, stderr=subprocess.DEVNULL)
+                current = None
+                for line in out.splitlines():
+                    if "*" in line:
+                        nums = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*\*", line)
+                        if nums:
+                            hz = _clamp_hz(nums[0])
+                            if hz:
+                                current = hz
+                                break
+                        nums = re.findall(r"\b([0-9]+(?:\.[0-9]+)?)\b", line)
+                        for n in nums:
+                            if "." in n or (n.isdigit() and 30 <= int(n) <= 500):
+                                hz = _clamp_hz(n)
+                                if hz:
+                                    current = hz
+                    if current is not None:
+                        return current
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+                pass
+        # DRM connector modes often end with refresh like "1920x1080@144"
+        try:
+            drm = Path("/sys/class/drm")
+            if drm.is_dir():
+                for mode_file in sorted(drm.glob("card*-*/modes")):
+                    status = mode_file.parent / "status"
+                    if status.is_file() and status.read_text().strip() != "connected":
+                        continue
+                    modes = mode_file.read_text().splitlines()
+                    if not modes:
+                        continue
+                    # First mode is usually preferred/current
+                    m = re.search(r"@([0-9]+)", modes[0])
+                    if m:
+                        hz = _clamp_hz(m.group(1))
+                        if hz:
+                            return hz
+        except OSError:
+            pass
+
+    if system == "windows":
+        ps = which("powershell") or which("pwsh")
+        if ps:
+            ps_script = r"""
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class LclDisplay {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Ansi)]
+  public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dmDeviceName;
+    public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+    public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+    public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dmFormName;
+    public short dmLogPixels;
+    public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+    public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2;
+    public int dmPanningWidth, dmPanningHeight;
+  }
+  [DllImport("user32.dll", CharSet=CharSet.Ansi)]
+  public static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
+  public static int Hz() {
+    var dm = new DEVMODE();
+    dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+    return EnumDisplaySettings(null, -1, ref dm) ? dm.dmDisplayFrequency : 0;
+  }
+}
+"@
+[LclDisplay]::Hz()
+"""
+            try:
+                out = subprocess.check_output(
+                    [ps, "-NoProfile", "-Command", ps_script],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                    timeout=15,
+                )
+                hz = _clamp_hz(out.strip().splitlines()[-1].strip())
+                if hz:
+                    return hz
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError, subprocess.TimeoutExpired):
+                pass
+
+    return 60
+
+
 def launch_qemu(kernel: Path) -> None:
     qemu = find_qemu()
     if not INITRAMFS_IMG.is_file():
@@ -595,6 +728,7 @@ def launch_qemu(kernel: Path) -> None:
 
     memory = "2G"
     cpus = "2"
+    refresh_hz = detect_host_refresh_rate()
     kvm = Path("/dev/kvm")
     if kvm.exists() and os.access(kvm, os.R_OK | os.W_OK):
         accel = ["-enable-kvm", "-cpu", "host"]
@@ -613,11 +747,13 @@ def launch_qemu(kernel: Path) -> None:
     print("  Launching QEMU Virtual Machine:")
     print(f"  - Memory: {memory}")
     print(f"  - SMP Cores: {cpus}")
+    print(f"  - Host refresh: {refresh_hz} Hz")
     print(f"  - Accelerator: {' '.join(accel)}")
     print(f"  - GPU: {gpu[1]}")
     print(f"  - Display: {display[1]}")
     print("----------------------------------------------------")
 
+    video_mode = f"video=1280x800-32@{refresh_hz}"
     cmd = [
         qemu,
         *accel,
@@ -626,7 +762,7 @@ def launch_qemu(kernel: Path) -> None:
         "-initrd",
         str(INITRAMFS_IMG),
         "-append",
-        "console=tty0 console=ttyS0,115200 video=1280x800-32@144 earlyprintk=ttyS0 rdinit=/init quiet loglevel=3",
+        f"console=tty0 console=ttyS0,115200 {video_mode} earlyprintk=ttyS0 rdinit=/init quiet loglevel=3",
         "-m",
         memory,
         "-smp",
