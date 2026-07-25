@@ -13,12 +13,10 @@ echo "===================================================="
 echo "  LCL Core Linux - QEMU Isolated Boot Launcher      "
 echo "===================================================="
 
-# 1. Build LCL Core binary if missing
-if [ ! -f "${BINARY}" ]; then
-    echo "[LCL QEMU] Building lcl-core binary..."
-    cmake -B "${BUILD_DIR}" -S "${ROOT_DIR}" -DCMAKE_BUILD_TYPE=Debug
-    cmake --build "${BUILD_DIR}"
-fi
+# 1. Build LCL Core binary (always ensure latest binary is compiled)
+echo "[LCL QEMU] Building lcl-core binary..."
+cmake -B "${BUILD_DIR}" -S "${ROOT_DIR}" -DCMAKE_BUILD_TYPE=Debug
+cmake --build "${BUILD_DIR}"
 
 QEMU_BIN=$(which qemu-system-x86_64 2>/dev/null || true)
 if [ -z "${QEMU_BIN}" ]; then
@@ -58,9 +56,23 @@ mkdir -p "${INITRAMFS_DIR}"/{proc,sys,dev,tmp,etc,usr/bin,usr/lib,usr/share,home
 [ ! -L "${INITRAMFS_DIR}/lib" ] && ln -s usr/lib "${INITRAMFS_DIR}/lib"
 [ ! -L "${INITRAMFS_DIR}/lib64" ] && ln -s usr/lib "${INITRAMFS_DIR}/lib64"
 
-# Copy lcl-core, sh, and essential init utilities
+# Copy lcl-core, sh, bash, and essential init utilities
 cp "${BINARY}" "${INITRAMFS_DIR}/usr/bin/lcl-core"
 [ -f /bin/sh ] && cp -L /bin/sh "${INITRAMFS_DIR}/usr/bin/sh"
+
+# Package GNU Bash + readline + ncurses for full interactive terminal support
+echo "[LCL QEMU] Packaging GNU Bash with readline/ncurses..."
+BASH_BIN="$(which bash 2>/dev/null || echo /usr/bin/bash)"
+if [ -f "${BASH_BIN}" ]; then
+    cp -L "${BASH_BIN}" "${INITRAMFS_DIR}/usr/bin/bash"
+    # Copy all bash shared library dependencies
+    ldd "${BASH_BIN}" 2>/dev/null | awk '{print $3}' | grep '^/' | while read lib; do
+        [ -f "$lib" ] && cp -L "$lib" "${INITRAMFS_DIR}/usr/lib/" 2>/dev/null || true
+    done
+else
+    echo "[LCL QEMU] WARNING: bash not found on host!"
+fi
+
 [ -f /bin/mount ] && cp -L /bin/mount "${INITRAMFS_DIR}/usr/bin/mount"
 [ -f /bin/mkdir ] && cp -L /bin/mkdir "${INITRAMFS_DIR}/usr/bin/mkdir"
 [ -f /bin/sleep ] && cp -L /bin/sleep "${INITRAMFS_DIR}/usr/bin/sleep"
@@ -68,6 +80,7 @@ cp "${BINARY}" "${INITRAMFS_DIR}/usr/bin/lcl-core"
 [ -f /usr/bin/printf ] && cp -L /usr/bin/printf "${INITRAMFS_DIR}/usr/bin/printf"
 [ -f /sbin/modprobe ] && cp -L /sbin/modprobe "${INITRAMFS_DIR}/usr/bin/modprobe"
 [ -d /usr/share/libinput ] && cp -r /usr/share/libinput "${INITRAMFS_DIR}/usr/share/" 2>/dev/null || true
+
 
 # Ensure font assets exist (auto-fetch if missing)
 if [ ! -d "${ROOT_DIR}/assets/fonts/inter" ] || [ -z "$(ls -A "${ROOT_DIR}/assets/fonts/inter" 2>/dev/null)" ]; then
@@ -89,16 +102,34 @@ printf "\033[2J\033[H"
 EOF
 chmod +x "${INITRAMFS_DIR}/usr/bin/clear"
 
-# Provision /etc/profile and /home/user/.shrc with Chevron Prompt
+# Provision /etc/profile for bash login shell
 cat << 'EOF' > "${INITRAMFS_DIR}/etc/profile"
 export HOME=/home/user
-export TERM=linux
-export PS1='\W ❯ '
-export ENV=/home/user/.shrc
+export TERM=xterm-256color
+export HISTSIZE=500
+export HISTFILESIZE=1000
 alias ls='ls --color=auto'
 alias ll='ls -la'
+if [ -f /home/user/.bashrc ]; then
+    . /home/user/.bashrc
+fi
 EOF
 
+# .bashrc — loaded for interactive bash sessions (chevron PS1 + readline)
+cat << 'EOF' > "${INITRAMFS_DIR}/home/user/.bashrc"
+export TERM=xterm-256color
+export PS1='\[\033[1;34m\]\W\[\033[0m\] ❯ '
+export HISTSIZE=500
+alias ls='ls --color=auto'
+alias ll='ls -la'
+# Bash readline settings
+bind 'set completion-ignore-case on' 2>/dev/null || true
+bind 'set show-all-if-ambiguous on' 2>/dev/null || true
+bind 'TAB:menu-complete' 2>/dev/null || true
+bind '"\e[Z":menu-complete-backward' 2>/dev/null || true
+EOF
+
+# Legacy .shrc for sh fallback
 cat << 'EOF' > "${INITRAMFS_DIR}/home/user/.shrc"
 export PS1='\W ❯ '
 alias ls='ls --color=auto'
@@ -106,9 +137,7 @@ alias ll='ls -la'
 EOF
 
 cat << 'EOF' > "${INITRAMFS_DIR}/home/user/.profile"
-export PS1='\W ❯ '
-alias ls='ls --color=auto'
-alias ll='ls -la'
+. /home/user/.bashrc
 EOF
 
 # Copy native C++ lcl-open tool as /usr/bin/open

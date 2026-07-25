@@ -437,8 +437,12 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
             int maxX = win.x + win.width - 12;
             int maxY = win.y + win.height - 12;
 
-            int maxCols = std::max(1, (maxX - minX) / 8);
-            int maxRows = std::max(1, (maxY - minY) / 16);
+            int fontCellWidth = m_fontRenderer.isInitialized() ? m_fontRenderer.getCellWidth() : 8;
+            int fontCellHeight = m_fontRenderer.isInitialized() ? m_fontRenderer.getCellHeight() : 16;
+            int lineSpacing = fontCellHeight + 2;
+
+            int maxCols = std::max(1, (maxX - minX) / fontCellWidth);
+            int maxRows = std::max(1, (maxY - minY) / lineSpacing);
 
             // Auto-wrap lines that exceed maxCols
             std::vector<std::string> wrappedLines;
@@ -458,44 +462,64 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
             int lastLineY = minY;
             std::string lastLineText;
 
-            for (size_t l = startLine; l < wrappedLines.size() && curY + 16 <= maxY; ++l) {
+            for (size_t l = startLine; l < wrappedLines.size() && curY + fontCellHeight <= maxY; ++l) {
                 drawStringClipped(minX, curY, wrappedLines[l], 0xFFA6E3A1, minX, minY, maxX, maxY);
                 lastLineY = curY;
                 lastLineText = wrappedLines[l];
-                curY += 18;
+                curY += lineSpacing;
             }
 
-            std::string cursorPrefixText = lastLineText;
-            if (contentPtr->cursorCol >= 0 && contentPtr->cursorCol <= static_cast<int>(lastLineText.size())) {
-                cursorPrefixText = lastLineText.substr(0, contentPtr->cursorCol);
+            // --- 500ms Blinking Text Cursor (Font-Agnostic Inverted Block Cursor) ---
+            int caretByteOffset = contentPtr->cursorCol;
+            std::string caretPrefix;
+            std::string charUnderCursor;
+
+            if (caretByteOffset >= 0 && caretByteOffset <= static_cast<int>(lastLineText.size())) {
+                int safeOffset = caretByteOffset;
+                while (safeOffset > 0 && safeOffset < static_cast<int>(lastLineText.size()) &&
+                       (static_cast<unsigned char>(lastLineText[safeOffset]) & 0xC0) == 0x80) {
+                    --safeOffset;
+                }
+                caretPrefix = lastLineText.substr(0, safeOffset);
+
+                if (safeOffset < static_cast<int>(lastLineText.size())) {
+                    unsigned char firstByte = lastLineText[safeOffset];
+                    size_t charLen = 1;
+                    if      ((firstByte & 0xE0) == 0xC0) charLen = 2;
+                    else if ((firstByte & 0xF0) == 0xE0) charLen = 3;
+                    else if ((firstByte & 0xF8) == 0xF0) charLen = 4;
+
+                    if (safeOffset + charLen <= lastLineText.size()) {
+                        charUnderCursor = lastLineText.substr(safeOffset, charLen);
+                    }
+                }
+            } else {
+                caretPrefix = lastLineText;
             }
 
-            int charWidth = 9; // JetBrains Mono character width
-            int charHeight = 16;
-            int prefixPixelWidth = m_fontRenderer.isInitialized() ?
-                                  m_fontRenderer.getTextWidth(cursorPrefixText) :
-                                  static_cast<int>(cursorPrefixText.size()) * charWidth;
-            int endPixelWidth = m_fontRenderer.isInitialized() ?
-                                m_fontRenderer.getTextWidth(lastLineText) :
-                                static_cast<int>(lastLineText.size()) * charWidth;
-
-            int caretX = minX + prefixPixelWidth;
+            int caretPixelX = m_fontRenderer.isInitialized()
+                ? m_fontRenderer.getTextWidth(caretPrefix)
+                : static_cast<int>(caretPrefix.size()) * fontCellWidth;
+            int caretX = minX + caretPixelX;
             int caretY = lastLineY;
-            int endX = minX + endPixelWidth;
 
-            // Render Ghost Text Auto-Suggestion at end of prompt (faint slate gray: 0x8094A3B8)
-            if (!contentPtr->suggestion.empty()) {
-                drawStringClipped(endX, caretY, contentPtr->suggestion, 0x8094A3B8, minX, minY, maxX, maxY);
-            }
-
-            // Interactive 500ms Blinking Text Cursor (macOS/Terminal style)
             auto now = std::chrono::steady_clock::now();
             auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
             bool showCursor = (millis / 500) % 2 == 0;
 
             if (showCursor && !wrappedLines.empty()) {
-                if (caretX + charWidth <= maxX && caretY + charHeight <= maxY) {
-                    drawFilledRect(caretX, caretY, charWidth, charHeight, 0xCCF3F4F6);
+                int cursorBoxWidth = (!charUnderCursor.empty() && m_fontRenderer.isInitialized())
+                    ? std::max(4, m_fontRenderer.getTextWidth(charUnderCursor))
+                    : fontCellWidth;
+
+                if (caretX + cursorBoxWidth <= maxX && caretY + fontCellHeight <= maxY) {
+                    // 1. Draw solid light slate cursor block
+                    drawFilledRect(caretX, caretY, cursorBoxWidth, fontCellHeight, 0xFFE2E8F0);
+
+                    // 2. Draw inverted character under cursor in dark navy ink (0xFF0F172A)
+                    if (!charUnderCursor.empty()) {
+                        drawStringClipped(caretX, caretY, charUnderCursor, 0xFF0F172A, minX, minY, maxX, maxY);
+                    }
                 }
             }
         }

@@ -88,14 +88,35 @@ bool PTYManager::spawnShell(const std::string& shellPath) {
         } else {
             setenv("HOME", "/", 1);
         }
-        setenv("TERM", "linux", 1);
-        setenv("PS1", "\\W ❯ ", 1);
-        setenv("ENV", "/home/user/.shrc", 1);
+        setenv("TERM", "xterm-256color", 1);
+        setenv("PS1", "\\W \xe2\x9d\xaf ", 1);
+        setenv("HOME", userHome, 1);
+        setenv("BASH_ENV", "/home/user/.bashrc", 1);
 
-        char* const argv[] = { const_cast<char*>(shellPath.c_str()), nullptr };
+        // Try bash first (full readline, tab cycling, cursor movement)
+        if (shellPath == "/bin/sh" || shellPath.empty()) {
+            // Prefer bash for interactive use
+            char* const bashArgv[] = {
+                const_cast<char*>("/usr/bin/bash"),
+                const_cast<char*>("--login"),
+                const_cast<char*>("-i"),
+                nullptr
+            };
+            execv("/usr/bin/bash", bashArgv);
+        }
+
+        // Use the specified shell
+        char* const argv[] = {
+            const_cast<char*>(shellPath.c_str()),
+            const_cast<char*>("--login"),
+            const_cast<char*>("-i"),
+            nullptr
+        };
         execv(shellPath.c_str(), argv);
 
-        // Fallback to /bin/sh if preferred shell failed
+        // Fallback to /bin/bash, then /bin/sh
+        char* const bashArgv[] = { const_cast<char*>("/usr/bin/bash"), const_cast<char*>("-i"), nullptr };
+        execv("/usr/bin/bash", bashArgv);
         char* const fallbackArgv[] = { const_cast<char*>("/bin/sh"), nullptr };
         execv("/bin/sh", fallbackArgv);
         _exit(127);

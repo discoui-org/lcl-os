@@ -29,6 +29,8 @@ public:
 
     /**
      * @brief Handle keyboard input event for active terminal shell.
+     * Pure PTY passthrough — all line editing, history, and tab completion
+     * is delegated to the shell (bash/readline) inside the PTY.
      */
     void handleInput(const core::InputEvent& ev);
 
@@ -53,25 +55,16 @@ public:
      */
     render::WindowRenderContent getRenderContent() const;
 
-    const std::string& getActiveSuggestion() const { return m_activeSuggestion; }
-
     void setAckFifo(const std::string& fifo) { m_ackFifo = fifo; }
     const std::string& getAckFifo() const { return m_ackFifo; }
 
 private:
     std::string keycodeToASCII(uint32_t keycode, bool shift);
-    std::string stripANSI(const std::string& input);
-    void updateAutoSuggestion();
-    void performTabCompletion();
 
     int m_windowId{-1};
     core::PTYManager m_ptyManager;
     std::vector<std::string> m_lines;
-    std::string m_currentLine;
-    std::string m_typedBuffer;
-    std::string m_activeSuggestion;
-    size_t m_cursorPos{0};
-    std::vector<std::string> m_history;
+    int m_writePos{0}; // Write-head byte offset in m_lines.back() (VT100 overwrite tracking)
     std::string m_ackFifo;
     bool m_initialized{false};
     bool m_shiftPressed{false};

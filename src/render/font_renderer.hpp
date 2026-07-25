@@ -46,6 +46,20 @@ public:
     int getLineGap() const { return m_lineGap; }
 
     /**
+     * @brief Retrieve exact advance width of a standard character cell for active loaded font.
+     */
+    int getCellWidth();
+
+    /**
+     * @brief Retrieve exact line height (ascent - descent + lineGap) for active loaded font.
+     */
+    int getCellHeight() const {
+        if (!m_initialized) return 16;
+        int h = m_ascent - m_descent + m_lineGap;
+        return h > 0 ? h : 16;
+    }
+
+    /**
      * @brief Fetch or rasterize glyph info for a specific codepoint.
      */
     const GlyphInfo* getGlyph(char32_t codepoint);

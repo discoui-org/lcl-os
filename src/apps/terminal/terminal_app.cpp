@@ -1,8 +1,5 @@
 #include "apps/terminal/terminal_app.hpp"
 #include <iostream>
-#include <algorithm>
-#include <dirent.h>
-#include <sys/stat.h>
 #include <linux/input-event-codes.h>
 
 namespace lcl::apps {
@@ -25,10 +22,12 @@ bool TerminalApp::initialize(int windowId) {
     }
 
     m_lines = {""};
-    m_currentLine.clear();
-    m_typedBuffer.clear();
-    m_cursorPos = 0;
+    m_writePos = 0;
     m_initialized = true;
+
+    // Set PTY winsize to match visible terminal window columns and rows
+    m_ptyManager.resizeWindow(57, 17);
+
     std::cout << "[LCL App] LCL Terminal App initialized successfully!\n";
     return true;
 }
@@ -37,61 +36,208 @@ render::WindowRenderContent TerminalApp::getRenderContent() const {
     render::WindowRenderContent content;
     content.windowId = static_cast<uint32_t>(m_windowId);
     content.lines = m_lines;
-    content.suggestion = m_activeSuggestion;
-    if (!m_lines.empty()) {
-        const std::string& lastLine = m_lines.back();
-        int promptOffset = 0;
-        size_t chevronPos = lastLine.find("❯");
-        if (chevronPos != std::string::npos) {
-            promptOffset = static_cast<int>(chevronPos + 3); // 3 bytes for ❯
-        }
-        content.cursorCol = promptOffset + static_cast<int>(m_cursorPos);
-    }
+    content.suggestion = "";
+    content.cursorCol = m_writePos;
     return content;
 }
 
-std::string TerminalApp::stripANSI(const std::string& input) {
-    std::string result;
-    bool inEscape = false;
-    for (size_t i = 0; i < input.size(); ++i) {
-        char c = input[i];
-        if (c == '\033') { // ESC
-            inEscape = true;
-            continue;
-        }
-        if (inEscape) {
-            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '~') {
-                inEscape = false;
+void TerminalApp::clearBuffer() {
+    m_lines.clear();
+    m_lines.push_back("");
+    m_writePos = 0;
+}
+
+void TerminalApp::update() {
+    if (!m_initialized) return;
+
+    std::string rawOut = m_ptyManager.readOutput();
+    if (rawOut.empty()) return;
+
+    // Detect ANSI clear-screen: full reset
+    if (rawOut.find("\033[2J") != std::string::npos) {
+        clearBuffer();
+        return;
+    }
+
+    // Process byte-by-byte with a minimal VT100 write-head overwrite model.
+    // m_writePos tracks the write position in m_lines.back().
+    // Printable chars OVERWRITE at m_writePos — they never blindly append.
+    // \r resets write-head to 0 WITHOUT clearing the line text.
+    // \033[K truncates the line at write-head (erase to end of line).
+    // \033[nD / \033[nC adjust write-head left/right by moving through UTF-8 codepoints.
+    // This is sufficient for bash/readline to maintain correct visible text.
+
+    if (m_lines.empty()) m_lines.push_back("");
+
+    size_t i = 0;
+    while (i < rawOut.size()) {
+        unsigned char c = rawOut[i];
+
+        // --- CSI escape sequence ---
+        if (c == '\033' && i + 1 < rawOut.size() && rawOut[i + 1] == '[') {
+            i += 2;
+            // Parse optional numeric parameter
+            int param = -1;
+            if (i < rawOut.size() && rawOut[i] >= '0' && rawOut[i] <= '9') {
+                param = 0;
+                while (i < rawOut.size() && rawOut[i] >= '0' && rawOut[i] <= '9') {
+                    param = param * 10 + (rawOut[i] - '0');
+                    ++i;
+                }
+            }
+            if (i < rawOut.size()) {
+                char cmd = rawOut[i++];
+                int n = (param <= 0) ? 1 : param;
+                std::string& line = m_lines.back();
+
+                if (cmd == 'K') {
+                    // Erase to end of line from write-head
+                    if (m_writePos <= static_cast<int>(line.size())) {
+                        line.resize(m_writePos);
+                    }
+                } else if (cmd == 'D') {
+                    // Cursor/write-head left — step back n UTF-8 codepoints
+                    for (int j = 0; j < n && m_writePos > 0; ++j) {
+                        --m_writePos;
+                        while (m_writePos > 0 &&
+                               (static_cast<unsigned char>(line[m_writePos]) & 0xC0) == 0x80) {
+                            --m_writePos;
+                        }
+                    }
+                } else if (cmd == 'C') {
+                    // Cursor/write-head right — step forward n UTF-8 codepoints
+                    int lineSize = static_cast<int>(line.size());
+                    for (int j = 0; j < n && m_writePos < lineSize; ++j) {
+                        unsigned char lc = static_cast<unsigned char>(line[m_writePos]);
+                        size_t charLen = 1;
+                        if      ((lc & 0xE0) == 0xC0) charLen = 2;
+                        else if ((lc & 0xF0) == 0xE0) charLen = 3;
+                        else if ((lc & 0xF8) == 0xF0) charLen = 4;
+                        m_writePos = std::min(m_writePos + static_cast<int>(charLen), lineSize);
+                    }
+                } else if (cmd == 'P') {
+                    // Delete n chars at write-head
+                    int del = std::min(n, static_cast<int>(line.size()) - m_writePos);
+                    if (del > 0) line.erase(m_writePos, del);
+                }
+                // Other CSI sequences (colours, position, etc.) — skip
             }
             continue;
         }
-        result.push_back(c);
+
+        // --- Non-CSI escape: skip until terminator ---
+        if (c == '\033') {
+            ++i;
+            while (i < rawOut.size()) {
+                char ec = rawOut[i++];
+                if ((ec >= 'A' && ec <= 'Z') || (ec >= 'a' && ec <= 'z') || ec == '~') break;
+            }
+            continue;
+        }
+
+        if (c == '\r') {
+            // Carriage return: reset write-head to start of line, DO NOT erase text
+            m_writePos = 0;
+            ++i;
+            continue;
+        }
+
+        if (c == '\n') {
+            // Newline: advance to next line
+            m_lines.push_back("");
+            m_writePos = 0;
+            ++i;
+            continue;
+        }
+
+        if (c == '\b') {
+            // Backspace: move write-head left one UTF-8 codepoint
+            std::string& line = m_lines.back();
+            if (m_writePos > 0) {
+                --m_writePos;
+                while (m_writePos > 0 &&
+                       (static_cast<unsigned char>(line[m_writePos]) & 0xC0) == 0x80) {
+                    --m_writePos;
+                }
+            }
+            ++i;
+            continue;
+        }
+
+        // --- Printable / UTF-8 character: overwrite at write-head ---
+        if (c >= 32) {
+            size_t seqLen = 1;
+            if      ((c & 0xE0) == 0xC0) seqLen = 2;
+            else if ((c & 0xF0) == 0xE0) seqLen = 3;
+            else if ((c & 0xF8) == 0xF0) seqLen = 4;
+            seqLen = std::min(seqLen, rawOut.size() - i);
+
+            std::string& line = m_lines.back();
+            std::string ch = rawOut.substr(i, seqLen);
+            i += seqLen;
+
+            if (m_writePos < static_cast<int>(line.size())) {
+                // Overwrite existing byte(s) — handle the case where current char
+                // at writePos may be a different byte-length UTF-8 sequence
+                unsigned char existing = static_cast<unsigned char>(line[m_writePos]);
+                size_t existLen = 1;
+                if      ((existing & 0xE0) == 0xC0) existLen = 2;
+                else if ((existing & 0xF0) == 0xE0) existLen = 3;
+                else if ((existing & 0xF8) == 0xF0) existLen = 4;
+                line.replace(m_writePos, existLen, ch);
+            } else {
+                line.append(ch);
+            }
+            m_writePos += static_cast<int>(seqLen);
+            continue;
+        }
+
+        ++i; // skip unhandled control char
     }
-    return result;
+}
+
+void TerminalApp::handleInput(const core::InputEvent& ev) {
+    if (!m_initialized) return;
+
+    if (ev.type == core::InputEventType::KeyboardKey) {
+        if (ev.key == KEY_LEFTSHIFT || ev.key == KEY_RIGHTSHIFT) {
+            m_shiftPressed = ev.pressed;
+            return;
+        }
+        if (ev.key == KEY_LEFTCTRL || ev.key == KEY_RIGHTCTRL) {
+            m_ctrlPressed = ev.pressed;
+            return;
+        }
+        if (!ev.pressed) return; // Only act on key down
+        std::string seq = keycodeToASCII(ev.key, m_shiftPressed);
+        if (!seq.empty()) m_ptyManager.writeInput(seq);
+    }
 }
 
 std::string TerminalApp::keycodeToASCII(uint32_t keycode, bool shift) {
     switch (keycode) {
         case KEY_ENTER: return "\n";
-        case KEY_BACKSPACE: return "\b";
+        case KEY_BACKSPACE: return "\x7F";
         case KEY_TAB: return "\t";
         case KEY_SPACE: return " ";
         case KEY_UP: return "\033[A";
         case KEY_DOWN: return "\033[B";
         case KEY_LEFT: return "\033[D";
         case KEY_RIGHT: return "\033[C";
-        case KEY_A: return shift ? "A" : "a";
+        case KEY_HOME: return "\033[H";
+        case KEY_END: return "\033[F";
+        case KEY_A: return m_ctrlPressed ? "\x01" : (shift ? "A" : "a");
         case KEY_B: return shift ? "B" : "b";
-        case KEY_C: return shift ? "C" : "c";
-        case KEY_D: return shift ? "D" : "d";
-        case KEY_E: return shift ? "E" : "e";
+        case KEY_C: return m_ctrlPressed ? "\x03" : (shift ? "C" : "c");
+        case KEY_D: return m_ctrlPressed ? "\x04" : (shift ? "D" : "d");
+        case KEY_E: return m_ctrlPressed ? "\x05" : (shift ? "E" : "e");
         case KEY_F: return shift ? "F" : "f";
         case KEY_G: return shift ? "G" : "g";
         case KEY_H: return shift ? "H" : "h";
         case KEY_I: return shift ? "I" : "i";
         case KEY_J: return shift ? "J" : "j";
-        case KEY_K: return shift ? "K" : "k";
-        case KEY_L: return shift ? "L" : "l";
+        case KEY_K: return m_ctrlPressed ? "\x0B" : (shift ? "K" : "k");
+        case KEY_L: return m_ctrlPressed ? "\x0C" : (shift ? "L" : "l");
         case KEY_M: return shift ? "M" : "m";
         case KEY_N: return shift ? "N" : "n";
         case KEY_O: return shift ? "O" : "o";
@@ -100,9 +246,9 @@ std::string TerminalApp::keycodeToASCII(uint32_t keycode, bool shift) {
         case KEY_R: return shift ? "R" : "r";
         case KEY_S: return shift ? "S" : "s";
         case KEY_T: return shift ? "T" : "t";
-        case KEY_U: return shift ? "U" : "u";
+        case KEY_U: return m_ctrlPressed ? "\x15" : (shift ? "U" : "u");
         case KEY_V: return shift ? "V" : "v";
-        case KEY_W: return shift ? "W" : "w";
+        case KEY_W: return m_ctrlPressed ? "\x17" : (shift ? "W" : "w");
         case KEY_X: return shift ? "X" : "x";
         case KEY_Y: return shift ? "Y" : "y";
         case KEY_Z: return shift ? "Z" : "z";
@@ -118,215 +264,16 @@ std::string TerminalApp::keycodeToASCII(uint32_t keycode, bool shift) {
         case KEY_0: return shift ? ")" : "0";
         case KEY_MINUS: return shift ? "_" : "-";
         case KEY_EQUAL: return shift ? "+" : "=";
-        case KEY_DOT: return shift ? ">" : ".";
+        case KEY_LEFTBRACE: return shift ? "{" : "[";
+        case KEY_RIGHTBRACE: return shift ? "}" : "]";
+        case KEY_BACKSLASH: return shift ? "|" : "\\";
+        case KEY_SEMICOLON: return shift ? ":" : ";";
+        case KEY_APOSTROPHE: return shift ? "\"" : "'";
+        case KEY_GRAVE: return shift ? "~" : "`";
         case KEY_COMMA: return shift ? "<" : ",";
+        case KEY_DOT: return shift ? ">" : ".";
         case KEY_SLASH: return shift ? "?" : "/";
         default: return "";
-    }
-}
-
-void TerminalApp::updateAutoSuggestion() {
-    m_activeSuggestion.clear();
-    if (m_typedBuffer.length() < 2) return;
-
-    for (auto it = m_history.rbegin(); it != m_history.rend(); ++it) {
-        if (it->size() > m_typedBuffer.size() && it->rfind(m_typedBuffer, 0) == 0) {
-            m_activeSuggestion = it->substr(m_typedBuffer.size());
-            break;
-        }
-    }
-}
-
-void TerminalApp::performTabCompletion() {
-    std::string cwd = m_ptyManager.getWorkingDirectory();
-
-    size_t lastSpace = m_typedBuffer.find_last_of(" \t");
-    std::string word = (lastSpace == std::string::npos) ? m_typedBuffer : m_typedBuffer.substr(lastSpace + 1);
-    if (word.empty()) return;
-
-    std::string dirPath = cwd;
-    std::string prefix = word;
-    size_t lastSlash = word.find_last_of('/');
-    if (lastSlash != std::string::npos) {
-        std::string pathPart = word.substr(0, lastSlash + 1);
-        prefix = word.substr(lastSlash + 1);
-        if (pathPart[0] == '/') {
-            dirPath = pathPart;
-        } else {
-            dirPath = cwd + "/" + pathPart;
-        }
-    }
-
-    DIR* dir = opendir(dirPath.c_str());
-    if (!dir) return;
-
-    std::vector<std::string> matches;
-    struct dirent* entry = nullptr;
-    while ((entry = readdir(dir)) != nullptr) {
-        std::string name = entry->d_name;
-        if (name == "." || name == "..") continue;
-        if (name.rfind(prefix, 0) == 0) {
-            struct stat st{};
-            std::string fullPath = dirPath + (dirPath.back() == '/' ? "" : "/") + name;
-            if (stat(fullPath.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
-                name += "/";
-            }
-            matches.push_back(name);
-        }
-    }
-    closedir(dir);
-
-    if (matches.size() == 1) {
-        std::string match = matches[0];
-        std::string completion = match.substr(prefix.length());
-        m_ptyManager.writeInput(completion);
-        m_typedBuffer.insert(m_cursorPos, completion);
-        m_cursorPos += completion.length();
-        updateAutoSuggestion();
-    }
-}
-
-void TerminalApp::handleInput(const core::InputEvent& ev) {
-    if (!m_initialized) return;
-
-    if (ev.type == core::InputEventType::KeyboardKey) {
-        if (ev.key == KEY_LEFTSHIFT || ev.key == KEY_RIGHTSHIFT) {
-            m_shiftPressed = ev.pressed;
-        }
-        if (ev.key == KEY_LEFTCTRL || ev.key == KEY_RIGHTCTRL) {
-            m_ctrlPressed = ev.pressed;
-        }
-
-        if (ev.pressed && !ev.isRepeat) {
-            if (ev.key == KEY_TAB) {
-                performTabCompletion();
-                return;
-            }
-
-            if (ev.key == KEY_LEFT) {
-                if (m_cursorPos > 0) {
-                    m_cursorPos--;
-                    m_ptyManager.writeInput("\033[D");
-                }
-                return;
-            }
-
-            if (ev.key == KEY_RIGHT) {
-                if (!m_activeSuggestion.empty() && m_cursorPos == m_typedBuffer.length()) {
-                    m_ptyManager.writeInput(m_activeSuggestion);
-                    m_typedBuffer += m_activeSuggestion;
-                    m_cursorPos = m_typedBuffer.length();
-                    m_activeSuggestion.clear();
-                    return;
-                } else if (m_cursorPos < m_typedBuffer.length()) {
-                    m_cursorPos++;
-                    m_ptyManager.writeInput("\033[C");
-                    return;
-                }
-            }
-
-            // Handle Control key shortcuts (Ctrl+C, Ctrl+D, Ctrl+Z, Ctrl+L)
-            if (m_ctrlPressed) {
-                if (ev.key == KEY_C) {
-                    m_ptyManager.writeInput("\x03");
-                    m_typedBuffer.clear();
-                    m_cursorPos = 0;
-                    m_activeSuggestion.clear();
-                    return;
-                }
-                if (ev.key == KEY_D) {
-                    m_ptyManager.writeInput("\x04");
-                    return;
-                }
-                if (ev.key == KEY_Z) {
-                    m_ptyManager.writeInput("\x1A");
-                    return;
-                }
-                if (ev.key == KEY_L) {
-                    clearBuffer();
-                    m_ptyManager.writeInput("\n");
-                    m_typedBuffer.clear();
-                    m_cursorPos = 0;
-                    m_activeSuggestion.clear();
-                    return;
-                }
-            }
-
-            if (ev.key == KEY_ENTER) {
-                if (!m_typedBuffer.empty()) {
-                    m_history.push_back(m_typedBuffer);
-                    m_typedBuffer.clear();
-                }
-                m_cursorPos = 0;
-                m_activeSuggestion.clear();
-                m_ptyManager.writeInput("\n");
-                return;
-            }
-
-            if (ev.key == KEY_BACKSPACE) {
-                if (m_cursorPos > 0 && !m_typedBuffer.empty()) {
-                    m_typedBuffer.erase(m_cursorPos - 1, 1);
-                    m_cursorPos--;
-                }
-                updateAutoSuggestion();
-                m_ptyManager.writeInput("\b");
-                return;
-            }
-
-            std::string ascii = keycodeToASCII(ev.key, m_shiftPressed);
-            if (!ascii.empty()) {
-                if (ascii != "\033[A" && ascii != "\033[B" && ascii != "\033[C" && ascii != "\033[D" && ascii != "\t") {
-                    if (m_cursorPos <= m_typedBuffer.length()) {
-                        m_typedBuffer.insert(m_cursorPos, ascii);
-                        m_cursorPos += ascii.length();
-                    }
-                    updateAutoSuggestion();
-                }
-                m_ptyManager.writeInput(ascii);
-            }
-        }
-    }
-}
-
-void TerminalApp::clearBuffer() {
-    m_lines.clear();
-    m_lines.push_back("");
-    m_currentLine.clear();
-}
-
-void TerminalApp::update() {
-    if (!m_initialized) return;
-
-    std::string rawOut = m_ptyManager.readOutput();
-    if (rawOut.empty()) return;
-
-    // Check for ANSI screen clear codes (\033[2J or \033[H) sent by clear command
-    if (rawOut.find("\033[2J") != std::string::npos || rawOut.find("\033[H") != std::string::npos) {
-        clearBuffer();
-    }
-
-    std::string clean = stripANSI(rawOut);
-    for (char ch : clean) {
-        if (ch == '\r') continue;
-        if (ch == '\n') {
-            if (!m_lines.empty()) {
-                m_lines.back() = m_currentLine;
-            } else {
-                m_lines.push_back(m_currentLine);
-            }
-            m_currentLine.clear();
-            m_lines.push_back("");
-        } else if (ch == '\b' || ch == 0x7F) {
-            if (!m_currentLine.empty()) m_currentLine.pop_back();
-        } else if (static_cast<unsigned char>(ch) >= 32) {
-            m_currentLine.push_back(ch);
-        }
-    }
-
-    if (!m_lines.empty()) {
-        m_lines.back() = m_currentLine;
-    } else {
-        m_lines.push_back(m_currentLine);
     }
 }
 

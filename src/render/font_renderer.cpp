@@ -170,6 +170,15 @@ const GlyphInfo* FontRenderer::getGlyph(char32_t codepoint) {
     return &insertedIt->second;
 }
 
+int FontRenderer::getCellWidth() {
+    if (!m_initialized) return 8;
+    const GlyphInfo* g = getGlyph('M');
+    if (g && g->advanceWidth > 0) {
+        return g->advanceWidth;
+    }
+    return 8;
+}
+
 int FontRenderer::getTextWidth(const std::string& text) {
     if (!m_initialized || text.empty()) return 0;
     int totalWidth = 0;
