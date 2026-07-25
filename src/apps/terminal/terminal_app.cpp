@@ -58,12 +58,6 @@ bool TerminalApp::update() {
     std::string rawOut = m_ptyManager.readOutput();
     if (rawOut.empty()) return false;
 
-    // Detect ANSI clear-screen: full reset
-    if (rawOut.find("\033[2J") != std::string::npos) {
-        clearBuffer();
-        return true;
-    }
-
     if (m_lines.empty()) m_lines.push_back("");
 
     size_t i = 0;
@@ -81,7 +75,7 @@ bool TerminalApp::update() {
                 ++i;
             }
 
-            // Consume final command byte (0x40..0x7E: 'm', 'K', 'D', 'C', 'P', etc.)
+            // Consume final command byte (0x40..0x7E: 'm', 'K', 'D', 'C', 'P', 'J', 'H', etc.)
             if (i < rawOut.size()) {
                 char cmd = rawOut[i++];
                 int n = 1;
@@ -92,7 +86,13 @@ bool TerminalApp::update() {
 
                 std::string& line = m_lines.back();
 
-                if (cmd == 'K') {
+                if (cmd == 'J') {
+                    // Erase display sequence (e.g. \033[2J or \033[3J)
+                    clearBuffer();
+                } else if (cmd == 'H' || cmd == 'f') {
+                    // Cursor position reset (e.g. \033[H)
+                    m_writePos = 0;
+                } else if (cmd == 'K') {
                     // Erase to end of line from writePos
                     if (m_writePos <= static_cast<int>(line.size())) {
                         line.resize(m_writePos);
@@ -122,7 +122,7 @@ bool TerminalApp::update() {
                     int del = std::min(n, static_cast<int>(line.size()) - m_writePos);
                     if (del > 0) line.erase(m_writePos, del);
                 }
-                // Colors/SGR ('m'), cursor pos ('H','f'), etc. are safely consumed and ignored
+                // Colors/SGR ('m'), etc. are safely consumed and ignored
             }
             continue;
         }
