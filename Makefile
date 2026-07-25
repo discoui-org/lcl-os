@@ -20,7 +20,7 @@ fonts:
 	./scripts/fetch_fonts.sh
 
 clean:
-	rm -rf build
+	python3 scripts/run_qemu.py --clean
 
 help:
 	@echo "make build           - Build lcl-core via Docker (always)"

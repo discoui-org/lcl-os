@@ -24,8 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sed \
     gawk \
     procps \
-    linux-image-virtual \
-    linux-modules-extra-virtual \
+    linux-image-generic \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*

@@ -85,6 +85,20 @@ def ensure_fonts() -> None:
 
 def cmake_build() -> None:
     log("Building lcl-core binary...")
+    cache = BUILD_DIR / "CMakeCache.txt"
+    if cache.is_file():
+        try:
+            content = cache.read_text(encoding="utf-8", errors="ignore")
+            for line in content.splitlines():
+                if line.startswith("CMAKE_CACHEFILE_DIR:INTERNAL="):
+                    cached_dir = line.split("=", 1)[1].strip()
+                    if cached_dir != str(BUILD_DIR.resolve()):
+                        log(f"Cleaning stale CMakeCache.txt ({cached_dir} != {BUILD_DIR.resolve()})...")
+                        shutil.rmtree(BUILD_DIR)
+                        ensure_dirs()
+                        break
+        except Exception:
+            pass
     run(
         [
             "cmake",
@@ -515,6 +529,10 @@ echo "===================================================="
     resolved = kernel_path.resolve()
     if resolved != KERNEL_CACHE.resolve():
         shutil.copy2(resolved, KERNEL_CACHE, follow_symlinks=True)
+        try:
+            KERNEL_CACHE.chmod(0o644)
+        except Exception:
+            pass
 
     write_text(
         INITRAMFS_DIR / "init",
@@ -659,16 +677,57 @@ def ensure_docker_image() -> None:
         stamp.write_text(df_mtime + "\n", encoding="utf-8")
 
 
+def fix_permissions() -> None:
+    """Fix ownership and permissions on /src/build inside Docker so host user can read/delete."""
+    if not BUILD_DIR.exists():
+        return
+    try:
+        run(["chmod", "-R", "a+rwX", str(BUILD_DIR)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+    uid = os.environ.get("HOST_UID")
+    gid = os.environ.get("HOST_GID")
+    if uid and gid:
+        try:
+            run(["chown", "-R", f"{uid}:{gid}", str(BUILD_DIR)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+
+def clean_build() -> None:
+    """Safely clean build directory using host or Docker root fallback."""
+    if not BUILD_DIR.exists():
+        log("build/ directory does not exist. Nothing to clean.")
+        return
+    log("Cleaning build/ directory...")
+    try:
+        shutil.rmtree(BUILD_DIR)
+        log("Successfully removed build/")
+    except Exception:
+        if docker_available():
+            log("Removing build/ via Docker container...")
+            mount = str(ROOT_DIR)
+            run(["docker", "run", "--rm", "-v", f"{mount}:/src", DOCKER_IMAGE, "rm", "-rf", "/src/build"])
+            log("Successfully removed build/ via Docker")
+        else:
+            err("Failed to remove build/. Try running: sudo rm -rf build")
+            sys.exit(1)
+
+
 def docker_run(args: list[str]) -> None:
     ensure_docker_image()
     # Resolve Windows paths for Docker Desktop if needed
     mount = str(ROOT_DIR)
+    env_args: list[str] = []
+    if hasattr(os, "getuid") and hasattr(os, "getgid"):
+        env_args = ["-e", f"HOST_UID={os.getuid()}", "-e", f"HOST_GID={os.getgid()}"]
     cmd = [
         "docker",
         "run",
         "--rm",
         "--platform",
         "linux/amd64",
+        *env_args,
         "-v",
         f"{mount}:/src",
         "-w",
@@ -704,7 +763,9 @@ def package_inside_docker() -> Path:
     kernel = locate_kernel()
     log(f"Docker image kernel: {kernel}")
     package_initramfs(kernel)
-    return KERNEL_CACHE if KERNEL_CACHE.is_file() else kernel
+    res = KERNEL_CACHE if KERNEL_CACHE.is_file() else kernel
+    fix_permissions()
+    return res
 
 
 # --- Host-native package path DISABLED (do not use outer OS kernel/modules) ---
@@ -1182,6 +1243,7 @@ def main() -> None:
     parser.add_argument("--run", "-r", action="store_true", help="Launch QEMU after packaging")
     parser.add_argument("--build-only", action="store_true", help="Only build binaries (Docker)")
     parser.add_argument("--package-only", action="store_true", help="Build + package initramfs (no QEMU)")
+    parser.add_argument("--clean", action="store_true", help="Remove build/ directory safely")
     parser.add_argument(
         "--docker",
         action="store_true",
@@ -1199,6 +1261,10 @@ def main() -> None:
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
+
+    if args.clean:
+        clean_build()
+        return
 
     print("====================================================")
     print("  LCL Core Linux - QEMU Isolated Boot Launcher      ")
