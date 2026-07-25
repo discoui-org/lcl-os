@@ -218,8 +218,14 @@ void Renderer::swapBuffers() {
     m_renderedFrames++;
 
     if (m_displayManager && m_displayManager->isInitialized()) {
-        if (m_usingDRMHardware && m_dumbBuffer.pixelData) {
+        if (m_usingDRMHardware && m_dumbBuffer.pixelData && m_dumbBuffer.fbId > 0) {
             std::memcpy(m_dumbBuffer.pixelData, m_softwareBackBuffer.data(), std::min(m_dumbBuffer.size, m_softwareBackBuffer.size() * sizeof(uint32_t)));
+
+            // Trigger DRM DirtyFB IOCTL to signal QEMU VirtIO/Bochs GPU to refresh display
+            int drmFd = m_displayManager->getDRMFd();
+            if (drmFd >= 0) {
+                drmModeDirtyFB(drmFd, m_dumbBuffer.fbId, nullptr, 0);
+            }
         } else if (m_displayManager->getBackendType() == core::DisplayBackendType::LinuxFB) {
             uint32_t* fbPixels = m_displayManager->getFBPixelData();
             if (fbPixels) {
