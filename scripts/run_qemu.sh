@@ -69,7 +69,14 @@ cp "${BINARY}" "${INITRAMFS_DIR}/usr/bin/lcl-core"
 [ -f /sbin/modprobe ] && cp -L /sbin/modprobe "${INITRAMFS_DIR}/usr/bin/modprobe"
 [ -d /usr/share/libinput ] && cp -r /usr/share/libinput "${INITRAMFS_DIR}/usr/share/" 2>/dev/null || true
 
+# Ensure font assets exist (auto-fetch if missing)
+if [ ! -d "${ROOT_DIR}/assets/fonts/inter" ] || [ -z "$(ls -A "${ROOT_DIR}/assets/fonts/inter" 2>/dev/null)" ]; then
+    echo "[LCL QEMU] Font assets missing. Executing fetch_fonts.sh..."
+    "${SCRIPT_DIR}/fetch_fonts.sh"
+fi
+
 # Copy system font assets into /usr/share/fonts/
+echo "[LCL QEMU] Packaging system fonts into /usr/share/fonts/..."
 mkdir -p "${INITRAMFS_DIR}/usr/share/fonts"
 if [ -d "${ROOT_DIR}/assets/fonts" ]; then
     cp -r "${ROOT_DIR}/assets/fonts/"* "${INITRAMFS_DIR}/usr/share/fonts/" 2>/dev/null || true
