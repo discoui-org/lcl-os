@@ -52,12 +52,11 @@ echo "[LCL QEMU] Host Kernel: ${KERNEL_PATH}"
 
 # 3. Create Initramfs Root with Arch/Linux Symlinks & Dynamic Libraries
 echo "[LCL QEMU] Preparing initramfs root directory structure..."
-rm -rf "${INITRAMFS_DIR}"
 mkdir -p "${INITRAMFS_DIR}"/{proc,sys,dev,tmp,etc,usr/bin,usr/lib,usr/share,home/user/Desktop,home/user/Documents,home/user/Downloads,home/user/Applications}
-ln -s usr/bin "${INITRAMFS_DIR}/bin"
-ln -s usr/bin "${INITRAMFS_DIR}/sbin"
-ln -s usr/lib "${INITRAMFS_DIR}/lib"
-ln -s usr/lib "${INITRAMFS_DIR}/lib64"
+[ ! -L "${INITRAMFS_DIR}/bin" ] && ln -s usr/bin "${INITRAMFS_DIR}/bin"
+[ ! -L "${INITRAMFS_DIR}/sbin" ] && ln -s usr/bin "${INITRAMFS_DIR}/sbin"
+[ ! -L "${INITRAMFS_DIR}/lib" ] && ln -s usr/lib "${INITRAMFS_DIR}/lib"
+[ ! -L "${INITRAMFS_DIR}/lib64" ] && ln -s usr/lib "${INITRAMFS_DIR}/lib64"
 
 # Copy lcl-core, sh, and essential init utilities
 cp "${BINARY}" "${INITRAMFS_DIR}/usr/bin/lcl-core"
@@ -154,19 +153,18 @@ for bin in "${FOR_BINS[@]}"; do
     done
 done
 
-# Copy Host Kernel DRM & VirtIO GPU Modules
-echo "[LCL QEMU] Packaging DRM & input kernel modules for initramfs..."
+# Copy Host Kernel DRM & VirtIO GPU Modules (with caching)
 KMOD_BASE=$(dirname "${KERNEL_PATH}")
 KVER=$(basename "${KMOD_BASE}")
 if [ ! -d "${KMOD_BASE}/kernel" ]; then
     KMOD_BASE="/lib/modules/${UNAME_R}"
     KVER="${UNAME_R}"
 fi
+TARGET_KMOD="${INITRAMFS_DIR}/usr/lib/modules/${KVER}"
 
-if [ -d "${KMOD_BASE}" ]; then
-    TARGET_KMOD="${INITRAMFS_DIR}/usr/lib/modules/${KVER}"
+if [ ! -d "${TARGET_KMOD}/kernel" ]; then
+    echo "[LCL QEMU] Packaging DRM & input kernel modules for initramfs..."
     mkdir -p "${TARGET_KMOD}"
-
     mkdir -p "${TARGET_KMOD}/kernel/drivers/gpu"
     mkdir -p "${TARGET_KMOD}/kernel/drivers/virtio"
     if [ -d "${KMOD_BASE}/kernel/drivers/gpu/drm" ]; then
@@ -189,6 +187,8 @@ if [ -d "${KMOD_BASE}" ]; then
     if command -v depmod >/dev/null 2>&1; then
         depmod -b "${INITRAMFS_DIR}" "${KVER}" 2>/dev/null || true
     fi
+else
+    echo "[LCL QEMU] Using cached kernel modules in ${TARGET_KMOD}"
 fi
 
 # Create /init startup script
@@ -229,9 +229,13 @@ exec /bin/lcl-core
 EOF
 chmod +x "${INITRAMFS_DIR}/init"
 
-# Package initramfs image
+# Package initramfs image using fast compression
 echo "[LCL QEMU] Packaging initramfs cpio archive..."
-(cd "${INITRAMFS_DIR}" && find . -print0 | cpio --null -ov --format=newc 2>/dev/null | gzip -9 > "${INITRAMFS_IMG}")
+COMPRESS_CMD="gzip -1"
+if command -v pigz >/dev/null 2>&1; then
+    COMPRESS_CMD="pigz -1"
+fi
+(cd "${INITRAMFS_DIR}" && find . -print0 | cpio --null -ov --format=newc 2>/dev/null | ${COMPRESS_CMD} > "${INITRAMFS_IMG}")
 
 echo "[LCL QEMU] Initramfs image built at: ${INITRAMFS_IMG}"
 

@@ -244,6 +244,88 @@ bool DisplayManager::probeLinuxFramebuffer() {
     return true;
 }
 
+bool DisplayManager::initHardwareCursor(uint32_t width, uint32_t height) {
+    if (!m_initialized || m_backendType != DisplayBackendType::DRM_KMS || m_drmDevice.fd < 0) return false;
+    if (!m_drmDevice.crtc) return false;
+
+    uint32_t crtcId = m_drmDevice.crtc->crtc_id;
+
+    struct drm_mode_create_dumb creq{};
+    creq.width = width;
+    creq.height = height;
+    creq.bpp = 32;
+
+    if (ioctl(m_drmDevice.fd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) {
+        std::cerr << "[LCL Display WARNING] Failed to create DRM Hardware Cursor dumb buffer.\n";
+        return false;
+    }
+
+    m_drmDevice.cursorWidth = width;
+    m_drmDevice.cursorHeight = height;
+    m_drmDevice.cursorHandle = creq.handle;
+    m_drmDevice.cursorSize = creq.size;
+
+    struct drm_mode_map_dumb mreq{};
+    mreq.handle = creq.handle;
+    if (ioctl(m_drmDevice.fd, DRM_IOCTL_MODE_MAP_DUMB, &mreq) < 0) {
+        return false;
+    }
+
+    void* mapPtr = mmap(nullptr, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED, m_drmDevice.fd, mreq.offset);
+    if (mapPtr == MAP_FAILED) {
+        return false;
+    }
+
+    m_drmDevice.cursorPixels = static_cast<uint32_t*>(mapPtr);
+    std::memset(m_drmDevice.cursorPixels, 0, creq.size);
+
+    // Rasterize default cursor arrow (ARGB)
+    static const char* cursorShape[] = {
+        "X           ",
+        "XX          ",
+        "X.X         ",
+        "X..X        ",
+        "X...X       ",
+        "X....X      ",
+        "X.....X     ",
+        "X......X    ",
+        "X.......X   ",
+        "X........X  ",
+        "X.....XXXXX ",
+        "X..X..X     ",
+        "X.X X..X    ",
+        "XX   X..X   ",
+        "X    X..X   ",
+        "      XX    "
+    };
+
+    for (int r = 0; r < 16; ++r) {
+        for (int c = 0; c < 12; ++c) {
+            char ch = cursorShape[r][c];
+            if (ch == 'X') {
+                m_drmDevice.cursorPixels[r * width + c] = 0xFF000000;
+            } else if (ch == '.') {
+                m_drmDevice.cursorPixels[r * width + c] = 0xFFFFFFFF;
+            }
+        }
+    }
+
+    // Register Hardware Cursor Plane on CRTC
+    if (drmModeSetCursor(m_drmDevice.fd, crtcId, m_drmDevice.cursorHandle, width, height) != 0) {
+        std::cerr << "[LCL Display WARNING] drmModeSetCursor failed.\n";
+        return false;
+    }
+
+    m_drmDevice.hasHardwareCursor = true;
+    std::cout << "[LCL Display] DRM Hardware Cursor Plane initialized (" << width << "x" << height << " ARGB, Zero-Latency)!\n";
+    return true;
+}
+
+bool DisplayManager::moveHardwareCursor(int x, int y) {
+    if (!m_drmDevice.hasHardwareCursor || m_drmDevice.fd < 0 || !m_drmDevice.crtc) return false;
+    return drmModeMoveCursor(m_drmDevice.fd, m_drmDevice.crtc->crtc_id, x, y) == 0;
+}
+
 void DisplayManager::shutdown() {
     if (!m_initialized) return;
     std::cout << "[LCL Display] Shutting down Display Subsystem...\n";
@@ -254,6 +336,15 @@ void DisplayManager::shutdown() {
 }
 
 void DisplayManager::cleanupDRMDevice() {
+    if (m_drmDevice.cursorPixels && m_drmDevice.cursorSize > 0) {
+        munmap(m_drmDevice.cursorPixels, m_drmDevice.cursorSize);
+        m_drmDevice.cursorPixels = nullptr;
+    }
+    if (m_drmDevice.cursorHandle > 0 && m_drmDevice.fd >= 0) {
+        struct drm_mode_destroy_dumb dreq{m_drmDevice.cursorHandle};
+        ioctl(m_drmDevice.fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dreq);
+        m_drmDevice.cursorHandle = 0;
+    }
     if (m_drmDevice.renderNodeFd >= 0) { close(m_drmDevice.renderNodeFd); m_drmDevice.renderNodeFd = -1; }
     if (m_drmDevice.crtc) { drmModeFreeCrtc(m_drmDevice.crtc); m_drmDevice.crtc = nullptr; }
     if (m_drmDevice.encoder) { drmModeFreeEncoder(m_drmDevice.encoder); m_drmDevice.encoder = nullptr; }

@@ -175,6 +175,7 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
         if (m_displayManager->getBackendType() == core::DisplayBackendType::DRM_KMS) {
             if (createDumbBuffer()) {
                 m_usingDRMHardware = true;
+                m_displayManager->initHardwareCursor(64, 64);
                 std::cout << "[LCL Render] DRM Hardware acceleration active! Driver: "
                           << m_displayManager->getDriverName()
                           << " (Render Node: "
@@ -439,7 +440,11 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
     }
 
     // 4. Render Mouse Cursor on top
-    drawCursor(windowManager.getMouseX(), windowManager.getMouseY());
+    if (m_displayManager && m_displayManager->isHardwareCursorActive()) {
+        m_displayManager->moveHardwareCursor(windowManager.getMouseX(), windowManager.getMouseY());
+    } else {
+        drawCursor(windowManager.getMouseX(), windowManager.getMouseY());
+    }
 }
 
 void Renderer::swapBuffers() {

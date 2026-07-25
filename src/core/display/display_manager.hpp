@@ -30,6 +30,12 @@ struct DRMDevice {
     std::string renderNodePath;
     int renderNodeFd{-1};
     bool hasHardwareAcceleration{false};
+    uint32_t cursorHandle{0};
+    uint32_t* cursorPixels{nullptr};
+    uint64_t cursorSize{0};
+    uint32_t cursorWidth{64};
+    uint32_t cursorHeight{64};
+    bool hasHardwareCursor{false};
     drmModeResPtr resources{nullptr};
     drmModeConnectorPtr connector{nullptr};
     drmModeEncoderPtr encoder{nullptr};
@@ -91,6 +97,11 @@ public:
     const std::string& getDriverVersion() const { return m_drmDevice.driverVersion; }
     const std::string& getRenderNodePath() const { return m_drmDevice.renderNodePath; }
     bool isHardwareAccelerated() const { return m_drmDevice.hasHardwareAcceleration; }
+
+    // DRM Hardware Cursor Plane (Zero-Latency GPU Cursor)
+    bool initHardwareCursor(uint32_t width = 64, uint32_t height = 64);
+    bool moveHardwareCursor(int x, int y);
+    bool isHardwareCursorActive() const { return m_drmDevice.hasHardwareCursor; }
 
 private:
     bool probeDRMWithRetry(const std::string& devicePath);
