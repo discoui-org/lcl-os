@@ -77,7 +77,40 @@ printf "\033[2J\033[H"
 EOF
 chmod +x "${INITRAMFS_DIR}/usr/bin/clear"
 
-# Create sample macOS-style SystemMonitor.app application bundle
+# Copy native C++ lcl-open tool as /usr/bin/open
+OPEN_BIN="${BUILD_DIR}/lcl-open"
+if [ -f "${OPEN_BIN}" ]; then
+    cp "${OPEN_BIN}" "${INITRAMFS_DIR}/usr/bin/open"
+else
+    cat << 'EOF' > "${INITRAMFS_DIR}/usr/bin/open"
+#!/bin/sh
+echo "Usage: open <app_name.app | path_to_app>"
+EOF
+    chmod +x "${INITRAMFS_DIR}/usr/bin/open"
+fi
+
+# Create Terminal.app bundle
+TERM_APP="${INITRAMFS_DIR}/home/user/Applications/Terminal.app"
+mkdir -p "${TERM_APP}"/{bin,assets}
+cat << 'EOF' > "${TERM_APP}/metadata.json"
+{
+    "name": "LCL Terminal",
+    "executable": "bin/terminal",
+    "version": "1.0.0",
+    "icon": "assets/icon.png"
+}
+EOF
+cat << 'EOF' > "${TERM_APP}/bin/terminal"
+#!/bin/sh
+echo "===================================================="
+echo "          LCL OS Terminal Subsystem App             "
+echo "===================================================="
+echo "Interactive PTY Shell active on seat0."
+echo "===================================================="
+EOF
+chmod +x "${TERM_APP}/bin/terminal"
+
+# Create SystemMonitor.app bundle
 APP_DIR="${INITRAMFS_DIR}/home/user/Applications/SystemMonitor.app"
 mkdir -p "${APP_DIR}"/{bin,assets}
 cat << 'EOF' > "${APP_DIR}/metadata.json"
@@ -104,6 +137,7 @@ chmod +x "${APP_DIR}/bin/sysmon"
 # Copy dynamic library dependencies
 echo "[LCL QEMU] Resolving dynamic library dependencies..."
 FOR_BINS=("${BINARY}")
+[ -f "${OPEN_BIN}" ] && FOR_BINS+=("${OPEN_BIN}")
 [ -f /bin/sh ] && FOR_BINS+=("/bin/sh")
 [ -f /bin/mount ] && FOR_BINS+=("/bin/mount")
 [ -f /bin/mkdir ] && FOR_BINS+=("/bin/mkdir")

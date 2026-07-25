@@ -139,6 +139,11 @@ void TerminalApp::update() {
     std::string rawOut = m_ptyManager.readOutput();
     if (rawOut.empty()) return;
 
+    // Check for ANSI screen clear codes (\033[2J or \033[H) sent by clear command
+    if (rawOut.find("\033[2J") != std::string::npos || rawOut.find("\033[H") != std::string::npos) {
+        clearBuffer();
+    }
+
     std::string clean = stripANSI(rawOut);
     for (char ch : clean) {
         if (ch == '\r') continue;

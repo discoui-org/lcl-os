@@ -2,7 +2,6 @@
 
 #include <string>
 #include <vector>
-#include <memory>
 #include <cstdint>
 #include "core/input/input_manager.hpp"
 
@@ -15,11 +14,12 @@ struct Window {
     int y{0};
     int width{400};
     int height{300};
-    uint32_t headerColor{0xFF313244};
+    int zIndex{0};
     bool isFocused{false};
     bool isDragging{false};
     int dragOffsetX{0};
     int dragOffsetY{0};
+    uint32_t headerColor{0xFF38BDF8};
 };
 
 class WindowManager {
@@ -27,27 +27,48 @@ public:
     WindowManager();
     ~WindowManager();
 
-    void initialize(int screenWidth, int screenHeight);
-    void updateScreenSize(int width, int height);
+    // Non-copyable
+    WindowManager(const WindowManager&) = delete;
+    WindowManager& operator=(const WindowManager&) = delete;
+
+    // Moveable
+    WindowManager(WindowManager&&) noexcept;
+    WindowManager& operator=(WindowManager&&) noexcept;
 
     /**
-     * @brief Process an input event for mouse movement, window click, and dragging.
+     * @brief Initialize window manager canvas dimensions.
      */
-    void processInputEvent(const core::InputEvent& event);
+    bool initialize(uint32_t screenWidth = 1024, uint32_t screenHeight = 768);
+
+    /**
+     * @brief Create a new window dynamically.
+     */
+    uint32_t createWindow(const std::string& title, int x, int y, int width, int height, uint32_t headerColor = 0xFF38BDF8);
+
+    /**
+     * @brief Process input event for hit testing, window focus, and dragging.
+     */
+    void processInputEvent(const core::InputEvent& ev);
+
+    /**
+     * @brief Focus a window by ID and bring it to top z-order.
+     */
+    void focusWindow(uint32_t windowId);
 
     const std::vector<Window>& getWindows() const { return m_windows; }
     int getMouseX() const { return m_mouseX; }
     int getMouseY() const { return m_mouseY; }
 
 private:
-    void bringToFront(size_t index);
+    void updateWindowZOrders();
 
-    int m_screenWidth{1024};
-    int m_screenHeight{768};
+    uint32_t m_screenWidth{1024};
+    uint32_t m_screenHeight{768};
+    std::vector<Window> m_windows;
     int m_mouseX{512};
     int m_mouseY{384};
-    bool m_mouseLeftDown{false};
-    std::vector<Window> m_windows;
+    uint32_t m_nextWindowId{1};
+    bool m_initialized{false};
 };
 
 } // namespace lcl::render

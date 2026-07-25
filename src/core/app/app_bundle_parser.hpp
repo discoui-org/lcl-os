@@ -12,6 +12,7 @@ struct AppBundleMetadata {
     std::string executablePath;  // e.g. "/home/user/Applications/SystemMonitor.app/bin/sysmon"
     std::string version;         // e.g. "1.0.0"
     std::string icon;            // e.g. "assets/icon.png"
+    std::string type;            // "gui" or "cli"
     bool valid{false};
 };
 

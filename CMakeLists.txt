@@ -17,13 +17,15 @@ pkg_check_modules(DRM REQUIRED libdrm)
 pkg_check_modules(LIBINPUT REQUIRED libinput)
 pkg_check_modules(UDEV REQUIRED libudev)
 
-# Executable target
+# Main Compositor Executable Target
 add_executable(lcl-core
     src/main.cpp
     src/apps/terminal/terminal_app.cpp
     src/core/app/app_bundle_parser.cpp
     src/core/display/display_manager.cpp
     src/core/input/input_manager.cpp
+    src/core/ipc/ipc_manager.cpp
+    src/core/session/startup_manager.cpp
     src/core/terminal/pty_manager.cpp
     src/render/renderer.cpp
     src/render/window_manager.cpp
@@ -47,4 +49,15 @@ target_compile_options(lcl-core PRIVATE
     ${DRM_CFLAGS_OTHER}
     ${LIBINPUT_CFLAGS_OTHER}
     ${UDEV_CFLAGS_OTHER}
+)
+
+# Native CLI App Launcher Target (lcl-open)
+add_executable(lcl-open
+    src/tools/open_main.cpp
+    src/core/app/app_bundle_parser.cpp
+    src/core/ipc/ipc_manager.cpp
+)
+
+target_include_directories(lcl-open PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )

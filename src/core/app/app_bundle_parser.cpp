@@ -55,6 +55,10 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
     meta.name = extractJsonString(content, "name");
     meta.version = extractJsonString(content, "version");
     meta.icon = extractJsonString(content, "icon");
+    meta.type = extractJsonString(content, "type");
+    if (meta.type.empty()) {
+        meta.type = "cli";
+    }
 
     std::string execRel = extractJsonString(content, "executable");
     if (execRel.empty()) {
