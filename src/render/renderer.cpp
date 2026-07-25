@@ -505,7 +505,7 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
 
             auto now = std::chrono::steady_clock::now();
             auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-            bool showCursor = (millis / 500) % 2 == 0;
+            bool showCursor = contentPtr->forceCursorSolid || ((millis / 500) % 2 == 0);
 
             if (showCursor && !wrappedLines.empty()) {
                 int cursorBoxWidth = (!charUnderCursor.empty() && m_fontRenderer.isInitialized())

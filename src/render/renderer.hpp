@@ -18,6 +18,7 @@ struct WindowRenderContent {
     std::vector<std::string> lines;
     std::string suggestion;
     int cursorCol{-1};
+    bool forceCursorSolid{false};
 };
 
 struct Color {

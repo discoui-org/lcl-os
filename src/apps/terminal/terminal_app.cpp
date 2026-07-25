@@ -38,6 +38,11 @@ render::WindowRenderContent TerminalApp::getRenderContent() const {
     content.lines = m_lines;
     content.suggestion = "";
     content.cursorCol = m_writePos;
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastInputTime).count();
+    // Solid cursor while actively typing (< 600ms), resumes 500ms blink when idle
+    content.forceCursorSolid = (elapsedMs < 600);
     return content;
 }
 
@@ -59,44 +64,41 @@ void TerminalApp::update() {
         return;
     }
 
-    // Process byte-by-byte with a minimal VT100 write-head overwrite model.
-    // m_writePos tracks the write position in m_lines.back().
-    // Printable chars OVERWRITE at m_writePos — they never blindly append.
-    // \r resets write-head to 0 WITHOUT clearing the line text.
-    // \033[K truncates the line at write-head (erase to end of line).
-    // \033[nD / \033[nC adjust write-head left/right by moving through UTF-8 codepoints.
-    // This is sufficient for bash/readline to maintain correct visible text.
-
     if (m_lines.empty()) m_lines.push_back("");
 
     size_t i = 0;
     while (i < rawOut.size()) {
         unsigned char c = rawOut[i];
 
-        // --- CSI escape sequence ---
+        // --- CSI escape sequence (\033[ ... <cmd>) ---
         if (c == '\033' && i + 1 < rawOut.size() && rawOut[i + 1] == '[') {
-            i += 2;
-            // Parse optional numeric parameter
-            int param = -1;
-            if (i < rawOut.size() && rawOut[i] >= '0' && rawOut[i] <= '9') {
-                param = 0;
-                while (i < rawOut.size() && rawOut[i] >= '0' && rawOut[i] <= '9') {
-                    param = param * 10 + (rawOut[i] - '0');
-                    ++i;
-                }
+            i += 2; // skip ESC [
+
+            // Consume all parameter bytes (0x20..0x3F: digits, semicolons, etc.)
+            std::string paramStr;
+            while (i < rawOut.size() && rawOut[i] >= 0x20 && rawOut[i] <= 0x3F) {
+                paramStr.push_back(rawOut[i]);
+                ++i;
             }
+
+            // Consume final command byte (0x40..0x7E: 'm', 'K', 'D', 'C', 'P', etc.)
             if (i < rawOut.size()) {
                 char cmd = rawOut[i++];
-                int n = (param <= 0) ? 1 : param;
+                int n = 1;
+                if (!paramStr.empty()) {
+                    try { n = std::stoi(paramStr); } catch (...) { n = 1; }
+                }
+                if (n <= 0) n = 1;
+
                 std::string& line = m_lines.back();
 
                 if (cmd == 'K') {
-                    // Erase to end of line from write-head
+                    // Erase to end of line from writePos
                     if (m_writePos <= static_cast<int>(line.size())) {
                         line.resize(m_writePos);
                     }
                 } else if (cmd == 'D') {
-                    // Cursor/write-head left — step back n UTF-8 codepoints
+                    // Cursor/write-head left n UTF-8 codepoints
                     for (int j = 0; j < n && m_writePos > 0; ++j) {
                         --m_writePos;
                         while (m_writePos > 0 &&
@@ -105,7 +107,7 @@ void TerminalApp::update() {
                         }
                     }
                 } else if (cmd == 'C') {
-                    // Cursor/write-head right — step forward n UTF-8 codepoints
+                    // Cursor/write-head right n UTF-8 codepoints
                     int lineSize = static_cast<int>(line.size());
                     for (int j = 0; j < n && m_writePos < lineSize; ++j) {
                         unsigned char lc = static_cast<unsigned char>(line[m_writePos]);
@@ -120,7 +122,7 @@ void TerminalApp::update() {
                     int del = std::min(n, static_cast<int>(line.size()) - m_writePos);
                     if (del > 0) line.erase(m_writePos, del);
                 }
-                // Other CSI sequences (colours, position, etc.) — skip
+                // Colors/SGR ('m'), cursor pos ('H','f'), etc. are safely consumed and ignored
             }
             continue;
         }
@@ -200,6 +202,7 @@ void TerminalApp::handleInput(const core::InputEvent& ev) {
     if (!m_initialized) return;
 
     if (ev.type == core::InputEventType::KeyboardKey) {
+        m_lastInputTime = std::chrono::steady_clock::now(); // Reset typing timer on keypress
         if (ev.key == KEY_LEFTSHIFT || ev.key == KEY_RIGHTSHIFT) {
             m_shiftPressed = ev.pressed;
             return;

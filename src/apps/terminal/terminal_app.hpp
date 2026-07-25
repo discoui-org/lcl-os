@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <chrono>
 #include "core/terminal/pty_manager.hpp"
 #include "core/input/input_manager.hpp"
 #include "render/renderer.hpp"
@@ -65,6 +66,7 @@ private:
     core::PTYManager m_ptyManager;
     std::vector<std::string> m_lines;
     int m_writePos{0}; // Write-head byte offset in m_lines.back() (VT100 overwrite tracking)
+    std::chrono::steady_clock::time_point m_lastInputTime;
     std::string m_ackFifo;
     bool m_initialized{false};
     bool m_shiftPressed{false};
