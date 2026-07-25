@@ -3,23 +3,19 @@
 #include <atomic>
 #include <unistd.h>
 #include <sys/types.h>
-#include <sys/stat.h>
 #include <sys/wait.h>
-#include <fcntl.h>
 #include <cstring>
 #include "core/app/app_bundle_parser.hpp"
 #include "core/ipc/ipc_manager.hpp"
 
 namespace {
-    std::string g_ackFifoPath;
+    bool g_waitingMode{false};
 
     void openSignalHandler(int sig) {
         (void)sig;
-        if (!g_ackFifoPath.empty()) {
-            std::cout << "\n[LCL Open] SIGINT received! Requesting Compositor to destroy spawned window...\n";
-            std::string cancelMsg = "DESTROY_WINDOW " + g_ackFifoPath;
-            lcl::core::IPCManager::sendMessage(cancelMsg);
-            unlink(g_ackFifoPath.c_str());
+        if (g_waitingMode) {
+            std::cout << "\n[LCL Open] SIGINT received! Requesting Compositor to destroy spawned window over Unix Domain Socket...\n";
+            lcl::core::IPCManager::sendClientRequest("DESTROY_LAST_WINDOW", "/tmp/lcl_compositor.sock", false);
         }
         _exit(130);
     }
@@ -66,40 +62,27 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Register signal handlers for clean SIGINT / SIGTERM cancellation
+    g_waitingMode = waitMode;
     std::signal(SIGINT, openSignalHandler);
     std::signal(SIGTERM, openSignalHandler);
 
-    // Check GUI app spawning
+    // Check GUI app spawning via Secure Unix Domain Socket
     if (meta->type == "gui" || meta->name == "LCL Terminal" || target.find("Terminal.app") != std::string::npos) {
         if (!waitMode) {
-            // Non-blocking mode: send IPC and exit immediately
             std::cout << "[LCL Open] Requesting LCL Compositor to spawn GUI Window for " << meta->name << "...\n";
-            if (lcl::core::IPCManager::sendMessage("SPAWN_TERMINAL")) {
-                std::cout << "[LCL Open SUCCESS] Sent SPAWN_TERMINAL IPC request to Compositor.\n";
-                return 0;
-            }
+            std::string res = lcl::core::IPCManager::sendClientRequest("SPAWN_TERMINAL", "/tmp/lcl_compositor.sock", false);
+            (void)res;
+            std::cout << "[LCL Open SUCCESS] Sent SPAWN_TERMINAL IPC request over Unix Domain Socket.\n";
+            return 0;
         } else {
-            // Blocking mode (-w): create ACK FIFO and wait for window close!
-            pid_t selfPid = getpid();
-            g_ackFifoPath = "/tmp/lcl_ipc_ack_" + std::to_string(selfPid) + ".fifo";
-            unlink(g_ackFifoPath.c_str());
-            if (mkfifo(g_ackFifoPath.c_str(), 0666) == 0) {
-                std::string reqMsg = "SPAWN_TERMINAL_WAIT " + g_ackFifoPath;
-                std::cout << "[LCL Open] Requesting GUI Window for " << meta->name << " (blocking mode: waiting for window close)...\n";
-                if (lcl::core::IPCManager::sendMessage(reqMsg)) {
-                    int ackFd = open(g_ackFifoPath.c_str(), O_RDONLY);
-                    if (ackFd >= 0) {
-                        char ackBuf[64];
-                        ssize_t n = read(ackFd, ackBuf, sizeof(ackBuf) - 1);
-                        (void)n;
-                        close(ackFd);
-                    }
-                    unlink(g_ackFifoPath.c_str());
-                    std::cout << "[LCL Open] Window closed cleanly. Returning to shell prompt.\n";
-                    return 0;
-                }
-                unlink(g_ackFifoPath.c_str());
+            std::cout << "[LCL Open] Requesting GUI Window for " << meta->name << " (blocking mode: waiting on socket ACK)...\n";
+            std::string response = lcl::core::IPCManager::sendClientRequest("SPAWN_TERMINAL_WAIT", "/tmp/lcl_compositor.sock", true);
+            if (response == "DONE") {
+                std::cout << "[LCL Open] Window closed cleanly (ACK received over Unix Socket). Returning to shell prompt.\n";
+                return 0;
+            } else {
+                std::cout << "[LCL Open] Socket connection closed or interrupted.\n";
+                return 0;
             }
         }
     }
@@ -124,10 +107,8 @@ int main(int argc, char* argv[]) {
     }
 
     if (waitMode) {
-        // Wait for child process to complete in blocking mode (-w)
         waitpid(pid, nullptr, 0);
     } else {
-        // Return immediately to shell prompt in non-blocking mode!
         std::cout << "[LCL Open] App launched in background with PID " << pid << ".\n";
     }
 
