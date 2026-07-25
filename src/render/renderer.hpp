@@ -74,11 +74,17 @@ public:
     void drawPixel(int x, int y, uint32_t argbColor);
     void drawRect(int x, int y, int width, int height, uint32_t argbColor);
     void drawFilledRect(int x, int y, int width, int height, uint32_t argbColor);
-    void drawCursor(int mouseX, int mouseY);
+
+    // Monospace Font primitives & Clipped drawing
+    void drawChar(int x, int y, char c, uint32_t fgColor);
+    void drawString(int x, int y, const std::string& text, uint32_t fgColor);
+    void drawCharClipped(int x, int y, char c, uint32_t fgColor, int minX, int minY, int maxX, int maxY);
+    void drawStringClipped(int x, int y, const std::string& text, uint32_t fgColor, int minX, int minY, int maxX, int maxY);
 
     // High-level LCL UI primitives
+    void drawCursor(int mouseX, int mouseY);
     void renderLCLDesktopShell(const std::string& statusMessage);
-    void renderDesktop(const WindowManager& windowManager);
+    void renderDesktop(const WindowManager& windowManager, const std::vector<std::string>& terminalLines);
     void drawWindowFrame(int x, int y, int width, int height, const std::string& title, uint32_t headerColor);
 
     /**

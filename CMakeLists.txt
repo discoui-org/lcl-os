@@ -22,6 +22,7 @@ add_executable(lcl-core
     src/main.cpp
     src/core/display/display_manager.cpp
     src/core/input/input_manager.cpp
+    src/core/terminal/pty_manager.cpp
     src/render/renderer.cpp
     src/render/window_manager.cpp
 )
