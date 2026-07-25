@@ -1,3 +1,4 @@
+# Canonical QEMU guest builder — always used (never package from the host OS).
 FROM --platform=linux/amd64 ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -19,7 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     coreutils \
     util-linux \
     findutils \
+    grep \
+    sed \
+    gawk \
+    procps \
     linux-image-virtual \
+    linux-modules-extra-virtual \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*

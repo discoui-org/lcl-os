@@ -23,9 +23,11 @@ clean:
 	rm -rf build
 
 help:
-	@echo "make build           - Build lcl-core (native on Linux, Docker elsewhere)"
-	@echo "make qemu-prep       - Build + package initramfs/kernel artifacts"
-	@echo "make qemu            - Build, package, and launch QEMU"
+	@echo "make build           - Build lcl-core via Docker (always)"
+	@echo "make qemu-prep       - Docker package kernel+initramfs"
+	@echo "make qemu            - Docker package + launch host QEMU"
 	@echo "make qemu NATIVE=1   - Host res + scale + QEMU fullscreen"
 	@echo "make fonts           - Fetch font assets"
 	@echo "make clean           - Remove build/"
+	@echo ""
+	@echo "Requires: Docker + qemu-system-x86_64 (guest never uses host kernel)"

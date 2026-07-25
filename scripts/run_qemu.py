@@ -108,37 +108,20 @@ def _readable_kernel(path: Path) -> Path | None:
     return None
 
 
-def find_host_kernel() -> Path | None:
-    """Kernel that matches the running host module tree (Linux native)."""
-    uname_r = platform.release()
-    candidates = [
-        Path(f"/lib/modules/{uname_r}/vmlinuz"),
-        Path(f"/boot/vmlinuz-{uname_r}"),
-        Path("/boot/vmlinuz-linux"),
-        Path("/boot/vmlinuz"),
-        Path(f"/usr/lib/modules/{uname_r}/vmlinuz"),
-    ]
-    for path in candidates:
-        if path.is_file() or path.is_symlink():
-            found = _readable_kernel(path)
-            if found:
-                return found
-    return None
+# --- Host kernel discovery DISABLED ---
+# Packaging must never use the developer machine kernel/modules (CachyOS/Arch/etc.
+# break guest DRM). All builds go through Docker (ubuntu:24.04 + linux-image-virtual).
+#
+# def find_host_kernel() -> Path | None:
+#     ... intentionally removed; see git history if needed.
 
 
 def locate_kernel() -> Path:
-    """Find a Linux kernel image paired with matching modules.
+    """Find kernel+modules from the Docker builder image only.
 
-    Never reuse a stale build/qemu-cache/vmlinuz against a different host
-    module tree (that yields empty /dev/dri and a frozen SeaBIOS screen).
+    Called only with --inside-docker. Never reads the outer host OS kernel.
     """
-    # 1) Linux host: always prefer the running kernel + /lib/modules/$(uname -r)
-    if is_linux() and not os.environ.get("LCL_FORCE_KERNEL_CACHE"):
-        host_k = find_host_kernel()
-        if host_k:
-            return host_k
-
-    # 2) Cache only when kver stamp is present and modules exist for it
+    # Prefer cache written by a previous Docker package (same image kver)
     if (
         KERNEL_CACHE.is_file()
         and KERNEL_KVER_STAMP.is_file()
@@ -148,19 +131,20 @@ def locate_kernel() -> Path:
         mod = Path("/lib/modules") / kver
         cached_mod = CACHE_DIR / "modules" / kver
         if (mod / "kernel").is_dir() or (cached_mod / "kernel").is_dir():
-            return KERNEL_CACHE
+            # Still prefer fresh /boot from this container when available
+            pass
 
-    uname_r = platform.release()
-    candidates = [
-        Path(f"/lib/modules/{uname_r}/vmlinuz"),
-        Path(f"/boot/vmlinuz-{uname_r}"),
-        Path("/boot/vmlinuz-linux"),
-        Path("/boot/vmlinuz"),
-        Path("/lib/modules/7.1.4-1-cachyos/vmlinuz"),
-    ]
+    # Ubuntu docker image: /boot/vmlinuz-* + matching /lib/modules/<kver>
+    candidates: list[Path] = []
     boot = Path("/boot")
     if boot.is_dir():
         candidates.extend(sorted(boot.glob("vmlinuz-*"), reverse=True))
+        candidates.append(Path("/boot/vmlinuz"))
+
+    modules_root = Path("/lib/modules")
+    if modules_root.is_dir():
+        for entry in sorted(modules_root.iterdir(), reverse=True):
+            candidates.append(entry / "vmlinuz")
 
     for path in candidates:
         if path.is_file() or path.is_symlink():
@@ -168,15 +152,7 @@ def locate_kernel() -> Path:
             if found:
                 return found
 
-    for base in (Path("/lib/modules"), Path("/boot")):
-        if not base.exists():
-            continue
-        for path in sorted(base.rglob("vmlinuz*")):
-            found = _readable_kernel(path)
-            if found:
-                return found
-
-    err("No Linux kernel image found.")
+    err("No kernel in Docker image. Rebuild: docker build -f scripts/Dockerfile.qemu")
     sys.exit(1)
 
 
@@ -319,13 +295,22 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
             pass
 
     has_virtio_gpu = any(target.rglob("virtio_gpu.ko*"))
-    if not copied_any:
+    builtin_txt = ""
+    builtin_path = kmod_base / "modules.builtin"
+    if builtin_path.is_file():
+        builtin_txt = builtin_path.read_text(encoding="utf-8", errors="ignore")
+        shutil.copy2(builtin_path, target / "modules.builtin", follow_symlinks=True)
+    virtio_builtin = "virtio_gpu" in builtin_txt or "virtio-gpu" in builtin_txt
+
+    if not copied_any and not virtio_builtin:
         err(f"No kernel modules copied from {kmod_base}")
         sys.exit(1)
-    if not has_virtio_gpu:
-        log(f"WARNING: virtio_gpu.ko not found under {kmod_base} — DRM may be unavailable")
-    else:
+    if has_virtio_gpu:
         log("virtio_gpu module packaged OK")
+    elif virtio_builtin:
+        log("virtio_gpu is built-in to this kernel (no .ko needed)")
+    else:
+        log(f"WARNING: virtio_gpu not found under {kmod_base} — DRM may be unavailable")
 
     # Persist matching cache pair
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -373,6 +358,7 @@ def package_initramfs(kernel_path: Path) -> None:
 
     shutil.copy2(BINARY, INITRAMFS_DIR / "usr" / "bin" / "lcl-core")
 
+    # Tools from the Docker image only (never host OS userland)
     host_bins = {
         "sh": Path("/bin/sh"),
         "bash": Path(which("bash") or "/usr/bin/bash"),
@@ -380,8 +366,13 @@ def package_initramfs(kernel_path: Path) -> None:
         "mkdir": Path("/bin/mkdir"),
         "sleep": Path("/bin/sleep"),
         "ls": Path("/bin/ls"),
+        "cat": Path("/bin/cat"),
+        "uname": Path("/usr/bin/uname"),
+        "grep": Path("/usr/bin/grep"),
         "printf": Path("/usr/bin/printf"),
         "modprobe": Path("/sbin/modprobe"),
+        "depmod": Path("/sbin/depmod"),
+        "kmod": Path("/bin/kmod"),
     }
 
     log("Packaging GNU Bash and essential utilities...")
@@ -633,14 +624,25 @@ def docker_available() -> bool:
 
 
 def ensure_docker_image() -> None:
+    """Build/rebuild image when missing or Dockerfile.qemu changed."""
     log(f"Ensuring Docker image {DOCKER_IMAGE}...")
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = CACHE_DIR / "docker-image.stamp"
+    df_mtime = str(DOCKERFILE.stat().st_mtime)
+
     inspect = subprocess.run(
         ["docker", "image", "inspect", DOCKER_IMAGE],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    if inspect.returncode != 0:
-        log("Building Docker builder image (first run may take a few minutes)...")
+    need_build = inspect.returncode != 0
+    if not need_build and stamp.is_file():
+        need_build = stamp.read_text(encoding="utf-8").strip() != df_mtime
+    elif not need_build and not stamp.is_file():
+        need_build = True
+
+    if need_build:
+        log("Building Docker builder image (first run / Dockerfile change may take a few minutes)...")
         run(
             [
                 "docker",
@@ -654,6 +656,7 @@ def ensure_docker_image() -> None:
                 str(SCRIPT_DIR),
             ]
         )
+        stamp.write_text(df_mtime + "\n", encoding="utf-8")
 
 
 def docker_run(args: list[str]) -> None:
@@ -680,45 +683,52 @@ def docker_run(args: list[str]) -> None:
     run(cmd)
 
 
-def native_build_and_package() -> Path:
+def docker_build_and_package() -> Path:
+    """Build + package exclusively inside Docker (ubuntu amd64)."""
+    ensure_dirs()
+    if not docker_available():
+        err("Docker is required on every host (Linux/macOS/Windows).")
+        err("Install Docker, then: docker build -f scripts/Dockerfile.qemu -t lcl-os-qemu-builder:latest scripts/")
+        sys.exit(1)
+    docker_run(["--package-only"])
+    if not KERNEL_CACHE.is_file() or not INITRAMFS_IMG.is_file():
+        err("Docker packaging did not produce kernel/initramfs artifacts.")
+        sys.exit(1)
+    return KERNEL_CACHE
+
+
+def package_inside_docker() -> Path:
+    """Runs only with --inside-docker: cmake + initramfs from image kernel/modules."""
     ensure_dirs()
     cmake_build()
     kernel = locate_kernel()
-    log(f"Host Kernel: {kernel}")
+    log(f"Docker image kernel: {kernel}")
     package_initramfs(kernel)
     return KERNEL_CACHE if KERNEL_CACHE.is_file() else kernel
 
 
-def prepare_artifacts(force_docker: bool = False) -> Path:
+# --- Host-native package path DISABLED (do not use outer OS kernel/modules) ---
+# def native_build_and_package() -> Path:
+#     ensure_dirs()
+#     cmake_build()
+#     kernel = locate_kernel()  # used to pick CachyOS/host vmlinuz — broken for guest DRM
+#     package_initramfs(kernel)
+#     return KERNEL_CACHE
+
+
+def prepare_artifacts() -> Path:
+    """Always Docker — never package from the host OS."""
+    return docker_build_and_package()
+
+
+def build_only() -> None:
+    """Always Docker — never compile against host libdrm/headers."""
     ensure_dirs()
-    use_docker = force_docker or not is_linux()
-
-    if use_docker:
-        if not docker_available():
-            err("Docker is required on macOS/Windows (and when --docker is set).")
-            if host_os() == "darwin":
-                err("Install Docker Desktop: https://www.docker.com/products/docker-desktop/")
-            sys.exit(1)
-        docker_run(["--package-only"])
-        if not KERNEL_CACHE.is_file() or not INITRAMFS_IMG.is_file():
-            err("Docker packaging did not produce kernel/initramfs artifacts.")
-            sys.exit(1)
-        return KERNEL_CACHE
-
-    return native_build_and_package()
-
-
-def build_only(force_docker: bool = False) -> None:
-    ensure_dirs()
-    if force_docker or not is_linux():
-        if not docker_available():
-            err("Docker is required to build on this platform.")
-            sys.exit(1)
-        docker_run(["--build-only"])
-        log(f"Linux binaries in {BUILD_DIR} (produced via Docker)")
-        return
-    cmake_build()
-    log(f"Build complete: {BINARY}")
+    if not docker_available():
+        err("Docker is required to build on every host.")
+        sys.exit(1)
+    docker_run(["--build-only"])
+    log(f"Linux binaries in {BUILD_DIR} (produced via Docker)")
 
 
 def _clamp_hz(value: float | int | None) -> int | None:
@@ -1170,9 +1180,13 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="LCL Core Linux QEMU launcher")
     parser.add_argument("--run", "-r", action="store_true", help="Launch QEMU after packaging")
-    parser.add_argument("--build-only", action="store_true", help="Only build binaries")
+    parser.add_argument("--build-only", action="store_true", help="Only build binaries (Docker)")
     parser.add_argument("--package-only", action="store_true", help="Build + package initramfs (no QEMU)")
-    parser.add_argument("--docker", action="store_true", help="Force Docker build/package path")
+    parser.add_argument(
+        "--docker",
+        action="store_true",
+        help="Ignored (Docker is always used for build/package)",
+    )
     parser.add_argument(
         "--native",
         "-n",
@@ -1190,31 +1204,23 @@ def main() -> None:
     print("  LCL Core Linux - QEMU Isolated Boot Launcher      ")
     print("====================================================")
 
-    # Inside Docker we always act as Linux native packager
-    if args.inside_docker or (is_linux() and not args.docker):
+    # ---- Inside Docker image: compile + package with image kernel/modules only ----
+    if args.inside_docker:
         if args.build_only:
             cmake_build()
+            log("Docker build-only complete.")
             return
-        kernel = native_build_and_package()
-        if args.run and not args.inside_docker:
-            launch_qemu(
-                kernel if isinstance(kernel, Path) else Path(kernel),
-                native=args.native,
-            )
-        elif not args.inside_docker and not args.package_only and not args.build_only:
-            # default without --run: prep only
-            log("Boot environment ready!")
-            log(f"Run '{Path(sys.argv[0]).name} --run' to launch QEMU in live VM.")
-        elif args.package_only or args.inside_docker:
-            log("Packaging complete.")
+        kernel = package_inside_docker()
+        log(f"Packaging complete. Kernel cache: {kernel}")
         return
 
-    # macOS / Windows (or forced docker from non-package host entry)
+    # ---- Outer host (Linux/macOS/Windows): always Docker for artifacts, QEMU on host ----
+    # Host OS kernel/modules/userland are NEVER used for the guest initramfs.
     if args.build_only:
-        build_only(force_docker=True)
+        build_only()
         return
 
-    kernel = prepare_artifacts(force_docker=args.docker or not is_linux())
+    kernel = prepare_artifacts()
     log(f"QEMU binary: {find_qemu()}")
     log(f"Kernel: {kernel}")
 

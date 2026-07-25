@@ -116,14 +116,13 @@ lcl-os/
 
 ### Build & QEMU (dev hosts)
 
-| Host | Build | Run |
-|------|--------|-----|
-| Linux | Native `cmake` (`make build`) | `make qemu` |
-| macOS / Windows | Docker `linux/amd64` (`Dockerfile.qemu`) | Host QEMU + packaged kernel/initramfs |
+**Always Docker** for compile + kernel/initramfs (`scripts/Dockerfile.qemu`, Ubuntu amd64).  
+The host OS kernel/modules are never packaged (avoids CachyOS/Arch DRM breakage).  
+QEMU itself runs on the host.
 
 ```bash
 make qemu            # default 1280x800, host refresh rate
-make qemu NATIVE=1   # host logical resolution + lcl.scale (kernel cmdline)
+make qemu NATIVE=1   # host resolution + scale + fullscreen
 ```
 
 Guest display boot args (when `NATIVE=1`):
