@@ -53,7 +53,7 @@ echo "[LCL QEMU] Host Kernel: ${KERNEL_PATH}"
 # 3. Create Initramfs Root with Arch/Linux Symlinks & Dynamic Libraries
 echo "[LCL QEMU] Preparing initramfs root directory structure..."
 rm -rf "${INITRAMFS_DIR}"
-mkdir -p "${INITRAMFS_DIR}"/{proc,sys,dev,tmp,etc,usr/bin,usr/lib,usr/share}
+mkdir -p "${INITRAMFS_DIR}"/{proc,sys,dev,tmp,etc,usr/bin,usr/lib,usr/share,home/user/Desktop,home/user/Documents,home/user/Downloads,home/user/Applications}
 ln -s usr/bin "${INITRAMFS_DIR}/bin"
 ln -s usr/bin "${INITRAMFS_DIR}/sbin"
 ln -s usr/lib "${INITRAMFS_DIR}/lib"
@@ -66,8 +66,40 @@ cp "${BINARY}" "${INITRAMFS_DIR}/usr/bin/lcl-core"
 [ -f /bin/mkdir ] && cp -L /bin/mkdir "${INITRAMFS_DIR}/usr/bin/mkdir"
 [ -f /bin/sleep ] && cp -L /bin/sleep "${INITRAMFS_DIR}/usr/bin/sleep"
 [ -f /bin/ls ] && cp -L /bin/ls "${INITRAMFS_DIR}/usr/bin/ls"
+[ -f /usr/bin/printf ] && cp -L /usr/bin/printf "${INITRAMFS_DIR}/usr/bin/printf"
 [ -f /sbin/modprobe ] && cp -L /sbin/modprobe "${INITRAMFS_DIR}/usr/bin/modprobe"
 [ -d /usr/share/libinput ] && cp -r /usr/share/libinput "${INITRAMFS_DIR}/usr/share/" 2>/dev/null || true
+
+# Create /usr/bin/clear helper script
+cat << 'EOF' > "${INITRAMFS_DIR}/usr/bin/clear"
+#!/bin/sh
+printf "\033[2J\033[H"
+EOF
+chmod +x "${INITRAMFS_DIR}/usr/bin/clear"
+
+# Create sample macOS-style SystemMonitor.app application bundle
+APP_DIR="${INITRAMFS_DIR}/home/user/Applications/SystemMonitor.app"
+mkdir -p "${APP_DIR}"/{bin,assets}
+cat << 'EOF' > "${APP_DIR}/metadata.json"
+{
+    "name": "System Monitor",
+    "executable": "bin/sysmon",
+    "version": "1.0.0",
+    "icon": "assets/icon.png"
+}
+EOF
+
+cat << 'EOF' > "${APP_DIR}/bin/sysmon"
+#!/bin/sh
+echo "===================================================="
+echo "          LCL OS System Monitor v1.0.0              "
+echo "===================================================="
+echo "Kernel: $(uname -a)"
+echo "Uptime: $(uptime 2>/dev/null || echo '0 mins')"
+echo "Memory: 2048 MB RAM Allocated"
+echo "===================================================="
+EOF
+chmod +x "${APP_DIR}/bin/sysmon"
 
 # Copy dynamic library dependencies
 echo "[LCL QEMU] Resolving dynamic library dependencies..."
@@ -77,6 +109,7 @@ FOR_BINS=("${BINARY}")
 [ -f /bin/mkdir ] && FOR_BINS+=("/bin/mkdir")
 [ -f /bin/sleep ] && FOR_BINS+=("/bin/sleep")
 [ -f /bin/ls ] && FOR_BINS+=("/bin/ls")
+[ -f /usr/bin/printf ] && FOR_BINS+=("/usr/bin/printf")
 [ -f /sbin/modprobe ] && FOR_BINS+=("/sbin/modprobe")
 
 for bin in "${FOR_BINS[@]}"; do
@@ -93,7 +126,7 @@ cat << 'EOF' > "${INITRAMFS_DIR}/init"
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-mkdir -p /dev/pts /dev/dri /dev/input
+mkdir -p /dev/pts /dev/dri /dev/input /home/user/Desktop /home/user/Documents /home/user/Downloads /home/user/Applications
 mount -t devpts devpts /dev/pts 2>/dev/null || true
 
 # Load USB HID input kernel modules for mouse/tablet

@@ -6,6 +6,7 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <cstring>
 #include <cerrno>
 
@@ -77,9 +78,17 @@ bool PTYManager::spawnShell(const std::string& shellPath) {
             if (slaveFd > STDERR_FILENO) close(slaveFd);
         }
 
-        // Set TERM environment variable
+        // Set HOME environment variable and change working directory to /home/user
+        const char* userHome = "/home/user";
+        struct stat st{};
+        if (stat(userHome, &st) == 0 && S_ISDIR(st.st_mode)) {
+            chdir(userHome);
+            setenv("HOME", userHome, 1);
+            setenv("PWD", userHome, 1);
+        } else {
+            setenv("HOME", "/", 1);
+        }
         setenv("TERM", "linux", 1);
-        setenv("HOME", "/", 1);
 
         char* const argv[] = { const_cast<char*>(shellPath.c_str()), nullptr };
         execv(shellPath.c_str(), argv);
