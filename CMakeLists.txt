@@ -27,6 +27,7 @@ add_executable(lcl-core
     src/core/ipc/ipc_manager.cpp
     src/core/session/startup_manager.cpp
     src/core/terminal/pty_manager.cpp
+    src/render/font_renderer.cpp
     src/render/renderer.cpp
     src/render/window_manager.cpp
 )

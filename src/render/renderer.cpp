@@ -185,6 +185,20 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
         }
     }
 
+    // Initialize TrueType Vector Font Engine (JetBrains Mono TTF with fallback)
+    std::vector<std::string> fontPaths = {
+        "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
+        "assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
+        "/usr/share/fonts/inter/Inter-Regular.otf",
+        "assets/fonts/inter/Inter-Regular.otf"
+    };
+
+    for (const auto& path : fontPaths) {
+        if (m_fontRenderer.loadFont(path, 15.0f)) {
+            break;
+        }
+    }
+
     m_initialized = true;
     return true;
 }
@@ -254,16 +268,20 @@ void Renderer::drawChar(int x, int y, char c, uint32_t fgColor) {
 }
 
 void Renderer::drawString(int x, int y, const std::string& text, uint32_t fgColor) {
-    int curX = x;
-    int curY = y;
-    for (char c : text) {
-        if (c == '\n') {
-            curX = x;
-            curY += 16;
-            continue;
+    if (m_fontRenderer.isInitialized()) {
+        m_fontRenderer.renderString(m_softwareBackBuffer.data(), m_width, m_height, x, y, text, fgColor);
+    } else {
+        int curX = x;
+        int curY = y;
+        for (char c : text) {
+            if (c == '\n') {
+                curX = x;
+                curY += 16;
+                continue;
+            }
+            drawChar(curX, curY, c, fgColor);
+            curX += 8;
         }
-        drawChar(curX, curY, c, fgColor);
-        curX += 8;
     }
 }
 
@@ -284,16 +302,20 @@ void Renderer::drawCharClipped(int x, int y, char c, uint32_t fgColor, int minX,
 }
 
 void Renderer::drawStringClipped(int x, int y, const std::string& text, uint32_t fgColor, int minX, int minY, int maxX, int maxY) {
-    int curX = x;
-    int curY = y;
-    for (char c : text) {
-        if (c == '\n') {
-            curX = x;
-            curY += 16;
-            continue;
+    if (m_fontRenderer.isInitialized()) {
+        m_fontRenderer.renderStringClipped(m_softwareBackBuffer.data(), m_width, m_height, x, y, text, fgColor, minX, minY, maxX, maxY);
+    } else {
+        int curX = x;
+        int curY = y;
+        for (char c : text) {
+            if (c == '\n') {
+                curX = x;
+                curY += 16;
+                continue;
+            }
+            drawCharClipped(curX, curY, c, fgColor, minX, minY, maxX, maxY);
+            curX += 8;
         }
-        drawCharClipped(curX, curY, c, fgColor, minX, minY, maxX, maxY);
-        curX += 8;
     }
 }
 

@@ -9,6 +9,8 @@
 #include "core/display/display_manager.hpp"
 #include "render/window_manager.hpp"
 
+#include "render/font_renderer.hpp"
+
 namespace lcl::render {
 
 struct WindowRenderContent {
@@ -107,6 +109,7 @@ private:
     void destroyDumbBuffer();
 
     core::DisplayManager* m_displayManager{nullptr};
+    FontRenderer m_fontRenderer;
     uint32_t m_width{1024};
     uint32_t m_height{768};
     bool m_initialized{false};
