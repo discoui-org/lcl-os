@@ -473,7 +473,10 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
             if (showCursor && !wrappedLines.empty()) {
                 int charWidth = 9; // JetBrains Mono character width
                 int charHeight = 16;
-                int caretX = minX + static_cast<int>(lastLineText.size()) * charWidth;
+                int textPixelWidth = m_fontRenderer.isInitialized() ?
+                                     m_fontRenderer.getTextWidth(lastLineText) :
+                                     static_cast<int>(lastLineText.size()) * charWidth;
+                int caretX = minX + textPixelWidth;
                 int caretY = lastLineY;
 
                 if (caretX + charWidth <= maxX && caretY + charHeight <= maxY) {

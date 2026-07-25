@@ -51,6 +51,11 @@ public:
     const GlyphInfo* getGlyph(char32_t codepoint);
 
     /**
+     * @brief Calculate the exact pixel width of a UTF-8 text string.
+     */
+    int getTextWidth(const std::string& text);
+
+    /**
      * @brief Render text onto a 32-bit ARGB software backbuffer with macOS-style antialiasing.
      */
     void renderString(uint32_t* backBuffer, int screenWidth, int screenHeight,

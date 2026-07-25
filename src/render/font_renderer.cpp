@@ -170,6 +170,23 @@ const GlyphInfo* FontRenderer::getGlyph(char32_t codepoint) {
     return &insertedIt->second;
 }
 
+int FontRenderer::getTextWidth(const std::string& text) {
+    if (!m_initialized || text.empty()) return 0;
+    int totalWidth = 0;
+    size_t i = 0;
+    while (i < text.size()) {
+        char32_t codepoint = decodeNextUTF8(text, i);
+        if (codepoint == '\n') break;
+        const GlyphInfo* g = getGlyph(codepoint);
+        if (g) {
+            totalWidth += (g->advanceWidth > 0 ? g->advanceWidth : 9);
+        } else {
+            totalWidth += 9;
+        }
+    }
+    return totalWidth;
+}
+
 void FontRenderer::renderString(uint32_t* backBuffer, int screenWidth, int screenHeight,
                                 int x, int y, const std::string& text, uint32_t fgColor) {
     renderStringClipped(backBuffer, screenWidth, screenHeight, x, y, text, fgColor, 0, 0, screenWidth, screenHeight);
