@@ -864,11 +864,23 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
     refresh_hz = host.refresh_hz
 
     if native:
-        width, height = host.width, host.height
-        scale = host.scale
+        host_dpr = host.scale if host.scale > 0 else 1.0
+        # Retina / HiDPI: guest FB = physical pixels, UI layout × DPR.
+        # Logical FB + zoom-to-fit upscales → blurry/pixelated (not true Retina).
+        if (
+            host.physical_width
+            and host.physical_height
+            and host_dpr > 1.01
+        ):
+            width, height = host.physical_width, host.physical_height
+            scale = host_dpr
+        else:
+            width, height = host.width, host.height
+            scale = 1.0
     else:
         width, height = 1280, 800
         scale = 1.0
+        host_dpr = 1.0
 
     kvm = Path("/dev/kvm")
     if kvm.exists() and os.access(kvm, os.R_OK | os.W_OK):
@@ -876,36 +888,69 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
     else:
         accel = ["-cpu", "max"]
 
-    # Prefer Cocoa on macOS, SDL elsewhere when available
-    display = ["-display", "cocoa"] if host_os() == "darwin" else ["-display", "sdl,gl=on"]
+    # Prefer Cocoa on macOS, SDL/GTK elsewhere when available
     gpu = ["-device", "virtio-vga-gl"]
-    # Cocoa + gl can fail on some setups; fall back without gl device flags if needed
+    extra_qemu: list[str] = []
     if host_os() == "darwin":
         gpu = ["-device", "virtio-vga"]
-        display = ["-display", "cocoa"]
+        # zoom-to-fit: stretch guest FB to fill the screen (otherwise centered letterbox)
+        if native:
+            disp = "cocoa,full-screen=on,zoom-to-fit=on"
+            extra_qemu = ["-full-screen"]
+        else:
+            disp = "cocoa"
+        display = ["-display", disp]
+    else:
+        # Prefer gtk zoom-to-fit when available; else SDL fullscreen
+        if native and which("qemu-system-x86_64"):
+            # Probe is expensive; pick gtk if this QEMU build lists it via -display help
+            try:
+                help_out = subprocess.check_output(
+                    [qemu, "-display", "help"],
+                    text=True,
+                    stderr=subprocess.STDOUT,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                help_out = ""
+            if "gtk" in help_out.splitlines() or "\ngtk" in help_out:
+                disp = "gtk,gl=on,full-screen=on,zoom-to-fit=on"
+            elif "sdl" in help_out:
+                disp = "sdl,gl=on,full-screen=on"
+            else:
+                disp = "cocoa,full-screen=on,zoom-to-fit=on" if "cocoa" in help_out else "sdl"
+            extra_qemu = ["-full-screen"]
+        else:
+            disp = "sdl,gl=on"
+        display = ["-display", disp]
 
     print("----------------------------------------------------")
     print("  Launching QEMU Virtual Machine:")
     print(f"  - Memory: {memory}")
     print(f"  - SMP Cores: {cpus}")
     print(f"  - Guest video: {width}x{height}@{refresh_hz}")
-    print(f"  - UI scale: {scale} (lcl.scale kernel param)")
+    print(f"  - UI scale: {scale} (lcl.scale)")
     if native:
-        print("  - Mode: native host display")
+        print("  - Mode: native host display (fullscreen)")
+        print(f"  - Host DPR: {host_dpr}  UI scale: {scale}")
         if host.logical_width and host.physical_width:
             print(
                 f"  - Host logical: {host.logical_width}x{host.logical_height}  "
                 f"physical: {host.physical_width}x{host.physical_height}"
             )
+            if scale > 1.01:
+                print("  - HiDPI: physical FB + scaled UI (sharp Retina path)")
     print(f"  - Accelerator: {' '.join(accel)}")
     print(f"  - GPU: {gpu[1]}")
     print(f"  - Display: {display[1]}")
     print("----------------------------------------------------")
 
-    # Resolution -> DRM/KMS via kernel video=
-    # Scale -> LCL via custom cmdline (read /proc/cmdline in guest when implementing HiDPI)
+    # Resolution -> DRM/KMS via kernel video= + lcl.width/height (DisplayManager picks mode)
+    # lcl.scale multiplies UI only when FB is physical HiDPI (bare-metal); QEMU native uses 1.0
     video_mode = f"video={width}x{height}-32@{refresh_hz}"
-    lcl_params = f"lcl.scale={scale} lcl.width={width} lcl.height={height}"
+    lcl_params = (
+        f"lcl.scale={scale} lcl.width={width} lcl.height={height} "
+        f"lcl.refresh={refresh_hz} lcl.dpr={host_dpr}"
+    )
     if host.logical_width and host.logical_height:
         lcl_params += f" lcl.logical={host.logical_width}x{host.logical_height}"
     if host.physical_width and host.physical_height:
@@ -930,6 +975,7 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
         cpus,
         *gpu,
         *display,
+        *extra_qemu,
         "-usb",
         "-device",
         "usb-ehci,id=ehci",

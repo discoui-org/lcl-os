@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <unistd.h>
 #include "core/display/display_manager.hpp"
+#include "core/display/display_scale.hpp"
 #include "core/input/input_manager.hpp"
 #include "core/ipc/ipc_manager.hpp"
 #include "core/session/startup_manager.hpp"
@@ -41,6 +42,9 @@ int main(int argc, char* argv[]) {
     std::cout << "  C++ Standard: C++20\n";
     std::cout << "====================================================\n";
     std::cout << "[LCL Core] Initializing core subsystem skeleton...\n";
+
+    // UI DPI scale from boot args (lcl.scale=) / LCL_SCALE
+    lcl::core::DisplayScale::initialize();
 
     // Initialize DRM/KMS Display Subsystem
     lcl::core::DisplayManager displayManager;
@@ -99,9 +103,9 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[LCL Core] Secure Unix Domain Socket Compositor IPC active! Press Ctrl+C to terminate.\n";
 
-    // High Refresh Rate Frame Pacing Setup (matches DRM display refresh rate, e.g. 144Hz)
-    uint32_t targetHz = displayManager.isInitialized() ? displayManager.getActiveDisplayMode().refreshRate : 144;
-    if (targetHz == 0) targetHz = 144;
+    // Frame pacing matches DRM refresh rate (fallback 60 Hz)
+    uint32_t targetHz = displayManager.isInitialized() ? displayManager.getActiveDisplayMode().refreshRate : 60;
+    if (targetHz == 0) targetHz = 60;
     auto targetFrameDuration = std::chrono::microseconds(1000000 / targetHz);
     std::cout << "[LCL Core] High Refresh Rate active: targeting " << targetHz << " Hz (~"
               << (1000000 / targetHz) << " us per frame budget).\n";
@@ -121,9 +125,16 @@ int main(int argc, char* argv[]) {
                       << msg.pid << ", UID: " << msg.uid << "): '" << msg.command << "'\n";
 
             if (msg.command == "SPAWN_TERMINAL" || msg.command == "SPAWN_TERMINAL_WAIT") {
-                int x = 80 + static_cast<int>(terminalApps.size() * 40);
-                int y = 60 + static_cast<int>(terminalApps.size() * 30);
-                uint32_t winId = windowManager.createWindow("LCL Terminal", x, y, 640, 480, 0xFF89B4FA);
+                using lcl::core::DisplayScale;
+                int x = DisplayScale::px(80 + static_cast<int>(terminalApps.size() * 40));
+                int y = DisplayScale::px(60 + static_cast<int>(terminalApps.size() * 30));
+                uint32_t winId = windowManager.createWindow(
+                    "LCL Terminal",
+                    x,
+                    y,
+                    DisplayScale::px(DisplayScale::kDefaultWinW),
+                    DisplayScale::px(DisplayScale::kDefaultWinH),
+                    0xFF89B4FA);
 
                 auto newApp = std::make_unique<lcl::apps::TerminalApp>();
                 newApp->initialize(winId);

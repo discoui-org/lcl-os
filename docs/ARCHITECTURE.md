@@ -126,4 +126,9 @@ make qemu            # default 1280x800, host refresh rate
 make qemu NATIVE=1   # host logical resolution + lcl.scale (kernel cmdline)
 ```
 
-Guest display boot args (when `NATIVE=1`): `video=WxH-32@Hz`, `lcl.scale=`, `lcl.logical=`, `lcl.physical=` (read from `/proc/cmdline`; HiDPI scale not yet consumed by LCL core).
+Guest display boot args (when `NATIVE=1`):
+- HiDPI/Retina: `video=` = **physical** pixels, `lcl.scale` = DPR (sharp UI; avoids zoom-upscale blur)
+- 1x displays: `video=` = host resolution, `lcl.scale=1`
+- QEMU cocoa: `full-screen=on,zoom-to-fit=on` (fill screen if mode list is inexact)
+
+`DisplayManager` prefers boot-requested mode. `DisplayScale` multiplies fonts/chrome/windows by `lcl.scale`.

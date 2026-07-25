@@ -1,4 +1,5 @@
 #include "render/renderer.hpp"
+#include "core/display/display_scale.hpp"
 #include <iostream>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
@@ -176,7 +177,11 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
         if (m_displayManager->getBackendType() == core::DisplayBackendType::DRM_KMS) {
             if (createDumbBuffer()) {
                 m_usingDRMHardware = true;
-                m_displayManager->initHardwareCursor(64, 64);
+                // Hardware cursor buffer sized for scaled arrow (base 12x16 × DPR)
+                const int cs = std::max(1, core::DisplayScale::px(1));
+                const uint32_t cursorDim = static_cast<uint32_t>(
+                    std::max(64, std::max(12 * cs, 16 * cs) + 8));
+                m_displayManager->initHardwareCursor(cursorDim, cursorDim);
                 std::cout << "[LCL Render] DRM Hardware acceleration active! Driver: "
                           << m_displayManager->getDriverName()
                           << " (Render Node: "
@@ -194,13 +199,16 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
         "assets/fonts/inter/Inter-Regular.otf"
     };
 
+    const float fontPx = core::DisplayScale::fontSize();
     for (const auto& path : fontPaths) {
-        if (m_fontRenderer.loadFont(path, 15.0f)) {
+        if (m_fontRenderer.loadFont(path, fontPx)) {
             break;
         }
     }
 
     m_initialized = true;
+    std::cout << "[LCL Render] UI scale: " << core::DisplayScale::factor()
+              << "  font: " << fontPx << "px\n";
     return true;
 }
 
@@ -258,11 +266,16 @@ void Renderer::drawPixel(int x, int y, uint32_t argbColor) {
 }
 
 void Renderer::drawChar(int x, int y, char c, uint32_t fgColor) {
+    const int s = core::DisplayScale::px(1);
     for (int r = 0; r < 16; ++r) {
         uint8_t rowMask = getGlyphRow(c, r);
         for (int col = 0; col < 8; ++col) {
             if ((rowMask >> (7 - col)) & 1) {
-                drawPixel(x + col, y + r, fgColor);
+                if (s <= 1) {
+                    drawPixel(x + col, y + r, fgColor);
+                } else {
+                    drawFilledRect(x + col * s, y + r * s, s, s, fgColor);
+                }
             }
         }
     }
@@ -272,31 +285,46 @@ void Renderer::drawString(int x, int y, const std::string& text, uint32_t fgColo
     if (m_fontRenderer.isInitialized()) {
         m_fontRenderer.renderString(m_softwareBackBuffer.data(), m_width, m_height, x, y, text, fgColor);
     } else {
+        const int cellW = core::DisplayScale::px(8);
+        const int cellH = core::DisplayScale::px(16);
         int curX = x;
         int curY = y;
         for (char c : text) {
             if (c == '\n') {
                 curX = x;
-                curY += 16;
+                curY += cellH;
                 continue;
             }
             drawChar(curX, curY, c, fgColor);
-            curX += 8;
+            curX += cellW;
         }
     }
 }
 
 void Renderer::drawCharClipped(int x, int y, char c, uint32_t fgColor, int minX, int minY, int maxX, int maxY) {
+    const int s = std::max(1, core::DisplayScale::px(1));
     for (int r = 0; r < 16; ++r) {
-        int py = y + r;
-        if (py < minY || py >= maxY) continue;
-
-        uint8_t rowMask = getGlyphRow(c, r);
         for (int col = 0; col < 8; ++col) {
-            int px = x + col;
-            if (px < minX || px >= maxX) continue;
-            if ((rowMask >> (7 - col)) & 1) {
+            if (!((getGlyphRow(c, r) >> (7 - col)) & 1)) {
+                continue;
+            }
+            if (s <= 1) {
+                int px = x + col;
+                int py = y + r;
+                if (px < minX || px >= maxX || py < minY || py >= maxY) {
+                    continue;
+                }
                 drawPixel(px, py, fgColor);
+            } else {
+                int px = x + col * s;
+                int py = y + r * s;
+                // Clip filled block roughly against bounds
+                int w = s;
+                int h = s;
+                if (px + w <= minX || py + h <= minY || px >= maxX || py >= maxY) {
+                    continue;
+                }
+                drawFilledRect(px, py, w, h, fgColor);
             }
         }
     }
@@ -306,16 +334,18 @@ void Renderer::drawStringClipped(int x, int y, const std::string& text, uint32_t
     if (m_fontRenderer.isInitialized()) {
         m_fontRenderer.renderStringClipped(m_softwareBackBuffer.data(), m_width, m_height, x, y, text, fgColor, minX, minY, maxX, maxY);
     } else {
+        const int cellW = core::DisplayScale::px(8);
+        const int cellH = core::DisplayScale::px(16);
         int curX = x;
         int curY = y;
         for (char c : text) {
             if (c == '\n') {
                 curX = x;
-                curY += 16;
+                curY += cellH;
                 continue;
             }
             drawCharClipped(curX, curY, c, fgColor, minX, minY, maxX, maxY);
-            curX += 8;
+            curX += cellW;
         }
     }
 }
@@ -364,60 +394,85 @@ void Renderer::drawCursor(int mouseX, int mouseY) {
         "      XX    "
     };
 
+    const int s = std::max(1, core::DisplayScale::px(1));
     for (int r = 0; r < 16; ++r) {
         for (int c = 0; c < 12; ++c) {
             char ch = cursorShape[r][c];
             if (ch == 'X') {
-                drawPixel(mouseX + c, mouseY + r, 0xFF000000);
+                if (s <= 1) {
+                    drawPixel(mouseX + c, mouseY + r, 0xFF000000);
+                } else {
+                    drawFilledRect(mouseX + c * s, mouseY + r * s, s, s, 0xFF000000);
+                }
             } else if (ch == '.') {
-                drawPixel(mouseX + c, mouseY + r, 0xFFFFFFFF);
+                if (s <= 1) {
+                    drawPixel(mouseX + c, mouseY + r, 0xFFFFFFFF);
+                } else {
+                    drawFilledRect(mouseX + c * s, mouseY + r * s, s, s, 0xFFFFFFFF);
+                }
             }
         }
     }
 }
 
 void Renderer::drawWindowFrame(int x, int y, int width, int height, const std::string& title, uint32_t headerColor) {
-    // Window header bar
-    drawFilledRect(x, y, width, 32, headerColor);
-    // Window body
-    drawFilledRect(x, y + 32, width, height - 32, 0xFF1E293B);
-    // Window border
+    using core::DisplayScale;
+    const int titleH = DisplayScale::titleBarHeight();
+    const int btn = DisplayScale::trafficBtn();
+    const int gap = DisplayScale::trafficGap();
+    const int pad = DisplayScale::px(10);
+    const int titleTx = DisplayScale::px(70);
+    const int titleTy = DisplayScale::px(8);
+
+    drawFilledRect(x, y, width, titleH, headerColor);
+    drawFilledRect(x, y + titleH, width, height - titleH, 0xFF1E293B);
     drawRect(x, y, width, height, 0xFF38BDF8);
-    // Window title text
-    drawString(x + 70, y + 8, title, 0xFFFFFFFF);
-    // Window control buttons
-    drawFilledRect(x + 10, y + 10, 12, 12, 0xFFEF4444); // Red
-    drawFilledRect(x + 28, y + 10, 12, 12, 0xFFF59E0B); // Yellow
-    drawFilledRect(x + 46, y + 10, 12, 12, 0xFF10B981); // Green
+    drawString(x + titleTx, y + titleTy, title, 0xFFFFFFFF);
+    drawFilledRect(x + pad, y + pad, btn, btn, 0xFFEF4444);
+    drawFilledRect(x + pad + gap, y + pad, btn, btn, 0xFFF59E0B);
+    drawFilledRect(x + pad + gap * 2, y + pad, btn, btn, 0xFF10B981);
 }
 
 void Renderer::renderLCLDesktopShell(const std::string& statusMessage) {
     (void)statusMessage;
+    using core::DisplayScale;
     clear(0xFF090D16);
-    drawFilledRect(0, 0, m_width, 40, 0xFF1E1E2E);
-    drawRect(0, 39, m_width, 1, 0xFF45475A);
-    drawFilledRect(10, 6, 80, 28, 0xFF89B4FA);
-    drawString(20, 12, "LCL OS", 0xFF000000);
-    drawWindowFrame(80, 80, 540, 360, "LCL Terminal / Core Engine", 0xFF89B4FA);
-    drawWindowFrame(360, 200, 460, 300, "LCL System Monitor", 0xFF45475A);
-    drawCursor(512, 384);
+    const int menuH = DisplayScale::menuBarHeight();
+    drawFilledRect(0, 0, m_width, menuH, 0xFF1E1E2E);
+    drawRect(0, menuH - 1, m_width, 1, 0xFF45475A);
+    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6), DisplayScale::px(80), DisplayScale::px(28), 0xFF89B4FA);
+    drawString(DisplayScale::px(20), DisplayScale::px(12), "LCL OS", 0xFF000000);
+    drawWindowFrame(DisplayScale::px(80), DisplayScale::px(80), DisplayScale::px(540), DisplayScale::px(360),
+                    "LCL Terminal / Core Engine", 0xFF89B4FA);
+    drawWindowFrame(DisplayScale::px(360), DisplayScale::px(200), DisplayScale::px(460), DisplayScale::px(300),
+                    "LCL System Monitor", 0xFF45475A);
+    drawCursor(static_cast<int>(m_width / 2), static_cast<int>(m_height / 2));
 }
 
 void Renderer::renderDesktop(const WindowManager& windowManager, const std::vector<WindowRenderContent>& windowContents) {
+    using core::DisplayScale;
+
     // 1. Wallpaper background
     clear(0xFF090D16);
 
     // 2. Top Taskbar / Shell Panel
-    drawFilledRect(0, 0, m_width, 40, 0xFF1E1E2E);
-    drawRect(0, 39, m_width, 1, 0xFF45475A);
+    const int menuH = DisplayScale::menuBarHeight();
+    drawFilledRect(0, 0, m_width, menuH, 0xFF1E1E2E);
+    drawRect(0, menuH - 1, m_width, 1, 0xFF45475A);
 
     // LCL Shell Logo Indicator & System Title
-    drawFilledRect(10, 6, 90, 28, 0xFF89B4FA);
-    drawString(20, 12, "LCL Core", 0xFF1E1E2E);
+    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6), DisplayScale::px(90), DisplayScale::px(28), 0xFF89B4FA);
+    drawString(DisplayScale::px(20), DisplayScale::px(12), "LCL Core", 0xFF1E1E2E);
     std::string hwInfo = "LCL OS v0.1.0 (" + (m_displayManager && m_displayManager->isHardwareAccelerated() ? m_displayManager->getDriverName() : "DRM FB") + ")";
-    drawString(m_width - static_cast<int>(hwInfo.length() * 8 + 20), 12, hwInfo, 0xFFA6ADC8);
+    const int monoW = DisplayScale::px(8);
+    drawString(static_cast<int>(m_width) - static_cast<int>(hwInfo.length()) * monoW - DisplayScale::px(20),
+               DisplayScale::px(12), hwInfo, 0xFFA6ADC8);
 
     // 3. Render Windows in z-order
+    const int pad = DisplayScale::windowPad();
+    const int titleH = DisplayScale::titleBarHeight();
+    const int contentTop = titleH + DisplayScale::px(8);
+
     for (const auto& win : windowManager.getWindows()) {
         drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
 
@@ -432,14 +487,14 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
 
         if (contentPtr && !contentPtr->lines.empty()) {
             const auto& lines = contentPtr->lines;
-            int minX = win.x + 12;
-            int minY = win.y + 40;
-            int maxX = win.x + win.width - 12;
-            int maxY = win.y + win.height - 12;
+            int minX = win.x + pad;
+            int minY = win.y + contentTop;
+            int maxX = win.x + win.width - pad;
+            int maxY = win.y + win.height - pad;
 
-            int fontCellWidth = m_fontRenderer.isInitialized() ? m_fontRenderer.getCellWidth() : 8;
-            int fontCellHeight = m_fontRenderer.isInitialized() ? m_fontRenderer.getCellHeight() : 16;
-            int lineSpacing = fontCellHeight + 2;
+            int fontCellWidth = m_fontRenderer.isInitialized() ? m_fontRenderer.getCellWidth() : DisplayScale::px(8);
+            int fontCellHeight = m_fontRenderer.isInitialized() ? m_fontRenderer.getCellHeight() : DisplayScale::px(16);
+            int lineSpacing = fontCellHeight + DisplayScale::px(2);
 
             int maxCols = std::max(1, (maxX - minX) / fontCellWidth);
             int maxRows = std::max(1, (maxY - minY) / lineSpacing);

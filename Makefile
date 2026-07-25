@@ -26,6 +26,6 @@ help:
 	@echo "make build           - Build lcl-core (native on Linux, Docker elsewhere)"
 	@echo "make qemu-prep       - Build + package initramfs/kernel artifacts"
 	@echo "make qemu            - Build, package, and launch QEMU"
-	@echo "make qemu NATIVE=1   - Same, host resolution + DPI scale (lcl.scale)"
+	@echo "make qemu NATIVE=1   - Host res + scale + QEMU fullscreen"
 	@echo "make fonts           - Fetch font assets"
 	@echo "make clean           - Remove build/"

@@ -1,5 +1,12 @@
 #include "core/display/display_manager.hpp"
+#include "core/display/display_scale.hpp"
 #include <iostream>
+#include <fstream>
+#include <sstream>
+#include <cstdlib>
+#include <cstdio>
+#include <cmath>
+#include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
@@ -10,6 +17,131 @@
 #include <chrono>
 
 namespace lcl::core {
+namespace {
+
+struct PreferredMode {
+    int width{0};
+    int height{0};
+    int refreshHz{0};
+};
+
+PreferredMode parsePreferredModeFromBoot() {
+    PreferredMode pref{};
+
+    auto applyVideoToken = [&](const std::string& token) {
+        // video=1280x800-32@60  or  video=1280x800@60  or  video=1280x800
+        if (token.rfind("video=", 0) != 0) {
+            return;
+        }
+        std::string spec = token.substr(6);
+        // strip connector prefix like "Virtual-1:" if present
+        auto colon = spec.find(':');
+        if (colon != std::string::npos) {
+            spec = spec.substr(colon + 1);
+        }
+        int w = 0, h = 0, hz = 0;
+        if (std::sscanf(spec.c_str(), "%dx%d-%*d@%d", &w, &h, &hz) >= 2 ||
+            std::sscanf(spec.c_str(), "%dx%d@%d", &w, &h, &hz) >= 2 ||
+            std::sscanf(spec.c_str(), "%dx%d", &w, &h) >= 2) {
+            if (w > 0 && h > 0) {
+                pref.width = w;
+                pref.height = h;
+                if (hz > 0) {
+                    pref.refreshHz = hz;
+                }
+            }
+        }
+    };
+
+    auto applyKv = [&](const std::string& token) {
+        auto eq = token.find('=');
+        if (eq == std::string::npos) {
+            return;
+        }
+        std::string key = token.substr(0, eq);
+        std::string val = token.substr(eq + 1);
+        try {
+            if (key == "lcl.width") {
+                pref.width = std::stoi(val);
+            } else if (key == "lcl.height") {
+                pref.height = std::stoi(val);
+            } else if (key == "lcl.refresh" || key == "lcl.hz") {
+                pref.refreshHz = std::stoi(val);
+            }
+        } catch (...) {
+        }
+    };
+
+    std::ifstream cmdline("/proc/cmdline");
+    if (cmdline) {
+        std::string line;
+        std::getline(cmdline, line);
+        std::istringstream iss(line);
+        std::string token;
+        while (iss >> token) {
+            applyVideoToken(token);
+            applyKv(token);
+        }
+    }
+
+    if (const char* ew = std::getenv("LCL_WIDTH")) {
+        try { pref.width = std::stoi(ew); } catch (...) {}
+    }
+    if (const char* eh = std::getenv("LCL_HEIGHT")) {
+        try { pref.height = std::stoi(eh); } catch (...) {}
+    }
+
+    return pref;
+}
+
+drmModeModeInfo pickMode(drmModeConnectorPtr conn, const PreferredMode& pref) {
+    drmModeModeInfo best = conn->modes[0];
+
+    if (pref.width > 0 && pref.height > 0) {
+        int bestScore = -1;
+        for (int m = 0; m < conn->count_modes; ++m) {
+            const auto& mode = conn->modes[m];
+            const int dw = static_cast<int>(mode.hdisplay) - pref.width;
+            const int dh = static_cast<int>(mode.vdisplay) - pref.height;
+            // Prefer exact match, then closest area; refresh as tie-breaker
+            int score = 0;
+            if (mode.hdisplay == static_cast<uint16_t>(pref.width) &&
+                mode.vdisplay == static_cast<uint16_t>(pref.height)) {
+                score = 1'000'000;
+                if (pref.refreshHz > 0) {
+                    score -= std::abs(static_cast<int>(mode.vrefresh) - pref.refreshHz) * 100;
+                } else {
+                    score += static_cast<int>(mode.vrefresh);
+                }
+            } else {
+                // Lower is better distance — invert into score
+                const int dist = dw * dw + dh * dh;
+                score = 500'000 - dist;
+                if (pref.refreshHz > 0) {
+                    score -= std::abs(static_cast<int>(mode.vrefresh) - pref.refreshHz);
+                }
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = mode;
+            }
+        }
+        return best;
+    }
+
+    // No preference: highest refresh, then largest resolution
+    for (int m = 0; m < conn->count_modes; ++m) {
+        const auto& mode = conn->modes[m];
+        if (mode.vrefresh > best.vrefresh ||
+            (mode.vrefresh == best.vrefresh &&
+             (mode.hdisplay * mode.vdisplay > best.hdisplay * best.vdisplay))) {
+            best = mode;
+        }
+    }
+    return best;
+}
+
+} // namespace
 
 DisplayManager::DisplayManager() = default;
 
@@ -144,19 +276,30 @@ bool DisplayManager::probeDRMResources() {
 
     if (!m_drmDevice.connector) return false;
 
-    drmModeModeInfo bestMode = m_drmDevice.connector->modes[0];
-    for (int m = 0; m < m_drmDevice.connector->count_modes; ++m) {
-        const auto& mode = m_drmDevice.connector->modes[m];
-        if (mode.vrefresh > bestMode.vrefresh ||
-           (mode.vrefresh == bestMode.vrefresh && (mode.hdisplay * mode.vdisplay > bestMode.hdisplay * bestMode.vdisplay))) {
-            bestMode = mode;
+    const PreferredMode pref = parsePreferredModeFromBoot();
+    if (pref.width > 0 && pref.height > 0) {
+        std::cout << "[LCL Display] Preferred mode from boot: "
+                  << pref.width << "x" << pref.height;
+        if (pref.refreshHz > 0) {
+            std::cout << "@" << pref.refreshHz;
         }
+        std::cout << "\n";
     }
+
+    drmModeModeInfo bestMode = pickMode(m_drmDevice.connector, pref);
     m_drmDevice.currentMode = bestMode;
     m_activeMode.width = m_drmDevice.currentMode.hdisplay;
     m_activeMode.height = m_drmDevice.currentMode.vdisplay;
     m_activeMode.refreshRate = m_drmDevice.currentMode.vrefresh;
     m_activeMode.name = m_drmDevice.currentMode.name;
+
+    if (pref.width > 0 && pref.height > 0 &&
+        (static_cast<int>(m_activeMode.width) != pref.width ||
+         static_cast<int>(m_activeMode.height) != pref.height)) {
+        std::cout << "[LCL Display WARNING] Exact mode " << pref.width << "x" << pref.height
+                  << " not in EDID list; using closest "
+                  << m_activeMode.width << "x" << m_activeMode.height << "\n";
+    }
 
     if (m_drmDevice.connector->encoder_id) {
         m_drmDevice.encoder = drmModeGetEncoder(m_drmDevice.fd, m_drmDevice.connector->encoder_id);
@@ -279,7 +422,7 @@ bool DisplayManager::initHardwareCursor(uint32_t width, uint32_t height) {
     m_drmDevice.cursorPixels = static_cast<uint32_t*>(mapPtr);
     std::memset(m_drmDevice.cursorPixels, 0, creq.size);
 
-    // Rasterize default cursor arrow (ARGB)
+    // Rasterize default cursor arrow (ARGB), scaled by UI DPR
     static const char* cursorShape[] = {
         "X           ",
         "XX          ",
@@ -299,13 +442,28 @@ bool DisplayManager::initHardwareCursor(uint32_t width, uint32_t height) {
         "      XX    "
     };
 
+    const int s = std::max(1, DisplayScale::px(1));
+    const int pitch = static_cast<int>(width);
     for (int r = 0; r < 16; ++r) {
         for (int c = 0; c < 12; ++c) {
             char ch = cursorShape[r][c];
+            uint32_t color = 0;
             if (ch == 'X') {
-                m_drmDevice.cursorPixels[r * width + c] = 0xFF000000;
+                color = 0xFF000000;
             } else if (ch == '.') {
-                m_drmDevice.cursorPixels[r * width + c] = 0xFFFFFFFF;
+                color = 0xFFFFFFFF;
+            } else {
+                continue;
+            }
+            for (int dy = 0; dy < s; ++dy) {
+                for (int dx = 0; dx < s; ++dx) {
+                    const int px = c * s + dx;
+                    const int py = r * s + dy;
+                    if (px >= 0 && py >= 0 &&
+                        px < static_cast<int>(width) && py < static_cast<int>(height)) {
+                        m_drmDevice.cursorPixels[py * pitch + px] = color;
+                    }
+                }
             }
         }
     }

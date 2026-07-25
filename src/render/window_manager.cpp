@@ -1,4 +1,5 @@
 #include "render/window_manager.hpp"
+#include "core/display/display_scale.hpp"
 #include <iostream>
 #include <algorithm>
 #include <linux/input-event-codes.h>
@@ -72,27 +73,31 @@ void WindowManager::processInputEvent(const core::InputEvent& event) {
         // Move dragging window
         for (auto& win : m_windows) {
             if (win.isDragging) {
+                const int menuH = core::DisplayScale::menuBarHeight();
                 win.x = std::clamp(m_mouseX - win.dragOffsetX, 0, static_cast<int>(m_screenWidth) - win.width);
-                win.y = std::clamp(m_mouseY - win.dragOffsetY, 40, static_cast<int>(m_screenHeight) - win.height);
+                win.y = std::clamp(m_mouseY - win.dragOffsetY, menuH, static_cast<int>(m_screenHeight) - win.height);
             }
         }
     } else if (event.type == core::InputEventType::PointerButton) {
         if (event.button == BTN_LEFT) {
             if (event.pressed) {
+                const int titleH = core::DisplayScale::titleBarHeight();
+                const int btn = core::DisplayScale::trafficBtn();
+                const int btnPad = core::DisplayScale::px(10);
                 for (int i = static_cast<int>(m_windows.size()) - 1; i >= 0; --i) {
                     auto& win = m_windows[i];
                     if (m_mouseX >= win.x && m_mouseX < win.x + win.width &&
                         m_mouseY >= win.y && m_mouseY < win.y + win.height) {
 
-                        // Check window close button click (red button x + 10 .. x + 22, y + 10 .. y + 22)
-                        if (m_mouseX >= win.x + 10 && m_mouseX <= win.x + 22 &&
-                            m_mouseY >= win.y + 10 && m_mouseY <= win.y + 22) {
+                        // Close button (red traffic light)
+                        if (m_mouseX >= win.x + btnPad && m_mouseX <= win.x + btnPad + btn &&
+                            m_mouseY >= win.y + btnPad && m_mouseY <= win.y + btnPad + btn) {
                             removeWindow(win.id);
                             break;
                         }
 
                         focusWindow(win.id);
-                        win.isDragging = (m_mouseY < win.y + 32);
+                        win.isDragging = (m_mouseY < win.y + titleH);
                         if (win.isDragging) {
                             win.dragOffsetX = m_mouseX - win.x;
                             win.dragOffsetY = m_mouseY - win.y;
