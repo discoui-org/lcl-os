@@ -69,6 +69,12 @@ cp "${BINARY}" "${INITRAMFS_DIR}/usr/bin/lcl-core"
 [ -f /sbin/modprobe ] && cp -L /sbin/modprobe "${INITRAMFS_DIR}/usr/bin/modprobe"
 [ -d /usr/share/libinput ] && cp -r /usr/share/libinput "${INITRAMFS_DIR}/usr/share/" 2>/dev/null || true
 
+# Copy system font assets into /usr/share/fonts/
+mkdir -p "${INITRAMFS_DIR}/usr/share/fonts"
+if [ -d "${ROOT_DIR}/assets/fonts" ]; then
+    cp -r "${ROOT_DIR}/assets/fonts/"* "${INITRAMFS_DIR}/usr/share/fonts/" 2>/dev/null || true
+fi
+
 # Create /usr/bin/clear helper script
 cat << 'EOF' > "${INITRAMFS_DIR}/usr/bin/clear"
 #!/bin/sh
