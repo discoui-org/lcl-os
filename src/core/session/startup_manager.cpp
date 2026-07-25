@@ -1,5 +1,6 @@
 #include "core/session/startup_manager.hpp"
 #include "core/display/display_scale.hpp"
+#include "theme/palette.hpp"
 #include <iostream>
 
 namespace lcl::core {
@@ -23,8 +24,8 @@ bool StartupManager::launchDefaultSession(render::WindowManager& windowManager, 
         DisplayScale::px(80),
         DisplayScale::px(60),
         DisplayScale::px(DisplayScale::kDefaultWinW),
-        DisplayScale::px(DisplayScale::kDefaultWinH),
-        0xFF89B4FA);
+        lcl::core::DisplayScale::px(DisplayScale::kDefaultWinH),
+        lcl::theme::UI::WindowTitleFocused);
     terminalApp.initialize(winId);
 
     std::cout << "[LCL Session] Primary window (ID: " << winId << ") created for LCL Terminal.\n";

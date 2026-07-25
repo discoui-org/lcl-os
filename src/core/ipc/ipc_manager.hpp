@@ -8,6 +8,10 @@
 
 namespace lcl::core {
 
+/// Canonical path for the Compositor Unix Domain Socket.
+/// Used by the Compositor server and all IPC clients (lcl-open, lcl-close, etc.)
+inline constexpr const char* kCompositorSocket = "/tmp/lcl_compositor.sock";
+
 struct IPCClientMessage {
     int clientFd{-1};
     pid_t pid{0};
@@ -27,10 +31,10 @@ public:
 
     /**
      * @brief Initialize Unix Domain Socket server listener for compositor requests.
-     * @param socketPath Path to Unix domain socket (default: "/tmp/lcl_compositor.sock")
+     * @param socketPath Path to Unix domain socket (default: kCompositorSocket)
      * @return true if created and listening with 0600 permissions, false otherwise
      */
-    bool initialize(const std::string& socketPath = "/tmp/lcl_compositor.sock");
+    bool initialize(const std::string& socketPath = kCompositorSocket);
 
     /**
      * @brief Poll non-blocking client connections & incoming authenticated IPC messages.
@@ -44,11 +48,13 @@ public:
 
     /**
      * @brief Send an IPC request to Compositor server as a client.
-     * @param request Message string to send
-     * @param socketPath Path to Unix domain socket
-     * @param waitResponse If true, wait for server response string and return it
+     * @param request       Message string to send
+     * @param socketPath    Path to Unix domain socket (default: kCompositorSocket)
+     * @param waitResponse  If true, wait for server response string and return it
      */
-    static std::string sendClientRequest(const std::string& request, const std::string& socketPath = "/tmp/lcl_compositor.sock", bool waitResponse = false);
+    static std::string sendClientRequest(const std::string& request,
+                                         const std::string& socketPath = kCompositorSocket,
+                                         bool waitResponse = false);
 
     void shutdown();
 

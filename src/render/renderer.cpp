@@ -1,5 +1,6 @@
 #include "render/renderer.hpp"
 #include "core/display/display_scale.hpp"
+#include "theme/palette.hpp"
 #include <iostream>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
@@ -171,7 +172,7 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
     }
 
     std::cout << "[LCL Render] Initializing Renderer Engine (" << m_width << "x" << m_height << ")...\n";
-    m_softwareBackBuffer.assign(m_width * m_height, 0xFF0F172A);
+    m_softwareBackBuffer.assign(m_width * m_height, lcl::theme::UI::Wallpaper);
 
     if (m_displayManager && m_displayManager->isInitialized()) {
         if (m_displayManager->getBackendType() == core::DisplayBackendType::DRM_KMS) {
@@ -425,27 +426,27 @@ void Renderer::drawWindowFrame(int x, int y, int width, int height, const std::s
     const int titleTy = DisplayScale::px(8);
 
     drawFilledRect(x, y, width, titleH, headerColor);
-    drawFilledRect(x, y + titleH, width, height - titleH, 0xFF1E293B);
-    drawRect(x, y, width, height, 0xFF38BDF8);
-    drawString(x + titleTx, y + titleTy, title, 0xFFFFFFFF);
-    drawFilledRect(x + pad, y + pad, btn, btn, 0xFFEF4444);
-    drawFilledRect(x + pad + gap, y + pad, btn, btn, 0xFFF59E0B);
-    drawFilledRect(x + pad + gap * 2, y + pad, btn, btn, 0xFF10B981);
+    drawFilledRect(x, y + titleH, width, height - titleH, lcl::theme::UI::WindowBodyBg);
+    drawRect(x, y, width, height, lcl::theme::UI::WindowBorder);
+    drawString(x + titleTx, y + titleTy, title, lcl::theme::UI::WindowTitleText);
+    drawFilledRect(x + pad, y + pad, btn, btn, lcl::theme::UI::BtnClose);
+    drawFilledRect(x + pad + gap, y + pad, btn, btn, lcl::theme::UI::BtnMinimize);
+    drawFilledRect(x + pad + gap * 2, y + pad, btn, btn, lcl::theme::UI::BtnMaximize);
 }
 
 void Renderer::renderLCLDesktopShell(const std::string& statusMessage) {
     (void)statusMessage;
     using core::DisplayScale;
-    clear(0xFF090D16);
+    clear(lcl::theme::UI::Wallpaper);
     const int menuH = DisplayScale::menuBarHeight();
-    drawFilledRect(0, 0, m_width, menuH, 0xFF1E1E2E);
-    drawRect(0, menuH - 1, m_width, 1, 0xFF45475A);
-    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6), DisplayScale::px(80), DisplayScale::px(28), 0xFF89B4FA);
-    drawString(DisplayScale::px(20), DisplayScale::px(12), "LCL OS", 0xFF000000);
+    drawFilledRect(0, 0, m_width, menuH, lcl::theme::UI::TaskbarBg);
+    drawRect(0, menuH - 1, m_width, 1, lcl::theme::UI::TaskbarBorder);
+    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6), DisplayScale::px(80), DisplayScale::px(28), lcl::theme::UI::TaskbarLogoBtn);
+    drawString(DisplayScale::px(20), DisplayScale::px(12), "LCL OS", lcl::theme::UI::TaskbarLogoBtnText);
     drawWindowFrame(DisplayScale::px(80), DisplayScale::px(80), DisplayScale::px(540), DisplayScale::px(360),
-                    "LCL Terminal / Core Engine", 0xFF89B4FA);
+                    "LCL Terminal / Core Engine", lcl::theme::UI::WindowTitleFocused);
     drawWindowFrame(DisplayScale::px(360), DisplayScale::px(200), DisplayScale::px(460), DisplayScale::px(300),
-                    "LCL System Monitor", 0xFF45475A);
+                    "LCL System Monitor", lcl::theme::UI::WindowTitleBlurred);
     drawCursor(static_cast<int>(m_width / 2), static_cast<int>(m_height / 2));
 }
 
@@ -453,20 +454,20 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
     using core::DisplayScale;
 
     // 1. Wallpaper background
-    clear(0xFF090D16);
+    clear(lcl::theme::UI::Wallpaper);
 
     // 2. Top Taskbar / Shell Panel
     const int menuH = DisplayScale::menuBarHeight();
-    drawFilledRect(0, 0, m_width, menuH, 0xFF1E1E2E);
-    drawRect(0, menuH - 1, m_width, 1, 0xFF45475A);
+    drawFilledRect(0, 0, m_width, menuH, lcl::theme::UI::TaskbarBg);
+    drawRect(0, menuH - 1, m_width, 1, lcl::theme::UI::TaskbarBorder);
 
     // LCL Shell Logo Indicator & System Title
-    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6), DisplayScale::px(90), DisplayScale::px(28), 0xFF89B4FA);
-    drawString(DisplayScale::px(20), DisplayScale::px(12), "LCL Core", 0xFF1E1E2E);
+    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6), DisplayScale::px(90), DisplayScale::px(28), lcl::theme::UI::TaskbarLogoBtn);
+    drawString(DisplayScale::px(20), DisplayScale::px(12), "LCL Core", lcl::theme::UI::TaskbarLogoBtnText);
     std::string hwInfo = "LCL OS v0.1.0 (" + (m_displayManager && m_displayManager->isHardwareAccelerated() ? m_displayManager->getDriverName() : "DRM FB") + ")";
     const int monoW = DisplayScale::px(8);
     drawString(static_cast<int>(m_width) - static_cast<int>(hwInfo.length()) * monoW - DisplayScale::px(20),
-               DisplayScale::px(12), hwInfo, 0xFFA6ADC8);
+               DisplayScale::px(12), hwInfo, lcl::theme::UI::TaskbarStatusText);
 
     // 3. Render Windows in z-order
     const int pad = DisplayScale::windowPad();
@@ -518,7 +519,7 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
             std::string lastLineText;
 
             for (size_t l = startLine; l < wrappedLines.size() && curY + fontCellHeight <= maxY; ++l) {
-                drawStringClipped(minX, curY, wrappedLines[l], 0xFFA6E3A1, minX, minY, maxX, maxY);
+                drawStringClipped(minX, curY, wrappedLines[l], lcl::theme::UI::TerminalText, minX, minY, maxX, maxY);
                 lastLineY = curY;
                 lastLineText = wrappedLines[l];
                 curY += lineSpacing;
@@ -569,11 +570,11 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
 
                 if (caretX + cursorBoxWidth <= maxX && caretY + fontCellHeight <= maxY) {
                     // 1. Draw solid light slate cursor block
-                    drawFilledRect(caretX, caretY, cursorBoxWidth, fontCellHeight, 0xFFE2E8F0);
+                    drawFilledRect(caretX, caretY, cursorBoxWidth, fontCellHeight, lcl::theme::UI::CursorBlock);
 
-                    // 2. Draw inverted character under cursor in dark navy ink (0xFF0F172A)
+                    // 2. Draw inverted character under cursor in dark navy ink
                     if (!charUnderCursor.empty()) {
-                        drawStringClipped(caretX, caretY, charUnderCursor, 0xFF0F172A, minX, minY, maxX, maxY);
+                        drawStringClipped(caretX, caretY, charUnderCursor, lcl::theme::UI::CursorText, minX, minY, maxX, maxY);
                     }
                 }
             }

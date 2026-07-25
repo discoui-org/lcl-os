@@ -57,8 +57,8 @@ public:
      */
     render::WindowRenderContent getRenderContent() const;
 
-    void setAckFifo(const std::string& fifo) { m_ackFifo = fifo; }
-    const std::string& getAckFifo() const { return m_ackFifo; }
+    void setAckClientFd(int fd) { m_ackClientFd = fd; }
+    int  getAckClientFd() const  { return m_ackClientFd; }
 
 private:
     std::string keycodeToASCII(uint32_t keycode, bool shift);
@@ -68,7 +68,7 @@ private:
     std::vector<std::string> m_lines;
     int m_writePos{0}; // Write-head byte offset in m_lines.back() (VT100 overwrite tracking)
     std::chrono::steady_clock::time_point m_lastInputTime;
-    std::string m_ackFifo;
+    int m_ackClientFd{-1}; ///< Client socket FD awaiting DONE ACK (-1 = none)
     bool m_initialized{false};
     bool m_shiftPressed{false};
     bool m_ctrlPressed{false};

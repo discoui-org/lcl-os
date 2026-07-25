@@ -1,5 +1,6 @@
 #include "render/window_manager.hpp"
 #include "core/display/display_scale.hpp"
+#include "theme/palette.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cmath>
@@ -22,12 +23,18 @@ bool WindowManager::initialize(uint32_t screenWidth, uint32_t screenHeight) {
     return true;
 }
 
-uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int width, int height, uint32_t headerColor) {
+void WindowManager::unfocusAll() {
     for (auto& w : m_windows) {
-        w.isFocused = false;
-        w.headerColor = 0xFF45475A;
-        w.markDirty();
+        if (w.isFocused) {
+            w.isFocused = false;
+            w.headerColor = lcl::theme::UI::WindowTitleBlurred;
+            w.markDirty();
+        }
     }
+}
+
+uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int width, int height, uint32_t headerColor) {
+    unfocusAll();
 
     Window win{};
     win.id = m_nextWindowId++;
@@ -57,7 +64,7 @@ bool WindowManager::removeWindow(uint32_t windowId) {
 
         if (!m_windows.empty()) {
             m_windows.back().isFocused = true;
-            m_windows.back().headerColor = 0xFF89B4FA;
+            m_windows.back().headerColor = lcl::theme::UI::WindowTitleFocused;
         }
         markAllDirty();
         return true;
@@ -329,16 +336,10 @@ void WindowManager::focusWindow(uint32_t windowId) {
         Window target = *it;
         m_windows.erase(it);
 
-        for (auto& w : m_windows) {
-            if (w.isFocused) {
-                w.isFocused = false;
-                w.headerColor = 0xFF45475A;
-                w.markDirty();
-            }
-        }
+        unfocusAll();
 
         target.isFocused = true;
-        target.headerColor = 0xFF89B4FA;
+        target.headerColor = lcl::theme::UI::WindowTitleFocused;
         target.markDirty();
         m_windows.push_back(target);
         m_mouseDirty = true;

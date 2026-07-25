@@ -73,7 +73,7 @@ int main(int argc, char* argv[]) {
 
     // Initialize Compositor IPC Manager (/tmp/lcl_compositor.sock with 0600 perms)
     lcl::core::IPCManager ipcManager;
-    ipcManager.initialize("/tmp/lcl_compositor.sock");
+    ipcManager.initialize(lcl::core::kCompositorSocket);
 
     // Dynamic Multi-Window App Registry
     std::vector<std::unique_ptr<lcl::apps::TerminalApp>> terminalApps;
@@ -147,7 +147,7 @@ int main(int argc, char* argv[]) {
                 newApp->initialize(winId);
 
                 if (msg.command == "SPAWN_TERMINAL_WAIT") {
-                    newApp->setAckFifo(std::to_string(msg.clientFd)); // Store client FD for ACK socket response
+                    newApp->setAckClientFd(msg.clientFd); // Store client FD for ACK socket response
                 }
                 terminalApps.push_back(std::move(newApp));
                 needsRedraw = true;
@@ -178,9 +178,8 @@ int main(int argc, char* argv[]) {
 
             if (!winExists) {
                 std::cout << "[LCL Compositor] Window ID " << winId << " closed via UI button. Destroying process.\n";
-                if (!(*it)->getAckFifo().empty()) {
-                    int cFd = std::stoi((*it)->getAckFifo());
-                    lcl::core::IPCManager::sendResponse(cFd, "DONE");
+                if ((*it)->getAckClientFd() >= 0) {
+                    lcl::core::IPCManager::sendResponse((*it)->getAckClientFd(), "DONE");
                 }
                 (*it)->shutdown();
                 it = terminalApps.erase(it);
@@ -208,9 +207,8 @@ int main(int argc, char* argv[]) {
             if (!app->isAlive()) {
                 uint32_t winId = static_cast<uint32_t>(app->getWindowId());
                 std::cout << "[LCL Compositor] Terminal App (Window ID: " << winId << ") process exited.\n";
-                if (!app->getAckFifo().empty()) {
-                    int cFd = std::stoi(app->getAckFifo());
-                    lcl::core::IPCManager::sendResponse(cFd, "DONE");
+                if (app->getAckClientFd() >= 0) {
+                    lcl::core::IPCManager::sendResponse(app->getAckClientFd(), "DONE");
                 }
                 windowManager.removeWindow(winId);
                 app->shutdown();
@@ -253,9 +251,8 @@ int main(int argc, char* argv[]) {
 
     // Explicit shutdown of core subsystems & apps
     for (auto& app : terminalApps) {
-        if (!app->getAckFifo().empty()) {
-            int cFd = std::stoi(app->getAckFifo());
-            lcl::core::IPCManager::sendResponse(cFd, "DONE");
+        if (app->getAckClientFd() >= 0) {
+            lcl::core::IPCManager::sendResponse(app->getAckClientFd(), "DONE");
         }
         app->shutdown();
     }

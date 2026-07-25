@@ -15,7 +15,7 @@ namespace {
         (void)sig;
         if (g_waitingMode) {
             std::cout << "\n[LCL Open] SIGINT received! Requesting Compositor to destroy spawned window over Unix Domain Socket...\n";
-            lcl::core::IPCManager::sendClientRequest("DESTROY_LAST_WINDOW", "/tmp/lcl_compositor.sock", false);
+            lcl::core::IPCManager::sendClientRequest("DESTROY_LAST_WINDOW", lcl::core::kCompositorSocket, false);
         }
         _exit(130);
     }
@@ -70,13 +70,13 @@ int main(int argc, char* argv[]) {
     if (meta->type == "gui" || meta->name == "LCL Terminal" || target.find("Terminal.app") != std::string::npos) {
         if (!waitMode) {
             std::cout << "[LCL Open] Requesting LCL Compositor to spawn GUI Window for " << meta->name << "...\n";
-            std::string res = lcl::core::IPCManager::sendClientRequest("SPAWN_TERMINAL", "/tmp/lcl_compositor.sock", false);
+            std::string res = lcl::core::IPCManager::sendClientRequest("SPAWN_TERMINAL", lcl::core::kCompositorSocket, false);
             (void)res;
             std::cout << "[LCL Open SUCCESS] Sent SPAWN_TERMINAL IPC request over Unix Domain Socket.\n";
             return 0;
         } else {
             std::cout << "[LCL Open] Requesting GUI Window for " << meta->name << " (blocking mode: waiting on socket ACK)...\n";
-            std::string response = lcl::core::IPCManager::sendClientRequest("SPAWN_TERMINAL_WAIT", "/tmp/lcl_compositor.sock", true);
+            std::string response = lcl::core::IPCManager::sendClientRequest("SPAWN_TERMINAL_WAIT", lcl::core::kCompositorSocket, true);
             if (response == "DONE") {
                 std::cout << "[LCL Open] Window closed cleanly (ACK received over Unix Socket). Returning to shell prompt.\n";
                 return 0;

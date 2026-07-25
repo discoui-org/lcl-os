@@ -135,6 +135,7 @@ public:
     int getMouseY() const { return m_mouseY; }
 
 private:
+    void unfocusAll(); ///< Clear focus + reset header color on all windows
     void updateWindowZOrders();
 
     uint32_t m_screenWidth{1024};
