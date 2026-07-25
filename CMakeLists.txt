@@ -20,6 +20,7 @@ pkg_check_modules(UDEV REQUIRED libudev)
 # Main Compositor Executable Target
 add_executable(lcl-core
     src/main.cpp
+    src/core/compositor/compositor.cpp
     src/apps/terminal/terminal_app.cpp
     src/core/app/app_bundle_parser.cpp
     src/core/display/display_manager.cpp

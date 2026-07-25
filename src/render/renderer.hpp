@@ -108,6 +108,12 @@ public:
     uint64_t getRenderedFrames() const { return m_renderedFrames; }
 
 private:
+    // --- Modular render passes (called by renderDesktop) ---
+    void renderBackground();
+    void renderTaskbar();
+    void renderWindowContent(const Window& win, const WindowRenderContent* content);
+
+    // --- DRM dumb buffer management ---
     bool createDumbBuffer();
     void destroyDumbBuffer();
 

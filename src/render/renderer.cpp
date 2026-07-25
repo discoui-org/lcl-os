@@ -450,142 +450,165 @@ void Renderer::renderLCLDesktopShell(const std::string& statusMessage) {
     drawCursor(static_cast<int>(m_width / 2), static_cast<int>(m_height / 2));
 }
 
-void Renderer::renderDesktop(const WindowManager& windowManager, const std::vector<WindowRenderContent>& windowContents) {
-    using core::DisplayScale;
+void Renderer::renderDesktop(const WindowManager& windowManager,
+                              const std::vector<WindowRenderContent>& windowContents) {
+    // 1. Layered composition in z-order
+    renderBackground();
+    renderTaskbar();
 
-    // 1. Wallpaper background
-    clear(lcl::theme::UI::Wallpaper);
-
-    // 2. Top Taskbar / Shell Panel
-    const int menuH = DisplayScale::menuBarHeight();
-    drawFilledRect(0, 0, m_width, menuH, lcl::theme::UI::TaskbarBg);
-    drawRect(0, menuH - 1, m_width, 1, lcl::theme::UI::TaskbarBorder);
-
-    // LCL Shell Logo Indicator & System Title
-    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6), DisplayScale::px(90), DisplayScale::px(28), lcl::theme::UI::TaskbarLogoBtn);
-    drawString(DisplayScale::px(20), DisplayScale::px(12), "LCL Core", lcl::theme::UI::TaskbarLogoBtnText);
-    std::string hwInfo = "LCL OS v0.1.0 (" + (m_displayManager && m_displayManager->isHardwareAccelerated() ? m_displayManager->getDriverName() : "DRM FB") + ")";
-    const int monoW = DisplayScale::px(8);
-    drawString(static_cast<int>(m_width) - static_cast<int>(hwInfo.length()) * monoW - DisplayScale::px(20),
-               DisplayScale::px(12), hwInfo, lcl::theme::UI::TaskbarStatusText);
-
-    // 3. Render Windows in z-order
-    const int pad = DisplayScale::windowPad();
-    const int titleH = DisplayScale::titleBarHeight();
-    const int contentTop = titleH + DisplayScale::px(8);
-
+    // 2. Render each window (frame + terminal content + cursor)
     for (const auto& win : windowManager.getWindows()) {
-        drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
-
-        // Find matching WindowRenderContent for this window ID
-        const WindowRenderContent* contentPtr = nullptr;
-        for (const auto& content : windowContents) {
-            if (content.windowId == win.id) {
-                contentPtr = &content;
-                break;
-            }
+        const WindowRenderContent* content = nullptr;
+        for (const auto& c : windowContents) {
+            if (c.windowId == win.id) { content = &c; break; }
         }
-
-        if (contentPtr && !contentPtr->lines.empty()) {
-            const auto& lines = contentPtr->lines;
-            int minX = win.x + pad;
-            int minY = win.y + contentTop;
-            int maxX = win.x + win.width - pad;
-            int maxY = win.y + win.height - pad;
-
-            int fontCellWidth = m_fontRenderer.isInitialized() ? m_fontRenderer.getCellWidth() : DisplayScale::px(8);
-            int fontCellHeight = m_fontRenderer.isInitialized() ? m_fontRenderer.getCellHeight() : DisplayScale::px(16);
-            int lineSpacing = fontCellHeight + DisplayScale::px(2);
-
-            int maxCols = std::max(1, (maxX - minX) / fontCellWidth);
-            int maxRows = std::max(1, (maxY - minY) / lineSpacing);
-
-            // Auto-wrap lines that exceed maxCols
-            std::vector<std::string> wrappedLines;
-            for (const auto& line : lines) {
-                if (line.empty()) {
-                    wrappedLines.push_back("");
-                    continue;
-                }
-                for (size_t i = 0; i < line.size(); i += maxCols) {
-                    wrappedLines.push_back(line.substr(i, maxCols));
-                }
-            }
-
-            // Auto-scroll to show latest maxRows lines
-            int startLine = std::max(0, static_cast<int>(wrappedLines.size()) - maxRows);
-            int curY = minY;
-            int lastLineY = minY;
-            std::string lastLineText;
-
-            for (size_t l = startLine; l < wrappedLines.size() && curY + fontCellHeight <= maxY; ++l) {
-                drawStringClipped(minX, curY, wrappedLines[l], lcl::theme::UI::TerminalText, minX, minY, maxX, maxY);
-                lastLineY = curY;
-                lastLineText = wrappedLines[l];
-                curY += lineSpacing;
-            }
-
-            // --- 500ms Blinking Text Cursor (Font-Agnostic Inverted Block Cursor) ---
-            int caretByteOffset = contentPtr->cursorCol;
-            std::string caretPrefix;
-            std::string charUnderCursor;
-
-            if (caretByteOffset >= 0 && caretByteOffset <= static_cast<int>(lastLineText.size())) {
-                int safeOffset = caretByteOffset;
-                while (safeOffset > 0 && safeOffset < static_cast<int>(lastLineText.size()) &&
-                       (static_cast<unsigned char>(lastLineText[safeOffset]) & 0xC0) == 0x80) {
-                    --safeOffset;
-                }
-                caretPrefix = lastLineText.substr(0, safeOffset);
-
-                if (safeOffset < static_cast<int>(lastLineText.size())) {
-                    unsigned char firstByte = lastLineText[safeOffset];
-                    size_t charLen = 1;
-                    if      ((firstByte & 0xE0) == 0xC0) charLen = 2;
-                    else if ((firstByte & 0xF0) == 0xE0) charLen = 3;
-                    else if ((firstByte & 0xF8) == 0xF0) charLen = 4;
-
-                    if (safeOffset + charLen <= lastLineText.size()) {
-                        charUnderCursor = lastLineText.substr(safeOffset, charLen);
-                    }
-                }
-            } else {
-                caretPrefix = lastLineText;
-            }
-
-            int caretPixelX = m_fontRenderer.isInitialized()
-                ? m_fontRenderer.getTextWidth(caretPrefix)
-                : static_cast<int>(caretPrefix.size()) * fontCellWidth;
-            int caretX = minX + caretPixelX;
-            int caretY = lastLineY;
-
-            auto now = std::chrono::steady_clock::now();
-            auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-            bool showCursor = contentPtr->forceCursorSolid || ((millis / 500) % 2 == 0);
-
-            if (showCursor && !wrappedLines.empty()) {
-                int cursorBoxWidth = (!charUnderCursor.empty() && m_fontRenderer.isInitialized())
-                    ? std::max(4, m_fontRenderer.getTextWidth(charUnderCursor))
-                    : fontCellWidth;
-
-                if (caretX + cursorBoxWidth <= maxX && caretY + fontCellHeight <= maxY) {
-                    // 1. Draw solid light slate cursor block
-                    drawFilledRect(caretX, caretY, cursorBoxWidth, fontCellHeight, lcl::theme::UI::CursorBlock);
-
-                    // 2. Draw inverted character under cursor in dark navy ink
-                    if (!charUnderCursor.empty()) {
-                        drawStringClipped(caretX, caretY, charUnderCursor, lcl::theme::UI::CursorText, minX, minY, maxX, maxY);
-                    }
-                }
-            }
-        }
+        renderWindowContent(win, content);
     }
 
-    // 4. Render Mouse Cursor on top
+    // 3. Mouse cursor on top of everything
     if (m_displayManager && m_displayManager->isHardwareCursorActive()) {
         m_displayManager->moveHardwareCursor(windowManager.getMouseX(), windowManager.getMouseY());
     } else {
         drawCursor(windowManager.getMouseX(), windowManager.getMouseY());
+    }
+}
+
+// -----------------------------------------------------------------------
+// Private render passes
+// -----------------------------------------------------------------------
+
+void Renderer::renderBackground() {
+    clear(lcl::theme::UI::Wallpaper);
+}
+
+void Renderer::renderTaskbar() {
+    using core::DisplayScale;
+    const int menuH = DisplayScale::menuBarHeight();
+
+    drawFilledRect(0, 0, m_width, menuH, lcl::theme::UI::TaskbarBg);
+    drawRect(0, menuH - 1, m_width, 1, lcl::theme::UI::TaskbarBorder);
+
+    // LCL logo button (left)
+    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6),
+                   DisplayScale::px(90), DisplayScale::px(28),
+                   lcl::theme::UI::TaskbarLogoBtn);
+    drawString(DisplayScale::px(20), DisplayScale::px(12),
+               "LCL Core", lcl::theme::UI::TaskbarLogoBtnText);
+
+    // Driver/version status text (right)
+    std::string hwInfo = "LCL OS v0.1.0 (" +
+        (m_displayManager && m_displayManager->isHardwareAccelerated()
+             ? m_displayManager->getDriverName() : "DRM FB") + ")";
+    const int monoW = DisplayScale::px(8);
+    drawString(static_cast<int>(m_width)
+                   - static_cast<int>(hwInfo.length()) * monoW
+                   - DisplayScale::px(20),
+               DisplayScale::px(12), hwInfo, lcl::theme::UI::TaskbarStatusText);
+}
+
+void Renderer::renderWindowContent(const Window& win, const WindowRenderContent* content) {
+    using core::DisplayScale;
+    const int pad        = DisplayScale::windowPad();
+    const int titleH     = DisplayScale::titleBarHeight();
+    const int contentTop = titleH + DisplayScale::px(8);
+
+    // Window chrome (title bar + body + border + traffic-light buttons)
+    drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
+
+    if (!content || content->lines.empty()) return;
+
+    // Content clipping rectangle
+    int minX = win.x + pad;
+    int minY = win.y + contentTop;
+    int maxX = win.x + win.width  - pad;
+    int maxY = win.y + win.height - pad;
+
+    // Font metrics (TTF or VGA fallback)
+    int fontCellW  = m_fontRenderer.isInitialized() ? m_fontRenderer.getCellWidth()  : DisplayScale::px(8);
+    int fontCellH  = m_fontRenderer.isInitialized() ? m_fontRenderer.getCellHeight() : DisplayScale::px(16);
+    int lineSpacing = fontCellH + DisplayScale::px(2);
+
+    int maxCols = std::max(1, (maxX - minX) / fontCellW);
+    int maxRows = std::max(1, (maxY - minY) / lineSpacing);
+
+    // Hard-wrap lines that exceed maxCols columns
+    std::vector<std::string> wrapped;
+    for (const auto& line : content->lines) {
+        if (line.empty()) { wrapped.push_back(""); continue; }
+        for (size_t i = 0; i < line.size(); i += maxCols) {
+            wrapped.push_back(line.substr(i, maxCols));
+        }
+    }
+
+    // Auto-scroll: show only the latest maxRows lines
+    int startLine   = std::max(0, static_cast<int>(wrapped.size()) - maxRows);
+    int curY        = minY;
+    int lastLineY   = minY;
+    std::string lastLineText;
+
+    for (size_t l = startLine; l < wrapped.size() && curY + fontCellH <= maxY; ++l) {
+        drawStringClipped(minX, curY, wrapped[l],
+                          lcl::theme::UI::TerminalText, minX, minY, maxX, maxY);
+        lastLineY    = curY;
+        lastLineText = wrapped[l];
+        curY += lineSpacing;
+    }
+
+    // ----------------------------------------------------------------
+    // 500ms Blinking Inverted Block Cursor
+    // ----------------------------------------------------------------
+    int caretByte = content->cursorCol;
+    std::string caretPrefix;
+    std::string charUnderCursor;
+
+    if (caretByte >= 0 && caretByte <= static_cast<int>(lastLineText.size())) {
+        // Walk back to UTF-8 codepoint boundary
+        int safe = caretByte;
+        while (safe > 0 && safe < static_cast<int>(lastLineText.size()) &&
+               (static_cast<unsigned char>(lastLineText[safe]) & 0xC0) == 0x80) {
+            --safe;
+        }
+        caretPrefix = lastLineText.substr(0, safe);
+
+        if (safe < static_cast<int>(lastLineText.size())) {
+            unsigned char fb = static_cast<unsigned char>(lastLineText[safe]);
+            size_t charLen = 1;
+            if      ((fb & 0xE0) == 0xC0) charLen = 2;
+            else if ((fb & 0xF0) == 0xE0) charLen = 3;
+            else if ((fb & 0xF8) == 0xF0) charLen = 4;
+            if (safe + charLen <= lastLineText.size()) {
+                charUnderCursor = lastLineText.substr(safe, charLen);
+            }
+        }
+    } else {
+        caretPrefix = lastLineText;
+    }
+
+    int caretPixelX = m_fontRenderer.isInitialized()
+        ? m_fontRenderer.getTextWidth(caretPrefix)
+        : static_cast<int>(caretPrefix.size()) * fontCellW;
+    int caretX = minX + caretPixelX;
+    int caretY = lastLineY;
+
+    auto now    = std::chrono::steady_clock::now();
+    auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      now.time_since_epoch()).count();
+    bool showCursor = content->forceCursorSolid || ((millis / 500) % 2 == 0);
+
+    if (showCursor && !wrapped.empty()) {
+        int cursorBoxW = (!charUnderCursor.empty() && m_fontRenderer.isInitialized())
+            ? std::max(4, m_fontRenderer.getTextWidth(charUnderCursor))
+            : fontCellW;
+
+        if (caretX + cursorBoxW <= maxX && caretY + fontCellH <= maxY) {
+            // Solid block background
+            drawFilledRect(caretX, caretY, cursorBoxW, fontCellH, lcl::theme::UI::CursorBlock);
+            // Inverted character under cursor
+            if (!charUnderCursor.empty()) {
+                drawStringClipped(caretX, caretY, charUnderCursor,
+                                  lcl::theme::UI::CursorText, minX, minY, maxX, maxY);
+            }
+        }
     }
 }
 
