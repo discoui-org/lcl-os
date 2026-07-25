@@ -189,11 +189,11 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Build window render content map
+        // Build window render content map cleanly via component encapsulation
         std::vector<lcl::render::WindowRenderContent> contents;
         contents.reserve(terminalApps.size());
         for (const auto& app : terminalApps) {
-            contents.push_back({static_cast<uint32_t>(app->getWindowId()), app->getLines()});
+            contents.push_back(app->getRenderContent());
         }
 
         // Render desktop with active windows & matching terminal surfaces

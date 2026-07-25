@@ -4,6 +4,7 @@
 #include <vector>
 #include "core/terminal/pty_manager.hpp"
 #include "core/input/input_manager.hpp"
+#include "render/renderer.hpp"
 
 namespace lcl::apps {
 
@@ -47,17 +48,30 @@ public:
 
     bool isAlive() const { return m_initialized && m_ptyManager.isAlive(); }
 
+    /**
+     * @brief Encapsulate active terminal rendering state for Compositor WindowManager.
+     */
+    render::WindowRenderContent getRenderContent() const;
+
+    const std::string& getActiveSuggestion() const { return m_activeSuggestion; }
+
     void setAckFifo(const std::string& fifo) { m_ackFifo = fifo; }
     const std::string& getAckFifo() const { return m_ackFifo; }
 
 private:
     std::string keycodeToASCII(uint32_t keycode, bool shift);
     std::string stripANSI(const std::string& input);
+    void updateAutoSuggestion();
+    void performTabCompletion();
 
     int m_windowId{-1};
     core::PTYManager m_ptyManager;
     std::vector<std::string> m_lines;
     std::string m_currentLine;
+    std::string m_typedBuffer;
+    std::string m_activeSuggestion;
+    size_t m_cursorPos{0};
+    std::vector<std::string> m_history;
     std::string m_ackFifo;
     bool m_initialized{false};
     bool m_shiftPressed{false};

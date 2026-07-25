@@ -45,6 +45,11 @@ public:
     int getMasterFd() const { return m_masterFd; }
     pid_t getChildPid() const { return m_childPid; }
 
+    /**
+     * @brief Retrieve current working directory path of child shell process via /proc/<pid>/cwd.
+     */
+    std::string getWorkingDirectory() const;
+
     bool isAlive() const {
         if (m_childPid <= 0) return false;
         return kill(m_childPid, 0) == 0;

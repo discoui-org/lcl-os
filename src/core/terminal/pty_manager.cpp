@@ -138,6 +138,19 @@ std::string PTYManager::readOutput() {
     return result;
 }
 
+std::string PTYManager::getWorkingDirectory() const {
+    if (m_childPid <= 0) return "/home/user";
+
+    std::string procPath = "/proc/" + std::to_string(m_childPid) + "/cwd";
+    char buf[1024];
+    ssize_t len = readlink(procPath.c_str(), buf, sizeof(buf) - 1);
+    if (len > 0) {
+        buf[len] = '\0';
+        return std::string(buf);
+    }
+    return "/home/user";
+}
+
 void PTYManager::shutdown() {
     if (m_childPid > 0) {
         std::cout << "[LCL PTY] Terminating shell process PID: " << m_childPid << "...\n";

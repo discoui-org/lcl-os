@@ -422,16 +422,16 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
         drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
 
         // Find matching WindowRenderContent for this window ID
-        const std::vector<std::string>* linesPtr = nullptr;
+        const WindowRenderContent* contentPtr = nullptr;
         for (const auto& content : windowContents) {
             if (content.windowId == win.id) {
-                linesPtr = &content.lines;
+                contentPtr = &content;
                 break;
             }
         }
 
-        if (linesPtr) {
-            const auto& lines = *linesPtr;
+        if (contentPtr && !contentPtr->lines.empty()) {
+            const auto& lines = contentPtr->lines;
             int minX = win.x + 12;
             int minY = win.y + 40;
             int maxX = win.x + win.width - 12;
@@ -465,20 +465,35 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
                 curY += 18;
             }
 
+            std::string cursorPrefixText = lastLineText;
+            if (contentPtr->cursorCol >= 0 && contentPtr->cursorCol <= static_cast<int>(lastLineText.size())) {
+                cursorPrefixText = lastLineText.substr(0, contentPtr->cursorCol);
+            }
+
+            int charWidth = 9; // JetBrains Mono character width
+            int charHeight = 16;
+            int prefixPixelWidth = m_fontRenderer.isInitialized() ?
+                                  m_fontRenderer.getTextWidth(cursorPrefixText) :
+                                  static_cast<int>(cursorPrefixText.size()) * charWidth;
+            int endPixelWidth = m_fontRenderer.isInitialized() ?
+                                m_fontRenderer.getTextWidth(lastLineText) :
+                                static_cast<int>(lastLineText.size()) * charWidth;
+
+            int caretX = minX + prefixPixelWidth;
+            int caretY = lastLineY;
+            int endX = minX + endPixelWidth;
+
+            // Render Ghost Text Auto-Suggestion at end of prompt (faint slate gray: 0x8094A3B8)
+            if (!contentPtr->suggestion.empty()) {
+                drawStringClipped(endX, caretY, contentPtr->suggestion, 0x8094A3B8, minX, minY, maxX, maxY);
+            }
+
             // Interactive 500ms Blinking Text Cursor (macOS/Terminal style)
             auto now = std::chrono::steady_clock::now();
             auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
             bool showCursor = (millis / 500) % 2 == 0;
 
             if (showCursor && !wrappedLines.empty()) {
-                int charWidth = 9; // JetBrains Mono character width
-                int charHeight = 16;
-                int textPixelWidth = m_fontRenderer.isInitialized() ?
-                                     m_fontRenderer.getTextWidth(lastLineText) :
-                                     static_cast<int>(lastLineText.size()) * charWidth;
-                int caretX = minX + textPixelWidth;
-                int caretY = lastLineY;
-
                 if (caretX + charWidth <= maxX && caretY + charHeight <= maxY) {
                     drawFilledRect(caretX, caretY, charWidth, charHeight, 0xCCF3F4F6);
                 }
