@@ -5,6 +5,7 @@
 #include <chrono>
 #include "core/display/display_manager.hpp"
 #include "core/input/input_manager.hpp"
+#include "render/renderer.hpp"
 
 namespace {
     // Atomic signal flag for thread-safe graceful shutdown
@@ -47,20 +48,32 @@ int main(int argc, char* argv[]) {
         std::cout << "[LCL Core] Input subsystem running in fallback/skeleton mode.\n";
     }
 
-    std::cout << "[LCL Core] Skeleton event loop started. Press Ctrl+C to terminate.\n";
+    // Initialize Renderer Engine Subsystem
+    lcl::render::Renderer renderer;
+    bool renderReady = renderer.initialize(&displayManager);
+    if (!renderReady) {
+        std::cout << "[LCL Core] Renderer running in fallback mode.\n";
+    }
 
-    // Main event loop
+    std::cout << "[LCL Core] Active event loop started. Press Ctrl+C to terminate.\n";
+
+    // Main event and rendering loop
     uint64_t loopTicks = 0;
     while (g_running.load()) {
         if (inputManager.isInitialized()) {
             inputManager.dispatchEvents();
         }
 
+        // Render desktop frame & swap buffers
+        renderer.renderLCLDesktopShell("LCL Core Active");
+        renderer.swapBuffers();
+
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         loopTicks++;
     }
 
     // Explicit shutdown of core subsystems
+    renderer.shutdown();
     inputManager.shutdown();
     displayManager.shutdown();
 
