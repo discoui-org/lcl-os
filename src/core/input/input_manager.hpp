@@ -24,6 +24,7 @@ struct InputEvent {
     double absoluteY{-1.0};
     uint32_t button{0};
     bool pressed{false};
+    bool isRepeat{false};
     uint32_t key{0};
     std::string deviceName;
 };

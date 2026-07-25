@@ -20,6 +20,7 @@ pkg_check_modules(UDEV REQUIRED libudev)
 # Executable target
 add_executable(lcl-core
     src/main.cpp
+    src/apps/terminal/terminal_app.cpp
     src/core/display/display_manager.cpp
     src/core/input/input_manager.cpp
     src/core/terminal/pty_manager.cpp

@@ -165,7 +165,7 @@ bool InputManager::initWithEvdev() {
             uint8_t evBits[KEY_MAX / 8 + 1] = {};
             ioctl(fd, EVIOCGBIT(0, sizeof(evBits)), evBits);
             bool hasKey = (evBits[EV_KEY / 8] >> (EV_KEY % 8)) & 1;
-            if (!hasKey) { close(fd); continue; } // Skip entirely uninteresting
+            if (!hasKey) { close(fd); continue; }
         }
 
         m_evdevDevices.push_back(dev);
@@ -255,14 +255,12 @@ size_t InputManager::dispatchLibinputEvents(int screenWidth, int screenHeight) {
 size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
     if (m_evdevDevices.empty()) return 0;
 
-    // Build poll set
     std::vector<struct pollfd> fds;
     fds.reserve(m_evdevDevices.size());
     for (auto& d : m_evdevDevices) {
         fds.push_back({d.fd, POLLIN, 0});
     }
 
-    // Non-blocking poll
     int ready = poll(fds.data(), static_cast<nfds_t>(fds.size()), 0);
     if (ready <= 0) return 0;
 
@@ -288,7 +286,6 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                 if (ev.code == ABS_X) dev.pendingAbsX = ev.value;
                 if (ev.code == ABS_Y) dev.pendingAbsY = ev.value;
             } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
-                // Flush absolute position update
                 if (dev.pendingAbsX >= 0 && dev.hasAbsX) {
                     InputEvent outEv{};
                     outEv.type = InputEventType::PointerMotion;
@@ -306,7 +303,8 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
             } else if (ev.type == EV_KEY) {
                 InputEvent outEv{};
                 outEv.deviceName = dev.name;
-                outEv.pressed = ev.value != 0;
+                outEv.pressed = (ev.value != 0);
+                outEv.isRepeat = (ev.value == 2);
 
                 if (ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE) {
                     outEv.type = InputEventType::PointerButton;
