@@ -4,6 +4,10 @@
 #include <unistd.h>
 #include <cstring>
 #include <cerrno>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <thread>
+#include <chrono>
 
 namespace lcl::core {
 
@@ -14,155 +18,198 @@ DisplayManager::~DisplayManager() {
 }
 
 DisplayManager::DisplayManager(DisplayManager&& other) noexcept
-    : m_device(other.m_device),
+    : m_devicePath(std::move(other.m_devicePath)),
+      m_drmDevice(other.m_drmDevice),
+      m_fbDevice(other.m_fbDevice),
       m_activeMode(other.m_activeMode),
+      m_backendType(other.m_backendType),
       m_initialized(other.m_initialized) {
-    other.m_device = DRMDevice{};
+    other.m_drmDevice = DRMDevice{};
+    other.m_fbDevice = FBDevice{};
     other.m_initialized = false;
+    other.m_backendType = DisplayBackendType::None;
 }
 
 DisplayManager& DisplayManager::operator=(DisplayManager&& other) noexcept {
     if (this != &other) {
         shutdown();
-        m_device = other.m_device;
+        m_devicePath = std::move(other.m_devicePath);
+        m_drmDevice = other.m_drmDevice;
+        m_fbDevice = other.m_fbDevice;
         m_activeMode = other.m_activeMode;
+        m_backendType = other.m_backendType;
         m_initialized = other.m_initialized;
 
-        other.m_device = DRMDevice{};
+        other.m_drmDevice = DRMDevice{};
+        other.m_fbDevice = FBDevice{};
         other.m_initialized = false;
+        other.m_backendType = DisplayBackendType::None;
     }
     return *this;
 }
 
 bool DisplayManager::initialize(const std::string& devicePath) {
     if (m_initialized) {
-        std::cout << "[LCL DRM/KMS] DisplayManager already initialized.\n";
+        std::cout << "[LCL Display] DisplayManager already initialized.\n";
         return true;
     }
 
-    std::cout << "[LCL DRM/KMS] Opening DRM device node: " << devicePath << "...\n";
-    m_device.path = devicePath;
-    m_device.fd = open(devicePath.c_str(), O_RDWR | O_CLOEXEC);
+    m_devicePath = devicePath;
+    std::cout << "[LCL Display] Initializing Display Subsystem...\n";
 
-    if (m_device.fd < 0) {
-        std::cerr << "[LCL DRM/KMS WARNING] Failed to open DRM device " << devicePath
-                  << ": " << std::strerror(errno) << "\n";
-        std::cerr << "[LCL DRM/KMS HINT] Device node unavailable or insufficient permission (user needs 'video' or 'render' group).\n";
-        return false;
+    // 1. Try DRM/KMS initialization with retry loop
+    if (probeDRMWithRetry(m_devicePath)) {
+        m_backendType = DisplayBackendType::DRM_KMS;
+        m_initialized = true;
+        std::cout << "[LCL Display] DRM/KMS Backend successfully initialized!\n";
+        std::cout << "  - Device: " << m_drmDevice.path << "\n";
+        std::cout << "  - Resolution: " << m_activeMode.width << "x" << m_activeMode.height
+                  << " @ " << m_activeMode.refreshRate << "Hz (" << m_activeMode.name << ")\n";
+        return true;
     }
 
-    // Enable modern client capabilities
-    if (drmSetClientCap(m_device.fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0) {
-        std::cout << "[LCL DRM/KMS] Universal planes capability enabled.\n";
-    }
-    if (drmSetClientCap(m_device.fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0) {
-        std::cout << "[LCL DRM/KMS] Atomic KMS capability enabled.\n";
-    }
-
-    if (!probeDRMResources()) {
-        std::cerr << "[LCL DRM/KMS WARNING] Failed to probe DRM/KMS connectors/CRTC on " << devicePath << ".\n";
-        cleanupDRMDevice();
-        return false;
+    // 2. Try Linux Framebuffer (/dev/fb0) fallback
+    std::cout << "[LCL Display] Probing Linux Framebuffer (/dev/fb0) fallback...\n";
+    if (probeLinuxFramebuffer()) {
+        m_backendType = DisplayBackendType::LinuxFB;
+        m_initialized = true;
+        std::cout << "[LCL Display] Linux Framebuffer Backend (/dev/fb0) successfully initialized!\n";
+        std::cout << "  - Device: /dev/fb0\n";
+        std::cout << "  - Resolution: " << m_activeMode.width << "x" << m_activeMode.height << "\n";
+        return true;
     }
 
-    m_initialized = true;
-    std::cout << "[LCL DRM/KMS] Display Subsystem successfully initialized!\n";
-    std::cout << "  - Device: " << m_device.path << "\n";
-    std::cout << "  - Resolution: " << m_activeMode.width << "x" << m_activeMode.height
-              << " @ " << m_activeMode.refreshRate << "Hz (" << m_activeMode.name << ")\n";
+    std::cout << "[LCL Display WARNING] Neither DRM/KMS nor /dev/fb0 available. Running in fallback mode.\n";
+    return false;
+}
 
-    return true;
+bool DisplayManager::probeDRMWithRetry(const std::string& devicePath) {
+    std::vector<std::string> probePaths = {devicePath, "/dev/dri/card0", "/dev/dri/card1"};
+
+    // Retry loop up to 10 attempts (1 second total) for devtmpfs node creation in QEMU
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        for (const auto& path : probePaths) {
+            int fd = open(path.c_str(), O_RDWR | O_CLOEXEC);
+            if (fd >= 0) {
+                m_drmDevice.path = path;
+                m_drmDevice.fd = fd;
+
+                // Enable client capabilities
+                drmSetClientCap(m_drmDevice.fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+                drmSetClientCap(m_drmDevice.fd, DRM_CLIENT_CAP_ATOMIC, 1);
+
+                if (probeDRMResources()) {
+                    return true;
+                }
+                cleanupDRMDevice();
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    return false;
 }
 
 bool DisplayManager::probeDRMResources() {
-    m_device.resources = drmModeGetResources(m_device.fd);
-    if (!m_device.resources) {
-        std::cerr << "[LCL DRM/KMS ERROR] drmModeGetResources failed.\n";
-        return false;
-    }
+    m_drmDevice.resources = drmModeGetResources(m_drmDevice.fd);
+    if (!m_drmDevice.resources) return false;
 
-    // Search for a connected display connector
-    for (int i = 0; i < m_device.resources->count_connectors; ++i) {
-        drmModeConnectorPtr conn = drmModeGetConnector(m_device.fd, m_device.resources->connectors[i]);
+    for (int i = 0; i < m_drmDevice.resources->count_connectors; ++i) {
+        drmModeConnectorPtr conn = drmModeGetConnector(m_drmDevice.fd, m_drmDevice.resources->connectors[i]);
         if (!conn) continue;
 
         if (conn->connection == DRM_MODE_CONNECTED && conn->count_modes > 0) {
-            m_device.connector = conn;
-            std::cout << "[LCL DRM/KMS] Found connected display connector (ID: "
-                      << conn->connector_id << ", Modes: " << conn->count_modes << ")\n";
+            m_drmDevice.connector = conn;
             break;
         }
         drmModeFreeConnector(conn);
     }
 
-    if (!m_device.connector) {
-        std::cerr << "[LCL DRM/KMS WARNING] No connected display connector found on " << m_device.path << ".\n";
+    if (!m_drmDevice.connector) return false;
+
+    m_drmDevice.currentMode = m_drmDevice.connector->modes[0];
+    m_activeMode.width = m_drmDevice.currentMode.hdisplay;
+    m_activeMode.height = m_drmDevice.currentMode.vdisplay;
+    m_activeMode.refreshRate = m_drmDevice.currentMode.vrefresh;
+    m_activeMode.name = m_drmDevice.currentMode.name;
+
+    if (m_drmDevice.connector->encoder_id) {
+        m_drmDevice.encoder = drmModeGetEncoder(m_drmDevice.fd, m_drmDevice.connector->encoder_id);
+    }
+    if (!m_drmDevice.encoder && m_drmDevice.connector->count_encoders > 0) {
+        m_drmDevice.encoder = drmModeGetEncoder(m_drmDevice.fd, m_drmDevice.connector->encoders[0]);
+    }
+    if (!m_drmDevice.encoder) return false;
+
+    if (m_drmDevice.encoder->crtc_id) {
+        m_drmDevice.crtc = drmModeGetCrtc(m_drmDevice.fd, m_drmDevice.encoder->crtc_id);
+    } else if (m_drmDevice.resources->count_crtcs > 0) {
+        m_drmDevice.crtc = drmModeGetCrtc(m_drmDevice.fd, m_drmDevice.resources->crtcs[0]);
+    }
+
+    return m_drmDevice.crtc != nullptr;
+}
+
+bool DisplayManager::probeLinuxFramebuffer() {
+    m_fbDevice.path = "/dev/fb0";
+    m_fbDevice.fd = open(m_fbDevice.path.c_str(), O_RDWR);
+    if (m_fbDevice.fd < 0) {
         return false;
     }
 
-    // Select preferred mode (first mode)
-    m_device.currentMode = m_device.connector->modes[0];
-    m_activeMode.width = m_device.currentMode.hdisplay;
-    m_activeMode.height = m_device.currentMode.vdisplay;
-    m_activeMode.refreshRate = m_device.currentMode.vrefresh;
-    m_activeMode.name = m_device.currentMode.name;
-
-    // Acquire encoder
-    if (m_device.connector->encoder_id) {
-        m_device.encoder = drmModeGetEncoder(m_device.fd, m_device.connector->encoder_id);
-    }
-    if (!m_device.encoder && m_device.connector->count_encoders > 0) {
-        m_device.encoder = drmModeGetEncoder(m_device.fd, m_device.connector->encoders[0]);
-    }
-
-    if (!m_device.encoder) {
-        std::cerr << "[LCL DRM/KMS WARNING] Could not find suitable encoder for connector.\n";
+    if (ioctl(m_fbDevice.fd, FBIOGET_VSCREENINFO, &m_fbDevice.vinfo) < 0 ||
+        ioctl(m_fbDevice.fd, FBIOGET_FSCREENINFO, &m_fbDevice.finfo) < 0) {
+        close(m_fbDevice.fd);
+        m_fbDevice.fd = -1;
         return false;
     }
 
-    // Acquire CRTC
-    if (m_device.encoder->crtc_id) {
-        m_device.crtc = drmModeGetCrtc(m_device.fd, m_device.encoder->crtc_id);
-    } else if (m_device.resources->count_crtcs > 0) {
-        m_device.crtc = drmModeGetCrtc(m_device.fd, m_device.resources->crtcs[0]);
-    }
+    m_fbDevice.width = m_fbDevice.vinfo.xres;
+    m_fbDevice.height = m_fbDevice.vinfo.yres;
+    m_fbDevice.bpp = m_fbDevice.vinfo.bits_per_pixel;
+    m_fbDevice.pitch = m_fbDevice.finfo.line_length;
+    m_fbDevice.size = m_fbDevice.finfo.smem_len;
 
-    if (!m_device.crtc) {
-        std::cerr << "[LCL DRM/KMS WARNING] Could not acquire CRTC.\n";
+    void* ptr = mmap(nullptr, m_fbDevice.size, PROT_READ | PROT_WRITE, MAP_SHARED, m_fbDevice.fd, 0);
+    if (ptr == MAP_FAILED) {
+        close(m_fbDevice.fd);
+        m_fbDevice.fd = -1;
         return false;
     }
+
+    m_fbDevice.pixelData = static_cast<uint32_t*>(ptr);
+    m_activeMode.width = m_fbDevice.width;
+    m_activeMode.height = m_fbDevice.height;
+    m_activeMode.refreshRate = 60;
+    m_activeMode.name = "LinuxFB";
 
     return true;
 }
 
 void DisplayManager::shutdown() {
-    if (!m_initialized && m_device.fd < 0) return;
-
-    std::cout << "[LCL DRM/KMS] Shutting down Display Subsystem...\n";
+    if (!m_initialized) return;
+    std::cout << "[LCL Display] Shutting down Display Subsystem...\n";
     cleanupDRMDevice();
+    cleanupFBDevice();
+    m_backendType = DisplayBackendType::None;
     m_initialized = false;
 }
 
 void DisplayManager::cleanupDRMDevice() {
-    if (m_device.crtc) {
-        drmModeFreeCrtc(m_device.crtc);
-        m_device.crtc = nullptr;
+    if (m_drmDevice.crtc) { drmModeFreeCrtc(m_drmDevice.crtc); m_drmDevice.crtc = nullptr; }
+    if (m_drmDevice.encoder) { drmModeFreeEncoder(m_drmDevice.encoder); m_drmDevice.encoder = nullptr; }
+    if (m_drmDevice.connector) { drmModeFreeConnector(m_drmDevice.connector); m_drmDevice.connector = nullptr; }
+    if (m_drmDevice.resources) { drmModeFreeResources(m_drmDevice.resources); m_drmDevice.resources = nullptr; }
+    if (m_drmDevice.fd >= 0) { close(m_drmDevice.fd); m_drmDevice.fd = -1; }
+}
+
+void DisplayManager::cleanupFBDevice() {
+    if (m_fbDevice.pixelData && m_fbDevice.size > 0) {
+        munmap(m_fbDevice.pixelData, m_fbDevice.size);
+        m_fbDevice.pixelData = nullptr;
     }
-    if (m_device.encoder) {
-        drmModeFreeEncoder(m_device.encoder);
-        m_device.encoder = nullptr;
-    }
-    if (m_device.connector) {
-        drmModeFreeConnector(m_device.connector);
-        m_device.connector = nullptr;
-    }
-    if (m_device.resources) {
-        drmModeFreeResources(m_device.resources);
-        m_device.resources = nullptr;
-    }
-    if (m_device.fd >= 0) {
-        close(m_device.fd);
-        m_device.fd = -1;
+    if (m_fbDevice.fd >= 0) {
+        close(m_fbDevice.fd);
+        m_fbDevice.fd = -1;
     }
 }
 

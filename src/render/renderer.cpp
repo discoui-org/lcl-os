@@ -70,16 +70,20 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
     // Allocate software back buffer
     m_softwareBackBuffer.assign(m_width * m_height, 0xFF0F172A); // Dark slate background
 
-    // Try DRM Dumb Buffer creation if hardware display is available
+    // Try DRM Dumb Buffer creation if DRM KMS hardware display is active
     if (m_displayManager && m_displayManager->isInitialized()) {
-        if (createDumbBuffer()) {
-            m_usingDRMHardware = true;
-            std::cout << "[LCL Render] DRM Dumb Framebuffer Hardware acceleration enabled!\n";
+        if (m_displayManager->getBackendType() == core::DisplayBackendType::DRM_KMS) {
+            if (createDumbBuffer()) {
+                m_usingDRMHardware = true;
+                std::cout << "[LCL Render] DRM Dumb Framebuffer Hardware acceleration enabled!\n";
+            }
+        } else if (m_displayManager->getBackendType() == core::DisplayBackendType::LinuxFB) {
+            std::cout << "[LCL Render] Linux Framebuffer (/dev/fb0) direct output enabled!\n";
         }
     }
 
-    if (!m_usingDRMHardware) {
-        std::cout << "[LCL Render] Operating in Software Framebuffer fallback mode.\n";
+    if (!m_usingDRMHardware && (!m_displayManager || m_displayManager->getBackendType() == core::DisplayBackendType::None)) {
+        std::cout << "[LCL Render] Operating in Software Canvas fallback mode.\n";
     }
 
     m_initialized = true;
@@ -156,8 +160,18 @@ void Renderer::renderLCLDesktopShell(const std::string& statusMessage) {
 
 void Renderer::swapBuffers() {
     m_renderedFrames++;
-    if (m_usingDRMHardware && m_dumbBuffer.pixelData) {
-        std::memcpy(m_dumbBuffer.pixelData, m_softwareBackBuffer.data(), m_dumbBuffer.size);
+
+    if (m_displayManager && m_displayManager->isInitialized()) {
+        if (m_displayManager->getBackendType() == core::DisplayBackendType::LinuxFB) {
+            uint32_t* fbPixels = m_displayManager->getFBPixelData();
+            if (fbPixels) {
+                size_t copyBytes = std::min(static_cast<size_t>(m_width * m_height * sizeof(uint32_t)),
+                                            static_cast<size_t>(m_displayManager->getFBDevice().size));
+                std::memcpy(fbPixels, m_softwareBackBuffer.data(), copyBytes);
+            }
+        } else if (m_usingDRMHardware && m_dumbBuffer.pixelData) {
+            std::memcpy(m_dumbBuffer.pixelData, m_softwareBackBuffer.data(), m_dumbBuffer.size);
+        }
     }
 }
 

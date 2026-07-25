@@ -59,10 +59,11 @@ ln -s usr/bin "${INITRAMFS_DIR}/sbin"
 ln -s usr/lib "${INITRAMFS_DIR}/lib"
 ln -s usr/lib "${INITRAMFS_DIR}/lib64"
 
-# Copy lcl-core, sh, and mount binaries
+# Copy lcl-core, sh, mount, and mkdir binaries
 cp "${BINARY}" "${INITRAMFS_DIR}/usr/bin/lcl-core"
 [ -f /bin/sh ] && cp -L /bin/sh "${INITRAMFS_DIR}/usr/bin/sh"
 [ -f /bin/mount ] && cp -L /bin/mount "${INITRAMFS_DIR}/usr/bin/mount"
+[ -f /bin/mkdir ] && cp -L /bin/mkdir "${INITRAMFS_DIR}/usr/bin/mkdir"
 [ -d /usr/share/libinput ] && cp -r /usr/share/libinput "${INITRAMFS_DIR}/usr/share/" 2>/dev/null || true
 
 # Copy dynamic library dependencies
@@ -70,6 +71,7 @@ echo "[LCL QEMU] Resolving dynamic library dependencies..."
 FOR_BINS=("${BINARY}")
 [ -f /bin/sh ] && FOR_BINS+=("/bin/sh")
 [ -f /bin/mount ] && FOR_BINS+=("/bin/mount")
+[ -f /bin/mkdir ] && FOR_BINS+=("/bin/mkdir")
 
 for bin in "${FOR_BINS[@]}"; do
     for lib in $(ldd "$bin" 2>/dev/null | grep -o '/[^\ ]*'); do
@@ -117,7 +119,7 @@ echo "  Launching QEMU Virtual Machine:"
 echo "  - Memory: ${MEMORY}"
 echo "  - SMP Cores: ${CPUS}"
 echo "  - Accelerator: ${QEMU_KVM_ARGS[*]}"
-echo "  - Display: virtio-vga / VirtIO GPU (Direct DRM/KMS)"
+echo "  - Display: Standard VGA / VirtIO Framebuffer"
 echo "----------------------------------------------------"
 
 if [ "$1" == "--run" ] || [ "$1" == "-r" ]; then
@@ -125,10 +127,10 @@ if [ "$1" == "--run" ] || [ "$1" == "-r" ]; then
         "${QEMU_KVM_ARGS[@]}" \
         -kernel "${KERNEL_PATH}" \
         -initrd "${INITRAMFS_IMG}" \
-        -append "console=tty0 console=ttyS0,115200 earlyprintk=ttyS0 rdinit=/init quiet loglevel=3" \
+        -append "console=tty0 console=ttyS0,115200 vga=792 video=1280x720-32 earlyprintk=ttyS0 rdinit=/init quiet loglevel=3" \
         -m "${MEMORY}" \
         -smp "${CPUS}" \
-        -vga virtio \
+        -vga std \
         -device virtio-gpu-pci \
         -serial stdio
 else

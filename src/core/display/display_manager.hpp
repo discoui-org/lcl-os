@@ -5,8 +5,15 @@
 #include <vector>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+#include <linux/fb.h>
 
 namespace lcl::core {
+
+enum class DisplayBackendType {
+    None,
+    DRM_KMS,
+    LinuxFB
+};
 
 struct DisplayMode {
     uint32_t width{0};
@@ -25,6 +32,19 @@ struct DRMDevice {
     drmModeModeInfo currentMode{};
 };
 
+struct FBDevice {
+    int fd{-1};
+    std::string path;
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t bpp{32};
+    uint32_t pitch{0};
+    uint64_t size{0};
+    uint32_t* pixelData{nullptr};
+    struct fb_var_screeninfo vinfo{};
+    struct fb_fix_screeninfo finfo{};
+};
+
 class DisplayManager {
 public:
     DisplayManager();
@@ -39,27 +59,40 @@ public:
     DisplayManager& operator=(DisplayManager&&) noexcept;
 
     /**
-     * @brief Probe and initialize DRM/KMS graphics device.
-     * @param devicePath Path to DRM device node (default: /dev/dri/card0)
-     * @return true if DRM/KMS device initialized successfully, false otherwise
+     * @brief Probe and initialize DRM/KMS graphics device or Linux FB fallback.
+     * @param devicePath Primary DRM device node path (default: /dev/dri/card0)
+     * @return true if graphics backend initialized successfully, false otherwise
      */
     bool initialize(const std::string& devicePath = "/dev/dri/card0");
 
     /**
-     * @brief Release all DRM/KMS resources.
+     * @brief Release graphics resources.
      */
     void shutdown();
 
     bool isInitialized() const { return m_initialized; }
+    DisplayBackendType getBackendType() const { return m_backendType; }
     const DisplayMode& getActiveDisplayMode() const { return m_activeMode; }
-    const std::string& getDevicePath() const { return m_device.path; }
+    const std::string& getDevicePath() const { return m_devicePath; }
+
+    // DRM / FB Data accessors
+    int getDRMFd() const { return m_drmDevice.fd; }
+    const DRMDevice& getDRMDevice() const { return m_drmDevice; }
+    const FBDevice& getFBDevice() const { return m_fbDevice; }
+    uint32_t* getFBPixelData() const { return m_fbDevice.pixelData; }
 
 private:
+    bool probeDRMWithRetry(const std::string& devicePath);
     bool probeDRMResources();
+    bool probeLinuxFramebuffer();
     void cleanupDRMDevice();
+    void cleanupFBDevice();
 
-    DRMDevice m_device;
+    std::string m_devicePath;
+    DRMDevice m_drmDevice;
+    FBDevice m_fbDevice;
     DisplayMode m_activeMode;
+    DisplayBackendType m_backendType{DisplayBackendType::None};
     bool m_initialized{false};
 };
 
