@@ -1,0 +1,27 @@
+FROM --platform=linux/amd64 ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    pkg-config \
+    python3 \
+    libdrm-dev \
+    libinput-dev \
+    libudev-dev \
+    cpio \
+    gzip \
+    pigz \
+    zstd \
+    kmod \
+    bash \
+    coreutils \
+    util-linux \
+    findutils \
+    linux-image-virtual \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
