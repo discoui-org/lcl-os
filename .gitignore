@@ -1,0 +1,34 @@
+# Build output directory
+build/
+bin/
+lib/
+out/
+
+# IDE and Editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.clang-format
+.clang-d
+
+# Cache and temporary files
+.cache/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+install_manifest.txt
+
+# Object files and compiled binaries
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Operating System files
+.DS_Store
+Thumbs.db
