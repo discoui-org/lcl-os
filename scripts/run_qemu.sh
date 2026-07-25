@@ -59,11 +59,14 @@ ln -s usr/bin "${INITRAMFS_DIR}/sbin"
 ln -s usr/lib "${INITRAMFS_DIR}/lib"
 ln -s usr/lib "${INITRAMFS_DIR}/lib64"
 
-# Copy lcl-core, sh, mount, and mkdir binaries
+# Copy lcl-core, sh, and essential init utilities
 cp "${BINARY}" "${INITRAMFS_DIR}/usr/bin/lcl-core"
 [ -f /bin/sh ] && cp -L /bin/sh "${INITRAMFS_DIR}/usr/bin/sh"
 [ -f /bin/mount ] && cp -L /bin/mount "${INITRAMFS_DIR}/usr/bin/mount"
 [ -f /bin/mkdir ] && cp -L /bin/mkdir "${INITRAMFS_DIR}/usr/bin/mkdir"
+[ -f /bin/sleep ] && cp -L /bin/sleep "${INITRAMFS_DIR}/usr/bin/sleep"
+[ -f /bin/ls ] && cp -L /bin/ls "${INITRAMFS_DIR}/usr/bin/ls"
+[ -f /sbin/modprobe ] && cp -L /sbin/modprobe "${INITRAMFS_DIR}/usr/bin/modprobe"
 [ -d /usr/share/libinput ] && cp -r /usr/share/libinput "${INITRAMFS_DIR}/usr/share/" 2>/dev/null || true
 
 # Copy dynamic library dependencies
@@ -72,6 +75,9 @@ FOR_BINS=("${BINARY}")
 [ -f /bin/sh ] && FOR_BINS+=("/bin/sh")
 [ -f /bin/mount ] && FOR_BINS+=("/bin/mount")
 [ -f /bin/mkdir ] && FOR_BINS+=("/bin/mkdir")
+[ -f /bin/sleep ] && FOR_BINS+=("/bin/sleep")
+[ -f /bin/ls ] && FOR_BINS+=("/bin/ls")
+[ -f /sbin/modprobe ] && FOR_BINS+=("/sbin/modprobe")
 
 for bin in "${FOR_BINS[@]}"; do
     for lib in $(ldd "$bin" 2>/dev/null | grep -o '/[^\ ]*'); do
@@ -90,9 +96,19 @@ mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 mkdir -p /dev/pts /dev/dri /dev/input
 mount -t devpts devpts /dev/pts 2>/dev/null || true
 
+# Load USB HID input kernel modules for mouse/tablet
+modprobe usbhid 2>/dev/null || true
+modprobe hid_generic 2>/dev/null || true
+modprobe evdev 2>/dev/null || true
+
+# Brief wait for udev / devtmpfs to populate /dev/input
+sleep 0.5
+
 echo "===================================================="
 echo "  LCL Core Linux (LCL) - QEMU Direct Kernel Boot   "
 echo "===================================================="
+echo "Input devices detected:"
+ls /dev/input/ 2>/dev/null || echo "  (none yet)"
 exec /bin/lcl-core
 EOF
 chmod +x "${INITRAMFS_DIR}/init"
@@ -132,6 +148,10 @@ if [ "$1" == "--run" ] || [ "$1" == "-r" ]; then
         -smp "${CPUS}" \
         -vga std \
         -device virtio-gpu-pci \
+        -usb \
+        -device usb-ehci,id=ehci \
+        -device usb-tablet,bus=ehci.0 \
+        -device virtio-keyboard-pci \
         -serial stdio
 else
     echo "[LCL QEMU] Boot environment ready!"
