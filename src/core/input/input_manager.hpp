@@ -1,8 +1,8 @@
 #pragma once
 
 #include <string>
-#include <memory>
 #include <vector>
+#include <memory>
 #include <functional>
 #include <libinput.h>
 #include <libudev.h>
@@ -44,7 +44,8 @@ public:
     InputManager& operator=(InputManager&&) noexcept;
 
     /**
-     * @brief Initialize libinput / evdev context on specified seat.
+     * @brief Initialize libinput using udev seat (requires udevd) or fallback
+     *        to libinput path backend which directly opens /dev/input/eventX nodes.
      * @param seatName Seat identifier (default: "seat0")
      * @return true if initialized successfully, false otherwise
      */
@@ -72,6 +73,8 @@ public:
     int getFD() const;
 
 private:
+    bool initWithUdev(const std::string& seatName);
+    bool initWithPathBackend();
     void cleanup();
 
     struct udev* m_udev{nullptr};
@@ -79,6 +82,7 @@ private:
     std::string m_seatName;
     EventCallback m_eventCallback;
     bool m_initialized{false};
+    bool m_usingPathBackend{false};
 };
 
 } // namespace lcl::core
