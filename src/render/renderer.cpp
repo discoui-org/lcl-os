@@ -91,7 +91,63 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
 }
 
 bool Renderer::createDumbBuffer() {
-    return false; // Hardware DRM dumb buffer hook stub
+    if (!m_displayManager || m_displayManager->getDRMFd() < 0) return false;
+
+    int drmFd = m_displayManager->getDRMFd();
+    const auto& drmDevice = m_displayManager->getDRMDevice();
+    if (!drmDevice.crtc || !drmDevice.connector) return false;
+
+    uint32_t crtcId = drmDevice.crtc->crtc_id;
+    uint32_t connectorId = drmDevice.connector->connector_id;
+    auto modeInfo = drmDevice.currentMode;
+
+    // 1. Request Dumb Buffer allocation from DRM driver
+    struct drm_mode_create_dumb creq{};
+    creq.width = m_width;
+    creq.height = m_height;
+    creq.bpp = 32;
+
+    if (ioctl(drmFd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) {
+        std::cerr << "[LCL Render ERROR] DRM_IOCTL_MODE_CREATE_DUMB failed: " << std::strerror(errno) << "\n";
+        return false;
+    }
+
+    m_dumbBuffer.width = m_width;
+    m_dumbBuffer.height = m_height;
+    m_dumbBuffer.pitch = creq.pitch;
+    m_dumbBuffer.handle = creq.handle;
+    m_dumbBuffer.size = creq.size;
+
+    // 2. Add DRM Framebuffer
+    if (drmModeAddFB(drmFd, m_width, m_height, 24, 32, creq.pitch, creq.handle, &m_dumbBuffer.fbId) != 0) {
+        std::cerr << "[LCL Render ERROR] drmModeAddFB failed: " << std::strerror(errno) << "\n";
+        return false;
+    }
+
+    // 3. Map Dumb Buffer into process memory space
+    struct drm_mode_map_dumb mreq{};
+    mreq.handle = creq.handle;
+    if (ioctl(drmFd, DRM_IOCTL_MODE_MAP_DUMB, &mreq) < 0) {
+        std::cerr << "[LCL Render ERROR] DRM_IOCTL_MODE_MAP_DUMB failed: " << std::strerror(errno) << "\n";
+        return false;
+    }
+
+    void* mapPtr = mmap(nullptr, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED, drmFd, mreq.offset);
+    if (mapPtr == MAP_FAILED) {
+        std::cerr << "[LCL Render ERROR] mmap failed for DRM dumb buffer.\n";
+        return false;
+    }
+
+    m_dumbBuffer.pixelData = static_cast<uint32_t*>(mapPtr);
+
+    // 4. Set CRTC to scan out from our new DRM Framebuffer
+    if (drmModeSetCrtc(drmFd, crtcId, m_dumbBuffer.fbId, 0, 0, &connectorId, 1, &modeInfo) != 0) {
+        std::cerr << "[LCL Render WARNING] drmModeSetCrtc failed: " << std::strerror(errno) << "\n";
+    } else {
+        std::cout << "[LCL Render] DRM Modeset active on CRTC ID: " << crtcId << " (FB ID: " << m_dumbBuffer.fbId << ")\n";
+    }
+
+    return true;
 }
 
 void Renderer::clear(uint32_t argbColor) {
@@ -162,15 +218,15 @@ void Renderer::swapBuffers() {
     m_renderedFrames++;
 
     if (m_displayManager && m_displayManager->isInitialized()) {
-        if (m_displayManager->getBackendType() == core::DisplayBackendType::LinuxFB) {
+        if (m_usingDRMHardware && m_dumbBuffer.pixelData) {
+            std::memcpy(m_dumbBuffer.pixelData, m_softwareBackBuffer.data(), std::min(m_dumbBuffer.size, m_softwareBackBuffer.size() * sizeof(uint32_t)));
+        } else if (m_displayManager->getBackendType() == core::DisplayBackendType::LinuxFB) {
             uint32_t* fbPixels = m_displayManager->getFBPixelData();
             if (fbPixels) {
                 size_t copyBytes = std::min(static_cast<size_t>(m_width * m_height * sizeof(uint32_t)),
                                             static_cast<size_t>(m_displayManager->getFBDevice().size));
                 std::memcpy(fbPixels, m_softwareBackBuffer.data(), copyBytes);
             }
-        } else if (m_usingDRMHardware && m_dumbBuffer.pixelData) {
-            std::memcpy(m_dumbBuffer.pixelData, m_softwareBackBuffer.data(), m_dumbBuffer.size);
         }
     }
 }
@@ -183,9 +239,19 @@ void Renderer::shutdown() {
 }
 
 void Renderer::destroyDumbBuffer() {
-    if (m_dumbBuffer.pixelData) {
+    if (m_dumbBuffer.pixelData && m_dumbBuffer.size > 0) {
         munmap(m_dumbBuffer.pixelData, m_dumbBuffer.size);
         m_dumbBuffer.pixelData = nullptr;
+    }
+    if (m_dumbBuffer.fbId > 0 && m_displayManager && m_displayManager->getDRMFd() >= 0) {
+        drmModeRmFB(m_displayManager->getDRMFd(), m_dumbBuffer.fbId);
+        m_dumbBuffer.fbId = 0;
+    }
+    if (m_dumbBuffer.handle > 0 && m_displayManager && m_displayManager->getDRMFd() >= 0) {
+        struct drm_mode_destroy_dumb dreq{};
+        dreq.handle = m_dumbBuffer.handle;
+        ioctl(m_displayManager->getDRMFd(), DRM_IOCTL_MODE_DESTROY_DUMB, &dreq);
+        m_dumbBuffer.handle = 0;
     }
 }
 
