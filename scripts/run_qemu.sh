@@ -89,6 +89,28 @@ printf "\033[2J\033[H"
 EOF
 chmod +x "${INITRAMFS_DIR}/usr/bin/clear"
 
+# Provision /etc/profile and /home/user/.shrc with Chevron Prompt
+cat << 'EOF' > "${INITRAMFS_DIR}/etc/profile"
+export HOME=/home/user
+export TERM=linux
+export PS1='\W ❯ '
+export ENV=/home/user/.shrc
+alias ls='ls --color=auto'
+alias ll='ls -la'
+EOF
+
+cat << 'EOF' > "${INITRAMFS_DIR}/home/user/.shrc"
+export PS1='\W ❯ '
+alias ls='ls --color=auto'
+alias ll='ls -la'
+EOF
+
+cat << 'EOF' > "${INITRAMFS_DIR}/home/user/.profile"
+export PS1='\W ❯ '
+alias ls='ls --color=auto'
+alias ll='ls -la'
+EOF
+
 # Copy native C++ lcl-open tool as /usr/bin/open
 OPEN_BIN="${BUILD_DIR}/lcl-open"
 if [ -f "${OPEN_BIN}" ]; then

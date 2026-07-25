@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cerrno>
 #include <algorithm>
+#include <chrono>
 
 namespace {
 
@@ -454,9 +455,30 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
             // Auto-scroll to show latest maxRows lines
             int startLine = std::max(0, static_cast<int>(wrappedLines.size()) - maxRows);
             int curY = minY;
+            int lastLineY = minY;
+            std::string lastLineText;
+
             for (size_t l = startLine; l < wrappedLines.size() && curY + 16 <= maxY; ++l) {
                 drawStringClipped(minX, curY, wrappedLines[l], 0xFFA6E3A1, minX, minY, maxX, maxY);
-                curY += 16;
+                lastLineY = curY;
+                lastLineText = wrappedLines[l];
+                curY += 18;
+            }
+
+            // Interactive 500ms Blinking Text Cursor (macOS/Terminal style)
+            auto now = std::chrono::steady_clock::now();
+            auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+            bool showCursor = (millis / 500) % 2 == 0;
+
+            if (showCursor && !wrappedLines.empty()) {
+                int charWidth = 9; // JetBrains Mono character width
+                int charHeight = 16;
+                int caretX = minX + static_cast<int>(lastLineText.size()) * charWidth;
+                int caretY = lastLineY;
+
+                if (caretX + charWidth <= maxX && caretY + charHeight <= maxY) {
+                    drawFilledRect(caretX, caretY, charWidth, charHeight, 0xCCF3F4F6);
+                }
             }
         }
     }

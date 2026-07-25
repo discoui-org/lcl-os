@@ -174,7 +174,7 @@ void TerminalApp::update() {
             m_lines.push_back("");
         } else if (ch == '\b' || ch == 0x7F) {
             if (!m_currentLine.empty()) m_currentLine.pop_back();
-        } else if (static_cast<unsigned char>(ch) >= 32 && static_cast<unsigned char>(ch) <= 126) {
+        } else if (static_cast<unsigned char>(ch) >= 32) {
             m_currentLine.push_back(ch);
         }
     }

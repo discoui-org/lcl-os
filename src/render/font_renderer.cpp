@@ -95,10 +95,47 @@ bool FontRenderer::loadFont(const std::string& fontPath, float fontSize) {
     return true;
 }
 
+static char32_t decodeNextUTF8(const std::string& str, size_t& i) {
+    if (i >= str.size()) return 0;
+    uint8_t c1 = static_cast<uint8_t>(str[i]);
+    if (c1 < 0x80) {
+        i += 1;
+        return c1;
+    } else if ((c1 & 0xE0) == 0xC0) {
+        if (i + 1 < str.size()) {
+            uint8_t c2 = static_cast<uint8_t>(str[i + 1]);
+            i += 2;
+            return ((c1 & 0x1F) << 6) | (c2 & 0x3F);
+        }
+    } else if ((c1 & 0xF0) == 0xE0) {
+        if (i + 2 < str.size()) {
+            uint8_t c2 = static_cast<uint8_t>(str[i + 1]);
+            uint8_t c3 = static_cast<uint8_t>(str[i + 2]);
+            i += 3;
+            return ((c1 & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+        }
+    } else if ((c1 & 0xF8) == 0xF0) {
+        if (i + 3 < str.size()) {
+            uint8_t c2 = static_cast<uint8_t>(str[i + 1]);
+            uint8_t c3 = static_cast<uint8_t>(str[i + 2]);
+            uint8_t c4 = static_cast<uint8_t>(str[i + 3]);
+            i += 4;
+            return ((c1 & 0x07) << 18) | ((c2 & 0x3F) << 12) | ((c3 & 0x3F) << 6) | (c4 & 0x3F);
+        }
+    }
+    i += 1;
+    return c1;
+}
+
 void FontRenderer::precacheASCII() {
     for (char32_t c = 32; c <= 126; ++c) {
         getGlyph(c);
     }
+    // Precache Chevron symbol (❯ U+276F) and arrows
+    getGlyph(0x276F); // Heavy Right-Pointing Angle Quotation Mark Mark (Chevron ❯)
+    getGlyph(0x276E); // Chevron ❮
+    getGlyph(0x279C); // Heavy Round-Headed Rightwards Arrow ➜
+    getGlyph(0x2192); // Rightwards Arrow →
 }
 
 const GlyphInfo* FontRenderer::getGlyph(char32_t codepoint) {
@@ -152,14 +189,16 @@ void FontRenderer::renderStringClipped(uint32_t* backBuffer, int screenWidth, in
     int curX = x;
     int curY = y + m_ascent;
 
-    for (char c : text) {
-        if (c == '\n') {
+    size_t i = 0;
+    while (i < text.size()) {
+        char32_t codepoint = decodeNextUTF8(text, i);
+        if (codepoint == '\n') {
             curX = x;
             curY += m_ascent - m_descent + m_lineGap;
             continue;
         }
 
-        const GlyphInfo* g = getGlyph(static_cast<char32_t>(c));
+        const GlyphInfo* g = getGlyph(codepoint);
         if (!g) continue;
 
         if (g->width > 0 && g->height > 0 && !g->bitmap.empty()) {

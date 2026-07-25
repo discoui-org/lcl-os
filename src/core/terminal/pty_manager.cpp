@@ -89,6 +89,8 @@ bool PTYManager::spawnShell(const std::string& shellPath) {
             setenv("HOME", "/", 1);
         }
         setenv("TERM", "linux", 1);
+        setenv("PS1", "\\W ❯ ", 1);
+        setenv("ENV", "/home/user/.shrc", 1);
 
         char* const argv[] = { const_cast<char*>(shellPath.c_str()), nullptr };
         execv(shellPath.c_str(), argv);
