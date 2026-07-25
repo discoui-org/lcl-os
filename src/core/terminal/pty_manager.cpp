@@ -140,6 +140,10 @@ void PTYManager::shutdown() {
     if (m_childPid > 0) {
         std::cout << "[LCL PTY] Terminating shell process PID: " << m_childPid << "...\n";
         kill(m_childPid, SIGTERM);
+        usleep(10000);
+        if (kill(m_childPid, 0) == 0) {
+            kill(m_childPid, SIGKILL);
+        }
         waitpid(m_childPid, nullptr, WNOHANG);
         m_childPid = -1;
     }

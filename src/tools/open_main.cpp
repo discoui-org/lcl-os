@@ -1,4 +1,6 @@
 #include <iostream>
+#include <csignal>
+#include <atomic>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -7,6 +9,21 @@
 #include <cstring>
 #include "core/app/app_bundle_parser.hpp"
 #include "core/ipc/ipc_manager.hpp"
+
+namespace {
+    std::string g_ackFifoPath;
+
+    void openSignalHandler(int sig) {
+        (void)sig;
+        if (!g_ackFifoPath.empty()) {
+            std::cout << "\n[LCL Open] SIGINT received! Requesting Compositor to destroy spawned window...\n";
+            std::string cancelMsg = "DESTROY_WINDOW " + g_ackFifoPath;
+            lcl::core::IPCManager::sendMessage(cancelMsg);
+            unlink(g_ackFifoPath.c_str());
+        }
+        _exit(130);
+    }
+}
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -49,6 +66,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Register signal handlers for clean SIGINT / SIGTERM cancellation
+    std::signal(SIGINT, openSignalHandler);
+    std::signal(SIGTERM, openSignalHandler);
+
     // Check GUI app spawning
     if (meta->type == "gui" || meta->name == "LCL Terminal" || target.find("Terminal.app") != std::string::npos) {
         if (!waitMode) {
@@ -61,24 +82,24 @@ int main(int argc, char* argv[]) {
         } else {
             // Blocking mode (-w): create ACK FIFO and wait for window close!
             pid_t selfPid = getpid();
-            std::string ackFifoPath = "/tmp/lcl_ipc_ack_" + std::to_string(selfPid) + ".fifo";
-            unlink(ackFifoPath.c_str());
-            if (mkfifo(ackFifoPath.c_str(), 0666) == 0) {
-                std::string reqMsg = "SPAWN_TERMINAL_WAIT " + ackFifoPath;
+            g_ackFifoPath = "/tmp/lcl_ipc_ack_" + std::to_string(selfPid) + ".fifo";
+            unlink(g_ackFifoPath.c_str());
+            if (mkfifo(g_ackFifoPath.c_str(), 0666) == 0) {
+                std::string reqMsg = "SPAWN_TERMINAL_WAIT " + g_ackFifoPath;
                 std::cout << "[LCL Open] Requesting GUI Window for " << meta->name << " (blocking mode: waiting for window close)...\n";
                 if (lcl::core::IPCManager::sendMessage(reqMsg)) {
-                    int ackFd = open(ackFifoPath.c_str(), O_RDONLY);
+                    int ackFd = open(g_ackFifoPath.c_str(), O_RDONLY);
                     if (ackFd >= 0) {
                         char ackBuf[64];
                         ssize_t n = read(ackFd, ackBuf, sizeof(ackBuf) - 1);
                         (void)n;
                         close(ackFd);
                     }
-                    unlink(ackFifoPath.c_str());
-                    std::cout << "[LCL Open] Window closed. Returning to shell prompt.\n";
+                    unlink(g_ackFifoPath.c_str());
+                    std::cout << "[LCL Open] Window closed cleanly. Returning to shell prompt.\n";
                     return 0;
                 }
-                unlink(ackFifoPath.c_str());
+                unlink(g_ackFifoPath.c_str());
             }
         }
     }

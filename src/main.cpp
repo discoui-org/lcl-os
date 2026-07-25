@@ -5,6 +5,7 @@
 #include <chrono>
 #include <memory>
 #include <vector>
+#include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
 #include "core/display/display_manager.hpp"
@@ -33,7 +34,7 @@ namespace {
             const char msg[] = "DONE\n";
             write(fd, msg, sizeof(msg) - 1);
             close(fd);
-            std::cout << "[LCL Compositor] Sent ACK to waiting open -w process on " << fifoPath << "\n";
+            std::cout << "[LCL Compositor] Sent ACK to waiting open process on " << fifoPath << "\n";
         }
     }
 }
@@ -117,7 +118,7 @@ int main(int argc, char* argv[]) {
             inputManager.dispatchEvents(renderer.getWidth(), renderer.getHeight());
         }
 
-        // Poll IPC messages from CLI apps (e.g. open Terminal.app or open -w Terminal.app)
+        // Poll IPC messages from CLI apps (e.g. open, open -w, or cancellation)
         auto ipcMsgs = ipcManager.pollMessages();
         for (const auto& msg : ipcMsgs) {
             if (msg == "SPAWN_TERMINAL" || msg.rfind("SPAWN_TERMINAL_WAIT", 0) == 0) {
@@ -139,15 +140,48 @@ int main(int argc, char* argv[]) {
 
                 std::cout << "[LCL Compositor] Dynamically spawned GUI Terminal Window (ID: " << winId
                           << (ackFifo.empty() ? "" : " [blocking -w mode]") << ") on desktop!\n";
+            } else if (msg.rfind("DESTROY_WINDOW", 0) == 0 && msg.size() > 15) {
+                std::string targetFifo = msg.substr(15);
+                auto it = std::find_if(terminalApps.begin(), terminalApps.end(), [&](const std::unique_ptr<lcl::apps::TerminalApp>& app) {
+                    return app->getAckFifo() == targetFifo;
+                });
+
+                if (it != terminalApps.end()) {
+                    uint32_t winId = static_cast<uint32_t>((*it)->getWindowId());
+                    std::cout << "[LCL Compositor] DESTROY_WINDOW: Destroying Window ID " << winId
+                              << " and terminating process group due to SIGINT cancel.\n";
+                    windowManager.removeWindow(winId);
+                    (*it)->shutdown();
+                    terminalApps.erase(it);
+                }
             }
         }
 
-        // Update active Terminal App Surfaces & clean up exited apps
+        // Synchronize closed windows from WindowManager (e.g. user clicked red close button)
+        const auto& activeWindows = windowManager.getWindows();
+        for (auto it = terminalApps.begin(); it != terminalApps.end(); ) {
+            uint32_t winId = static_cast<uint32_t>((*it)->getWindowId());
+            bool winExists = std::any_of(activeWindows.begin(), activeWindows.end(), [winId](const lcl::render::Window& w) {
+                return w.id == winId;
+            });
+
+            if (!winExists) {
+                std::cout << "[LCL Compositor] Window ID " << winId << " closed via UI button. Destroying process.\n";
+                if (!(*it)->getAckFifo().empty()) {
+                    sendAck((*it)->getAckFifo());
+                }
+                (*it)->shutdown();
+                it = terminalApps.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        // Update active Terminal App Surfaces & clean up exited PTY processes
         for (auto it = terminalApps.begin(); it != terminalApps.end(); ) {
             auto& app = *it;
             app->update();
 
-            // Check if PTY process terminated (e.g. exit command typed)
             if (!app->isAlive()) {
                 uint32_t winId = static_cast<uint32_t>(app->getWindowId());
                 std::cout << "[LCL Compositor] Terminal App (Window ID: " << winId << ") process exited.\n";

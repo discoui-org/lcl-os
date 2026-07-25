@@ -112,11 +112,28 @@ void TerminalApp::handleInput(const core::InputEvent& ev) {
         }
 
         if (ev.pressed && !ev.isRepeat) {
-            // Handle Ctrl+L shortcut to clear screen
-            if (m_ctrlPressed && ev.key == KEY_L) {
-                clearBuffer();
-                m_ptyManager.writeInput("\n");
-                return;
+            // Handle Control key shortcuts (Ctrl+C, Ctrl+D, Ctrl+Z, Ctrl+L)
+            if (m_ctrlPressed) {
+                if (ev.key == KEY_C) {
+                    // Send SIGINT / Interrupt control character (ASCII 0x03 ETX)
+                    m_ptyManager.writeInput("\x03");
+                    return;
+                }
+                if (ev.key == KEY_D) {
+                    // Send EOF / End of File control character (ASCII 0x04 EOT)
+                    m_ptyManager.writeInput("\x04");
+                    return;
+                }
+                if (ev.key == KEY_Z) {
+                    // Send SIGTSTP / Suspend control character (ASCII 0x1A SUB)
+                    m_ptyManager.writeInput("\x1A");
+                    return;
+                }
+                if (ev.key == KEY_L) {
+                    clearBuffer();
+                    m_ptyManager.writeInput("\n");
+                    return;
+                }
             }
 
             std::string ascii = keycodeToASCII(ev.key, m_shiftPressed);
@@ -171,7 +188,7 @@ void TerminalApp::update() {
 
 void TerminalApp::shutdown() {
     if (!m_initialized) return;
-    std::cout << "[LCL App] Shutting down LCL Terminal App...\n";
+    std::cout << "[LCL App] Shutting down LCL Terminal App (Window ID: " << m_windowId << ")...\n";
     m_ptyManager.shutdown();
     m_initialized = false;
 }
