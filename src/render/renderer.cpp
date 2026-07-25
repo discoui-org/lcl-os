@@ -183,6 +183,38 @@ void Renderer::drawFilledRect(int x, int y, int width, int height, uint32_t argb
     }
 }
 
+void Renderer::drawCursor(int mouseX, int mouseY) {
+    static const char* cursorShape[] = {
+        "X           ",
+        "XX          ",
+        "X.X         ",
+        "X..X        ",
+        "X...X       ",
+        "X....X      ",
+        "X.....X     ",
+        "X......X    ",
+        "X.......X   ",
+        "X........X  ",
+        "X.....XXXXX ",
+        "X..X..X     ",
+        "X.X X..X    ",
+        "XX   X..X   ",
+        "X    X..X   ",
+        "      XX    "
+    };
+
+    for (int r = 0; r < 16; ++r) {
+        for (int c = 0; c < 12; ++c) {
+            char ch = cursorShape[r][c];
+            if (ch == 'X') {
+                drawPixel(mouseX + c, mouseY + r, 0xFF000000); // Black border
+            } else if (ch == '.') {
+                drawPixel(mouseX + c, mouseY + r, 0xFFFFFFFF); // White fill
+            }
+        }
+    }
+}
+
 void Renderer::drawWindowFrame(int x, int y, int width, int height, const std::string& title, uint32_t headerColor) {
     (void)title;
     // Window header bar
@@ -199,19 +231,33 @@ void Renderer::drawWindowFrame(int x, int y, int width, int height, const std::s
 
 void Renderer::renderLCLDesktopShell(const std::string& statusMessage) {
     (void)statusMessage;
-    // Desktop Wallpaper Surface
-    clear(0xFF090D16); // Deep space dark wallpaper
+    clear(0xFF090D16);
+    drawFilledRect(0, 0, m_width, 40, 0xFF1E1E2E);
+    drawRect(0, 39, m_width, 1, 0xFF45475A);
+    drawFilledRect(10, 6, 80, 28, 0xFF89B4FA);
+    drawWindowFrame(80, 80, 540, 360, "LCL Terminal / Core Engine", 0xFF89B4FA);
+    drawWindowFrame(360, 200, 460, 300, "LCL System Monitor", 0xFF45475A);
+    drawCursor(512, 384);
+}
 
-    // Top Status Taskbar / Panel
+void Renderer::renderDesktop(const WindowManager& windowManager) {
+    // 1. Wallpaper background
+    clear(0xFF090D16); // Deep space dark surface
+
+    // 2. Top Taskbar / Shell Panel
     drawFilledRect(0, 0, m_width, 40, 0xFF1E1E2E);
     drawRect(0, 39, m_width, 1, 0xFF45475A);
 
-    // LCL Shell Logo / Launcher Indicator
+    // LCL Shell Logo Indicator
     drawFilledRect(10, 6, 80, 28, 0xFF89B4FA);
 
-    // Render active desktop windows (LCL Core Window Manager preview)
-    drawWindowFrame(80, 80, 640, 420, "LCL Terminal / Core Engine", 0xFF313244);
-    drawWindowFrame(400, 200, 520, 340, "LCL System Monitor", 0xFF45475A);
+    // 3. Render Windows in z-order
+    for (const auto& win : windowManager.getWindows()) {
+        drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
+    }
+
+    // 4. Render Mouse Cursor on top
+    drawCursor(windowManager.getMouseX(), windowManager.getMouseY());
 }
 
 void Renderer::swapBuffers() {

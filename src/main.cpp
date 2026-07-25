@@ -6,6 +6,7 @@
 #include "core/display/display_manager.hpp"
 #include "core/input/input_manager.hpp"
 #include "render/renderer.hpp"
+#include "render/window_manager.hpp"
 
 namespace {
     // Atomic signal flag for thread-safe graceful shutdown
@@ -55,20 +56,30 @@ int main(int argc, char* argv[]) {
         std::cout << "[LCL Core] Renderer running in fallback mode.\n";
     }
 
-    std::cout << "[LCL Core] Active event loop started. Press Ctrl+C to terminate.\n";
+    // Initialize Window Manager Engine
+    lcl::render::WindowManager windowManager;
+    windowManager.initialize(renderer.getWidth(), renderer.getHeight());
 
-    // Main event and rendering loop
+    // Connect Input Subsystem events to Window Manager
+    inputManager.setEventCallback([&windowManager](const lcl::core::InputEvent& ev) {
+        windowManager.processInputEvent(ev);
+    });
+
+    std::cout << "[LCL Core] Interactive Window Manager active! Press Ctrl+C to terminate.\n";
+
+    // Main 60 FPS interactive event & render loop
     uint64_t loopTicks = 0;
     while (g_running.load()) {
         if (inputManager.isInitialized()) {
-            inputManager.dispatchEvents();
+            inputManager.dispatchEvents(renderer.getWidth(), renderer.getHeight());
         }
 
-        // Render desktop frame & swap buffers
-        renderer.renderLCLDesktopShell("LCL Core Active");
+        // Render interactive desktop with active windows & mouse cursor
+        renderer.renderDesktop(windowManager);
         renderer.swapBuffers();
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // ~60 FPS frame rate target
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
         loopTicks++;
     }
 

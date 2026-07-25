@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cerrno>
+#include <linux/input-event-codes.h>
 
 namespace {
 
@@ -37,6 +38,7 @@ InputManager::InputManager(InputManager&& other) noexcept
     : m_udev(other.m_udev),
       m_libinput(other.m_libinput),
       m_seatName(std::move(other.m_seatName)),
+      m_eventCallback(std::move(other.m_eventCallback)),
       m_initialized(other.m_initialized) {
     other.m_udev = nullptr;
     other.m_libinput = nullptr;
@@ -49,6 +51,7 @@ InputManager& InputManager::operator=(InputManager&& other) noexcept {
         m_udev = other.m_udev;
         m_libinput = other.m_libinput;
         m_seatName = std::move(other.m_seatName);
+        m_eventCallback = std::move(other.m_eventCallback);
         m_initialized = other.m_initialized;
 
         other.m_udev = nullptr;
@@ -82,7 +85,6 @@ bool InputManager::initialize(const std::string& seatName) {
 
     if (libinput_udev_assign_seat(m_libinput, m_seatName.c_str()) != 0) {
         std::cerr << "[LCL Input WARNING] Failed to assign seat '" << m_seatName << "' to libinput.\n";
-        std::cerr << "[LCL Input HINT] Device node access may require root or 'input' group permissions.\n";
         cleanup();
         return false;
     }
@@ -99,7 +101,7 @@ int InputManager::getFD() const {
     return -1;
 }
 
-size_t InputManager::dispatchEvents() {
+size_t InputManager::dispatchEvents(int screenWidth, int screenHeight) {
     if (!m_initialized || !m_libinput) return 0;
 
     libinput_dispatch(m_libinput);
@@ -111,19 +113,42 @@ size_t InputManager::dispatchEvents() {
         struct libinput_device* dev = libinput_event_get_device(event);
         const char* devName = dev ? libinput_device_get_name(dev) : "Unknown Device";
 
+        InputEvent outEv{};
+        outEv.deviceName = devName;
+
         switch (type) {
-            case LIBINPUT_EVENT_KEYBOARD_KEY:
-                std::cout << "[LCL Input Event] Keyboard Key Event from " << devName << "\n";
+            case LIBINPUT_EVENT_POINTER_MOTION: {
+                struct libinput_event_pointer* p = libinput_event_get_pointer_event(event);
+                outEv.type = InputEventType::PointerMotion;
+                outEv.dx = libinput_event_pointer_get_dx(p);
+                outEv.dy = libinput_event_pointer_get_dy(p);
+                if (m_eventCallback) m_eventCallback(outEv);
                 break;
-            case LIBINPUT_EVENT_POINTER_MOTION:
-                std::cout << "[LCL Input Event] Pointer Motion Event from " << devName << "\n";
+            }
+            case LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE: {
+                struct libinput_event_pointer* p = libinput_event_get_pointer_event(event);
+                outEv.type = InputEventType::PointerMotion;
+                outEv.absoluteX = libinput_event_pointer_get_absolute_x_transformed(p, screenWidth);
+                outEv.absoluteY = libinput_event_pointer_get_absolute_y_transformed(p, screenHeight);
+                if (m_eventCallback) m_eventCallback(outEv);
                 break;
-            case LIBINPUT_EVENT_POINTER_BUTTON:
-                std::cout << "[LCL Input Event] Pointer Button Event from " << devName << "\n";
+            }
+            case LIBINPUT_EVENT_POINTER_BUTTON: {
+                struct libinput_event_pointer* p = libinput_event_get_pointer_event(event);
+                outEv.type = InputEventType::PointerButton;
+                outEv.button = libinput_event_pointer_get_button(p);
+                outEv.pressed = (libinput_event_pointer_get_button_state(p) == LIBINPUT_BUTTON_STATE_PRESSED);
+                if (m_eventCallback) m_eventCallback(outEv);
                 break;
-            case LIBINPUT_EVENT_TOUCH_DOWN:
-                std::cout << "[LCL Input Event] Touch Down Event from " << devName << "\n";
+            }
+            case LIBINPUT_EVENT_KEYBOARD_KEY: {
+                struct libinput_event_keyboard* k = libinput_event_get_keyboard_event(event);
+                outEv.type = InputEventType::KeyboardKey;
+                outEv.key = libinput_event_keyboard_get_key(k);
+                outEv.pressed = (libinput_event_keyboard_get_key_state(k) == LIBINPUT_KEY_STATE_PRESSED);
+                if (m_eventCallback) m_eventCallback(outEv);
                 break;
+            }
             default:
                 break;
         }

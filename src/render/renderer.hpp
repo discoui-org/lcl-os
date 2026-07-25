@@ -7,6 +7,7 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 #include "core/display/display_manager.hpp"
+#include "render/window_manager.hpp"
 
 namespace lcl::render {
 
@@ -73,9 +74,11 @@ public:
     void drawPixel(int x, int y, uint32_t argbColor);
     void drawRect(int x, int y, int width, int height, uint32_t argbColor);
     void drawFilledRect(int x, int y, int width, int height, uint32_t argbColor);
+    void drawCursor(int mouseX, int mouseY);
 
     // High-level LCL UI primitives
     void renderLCLDesktopShell(const std::string& statusMessage);
+    void renderDesktop(const WindowManager& windowManager);
     void drawWindowFrame(int x, int y, int width, int height, const std::string& title, uint32_t headerColor);
 
     /**
@@ -93,8 +96,8 @@ private:
     void destroyDumbBuffer();
 
     core::DisplayManager* m_displayManager{nullptr};
-    uint32_t m_width{1280};
-    uint32_t m_height{720};
+    uint32_t m_width{1024};
+    uint32_t m_height{768};
     bool m_initialized{false};
     bool m_usingDRMHardware{false};
 
