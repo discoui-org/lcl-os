@@ -154,6 +154,43 @@ for bin in "${FOR_BINS[@]}"; do
     done
 done
 
+# Copy Host Kernel DRM & VirtIO GPU Modules
+echo "[LCL QEMU] Packaging DRM & input kernel modules for initramfs..."
+KMOD_BASE=$(dirname "${KERNEL_PATH}")
+KVER=$(basename "${KMOD_BASE}")
+if [ ! -d "${KMOD_BASE}/kernel" ]; then
+    KMOD_BASE="/lib/modules/${UNAME_R}"
+    KVER="${UNAME_R}"
+fi
+
+if [ -d "${KMOD_BASE}" ]; then
+    TARGET_KMOD="${INITRAMFS_DIR}/usr/lib/modules/${KVER}"
+    mkdir -p "${TARGET_KMOD}"
+
+    mkdir -p "${TARGET_KMOD}/kernel/drivers/gpu"
+    mkdir -p "${TARGET_KMOD}/kernel/drivers/virtio"
+    if [ -d "${KMOD_BASE}/kernel/drivers/gpu/drm" ]; then
+        cp -r "${KMOD_BASE}/kernel/drivers/gpu/drm" "${TARGET_KMOD}/kernel/drivers/gpu/" 2>/dev/null || true
+    fi
+    if [ -d "${KMOD_BASE}/kernel/drivers/virtio" ]; then
+        cp -r "${KMOD_BASE}/kernel/drivers/virtio" "${TARGET_KMOD}/kernel/drivers/virtio/" 2>/dev/null || true
+    fi
+    if [ -d "${KMOD_BASE}/kernel/drivers/hid" ]; then
+        cp -r "${KMOD_BASE}/kernel/drivers/hid" "${TARGET_KMOD}/kernel/drivers/hid/" 2>/dev/null || true
+    fi
+    if [ -d "${KMOD_BASE}/kernel/drivers/input" ]; then
+        cp -r "${KMOD_BASE}/kernel/drivers/input" "${TARGET_KMOD}/kernel/drivers/input/" 2>/dev/null || true
+    fi
+
+    # Decompress .ko.zst modules to .ko for kernel module loader compatibility
+    find "${TARGET_KMOD}" -name "*.ko.zst" -exec zstd -d --rm {} + 2>/dev/null || true
+
+    # Regenerate modules.dep and modules.alias for initramfs module tree
+    if command -v depmod >/dev/null 2>&1; then
+        depmod -b "${INITRAMFS_DIR}" "${KVER}" 2>/dev/null || true
+    fi
+fi
+
 # Create /init startup script
 cat << 'EOF' > "${INITRAMFS_DIR}/init"
 #!/bin/sh
@@ -163,17 +200,29 @@ mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 mkdir -p /dev/pts /dev/dri /dev/input /home/user/Desktop /home/user/Documents /home/user/Downloads /home/user/Applications
 mount -t devpts devpts /dev/pts 2>/dev/null || true
 
-# Load USB HID input kernel modules for mouse/tablet
+# Ensure DRM & FB device nodes exist
+mknod -m 666 /dev/dri/card0 c 226 0 2>/dev/null || true
+mknod -m 666 /dev/dri/renderD128 c 226 128 2>/dev/null || true
+mknod -m 666 /dev/fb0 c 29 0 2>/dev/null || true
+
+# Load VirtIO DMA BUF, VirtIO GPU, DRM, and USB HID input kernel modules
+modprobe virtio_dma_buf 2>/dev/null || true
+modprobe virtio_gpu 2>/dev/null || true
+modprobe bochs 2>/dev/null || true
+modprobe drm 2>/dev/null || true
+modprobe drm_kms_helper 2>/dev/null || true
 modprobe usbhid 2>/dev/null || true
 modprobe hid_generic 2>/dev/null || true
 modprobe evdev 2>/dev/null || true
 
-# Brief wait for udev / devtmpfs to populate /dev/input
+# Brief wait for udev / devtmpfs to populate /dev/dri and /dev/input
 sleep 0.5
 
 echo "===================================================="
 echo "  LCL Core Linux (LCL) - QEMU Direct Kernel Boot   "
 echo "===================================================="
+echo "DRM devices detected:"
+ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
 echo "Input devices detected:"
 ls /dev/input/ 2>/dev/null || echo "  (none yet)"
 exec /bin/lcl-core
@@ -197,12 +246,17 @@ else
     QEMU_KVM_ARGS=("-cpu" "max")
 fi
 
+# VirtIO-GPU Hardware Acceleration (VirGL) configuration
+GPU_ARGS=("-device" "virtio-vga-gl")
+DISPLAY_ARGS=("-display" "sdl,gl=on")
+
 echo "----------------------------------------------------"
 echo "  Launching QEMU Virtual Machine:"
 echo "  - Memory: ${MEMORY}"
 echo "  - SMP Cores: ${CPUS}"
 echo "  - Accelerator: ${QEMU_KVM_ARGS[*]}"
-echo "  - Display: Standard VGA / VirtIO Framebuffer"
+echo "  - GPU Accelerator: VirtIO-GPU VirGL Hardware Acceleration (${GPU_ARGS[1]})"
+echo "  - Display Backend: Host OpenGL (${DISPLAY_ARGS[1]})"
 echo "----------------------------------------------------"
 
 if [ "$1" == "--run" ] || [ "$1" == "-r" ]; then
@@ -210,11 +264,11 @@ if [ "$1" == "--run" ] || [ "$1" == "-r" ]; then
         "${QEMU_KVM_ARGS[@]}" \
         -kernel "${KERNEL_PATH}" \
         -initrd "${INITRAMFS_IMG}" \
-        -append "console=tty0 console=ttyS0,115200 vga=792 video=1280x720-32 earlyprintk=ttyS0 rdinit=/init quiet loglevel=3" \
+        -append "console=tty0 console=ttyS0,115200 video=1280x720-32 earlyprintk=ttyS0 rdinit=/init quiet loglevel=3" \
         -m "${MEMORY}" \
         -smp "${CPUS}" \
-        -vga std \
-        -device virtio-gpu-pci \
+        "${GPU_ARGS[@]}" \
+        "${DISPLAY_ARGS[@]}" \
         -usb \
         -device usb-ehci,id=ehci \
         -device usb-tablet,bus=ehci.0 \
@@ -224,3 +278,4 @@ else
     echo "[LCL QEMU] Boot environment ready!"
     echo "[LCL QEMU] Run '${0} --run' to launch QEMU in live VM."
 fi
+

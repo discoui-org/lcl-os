@@ -25,6 +25,11 @@ struct DisplayMode {
 struct DRMDevice {
     int fd{-1};
     std::string path;
+    std::string driverName;
+    std::string driverVersion;
+    std::string renderNodePath;
+    int renderNodeFd{-1};
+    bool hasHardwareAcceleration{false};
     drmModeResPtr resources{nullptr};
     drmModeConnectorPtr connector{nullptr};
     drmModeEncoderPtr encoder{nullptr};
@@ -81,9 +86,16 @@ public:
     const FBDevice& getFBDevice() const { return m_fbDevice; }
     uint32_t* getFBPixelData() const { return m_fbDevice.pixelData; }
 
+    // Hardware Acceleration & Driver Metadata
+    const std::string& getDriverName() const { return m_drmDevice.driverName; }
+    const std::string& getDriverVersion() const { return m_drmDevice.driverVersion; }
+    const std::string& getRenderNodePath() const { return m_drmDevice.renderNodePath; }
+    bool isHardwareAccelerated() const { return m_drmDevice.hasHardwareAcceleration; }
+
 private:
     bool probeDRMWithRetry(const std::string& devicePath);
     bool probeDRMResources();
+    bool probeRenderNode();
     bool probeLinuxFramebuffer();
     void cleanupDRMDevice();
     void cleanupFBDevice();

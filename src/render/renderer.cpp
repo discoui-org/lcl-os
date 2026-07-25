@@ -175,7 +175,11 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
         if (m_displayManager->getBackendType() == core::DisplayBackendType::DRM_KMS) {
             if (createDumbBuffer()) {
                 m_usingDRMHardware = true;
-                std::cout << "[LCL Render] DRM Dumb Framebuffer Hardware acceleration enabled!\n";
+                std::cout << "[LCL Render] DRM Hardware acceleration active! Driver: "
+                          << m_displayManager->getDriverName()
+                          << " (Render Node: "
+                          << (m_displayManager->getRenderNodePath().empty() ? "Direct KMS" : m_displayManager->getRenderNodePath())
+                          << ")\n";
             }
         }
     }
@@ -386,7 +390,8 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
     // LCL Shell Logo Indicator & System Title
     drawFilledRect(10, 6, 90, 28, 0xFF89B4FA);
     drawString(20, 12, "LCL Core", 0xFF1E1E2E);
-    drawString(m_width - 240, 12, "LCL OS v0.1.0 (Direct DRM)", 0xFFA6ADC8);
+    std::string hwInfo = "LCL OS v0.1.0 (" + (m_displayManager && m_displayManager->isHardwareAccelerated() ? m_displayManager->getDriverName() : "DRM FB") + ")";
+    drawString(m_width - static_cast<int>(hwInfo.length() * 8 + 20), 12, hwInfo, 0xFFA6ADC8);
 
     // 3. Render Windows in z-order
     for (const auto& win : windowManager.getWindows()) {

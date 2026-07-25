@@ -63,6 +63,11 @@ bool DisplayManager::initialize(const std::string& devicePath) {
         m_initialized = true;
         std::cout << "[LCL Display] DRM/KMS Backend successfully initialized!\n";
         std::cout << "  - Device: " << m_drmDevice.path << "\n";
+        std::cout << "  - Driver: " << m_drmDevice.driverName << " v" << m_drmDevice.driverVersion << "\n";
+        std::cout << "  - Hardware Acceleration: " << (m_drmDevice.hasHardwareAcceleration ? "ENABLED (" + m_drmDevice.driverName + ")" : "DISABLED (Software FB)") << "\n";
+        if (!m_drmDevice.renderNodePath.empty()) {
+            std::cout << "  - Render Node: " << m_drmDevice.renderNodePath << "\n";
+        }
         std::cout << "  - Resolution: " << m_activeMode.width << "x" << m_activeMode.height
                   << " @ " << m_activeMode.refreshRate << "Hz (" << m_activeMode.name << ")\n";
         return true;
@@ -110,6 +115,19 @@ bool DisplayManager::probeDRMWithRetry(const std::string& devicePath) {
 }
 
 bool DisplayManager::probeDRMResources() {
+    // Query DRM Driver Version Information
+    drmVersionPtr ver = drmGetVersion(m_drmDevice.fd);
+    if (ver) {
+        m_drmDevice.driverName = ver->name ? ver->name : "unknown";
+        m_drmDevice.driverVersion = std::to_string(ver->version_major) + "." +
+                                    std::to_string(ver->version_minor) + "." +
+                                    std::to_string(ver->version_patchlevel);
+        drmFreeVersion(ver);
+    } else {
+        m_drmDevice.driverName = "generic";
+        m_drmDevice.driverVersion = "0.0.0";
+    }
+
     m_drmDevice.resources = drmModeGetResources(m_drmDevice.fd);
     if (!m_drmDevice.resources) return false;
 
@@ -146,7 +164,40 @@ bool DisplayManager::probeDRMResources() {
         m_drmDevice.crtc = drmModeGetCrtc(m_drmDevice.fd, m_drmDevice.resources->crtcs[0]);
     }
 
-    return m_drmDevice.crtc != nullptr;
+    if (m_drmDevice.crtc != nullptr) {
+        probeRenderNode();
+        return true;
+    }
+
+    return false;
+}
+
+bool DisplayManager::probeRenderNode() {
+    std::vector<std::string> renderNodes = {"/dev/dri/renderD128", "/dev/dri/renderD129"};
+    for (const auto& path : renderNodes) {
+        int fd = open(path.c_str(), O_RDWR | O_CLOEXEC);
+        if (fd >= 0) {
+            drmVersionPtr ver = drmGetVersion(fd);
+            if (ver) {
+                m_drmDevice.renderNodePath = path;
+                m_drmDevice.renderNodeFd = fd;
+                m_drmDevice.hasHardwareAcceleration = true;
+                std::cout << "[LCL Display] DRM Render Node probed: " << path
+                          << " (Driver: " << (ver->name ? ver->name : "unknown") << ")\n";
+                drmFreeVersion(ver);
+                return true;
+            }
+            close(fd);
+        }
+    }
+
+    // Check if primary DRM driver itself supports 3D hardware acceleration (e.g. virtio_gpu)
+    if (m_drmDevice.driverName == "virtio_gpu" || m_drmDevice.driverName == "virtio-gpu" ||
+        m_drmDevice.driverName == "i915" || m_drmDevice.driverName == "amdgpu" || m_drmDevice.driverName == "nouveau") {
+        m_drmDevice.hasHardwareAcceleration = true;
+    }
+
+    return m_drmDevice.hasHardwareAcceleration;
 }
 
 bool DisplayManager::probeLinuxFramebuffer() {
@@ -195,6 +246,7 @@ void DisplayManager::shutdown() {
 }
 
 void DisplayManager::cleanupDRMDevice() {
+    if (m_drmDevice.renderNodeFd >= 0) { close(m_drmDevice.renderNodeFd); m_drmDevice.renderNodeFd = -1; }
     if (m_drmDevice.crtc) { drmModeFreeCrtc(m_drmDevice.crtc); m_drmDevice.crtc = nullptr; }
     if (m_drmDevice.encoder) { drmModeFreeEncoder(m_drmDevice.encoder); m_drmDevice.encoder = nullptr; }
     if (m_drmDevice.connector) { drmModeFreeConnector(m_drmDevice.connector); m_drmDevice.connector = nullptr; }
