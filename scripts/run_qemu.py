@@ -849,14 +849,31 @@ def detect_host_refresh_rate() -> int:
     return detect_host_display().refresh_hz
 
 
+def validate_kernel(kernel: Path) -> None:
+    """Ensure kernel is readable and looks like a bzImage QEMU can -kernel boot."""
+    if not kernel.is_file():
+        err(f"Missing kernel: {kernel}")
+        sys.exit(1)
+    if not os.access(kernel, os.R_OK):
+        err(f"Kernel not readable (try sudo or copy to build/qemu-cache): {kernel}")
+        sys.exit(1)
+    try:
+        data = kernel.read_bytes()[:512]
+    except OSError as exc:
+        err(f"Cannot read kernel: {exc}")
+        sys.exit(1)
+    # bzImage has "HdrS" at offset 0x202 in the setup header
+    if len(data) >= 0x206 and data[0x202:0x206] != b"HdrS":
+        # Also accept raw files identified by `file` later; warn only
+        log(f"WARNING: {kernel} may not be a bzImage (HdrS missing). QEMU -kernel might fail.")
+
+
 def launch_qemu(kernel: Path, native: bool = False) -> None:
     qemu = find_qemu()
     if not INITRAMFS_IMG.is_file():
         err(f"Missing initramfs: {INITRAMFS_IMG}")
         sys.exit(1)
-    if not kernel.is_file():
-        err(f"Missing kernel: {kernel}")
-        sys.exit(1)
+    validate_kernel(kernel)
 
     memory = "2G"
     cpus = "2"
@@ -888,12 +905,28 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
     else:
         accel = ["-cpu", "max"]
 
-    # Prefer Cocoa on macOS, SDL/GTK elsewhere when available
-    gpu = ["-device", "virtio-vga-gl"]
+    want_gl = os.environ.get("LCL_QEMU_GL", "").lower() in ("1", "true", "yes", "on")
+
+    # Probe available display backends once
+    try:
+        disp_help = subprocess.check_output(
+            [qemu, "-display", "help"],
+            text=True,
+            stderr=subprocess.STDOUT,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        disp_help = ""
+    backends = {line.strip() for line in disp_help.splitlines() if line.strip()}
+
     extra_qemu: list[str] = []
+    # Always disable default stdvga when attaching virtio-vga (avoids dual-head / stuck BIOS fb)
+    # GL path is opt-in: virtio-vga-gl + gl=on often hangs on Linux ("Booting from ROM..." freeze).
+    if want_gl:
+        gpu = ["-vga", "none", "-device", "virtio-vga-gl"]
+    else:
+        gpu = ["-vga", "none", "-device", "virtio-vga"]
+
     if host_os() == "darwin":
-        gpu = ["-device", "virtio-vga"]
-        # zoom-to-fit: stretch guest FB to fill the screen (otherwise centered letterbox)
         if native:
             disp = "cocoa,full-screen=on,zoom-to-fit=on"
             extra_qemu = ["-full-screen"]
@@ -901,26 +934,26 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
             disp = "cocoa"
         display = ["-display", disp]
     else:
-        # Prefer gtk zoom-to-fit when available; else SDL fullscreen
-        if native and which("qemu-system-x86_64"):
-            # Probe is expensive; pick gtk if this QEMU build lists it via -display help
-            try:
-                help_out = subprocess.check_output(
-                    [qemu, "-display", "help"],
-                    text=True,
-                    stderr=subprocess.STDOUT,
-                )
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                help_out = ""
-            if "gtk" in help_out.splitlines() or "\ngtk" in help_out:
-                disp = "gtk,gl=on,full-screen=on,zoom-to-fit=on"
-            elif "sdl" in help_out:
-                disp = "sdl,gl=on,full-screen=on"
+        # Linux: prefer software path (no gl) — reliable DRM/KMS in guest
+        if "gtk" in backends:
+            if native:
+                disp = "gtk,full-screen=on,zoom-to-fit=on"
+                if want_gl:
+                    disp = "gtk,gl=on,full-screen=on,zoom-to-fit=on"
+                extra_qemu = ["-full-screen"]
             else:
-                disp = "cocoa,full-screen=on,zoom-to-fit=on" if "cocoa" in help_out else "sdl"
-            extra_qemu = ["-full-screen"]
+                disp = "gtk,gl=on" if want_gl else "gtk,zoom-to-fit=on"
+        elif "sdl" in backends:
+            if native:
+                disp = "sdl,full-screen=on"
+                if want_gl:
+                    disp = "sdl,gl=on,full-screen=on"
+                extra_qemu = ["-full-screen"]
+            else:
+                disp = "sdl,gl=on" if want_gl else "sdl"
         else:
-            disp = "sdl,gl=on"
+            disp = "curses"
+            log("No gtk/sdl display backend; falling back to curses (install qemu gtk/sdl)")
         display = ["-display", disp]
 
     print("----------------------------------------------------")
@@ -940,12 +973,13 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
             if scale > 1.01:
                 print("  - HiDPI: physical FB + scaled UI (sharp Retina path)")
     print(f"  - Accelerator: {' '.join(accel)}")
-    print(f"  - GPU: {gpu[1]}")
+    print(f"  - GPU: {' '.join(gpu)}{'  (LCL_QEMU_GL=1 for VirGL)' if not want_gl else ''}")
     print(f"  - Display: {display[1]}")
+    print(f"  - Kernel: {kernel}")
+    print(f"  - Initrd: {INITRAMFS_IMG}")
     print("----------------------------------------------------")
 
     # Resolution -> DRM/KMS via kernel video= + lcl.width/height (DisplayManager picks mode)
-    # lcl.scale multiplies UI only when FB is physical HiDPI (bare-metal); QEMU native uses 1.0
     video_mode = f"video={width}x{height}-32@{refresh_hz}"
     lcl_params = (
         f"lcl.scale={scale} lcl.width={width} lcl.height={height} "
@@ -956,13 +990,18 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
     if host.physical_width and host.physical_height:
         lcl_params += f" lcl.physical={host.physical_width}x{host.physical_height}"
 
+    # Keep early messages on tty0 so a hung GPU still shows progress (not frozen SeaBIOS text).
+    # Serial mirrors the same log on the host terminal.
     append = (
-        f"console=tty0 console=ttyS0,115200 {video_mode} {lcl_params} "
-        f"earlyprintk=ttyS0 rdinit=/init quiet loglevel=3"
+        f"console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200 "
+        f"{video_mode} {lcl_params} "
+        f"rdinit=/init loglevel=6"
     )
     cmd = [
         qemu,
         *accel,
+        "-machine",
+        "q35",
         "-kernel",
         str(kernel),
         "-initrd",
@@ -976,16 +1015,15 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
         *gpu,
         *display,
         *extra_qemu,
-        "-usb",
-        "-device",
-        "usb-ehci,id=ehci",
-        "-device",
-        "usb-tablet,bus=ehci.0",
         "-device",
         "virtio-keyboard-pci",
+        "-device",
+        "virtio-tablet-pci",
         "-serial",
         "stdio",
+        "-no-reboot",
     ]
+    log("QEMU cmdline: " + " ".join(cmd))
     os.execvp(qemu, cmd)
 
 
