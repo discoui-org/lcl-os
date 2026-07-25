@@ -1,112 +1,112 @@
-# LCL Core Linux (LCL)
+# LCL Core Linux (LCL) Architecture Specification
 
 > **LCL**: LCL Core Linux (Recursive Abbreviation)
 
-LCL is a modular, layered graphics operating system architecture designed to run directly on top of Linux kernel capabilities without the overhead of traditional desktop environments (heavy UI toolkits over X11/Wayland). It combines the raw performance of **C/C++** with the flexibility of a **JavaScript** runtime.
+LCL is a modular, layered graphics operating system architecture running directly on bare-metal Linux kernel capabilities (`DRM/KMS`, `evdev`, `io_uring`, `AF_UNIX`) without traditional X11 or Wayland display server dependencies. It combines high-performance C++20 engine primitives with native desktop window management and JavaScript/native application runtime capabilities.
 
 ---
 
-## 1. Architectural Theme & Vertical Slice
+## 1. Architectural Layers & Vertical Slice
 
-The LCL architecture consists of 4 main layers from bottom to top. Each layer is designed to be completely decoupled.
+The LCL architecture consists of 4 main decoupled layers:
 
 ```text
-+-------------------------------------------------------+
-|  Top Layer / UI (LCL Shell & Apps - JS)               |
-+-------------------------------------------------------+
-|  Bridge & Runtime (C Binding / JS Engine)             |
-+-------------------------------------------------------+
-|  Graphics & Compositor Engine (Skia & C/C++ Manager)  |
-+-------------------------------------------------------+
-|  Linux Kernel / Hardware Layer (DRM/KMS/evdev)        |
-+-------------------------------------------------------+
-
++-----------------------------------------------------------------------+
+|  Top Layer / Apps & Shell (JS Shell, LCL Terminal, System Monitor)     |
++-----------------------------------------------------------------------+
+|  Application & IPC Layer (AppBundleParser, lcl-open, AF_UNIX IPC)     |
++-----------------------------------------------------------------------+
+|  Graphics & Window Manager (Skia/stb_truetype, FontRenderer, PTY)     |
++-----------------------------------------------------------------------+
+|  Linux Kernel & Hardware Layer (DRM/KMS, virtio_gpu, evdev, io_uring) |
++-----------------------------------------------------------------------+
 ```
 
 ---
 
-## 2. Layer Details & Technology Stack
+## 2. Layer Details & Subsystems
 
 ### I. Hardware & Input Layer
+* **Location:** `src/core/display/`, `src/core/input/`
+* **Language:** C++20 / C
+* **Display Management (DRM/KMS):** Directly drives GPU framebuffers via Linux DRM/KMS (`/dev/dri/card0`, `/dev/dri/renderD128`) with `virtio_gpu` VirGL hardware acceleration support.
+* **Input Subsystem (`evdev` / `libinput`):** Captures hardware keyboard, mouse, and touch events directly from `/dev/input/event*` nodes and dispatches them to the desktop event queue.
 
-* **Location:** `src/core/`
-* **Language:** C / C++
-* **Hardware Access (DRM/KMS):** Directly renders images onto the GPU framebuffer using Linux Kernel's `Direct Rendering Manager` (DRM) and `Kernel Mode Setting` (KMS) subsystems, bypassing X Server or traditional display managers.
-* **Input Management (`libinput` / `evdev`):** Directly captures keyboard, mouse, and touchscreen events from `/dev/input/` device nodes and dispatches them to the event queue.
+### II. Rendering & Window Management Layer
+* **Location:** `src/render/`, `src/apps/`
+* **Language:** C++20
+* **Font & Text Engine (`FontRenderer`):** TrueType vector font rasterization via `stb_truetype` featuring subpixel antialiasing, macOS-style gamma correction, font-agnostic metric queries (`getCellWidth()`, `getCellHeight()`), and UTF-8 multi-byte sequence handling.
+* **Window Manager:** Decoupled spatial window layout engine tracking z-index, spatial coordinates (`x, y, width, height`), focus, and window frame rendering.
+* **Terminal Engine (`TerminalApp` & `PTYManager`):** Pseudo-terminal (`/dev/pts/`) controller spawning interactive GNU Bash shells. Features font-agnostic canvas layout, `TIOCSWINSZ` PTY window size synchronization, VT100 write-head overwrite state tracking, and typing-aware 500ms blinking inverted block cursor rendering.
 
-### II. Rendering Engine & Compositor Layer
+### III. IPC & Application Bundle Subsystem
+* **Location:** `src/core/ipc/`, `src/tools/`
+* **Secure Unix Domain Socket IPC:** Compositor IPC operating over Unix Domain Sockets (`/tmp/lcl_compositor.sock`) bound with strict `0600` permissions. Validates client requests using kernel peer authentication (`SO_PEERCRED` via `getsockopt`) to verify `PID`, `UID`, and `GID`.
+* **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`.
+* **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ CLI tool linking against `AppBundleParser`. Supports background launch (`open App.app`) and blocking wait mode (`open -w App.app`) with signal handling (`SIGINT`/`SIGTERM`) and automatic window surface reclamation (`DESTROY_LAST_WINDOW`).
 
-* **Location:** `src/render/`
-* **Language:** C++
-* **Graphics Engine (Skia):** Uses Google's open-source 2D graphics engine (Skia) for rendering vector graphics, text, shadows, and managing GPU-accelerated OpenGL/Vulkan outputs.
-* **Window Manager:** A C++ engine that calculates window bounds (`width, height`), spatial positions (`x, y`), layer depths (`z-index`), and focus states.
-* **Decoupling Principle:** The Window Manager strictly handles geometric and physical window rules; it contains no visual Shell elements.
-
-### III. Bridge & Runtime Layer
-
-* **Location:** `src/binding/`
-* **Language:** C++ / C / JavaScript
-* **JS Engine:** Lightweight JavaScript runtime (QuickJS / V8) for executing user-space code.
-* **C/JS Binding:** Maps C++ Skia drawing commands and system hardware events (mouse/keyboard events) into JavaScript objects and functions.
-
-### IV. Shell & User Interface Layer
-
-* **Location:** `shell/`
-* **Language:** JavaScript / TypeScript
-* **LCL Shell:** The user-facing visual surface containing the taskbar, application launcher, wallpaper, and notification area. Decoupled from the Window Manager.
-* **Application Ecosystem:** Designed to support React Native / declarative JS paradigms in future stages via integration with `Yoga Layout` (C++ Flexbox engine).
-
----
-
-## 3. Subsystems
-
-### A. Asynchronous File System & Storage
-
+### IV. Storage & Asynchronous File System
 * **Location:** `src/fs/`
-* **Architecture:** Asynchronous I/O architecture running over the Linux Kernel VFS (Virtual File System).
-* **I/O Engine:** Leverages modern Linux `io_uring` and standard POSIX APIs for zero-cost, non-blocking disk operations that prevent main render loop stutters.
-* **File Watching:** Live directory tracking using `inotify`.
-* **Security & Sandboxing:** Application directory isolation exposed via the `LCL.fs` JavaScript API.
-* **Disk Partitioning Strategy (Immutable Layout):**
-* `/system`: Read-only operating system and Shell core files.
-* `/home/user`: Writable user data and configurations.
-* `/apps`: Isolated application packages.
-
-
+* **Architecture:** Non-blocking asynchronous I/O over Linux Kernel VFS using `io_uring` and POSIX async primitives to prevent main rendering thread stutters.
 
 ---
 
-## 4. Event & Data Flow Architecture
+## 3. Communication & Event Flow Architecture
 
-When an event occurs (e.g., a user mouse click), the vertical execution flow operates as follows:
-
-1. **Kernel (`evdev`)** $\rightarrow$ Captures raw hardware event (`/dev/input/`).
-2. **C++ Window Manager** $\rightarrow$ Calculates coordinate hit-testing and identifies target window.
-3. **C Binding Layer** $\rightarrow$ Translates the event into a JS `onClick` object and dispatches it to the JS Runtime.
-4. **JS Shell / Application** $\rightarrow$ Updates application state and triggers a re-render signal back to the C++ layer.
-5. **Skia Engine** $\rightarrow$ Renders the updated frame directly to the screen via GPU/DRM.
+```text
++-----------------------+
+|  1. Hardware Event    | (Keyboard / Mouse event via /dev/input/event*)
++-----------+-----------+
+            |
+            v
++-----------+-----------+
+|  2. Input Subsystem   | (evdev / libinput event listener)
++-----------+-----------+
+            |
+            v
++-----------+-----------+
+|  3. Window Manager    | (Hit-testing, focus dispatch, spatial bounds)
++-----------+-----------+
+            |
+            v
++-----------+-----------+
+|  4. PTY / App Handler | (Writes sequence to master FD / IPC Socket)
++-----------+-----------+
+            |
+            v
++-----------+-----------+
+|  5. Renderer Engine   | (FontRenderer & DRM/KMS buffer swap)
++-----------------------+
+```
 
 ---
 
-## 5. Directory Structure
+## 4. Directory Structure
 
 ```text
 lcl-os/
-├── ARCHITECTURE.md         # Architecture documentation
-├── CMakeLists.txt          # Root CMake configuration
-├── third_party/            # External dependencies (Skia, QuickJS/V8, etc.)
-├── build/                  # Build output directory
-├── shell/                  # Top Layer (JavaScript)
-│   ├── assets/             # Fonts, wallpapers, icons
-│   └── js/
-│       └── main.js         # LCL Shell entry point
-└── src/                    # Lower Layer (C/C++)
-    ├── main.cpp            # Application entry point & Event Loop
-    ├── core/
-    │   ├── display/        # DRM/KMS, OpenGL/Vulkan framebuffer management
-    │   └── input/          # evdev & libinput event listeners
-    ├── render/             # Skia window rendering & compositing engine
-    ├── fs/                 # io_uring / POSIX async file system
-    └── binding/            # C++ <-> JS communication bridge
-
+├── ARCHITECTURE.md                 # System architecture specification
+├── CMakeLists.txt                  # Root CMake build configuration
+├── assets/                         # System fonts and visual assets
+│   └── fonts/                      # TrueType font assets (JetBrains Mono, Inter)
+├── docs/                           # Documentation & Agent prompts
+│   ├── AGENTS.md                   # Agent working rules & communication protocol
+│   ├── AG_NEW_INSTANCE_PROMPT.md   # AntiGravity instance bootstrapper prompt
+│   └── GEMINI_NEW_INSTANCE_PROMPT.md # Gemini instance bootstrapper prompt
+├── scripts/                        # System build & QEMU launcher scripts
+│   └── run_qemu.sh                 # QEMU direct kernel boot & initramfs packager
+├── shell/                          # Shell Presentation Layer
+└── src/                            # Core C++20 Engine & Applications
+    ├── main.cpp                    # Application entry point & compositor loop
+    ├── apps/                       # Native system applications
+    │   ├── sysmon/                 # System Monitor application
+    │   └── terminal/               # LCL Terminal application & VT100 engine
+    ├── core/                       # Core engine subsystems
+    │   ├── display/                # DRM/KMS & OpenGL/Vulkan display backend
+    │   ├── input/                  # evdev & libinput event listeners
+    │   ├── ipc/                    # Secure Unix Domain Socket IPC server
+    │   └── terminal/               # PTY master/slave manager
+    ├── render/                     # Renderer engine & stb_truetype FontRenderer
+    ├── fs/                         # io_uring & POSIX async file system
+    └── tools/                      # Native CLI utilities (lcl-open)
 ```
