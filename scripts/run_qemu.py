@@ -308,7 +308,7 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
         except subprocess.CalledProcessError:
             pass
 
-    has_virtio_gpu = any(target.rglob("virtio_gpu.ko*"))
+    has_virtio_gpu = any(target.rglob("virtio_gpu.ko*")) or any(target.rglob("virtio-gpu.ko*"))
     builtin_txt = ""
     builtin_path = kmod_base / "modules.builtin"
     if builtin_path.is_file():
@@ -549,7 +549,6 @@ chmod 666 /dev/ptmx 2>/dev/null || true
 
 # Resolve module tree (uname -r inside guest matches booted kernel)
 KVER=$(uname -r 2>/dev/null)
-export MODPROBE_OPTIONS=""
 if [ -d "/lib/modules/$KVER" ]; then
     echo "[init] modules: /lib/modules/$KVER"
 else
