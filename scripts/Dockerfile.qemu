@@ -24,9 +24,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sed \
     gawk \
     procps \
-    linux-image-generic \
     ca-certificates \
     curl \
+    && apt-get install -y linux-image-generic \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

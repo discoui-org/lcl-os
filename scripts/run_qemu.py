@@ -558,18 +558,18 @@ else
 fi
 
 # Load GPU / input stack BEFORE creating any device nodes (let devtmpfs populate)
-modprobe virtio_pci 2>/dev/null || true
-modprobe virtio_dma_buf 2>/dev/null || true
-modprobe drm 2>/dev/null || true
-modprobe drm_kms_helper 2>/dev/null || true
-modprobe virtio_gpu 2>/dev/null || true
-modprobe bochs 2>/dev/null || true
-modprobe simpledrm 2>/dev/null || true
-modprobe virtio_input 2>/dev/null || true
-modprobe usbhid 2>/dev/null || true
-modprobe hid_generic 2>/dev/null || true
-modprobe evdev 2>/dev/null || true
-modprobe qemu_fw_cfg 2>/dev/null || true
+modprobe virtio_pci || true
+modprobe virtio_dma_buf || true
+modprobe drm || true
+modprobe drm_kms_helper || true
+modprobe virtio_gpu || true
+modprobe bochs || true
+modprobe simpledrm || true
+modprobe virtio_input || true
+modprobe usbhid || true
+modprobe hid_generic || true
+modprobe evdev || true
+modprobe qemu_fw_cfg || true
 
 # Wait for /dev/dri/card* (up to ~3s)
 i=0
