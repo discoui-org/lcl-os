@@ -15,26 +15,31 @@ find_package(Threads REQUIRED)
 
 pkg_check_modules(DRM REQUIRED libdrm)
 pkg_check_modules(LIBINPUT REQUIRED libinput)
+pkg_check_modules(UDEV REQUIRED libudev)
 
 # Executable target
 add_executable(lcl-core
     src/main.cpp
     src/core/display/display_manager.cpp
+    src/core/input/input_manager.cpp
 )
 
 target_include_directories(lcl-core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${DRM_INCLUDE_DIRS}
     ${LIBINPUT_INCLUDE_DIRS}
+    ${UDEV_INCLUDE_DIRS}
 )
 
 target_link_libraries(lcl-core PRIVATE
     ${DRM_LIBRARIES}
     ${LIBINPUT_LIBRARIES}
+    ${UDEV_LIBRARIES}
     Threads::Threads
 )
 
 target_compile_options(lcl-core PRIVATE
     ${DRM_CFLAGS_OTHER}
     ${LIBINPUT_CFLAGS_OTHER}
+    ${UDEV_CFLAGS_OTHER}
 )

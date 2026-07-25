@@ -4,6 +4,7 @@
 #include <thread>
 #include <chrono>
 #include "core/display/display_manager.hpp"
+#include "core/input/input_manager.hpp"
 
 namespace {
     // Atomic signal flag for thread-safe graceful shutdown
@@ -39,16 +40,28 @@ int main(int argc, char* argv[]) {
         std::cout << "[LCL Core] Display subsystem running in fallback/skeleton mode.\n";
     }
 
+    // Initialize libinput / evdev Input Subsystem
+    lcl::core::InputManager inputManager;
+    bool inputReady = inputManager.initialize("seat0");
+    if (!inputReady) {
+        std::cout << "[LCL Core] Input subsystem running in fallback/skeleton mode.\n";
+    }
+
     std::cout << "[LCL Core] Skeleton event loop started. Press Ctrl+C to terminate.\n";
 
-    // Basic skeleton event loop
+    // Main event loop
     uint64_t loopTicks = 0;
     while (g_running.load()) {
+        if (inputManager.isInitialized()) {
+            inputManager.dispatchEvents();
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         loopTicks++;
     }
 
-    // Explicit shutdown of Display Subsystem
+    // Explicit shutdown of core subsystems
+    inputManager.shutdown();
     displayManager.shutdown();
 
     std::cout << "[LCL Core] Clean shutdown complete. Total event loop ticks: " << loopTicks << "\n";
