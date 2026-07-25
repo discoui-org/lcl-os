@@ -144,7 +144,15 @@ bool DisplayManager::probeDRMResources() {
 
     if (!m_drmDevice.connector) return false;
 
-    m_drmDevice.currentMode = m_drmDevice.connector->modes[0];
+    drmModeModeInfo bestMode = m_drmDevice.connector->modes[0];
+    for (int m = 0; m < m_drmDevice.connector->count_modes; ++m) {
+        const auto& mode = m_drmDevice.connector->modes[m];
+        if (mode.vrefresh > bestMode.vrefresh ||
+           (mode.vrefresh == bestMode.vrefresh && (mode.hdisplay * mode.vdisplay > bestMode.hdisplay * bestMode.vdisplay))) {
+            bestMode = mode;
+        }
+    }
+    m_drmDevice.currentMode = bestMode;
     m_activeMode.width = m_drmDevice.currentMode.hdisplay;
     m_activeMode.height = m_drmDevice.currentMode.vdisplay;
     m_activeMode.refreshRate = m_drmDevice.currentMode.vrefresh;

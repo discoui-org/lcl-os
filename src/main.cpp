@@ -99,9 +99,17 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[LCL Core] Secure Unix Domain Socket Compositor IPC active! Press Ctrl+C to terminate.\n";
 
-    // Main 60 FPS interactive event & render loop
+    // High Refresh Rate Frame Pacing Setup (matches DRM display refresh rate, e.g. 144Hz)
+    uint32_t targetHz = displayManager.isInitialized() ? displayManager.getActiveDisplayMode().refreshRate : 144;
+    if (targetHz == 0) targetHz = 144;
+    auto targetFrameDuration = std::chrono::microseconds(1000000 / targetHz);
+    std::cout << "[LCL Core] High Refresh Rate active: targeting " << targetHz << " Hz (~"
+              << (1000000 / targetHz) << " us per frame budget).\n";
+
     uint64_t loopTicks = 0;
     while (g_running.load()) {
+        auto frameStart = std::chrono::high_resolution_clock::now();
+
         if (inputManager.isInitialized()) {
             inputManager.dispatchEvents(renderer.getWidth(), renderer.getHeight());
         }
@@ -192,8 +200,12 @@ int main(int argc, char* argv[]) {
         renderer.renderDesktop(windowManager, contents);
         renderer.swapBuffers();
 
-        // ~60 FPS frame rate target
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        // Precise dynamic frame pacing matching display refresh rate
+        auto frameDuration = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::high_resolution_clock::now() - frameStart);
+        if (frameDuration < targetFrameDuration) {
+            std::this_thread::sleep_for(targetFrameDuration - frameDuration);
+        }
         loopTicks++;
     }
 

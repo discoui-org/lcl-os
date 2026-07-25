@@ -264,7 +264,7 @@ if [ "$1" == "--run" ] || [ "$1" == "-r" ]; then
         "${QEMU_KVM_ARGS[@]}" \
         -kernel "${KERNEL_PATH}" \
         -initrd "${INITRAMFS_IMG}" \
-        -append "console=tty0 console=ttyS0,115200 video=1280x720-32 earlyprintk=ttyS0 rdinit=/init quiet loglevel=3" \
+        -append "console=tty0 console=ttyS0,115200 video=1280x800-32@144 earlyprintk=ttyS0 rdinit=/init quiet loglevel=3" \
         -m "${MEMORY}" \
         -smp "${CPUS}" \
         "${GPU_ARGS[@]}" \
