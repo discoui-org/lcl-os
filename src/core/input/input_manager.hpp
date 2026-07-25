@@ -26,6 +26,7 @@ struct InputEvent {
     bool pressed{false};
     bool isRepeat{false};
     uint32_t key{0};
+    bool superPressed{false};
     std::string deviceName;
 };
 
@@ -102,6 +103,7 @@ private:
     EventCallback m_eventCallback;
     bool m_initialized{false};
     bool m_usingEvdev{false};
+    bool m_superPressed{false};
 };
 
 } // namespace lcl::core

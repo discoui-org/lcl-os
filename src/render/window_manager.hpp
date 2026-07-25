@@ -8,6 +8,18 @@
 
 namespace lcl::render {
 
+enum class ResizeEdge {
+    None,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight
+};
+
 struct Window {
     uint32_t id{0};
     std::string title;
@@ -17,9 +29,22 @@ struct Window {
     int height{300};
     int zIndex{0};
     bool isFocused{false};
+
+    // Drag state
     bool isDragging{false};
     int dragOffsetX{0};
     int dragOffsetY{0};
+
+    // Resize state
+    bool isResizing{false};
+    ResizeEdge resizeEdge{ResizeEdge::None};
+    int resizeStartX{0};
+    int resizeStartY{0};
+    int initialX{0};
+    int initialY{0};
+    int initialWidth{0};
+    int initialHeight{0};
+
     uint32_t headerColor{0xFF38BDF8};
 
     // Damage Tracking & Occlusion Culling

@@ -313,10 +313,15 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                     count++;
                 }
             } else if (ev.type == EV_KEY) {
+                if (ev.code == KEY_LEFTMETA || ev.code == KEY_RIGHTMETA) {
+                    m_superPressed = (ev.value != 0);
+                }
+
                 InputEvent outEv{};
                 outEv.deviceName = dev.name;
                 outEv.pressed = (ev.value != 0);
                 outEv.isRepeat = (ev.value == 2);
+                outEv.superPressed = m_superPressed;
 
                 if (ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE) {
                     outEv.type = InputEventType::PointerButton;

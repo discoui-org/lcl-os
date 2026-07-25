@@ -2,6 +2,7 @@
 #include "core/display/display_scale.hpp"
 #include <iostream>
 #include <algorithm>
+#include <cmath>
 #include <linux/input-event-codes.h>
 
 namespace lcl::render {
@@ -64,6 +65,27 @@ bool WindowManager::removeWindow(uint32_t windowId) {
     return false;
 }
 
+namespace {
+    ResizeEdge detectResizeEdge(int mx, int my, const Window& win) {
+        const int border = core::DisplayScale::px(8);
+        bool nearLeft = (mx >= win.x - border && mx <= win.x + border);
+        bool nearRight = (mx >= win.x + win.width - border && mx <= win.x + win.width + border);
+        bool nearTop = (my >= win.y - border && my <= win.y + border);
+        bool nearBottom = (my >= win.y + win.height - border && my <= win.y + win.height + border);
+
+        if (nearTop && nearLeft) return ResizeEdge::TopLeft;
+        if (nearTop && nearRight) return ResizeEdge::TopRight;
+        if (nearBottom && nearLeft) return ResizeEdge::BottomLeft;
+        if (nearBottom && nearRight) return ResizeEdge::BottomRight;
+        if (nearLeft) return ResizeEdge::Left;
+        if (nearRight) return ResizeEdge::Right;
+        if (nearTop) return ResizeEdge::Top;
+        if (nearBottom) return ResizeEdge::Bottom;
+
+        return ResizeEdge::None;
+    }
+}
+
 bool WindowManager::processInputEvent(const core::InputEvent& event) {
     bool stateChanged = false;
 
@@ -84,10 +106,13 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
             stateChanged = true;
         }
 
-        // Move dragging window
+        const int menuH = core::DisplayScale::menuBarHeight();
+        const int minW = core::DisplayScale::px(180);
+        const int minH = core::DisplayScale::px(100);
+
         for (auto& win : m_windows) {
+            // Dragging (Move)
             if (win.isDragging) {
-                const int menuH = core::DisplayScale::menuBarHeight();
                 int newX = std::clamp(m_mouseX - win.dragOffsetX, 0, static_cast<int>(m_screenWidth) - win.width);
                 int newY = std::clamp(m_mouseY - win.dragOffsetY, menuH, static_cast<int>(m_screenHeight) - win.height);
                 if (newX != win.x || newY != win.y) {
@@ -97,43 +122,197 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                     stateChanged = true;
                 }
             }
-        }
-    } else if (event.type == core::InputEventType::PointerButton) {
-        if (event.button == BTN_LEFT) {
-            if (event.pressed) {
-                const int titleH = core::DisplayScale::titleBarHeight();
-                const int btn = core::DisplayScale::trafficBtn();
-                const int btnPad = core::DisplayScale::px(10);
-                for (int i = static_cast<int>(m_windows.size()) - 1; i >= 0; --i) {
-                    auto& win = m_windows[i];
-                    if (m_mouseX >= win.x && m_mouseX < win.x + win.width &&
-                        m_mouseY >= win.y && m_mouseY < win.y + win.height) {
+            // Resizing
+            if (win.isResizing) {
+                int deltaX = m_mouseX - win.resizeStartX;
+                int deltaY = m_mouseY - win.resizeStartY;
 
-                        // Close button (red traffic light)
-                        if (m_mouseX >= win.x + btnPad && m_mouseX <= win.x + btnPad + btn &&
-                            m_mouseY >= win.y + btnPad && m_mouseY <= win.y + btnPad + btn) {
-                            removeWindow(win.id);
-                            stateChanged = true;
-                            break;
-                        }
+                int newX = win.initialX;
+                int newY = win.initialY;
+                int newW = win.initialWidth;
+                int newH = win.initialHeight;
 
-                        focusWindow(win.id);
-                        win.isDragging = (m_mouseY < win.y + titleH);
-                        if (win.isDragging) {
-                            win.dragOffsetX = m_mouseX - win.x;
-                            win.dragOffsetY = m_mouseY - win.y;
+                switch (win.resizeEdge) {
+                    case ResizeEdge::Right:
+                    case ResizeEdge::None: // Default Super + RightClick resize corner
+                        newW = std::max(minW, win.initialWidth + deltaX);
+                        break;
+                    case ResizeEdge::Bottom:
+                        newH = std::max(minH, win.initialHeight + deltaY);
+                        break;
+                    case ResizeEdge::Left: {
+                        int candidateW = win.initialWidth - deltaX;
+                        if (candidateW >= minW) {
+                            newX = win.initialX + deltaX;
+                            newW = candidateW;
                         }
-                        win.markDirty();
-                        stateChanged = true;
+                        break;
+                    }
+                    case ResizeEdge::Top: {
+                        int candidateH = win.initialHeight - deltaY;
+                        if (candidateH >= minH) {
+                            newY = std::clamp(win.initialY + deltaY, menuH, static_cast<int>(m_screenHeight) - minH);
+                            newH = win.initialHeight + (win.initialY - newY);
+                        }
+                        break;
+                    }
+                    case ResizeEdge::BottomRight:
+                        newW = std::max(minW, win.initialWidth + deltaX);
+                        newH = std::max(minH, win.initialHeight + deltaY);
+                        break;
+                    case ResizeEdge::BottomLeft: {
+                        int candidateW = win.initialWidth - deltaX;
+                        if (candidateW >= minW) {
+                            newX = win.initialX + deltaX;
+                            newW = candidateW;
+                        }
+                        newH = std::max(minH, win.initialHeight + deltaY);
+                        break;
+                    }
+                    case ResizeEdge::TopRight: {
+                        newW = std::max(minW, win.initialWidth + deltaX);
+                        int candidateH = win.initialHeight - deltaY;
+                        if (candidateH >= minH) {
+                            newY = std::clamp(win.initialY + deltaY, menuH, static_cast<int>(m_screenHeight) - minH);
+                            newH = win.initialHeight + (win.initialY - newY);
+                        }
+                        break;
+                    }
+                    case ResizeEdge::TopLeft: {
+                        int candidateW = win.initialWidth - deltaX;
+                        if (candidateW >= minW) {
+                            newX = win.initialX + deltaX;
+                            newW = candidateW;
+                        }
+                        int candidateH = win.initialHeight - deltaY;
+                        if (candidateH >= minH) {
+                            newY = std::clamp(win.initialY + deltaY, menuH, static_cast<int>(m_screenHeight) - minH);
+                            newH = win.initialHeight + (win.initialY - newY);
+                        }
                         break;
                     }
                 }
-            } else {
-                for (auto& win : m_windows) {
-                    if (win.isDragging) {
-                        win.isDragging = false;
+
+                if (newX != win.x || newY != win.y || newW != win.width || newH != win.height) {
+                    win.x = newX;
+                    win.y = newY;
+                    win.width = newW;
+                    win.height = newH;
+                    win.markDirty();
+                    stateChanged = true;
+                }
+            }
+        }
+    } else if (event.type == core::InputEventType::PointerButton) {
+        if (event.pressed) {
+            // Strict Top-to-Bottom Z-Order Hit-Testing Bug Fix:
+            // Find top-most target window under cursor FIRST without mutating array structure mid-loop!
+            uint32_t targetWinId = 0;
+            const int border = core::DisplayScale::px(8);
+
+            for (int i = static_cast<int>(m_windows.size()) - 1; i >= 0; --i) {
+                const auto& win = m_windows[i];
+                if (m_mouseX >= win.x - border && m_mouseX < win.x + win.width + border &&
+                    m_mouseY >= win.y - border && m_mouseY < win.y + win.height + border) {
+                    targetWinId = win.id;
+                    break;
+                }
+            }
+
+            if (targetWinId > 0) {
+                // Focus target window and bring to top z-order
+                focusWindow(targetWinId);
+
+                // Now m_windows.back() is guaranteed to be the focused top-most window
+                auto& topWin = m_windows.back();
+                const int titleH = core::DisplayScale::titleBarHeight();
+                const int btn = core::DisplayScale::trafficBtn();
+                const int btnPad = core::DisplayScale::px(10);
+
+                // Close button check
+                if (m_mouseX >= topWin.x + btnPad && m_mouseX <= topWin.x + btnPad + btn &&
+                    m_mouseY >= topWin.y + btnPad && m_mouseY <= topWin.y + btnPad + btn) {
+                    removeWindow(topWin.id);
+                    stateChanged = true;
+                } else if (event.superPressed) {
+                    // GNOME / KDE Style Super Shortcuts
+                    if (event.button == BTN_LEFT) {
+                        // Super + Left Click = Move
+                        topWin.isDragging = true;
+                        topWin.dragOffsetX = m_mouseX - topWin.x;
+                        topWin.dragOffsetY = m_mouseY - topWin.y;
+                        topWin.markDirty();
+                        stateChanged = true;
+                    } else if (event.button == BTN_RIGHT) {
+                        // Super + Right Click = Normalized Aspect-Aware Grid (3x3 Dynamic Bounding Box Stretch)
+                        topWin.isResizing = true;
+
+                        // Calculate normalized click position in window local bounds [0.0, 1.0]
+                        double normX = (topWin.width > 0)
+                            ? static_cast<double>(m_mouseX - topWin.x) / static_cast<double>(topWin.width)
+                            : 0.5;
+                        double normY = (topWin.height > 0)
+                            ? static_cast<double>(m_mouseY - topWin.y) / static_cast<double>(topWin.height)
+                            : 0.5;
+
+                        // 3x3 Aspect-Aware Bounding Box Grid Mapping (Thresholds: 0.33 & 0.66)
+                        if (normY < 0.33) {
+                            if (normX < 0.33)      topWin.resizeEdge = ResizeEdge::TopLeft;
+                            else if (normX > 0.66) topWin.resizeEdge = ResizeEdge::TopRight;
+                            else                   topWin.resizeEdge = ResizeEdge::Top;
+                        } else if (normY > 0.66) {
+                            if (normX < 0.33)      topWin.resizeEdge = ResizeEdge::BottomLeft;
+                            else if (normX > 0.66) topWin.resizeEdge = ResizeEdge::BottomRight;
+                            else                   topWin.resizeEdge = ResizeEdge::Bottom;
+                        } else {
+                            if (normX < 0.33)      topWin.resizeEdge = ResizeEdge::Left;
+                            else if (normX > 0.66) topWin.resizeEdge = ResizeEdge::Right;
+                            else                   topWin.resizeEdge = ResizeEdge::BottomRight; // Center default
+                        }
+
+                        topWin.resizeStartX = m_mouseX;
+                        topWin.resizeStartY = m_mouseY;
+                        topWin.initialX = topWin.x;
+                        topWin.initialY = topWin.y;
+                        topWin.initialWidth = topWin.width;
+                        topWin.initialHeight = topWin.height;
+                        topWin.markDirty();
                         stateChanged = true;
                     }
+                } else if (event.button == BTN_LEFT) {
+                    // Normal Left Click
+                    ResizeEdge edge = detectResizeEdge(m_mouseX, m_mouseY, topWin);
+                    if (edge != ResizeEdge::None) {
+                        // Edge / Corner Resize
+                        topWin.isResizing = true;
+                        topWin.resizeEdge = edge;
+                        topWin.resizeStartX = m_mouseX;
+                        topWin.resizeStartY = m_mouseY;
+                        topWin.initialX = topWin.x;
+                        topWin.initialY = topWin.y;
+                        topWin.initialWidth = topWin.width;
+                        topWin.initialHeight = topWin.height;
+                        topWin.markDirty();
+                        stateChanged = true;
+                    } else if (m_mouseY < topWin.y + titleH) {
+                        // Header Drag Move
+                        topWin.isDragging = true;
+                        topWin.dragOffsetX = m_mouseX - topWin.x;
+                        topWin.dragOffsetY = m_mouseY - topWin.y;
+                        topWin.markDirty();
+                        stateChanged = true;
+                    }
+                }
+            }
+        } else {
+            // Button Released: Release dragging and resizing for all windows
+            for (auto& win : m_windows) {
+                if (win.isDragging || win.isResizing) {
+                    win.isDragging = false;
+                    win.isResizing = false;
+                    win.resizeEdge = ResizeEdge::None;
+                    win.markDirty();
+                    stateChanged = true;
                 }
             }
         }
