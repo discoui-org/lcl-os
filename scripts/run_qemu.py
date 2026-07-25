@@ -24,6 +24,7 @@ INITRAMFS_DIR = BUILD_DIR / "initramfs_root"
 INITRAMFS_IMG = BUILD_DIR / "initramfs.cpio.gz"
 CACHE_DIR = BUILD_DIR / "qemu-cache"
 KERNEL_CACHE = CACHE_DIR / "vmlinuz"
+KERNEL_KVER_STAMP = CACHE_DIR / "kver"
 DOCKER_IMAGE = "lcl-os-qemu-builder:latest"
 DOCKERFILE = SCRIPT_DIR / "Dockerfile.qemu"
 
@@ -97,39 +98,83 @@ def cmake_build() -> None:
     run(["cmake", "--build", str(BUILD_DIR)])
 
 
+def _readable_kernel(path: Path) -> Path | None:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return None
+    if resolved.is_file() and os.access(resolved, os.R_OK):
+        return resolved
+    return None
+
+
+def find_host_kernel() -> Path | None:
+    """Kernel that matches the running host module tree (Linux native)."""
+    uname_r = platform.release()
+    candidates = [
+        Path(f"/lib/modules/{uname_r}/vmlinuz"),
+        Path(f"/boot/vmlinuz-{uname_r}"),
+        Path("/boot/vmlinuz-linux"),
+        Path("/boot/vmlinuz"),
+        Path(f"/usr/lib/modules/{uname_r}/vmlinuz"),
+    ]
+    for path in candidates:
+        if path.is_file() or path.is_symlink():
+            found = _readable_kernel(path)
+            if found:
+                return found
+    return None
+
+
 def locate_kernel() -> Path:
-    """Find a Linux kernel image. Prefer real /boot packages over uname -r
-    (uname inside Docker often reports the host/VM kernel, not the image)."""
-    if KERNEL_CACHE.is_file() and not os.environ.get("LCL_IGNORE_KERNEL_CACHE"):
-        return KERNEL_CACHE
+    """Find a Linux kernel image paired with matching modules.
+
+    Never reuse a stale build/qemu-cache/vmlinuz against a different host
+    module tree (that yields empty /dev/dri and a frozen SeaBIOS screen).
+    """
+    # 1) Linux host: always prefer the running kernel + /lib/modules/$(uname -r)
+    if is_linux() and not os.environ.get("LCL_FORCE_KERNEL_CACHE"):
+        host_k = find_host_kernel()
+        if host_k:
+            return host_k
+
+    # 2) Cache only when kver stamp is present and modules exist for it
+    if (
+        KERNEL_CACHE.is_file()
+        and KERNEL_KVER_STAMP.is_file()
+        and not os.environ.get("LCL_IGNORE_KERNEL_CACHE")
+    ):
+        kver = KERNEL_KVER_STAMP.read_text(encoding="utf-8").strip()
+        mod = Path("/lib/modules") / kver
+        cached_mod = CACHE_DIR / "modules" / kver
+        if (mod / "kernel").is_dir() or (cached_mod / "kernel").is_dir():
+            return KERNEL_CACHE
 
     uname_r = platform.release()
     candidates = [
-        Path("/boot/vmlinuz"),
+        Path(f"/lib/modules/{uname_r}/vmlinuz"),
         Path(f"/boot/vmlinuz-{uname_r}"),
         Path("/boot/vmlinuz-linux"),
-        Path(f"/lib/modules/{uname_r}/vmlinuz"),
+        Path("/boot/vmlinuz"),
         Path("/lib/modules/7.1.4-1-cachyos/vmlinuz"),
     ]
-    # Packaged kernels in the build image (Docker)
     boot = Path("/boot")
     if boot.is_dir():
         candidates.extend(sorted(boot.glob("vmlinuz-*"), reverse=True))
 
     for path in candidates:
         if path.is_file() or path.is_symlink():
-            resolved = path.resolve()
-            if resolved.is_file():
-                return resolved
+            found = _readable_kernel(path)
+            if found:
+                return found
 
     for base in (Path("/lib/modules"), Path("/boot")):
         if not base.exists():
             continue
-        found = sorted(base.rglob("vmlinuz*"))
-        for path in found:
-            resolved = path.resolve()
-            if resolved.is_file():
-                return resolved
+        for path in sorted(base.rglob("vmlinuz*")):
+            found = _readable_kernel(path)
+            if found:
+                return found
 
     err("No Linux kernel image found.")
     sys.exit(1)
@@ -137,27 +182,47 @@ def locate_kernel() -> Path:
 
 def locate_module_tree(kernel_path: Path) -> tuple[Path, str]:
     """Return (modules_dir, kver) matching the kernel we will boot."""
+    resolved = kernel_path.resolve()
+
+    # Cached kernel with stamp
+    if (
+        KERNEL_CACHE.is_file()
+        and resolved == KERNEL_CACHE.resolve()
+        and KERNEL_KVER_STAMP.is_file()
+    ):
+        kver = KERNEL_KVER_STAMP.read_text(encoding="utf-8").strip()
+        for mod in (Path("/lib/modules") / kver, CACHE_DIR / "modules" / kver):
+            if (mod / "kernel").is_dir():
+                return mod, kver
+
     # vmlinuz-6.8.0-51-generic -> 6.8.0-51-generic
     name = kernel_path.name
     if name.startswith("vmlinuz-"):
         kver = name[len("vmlinuz-") :]
         mod = Path("/lib/modules") / kver
-        if (mod / "kernel").is_dir() or mod.is_dir():
+        if (mod / "kernel").is_dir():
             return mod, kver
 
+    # /lib/modules/<kver>/vmlinuz
     parent = kernel_path.parent
-    if (parent / "kernel").is_dir():
+    if parent.name and (parent / "kernel").is_dir():
         return parent, parent.name
 
-    # Fall back to any installed module tree (Docker image)
+    # Running host (native Linux package path)
+    uname_r = platform.release()
+    host_mod = Path("/lib/modules") / uname_r
+    if (host_mod / "kernel").is_dir():
+        return host_mod, uname_r
+
+    # Docker image: only modules that exist (never mix random newest tree)
     modules_root = Path("/lib/modules")
     if modules_root.is_dir():
         for entry in sorted(modules_root.iterdir(), reverse=True):
             if (entry / "kernel").is_dir():
                 return entry, entry.name
 
-    uname_r = platform.release()
-    return Path(f"/lib/modules/{uname_r}"), uname_r
+    err(f"No module tree found for kernel {kernel_path}")
+    sys.exit(1)
 
 
 def copy_ldd_deps(binary: Path, dest_lib: Path) -> None:
@@ -189,19 +254,24 @@ def write_text(path: Path, content: str, executable: bool = False) -> None:
 
 def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
     kmod_base, kver = locate_module_tree(kernel_path)
+    log(f"Kernel modules source: {kmod_base} (kver={kver})")
 
     target = init_root / "usr" / "lib" / "modules" / kver
-    if (target / "kernel").is_dir():
-        log(f"Using cached kernel modules in {target}")
-        return
+    # Always refresh modules for this package run (avoid stale empty trees)
+    if target.exists():
+        shutil.rmtree(target)
 
     log(f"Packaging DRM & input kernel modules ({kver})...")
     target.mkdir(parents=True, exist_ok=True)
+    copied_any = False
     for rel in (
         "kernel/drivers/gpu/drm",
         "kernel/drivers/virtio",
+        "kernel/drivers/gpu/drm/virtio",
         "kernel/drivers/hid",
         "kernel/drivers/input",
+        "kernel/drivers/virtio",
+        "kernel/drivers/char/virtio_console",
     ):
         src = kmod_base / rel
         if src.is_dir():
@@ -210,12 +280,33 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
             if dst.exists():
                 shutil.rmtree(dst)
             shutil.copytree(src, dst, symlinks=False)
+            copied_any = True
+        elif src.is_file():
+            dst = target / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst, follow_symlinks=True)
+            copied_any = True
 
-    for zst in target.rglob("*.ko.zst"):
+    # Also pull any virtio_gpu*.ko* wherever it lives
+    for pattern in ("**/virtio_gpu.ko*", "**/virtio-gpu.ko*", "**/drm.ko*", "**/virtio_pci.ko*"):
+        for src in kmod_base.glob(pattern):
+            rel = src.relative_to(kmod_base)
+            dst = target / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst, follow_symlinks=True)
+            copied_any = True
+
+    for zst in list(target.rglob("*.ko.zst")):
         try:
             run(["zstd", "-d", "--rm", str(zst)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except subprocess.CalledProcessError:
             pass
+
+    # Copy modules.builtin / modules.order if present (helps depmod)
+    for meta in ("modules.builtin", "modules.builtin.modinfo", "modules.order", "modules.dep", "modules.alias"):
+        src_meta = kmod_base / meta
+        if src_meta.is_file():
+            shutil.copy2(src_meta, target / meta, follow_symlinks=True)
 
     if which("depmod"):
         try:
@@ -226,6 +317,23 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
             )
         except subprocess.CalledProcessError:
             pass
+
+    has_virtio_gpu = any(target.rglob("virtio_gpu.ko*"))
+    if not copied_any:
+        err(f"No kernel modules copied from {kmod_base}")
+        sys.exit(1)
+    if not has_virtio_gpu:
+        log(f"WARNING: virtio_gpu.ko not found under {kmod_base} — DRM may be unavailable")
+    else:
+        log("virtio_gpu module packaged OK")
+
+    # Persist matching cache pair
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    KERNEL_KVER_STAMP.write_text(kver + "\n", encoding="utf-8")
+    cache_mod = CACHE_DIR / "modules" / kver
+    if cache_mod.exists():
+        shutil.rmtree(cache_mod)
+    shutil.copytree(target, cache_mod)
 
 
 def package_initramfs(kernel_path: Path) -> None:
@@ -423,31 +531,57 @@ echo "===================================================="
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-mkdir -p /dev/pts /dev/dri /dev/input /home/user/Desktop /home/user/Documents /home/user/Downloads /home/user/Applications
-mount -t devpts devpts /dev/pts 2>/dev/null || true
+mkdir -p /dev/pts /dev/input /home/user/Desktop /home/user/Documents /home/user/Downloads /home/user/Applications
+mount -t devpts devpts /dev/pts -o mode=0620,ptmxmode=0666 2>/dev/null || mount -t devpts devpts /dev/pts 2>/dev/null || true
+if [ ! -e /dev/ptmx ]; then
+    mknod -m 666 /dev/ptmx c 5 2 2>/dev/null || ln -sf pts/ptmx /dev/ptmx 2>/dev/null || true
+fi
+chmod 666 /dev/ptmx 2>/dev/null || true
 
-mknod -m 666 /dev/dri/card0 c 226 0 2>/dev/null || true
-mknod -m 666 /dev/dri/renderD128 c 226 128 2>/dev/null || true
-mknod -m 666 /dev/fb0 c 29 0 2>/dev/null || true
+# Resolve module tree (uname -r inside guest matches booted kernel)
+KVER=$(uname -r 2>/dev/null)
+export MODPROBE_OPTIONS=""
+if [ -d "/lib/modules/$KVER" ]; then
+    echo "[init] modules: /lib/modules/$KVER"
+else
+    echo "[init] WARNING: /lib/modules/$KVER missing"
+    ls -la /lib/modules 2>/dev/null || true
+fi
 
+# Load GPU / input stack BEFORE creating any device nodes (let devtmpfs populate)
+modprobe virtio_pci 2>/dev/null || true
 modprobe virtio_dma_buf 2>/dev/null || true
-modprobe virtio_gpu 2>/dev/null || true
-modprobe bochs 2>/dev/null || true
 modprobe drm 2>/dev/null || true
 modprobe drm_kms_helper 2>/dev/null || true
+modprobe virtio_gpu 2>/dev/null || true
+modprobe bochs 2>/dev/null || true
+modprobe simpledrm 2>/dev/null || true
+modprobe virtio_input 2>/dev/null || true
 modprobe usbhid 2>/dev/null || true
 modprobe hid_generic 2>/dev/null || true
 modprobe evdev 2>/dev/null || true
+modprobe qemu_fw_cfg 2>/dev/null || true
 
-sleep 0.5
+# Wait for /dev/dri/card* (up to ~3s)
+i=0
+while [ "$i" -lt 30 ]; do
+    if ls /dev/dri/card* >/dev/null 2>&1; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.1
+done
 
 echo "===================================================="
 echo "  LCL Core Linux (LCL) - QEMU Direct Kernel Boot   "
 echo "===================================================="
+echo "Kernel: $(uname -r)  cmdline: $(cat /proc/cmdline 2>/dev/null)"
 echo "DRM devices detected:"
 ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
 echo "Input devices detected:"
 ls /dev/input/ 2>/dev/null || echo "  (none yet)"
+echo "Loaded drm-related modules:"
+cat /proc/modules 2>/dev/null | grep -E 'virtio|drm|bochs' || echo "  (none)"
 exec /bin/lcl-core
 """,
         executable=True,
@@ -882,17 +1016,23 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
 
     if native:
         host_dpr = host.scale if host.scale > 0 else 1.0
-        # Retina / HiDPI: guest FB = physical pixels, UI layout × DPR.
-        # Logical FB + zoom-to-fit upscales → blurry/pixelated (not true Retina).
-        if (
-            host.physical_width
-            and host.physical_height
-            and host_dpr > 1.01
-        ):
-            width, height = host.physical_width, host.physical_height
-            scale = host_dpr
+        logical_w = host.logical_width or host.width
+        logical_h = host.logical_height or host.height
+        physical_w = host.physical_width or logical_w
+        physical_h = host.physical_height or logical_h
+        # True Retina only when physical pixels > logical points.
+        # GNOME scaling-factor (e.g. 4) with physical==logical is NOT FB HiDPI —
+        # using scale=4 there makes a tiny/broken UI and mis-labels the path.
+        true_retina = (
+            physical_w > 0
+            and logical_w > 0
+            and physical_w >= int(logical_w * 1.5)
+        )
+        if true_retina:
+            width, height = physical_w, physical_h
+            scale = host_dpr if host_dpr > 1.01 else float(physical_w) / float(logical_w)
         else:
-            width, height = host.width, host.height
+            width, height = logical_w, logical_h
             scale = 1.0
     else:
         width, height = 1280, 800

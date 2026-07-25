@@ -18,7 +18,7 @@ float clampScale(float s) {
     if (s > 4.0f) {
         return 4.0f;
     }
-    const float snaps[] = {1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f};
+    const float snaps[] = {1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 4.0f};
     for (float c : snaps) {
         if (std::fabs(s - c) < 0.08f) {
             return c;
@@ -30,11 +30,17 @@ float clampScale(float s) {
 float parseScaleToken(const std::string& token) {
     // lcl.scale=2 or lcl.scale=2.0
     const std::string key = "lcl.scale=";
-    if (token.rfind(key, 0) != 0) {
+    auto pos = token.find(key);
+    if (pos == std::string::npos) {
         return -1.0f;
     }
     try {
-        return clampScale(std::stof(token.substr(key.size())));
+        // Accept leading junk / quotes: lcl.scale=2.0
+        std::string val = token.substr(pos + key.size());
+        while (!val.empty() && (val.back() == '"' || val.back() == '\'' || val.back() == '\r')) {
+            val.pop_back();
+        }
+        return clampScale(std::stof(val));
     } catch (...) {
         return -1.0f;
     }
@@ -62,14 +68,21 @@ void DisplayScale::initialize() {
         }
     }
 
+    std::string cmdlineStr;
     std::ifstream cmdline("/proc/cmdline");
     if (cmdline) {
-        std::string line;
-        std::getline(cmdline, line);
-        std::istringstream iss(line);
+        std::getline(cmdline, cmdlineStr);
+        std::istringstream iss(cmdlineStr);
         std::string token;
         while (iss >> token) {
             float s = parseScaleToken(token);
+            if (s > 0.0f) {
+                found = s;
+            }
+        }
+        // Fallback: substring search if tokenizer missed it
+        if (found < 0.0f) {
+            float s = parseScaleToken(cmdlineStr);
             if (s > 0.0f) {
                 found = s;
             }
@@ -85,6 +98,11 @@ void DisplayScale::initialize() {
 
     std::cout << "[LCL DisplayScale] UI scale factor: " << scaleRef()
               << " (1 logical unit = " << px(1) << " px)\n";
+    if (!cmdlineStr.empty()) {
+        std::cout << "[LCL DisplayScale] cmdline: " << cmdlineStr << "\n";
+    } else {
+        std::cout << "[LCL DisplayScale] WARNING: /proc/cmdline empty or unreadable\n";
+    }
 }
 
 float DisplayScale::factor() {
