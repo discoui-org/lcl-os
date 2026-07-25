@@ -85,16 +85,19 @@ The LCL architecture consists of 4 main decoupled layers:
 
 ```text
 lcl-os/
-├── ARCHITECTURE.md                 # System architecture specification
+├── Makefile                        # make build | qemu | qemu NATIVE=1
 ├── CMakeLists.txt                  # Root CMake build configuration
 ├── assets/                         # System fonts and visual assets
 │   └── fonts/                      # TrueType font assets (JetBrains Mono, Inter)
 ├── docs/                           # Documentation & Agent prompts
-│   ├── AGENTS.md                   # Agent working rules & communication protocol
+│   ├── ARCHITECTURE.md             # System architecture specification
 │   ├── AG_NEW_INSTANCE_PROMPT.md   # AntiGravity instance bootstrapper prompt
 │   └── GEMINI_NEW_INSTANCE_PROMPT.md # Gemini instance bootstrapper prompt
-├── scripts/                        # System build & QEMU launcher scripts
-│   └── run_qemu.sh                 # QEMU direct kernel boot & initramfs packager
+├── scripts/                        # System build & QEMU launcher
+│   ├── run_qemu.py                 # Cross-platform QEMU launcher (Linux/macOS/Windows)
+│   ├── run_qemu.sh                 # Thin wrapper → run_qemu.py
+│   ├── Dockerfile.qemu             # linux/amd64 builder image (macOS/Windows)
+│   └── fetch_fonts.sh              # Font asset fetcher
 ├── shell/                          # Shell Presentation Layer
 └── src/                            # Core C++20 Engine & Applications
     ├── main.cpp                    # Application entry point & compositor loop
@@ -110,3 +113,17 @@ lcl-os/
     ├── fs/                         # io_uring & POSIX async file system
     └── tools/                      # Native CLI utilities (lcl-open)
 ```
+
+### Build & QEMU (dev hosts)
+
+| Host | Build | Run |
+|------|--------|-----|
+| Linux | Native `cmake` (`make build`) | `make qemu` |
+| macOS / Windows | Docker `linux/amd64` (`Dockerfile.qemu`) | Host QEMU + packaged kernel/initramfs |
+
+```bash
+make qemu            # default 1280x800, host refresh rate
+make qemu NATIVE=1   # host logical resolution + lcl.scale (kernel cmdline)
+```
+
+Guest display boot args (when `NATIVE=1`): `video=WxH-32@Hz`, `lcl.scale=`, `lcl.logical=`, `lcl.physical=` (read from `/proc/cmdline`; HiDPI scale not yet consumed by LCL core).

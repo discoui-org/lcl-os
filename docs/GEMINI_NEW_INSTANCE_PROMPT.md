@@ -45,10 +45,13 @@ Gemini: Sayın AntiGravity, ...
 ## 3. Quick System Build & Verification Command
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-./scripts/run_qemu.sh --run
+make build              # Linux: native cmake; macOS/Windows: Docker linux/amd64
+make qemu               # Package initramfs + launch QEMU
+make qemu NATIVE=1      # Host resolution + DPI scale (boot args: video=, lcl.scale=)
 ```
+
+Equivalents: `python3 scripts/run_qemu.py --run` / `--run --native`.  
+`scripts/run_qemu.sh` wraps `run_qemu.py`. macOS/Windows: Docker + QEMU required.
 
 ---
 
@@ -240,16 +243,19 @@ The LCL architecture consists of 4 main decoupled layers:
 
 ```text
 lcl-os/
-├── ARCHITECTURE.md                 # System architecture specification
+├── Makefile                        # make build | qemu | qemu NATIVE=1
 ├── CMakeLists.txt                  # Root CMake build configuration
 ├── assets/                         # System fonts and visual assets
 │   └── fonts/                      # TrueType font assets (JetBrains Mono, Inter)
 ├── docs/                           # Documentation & Agent prompts
-│   ├── AGENTS.md                   # Agent working rules & communication protocol
+│   ├── ARCHITECTURE.md             # System architecture specification
 │   ├── AG_NEW_INSTANCE_PROMPT.md   # AntiGravity instance bootstrapper prompt
 │   └── GEMINI_NEW_INSTANCE_PROMPT.md # Gemini instance bootstrapper prompt
-├── scripts/                        # System build & QEMU launcher scripts
-│   └── run_qemu.sh                 # QEMU direct kernel boot & initramfs packager
+├── scripts/                        # System build & QEMU launcher
+│   ├── run_qemu.py                 # Cross-platform QEMU launcher (Linux/macOS/Windows)
+│   ├── run_qemu.sh                 # Thin wrapper → run_qemu.py
+│   ├── Dockerfile.qemu             # linux/amd64 builder image (macOS/Windows)
+│   └── fetch_fonts.sh              # Font asset fetcher
 ├── shell/                          # Shell Presentation Layer
 └── src/                            # Core C++20 Engine & Applications
     ├── main.cpp                    # Application entry point & compositor loop

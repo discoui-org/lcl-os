@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -598,9 +599,54 @@ def _clamp_hz(value: float | int | None) -> int | None:
     return None
 
 
-def detect_host_refresh_rate() -> int:
-    """Best-effort primary display refresh rate. Falls back to 60 Hz."""
+def _clamp_dim(value: float | int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        dim = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+    if 320 <= dim <= 7680:
+        return dim
+    return None
+
+
+def _clamp_scale(value: float | int | None) -> float:
+    if value is None:
+        return 1.0
+    try:
+        scale = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    if scale < 0.5:
+        return 1.0
+    if scale > 4.0:
+        return 4.0
+    # Snap common DPRs
+    for candidate in (1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0):
+        if abs(scale - candidate) < 0.08:
+            return candidate
+    return round(scale, 2)
+
+
+@dataclass
+class HostDisplay:
+    """Host primary display geometry for QEMU + guest LCL."""
+
+    width: int = 1280
+    height: int = 800
+    refresh_hz: int = 60
+    scale: float = 1.0
+    logical_width: int | None = None
+    logical_height: int | None = None
+    physical_width: int | None = None
+    physical_height: int | None = None
+
+
+def detect_host_display() -> HostDisplay:
+    """Best-effort primary display: resolution, refresh, and DPI scale."""
     system = host_os()
+    info = HostDisplay()
 
     if system == "darwin":
         try:
@@ -610,67 +656,118 @@ def detect_host_refresh_rate() -> int:
                 stderr=subprocess.DEVNULL,
             )
             data = json.loads(out)
-            rates: list[int] = []
+            main_disp = None
+            first_disp = None
             for gpu in data.get("SPDisplaysDataType", []):
                 for disp in gpu.get("spdisplays_ndrvs", []) or []:
+                    if first_disp is None:
+                        first_disp = disp
+                    if disp.get("spdisplays_main") == "spdisplays_yes":
+                        main_disp = disp
+                        break
+                if main_disp:
+                    break
+            disp = main_disp or first_disp
+            if disp:
+                # logical: "1710 x 1112 @ 60.00Hz"
+                res = str(disp.get("_spdisplays_resolution", ""))
+                m = re.search(
+                    r"(\d+)\s*x\s*(\d+)(?:\s*@\s*([0-9.]+)\s*Hz)?",
+                    res,
+                    re.I,
+                )
+                if m:
+                    info.logical_width = _clamp_dim(m.group(1))
+                    info.logical_height = _clamp_dim(m.group(2))
+                    hz = _clamp_hz(m.group(3)) if m.group(3) else None
+                    if hz:
+                        info.refresh_hz = hz
+                pixels = str(disp.get("_spdisplays_pixels", ""))
+                pm = re.search(r"(\d+)\s*x\s*(\d+)", pixels)
+                if pm:
+                    info.physical_width = _clamp_dim(pm.group(1))
+                    info.physical_height = _clamp_dim(pm.group(2))
+                if not info.refresh_hz or info.refresh_hz == 60:
                     blob = " ".join(str(v) for v in disp.values())
-                    for match in re.finditer(r"@\s*([0-9]+(?:\.[0-9]+)?)\s*Hz", blob, re.I):
-                        hz = _clamp_hz(match.group(1))
+                    hm = re.search(r"@\s*([0-9.]+)\s*Hz", blob, re.I)
+                    if hm:
+                        hz = _clamp_hz(hm.group(1))
                         if hz:
-                            rates.append(hz)
-                    for key in ("spdisplays_main",):
-                        if disp.get(key) == "spdisplays_yes" and rates:
-                            return rates[-1]
-            if rates:
-                return max(rates)
+                            info.refresh_hz = hz
         except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError, OSError):
             pass
 
-    if system == "linux":
-        # xrandr: "1920x1080     60.00*+  144.00"
+    elif system == "linux":
         if which("xrandr"):
             try:
                 out = subprocess.check_output(["xrandr"], text=True, stderr=subprocess.DEVNULL)
-                current = None
+                # "eDP-1 connected primary 1920x1080+0+0 ..."
                 for line in out.splitlines():
-                    if "*" in line:
-                        nums = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*\*", line)
-                        if nums:
-                            hz = _clamp_hz(nums[0])
-                            if hz:
-                                current = hz
-                                break
-                        nums = re.findall(r"\b([0-9]+(?:\.[0-9]+)?)\b", line)
-                        for n in nums:
-                            if "." in n or (n.isdigit() and 30 <= int(n) <= 500):
-                                hz = _clamp_hz(n)
-                                if hz:
-                                    current = hz
-                    if current is not None:
-                        return current
+                    if " connected" not in line:
+                        continue
+                    m = re.search(r"\s(\d+)x(\d+)\+\d+\+\d+", line)
+                    if m:
+                        info.logical_width = _clamp_dim(m.group(1))
+                        info.logical_height = _clamp_dim(m.group(2))
+                        info.physical_width = info.logical_width
+                        info.physical_height = info.logical_height
+                    break
+                for line in out.splitlines():
+                    if "*" not in line:
+                        continue
+                    nums = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*\*", line)
+                    if nums:
+                        hz = _clamp_hz(nums[0])
+                        if hz:
+                            info.refresh_hz = hz
+                        break
+                    rm = re.search(r"\b(\d{2,3}(?:\.\d+)?)\b", line)
+                    if rm:
+                        hz = _clamp_hz(rm.group(1))
+                        if hz:
+                            info.refresh_hz = hz
+                            break
             except (subprocess.CalledProcessError, FileNotFoundError, OSError):
                 pass
-        # DRM connector modes often end with refresh like "1920x1080@144"
-        try:
-            drm = Path("/sys/class/drm")
-            if drm.is_dir():
-                for mode_file in sorted(drm.glob("card*-*/modes")):
-                    status = mode_file.parent / "status"
-                    if status.is_file() and status.read_text().strip() != "connected":
-                        continue
-                    modes = mode_file.read_text().splitlines()
-                    if not modes:
-                        continue
-                    # First mode is usually preferred/current
-                    m = re.search(r"@([0-9]+)", modes[0])
-                    if m:
-                        hz = _clamp_hz(m.group(1))
-                        if hz:
-                            return hz
-        except OSError:
-            pass
+        # Wayland / GNOME scale
+        if which("gsettings"):
+            try:
+                out = subprocess.check_output(
+                    ["gsettings", "get", "org.gnome.desktop.interface", "scaling-factor"],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                )
+                sm = re.search(r"(\d+)", out)
+                if sm and int(sm.group(1)) >= 1:
+                    info.scale = _clamp_scale(sm.group(1))
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+                pass
+        if info.logical_width is None:
+            try:
+                drm = Path("/sys/class/drm")
+                if drm.is_dir():
+                    for mode_file in sorted(drm.glob("card*-*/modes")):
+                        status = mode_file.parent / "status"
+                        if status.is_file() and status.read_text().strip() != "connected":
+                            continue
+                        modes = mode_file.read_text().splitlines()
+                        if not modes:
+                            continue
+                        m = re.match(r"(\d+)x(\d+)(?:@(\d+))?", modes[0])
+                        if m:
+                            info.logical_width = _clamp_dim(m.group(1))
+                            info.logical_height = _clamp_dim(m.group(2))
+                            info.physical_width = info.logical_width
+                            info.physical_height = info.logical_height
+                            if m.group(3):
+                                hz = _clamp_hz(m.group(3))
+                                if hz:
+                                    info.refresh_hz = hz
+                            break
+            except OSError:
+                pass
 
-    if system == "windows":
+    elif system == "windows":
         ps = which("powershell") or which("pwsh")
         if ps:
             ps_script = r"""
@@ -692,14 +789,18 @@ public class LclDisplay {
   }
   [DllImport("user32.dll", CharSet=CharSet.Ansi)]
   public static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
-  public static int Hz() {
+  [DllImport("user32.dll")] public static extern int GetDpiForSystem();
+  public static string Info() {
     var dm = new DEVMODE();
     dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
-    return EnumDisplaySettings(null, -1, ref dm) ? dm.dmDisplayFrequency : 0;
+    if (!EnumDisplaySettings(null, -1, ref dm)) return "0 0 0 96";
+    int dpi = 96;
+    try { dpi = GetDpiForSystem(); } catch {}
+    return dm.dmPelsWidth + " " + dm.dmPelsHeight + " " + dm.dmDisplayFrequency + " " + dpi;
   }
 }
 "@
-[LclDisplay]::Hz()
+[LclDisplay]::Info()
 """
             try:
                 out = subprocess.check_output(
@@ -708,16 +809,47 @@ public class LclDisplay {
                     stderr=subprocess.DEVNULL,
                     timeout=15,
                 )
-                hz = _clamp_hz(out.strip().splitlines()[-1].strip())
-                if hz:
-                    return hz
+                parts = out.strip().splitlines()[-1].split()
+                if len(parts) >= 4:
+                    info.logical_width = _clamp_dim(parts[0])
+                    info.logical_height = _clamp_dim(parts[1])
+                    info.physical_width = info.logical_width
+                    info.physical_height = info.logical_height
+                    hz = _clamp_hz(parts[2])
+                    if hz:
+                        info.refresh_hz = hz
+                    dpi = float(parts[3])
+                    if dpi > 0:
+                        info.scale = _clamp_scale(dpi / 96.0)
             except (subprocess.CalledProcessError, FileNotFoundError, OSError, subprocess.TimeoutExpired):
                 pass
 
-    return 60
+    # Derive scale from physical/logical when possible (Retina etc.)
+    if (
+        info.scale == 1.0
+        and info.physical_width
+        and info.logical_width
+        and info.logical_width > 0
+        and info.physical_width != info.logical_width
+    ):
+        info.scale = _clamp_scale(info.physical_width / info.logical_width)
+
+    # Default framebuffer target: logical points (sane QEMU window). Physical kept for scale.
+    if info.logical_width and info.logical_height:
+        info.width = info.logical_width
+        info.height = info.logical_height
+    elif info.physical_width and info.physical_height:
+        info.width = info.physical_width
+        info.height = info.physical_height
+
+    return info
 
 
-def launch_qemu(kernel: Path) -> None:
+def detect_host_refresh_rate() -> int:
+    return detect_host_display().refresh_hz
+
+
+def launch_qemu(kernel: Path, native: bool = False) -> None:
     qemu = find_qemu()
     if not INITRAMFS_IMG.is_file():
         err(f"Missing initramfs: {INITRAMFS_IMG}")
@@ -728,7 +860,16 @@ def launch_qemu(kernel: Path) -> None:
 
     memory = "2G"
     cpus = "2"
-    refresh_hz = detect_host_refresh_rate()
+    host = detect_host_display()
+    refresh_hz = host.refresh_hz
+
+    if native:
+        width, height = host.width, host.height
+        scale = host.scale
+    else:
+        width, height = 1280, 800
+        scale = 1.0
+
     kvm = Path("/dev/kvm")
     if kvm.exists() and os.access(kvm, os.R_OK | os.W_OK):
         accel = ["-enable-kvm", "-cpu", "host"]
@@ -747,13 +888,33 @@ def launch_qemu(kernel: Path) -> None:
     print("  Launching QEMU Virtual Machine:")
     print(f"  - Memory: {memory}")
     print(f"  - SMP Cores: {cpus}")
-    print(f"  - Host refresh: {refresh_hz} Hz")
+    print(f"  - Guest video: {width}x{height}@{refresh_hz}")
+    print(f"  - UI scale: {scale} (lcl.scale kernel param)")
+    if native:
+        print("  - Mode: native host display")
+        if host.logical_width and host.physical_width:
+            print(
+                f"  - Host logical: {host.logical_width}x{host.logical_height}  "
+                f"physical: {host.physical_width}x{host.physical_height}"
+            )
     print(f"  - Accelerator: {' '.join(accel)}")
     print(f"  - GPU: {gpu[1]}")
     print(f"  - Display: {display[1]}")
     print("----------------------------------------------------")
 
-    video_mode = f"video=1280x800-32@{refresh_hz}"
+    # Resolution -> DRM/KMS via kernel video=
+    # Scale -> LCL via custom cmdline (read /proc/cmdline in guest when implementing HiDPI)
+    video_mode = f"video={width}x{height}-32@{refresh_hz}"
+    lcl_params = f"lcl.scale={scale} lcl.width={width} lcl.height={height}"
+    if host.logical_width and host.logical_height:
+        lcl_params += f" lcl.logical={host.logical_width}x{host.logical_height}"
+    if host.physical_width and host.physical_height:
+        lcl_params += f" lcl.physical={host.physical_width}x{host.physical_height}"
+
+    append = (
+        f"console=tty0 console=ttyS0,115200 {video_mode} {lcl_params} "
+        f"earlyprintk=ttyS0 rdinit=/init quiet loglevel=3"
+    )
     cmd = [
         qemu,
         *accel,
@@ -762,7 +923,7 @@ def launch_qemu(kernel: Path) -> None:
         "-initrd",
         str(INITRAMFS_IMG),
         "-append",
-        f"console=tty0 console=ttyS0,115200 {video_mode} earlyprintk=ttyS0 rdinit=/init quiet loglevel=3",
+        append,
         "-m",
         memory,
         "-smp",
@@ -789,6 +950,12 @@ def main() -> None:
     parser.add_argument("--package-only", action="store_true", help="Build + package initramfs (no QEMU)")
     parser.add_argument("--docker", action="store_true", help="Force Docker build/package path")
     parser.add_argument(
+        "--native",
+        "-n",
+        action="store_true",
+        help="Match host resolution + DPI scale (video= + lcl.scale cmdline)",
+    )
+    parser.add_argument(
         "--inside-docker",
         action="store_true",
         help=argparse.SUPPRESS,
@@ -806,7 +973,10 @@ def main() -> None:
             return
         kernel = native_build_and_package()
         if args.run and not args.inside_docker:
-            launch_qemu(kernel if isinstance(kernel, Path) else Path(kernel))
+            launch_qemu(
+                kernel if isinstance(kernel, Path) else Path(kernel),
+                native=args.native,
+            )
         elif not args.inside_docker and not args.package_only and not args.build_only:
             # default without --run: prep only
             log("Boot environment ready!")
@@ -825,7 +995,7 @@ def main() -> None:
     log(f"Kernel: {kernel}")
 
     if args.run:
-        launch_qemu(kernel)
+        launch_qemu(kernel, native=args.native)
     else:
         log("Boot environment ready!")
         log(f"Run '{Path(sys.argv[0]).name} --run' to launch QEMU in live VM.")

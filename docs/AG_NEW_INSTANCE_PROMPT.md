@@ -41,12 +41,15 @@ Example:
 
 ## 3. Quick Build & QEMU Test Commands
 
-To build the project and launch the live QEMU VM:
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-./scripts/run_qemu.sh --run
+make build              # Linux: native cmake; macOS/Windows: Docker linux/amd64
+make qemu               # Package initramfs + launch QEMU
+make qemu NATIVE=1      # Host resolution + DPI scale (boot args: video=, lcl.scale=)
 ```
+
+Equivalents: `python3 scripts/run_qemu.py --run` / `--run --native`.  
+`scripts/run_qemu.sh` is a thin wrapper around `run_qemu.py`.  
+macOS/Windows need Docker Desktop + `qemu-system-x86_64` (e.g. `brew install qemu`).
 
 ---
 
