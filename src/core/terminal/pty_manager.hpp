@@ -1,9 +1,8 @@
 #pragma once
 
 #include <string>
-#include <vector>
-#include <memory>
-#include <unistd.h>
+#include <sys/types.h>
+#include <signal.h>
 
 namespace lcl::core {
 
@@ -17,34 +16,39 @@ public:
     PTYManager& operator=(const PTYManager&) = delete;
 
     /**
-     * @brief Spawn shell process (/bin/sh or /bin/bash) connected to a PTY master/slave pair.
-     * @param shellPath Path to shell binary (default: "/bin/sh")
-     * @return true if process spawned, false otherwise
+     * @brief Spawn shell binary inside pseudo-terminal (PTY master/slave).
+     * @param shellPath Path to shell executable (default: "/bin/sh")
      */
     bool spawnShell(const std::string& shellPath = "/bin/sh");
 
     /**
-     * @brief Update PTY window size (rows and columns).
-     */
-    void setWindowSize(int rows, int cols);
-
-    /**
-     * @brief Write user input data (keystrokes) to PTY master.
-     */
-    ssize_t writeInput(const std::string& data);
-
-    /**
-     * @brief Read available output bytes from PTY master.
+     * @brief Read pending output from PTY master.
      */
     std::string readOutput();
 
     /**
-     * @brief Terminate shell process and close PTY.
+     * @brief Write input data into PTY master.
+     */
+    bool writeInput(const std::string& input);
+
+    /**
+     * @brief Update window dimensions for PTY TIOCSWINSZ.
+     */
+    void resizeWindow(int cols, int rows);
+
+    /**
+     * @brief Terminate shell process and close PTY descriptors.
      */
     void shutdown();
 
-    bool isRunning() const { return m_masterFd >= 0 && m_childPid > 0; }
+    bool isInitialized() const { return m_masterFd >= 0; }
     int getMasterFd() const { return m_masterFd; }
+    pid_t getChildPid() const { return m_childPid; }
+
+    bool isAlive() const {
+        if (m_childPid <= 0) return false;
+        return kill(m_childPid, 0) == 0;
+    }
 
 private:
     int m_masterFd{-1};

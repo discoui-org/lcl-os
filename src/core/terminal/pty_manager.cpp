@@ -19,7 +19,7 @@ PTYManager::~PTYManager() {
 }
 
 bool PTYManager::spawnShell(const std::string& shellPath) {
-    if (isRunning()) return true;
+    if (isAlive()) return true;
 
     // Open PTY master
     m_masterFd = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
@@ -47,7 +47,7 @@ bool PTYManager::spawnShell(const std::string& shellPath) {
     std::cout << "[LCL PTY] Created PTY pair (Master FD: " << m_masterFd << ", Slave: " << m_slaveName << ")\n";
 
     // Set default initial window size (24 rows x 64 cols)
-    setWindowSize(24, 64);
+    resizeWindow(64, 24);
 
     // Set master FD to non-blocking mode for non-blocking reads
     int flags = fcntl(m_masterFd, F_GETFL, 0);
@@ -103,7 +103,7 @@ bool PTYManager::spawnShell(const std::string& shellPath) {
     return true;
 }
 
-void PTYManager::setWindowSize(int rows, int cols) {
+void PTYManager::resizeWindow(int cols, int rows) {
     if (m_masterFd < 0) return;
     struct winsize ws{};
     ws.ws_row = static_cast<unsigned short>(rows);
@@ -113,9 +113,10 @@ void PTYManager::setWindowSize(int rows, int cols) {
     ioctl(m_masterFd, TIOCSWINSZ, &ws);
 }
 
-ssize_t PTYManager::writeInput(const std::string& data) {
-    if (m_masterFd < 0 || data.empty()) return 0;
-    return write(m_masterFd, data.data(), data.size());
+bool PTYManager::writeInput(const std::string& input) {
+    if (m_masterFd < 0 || input.empty()) return false;
+    ssize_t n = write(m_masterFd, input.data(), input.size());
+    return n > 0;
 }
 
 std::string PTYManager::readOutput() {

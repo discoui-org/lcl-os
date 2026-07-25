@@ -5,6 +5,8 @@
 #include <chrono>
 #include <memory>
 #include <vector>
+#include <fcntl.h>
+#include <unistd.h>
 #include "core/display/display_manager.hpp"
 #include "core/input/input_manager.hpp"
 #include "core/ipc/ipc_manager.hpp"
@@ -21,6 +23,17 @@ namespace {
         if (signal == SIGINT || signal == SIGTERM) {
             std::cout << "\n[LCL Core] Signal received (" << signal << "). Initiating graceful shutdown...\n";
             g_running.store(false);
+        }
+    }
+
+    void sendAck(const std::string& fifoPath) {
+        if (fifoPath.empty()) return;
+        int fd = open(fifoPath.c_str(), O_WRONLY | O_NONBLOCK);
+        if (fd >= 0) {
+            const char msg[] = "DONE\n";
+            write(fd, msg, sizeof(msg) - 1);
+            close(fd);
+            std::cout << "[LCL Compositor] Sent ACK to waiting open -w process on " << fifoPath << "\n";
         }
     }
 }
@@ -78,14 +91,14 @@ int main(int argc, char* argv[]) {
     startupManager.launchDefaultSession(windowManager, *primaryTerminal);
     terminalApps.push_back(std::move(primaryTerminal));
 
-    // Connect Input Subsystem events to Window Manager and Terminal App Surfaces
+    // Connect Input Subsystem events to Window Manager and active focused window
     inputManager.setEventCallback([&](const lcl::core::InputEvent& ev) {
         windowManager.processInputEvent(ev);
 
-        // Find active focused window ID
+        // Find active focused window ID (top of z-order stack)
         const auto& windows = windowManager.getWindows();
         if (!windows.empty()) {
-            uint32_t focusedId = windows.back().id; // Top window in z-order
+            uint32_t focusedId = windows.back().id;
             for (auto& app : terminalApps) {
                 if (static_cast<uint32_t>(app->getWindowId()) == focusedId) {
                     app->handleInput(ev);
@@ -104,30 +117,60 @@ int main(int argc, char* argv[]) {
             inputManager.dispatchEvents(renderer.getWidth(), renderer.getHeight());
         }
 
-        // Poll IPC messages from CLI apps (e.g. open Terminal.app)
+        // Poll IPC messages from CLI apps (e.g. open Terminal.app or open -w Terminal.app)
         auto ipcMsgs = ipcManager.pollMessages();
         for (const auto& msg : ipcMsgs) {
-            if (msg == "SPAWN_TERMINAL") {
+            if (msg == "SPAWN_TERMINAL" || msg.rfind("SPAWN_TERMINAL_WAIT", 0) == 0) {
+                std::string ackFifo;
+                if (msg.rfind("SPAWN_TERMINAL_WAIT", 0) == 0 && msg.size() > 20) {
+                    ackFifo = msg.substr(20);
+                }
+
                 int x = 80 + static_cast<int>(terminalApps.size() * 40);
                 int y = 60 + static_cast<int>(terminalApps.size() * 30);
                 uint32_t winId = windowManager.createWindow("LCL Terminal", x, y, 640, 480, 0xFF89B4FA);
 
                 auto newApp = std::make_unique<lcl::apps::TerminalApp>();
                 newApp->initialize(winId);
+                if (!ackFifo.empty()) {
+                    newApp->setAckFifo(ackFifo);
+                }
                 terminalApps.push_back(std::move(newApp));
 
-                std::cout << "[LCL Compositor] Dynamically spawned new GUI Terminal Window (ID: " << winId << ") on desktop!\n";
+                std::cout << "[LCL Compositor] Dynamically spawned GUI Terminal Window (ID: " << winId
+                          << (ackFifo.empty() ? "" : " [blocking -w mode]") << ") on desktop!\n";
             }
         }
 
-        // Update active Terminal App Surfaces (poll PTY output)
-        for (auto& app : terminalApps) {
+        // Update active Terminal App Surfaces & clean up exited apps
+        for (auto it = terminalApps.begin(); it != terminalApps.end(); ) {
+            auto& app = *it;
             app->update();
+
+            // Check if PTY process terminated (e.g. exit command typed)
+            if (!app->isAlive()) {
+                uint32_t winId = static_cast<uint32_t>(app->getWindowId());
+                std::cout << "[LCL Compositor] Terminal App (Window ID: " << winId << ") process exited.\n";
+                if (!app->getAckFifo().empty()) {
+                    sendAck(app->getAckFifo());
+                }
+                windowManager.removeWindow(winId);
+                app->shutdown();
+                it = terminalApps.erase(it);
+            } else {
+                ++it;
+            }
         }
 
-        // Render desktop with active windows & primary app lines
-        const auto& lines = terminalApps.empty() ? std::vector<std::string>{} : terminalApps.front()->getLines();
-        renderer.renderDesktop(windowManager, lines);
+        // Build window render content map
+        std::vector<lcl::render::WindowRenderContent> contents;
+        contents.reserve(terminalApps.size());
+        for (const auto& app : terminalApps) {
+            contents.push_back({static_cast<uint32_t>(app->getWindowId()), app->getLines()});
+        }
+
+        // Render desktop with active windows & matching terminal surfaces
+        renderer.renderDesktop(windowManager, contents);
         renderer.swapBuffers();
 
         // ~60 FPS frame rate target
@@ -137,6 +180,9 @@ int main(int argc, char* argv[]) {
 
     // Explicit shutdown of core subsystems & apps
     for (auto& app : terminalApps) {
+        if (!app->getAckFifo().empty()) {
+            sendAck(app->getAckFifo());
+        }
         app->shutdown();
     }
     terminalApps.clear();

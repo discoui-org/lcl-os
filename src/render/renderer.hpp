@@ -11,6 +11,11 @@
 
 namespace lcl::render {
 
+struct WindowRenderContent {
+    uint32_t windowId{0};
+    std::vector<std::string> lines;
+};
+
 struct Color {
     uint8_t r{0};
     uint8_t g{0};
@@ -84,7 +89,7 @@ public:
     // High-level LCL UI primitives
     void drawCursor(int mouseX, int mouseY);
     void renderLCLDesktopShell(const std::string& statusMessage);
-    void renderDesktop(const WindowManager& windowManager, const std::vector<std::string>& terminalLines);
+    void renderDesktop(const WindowManager& windowManager, const std::vector<WindowRenderContent>& windowContents);
     void drawWindowFrame(int x, int y, int width, int height, const std::string& title, uint32_t headerColor);
 
     /**

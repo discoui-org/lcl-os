@@ -46,6 +46,11 @@ public:
     uint32_t createWindow(const std::string& title, int x, int y, int width, int height, uint32_t headerColor = 0xFF38BDF8);
 
     /**
+     * @brief Remove / close a window by ID.
+     */
+    bool removeWindow(uint32_t windowId);
+
+    /**
      * @brief Process input event for hit testing, window focus, and dragging.
      */
     void processInputEvent(const core::InputEvent& ev);

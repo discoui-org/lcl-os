@@ -375,7 +375,7 @@ void Renderer::renderLCLDesktopShell(const std::string& statusMessage) {
     drawCursor(512, 384);
 }
 
-void Renderer::renderDesktop(const WindowManager& windowManager, const std::vector<std::string>& terminalLines) {
+void Renderer::renderDesktop(const WindowManager& windowManager, const std::vector<WindowRenderContent>& windowContents) {
     // 1. Wallpaper background
     clear(0xFF090D16);
 
@@ -392,8 +392,17 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
     for (const auto& win : windowManager.getWindows()) {
         drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
 
-        // If this is the LCL Terminal window, render terminal output lines with strict clipping bounds and auto-wrap!
-        if (win.id == 1) {
+        // Find matching WindowRenderContent for this window ID
+        const std::vector<std::string>* linesPtr = nullptr;
+        for (const auto& content : windowContents) {
+            if (content.windowId == win.id) {
+                linesPtr = &content.lines;
+                break;
+            }
+        }
+
+        if (linesPtr) {
+            const auto& lines = *linesPtr;
             int minX = win.x + 12;
             int minY = win.y + 40;
             int maxX = win.x + win.width - 12;
@@ -404,7 +413,7 @@ void Renderer::renderDesktop(const WindowManager& windowManager, const std::vect
 
             // Auto-wrap lines that exceed maxCols
             std::vector<std::string> wrappedLines;
-            for (const auto& line : terminalLines) {
+            for (const auto& line : lines) {
                 if (line.empty()) {
                     wrappedLines.push_back("");
                     continue;

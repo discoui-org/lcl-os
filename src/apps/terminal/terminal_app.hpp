@@ -2,11 +2,8 @@
 
 #include <string>
 #include <vector>
-#include <memory>
 #include "core/terminal/pty_manager.hpp"
 #include "core/input/input_manager.hpp"
-#include "render/renderer.hpp"
-#include "render/window_manager.hpp"
 
 namespace lcl::apps {
 
@@ -20,29 +17,27 @@ public:
     TerminalApp& operator=(const TerminalApp&) = delete;
 
     /**
-     * @brief Initialize modular Terminal application and spawn PTY shell.
-     * @param windowId Window Manager target window ID
-     * @return true if initialized, false otherwise
+     * @brief Initialize Terminal application instance with spatial window ID.
      */
-    bool initialize(int windowId = 1);
+    bool initialize(int windowId);
 
     /**
-     * @brief Process input event passed from compositor/window manager.
-     */
-    void handleInput(const core::InputEvent& ev);
-
-    /**
-     * @brief Poll PTY output and update internal line buffers.
+     * @brief Poll PTY output buffer and update terminal line rendering state.
      */
     void update();
 
     /**
-     * @brief Clear terminal screen buffer (Ctrl+L / clear command).
+     * @brief Handle keyboard input event for active terminal shell.
+     */
+    void handleInput(const core::InputEvent& ev);
+
+    /**
+     * @brief Clear terminal line buffer (Ctrl+L / clear ANSI escape sequence).
      */
     void clearBuffer();
 
     /**
-     * @brief Terminate PTY shell process and cleanup resources.
+     * @brief Shut down Terminal PTY process and cleanup.
      */
     void shutdown();
 
@@ -50,17 +45,23 @@ public:
     int getWindowId() const { return m_windowId; }
     const std::vector<std::string>& getLines() const { return m_lines; }
 
-private:
-    std::string stripANSI(const std::string& input);
-    std::string keycodeToASCII(uint32_t keycode, bool shift);
+    bool isAlive() const { return m_initialized && m_ptyManager.isAlive(); }
 
-    int m_windowId{1};
+    void setAckFifo(const std::string& fifo) { m_ackFifo = fifo; }
+    const std::string& getAckFifo() const { return m_ackFifo; }
+
+private:
+    std::string keycodeToASCII(uint32_t keycode, bool shift);
+    std::string stripANSI(const std::string& input);
+
+    int m_windowId{-1};
     core::PTYManager m_ptyManager;
     std::vector<std::string> m_lines;
     std::string m_currentLine;
+    std::string m_ackFifo;
+    bool m_initialized{false};
     bool m_shiftPressed{false};
     bool m_ctrlPressed{false};
-    bool m_initialized{false};
 };
 
 } // namespace lcl::apps

@@ -41,6 +41,24 @@ uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int
     return win.id;
 }
 
+bool WindowManager::removeWindow(uint32_t windowId) {
+    auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
+        return w.id == windowId;
+    });
+
+    if (it != m_windows.end()) {
+        std::cout << "[LCL WindowManager] Removing window ID: " << windowId << " ('" << it->title << "').\n";
+        m_windows.erase(it);
+
+        if (!m_windows.empty()) {
+            m_windows.back().isFocused = true;
+            m_windows.back().headerColor = 0xFF89B4FA;
+        }
+        return true;
+    }
+    return false;
+}
+
 void WindowManager::processInputEvent(const core::InputEvent& event) {
     if (event.type == core::InputEventType::PointerMotion) {
         if (event.absoluteX >= 0.0 && event.absoluteY >= 0.0) {
@@ -65,6 +83,14 @@ void WindowManager::processInputEvent(const core::InputEvent& event) {
                     auto& win = m_windows[i];
                     if (m_mouseX >= win.x && m_mouseX < win.x + win.width &&
                         m_mouseY >= win.y && m_mouseY < win.y + win.height) {
+
+                        // Check window close button click (red button x + 10 .. x + 22, y + 10 .. y + 22)
+                        if (m_mouseX >= win.x + 10 && m_mouseX <= win.x + 22 &&
+                            m_mouseY >= win.y + 10 && m_mouseY <= win.y + 22) {
+                            removeWindow(win.id);
+                            break;
+                        }
+
                         focusWindow(win.id);
                         win.isDragging = (m_mouseY < win.y + 32);
                         if (win.isDragging) {
