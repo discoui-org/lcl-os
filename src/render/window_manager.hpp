@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include "core/input/input_manager.hpp"
+#include "render/damage_tracker.hpp"
 
 namespace lcl::render {
 
@@ -20,6 +21,33 @@ struct Window {
     int dragOffsetX{0};
     int dragOffsetY{0};
     uint32_t headerColor{0xFF38BDF8};
+
+    // Damage Tracking & Occlusion Culling
+    bool isDirty{true};
+    Rect damageRect{0, 0, 400, 300};
+
+    Rect getBounds() const {
+        return Rect{x, y, width, height};
+    }
+
+    void markDirty() {
+        isDirty = true;
+        damageRect = Rect{x, y, width, height};
+    }
+
+    void markDirty(const Rect& rect) {
+        if (!isDirty) {
+            isDirty = true;
+            damageRect = rect;
+        } else {
+            damageRect = Rect::Union(damageRect, rect);
+        }
+    }
+
+    void clearDirty() {
+        isDirty = false;
+        damageRect = Rect{0, 0, 0, 0};
+    }
 };
 
 class WindowManager {
@@ -52,15 +80,32 @@ public:
 
     /**
      * @brief Process input event for hit testing, window focus, and dragging.
+     * @return True if window state or mouse position changed requiring redraw.
      */
-    void processInputEvent(const core::InputEvent& ev);
+    bool processInputEvent(const core::InputEvent& ev);
 
     /**
      * @brief Focus a window by ID and bring it to top z-order.
      */
     void focusWindow(uint32_t windowId);
 
+    /**
+     * @brief Check if any window or cursor state is dirty.
+     */
+    bool isAnyWindowDirty() const;
+
+    /**
+     * @brief Mark all windows dirty (full redraw request).
+     */
+    void markAllDirty();
+
+    /**
+     * @brief Clear dirty flags across all windows.
+     */
+    void clearAllDirty();
+
     const std::vector<Window>& getWindows() const { return m_windows; }
+    std::vector<Window>& getWindowsMutable() { return m_windows; }
     int getMouseX() const { return m_mouseX; }
     int getMouseY() const { return m_mouseY; }
 
@@ -74,6 +119,8 @@ private:
     int m_mouseY{384};
     uint32_t m_nextWindowId{1};
     bool m_initialized{false};
+    bool m_mouseDirty{true};
 };
 
 } // namespace lcl::render
+

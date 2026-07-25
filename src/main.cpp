@@ -85,8 +85,12 @@ int main(int argc, char* argv[]) {
     terminalApps.push_back(std::move(primaryTerminal));
 
     // Connect Input Subsystem events to Window Manager and active focused window
+    bool needsRedraw = true;
     inputManager.setEventCallback([&](const lcl::core::InputEvent& ev) {
-        windowManager.processInputEvent(ev);
+        bool windowChanged = windowManager.processInputEvent(ev);
+        if (windowChanged) {
+            needsRedraw = true;
+        }
 
         // Find active focused window ID (top of z-order stack)
         const auto& windows = windowManager.getWindows();
@@ -95,6 +99,7 @@ int main(int argc, char* argv[]) {
             for (auto& app : terminalApps) {
                 if (static_cast<uint32_t>(app->getWindowId()) == focusedId) {
                     app->handleInput(ev);
+                    needsRedraw = true;
                     break;
                 }
             }
@@ -111,6 +116,8 @@ int main(int argc, char* argv[]) {
               << (1000000 / targetHz) << " us per frame budget).\n";
 
     uint64_t loopTicks = 0;
+    auto lastBlinkCheck = std::chrono::steady_clock::now();
+
     while (g_running.load()) {
         auto frameStart = std::chrono::high_resolution_clock::now();
 
@@ -143,6 +150,7 @@ int main(int argc, char* argv[]) {
                     newApp->setAckFifo(std::to_string(msg.clientFd)); // Store client FD for ACK socket response
                 }
                 terminalApps.push_back(std::move(newApp));
+                needsRedraw = true;
 
                 std::cout << "[LCL Compositor] Dynamically spawned GUI Terminal Window (ID: " << winId
                           << (msg.command == "SPAWN_TERMINAL_WAIT" ? " [blocking -w mode]" : "") << ") on desktop!\n";
@@ -155,6 +163,7 @@ int main(int argc, char* argv[]) {
                     windowManager.removeWindow(winId);
                     lastApp->shutdown();
                     terminalApps.pop_back();
+                    needsRedraw = true;
                 }
             }
         }
@@ -175,6 +184,7 @@ int main(int argc, char* argv[]) {
                 }
                 (*it)->shutdown();
                 it = terminalApps.erase(it);
+                needsRedraw = true;
             } else {
                 ++it;
             }
@@ -183,7 +193,17 @@ int main(int argc, char* argv[]) {
         // Update active Terminal App Surfaces & clean up exited PTY processes
         for (auto it = terminalApps.begin(); it != terminalApps.end(); ) {
             auto& app = *it;
-            app->update();
+            bool appChanged = app->update();
+            if (appChanged) {
+                uint32_t winId = static_cast<uint32_t>(app->getWindowId());
+                for (auto& w : windowManager.getWindowsMutable()) {
+                    if (w.id == winId) {
+                        w.markDirty();
+                        break;
+                    }
+                }
+                needsRedraw = true;
+            }
 
             if (!app->isAlive()) {
                 uint32_t winId = static_cast<uint32_t>(app->getWindowId());
@@ -195,23 +215,34 @@ int main(int argc, char* argv[]) {
                 windowManager.removeWindow(winId);
                 app->shutdown();
                 it = terminalApps.erase(it);
+                needsRedraw = true;
             } else {
                 ++it;
             }
         }
 
-        // Build window render content map cleanly via component encapsulation
-        std::vector<lcl::render::WindowRenderContent> contents;
-        contents.reserve(terminalApps.size());
-        for (const auto& app : terminalApps) {
-            contents.push_back(app->getRenderContent());
+        // 500ms Cursor Blink tick trigger
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastBlinkCheck).count() >= 500) {
+            lastBlinkCheck = now;
+            needsRedraw = true;
         }
 
-        // Render desktop with active windows & matching terminal surfaces
-        renderer.renderDesktop(windowManager, contents);
-        renderer.swapBuffers();
+        // Event-Driven & Damage Tracking: Render ONLY when dirty/event occurred
+        if (needsRedraw || windowManager.isAnyWindowDirty()) {
+            std::vector<lcl::render::WindowRenderContent> contents;
+            contents.reserve(terminalApps.size());
+            for (const auto& app : terminalApps) {
+                contents.push_back(app->getRenderContent());
+            }
 
-        // Precise dynamic frame pacing matching display refresh rate
+            renderer.renderDesktop(windowManager, contents);
+            renderer.swapBuffers();
+            windowManager.clearAllDirty();
+            needsRedraw = false;
+        }
+
+        // Dynamic frame pacing
         auto frameDuration = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::high_resolution_clock::now() - frameStart);
         if (frameDuration < targetFrameDuration) {

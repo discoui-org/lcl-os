@@ -52,16 +52,16 @@ void TerminalApp::clearBuffer() {
     m_writePos = 0;
 }
 
-void TerminalApp::update() {
-    if (!m_initialized) return;
+bool TerminalApp::update() {
+    if (!m_initialized) return false;
 
     std::string rawOut = m_ptyManager.readOutput();
-    if (rawOut.empty()) return;
+    if (rawOut.empty()) return false;
 
     // Detect ANSI clear-screen: full reset
     if (rawOut.find("\033[2J") != std::string::npos) {
         clearBuffer();
-        return;
+        return true;
     }
 
     if (m_lines.empty()) m_lines.push_back("");
@@ -196,6 +196,7 @@ void TerminalApp::update() {
 
         ++i; // skip unhandled control char
     }
+    return true;
 }
 
 void TerminalApp::handleInput(const core::InputEvent& ev) {

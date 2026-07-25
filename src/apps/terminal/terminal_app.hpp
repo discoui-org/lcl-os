@@ -25,8 +25,9 @@ public:
 
     /**
      * @brief Poll PTY output buffer and update terminal line rendering state.
+     * @return True if new output was read or state changed.
      */
-    void update();
+    bool update();
 
     /**
      * @brief Handle keyboard input event for active terminal shell.
