@@ -8,6 +8,57 @@
 
 namespace lcl::render {
 
+static GLuint compileShader(GLenum type, const char* source) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+    return shader;
+}
+
+bool SkiaRenderer::initGLShader() {
+    const char* vSrc =
+        "attribute vec2 aPosition;\n"
+        "attribute vec2 aTexCoord;\n"
+        "varying vec2 vTexCoord;\n"
+        "void main() {\n"
+        "    gl_Position = vec4(aPosition, 0.0, 1.0);\n"
+        "    vTexCoord = aTexCoord;\n"
+        "}\n";
+
+    const char* fSrc =
+        "precision mediump float;\n"
+        "varying vec2 vTexCoord;\n"
+        "uniform sampler2D uTexture;\n"
+        "void main() {\n"
+        "    vec4 c = texture2D(uTexture, vTexCoord);\n"
+        "    gl_FragColor = vec4(c.b, c.g, c.r, c.a);\n"
+        "}\n";
+
+    GLuint vs = compileShader(GL_VERTEX_SHADER, vSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, fSrc);
+    m_glProgram = glCreateProgram();
+    glAttachShader(m_glProgram, vs);
+    glAttachShader(m_glProgram, fs);
+    glLinkProgram(m_glProgram);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    m_aPosLoc = glGetAttribLocation(m_glProgram, "aPosition");
+    m_aTexLoc = glGetAttribLocation(m_glProgram, "aTexCoord");
+    m_uTextureLoc = glGetUniformLocation(m_glProgram, "uTexture");
+
+    glGenTextures(1, &m_glTexture);
+    glBindTexture(GL_TEXTURE_2D, m_glTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_width, m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    return true;
+}
+
 SkiaRenderer::~SkiaRenderer() {
     shutdown();
 }
@@ -23,6 +74,8 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height, lcl::core::EGLBac
     if (m_eglBackend && m_eglBackend->isInitialized()) {
         m_backendType = SkiaBackendType::OpenGL_EGL;
         m_eglBackend->makeCurrent();
+
+        initGLShader();
 
         glViewport(0, 0, m_width, m_height);
         glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
@@ -45,6 +98,14 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height, lcl::core::EGLBac
 }
 
 void SkiaRenderer::shutdown() {
+    if (m_glTexture > 0) {
+        glDeleteTextures(1, &m_glTexture);
+        m_glTexture = 0;
+    }
+    if (m_glProgram > 0) {
+        glDeleteProgram(m_glProgram);
+        m_glProgram = 0;
+    }
     m_rasterPixels.clear();
     m_rasterPixels.shrink_to_fit();
     m_targetPixels = nullptr;
@@ -54,12 +115,7 @@ void SkiaRenderer::shutdown() {
 void SkiaRenderer::beginFrame() {
     if (!m_initialized) return;
 
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
-        m_eglBackend->makeCurrent();
-        glViewport(0, 0, m_width, m_height);
-        glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-    } else if (m_targetPixels) {
+    if (m_targetPixels) {
         std::fill_n(m_targetPixels, m_width * m_height, 0xFF14161D);
     }
 }
@@ -68,24 +124,45 @@ void SkiaRenderer::endFrame() {
     if (!m_initialized) return;
 
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+        m_eglBackend->makeCurrent();
+        glViewport(0, 0, m_width, m_height);
+
+        if (m_targetPixels && m_glTexture > 0) {
+            glBindTexture(GL_TEXTURE_2D, m_glTexture);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_width, m_height, GL_RGBA, GL_UNSIGNED_BYTE, m_targetPixels);
+
+            glUseProgram(m_glProgram);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, m_glTexture);
+            glUniform1i(m_uTextureLoc, 0);
+
+            static const float quad[] = {
+                -1.0f,  1.0f,  0.0f, 0.0f,
+                -1.0f, -1.0f,  0.0f, 1.0f,
+                 1.0f,  1.0f,  1.0f, 0.0f,
+                 1.0f, -1.0f,  1.0f, 1.0f,
+            };
+
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glVertexAttribPointer(m_aPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
+            glEnableVertexAttribArray(m_aPosLoc);
+            glVertexAttribPointer(m_aTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
+            glEnableVertexAttribArray(m_aTexLoc);
+
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+            glDisableVertexAttribArray(m_aPosLoc);
+            glDisableVertexAttribArray(m_aTexLoc);
+        }
+
         glFlush();
         m_eglBackend->swapBuffers();
     }
 }
 
 void SkiaRenderer::drawBackgroundGradient(const SkiaColor& topColor, const SkiaColor& bottomColor) {
-    if (!m_initialized) return;
+    if (!m_initialized || !m_targetPixels) return;
 
-    if (m_backendType == SkiaBackendType::OpenGL_EGL) {
-        // Clear background with top color blend in GL mode
-        glClearColor(topColor.r / 255.0f, topColor.g / 255.0f, topColor.b / 255.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        return;
-    }
-
-    if (!m_targetPixels) return;
-
-    // Raster Software Gradient Fill
     for (uint32_t y = 0; y < m_height; ++y) {
         float t = static_cast<float>(y) / static_cast<float>(m_height);
         uint8_t r = static_cast<uint8_t>((1.0f - t) * topColor.r + t * bottomColor.r);
@@ -99,7 +176,7 @@ void SkiaRenderer::drawBackgroundGradient(const SkiaColor& topColor, const SkiaC
 }
 
 void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
-    if (!m_initialized) return;
+    if (!m_initialized || !m_targetPixels) return;
 
     int x1 = std::clamp(static_cast<int>(rect.x), 0, static_cast<int>(m_width));
     int y1 = std::clamp(static_cast<int>(rect.y), 0, static_cast<int>(m_height));
@@ -110,26 +187,24 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
 
     uint32_t fillARGB = color.toARGB();
 
-    if (m_backendType == SkiaBackendType::SoftwareRaster && m_targetPixels) {
-        for (int y = y1; y < y2; ++y) {
-            uint32_t* row = &m_targetPixels[y * m_width + x1];
-            if (color.a == 255) {
-                std::fill_n(row, x2 - x1, fillARGB);
-            } else {
-                float alpha = color.a / 255.0f;
-                float invAlpha = 1.0f - alpha;
-                for (int x = x1; x < x2; ++x) {
-                    uint32_t bg = m_targetPixels[y * m_width + x];
-                    uint8_t bgR = (bg >> 16) & 0xFF;
-                    uint8_t bgG = (bg >> 8) & 0xFF;
-                    uint8_t bgB = bg & 0xFF;
+    for (int y = y1; y < y2; ++y) {
+        uint32_t* row = &m_targetPixels[y * m_width + x1];
+        if (color.a == 255) {
+            std::fill_n(row, x2 - x1, fillARGB);
+        } else {
+            float alpha = color.a / 255.0f;
+            float invAlpha = 1.0f - alpha;
+            for (int x = x1; x < x2; ++x) {
+                uint32_t bg = m_targetPixels[y * m_width + x];
+                uint8_t bgR = (bg >> 16) & 0xFF;
+                uint8_t bgG = (bg >> 8) & 0xFF;
+                uint8_t bgB = bg & 0xFF;
 
-                    uint8_t r = static_cast<uint8_t>(color.r * alpha + bgR * invAlpha);
-                    uint8_t g = static_cast<uint8_t>(color.g * alpha + bgG * invAlpha);
-                    uint8_t b = static_cast<uint8_t>(color.b * alpha + bgB * invAlpha);
+                uint8_t r = static_cast<uint8_t>(color.r * alpha + bgR * invAlpha);
+                uint8_t g = static_cast<uint8_t>(color.g * alpha + bgG * invAlpha);
+                uint8_t b = static_cast<uint8_t>(color.b * alpha + bgB * invAlpha);
 
-                    m_targetPixels[y * m_width + x] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
-                }
+                m_targetPixels[y * m_width + x] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
             }
         }
     }
@@ -139,10 +214,8 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect, float radius, const Ski
     (void)radius;
     drawRect(rect, color);
     if (borderWidth > 0.0f && borderColor.a > 0) {
-        // Draw top & bottom border
         drawRect({rect.x, rect.y, rect.width, borderWidth}, borderColor);
         drawRect({rect.x, rect.y + rect.height - borderWidth, rect.width, borderWidth}, borderColor);
-        // Draw left & right border
         drawRect({rect.x, rect.y, borderWidth, rect.height}, borderColor);
         drawRect({rect.x + rect.width - borderWidth, rect.y, borderWidth, rect.height}, borderColor);
     }
@@ -174,7 +247,7 @@ void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, const SkiaCo
 }
 
 void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint32_t* pixelData, int stridePixels, float opacity) {
-    if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0) return;
+    if (!m_initialized || !pixelData || !m_targetPixels || srcW <= 0 || srcH <= 0) return;
 
     if (stridePixels <= 0) stridePixels = srcW;
 
@@ -185,29 +258,27 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
 
     if (clipX1 >= clipX2 || clipY1 >= clipY2) return;
 
-    if (m_backendType == SkiaBackendType::SoftwareRaster && m_targetPixels) {
-        for (int y = clipY1; y < clipY2; ++y) {
-            int srcY = y - dstY;
-            const uint32_t* srcRow = pixelData + (srcY * stridePixels);
-            uint32_t* dstRow = &m_targetPixels[y * m_width];
+    for (int y = clipY1; y < clipY2; ++y) {
+        int srcY = y - dstY;
+        const uint32_t* srcRow = pixelData + (srcY * stridePixels);
+        uint32_t* dstRow = &m_targetPixels[y * m_width];
 
-            for (int x = clipX1; x < clipX2; ++x) {
-                int srcX = x - dstX;
-                uint32_t pixel = srcRow[srcX];
-                if (opacity >= 0.99f) {
-                    dstRow[x] = pixel;
-                } else {
-                    uint8_t srcA = static_cast<uint8_t>(((pixel >> 24) & 0xFF) * opacity);
-                    float a = srcA / 255.0f;
-                    float invA = 1.0f - a;
+        for (int x = clipX1; x < clipX2; ++x) {
+            int srcX = x - dstX;
+            uint32_t pixel = srcRow[srcX];
+            if (opacity >= 0.99f) {
+                dstRow[x] = pixel;
+            } else {
+                uint8_t srcA = static_cast<uint8_t>(((pixel >> 24) & 0xFF) * opacity);
+                float a = srcA / 255.0f;
+                float invA = 1.0f - a;
 
-                    uint32_t bg = dstRow[x];
-                    uint8_t r = static_cast<uint8_t>(((pixel >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * invA);
-                    uint8_t g = static_cast<uint8_t>(((pixel >> 8) & 0xFF) * a + ((bg >> 8) & 0xFF) * invA);
-                    uint8_t b = static_cast<uint8_t>((pixel & 0xFF) * a + (bg & 0xFF) * invA);
+                uint32_t bg = dstRow[x];
+                uint8_t r = static_cast<uint8_t>(((pixel >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * invA);
+                uint8_t g = static_cast<uint8_t>(((pixel >> 8) & 0xFF) * a + ((bg >> 8) & 0xFF) * invA);
+                uint8_t b = static_cast<uint8_t>((pixel & 0xFF) * a + (bg & 0xFF) * invA);
 
-                    dstRow[x] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
-                }
+                dstRow[x] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
             }
         }
     }

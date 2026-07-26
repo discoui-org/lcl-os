@@ -105,6 +105,8 @@ public:
     uint32_t* getRasterBuffer() { return m_targetPixels ? m_targetPixels : m_rasterPixels.data(); }
 
 private:
+    bool initGLShader();
+
     uint32_t m_width{0};
     uint32_t m_height{0};
     SkiaBackendType m_backendType{SkiaBackendType::SoftwareRaster};
@@ -113,6 +115,12 @@ private:
     std::vector<uint32_t> m_rasterPixels;
     uint32_t* m_targetPixels{nullptr};
     bool m_initialized{false};
+
+    uint32_t m_glTexture{0};
+    uint32_t m_glProgram{0};
+    int32_t m_aPosLoc{-1};
+    int32_t m_aTexLoc{-1};
+    int32_t m_uTextureLoc{-1};
 };
 
 } // namespace lcl::render

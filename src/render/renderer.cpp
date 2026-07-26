@@ -624,7 +624,6 @@ void Renderer::swapBuffers() {
 
     if (m_skiaRenderer.getBackendType() == SkiaBackendType::OpenGL_EGL) {
         m_skiaRenderer.endFrame();
-        return;
     }
 
     if (m_displayManager && m_displayManager->isInitialized()) {

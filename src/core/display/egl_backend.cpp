@@ -84,6 +84,10 @@ bool EGLBackend::initialize(int drmFd, uint32_t width, uint32_t height, uint32_t
     m_crtcId = crtcId;
     m_connectorId = connectorId;
 
+    // Set driver search paths for Mesa in isolated initramfs
+    setenv("LIBGL_DRIVERS_PATH", "/usr/lib/x86_64-linux-gnu/dri:/usr/lib/dri", 1);
+    setenv("GBM_DRIVERS_PATH", "/usr/lib/x86_64-linux-gnu/gbm:/usr/lib/gbm", 1);
+
     // 1. Create GBM Device
     m_gbmDevice = gbm_create_device(m_drmFd);
     if (!m_gbmDevice) {
@@ -102,51 +106,111 @@ bool EGLBackend::initialize(int drmFd, uint32_t width, uint32_t height, uint32_t
         return false;
     }
 
-    // 3. Initialize EGL Display via eglGetPlatformDisplay / eglGetDisplay
-    PFNEGLGETPLATFORMDISPLAYEXTPROC getPlatformDisplay =
-        (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
-
-    if (getPlatformDisplay) {
-        m_eglDisplay = getPlatformDisplay(EGL_PLATFORM_GBM_KHR, m_gbmDevice, NULL);
-    }
-    if (m_eglDisplay == EGL_NO_DISPLAY) {
-        m_eglDisplay = eglGetDisplay((EGLNativeDisplayType)m_gbmDevice);
-    }
-
-    if (m_eglDisplay == EGL_NO_DISPLAY) {
-        std::cerr << "[LCL EGL] Failed to acquire EGL display from GBM device.\n";
-        shutdown();
-        return false;
-    }
-
-    EGLint major = 0, minor = 0;
-    if (!eglInitialize(m_eglDisplay, &major, &minor)) {
-        std::cerr << "[LCL EGL] eglInitialize failed: 0x" << std::hex << eglGetError() << std::dec << "\n";
-        shutdown();
-        return false;
-    }
-    std::cout << "[LCL EGL] EGL initialized (v" << major << "." << minor
-              << ", Vendor: " << eglQueryString(m_eglDisplay, EGL_VENDOR) << ").\n";
-
-    // Bind OpenGL ES API
+    // 3. Bind API prior to display initialization
     if (!eglBindAPI(EGL_OPENGL_ES_API)) {
         eglBindAPI(EGL_OPENGL_API);
     }
 
-    // 4. Choose EGL Config
-    static const EGLint configAttribs[] = {
+    // 4. Initialize EGL Display with candidates
+    PFNEGLGETPLATFORMDISPLAYEXTPROC getPlatformDisplayExt =
+        (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+    PFNEGLGETPLATFORMDISPLAYPROC getPlatformDisplay =
+        (PFNEGLGETPLATFORMDISPLAYPROC)eglGetProcAddress("eglGetPlatformDisplay");
+
+    static const EGLint emptyAttribsExt[] = { EGL_NONE };
+    static const EGLAttrib emptyAttribs[] = { EGL_NONE };
+
+    EGLint major = 0, minor = 0;
+    auto tryInitializeDisplay = [&](EGLDisplay dpy, const char* name) -> bool {
+        if (dpy == EGL_NO_DISPLAY) {
+            EGLint err = eglGetError();
+            std::cout << "[LCL EGL] Probe '" << name << "' returned EGL_NO_DISPLAY (eglGetError: 0x"
+                      << std::hex << err << std::dec << ")\n";
+            return false;
+        }
+        if (eglInitialize(dpy, &major, &minor)) {
+            m_eglDisplay = dpy;
+            std::cout << "[LCL EGL] EGL display successfully acquired via '" << name
+                      << "' (v" << major << "." << minor
+                      << ", Vendor: " << (eglQueryString(m_eglDisplay, EGL_VENDOR) ? eglQueryString(m_eglDisplay, EGL_VENDOR) : "Unknown") << ")\n";
+            return true;
+        }
+        EGLint err = eglGetError();
+        std::cout << "[LCL EGL] eglInitialize failed for '" << name << "' (eglGetError: 0x"
+                  << std::hex << err << std::dec << ")\n";
+        return false;
+    };
+
+    bool ok = false;
+    // Candidate 1: Standard eglGetDisplay with gbmDevice (canonical Mesa GBM display)
+    if (!ok && m_gbmDevice) {
+        ok = tryInitializeDisplay(eglGetDisplay(reinterpret_cast<EGLNativeDisplayType>(m_gbmDevice)), "eglGetDisplay(gbmDevice)");
+    }
+    // Candidate 2: eglGetPlatformDisplayEXT with EGL_PLATFORM_GBM_KHR
+    if (!ok && getPlatformDisplayExt && m_gbmDevice) {
+        ok = tryInitializeDisplay(getPlatformDisplayExt(EGL_PLATFORM_GBM_KHR, m_gbmDevice, emptyAttribsExt), "eglGetPlatformDisplayEXT(GBM_KHR)");
+    }
+    // Candidate 3: eglGetPlatformDisplay with EGL_PLATFORM_GBM_KHR
+    if (!ok && getPlatformDisplay && m_gbmDevice) {
+        ok = tryInitializeDisplay(getPlatformDisplay(EGL_PLATFORM_GBM_KHR, m_gbmDevice, emptyAttribs), "eglGetPlatformDisplay(GBM_KHR)");
+    }
+    // Candidate 4: eglGetDisplay with DRM file descriptor
+    if (!ok && m_drmFd >= 0) {
+        ok = tryInitializeDisplay(eglGetDisplay(reinterpret_cast<EGLNativeDisplayType>(static_cast<uintptr_t>(m_drmFd))), "eglGetDisplay(drmFd)");
+    }
+    // Candidate 5: eglGetDisplay with EGL_DEFAULT_DISPLAY
+    if (!ok) {
+        ok = tryInitializeDisplay(eglGetDisplay(EGL_DEFAULT_DISPLAY), "eglGetDisplay(DEFAULT)");
+    }
+
+    if (!ok || m_eglDisplay == EGL_NO_DISPLAY) {
+        std::cerr << "[LCL EGL ERROR] Failed to acquire any valid EGL display.\n";
+        shutdown();
+        return false;
+    }
+
+    // 5. Choose EGL Config with progressive fallbacks
+    static const EGLint config1[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-        EGL_RED_SIZE, 8,
-        EGL_GREEN_SIZE, 8,
-        EGL_BLUE_SIZE, 8,
-        EGL_ALPHA_SIZE, 0,
+        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
         EGL_NONE
     };
+    static const EGLint config2[] = {
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_NONE
+    };
+    static const EGLint config3[] = {
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+        EGL_NONE
+    };
+    static const EGLint config4[] = {
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_NONE
+    };
+    static const EGLint config5[] = {
+        EGL_NONE
+    };
 
+    const EGLint* fallbacks[] = { config1, config2, config3, config4, config5 };
     EGLint numConfigs = 0;
-    if (!eglChooseConfig(m_eglDisplay, configAttribs, &m_eglConfig, 1, &numConfigs) || numConfigs == 0) {
-        std::cerr << "[LCL EGL] Failed to find compatible EGL config.\n";
+    bool foundConfig = false;
+
+    for (const auto* attribs : fallbacks) {
+        if (eglChooseConfig(m_eglDisplay, attribs, &m_eglConfig, 1, &numConfigs) && numConfigs > 0) {
+            foundConfig = true;
+            break;
+        }
+    }
+
+    if (!foundConfig) {
+        EGLint err = eglGetError();
+        std::cerr << "[LCL EGL ERROR] Failed to find compatible EGL config. eglGetError: 0x"
+                  << std::hex << err << std::dec << "\n";
         shutdown();
         return false;
     }
@@ -200,7 +264,22 @@ uint32_t EGLBackend::getOrCreateFB(struct gbm_bo* bo) {
 
     int ret = drmModeAddFB(m_drmFd, width, height, 24, 32, stride, handle, &fbId);
     if (ret != 0) {
-        std::cerr << "[LCL EGL] drmModeAddFB failed for GBM buffer: " << std::strerror(errno) << "\n";
+        int primeFd = gbm_bo_get_fd(bo);
+        if (primeFd >= 0) {
+            uint32_t primeHandle = 0;
+            if (drmPrimeFDToHandle(m_drmFd, primeFd, &primeHandle) == 0) {
+                ret = drmModeAddFB(m_drmFd, width, height, 24, 32, stride, primeHandle, &fbId);
+            }
+            close(primeFd);
+        }
+    }
+
+    if (ret != 0) {
+        static bool s_logged = false;
+        if (!s_logged) {
+            std::cerr << "[LCL EGL WARNING] drmModeAddFB failed for GBM buffer: " << std::strerror(errno) << "\n";
+            s_logged = true;
+        }
         return 0;
     }
 

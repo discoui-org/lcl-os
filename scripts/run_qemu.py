@@ -539,6 +539,26 @@ echo "===================================================="
                     shutil.copy2(item, dri_dst / item.name, follow_symlinks=True)
                     copy_ldd_deps(item, dest_lib)
 
+    # Package GLVND vendor configs (/usr/share/glvnd, /etc/glvnd) and Mesa vendor drivers
+    log("Packaging GLVND vendor configs & Mesa EGL drivers...")
+    glvnd_share = Path("/usr/share/glvnd")
+    if glvnd_share.is_dir():
+        shutil.copytree(glvnd_share, INITRAMFS_DIR / "usr" / "share" / "glvnd", dirs_exist_ok=True)
+
+    glvnd_etc = Path("/etc/glvnd")
+    if glvnd_etc.is_dir():
+        shutil.copytree(glvnd_etc, INITRAMFS_DIR / "etc" / "glvnd", dirs_exist_ok=True)
+
+    drirc_share = Path("/usr/share/drirc.d")
+    if drirc_share.is_dir():
+        shutil.copytree(drirc_share, INITRAMFS_DIR / "usr" / "share" / "drirc.d", dirs_exist_ok=True)
+
+    for lib_pattern in ("libEGL_mesa*", "libGLX_mesa*", "libgbm*", "libglapi*"):
+        for mesa_lib in Path("/usr/lib/x86_64-linux-gnu").glob(lib_pattern):
+            if mesa_lib.is_file():
+                shutil.copy2(mesa_lib, dest_lib / mesa_lib.name, follow_symlinks=True)
+                copy_ldd_deps(mesa_lib, dest_lib)
+
     package_kernel_modules(kernel_path, INITRAMFS_DIR)
 
     # Cache kernel next to artifacts when packaging inside Docker/Linux
