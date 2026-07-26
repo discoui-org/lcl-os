@@ -271,3 +271,5 @@ lcl-os/
     ├── fs/                         # io_uring & POSIX async file system
     └── tools/                      # Native CLI utilities (lcl-open)
 ```
+
+When you have read and understood this prompt, reply with: **"Gemini: Hazırım!"**
