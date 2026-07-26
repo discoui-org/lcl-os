@@ -446,13 +446,9 @@ void Renderer::renderLCLDesktopShell(const std::string& statusMessage) {
 
 void Renderer::renderDesktop(const WindowManager& windowManager,
                               const std::vector<WindowRenderContent>& windowContents) {
-    // 0. Begin Skia canvas frame
-    m_skiaRenderer.beginFrame();
+    // beginFrame() is called by the compositor before renderDesktop() — do NOT call it here.
 
-    // 1. Layered composition on pure black display server canvas
-    renderBackground();
-
-    // 2. Render registered client surfaces/windows
+    // 1. Render registered client surfaces/windows (with text-based fallback content)
     for (const auto& win : windowManager.getWindows()) {
         const WindowRenderContent* content = nullptr;
         for (const auto& c : windowContents) {
@@ -461,7 +457,7 @@ void Renderer::renderDesktop(const WindowManager& windowManager,
         renderWindowContent(win, content);
     }
 
-    // 3. Mouse cursor on top of everything
+    // 2. Mouse cursor on top of everything
     if (m_displayManager && m_displayManager->isHardwareCursorActive()) {
         m_displayManager->moveHardwareCursor(windowManager.getMouseX(), windowManager.getMouseY());
     } else {

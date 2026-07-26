@@ -95,3 +95,22 @@ target_include_directories(lcl-desktop-wm PRIVATE
 target_link_libraries(lcl-desktop-wm PRIVATE
     Threads::Threads
 )
+
+# Standalone Client Terminal App Target (lcl-terminal)
+add_executable(lcl-terminal
+    src/tools/terminal_main.cpp
+    src/apps/terminal/terminal_app.cpp
+    src/core/terminal/pty_manager.cpp
+    src/core/display/display_scale.cpp
+    src/core/ipc/ipc_manager.cpp
+    src/core/ipc/lcl_protocol.cpp
+    src/render/font_renderer.cpp
+)
+
+target_include_directories(lcl-terminal PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(lcl-terminal PRIVATE
+    Threads::Threads
+)

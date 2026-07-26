@@ -236,9 +236,14 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                 const int btn = core::DisplayScale::trafficBtn();
                 const int btnPad = core::DisplayScale::px(10);
 
-                // Close button check
-                if (m_mouseX >= topWin.x + btnPad && m_mouseX <= topWin.x + btnPad + btn &&
-                    m_mouseY >= topWin.y + btnPad && m_mouseY <= topWin.y + btnPad + btn) {
+                // Close button check (only when explicitly clicked or Super shortcut used)
+                if (event.superPressed && event.button == BTN_MIDDLE) {
+                    removeWindow(topWin.id);
+                    stateChanged = true;
+                } else if (!event.superPressed &&
+                           m_mouseX >= topWin.x + btnPad && m_mouseX <= topWin.x + btnPad + btn &&
+                           m_mouseY >= topWin.y + btnPad && m_mouseY <= topWin.y + btnPad + btn) {
+                    std::cout << "[LCL WM] Close button clicked on window ID: " << topWin.id << "\n";
                     removeWindow(topWin.id);
                     stateChanged = true;
                 } else if (event.superPressed) {

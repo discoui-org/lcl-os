@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <thread>
 #include <chrono>
+#include <sys/mman.h>
 
 namespace lcl::core {
 
@@ -18,24 +19,16 @@ Compositor::Compositor() = default;
 Compositor::~Compositor() {
     if (!m_initialized) return;
 
-    // Shutdown in dependency-reverse order:
-    // 1. Apps (send pending ACKs, kill PTYs)
-    for (auto& app : m_apps) {
-        sendAck(app->getAckClientFd());
-        app->shutdown();
-    }
-    m_apps.clear();
-
-    // 2. IPC — close socket before renderer/input tear-down
+    // 1. IPC — close socket before renderer/input tear-down
     m_ipcManager.shutdown();
 
-    // 3. Renderer — release DRM framebuffer
+    // 2. Renderer — release DRM framebuffer
     m_renderer.shutdown();
 
-    // 4. Input — close evdev/libinput handles
+    // 3. Input — close evdev/libinput handles
     m_inputManager.shutdown();
 
-    // 5. Display — release DRM/KMS lease
+    // 4. Display — release DRM/KMS lease
     m_displayManager.shutdown();
 
     std::cout << "[LCL Core] Clean shutdown complete. Total event loop ticks: "
@@ -54,7 +47,7 @@ bool Compositor::initialize() {
               << "  Architecture: Direct DRM/KMS & evdev (No X11/Wayland)\n"
               << "  C++ Standard: C++20\n"
               << "====================================================\n"
-              << "[LCL Core] Initializing core subsystem skeleton...\n";
+              << "[LCL Core] Initializing pure Display Server compositor...\n";
 
     // --- Display scale (reads lcl.scale= from /proc/cmdline) ---
     DisplayScale::initialize();
@@ -74,31 +67,20 @@ bool Compositor::initialize() {
         std::cout << "[LCL Core] Renderer running in fallback mode.\n";
     }
 
-    // --- Window Manager ---
+    // --- Window Manager Canvas ---
     m_windowManager.initialize(m_renderer.getWidth(), m_renderer.getHeight());
 
     // --- IPC (Unix Domain Socket, SO_PEERCRED auth, 0600 perms) ---
     m_ipcManager.initialize(kCompositorSocket);
 
-    // --- Wire input events → WindowManager + focused app ---
+    // --- Wire input events → WindowManager ---
     m_inputManager.setEventCallback([this](const InputEvent& ev) {
         if (m_windowManager.processInputEvent(ev)) {
             m_needsRedraw = true;
         }
-        const auto& wins = m_windowManager.getWindows();
-        if (!wins.empty()) {
-            uint32_t focusedId = wins.back().id;
-            for (auto& app : m_apps) {
-                if (static_cast<uint32_t>(app->getWindowId()) == focusedId) {
-                    app->handleInput(ev);
-                    m_needsRedraw = true;
-                    break;
-                }
-            }
-        }
     });
 
-    // --- Launch primary desktop session (passive Compositor ready for IPC clients) ---
+    // --- Launch primary desktop session ---
     m_startupManager.launchDefaultSession(m_windowManager);
 
     // --- Frame pacing from DRM refresh rate ---
@@ -107,8 +89,8 @@ bool Compositor::initialize() {
     if (hz == 0) hz = 60;
     m_targetFrameDuration = std::chrono::microseconds(1000000 / hz);
 
-    std::cout << "[LCL Core] Secure Unix Domain Socket Compositor IPC active! "
-                 "Press Ctrl+C to terminate.\n"
+    std::cout << "[LCL Core] Pure Display Server active on " << kCompositorSocket
+              << ". Listening for client surface registrations.\n"
               << "[LCL Core] High Refresh Rate active: targeting " << hz
               << " Hz (~" << (1000000 / hz) << " us per frame budget).\n";
 
@@ -129,8 +111,6 @@ void Compositor::run() {
 
         processInput();
         processIPC();
-        syncWindowLifecycle();
-        updateApps();
         tickCursorBlink();
         renderFrame();
 
@@ -142,7 +122,6 @@ void Compositor::run() {
         }
         ++m_loopTicks;
     }
-    // Cleanup happens in ~Compositor()
 }
 
 // ============================================================
@@ -159,64 +138,110 @@ void Compositor::processInput() {
 
 void Compositor::processIPC() {
     for (const auto& msg : m_ipcManager.pollMessages()) {
-        std::cout << "[LCL IPC SECURITY] Message from authenticated Client (PID: "
-                  << msg.pid << ", UID: " << msg.uid << "): '" << msg.command << "'\n";
+        // --- SURFACE_CREATE: register a window on the compositor canvas ---
+        bool isSurfaceCreate = (msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceCreate) ||
+                               (msg.command.rfind("SURFACE_CREATE:", 0) == 0);
+        bool isAttachBuffer  = (msg.header.opcode == lcl::protocol::LCLOpcode::AttachBuffer) ||
+                               (msg.command.rfind("ATTACH_BUFFER:", 0) == 0);
 
-        if (msg.command == "SPAWN_TERMINAL") {
-            handleSpawnTerminal(msg, /*waitMode=*/false);
-        } else if (msg.command == "SPAWN_TERMINAL_WAIT") {
-            handleSpawnTerminal(msg, /*waitMode=*/true);
-        } else if (msg.command == "DESTROY_LAST_WINDOW") {
-            handleDestroyLastWindow();
-        }
-    }
-}
+        if (isSurfaceCreate) {
+            uint32_t surfId = 1;
+            std::string title = "LCL Terminal";
+            int winX = DisplayScale::px(80);
+            int winY = DisplayScale::px(60);
+            int winW = DisplayScale::px(540);
+            int winH = DisplayScale::px(360);
 
-void Compositor::syncWindowLifecycle() {
-    // Remove apps whose window was closed via the UI close button
-    const auto& activeWins = m_windowManager.getWindows();
-    for (auto it = m_apps.begin(); it != m_apps.end(); ) {
-        uint32_t winId = static_cast<uint32_t>((*it)->getWindowId());
-        bool exists = std::any_of(activeWins.begin(), activeWins.end(),
-                                  [winId](const render::Window& w) { return w.id == winId; });
-        if (!exists) {
-            std::cout << "[LCL Compositor] Window ID " << winId
-                      << " closed via UI button. Destroying process.\n";
-            sendAck((*it)->getAckClientFd());
-            (*it)->shutdown();
-            it = m_apps.erase(it);
-            m_needsRedraw = true;
-        } else {
-            ++it;
-        }
-    }
-}
-
-void Compositor::updateApps() {
-    for (auto it = m_apps.begin(); it != m_apps.end(); ) {
-        auto& app = *it;
-
-        // Poll PTY output; mark window dirty if new content arrived
-        if (app->update()) {
-            uint32_t winId = static_cast<uint32_t>(app->getWindowId());
-            for (auto& w : m_windowManager.getWindowsMutable()) {
-                if (w.id == winId) { w.markDirty(); break; }
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
+                auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
+                surfId = sm->surfaceId;
+                if (sm->title[0]) title = sm->title;
+                if (sm->x > 0) winX = sm->x;
+                if (sm->y > 0) winY = sm->y;
+                if (sm->width > 0) winW = sm->width;
+                if (sm->height > 0) winH = sm->height;
             }
-            m_needsRedraw = true;
-        }
 
-        // Remove apps whose shell process has exited
-        if (!app->isAlive()) {
-            uint32_t winId = static_cast<uint32_t>(app->getWindowId());
-            std::cout << "[LCL Compositor] Terminal App (Window ID: " << winId
-                      << ") process exited.\n";
-            sendAck(app->getAckClientFd());
-            m_windowManager.removeWindow(winId);
-            app->shutdown();
-            it = m_apps.erase(it);
+            if (m_surfaces.find(surfId) == m_surfaces.end()) {
+                SurfaceEntry entry{};
+                entry.windowId = m_windowManager.createWindow(
+                    title, winX, winY, winW, winH,
+                    ::lcl::theme::UI::WindowTitleFocused);
+                entry.width  = static_cast<uint32_t>(winW);
+                entry.height = static_cast<uint32_t>(winH);
+                entry.stride = entry.width * 4;
+                m_surfaces[surfId] = entry;
+                std::cout << "[LCL Compositor] Created Window (ID: " << entry.windowId
+                          << ") for Surface " << surfId
+                          << " from client PID " << msg.pid << "\n";
+                m_needsRedraw = true;
+            }
+
+        // --- ATTACH_BUFFER: mmap the SCM_RIGHTS memfd into compositor address space ---
+        } else if (isAttachBuffer) {
+            uint32_t surfId = 1;
+            uint32_t w = 540, h = 360, stride = 540 * 4;
+
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgAttachBuffer)) {
+                auto* bm = reinterpret_cast<const lcl::protocol::LCLMsgAttachBuffer*>(msg.payload.data());
+                surfId = bm->surfaceId;
+                w = bm->width;
+                h = bm->height;
+                stride = bm->stride > 0 ? bm->stride : w * 4;
+            }
+
+            int fd = msg.passedFd;
+            if (fd >= 0) {
+                size_t shmSize = static_cast<size_t>(stride) * h;
+                void* pixels = mmap(nullptr, shmSize, PROT_READ, MAP_SHARED, fd, 0);
+                if (pixels != MAP_FAILED) {
+                    // Ensure surface exists
+                    if (m_surfaces.find(surfId) == m_surfaces.end()) {
+                        SurfaceEntry entry{};
+                        int winX = DisplayScale::px(80);
+                        int winY = DisplayScale::px(60);
+                        entry.windowId = m_windowManager.createWindow(
+                            "LCL Terminal", winX, winY, w, h,
+                            ::lcl::theme::UI::WindowTitleFocused);
+                        entry.width  = w;
+                        entry.height = h;
+                        entry.stride = stride;
+                        m_surfaces[surfId] = entry;
+                    }
+
+                    auto& entry = m_surfaces[surfId];
+                    if (entry.pixels && entry.shmSize > 0) {
+                        munmap(entry.pixels, entry.shmSize);
+                    }
+                    entry.pixels  = pixels;
+                    entry.shmSize = shmSize;
+                    entry.width   = w;
+                    entry.height  = h;
+                    entry.stride  = stride;
+                    entry.shmFd   = fd;
+                    std::cout << "[LCL Compositor] Attached SHM Buffer (FD: " << fd
+                              << ", " << w << "x" << h << ") for Surface " << surfId
+                              << " from client PID " << msg.pid << "\n";
+                } else {
+                    std::cerr << "[DEBUG-COMP ERROR] mmap failed for memfd " << fd
+                              << ": " << strerror(errno) << "\n";
+                }
+                m_needsRedraw = true;
+            } else if (m_surfaces.find(surfId) != m_surfaces.end() && m_surfaces[surfId].pixels) {
+                // Buffer commit notification for existing attached SHM buffer
+                m_needsRedraw = true;
+            }
+
+        } else if (msg.command == "SPAWN_TERMINAL") {
+            int x = DisplayScale::px(80);
+            int y = DisplayScale::px(60);
+            uint32_t winId = m_windowManager.createWindow(
+                "LCL Terminal", x, y,
+                DisplayScale::px(DisplayScale::kDefaultWinW),
+                DisplayScale::px(DisplayScale::kDefaultWinH),
+                ::lcl::theme::UI::WindowTitleFocused);
+            std::cout << "[LCL Compositor] Created window surface (ID: " << winId << ") for client PID " << msg.pid << "\n";
             m_needsRedraw = true;
-        } else {
-            ++it;
         }
     }
 }
@@ -234,66 +259,65 @@ void Compositor::tickCursorBlink() {
 void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
 
+    // --- Build legacy WindowRenderContent list (text-based fallback for windows without SHM) ---
     std::vector<render::WindowRenderContent> contents;
-    contents.reserve(m_apps.size());
-    for (const auto& app : m_apps) {
-        contents.push_back(app->getRenderContent());
+    for (const auto& win : m_windowManager.getWindows()) {
+        bool hasShmBuffer = false;
+        for (const auto& [surfId, entry] : m_surfaces) {
+            if (entry.windowId == win.id && entry.pixels) {
+                hasShmBuffer = true;
+                break;
+            }
+        }
+        if (!hasShmBuffer) {
+            render::WindowRenderContent c;
+            c.windowId = win.id;
+            c.lines = {
+                "LCL OS Desktop",
+                "Waiting for client surface buffer..."
+            };
+            c.cursorCol = 0;
+            contents.push_back(c);
+        }
     }
 
+    // --- Begin Skia frame ---
+    m_renderer.getSkiaRenderer()->beginFrame();
+
+    // 1. Black desktop background
+    m_renderer.clear(0xFF000000);
+
+    // 2. Render windows with text-content fallback
     m_renderer.renderDesktop(m_windowManager, contents);
+
+    // 3. Composite IPC client SHM framebuffers on top of their windows
+    for (const auto& [surfId, entry] : m_surfaces) {
+        if (!entry.pixels) continue;
+
+        // Find the matching window to get its position
+        const render::Window* win = nullptr;
+        for (const auto& w : m_windowManager.getWindows()) {
+            if (w.id == entry.windowId) { win = &w; break; }
+        }
+        if (!win) continue;
+
+        // Draw SHM pixel buffer inside window content area (below title bar)
+        using core::DisplayScale;
+        int dstX = win->x;
+        int dstY = win->y + DisplayScale::titleBarHeight();
+        int srcW = static_cast<int>(entry.width);
+        int srcH = static_cast<int>(entry.height);
+        int stridePixels = static_cast<int>(entry.stride / 4);
+
+        m_renderer.getSkiaRenderer()->drawBuffer(
+            dstX, dstY, srcW, srcH,
+            reinterpret_cast<const uint32_t*>(entry.pixels),
+            stridePixels, 1.0f);
+    }
+
     m_renderer.swapBuffers();
     m_windowManager.clearAllDirty();
     m_needsRedraw = false;
-}
-
-// ============================================================
-// IPC Command Handlers
-// ============================================================
-
-void Compositor::handleSpawnTerminal(const IPCClientMessage& msg, bool waitMode) {
-    int x = DisplayScale::px(80 + static_cast<int>(m_apps.size() * 40));
-    int y = DisplayScale::px(60 + static_cast<int>(m_apps.size() * 30));
-
-    uint32_t winId = m_windowManager.createWindow(
-        "LCL Terminal", x, y,
-        DisplayScale::px(DisplayScale::kDefaultWinW),
-        DisplayScale::px(DisplayScale::kDefaultWinH),
-        lcl::theme::UI::WindowTitleFocused);
-
-    auto app = std::make_unique<apps::TerminalApp>();
-    app->initialize(winId);
-    if (waitMode) {
-        app->setAckClientFd(msg.clientFd);
-    }
-
-    std::cout << "[LCL Compositor] Dynamically spawned GUI Terminal Window (ID: "
-              << winId << (waitMode ? " [blocking -w mode]" : "") << ") on desktop!\n";
-
-    m_apps.push_back(std::move(app));
-    m_needsRedraw = true;
-}
-
-void Compositor::handleDestroyLastWindow() {
-    if (m_apps.size() > 1) {
-        auto& last = m_apps.back();
-        uint32_t winId = static_cast<uint32_t>(last->getWindowId());
-        std::cout << "[LCL Compositor] DESTROY_LAST_WINDOW: Destroying Window ID " << winId
-                  << " and terminating process group due to SIGINT cancel.\n";
-        m_windowManager.removeWindow(winId);
-        last->shutdown();
-        m_apps.pop_back();
-        m_needsRedraw = true;
-    }
-}
-
-// ============================================================
-// Helpers
-// ============================================================
-
-void Compositor::sendAck(int fd) {
-    if (fd >= 0) {
-        IPCManager::sendResponse(fd, "DONE");
-    }
 }
 
 } // namespace lcl::core

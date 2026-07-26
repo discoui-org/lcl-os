@@ -3,7 +3,9 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <unordered_map>
 #include <vector>
+#include <cstdint>
 
 #include "core/display/display_manager.hpp"
 #include "core/input/input_manager.hpp"
@@ -11,33 +13,24 @@
 #include "core/session/startup_manager.hpp"
 #include "render/renderer.hpp"
 #include "render/window_manager.hpp"
-#include "apps/terminal/terminal_app.hpp"
 
 namespace lcl::core {
 
 /**
- * @brief LCL Compositor — Top-level orchestrator owning all subsystems and
- *        driving the main frame/event loop.
+ * @brief LCL Compositor — Pure Display Server & Compositor orchestrator.
  *
  * Responsibilities:
  *  - Subsystem initialization and ordered shutdown
- *  - IPC message dispatch (SPAWN_TERMINAL, DESTROY_LAST_WINDOW)
- *  - Window ↔ App lifecycle synchronization
- *  - PTY process health tracking
+ *  - IPC message and protocol packet dispatch
+ *  - Direct DRM/KMS and EGL hardware-accelerated frame composition
  *  - Frame pacing at target display refresh rate
- *
- * Usage:
- *  @code
- *  Compositor c;
- *  if (c.initialize()) c.run();
- *  @endcode
  */
 class Compositor {
 public:
     Compositor();
     ~Compositor();
 
-    // Non-copyable, non-moveable (owns subsystems by value)
+    // Non-copyable, non-moveable
     Compositor(const Compositor&) = delete;
     Compositor& operator=(const Compositor&) = delete;
 
@@ -60,32 +53,24 @@ public:
 
     bool isRunning() const noexcept { return m_running.load(); }
 
+    /// Per-IPC-surface metadata tracked by the compositor.
+    struct SurfaceEntry {
+        uint32_t windowId{0};    ///< Corresponding WindowManager window id
+        int      shmFd{-1};     ///< memfd descriptor received via SCM_RIGHTS
+        void*    pixels{nullptr};///< mmap'd pixel pointer into the SHM buffer
+        uint32_t width{0};
+        uint32_t height{0};
+        uint32_t stride{0};     ///< Row stride in bytes
+        size_t   shmSize{0};    ///< Total SHM buffer bytes
+    };
+
 private:
-    // ----------------------------------------------------------------
-    // Per-tick processing — called once per frame in run()
-    // ----------------------------------------------------------------
     void processInput();
     void processIPC();
-    void syncWindowLifecycle(); ///< Remove apps whose UI close button was clicked
-    void updateApps();          ///< Poll PTY output; clean up exited processes
     void tickCursorBlink();
     void renderFrame();
 
-    // ----------------------------------------------------------------
-    // IPC command handlers
-    // ----------------------------------------------------------------
-    void handleSpawnTerminal(const IPCClientMessage& msg, bool waitMode);
-    void handleDestroyLastWindow();
-
-    // ----------------------------------------------------------------
-    // Helpers
-    // ----------------------------------------------------------------
-    /// Send "DONE" ACK over client socket fd; no-op if fd < 0.
-    void sendAck(int fd);
-
-    // ----------------------------------------------------------------
     // Subsystems — declared in init order, destructed in reverse
-    // ----------------------------------------------------------------
     DisplayManager         m_displayManager;
     InputManager           m_inputManager;
     IPCManager             m_ipcManager;
@@ -93,14 +78,10 @@ private:
     render::Renderer       m_renderer;
     render::WindowManager  m_windowManager;
 
-    // ----------------------------------------------------------------
-    // Application registry
-    // ----------------------------------------------------------------
-    std::vector<std::unique_ptr<apps::TerminalApp>> m_apps;
+    /// IPC surface registry: surfaceId → SurfaceEntry
+    std::unordered_map<uint32_t, SurfaceEntry> m_surfaces;
 
-    // ----------------------------------------------------------------
     // Loop state
-    // ----------------------------------------------------------------
     std::atomic<bool>                    m_running{true};
     bool                                 m_initialized{false};
     bool                                 m_needsRedraw{true};

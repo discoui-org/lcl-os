@@ -8,19 +8,12 @@
 #include <xf86drmMode.h>
 #include "core/display/display_manager.hpp"
 #include "render/window_manager.hpp"
+#include "render/render_types.hpp"
 
 #include "render/font_renderer.hpp"
 #include "render/skia_renderer.hpp"
 
 namespace lcl::render {
-
-struct WindowRenderContent {
-    uint32_t windowId{0};
-    std::vector<std::string> lines;
-    std::string suggestion;
-    int cursorCol{-1};
-    bool forceCursorSolid{false};
-};
 
 struct Color {
     uint8_t r{0};

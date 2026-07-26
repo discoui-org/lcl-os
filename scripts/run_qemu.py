@@ -21,6 +21,7 @@ BUILD_DIR = ROOT_DIR / "build"
 BINARY = BUILD_DIR / "lcl-core"
 OPEN_BIN = BUILD_DIR / "lcl-open"
 WM_BIN = BUILD_DIR / "lcl-desktop-wm"
+TERM_BIN = BUILD_DIR / "lcl-terminal"
 INITRAMFS_DIR = BUILD_DIR / "initramfs_root"
 INITRAMFS_IMG = BUILD_DIR / "initramfs.cpio.gz"
 CACHE_DIR = BUILD_DIR / "qemu-cache"
@@ -468,6 +469,9 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
 
     if WM_BIN.is_file():
         shutil.copy2(WM_BIN, dest_bin / "lcl-desktop-wm")
+
+    if TERM_BIN.is_file():
+        shutil.copy2(TERM_BIN, dest_bin / "lcl-terminal")
 
     term_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "Terminal.app"
     (term_app / "bin").mkdir(parents=True, exist_ok=True)

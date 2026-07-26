@@ -62,8 +62,9 @@ bool recvMsgWithFd(int socketFd, LCLHeader& header, std::vector<uint8_t>& payloa
     msg.msg_control = cmsgu.control;
     msg.msg_controllen = sizeof(cmsgu.control);
 
-    ssize_t n = recvmsg(socketFd, &msg, 0);
-    if (n <= 0) return false;
+    // Use MSG_DONTWAIT so non-blocking sockets return EAGAIN cleanly
+    ssize_t n = recvmsg(socketFd, &msg, MSG_DONTWAIT);
+    if (n <= 0) return false;  // includes EAGAIN (errno set), closed, or error
     if (n < static_cast<ssize_t>(sizeof(LCLHeader))) return false;
     if (header.magic != LCL_PROTOCOL_MAGIC) return false;
 
@@ -74,13 +75,21 @@ bool recvMsgWithFd(int socketFd, LCLHeader& header, std::vector<uint8_t>& payloa
         std::memcpy(&receivedFd, CMSG_DATA(cmsg), sizeof(int));
     }
 
-    // Read payload if specified
+    // Read payload if specified — use blocking read since header already received
     payload.clear();
-    if (header.payloadSize > 0) {
+    if (header.payloadSize > 0 && header.payloadSize < 65536) {
         payload.resize(header.payloadSize);
-        ssize_t pBytes = read(socketFd, payload.data(), header.payloadSize);
-        if (pBytes < static_cast<ssize_t>(header.payloadSize)) {
-            return false;
+        size_t bytesRead = 0;
+        while (bytesRead < header.payloadSize) {
+            ssize_t pBytes = read(socketFd, payload.data() + bytesRead, header.payloadSize - bytesRead);
+            if (pBytes <= 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    // Short spin: payload immediately follows header in the same send
+                    continue;
+                }
+                return false;
+            }
+            bytesRead += static_cast<size_t>(pBytes);
         }
     }
 

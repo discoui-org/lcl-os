@@ -5,7 +5,7 @@
 #include <chrono>
 #include "core/terminal/pty_manager.hpp"
 #include "core/input/input_manager.hpp"
-#include "render/renderer.hpp"
+#include "render/render_types.hpp"
 
 namespace lcl::apps {
 
