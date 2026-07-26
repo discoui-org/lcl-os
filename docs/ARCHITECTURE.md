@@ -86,7 +86,7 @@ The LCL architecture consists of 4 main decoupled layers:
 ```text
 lcl-os/
 ├── Makefile                        # make build | qemu | qemu NATIVE=1
-├── CMakeLists.txt                  # Root CMake build configuration
+├── CMakeLists.txt                  # Root CMake build configuration (with BUILD_TESTS support)
 ├── assets/                         # System fonts and visual assets
 │   └── fonts/                      # TrueType font assets (JetBrains Mono, Inter)
 ├── docs/                           # Documentation & Agent prompts
@@ -95,10 +95,15 @@ lcl-os/
 │   └── GEMINI_NEW_INSTANCE_PROMPT.md # Gemini instance bootstrapper prompt
 ├── scripts/                        # System build & QEMU launcher
 │   ├── run_qemu.py                 # Cross-platform QEMU launcher (Linux/macOS/Windows)
-│   ├── run_qemu.sh                 # Thin wrapper → run_qemu.py
+│   ├── run_qemu.sh                 # Thin wrapper -> run_qemu.py
 │   ├── Dockerfile.qemu             # linux/amd64 builder image (macOS/Windows)
 │   └── fetch_fonts.sh              # Font asset fetcher
 ├── shell/                          # Shell Presentation Layer
+├── tests/                          # CTest & GoogleTest native unit testing suite
+│   ├── test_lcl_protocol.cpp       # IPC binary protocol & header tests
+│   ├── test_app_bundle_parser.cpp  # .app bundle metadata parsing & directory scan
+│   ├── test_display_scale.cpp      # HiDPI scale factor & pixel conversion math
+│   └── test_ipc_manager.cpp        # Unix Domain Socket & SO_PEERCRED authentication
 └── src/                            # Core C++20 Engine & Applications
     ├── main.cpp                    # Application entry point & compositor loop
     ├── apps/                       # Native system applications
@@ -116,10 +121,14 @@ lcl-os/
 
 ### Build & QEMU (dev hosts)
 
-**Always Docker** for compile + kernel/initramfs (`scripts/Dockerfile.qemu`, Ubuntu amd64).  
-The host OS kernel/modules are never packaged (avoids CachyOS/Arch DRM breakage).  
-QEMU itself runs on the host.
+**Host-side Fast Unit Testing** (Runs in ~0.03 seconds natively on Linux host without QEMU):
+```bash
+cmake -B build -DBUILD_TESTS=ON
+cmake --build build --target lcl_unit_tests
+ctest --test-dir build --output-on-failure
+```
 
+**System Integration & Compositor Execution (QEMU Docker Builder)**:
 ```bash
 make qemu            # default 1280x800, host refresh rate
 make qemu NATIVE=1   # host resolution + scale + fullscreen

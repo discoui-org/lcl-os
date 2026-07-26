@@ -114,3 +114,41 @@ target_include_directories(lcl-terminal PRIVATE
 target_link_libraries(lcl-terminal PRIVATE
     Threads::Threads
 )
+
+# Unit Testing Framework Configuration
+option(BUILD_TESTS "Build LCL OS unit tests" ON)
+
+if(BUILD_TESTS)
+    enable_testing()
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    add_executable(lcl_unit_tests
+        tests/test_lcl_protocol.cpp
+        tests/test_app_bundle_parser.cpp
+        tests/test_display_scale.cpp
+        tests/test_ipc_manager.cpp
+        src/core/ipc/lcl_protocol.cpp
+        src/core/ipc/ipc_manager.cpp
+        src/core/app/app_bundle_parser.cpp
+        src/core/display/display_scale.cpp
+    )
+
+    target_include_directories(lcl_unit_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(lcl_unit_tests PRIVATE
+        GTest::gtest_main
+        Threads::Threads
+    )
+
+    include(GoogleTest)
+    gtest_discover_tests(lcl_unit_tests)
+endif()
+
