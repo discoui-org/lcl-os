@@ -440,17 +440,7 @@ void Renderer::drawWindowFrame(int x, int y, int width, int height, const std::s
 
 void Renderer::renderLCLDesktopShell(const std::string& statusMessage) {
     (void)statusMessage;
-    using core::DisplayScale;
-    clear(lcl::theme::UI::Wallpaper);
-    const int menuH = DisplayScale::menuBarHeight();
-    drawFilledRect(0, 0, m_width, menuH, lcl::theme::UI::TaskbarBg);
-    drawRect(0, menuH - 1, m_width, 1, lcl::theme::UI::TaskbarBorder);
-    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6), DisplayScale::px(80), DisplayScale::px(28), lcl::theme::UI::TaskbarLogoBtn);
-    drawString(DisplayScale::px(20), DisplayScale::px(12), "LCL OS", lcl::theme::UI::TaskbarLogoBtnText);
-    drawWindowFrame(DisplayScale::px(80), DisplayScale::px(80), DisplayScale::px(540), DisplayScale::px(360),
-                    "LCL Terminal / Core Engine", lcl::theme::UI::WindowTitleFocused);
-    drawWindowFrame(DisplayScale::px(360), DisplayScale::px(200), DisplayScale::px(460), DisplayScale::px(300),
-                    "LCL System Monitor", lcl::theme::UI::WindowTitleBlurred);
+    clear(0xFF000000);
     drawCursor(static_cast<int>(m_width / 2), static_cast<int>(m_height / 2));
 }
 
@@ -459,11 +449,10 @@ void Renderer::renderDesktop(const WindowManager& windowManager,
     // 0. Begin Skia canvas frame
     m_skiaRenderer.beginFrame();
 
-    // 1. Layered composition in z-order
+    // 1. Layered composition on pure black display server canvas
     renderBackground();
-    renderTaskbar();
 
-    // 2. Render each window (frame + terminal content + cursor)
+    // 2. Render registered client surfaces/windows
     for (const auto& win : windowManager.getWindows()) {
         const WindowRenderContent* content = nullptr;
         for (const auto& c : windowContents) {
@@ -485,32 +474,11 @@ void Renderer::renderDesktop(const WindowManager& windowManager,
 // -----------------------------------------------------------------------
 
 void Renderer::renderBackground() {
-    clear(lcl::theme::UI::Wallpaper);
+    clear(0xFF000000);
 }
 
 void Renderer::renderTaskbar() {
-    using core::DisplayScale;
-    const int menuH = DisplayScale::menuBarHeight();
-
-    drawFilledRect(0, 0, m_width, menuH, lcl::theme::UI::TaskbarBg);
-    drawRect(0, menuH - 1, m_width, 1, lcl::theme::UI::TaskbarBorder);
-
-    // LCL logo button (left)
-    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6),
-                   DisplayScale::px(90), DisplayScale::px(28),
-                   lcl::theme::UI::TaskbarLogoBtn);
-    drawString(DisplayScale::px(20), DisplayScale::px(12),
-               "LCL Core", lcl::theme::UI::TaskbarLogoBtnText);
-
-    // Driver/version status text (right)
-    std::string hwInfo = "LCL OS v0.1.0 (" +
-        (m_displayManager && m_displayManager->isHardwareAccelerated()
-             ? m_displayManager->getDriverName() : "DRM FB") + ")";
-    const int monoW = DisplayScale::px(8);
-    drawString(static_cast<int>(m_width)
-                   - static_cast<int>(hwInfo.length()) * monoW
-                   - DisplayScale::px(20),
-               DisplayScale::px(12), hwInfo, lcl::theme::UI::TaskbarStatusText);
+    // No-op: Compositor core does not render built-in taskbars/panels (handled via lcl-protocol layer-shell clients)
 }
 
 void Renderer::renderWindowContent(const Window& win, const WindowRenderContent* content) {

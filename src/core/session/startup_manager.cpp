@@ -8,7 +8,8 @@ namespace lcl::core {
 StartupManager::StartupManager() = default;
 StartupManager::~StartupManager() = default;
 
-bool StartupManager::launchDefaultSession(render::WindowManager& windowManager, apps::TerminalApp& terminalApp) {
+bool StartupManager::launchDefaultSession(render::WindowManager& windowManager) {
+    (void)windowManager;
     std::cout << "[LCL Session] Starting LCL OS Desktop Session...\n";
 
     // 1. Discover installed .app bundles in /home/user/Applications
@@ -18,17 +19,7 @@ bool StartupManager::launchDefaultSession(render::WindowManager& windowManager, 
         std::cout << "  - " << app.name << " v" << app.version << " [" << app.bundlePath << "]\n";
     }
 
-    // 2. Spawn primary user window (LCL Terminal App) — sizes in logical units × UI scale
-    uint32_t winId = windowManager.createWindow(
-        "LCL Terminal",
-        DisplayScale::px(80),
-        DisplayScale::px(60),
-        DisplayScale::px(DisplayScale::kDefaultWinW),
-        lcl::core::DisplayScale::px(DisplayScale::kDefaultWinH),
-        lcl::theme::UI::WindowTitleFocused);
-    terminalApp.initialize(winId);
-
-    std::cout << "[LCL Session] Primary window (ID: " << winId << ") created for LCL Terminal.\n";
+    std::cout << "[LCL Session] Compositor canvas active (0 initial windows). Listening for IPC client surface registrations.\n";
     return true;
 }
 

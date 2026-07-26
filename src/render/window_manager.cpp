@@ -19,7 +19,7 @@ bool WindowManager::initialize(uint32_t screenWidth, uint32_t screenHeight) {
     m_windows.clear();
     m_initialized = true;
 
-    std::cout << "[LCL WindowManager] Initialized canvas (" << m_screenWidth << "x" << m_screenHeight << ") with 0 dummy windows.\n";
+    std::cout << "[LCL WindowManager] Initialized compositor canvas (" << m_screenWidth << "x" << m_screenHeight << ") [0 active surfaces].\n";
     return true;
 }
 

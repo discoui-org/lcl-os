@@ -20,7 +20,7 @@ public:
     /**
      * @brief Initialize default OS session startup applications.
      */
-    bool launchDefaultSession(render::WindowManager& windowManager, apps::TerminalApp& terminalApp);
+    bool launchDefaultSession(render::WindowManager& windowManager);
 
     /**
      * @brief Scan Applications directory and register available .app bundles.

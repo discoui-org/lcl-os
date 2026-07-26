@@ -98,10 +98,8 @@ bool Compositor::initialize() {
         }
     });
 
-    // --- Launch primary desktop session (Terminal App) ---
-    auto primary = std::make_unique<apps::TerminalApp>();
-    m_startupManager.launchDefaultSession(m_windowManager, *primary);
-    m_apps.push_back(std::move(primary));
+    // --- Launch primary desktop session (passive Compositor ready for IPC clients) ---
+    m_startupManager.launchDefaultSession(m_windowManager);
 
     // --- Frame pacing from DRM refresh rate ---
     uint32_t hz = (m_displayManager.isInitialized()
