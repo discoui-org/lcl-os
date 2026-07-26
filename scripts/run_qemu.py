@@ -20,6 +20,7 @@ ROOT_DIR = SCRIPT_DIR.parent
 BUILD_DIR = ROOT_DIR / "build"
 BINARY = BUILD_DIR / "lcl-core"
 OPEN_BIN = BUILD_DIR / "lcl-open"
+WM_BIN = BUILD_DIR / "lcl-desktop-wm"
 INITRAMFS_DIR = BUILD_DIR / "initramfs_root"
 INITRAMFS_IMG = BUILD_DIR / "initramfs.cpio.gz"
 CACHE_DIR = BUILD_DIR / "qemu-cache"
@@ -465,6 +466,9 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
             executable=True,
         )
 
+    if WM_BIN.is_file():
+        shutil.copy2(WM_BIN, dest_bin / "lcl-desktop-wm")
+
     term_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "Terminal.app"
     (term_app / "bin").mkdir(parents=True, exist_ok=True)
     (term_app / "assets").mkdir(parents=True, exist_ok=True)
@@ -626,8 +630,13 @@ ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
 echo "Input devices detected:"
 ls /dev/input/ 2>/dev/null || echo "  (none yet)"
 echo "Loaded drm-related modules:"
-cat /proc/modules 2>/dev/null | grep -E 'virtio|drm|bochs' || echo "  (none)"
-exec /bin/lcl-core
+/bin/lcl-core &
+sleep 0.2
+if [ -x /usr/bin/lcl-desktop-wm ]; then
+    echo "[init] Starting lcl-desktop-wm daemon..."
+    /usr/bin/lcl-desktop-wm &
+fi
+wait
 """,
         executable=True,
     )

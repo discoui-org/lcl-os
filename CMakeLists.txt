@@ -31,6 +31,7 @@ add_executable(lcl-core
     src/core/display/egl_backend.cpp
     src/core/input/input_manager.cpp
     src/core/ipc/ipc_manager.cpp
+    src/core/ipc/lcl_protocol.cpp
     src/core/session/startup_manager.cpp
     src/core/terminal/pty_manager.cpp
     src/render/font_renderer.cpp
@@ -73,8 +74,24 @@ add_executable(lcl-open
     src/tools/open_main.cpp
     src/core/app/app_bundle_parser.cpp
     src/core/ipc/ipc_manager.cpp
+    src/core/ipc/lcl_protocol.cpp
 )
 
 target_include_directories(lcl-open PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# Standalone Window Manager Daemon Target (lcl-desktop-wm)
+add_executable(lcl-desktop-wm
+    src/tools/desktop_wm_main.cpp
+    src/core/ipc/ipc_manager.cpp
+    src/core/ipc/lcl_protocol.cpp
+)
+
+target_include_directories(lcl-desktop-wm PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(lcl-desktop-wm PRIVATE
+    Threads::Threads
 )
