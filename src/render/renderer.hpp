@@ -10,6 +10,7 @@
 #include "render/window_manager.hpp"
 
 #include "render/font_renderer.hpp"
+#include "render/skia_renderer.hpp"
 
 namespace lcl::render {
 
@@ -106,6 +107,7 @@ public:
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
     uint64_t getRenderedFrames() const { return m_renderedFrames; }
+    SkiaRenderer* getSkiaRenderer() { return &m_skiaRenderer; }
 
 private:
     // --- Modular render passes (called by renderDesktop) ---
@@ -119,6 +121,7 @@ private:
 
     core::DisplayManager* m_displayManager{nullptr};
     FontRenderer m_fontRenderer;
+    SkiaRenderer m_skiaRenderer;
     uint32_t m_width{1024};
     uint32_t m_height{768};
     bool m_initialized{false};

@@ -317,6 +317,13 @@ bool DisplayManager::probeDRMResources() {
 
     if (m_drmDevice.crtc != nullptr) {
         probeRenderNode();
+
+        // Attempt EGL/GBM hardware acceleration initialization
+        if (m_eglBackend.initialize(m_drmDevice.fd, m_activeMode.width, m_activeMode.height,
+                                    m_drmDevice.crtc->crtc_id, m_drmDevice.connector->connector_id)) {
+            m_drmDevice.hasHardwareAcceleration = true;
+        }
+
         return true;
     }
 
@@ -487,6 +494,7 @@ bool DisplayManager::moveHardwareCursor(int x, int y) {
 void DisplayManager::shutdown() {
     if (!m_initialized) return;
     std::cout << "[LCL Display] Shutting down Display Subsystem...\n";
+    m_eglBackend.shutdown();
     cleanupDRMDevice();
     cleanupFBDevice();
     m_backendType = DisplayBackendType::None;

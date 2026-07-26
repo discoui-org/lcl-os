@@ -192,6 +192,10 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
         }
     }
 
+    // Initialize Skia Hardware / Software Rendering Backend
+    core::EGLBackend* eglBackend = m_displayManager ? m_displayManager->getEGLBackend() : nullptr;
+    m_skiaRenderer.initialize(m_width, m_height, eglBackend, m_softwareBackBuffer.data());
+
     // Initialize TrueType Vector Font Engine (JetBrains Mono TTF with fallback)
     std::vector<std::string> fontPaths = {
         "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
@@ -452,6 +456,9 @@ void Renderer::renderLCLDesktopShell(const std::string& statusMessage) {
 
 void Renderer::renderDesktop(const WindowManager& windowManager,
                               const std::vector<WindowRenderContent>& windowContents) {
+    // 0. Begin Skia canvas frame
+    m_skiaRenderer.beginFrame();
+
     // 1. Layered composition in z-order
     renderBackground();
     renderTaskbar();
@@ -615,9 +622,15 @@ void Renderer::renderWindowContent(const Window& win, const WindowRenderContent*
 void Renderer::swapBuffers() {
     m_renderedFrames++;
 
+    if (m_skiaRenderer.getBackendType() == SkiaBackendType::OpenGL_EGL) {
+        m_skiaRenderer.endFrame();
+        return;
+    }
+
     if (m_displayManager && m_displayManager->isInitialized()) {
+        const uint32_t* srcPixels = m_skiaRenderer.getRasterBuffer() ? m_skiaRenderer.getRasterBuffer() : m_softwareBackBuffer.data();
         if (m_usingDRMHardware && m_dumbBuffer.pixelData && m_dumbBuffer.fbId > 0) {
-            std::memcpy(m_dumbBuffer.pixelData, m_softwareBackBuffer.data(), std::min(m_dumbBuffer.size, m_softwareBackBuffer.size() * sizeof(uint32_t)));
+            std::memcpy(m_dumbBuffer.pixelData, srcPixels, std::min(m_dumbBuffer.size, m_width * m_height * sizeof(uint32_t)));
 
             int drmFd = m_displayManager->getDRMFd();
             if (drmFd >= 0) {
@@ -628,7 +641,7 @@ void Renderer::swapBuffers() {
             if (fbPixels) {
                 size_t copyBytes = std::min(static_cast<size_t>(m_width * m_height * sizeof(uint32_t)),
                                             static_cast<size_t>(m_displayManager->getFBDevice().size));
-                std::memcpy(fbPixels, m_softwareBackBuffer.data(), copyBytes);
+                std::memcpy(fbPixels, srcPixels, copyBytes);
             }
         }
     }

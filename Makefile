@@ -4,8 +4,10 @@
 #   make qemu
 #   make qemu NATIVE=1
 
+GPU ?= 0
 NATIVE ?= 0
 QEMU_NATIVE_FLAG := $(if $(filter 1 yes true on,$(NATIVE)),--native,)
+QEMU_GPU_FLAG := $(if $(filter 1 yes true on,$(GPU)),--gpu,)
 
 build compile:
 	python3 scripts/run_qemu.py --build-only
@@ -14,7 +16,7 @@ qemu-prep:
 	python3 scripts/run_qemu.py
 
 qemu:
-	python3 scripts/run_qemu.py --run $(QEMU_NATIVE_FLAG)
+	python3 scripts/run_qemu.py --run $(QEMU_NATIVE_FLAG) $(QEMU_GPU_FLAG)
 
 fonts:
 	./scripts/fetch_fonts.sh

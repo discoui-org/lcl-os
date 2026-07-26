@@ -522,6 +522,23 @@ echo "===================================================="
     for bin_path in bins:
         copy_ldd_deps(bin_path, dest_lib)
 
+    # Package Mesa DRI and GBM drivers for EGL hardware acceleration
+    log("Packaging Mesa DRI and GBM graphics drivers...")
+    dri_dirs = [
+        Path("/usr/lib/x86_64-linux-gnu/dri"),
+        Path("/usr/lib/dri"),
+        Path("/usr/lib/x86_64-linux-gnu/gbm"),
+        Path("/usr/lib/gbm"),
+    ]
+    for dri_src in dri_dirs:
+        if dri_src.is_dir():
+            dri_dst = INITRAMFS_DIR / "usr" / "lib" / "x86_64-linux-gnu" / dri_src.name
+            dri_dst.mkdir(parents=True, exist_ok=True)
+            for item in dri_src.iterdir():
+                if item.is_file():
+                    shutil.copy2(item, dri_dst / item.name, follow_symlinks=True)
+                    copy_ldd_deps(item, dest_lib)
+
     package_kernel_modules(kernel_path, INITRAMFS_DIR)
 
     # Cache kernel next to artifacts when packaging inside Docker/Linux
@@ -1255,11 +1272,20 @@ def main() -> None:
         help="Match host resolution + DPI scale (video= + lcl.scale cmdline)",
     )
     parser.add_argument(
+        "--gpu",
+        "-g",
+        action="store_true",
+        help="Enable 3D VirGL GPU acceleration in QEMU",
+    )
+    parser.add_argument(
         "--inside-docker",
         action="store_true",
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
+
+    if args.gpu:
+        os.environ["LCL_QEMU_GL"] = "1"
 
     if args.clean:
         clean_build()
