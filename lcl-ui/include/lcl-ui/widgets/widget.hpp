@@ -2,6 +2,7 @@
 
 #include "lcl-ui/core/rect.hpp"
 #include "lcl-ui/core/render_pass.hpp"
+#include "lcl-ui/core/events.hpp"
 #include "lcl-ui/layout/yoga_node.hpp"
 #include <vector>
 #include <memory>
@@ -34,16 +35,27 @@ public:
     void setVisible(bool visible) { m_visible = visible; markDirty(); }
     bool isVisible() const { return m_visible; }
 
+    void setFocusable(bool focusable) { m_focusable = focusable; }
+    bool isFocusable() const { return m_focusable; }
+
     void markDirty();
     void setRenderPass(RenderPass* pass) { m_renderPass = pass; }
 
     virtual void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f);
     virtual void draw(SkCanvas* canvas, const Rect& damageRect);
 
-    // Event handling hooks
-    virtual bool onPointerMove(float px, float py);
-    virtual bool onPointerDown(float px, float py);
-    virtual bool onPointerUp(float px, float py);
+    // Polymorphic Event Handlers (Return true if handled, false to bubble to parent)
+    virtual bool onPointerEnter(const PointerEvent& event) { (void)event; return false; }
+    virtual bool onPointerLeave(const PointerEvent& event) { (void)event; return false; }
+    virtual bool onPointerDown(const PointerEvent& event) { (void)event; return false; }
+    virtual bool onPointerUp(const PointerEvent& event) { (void)event; return false; }
+    virtual bool onPointerMove(const PointerEvent& event) { (void)event; return false; }
+    virtual bool onScroll(const PointerEvent& event) { (void)event; return false; }
+    virtual bool onKeyDown(const KeyEvent& event) { (void)event; return false; }
+    virtual bool onKeyUp(const KeyEvent& event) { (void)event; return false; }
+    virtual bool onTextInput(const TextInputEvent& event) { (void)event; return false; }
+    virtual bool onFocusGained(const FocusEvent& event) { (void)event; return false; }
+    virtual bool onFocusLost(const FocusEvent& event) { (void)event; return false; }
 
 protected:
     YogaNode m_yogaNode;
@@ -53,6 +65,7 @@ protected:
     Rect m_bounds{0.0f, 0.0f, 0.0f, 0.0f};
     Rect m_absoluteBounds{0.0f, 0.0f, 0.0f, 0.0f};
     bool m_visible{true};
+    bool m_focusable{false};
     RenderPass* m_renderPass{nullptr};
 };
 

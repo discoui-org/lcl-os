@@ -137,6 +137,7 @@ if(BUILD_TESTS)
         tests/test_display_scale.cpp
         tests/test_ipc_manager.cpp
         tests/test_lcl_ui.cpp
+        tests/test_lcl_ui_events.cpp
         src/core/ipc/lcl_protocol.cpp
         src/core/ipc/ipc_manager.cpp
         src/core/app/app_bundle_parser.cpp

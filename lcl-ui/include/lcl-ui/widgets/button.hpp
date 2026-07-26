@@ -27,9 +27,11 @@ public:
 
     ButtonState getState() const { return m_state; }
 
-    bool onPointerMove(float px, float py) override;
-    bool onPointerDown(float px, float py) override;
-    bool onPointerUp(float px, float py) override;
+    // Phase 1.5 Event Handlers
+    bool onPointerEnter(const PointerEvent& event) override;
+    bool onPointerLeave(const PointerEvent& event) override;
+    bool onPointerDown(const PointerEvent& event) override;
+    bool onPointerUp(const PointerEvent& event) override;
 
     void draw(SkCanvas* canvas, const Rect& damageRect) override;
 

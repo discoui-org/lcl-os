@@ -16,6 +16,7 @@ FetchContent_MakeAvailable(yoga)
 add_library(lcl-ui STATIC
     src/core/rect.cpp
     src/core/render_pass.cpp
+    src/core/event_dispatcher.cpp
     src/layout/yoga_node.cpp
     src/widgets/widget.cpp
     src/widgets/container.cpp

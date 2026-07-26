@@ -65,31 +65,4 @@ void Widget::draw(SkCanvas* canvas, const Rect& damageRect) {
     }
 }
 
-bool Widget::onPointerMove(float px, float py) {
-    if (!m_visible || !m_absoluteBounds.containsPoint(px, py)) return false;
-
-    for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
-        if ((*it)->onPointerMove(px, py)) return true;
-    }
-    return true;
-}
-
-bool Widget::onPointerDown(float px, float py) {
-    if (!m_visible || !m_absoluteBounds.containsPoint(px, py)) return false;
-
-    for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
-        if ((*it)->onPointerDown(px, py)) return true;
-    }
-    return true;
-}
-
-bool Widget::onPointerUp(float px, float py) {
-    if (!m_visible || !m_absoluteBounds.containsPoint(px, py)) return false;
-
-    for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
-        if ((*it)->onPointerUp(px, py)) return true;
-    }
-    return true;
-}
-
 } // namespace lcl::ui

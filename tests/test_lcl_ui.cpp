@@ -105,15 +105,18 @@ TEST(LclUiTest, ButtonStateAndClick) {
     EXPECT_EQ(btn->getState(), ButtonState::Normal);
 
     // Hover
-    btn->onPointerMove(10.0f, 10.0f);
+    PointerEvent moveEv{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Enter};
+    btn->onPointerEnter(moveEv);
     EXPECT_EQ(btn->getState(), ButtonState::Hover);
 
     // Mouse Down
-    btn->onPointerDown(10.0f, 10.0f);
+    PointerEvent downEv{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down};
+    btn->onPointerDown(downEv);
     EXPECT_EQ(btn->getState(), ButtonState::Active);
 
     // Mouse Up -> triggers click
-    btn->onPointerUp(10.0f, 10.0f);
+    PointerEvent upEv{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Up};
+    btn->onPointerUp(upEv);
     EXPECT_TRUE(clicked);
     EXPECT_EQ(btn->getState(), ButtonState::Hover);
 }

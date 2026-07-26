@@ -11,6 +11,8 @@ Button::Button(const std::string& label) {
     m_yogaNode.setPadding(YGEdgeVertical, 8.0f);
     m_yogaNode.setJustifyContent(YGJustifyCenter);
     m_yogaNode.setAlignItems(YGAlignCenter);
+
+    setFocusable(true);
 }
 
 void Button::setLabel(const std::string& label) {
@@ -30,41 +32,37 @@ void Button::setState(ButtonState newState) {
     }
 }
 
-bool Button::onPointerMove(float px, float py) {
-    bool inside = m_absoluteBounds.containsPoint(px, py);
-    if (inside) {
-        if (m_state != ButtonState::Active) {
-            setState(ButtonState::Hover);
-        }
-        return true;
-    } else {
-        setState(ButtonState::Normal);
-        return false;
+bool Button::onPointerEnter(const PointerEvent& event) {
+    (void)event;
+    if (m_state != ButtonState::Active) {
+        setState(ButtonState::Hover);
     }
+    return true;
 }
 
-bool Button::onPointerDown(float px, float py) {
-    if (m_absoluteBounds.containsPoint(px, py)) {
-        setState(ButtonState::Active);
-        return true;
-    }
-    return false;
+bool Button::onPointerLeave(const PointerEvent& event) {
+    (void)event;
+    setState(ButtonState::Normal);
+    return true;
 }
 
-bool Button::onPointerUp(float px, float py) {
-    if (m_state == ButtonState::Active && m_absoluteBounds.containsPoint(px, py)) {
+bool Button::onPointerDown(const PointerEvent& event) {
+    (void)event;
+    setState(ButtonState::Active);
+    return true;
+}
+
+bool Button::onPointerUp(const PointerEvent& event) {
+    (void)event;
+    if (m_state == ButtonState::Active) {
         setState(ButtonState::Hover);
         if (m_onClick) {
             m_onClick();
         }
         return true;
     }
-    if (m_absoluteBounds.containsPoint(px, py)) {
-        setState(ButtonState::Hover);
-    } else {
-        setState(ButtonState::Normal);
-    }
-    return false;
+    setState(ButtonState::Hover);
+    return true;
 }
 
 void Button::draw(SkCanvas* canvas, const Rect& damageRect) {
