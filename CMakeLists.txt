@@ -115,6 +115,9 @@ target_link_libraries(lcl-terminal PRIVATE
     Threads::Threads
 )
 
+# Subdirectories
+add_subdirectory(lcl-ui)
+
 # Unit Testing Framework Configuration
 option(BUILD_TESTS "Build LCL OS unit tests" ON)
 
@@ -133,22 +136,31 @@ if(BUILD_TESTS)
         tests/test_app_bundle_parser.cpp
         tests/test_display_scale.cpp
         tests/test_ipc_manager.cpp
+        tests/test_lcl_ui.cpp
         src/core/ipc/lcl_protocol.cpp
         src/core/ipc/ipc_manager.cpp
         src/core/app/app_bundle_parser.cpp
         src/core/display/display_scale.cpp
     )
 
+    target_compile_options(lcl_unit_tests PRIVATE -frtti)
+    target_compile_options(gtest PRIVATE -frtti)
+    target_compile_options(gtest_main PRIVATE -frtti)
+
     target_include_directories(lcl_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
     )
 
     target_link_libraries(lcl_unit_tests PRIVATE
-        GTest::gtest_main
+        gtest_main
+        gtest
         Threads::Threads
+        lcl-ui
     )
 
     include(GoogleTest)
     gtest_discover_tests(lcl_unit_tests)
 endif()
+
 
