@@ -1136,12 +1136,33 @@ def validate_kernel(kernel: Path) -> None:
         log(f"WARNING: {kernel} may not be a bzImage (HdrS missing). QEMU -kernel might fail.")
 
 
-def launch_qemu(kernel: Path, native: bool = False) -> None:
+def find_ovmf_firmware() -> Path | None:
+    candidates = [
+        Path("/usr/share/edk2/x64/OVMF_CODE.4m.fd"),
+        Path("/usr/share/edk2/x64/OVMF_CODE.fd"),
+        Path("/usr/share/OVMF/OVMF_CODE.fd"),
+        Path("/usr/share/ovmf/OVMF.fd"),
+        Path("/usr/share/qemu/OVMF.fd"),
+        Path("/usr/share/edk2/x64/OVMF.4m.fd"),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def launch_qemu(
+    kernel: Path,
+    native: bool = False,
+    iso_mode: bool = False,
+    uefi_mode: bool = False,
+) -> None:
     qemu = find_qemu()
-    if not INITRAMFS_IMG.is_file():
-        err(f"Missing initramfs: {INITRAMFS_IMG}")
-        sys.exit(1)
-    validate_kernel(kernel)
+    if not iso_mode:
+        if not INITRAMFS_IMG.is_file():
+            err(f"Missing initramfs: {INITRAMFS_IMG}")
+            sys.exit(1)
+        validate_kernel(kernel)
 
     memory = "2G"
     cpus = "2"
@@ -1243,11 +1264,15 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
             )
             if scale > 1.01:
                 print("  - HiDPI: physical FB + scaled UI (sharp Retina path)")
+    print(f"  - Boot Mode: {'ISO CD-ROM (' + ('UEFI' if uefi_mode else 'BIOS') + ')' if iso_mode else 'Direct Kernel Boot'}")
     print(f"  - Accelerator: {' '.join(accel)}")
     print(f"  - GPU: {' '.join(gpu)}{'  (LCL_QEMU_GL=1 for VirGL)' if not want_gl else ''}")
     print(f"  - Display: {display[1]}")
-    print(f"  - Kernel: {kernel}")
-    print(f"  - Initrd: {INITRAMFS_IMG}")
+    if iso_mode:
+        print(f"  - ISO Image: {BUILD_DIR / 'lcl-os.iso'}")
+    else:
+        print(f"  - Kernel: {kernel}")
+        print(f"  - Initrd: {INITRAMFS_IMG}")
     print("----------------------------------------------------")
 
     # Resolution -> DRM/KMS via kernel video= + lcl.width/height (DisplayManager picks mode)
@@ -1261,24 +1286,44 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
     if host.physical_width and host.physical_height:
         lcl_params += f" lcl.physical={host.physical_width}x{host.physical_height}"
 
-    # Keep early messages on tty0 so a hung GPU still shows progress (not frozen SeaBIOS text).
-    # Serial mirrors the same log on the host terminal.
     append = (
         f"console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200 "
         f"{video_mode} {lcl_params} "
         f"rdinit=/init loglevel=6"
     )
+
     cmd = [
         qemu,
         *accel,
         "-machine",
         "q35",
-        "-kernel",
-        str(kernel),
-        "-initrd",
-        str(INITRAMFS_IMG),
-        "-append",
-        append,
+    ]
+
+    if uefi_mode:
+        ovmf = find_ovmf_firmware()
+        if not ovmf:
+            err("UEFI requested (--uefi), but OVMF firmware file not found.")
+            sys.exit(1)
+        log(f"UEFI boot mode enabled. Firmware: {ovmf}")
+        cmd.extend(["-drive", f"if=pflash,format=raw,readonly=on,file={ovmf}"])
+
+    if iso_mode:
+        iso_path = BUILD_DIR / "lcl-os.iso"
+        if not iso_path.is_file():
+            err(f"Missing ISO file: {iso_path}. Please run 'make iso' first.")
+            sys.exit(1)
+        cmd.extend(["-boot", "d", "-cdrom", str(iso_path)])
+    else:
+        cmd.extend([
+            "-kernel",
+            str(kernel),
+            "-initrd",
+            str(INITRAMFS_IMG),
+            "-append",
+            append,
+        ])
+
+    cmd.extend([
         "-m",
         memory,
         "-smp",
@@ -1293,7 +1338,7 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
         "-serial",
         "stdio",
         "-no-reboot",
-    ]
+    ])
     log("QEMU cmdline: " + " ".join(cmd))
     os.execvp(qemu, cmd)
 
@@ -1303,6 +1348,8 @@ def main() -> None:
     parser.add_argument("--run", "-r", action="store_true", help="Launch QEMU after packaging")
     parser.add_argument("--build-only", action="store_true", help="Only build binaries (Docker)")
     parser.add_argument("--package-only", action="store_true", help="Build + package initramfs (no QEMU)")
+    parser.add_argument("--iso", action="store_true", help="Boot from build/lcl-os.iso CD-ROM image")
+    parser.add_argument("--uefi", action="store_true", help="Use OVMF UEFI firmware for QEMU boot")
     parser.add_argument("--clean", action="store_true", help="Remove build/ directory safely")
     parser.add_argument(
         "--docker",
@@ -1360,7 +1407,7 @@ def main() -> None:
     log(f"Kernel: {kernel}")
 
     if args.run:
-        launch_qemu(kernel, native=args.native)
+        launch_qemu(kernel, native=args.native, iso_mode=args.iso, uefi_mode=args.uefi)
     else:
         log("Boot environment ready!")
         log(f"Run '{Path(sys.argv[0]).name} --run' to launch QEMU in live VM.")
