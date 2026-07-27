@@ -164,3 +164,11 @@ Guest display boot args (when `NATIVE=1`):
    - `LCLOpcode::SetDecorationMode` IPC mesajı ile istemciler `SSD` (Server-Side Decoration) veya `CSD` (Client-Side Decoration) modlarını talep eder.
    - **Masaüstü WM (`lcl-desktop-wm`):** Varsayılan olarak `SSD` modunda pencere başlık çubuğunu çizer. İstemci `CSD` talep ederse başlık çubuğu çizimini devre dışı bırakarak tüm render alanını istemciye devreder.
    - **Mobil WM (`lcl-mobile-wm`):** Mobil deneyiminde `SSD` çizimini reddederek uygulamalara tam ekran (fullscreen) uygulama alanı sağlar.
+
+---
+
+## 7. Unix Domain Socket IPC & Disconnect Detection
+
+1. **Secure Domain Socket Protocol:** Compositor IPC operates on `/tmp/lcl_compositor.sock` with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
+2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). `lcl::protocol::recvMsgWithFd()` explicitly sets `errno = ECONNRESET` to prevent stale `errno = EAGAIN` from `accept4()` from masking client disconnects.
+3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits `CLIENT_DISCONNECT` (`SurfaceDestroy`) upon socket EOF. `Compositor` unmaps SHM buffers and calls `WindowManager::removeWindow(windowId)` to immediately unregister and erase spatial window surfaces belonging to terminated client processes.
