@@ -367,8 +367,12 @@ int main() {
                 } else if (header.opcode == lcl::protocol::LCLOpcode::ConfigureBounds &&
                            payload.size() >= sizeof(lcl::protocol::LCLMsgConfigureBounds)) {
                     auto* cfg = reinterpret_cast<const lcl::protocol::LCLMsgConfigureBounds*>(payload.data());
-                    int newW = static_cast<int>(cfg->width);
-                    int newH = static_cast<int>(cfg->height);
+                    int reqW = static_cast<int>(cfg->width);
+                    int reqH = static_cast<int>(cfg->height);
+
+                    int newW = reqW;
+                    int newH = reqH;
+                    lcl::apps::TerminalApp::getSnappedDimensions(reqW, reqH, newW, newH);
 
                     if (newW > 0 && newH > 0 && (newW != curW || newH != curH)) {
                         curW = newW;

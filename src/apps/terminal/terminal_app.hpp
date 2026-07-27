@@ -42,6 +42,7 @@ public:
      */
     void clearBuffer();
     void resize(int width, int height);
+    static void getSnappedDimensions(int reqW, int reqH, int& outW, int& outH);
 
     /**
      * @brief Shut down Terminal PTY process and cleanup.

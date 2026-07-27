@@ -200,6 +200,18 @@ bool TerminalApp::update() {
     return true;
 }
 
+void TerminalApp::getSnappedDimensions(int reqW, int reqH, int& outW, int& outH) {
+    int cellW = core::DisplayScale::px(8);
+    int cellH = core::DisplayScale::px(16);
+    int pad = core::DisplayScale::windowPad();
+
+    int cols = std::max(1, (reqW - pad * 2) / cellW);
+    int rows = std::max(1, (reqH - pad * 2) / cellH);
+
+    outW = cols * cellW + pad * 2;
+    outH = rows * cellH + pad * 2;
+}
+
 void TerminalApp::resize(int width, int height) {
     if (!m_initialized) return;
 
