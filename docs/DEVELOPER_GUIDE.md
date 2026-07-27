@@ -20,36 +20,43 @@ To build the complete OS kernel tree, compositor daemon, window manager, CLI uti
 ```bash
 make
 ```
-*(Under the hood, `make` runs `python3 scripts/run_qemu.py --build-only` inside an isolated Linux docker container if host tools differ).*
+
+To build a bootable hybrid ISO (`build/lcl-os.iso`) powered by Limine bootloader:
+```bash
+make iso
+```
 
 ---
 
 ## 2. Running & Testing LCL OS in QEMU
 
-The QEMU launcher boots LCL OS directly into direct Linux DRM/KMS mode without host OS display dependencies.
-
-### 1. VirGL 3D Hardware Acceleration Mode (Recommended)
+### 1. Direct Kernel Boot Mode (Fast Development Iteration)
 ```bash
 make qemu GPU=1 NATIVE=1
 ```
-- Probes `/dev/dri/renderD128` (VirtIO-GPU).
-- Displays real-time HUD with hardware engine status: `Engine: VirGL 3D (GPU)`.
+- Direct kernel scanout via `/dev/dri/renderD128` (VirtIO-GPU VirGL 3D).
 
-### 2. Software Rasterization Mode (`llvmpipe`)
+### 2. Bootable ISO via Limine Bootloader (Legacy BIOS Mode)
 ```bash
-make qemu GPU=0 NATIVE=1
+make qemu-iso
 ```
-- Falls back to Mesa CPU rasterizer: `Engine: Mesa llvmpipe (CPU)`.
+
+### 3. Bootable ISO via Limine Bootloader (UEFI Mode)
+```bash
+make qemu-iso UEFI=1
+```
+- Loads OVMF UEFI firmware and executes `BOOTX64.EFI` from ISO.
 
 ---
 
 ## 3. Running Unit Tests & Test Suite
 
-LCL OS features a comprehensive GoogleTest CTest suite (19 test cases) validating:
+LCL OS features a comprehensive GoogleTest CTest suite (22 test cases) validating:
 - IPC Protocol header magic and message serializations
 - App Bundle (`metadata.json`) scanner and parser
 - Display scaling DPIScale calculations
 - Unix Domain Socket permission (`0600`) and kernel peer credentials (`SO_PEERCRED`)
+- Dynamic Input Hotplug (`AF_NETLINK` uevent) and Touchpad `EV_ABS` delta math
 - Yoga Flexbox layout engine tree hierarchy
 - Widget damage rectangle intersection math
 - Depth-first hit testing and event dispatcher callbacks

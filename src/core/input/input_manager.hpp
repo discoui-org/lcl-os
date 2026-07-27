@@ -90,10 +90,18 @@ private:
         bool hasRelY{false};
         bool hasAbsX{false};
         bool hasAbsY{false};
+        bool isTouchpad{false};
+
         int absXMin{0}, absXMax{1};
         int absYMin{0}, absYMax{1};
         int currentAbsX{-1};
         int currentAbsY{-1};
+
+        // Touchpad tracking
+        int lastTouchX{-1};
+        int lastTouchY{-1};
+        bool isTouching{false};
+
         bool absXUpdated{false};
         bool absYUpdated{false};
         double currentRelX{0.0};
@@ -103,6 +111,13 @@ private:
     };
     std::vector<EvdevDevice> m_evdevDevices;
 
+    bool initUeventSocket();
+    void processUeventHotplug();
+    size_t rescanEvdevDevices();
+    void performPeriodicRescan();
+
+    int m_netlinkFd{-1};
+    uint64_t m_dispatchCounter{0};
     std::string m_seatName;
     EventCallback m_eventCallback;
     bool m_initialized{false};
@@ -111,3 +126,4 @@ private:
 };
 
 } // namespace lcl::core
+

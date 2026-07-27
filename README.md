@@ -1,33 +1,14 @@
 # LCL Core Linux (LCL OS)
 
-> **Modular, High-Performance Linux Desktop Architecture & Display Server**
-> *Direct Linux DRM/KMS & evdev (No X11 / No Wayland dependencies)*
-
----
-
-## Overview
-
-**LCL OS** is a lightweight, high-performance C++20 desktop environment and display server built directly on top of the Linux Kernel DRM/KMS subsystem and `evdev` input layer. By removing traditional display server overheads (X11/Wayland), LCL OS achieves zero-stutter frame rates, hardware VSync synchronization, zero-latency cursor planes, and dynamic high-refresh-rate pacing (60Hz–250Hz+).
-
----
-
-## Architectural Highlights
-
-- **Direct DRM/KMS & EGL Backend:** Interfacing directly with `/dev/dri/card0` and `/dev/dri/renderD128` via Mesa EGL/GBM (VirGL 3D GPU acceleration or `llvmpipe` CPU fallback).
-- **Skia 2D Rendering & Vector Typography:** TrueType vector font engine with macOS-style antialiasing and subpixel rendering.
-- **Dynamic Refresh Rate Pacing & Headroom Allowance:** Hardware-agnostic monitor refresh rate detection with a ~0.5ms safety headroom allowance ($\sim 155\text{ FPS}$ preparation budget for 144Hz displays) guaranteeing zero VBlank misses and zero frame skip.
-- **Zero-Resource Idle State:** Non-busy blocking state when the desktop canvas is idle, dropping CPU utilization to $\sim 0\%$ and displaying `FPS: 0 (Idle)`.
-- **Decoupled `lcl-ui` Application Framework:** Yoga Flexbox layout engine, polymorphic widget hierarchy (`Container`, `Button`, `Text`), damage rect tracking, and custom 2D canvas drawing.
-- **Secure Unix Domain Socket IPC:** Unix Domain Socket (`/tmp/lcl_compositor.sock`) bound with strict `0600` permissions, Linux Kernel peer authentication (`SO_PEERCRED`), and zero-copy shared memory (`memfd`).
-
----
+Modular, Lightweight Linux Distribution built with C++20 and Limine bootloader. This is a custom Linux distribution built from scratch with a focus on modularity, performance, and ease of use. I made this to learn about operating systems and to create a lightweight desktop environment that is easy to use and customize. This is a work in progress and is not intended for production use but I have plans to continue developing it for my personal use.
 
 ## Project Structure
 
 ```text
 lcl-os/
+├── iso_root/                 # Limine bootloader configuration & boot tree
 ├── src/                      # Core OS Engine & Compositor
-│   ├── core/                 # DRM/KMS, EGL, Evdev Input, IPC, Session
+│   ├── core/                 # DRM/KMS, EGL, Evdev Input, Hotplug, IPC, Session
 │   ├── render/               # Skia Renderer, FontRenderer, WindowManager
 │   └── tools/                # Core System Daemons & Binaries (lcl-core, lcl-desktop-wm, lcl-terminal, lcl-open)
 ├── lcl-ui/                   # Decoupled UI Application Framework (Yoga Flexbox, Widget Tree)
@@ -38,7 +19,7 @@ lcl-os/
 │   ├── ARCHITECTURE.md       # Low-level system & architectural design
 │   ├── LCL_UI_FRAMEWORK.md   # Complete lcl-ui developer API guide
 │   └── DEVELOPER_GUIDE.md    # Build, testing, and contribution instructions
-└── scripts/                  # QEMU Isolated Boot Launcher & Packaging
+└── scripts/                  # QEMU Isolated Boot Launcher, ISO Builder & Packaging
 ```
 
 ---
@@ -48,7 +29,8 @@ lcl-os/
 ### Prerequisites
 - Linux host or Docker (the build system automatically uses an isolated Docker container `lcl-os-qemu-builder` if local toolchain is absent).
 - CMake 3.20+ and C++20 compiler (`g++-13` or `clang-16`+).
-- QEMU (`qemu-system-x86_64`) for running the direct kernel boot environment.
+- `xorriso` and `limine` (for generating bootable ISO images).
+- QEMU (`qemu-system-x86_64`) for running the test environment.
 
 ### Building
 Compile all core binaries, libraries, unit tests, and application bundles:
@@ -56,16 +38,27 @@ Compile all core binaries, libraries, unit tests, and application bundles:
 make
 ```
 
+### Building Bootable ISO Image (`build/lcl-os.iso`)
+Generate a hybrid bootable LiveUSB / ISO image for bare-metal hardware or VMs:
+```bash
+make iso
+```
+
 ### Running in QEMU Virtual Machine
 
-#### 1. Hardware VirGL 3D Mode (144Hz GPU Acceleration)
+#### 1. Fast Direct Kernel Boot (Development)
 ```bash
 make qemu GPU=1 NATIVE=1
 ```
 
-#### 2. Software Raster Mode (Mesa `llvmpipe` CPU)
+#### 2. Boot Limine ISO in Legacy BIOS Mode
 ```bash
-make qemu GPU=0 NATIVE=1
+make qemu-iso
+```
+
+#### 3. Boot Limine ISO in UEFI Mode (OVMF Firmware)
+```bash
+make qemu-iso UEFI=1
 ```
 
 ---
@@ -91,20 +84,11 @@ When LCL OS boots in QEMU, launch applications from the built-in terminal or usi
   open Terminal.app
   ```
 
----
-
-## Diagnostic Overlay & HUD
-
-LCL OS includes a real-time diagnostic HUD in the top-right corner displaying:
-- **FPS & Frame Time:** Rolling 1.0s sliding window (`FPS: 144 (6.9 ms)` or `FPS: 0 (Idle)` when canvas is static).
-- **Render Engine:** Active Mesa driver probed via GL audit (`Engine: VirGL 3D (GPU)` or `Engine: Mesa llvmpipe (CPU)`).
-- **VSync Status:** Hardware EGL VSync synchronization state (`VSync: ON`).
-
----
+--
 
 ## Running Unit Tests
 
-Run the full GoogleTest CTest suite (19 passing unit tests covering IPC protocol, bundle parsing, display scaling, Yoga layout, and event routing):
+Run the full GoogleTest CTest suite (22 passing unit tests covering IPC protocol, input hotplug/touchpad math, bundle parsing, display scaling, Yoga layout, and event routing):
 ```bash
 make test
 ```
@@ -121,4 +105,4 @@ make test
 
 ## License
 
-Copyright © 2026 LCL OS Team. All rights reserved.
+MIT License

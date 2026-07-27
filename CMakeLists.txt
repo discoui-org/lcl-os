@@ -139,12 +139,14 @@ if(BUILD_TESTS)
         tests/test_app_bundle_parser.cpp
         tests/test_display_scale.cpp
         tests/test_ipc_manager.cpp
+        tests/test_input_manager.cpp
         tests/test_lcl_ui.cpp
         tests/test_lcl_ui_events.cpp
         src/core/ipc/lcl_protocol.cpp
         src/core/ipc/ipc_manager.cpp
         src/core/app/app_bundle_parser.cpp
         src/core/display/display_scale.cpp
+        src/core/input/input_manager.cpp
     )
 
     target_compile_options(lcl_unit_tests PRIVATE -frtti)
@@ -154,6 +156,8 @@ if(BUILD_TESTS)
     target_include_directories(lcl_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+        ${LIBINPUT_INCLUDE_DIRS}
+        ${UDEV_INCLUDE_DIRS}
     )
 
     target_link_libraries(lcl_unit_tests PRIVATE
@@ -161,6 +165,8 @@ if(BUILD_TESTS)
         gtest
         Threads::Threads
         lcl-ui
+        ${LIBINPUT_LIBRARIES}
+        ${UDEV_LIBRARIES}
     )
 
     include(GoogleTest)
