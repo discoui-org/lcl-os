@@ -211,7 +211,7 @@ void Compositor::processIPC() {
                 if (sm->height > 0) winH = sm->height;
             }
 
-            uint64_t surfaceKey = (static_cast<uint64_t>(msg.clientFd) << 32) | surfId;
+            uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             if (m_surfaces.find(surfaceKey) == m_surfaces.end()) {
                 SurfaceEntry entry{};
                 int frameW = winW;
@@ -245,7 +245,7 @@ void Compositor::processIPC() {
                 stride = bm->stride > 0 ? bm->stride : w * 4;
             }
 
-            uint64_t surfaceKey = (static_cast<uint64_t>(msg.clientFd) << 32) | surfId;
+            uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             if (m_surfaces.find(surfaceKey) == m_surfaces.end()) {
                 static int spawnIndex = 0;
                 int winX = DisplayScale::px(80 + (spawnIndex % 6) * 30);

@@ -500,28 +500,16 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
         )
 
     term_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "Terminal.app"
-    (term_app / "bin").mkdir(parents=True, exist_ok=True)
     (term_app / "assets").mkdir(parents=True, exist_ok=True)
     write_text(
         term_app / "metadata.json",
         """{
     "name": "LCL Terminal",
-    "executable": "bin/terminal",
+    "executable": "/bin/lcl-terminal",
     "version": "1.0.0",
     "icon": "assets/icon.png"
 }
 """,
-    )
-    write_text(
-        term_app / "bin" / "terminal",
-        """#!/bin/sh
-echo "===================================================="
-echo "          LCL OS Terminal Subsystem App             "
-echo "===================================================="
-echo "Interactive PTY Shell active on seat0."
-echo "===================================================="
-""",
-        executable=True,
     )
 
     sysmon_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "SystemMonitor.app"
