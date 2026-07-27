@@ -41,6 +41,8 @@ uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int
     win.title = title;
     win.x = x;
     win.y = y;
+    win.pendingX = x;
+    win.pendingY = y;
     win.width = width;
     win.height = height;
     win.pendingWidth = width;
@@ -202,9 +204,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                     }
                 }
 
-                if (newX != win.x || newY != win.y || newW != win.pendingWidth || newH != win.pendingHeight) {
-                    win.x = newX;
-                    win.y = newY;
+                if (newX != win.pendingX || newY != win.pendingY || newW != win.pendingWidth || newH != win.pendingHeight) {
+                    win.pendingX = newX;
+                    win.pendingY = newY;
                     win.pendingWidth = newW;
                     win.pendingHeight = newH;
                     win.markDirty();
@@ -332,6 +334,46 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
         }
     }
     return stateChanged;
+}
+
+void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH) {
+    auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
+        return w.id == windowId;
+    });
+    if (it == m_windows.end()) return;
+
+    Window& win = *it;
+    int finalX = win.pendingX;
+    int finalY = win.pendingY;
+
+    // Generic opposite-edge anchor offset for client surface buffers (e.g. monospace character cell snapping)
+    if (win.isResizing) {
+        int diffW = win.pendingWidth - frameW;
+        int diffH = win.pendingHeight - frameH;
+
+        if (win.resizeEdge == ResizeEdge::Left ||
+            win.resizeEdge == ResizeEdge::TopLeft ||
+            win.resizeEdge == ResizeEdge::BottomLeft) {
+            finalX += diffW;
+        }
+        if (win.resizeEdge == ResizeEdge::Top ||
+            win.resizeEdge == ResizeEdge::TopLeft ||
+            win.resizeEdge == ResizeEdge::TopRight) {
+            finalY += diffH;
+        }
+    }
+
+    if (win.width != frameW || win.height != frameH || win.x != finalX || win.y != finalY) {
+        win.width = frameW;
+        win.height = frameH;
+        win.x = finalX;
+        win.y = finalY;
+        win.pendingX = finalX;
+        win.pendingY = finalY;
+        win.pendingWidth = frameW;
+        win.pendingHeight = frameH;
+        win.markDirty();
+    }
 }
 
 void WindowManager::focusWindow(uint32_t windowId) {

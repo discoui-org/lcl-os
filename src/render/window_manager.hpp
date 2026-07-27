@@ -25,6 +25,8 @@ struct Window {
     std::string title;
     int x{0};
     int y{0};
+    int pendingX{0};
+    int pendingY{0};
     int width{400};
     int height{300};
     int pendingWidth{400};
@@ -110,6 +112,14 @@ public:
      * @return True if window state or mouse position changed requiring redraw.
      */
     bool processInputEvent(const core::InputEvent& ev);
+
+    /**
+     * @brief Commit attached client surface geometry and calculate position shift for anchor preservation.
+     * @param windowId Target window ID.
+     * @param frameW Total attached surface frame width.
+     * @param frameH Total attached surface frame height (including titlebar).
+     */
+    void commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH);
 
     /**
      * @brief Focus a window by ID and bring it to top z-order.

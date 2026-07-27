@@ -291,20 +291,10 @@ void Compositor::processIPC() {
                 }
             }
 
-            // Sync window frame dimensions in WindowManager to match surface size + titlebar
+            // Notify WindowManager of client surface buffer commit
             int frameW = static_cast<int>(w);
             int frameH = static_cast<int>(h) + DisplayScale::titleBarHeight();
-
-            for (auto& win : m_windowManager.getWindowsMutable()) {
-                if (win.id == entry.windowId) {
-                    if (win.width != frameW || win.height != frameH) {
-                        win.width = frameW;
-                        win.height = frameH;
-                        win.markDirty();
-                    }
-                    break;
-                }
-            }
+            m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH);
             m_needsRedraw = true;
 
         } else if (msg.command == "SPAWN_TERMINAL") {
