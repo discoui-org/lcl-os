@@ -194,6 +194,13 @@ bool Compositor::initialize() {
 void Compositor::run() {
     if (!m_initialized) return;
 
+    // Check if EGL VSync is active — if so, eglSwapBuffers() already blocks at VBlank;
+    // the software sleep would only waste frame budget and add latency.
+    const bool vsyncActive = [this]() -> bool {
+        auto* egl = m_displayManager.getEGLBackend();
+        return egl && egl->isInitialized() && egl->isVSyncActive();
+    }();
+
     while (m_running.load()) {
         auto frameStart = std::chrono::high_resolution_clock::now();
 
@@ -202,11 +209,13 @@ void Compositor::run() {
         tickCursorBlink();
         renderFrame();
 
-        // Dynamic frame pacing
-        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now() - frameStart);
-        if (elapsed < m_targetFrameDuration) {
-            std::this_thread::sleep_for(m_targetFrameDuration - elapsed);
+        // Dynamic frame pacing: skip software sleep if VSync handles it via eglSwapBuffers
+        if (!vsyncActive) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::high_resolution_clock::now() - frameStart);
+            if (elapsed < m_targetFrameDuration) {
+                std::this_thread::sleep_for(m_targetFrameDuration - elapsed);
+            }
         }
         ++m_loopTicks;
     }

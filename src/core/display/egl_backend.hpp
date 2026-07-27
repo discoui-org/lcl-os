@@ -58,6 +58,7 @@ public:
     bool swapBuffers();
 
     bool isInitialized() const { return m_initialized; }
+    bool isVSyncActive() const { return m_vsyncActive; }
     EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
     EGLContext getEGLContext() const { return m_eglContext; }
     EGLSurface getEGLSurface() const { return m_eglSurface; }
@@ -87,6 +88,7 @@ private:
 
     uint32_t m_currentFBId{0};
     bool m_crtcSet{false};
+    bool m_vsyncActive{false};
     bool m_initialized{false};
 };
 

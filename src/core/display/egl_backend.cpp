@@ -3,6 +3,8 @@
 #include <cstring>
 #include <cerrno>
 #include <unistd.h>
+#include <algorithm>
+#include <GLES2/gl2.h>
 
 #ifndef EGL_PLATFORM_GBM_KHR
 #define EGL_PLATFORM_GBM_KHR 0x31D7
@@ -245,11 +247,43 @@ bool EGLBackend::initialize(int drmFd, uint32_t width, uint32_t height, uint32_t
     }
 
     // Enable hardware VSync synchronization (1 = wait for VBlank on buffer swap)
+    m_vsyncActive = false;
     if (eglSwapInterval(m_eglDisplay, 1) == EGL_TRUE) {
+        m_vsyncActive = true;
         std::cout << "[LCL EGL] Hardware VSync enabled (eglSwapInterval = 1).\n";
     } else {
         std::cerr << "[LCL EGL WARNING] Failed to set eglSwapInterval(1).\n";
     }
+
+    // GL Renderer Audit: Detect virgl vs llvmpipe/software rasterizer
+    const char* glRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    const char* glVendor   = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+    const char* glVersion  = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    std::string rendererStr  = glRenderer  ? glRenderer  : "";
+    std::string vendorStr    = glVendor    ? glVendor    : "";
+    std::string versionStr   = glVersion   ? glVersion   : "";
+
+    auto containsCI = [](const std::string& s, const char* key) {
+        std::string l = s; std::string k = key;
+        std::transform(l.begin(), l.end(), l.begin(), ::tolower);
+        std::transform(k.begin(), k.end(), k.begin(), ::tolower);
+        return l.find(k) != std::string::npos;
+    };
+
+    bool isHW = containsCI(rendererStr, "virgl") || containsCI(rendererStr, "virtio")
+             || containsCI(vendorStr,   "virgl") || containsCI(vendorStr,   "virtio");
+    bool isSW = containsCI(rendererStr, "llvmpipe") || containsCI(rendererStr, "softpipe")
+             || containsCI(rendererStr, "swrast")   || containsCI(rendererStr, "software");
+
+    if (isHW) {
+        std::cout << "[LCL Display] Render Engine: HARDWARE ACCELERATED (VirGL 3D - " << rendererStr << ")\n";
+    } else if (isSW) {
+        std::cout << "[LCL Display] Render Engine: SOFTWARE EMULATED (Mesa llvmpipe CPU - " << rendererStr << ")\n";
+    } else {
+        std::cout << "[LCL Display] Render Engine: " << (rendererStr.empty() ? "Unknown" : rendererStr)
+                  << " (Vendor: " << (vendorStr.empty() ? "Unknown" : vendorStr) << ")\n";
+    }
+    std::cout << "[LCL Display] GL Version: " << (versionStr.empty() ? "Unknown" : versionStr) << "\n";
 
     m_initialized = true;
     std::cout << "[LCL EGL] Hardware-Accelerated EGL/GBM Context active (" << m_width << "x" << m_height << ")!\n";
