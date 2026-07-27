@@ -59,6 +59,8 @@ public:
 
     bool isInitialized() const { return m_initialized; }
     bool isVSyncActive() const { return m_vsyncActive; }
+    const std::string& getGLRendererString() const { return m_glRendererString; }
+    bool isHardwareAccelerated() const { return m_isHardwareAccelerated; }
     EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
     EGLContext getEGLContext() const { return m_eglContext; }
     EGLSurface getEGLSurface() const { return m_eglSurface; }
@@ -90,6 +92,8 @@ private:
     bool m_crtcSet{false};
     bool m_vsyncActive{false};
     bool m_initialized{false};
+    std::string m_glRendererString{"Software Fallback"};
+    bool m_isHardwareAccelerated{false};
 };
 
 } // namespace lcl::core

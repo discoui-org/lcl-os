@@ -372,9 +372,31 @@ void Renderer::drawFilledRect(int x, int y, int width, int height, uint32_t argb
     int startY = std::max(0, y);
     int endY = std::min(static_cast<int>(m_height), y + height);
 
-    for (int j = startY; j < endY; ++j) {
-        for (int i = startX; i < endX; ++i) {
-            m_softwareBackBuffer[j * m_width + i] = argbColor;
+    uint8_t a = (argbColor >> 24) & 0xFF;
+    if (a == 255) {
+        for (int j = startY; j < endY; ++j) {
+            std::fill_n(&m_softwareBackBuffer[j * m_width + startX], endX - startX, argbColor);
+        }
+    } else if (a > 0) {
+        float alpha = a / 255.0f;
+        float invAlpha = 1.0f - alpha;
+        uint8_t srcR = (argbColor >> 16) & 0xFF;
+        uint8_t srcG = (argbColor >> 8) & 0xFF;
+        uint8_t srcB = argbColor & 0xFF;
+
+        for (int j = startY; j < endY; ++j) {
+            for (int i = startX; i < endX; ++i) {
+                uint32_t bg = m_softwareBackBuffer[j * m_width + i];
+                uint8_t bgR = (bg >> 16) & 0xFF;
+                uint8_t bgG = (bg >> 8) & 0xFF;
+                uint8_t bgB = bg & 0xFF;
+
+                uint8_t r = static_cast<uint8_t>(srcR * alpha + bgR * invAlpha);
+                uint8_t g = static_cast<uint8_t>(srcG * alpha + bgG * invAlpha);
+                uint8_t b = static_cast<uint8_t>(srcB * alpha + bgB * invAlpha);
+
+                m_softwareBackBuffer[j * m_width + i] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
+            }
         }
     }
 }

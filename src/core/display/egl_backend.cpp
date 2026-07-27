@@ -270,17 +270,20 @@ bool EGLBackend::initialize(int drmFd, uint32_t width, uint32_t height, uint32_t
         return l.find(k) != std::string::npos;
     };
 
-    bool isHW = containsCI(rendererStr, "virgl") || containsCI(rendererStr, "virtio")
-             || containsCI(vendorStr,   "virgl") || containsCI(vendorStr,   "virtio");
+    m_isHardwareAccelerated = containsCI(rendererStr, "virgl") || containsCI(rendererStr, "virtio")
+                           || containsCI(vendorStr,   "virgl") || containsCI(vendorStr,   "virtio");
     bool isSW = containsCI(rendererStr, "llvmpipe") || containsCI(rendererStr, "softpipe")
              || containsCI(rendererStr, "swrast")   || containsCI(rendererStr, "software");
 
-    if (isHW) {
+    if (m_isHardwareAccelerated) {
+        m_glRendererString = "VirGL 3D (GPU)";
         std::cout << "[LCL Display] Render Engine: HARDWARE ACCELERATED (VirGL 3D - " << rendererStr << ")\n";
     } else if (isSW) {
+        m_glRendererString = "Mesa llvmpipe (CPU)";
         std::cout << "[LCL Display] Render Engine: SOFTWARE EMULATED (Mesa llvmpipe CPU - " << rendererStr << ")\n";
     } else {
-        std::cout << "[LCL Display] Render Engine: " << (rendererStr.empty() ? "Unknown" : rendererStr)
+        m_glRendererString = rendererStr.empty() ? "Software Fallback" : rendererStr;
+        std::cout << "[LCL Display] Render Engine: " << m_glRendererString
                   << " (Vendor: " << (vendorStr.empty() ? "Unknown" : vendorStr) << ")\n";
     }
     std::cout << "[LCL Display] GL Version: " << (versionStr.empty() ? "Unknown" : versionStr) << "\n";

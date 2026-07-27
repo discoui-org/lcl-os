@@ -188,40 +188,6 @@ bool Compositor::initialize() {
 }
 
 // ============================================================
-// Main Event Loop
-// ============================================================
-
-void Compositor::run() {
-    if (!m_initialized) return;
-
-    // Check if EGL VSync is active — if so, eglSwapBuffers() already blocks at VBlank;
-    // the software sleep would only waste frame budget and add latency.
-    const bool vsyncActive = [this]() -> bool {
-        auto* egl = m_displayManager.getEGLBackend();
-        return egl && egl->isInitialized() && egl->isVSyncActive();
-    }();
-
-    while (m_running.load()) {
-        auto frameStart = std::chrono::high_resolution_clock::now();
-
-        processInput();
-        processIPC();
-        tickCursorBlink();
-        renderFrame();
-
-        // Dynamic frame pacing: skip software sleep if VSync handles it via eglSwapBuffers
-        if (!vsyncActive) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::high_resolution_clock::now() - frameStart);
-            if (elapsed < m_targetFrameDuration) {
-                std::this_thread::sleep_for(m_targetFrameDuration - elapsed);
-            }
-        }
-        ++m_loopTicks;
-    }
-}
-
-// ============================================================
 // Per-Tick Processing
 // ============================================================
 
@@ -430,6 +396,115 @@ void Compositor::tickCursorBlink() {
     }
 }
 
+void Compositor::run() {
+    if (!m_initialized) return;
+
+    // 1. Query dynamic DRM/KMS monitor refresh rate (default to 60Hz if undetected)
+    uint32_t refreshHz = (m_displayManager.isInitialized() ? m_displayManager.getActiveDisplayMode().refreshRate : 60);
+    if (refreshHz == 0) refreshHz = 60;
+
+    // 2. Calculate dynamic frame period & headroom allowance (~0.5ms safety budget)
+    float targetPeriodMs = 1000.0f / static_cast<float>(refreshHz);
+    float headroomMs = std::min(0.5f, targetPeriodMs * 0.08f);
+    float targetBudgetMs = targetPeriodMs - headroomMs;
+    auto targetFrameDuration = std::chrono::microseconds(static_cast<int64_t>(targetBudgetMs * 1000.0f));
+
+    std::cout << "[LCL Core] Dynamic Frame Pacer Active: " << refreshHz << " Hz "
+              << "(Target Period: " << targetPeriodMs << " ms, Headroom: " << headroomMs
+              << " ms, Budget: " << targetBudgetMs << " ms)\n";
+
+    m_lastFpsTime = std::chrono::steady_clock::now();
+
+    while (m_running.load()) {
+        auto frameStart = std::chrono::high_resolution_clock::now();
+
+        processInput();
+        processIPC();
+        tickCursorBlink();
+
+        bool willDraw = m_needsRedraw || m_windowManager.isAnyWindowDirty();
+
+        if (willDraw) {
+            renderFrame();
+
+            // Dynamic Frame Pacing with Headroom Allowance to prevent frame skipping & uncapped rendering
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::high_resolution_clock::now() - frameStart);
+            if (elapsed < targetFrameDuration) {
+                std::this_thread::sleep_for(targetFrameDuration - elapsed);
+            }
+        } else {
+            // Idle State: Sleep 2ms to prevent CPU busy-spinning and reduce idle usage to ~0%
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+
+        // Sliding 1.0s window FPS calculation (displays 0 (Idle) when no frames were rendered)
+        auto fpsNow = std::chrono::steady_clock::now();
+        float elapsedSec = std::chrono::duration<float>(fpsNow - m_lastFpsTime).count();
+        if (elapsedSec >= 1.0f) {
+            if (m_fpsFrameCount == 0) {
+                m_currentFps = 0.0f;
+                m_currentFrameMs = 0.0f;
+            } else {
+                m_currentFps = static_cast<float>(m_fpsFrameCount) / elapsedSec;
+                m_currentFrameMs = (elapsedSec * 1000.0f) / static_cast<float>(m_fpsFrameCount);
+            }
+            m_fpsFrameCount = 0;
+            m_lastFpsTime = fpsNow;
+        }
+
+        ++m_loopTicks;
+    }
+}
+
+void Compositor::renderDiagnosticOverlay() {
+    if (!m_showFpsOverlay) return;
+
+    int screenW = static_cast<int>(m_renderer.getWidth());
+    int cardW = DisplayScale::px(220);
+    int cardH = DisplayScale::px(70);
+    int cardX = screenW - cardW - DisplayScale::px(16);
+    int cardY = DisplayScale::px(16);
+
+    // Render translucent dark slate card background with sky accent border
+    m_renderer.drawFilledRect(cardX, cardY, cardW, cardH, 0xDD0F172A);
+    m_renderer.drawRect(cardX, cardY, cardW, cardH, 0x6638BDF8);
+
+    // Determine engine label from audited EGL backend renderer string
+    std::string engineStr = "Engine: ";
+    auto* egl = m_displayManager.getEGLBackend();
+    if (egl && egl->isInitialized()) {
+        engineStr += egl->getGLRendererString();
+    } else {
+        engineStr += "Software Fallback";
+    }
+
+    // Determine VSync label
+    std::string vsyncStr = "VSync: ";
+    if (egl && egl->isInitialized() && egl->isVSyncActive()) {
+        vsyncStr += "ON";
+    } else {
+        vsyncStr += "OFF";
+    }
+
+    char fpsBuf[64];
+    uint32_t fpsColor = 0xFF4ADE80; // Bright Lime
+    if (m_currentFps <= 0.0f) {
+        std::snprintf(fpsBuf, sizeof(fpsBuf), "FPS: 0 (Idle)");
+        fpsColor = 0xFF94A3B8; // Slate Gray when idle
+    } else {
+        std::snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %.0f (%.1f ms)", m_currentFps, m_currentFrameMs);
+    }
+
+    int textX = cardX + DisplayScale::px(12);
+    int textY = cardY + DisplayScale::px(10);
+    int lineSpacing = DisplayScale::px(18);
+
+    m_renderer.drawString(textX, textY, fpsBuf, fpsColor);
+    m_renderer.drawString(textX, textY + lineSpacing, engineStr, 0xFF38BDF8);     // Cyan Engine
+    m_renderer.drawString(textX, textY + lineSpacing * 2, vsyncStr, 0xFF34D399); // Emerald VSync
+}
+
 void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
 
@@ -502,12 +577,18 @@ void Compositor::renderFrame() {
         }
     }
 
-    // 3. Render Mouse Cursor on top of all windows
+    // 3. Render Diagnostic FPS Overlay
+    renderDiagnosticOverlay();
+
+    // 4. Render Mouse Cursor on top of all windows
     m_renderer.drawCursor(m_windowManager.getMouseX(), m_windowManager.getMouseY());
 
     m_renderer.swapBuffers();
     m_windowManager.clearAllDirty();
     m_needsRedraw = false;
+
+    // Increment presented frame count (used by 1.0s sliding window in run loop)
+    m_fpsFrameCount++;
 }
 
 } // namespace lcl::core

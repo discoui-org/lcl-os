@@ -65,11 +65,15 @@ public:
         size_t   shmSize{0};    ///< Total SHM buffer bytes
     };
 
+    void toggleFpsOverlay() noexcept { m_showFpsOverlay = !m_showFpsOverlay; }
+    bool isFpsOverlayVisible() const noexcept { return m_showFpsOverlay; }
+
 private:
     void processInput();
     void processIPC();
     void tickCursorBlink();
     void renderFrame();
+    void renderDiagnosticOverlay();
 
     // Subsystems — declared in init order, destructed in reverse
     DisplayManager         m_displayManager;
@@ -89,6 +93,13 @@ private:
     uint64_t                             m_loopTicks{0};
     std::chrono::microseconds            m_targetFrameDuration{std::chrono::microseconds(16667)};
     std::chrono::steady_clock::time_point m_lastBlinkCheck;
+
+    // Diagnostic Overlay & FPS metrics
+    bool                                 m_showFpsOverlay{true};
+    uint32_t                             m_fpsFrameCount{0};
+    float                                m_currentFps{0.0f};
+    float                                m_currentFrameMs{0.0f};
+    std::chrono::steady_clock::time_point m_lastFpsTime;
 };
 
 } // namespace lcl::core
