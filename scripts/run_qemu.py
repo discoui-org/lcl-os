@@ -23,7 +23,6 @@ OPEN_BIN = BUILD_DIR / "lcl-open"
 WM_BIN = BUILD_DIR / "lcl-desktop-wm"
 TERM_BIN = BUILD_DIR / "lcl-terminal"
 DEMO_BIN = BUILD_DIR / "apps" / "ui_demo" / "lcl_ui_demo"
-SHADER_BIN = BUILD_DIR / "apps" / "shader_demo" / "lcl_shader_demo"
 INITRAMFS_DIR = BUILD_DIR / "initramfs_root"
 INITRAMFS_IMG = BUILD_DIR / "initramfs.cpio.gz"
 CACHE_DIR = BUILD_DIR / "qemu-cache"
@@ -478,9 +477,6 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
     if DEMO_BIN.is_file():
         shutil.copy2(DEMO_BIN, dest_bin / "lcl_ui_demo")
 
-    if SHADER_BIN.is_file():
-        shutil.copy2(SHADER_BIN, dest_bin / "lcl_shader_demo")
-
     uidemo_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "UIDemo.app"
     (uidemo_app / "bin").mkdir(parents=True, exist_ok=True)
     (uidemo_app / "assets").mkdir(parents=True, exist_ok=True)
@@ -500,28 +496,6 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
         write_text(
             uidemo_app / "bin" / "ui_demo",
             "#!/bin/sh\n/usr/bin/lcl_ui_demo 2>/dev/null || echo 'LCL UI Demo App'\n",
-            executable=True,
-        )
-
-    shader_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "ShaderDemo.app"
-    (shader_app / "bin").mkdir(parents=True, exist_ok=True)
-    (shader_app / "assets").mkdir(parents=True, exist_ok=True)
-    write_text(
-        shader_app / "metadata.json",
-        """{
-    "name": "Shader Demo",
-    "executable": "bin/shader_demo",
-    "version": "1.0.0",
-    "icon": "assets/icon.png"
-}
-""",
-    )
-    if SHADER_BIN.is_file():
-        shutil.copy2(SHADER_BIN, shader_app / "bin" / "shader_demo")
-    else:
-        write_text(
-            shader_app / "bin" / "shader_demo",
-            "#!/bin/sh\n/usr/bin/lcl_shader_demo 2>/dev/null || echo 'LCL Shader Demo App'\n",
             executable=True,
         )
 
@@ -981,7 +955,7 @@ def detect_host_display() -> HostDisplay:
                 if pm:
                     info.physical_width = _clamp_dim(pm.group(1))
                     info.physical_height = _clamp_dim(pm.group(2))
-                if not info.refresh_hz or info.refresh_hz == 60:
+                if not info.refresh_hz:
                     blob = " ".join(str(v) for v in disp.values())
                     hm = re.search(r"@\s*([0-9.]+)\s*Hz", blob, re.I)
                     if hm:

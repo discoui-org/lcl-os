@@ -255,7 +255,6 @@ void WindowApp::pollIPC() {
 
 void WindowApp::runEventLoop() {
     m_running = true;
-    constexpr auto targetPeriod = std::chrono::microseconds(6944); // 144 Hz target period (~6.944 ms)
 
     while (m_running && !g_appSignalReceived.load()) {
         auto frameStart = std::chrono::high_resolution_clock::now();
@@ -266,8 +265,9 @@ void WindowApp::runEventLoop() {
         if (rendered) {
             auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::high_resolution_clock::now() - frameStart);
-            if (elapsed < targetPeriod) {
-                std::this_thread::sleep_for(targetPeriod - elapsed);
+            constexpr auto minFramePeriod = std::chrono::microseconds(1000); // 1000 FPS safety ceiling
+            if (elapsed < minFramePeriod) {
+                std::this_thread::sleep_for(minFramePeriod - elapsed);
             }
         } else {
             // Idle state: sleep 2ms when no redraws are needed to avoid CPU busy spinning
@@ -363,7 +363,7 @@ bool WindowApp::renderFrame() {
     m_renderPass.end(nullptr);
     m_renderer.endFrame();
 
-    // Copy 100% complete rendered frame to SHM buffer atomically
+    // Double Buffering: Copy 100% complete rendered frame to SHM buffer atomically
     if (m_shmPixels && !m_pixelBuffer.empty()) {
         size_t copyBytes = std::min(m_shmSize, m_pixelBuffer.size() * sizeof(uint32_t));
         std::memcpy(m_shmPixels, m_pixelBuffer.data(), copyBytes);

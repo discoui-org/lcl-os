@@ -164,17 +164,36 @@ void SkiaRenderer::endFrame() {
 }
 
 void SkiaRenderer::drawBackgroundGradient(const SkiaColor& topColor, const SkiaColor& bottomColor) {
-    if (!m_initialized || !m_targetPixels) return;
+    if (!m_initialized || !m_targetPixels || m_height == 0 || m_width == 0) return;
+
+    if (m_height == 1) {
+        std::fill_n(m_targetPixels, m_width, topColor.toARGB());
+        return;
+    }
+
+    uint32_t topR = topColor.r << 16;
+    uint32_t topG = topColor.g << 16;
+    uint32_t topB = topColor.b << 16;
+
+    int32_t stepR = ((static_cast<int32_t>(bottomColor.r) - static_cast<int32_t>(topColor.r)) << 16) / static_cast<int32_t>(m_height - 1);
+    int32_t stepG = ((static_cast<int32_t>(bottomColor.g) - static_cast<int32_t>(topColor.g)) << 16) / static_cast<int32_t>(m_height - 1);
+    int32_t stepB = ((static_cast<int32_t>(bottomColor.b) - static_cast<int32_t>(topColor.b)) << 16) / static_cast<int32_t>(m_height - 1);
+
+    uint32_t currR = topR;
+    uint32_t currG = topG;
+    uint32_t currB = topB;
 
     for (uint32_t y = 0; y < m_height; ++y) {
-        float t = static_cast<float>(y) / static_cast<float>(m_height);
-        uint8_t r = static_cast<uint8_t>((1.0f - t) * topColor.r + t * bottomColor.r);
-        uint8_t g = static_cast<uint8_t>((1.0f - t) * topColor.g + t * bottomColor.g);
-        uint8_t b = static_cast<uint8_t>((1.0f - t) * topColor.b + t * bottomColor.b);
+        uint32_t r = currR >> 16;
+        uint32_t g = currG >> 16;
+        uint32_t b = currB >> 16;
         uint32_t argb = (0xFFu << 24) | (r << 16) | (g << 8) | b;
 
-        uint32_t* row = &m_targetPixels[y * m_width];
-        std::fill_n(row, m_width, argb);
+        std::fill_n(&m_targetPixels[y * m_width], m_width, argb);
+
+        currR += stepR;
+        currG += stepG;
+        currB += stepB;
     }
 }
 
@@ -190,24 +209,31 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
 
     uint32_t fillARGB = color.toARGB();
 
-    for (int y = y1; y < y2; ++y) {
-        uint32_t* row = &m_targetPixels[y * m_width + x1];
-        if (color.a == 255) {
+    if (color.a == 255) {
+        for (int y = y1; y < y2; ++y) {
+            uint32_t* row = &m_targetPixels[y * m_width + x1];
             std::fill_n(row, x2 - x1, fillARGB);
-        } else {
-            float alpha = color.a / 255.0f;
-            float invAlpha = 1.0f - alpha;
+        }
+    } else if (color.a > 0) {
+        uint32_t alpha = color.a;
+        uint32_t invAlpha = 255 - alpha;
+        uint32_t srcR = color.r * alpha;
+        uint32_t srcG = color.g * alpha;
+        uint32_t srcB = color.b * alpha;
+
+        for (int y = y1; y < y2; ++y) {
+            uint32_t* row = &m_targetPixels[y * m_width];
             for (int x = x1; x < x2; ++x) {
-                uint32_t bg = m_targetPixels[y * m_width + x];
-                uint8_t bgR = (bg >> 16) & 0xFF;
-                uint8_t bgG = (bg >> 8) & 0xFF;
-                uint8_t bgB = bg & 0xFF;
+                uint32_t bg = row[x];
+                uint32_t bgR = (bg >> 16) & 0xFF;
+                uint32_t bgG = (bg >> 8) & 0xFF;
+                uint32_t bgB = bg & 0xFF;
 
-                uint8_t r = static_cast<uint8_t>(color.r * alpha + bgR * invAlpha);
-                uint8_t g = static_cast<uint8_t>(color.g * alpha + bgG * invAlpha);
-                uint8_t b = static_cast<uint8_t>(color.b * alpha + bgB * invAlpha);
+                uint32_t r = (srcR + bgR * invAlpha) >> 8;
+                uint32_t g = (srcG + bgG * invAlpha) >> 8;
+                uint32_t b = (srcB + bgB * invAlpha) >> 8;
 
-                m_targetPixels[y * m_width + x] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
+                row[x] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
             }
         }
     }

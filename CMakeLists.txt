@@ -120,7 +120,6 @@ target_link_libraries(lcl-terminal PRIVATE
 # Subdirectories
 add_subdirectory(lcl-ui)
 add_subdirectory(apps/ui_demo)
-add_subdirectory(apps/shader_demo)
 
 # Unit Testing Framework Configuration
 option(BUILD_TESTS "Build LCL OS unit tests" ON)
