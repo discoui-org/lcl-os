@@ -211,7 +211,8 @@ void Compositor::processIPC() {
                 if (sm->height > 0) winH = sm->height;
             }
 
-            if (m_surfaces.find(surfId) == m_surfaces.end()) {
+            uint64_t surfaceKey = (static_cast<uint64_t>(msg.clientFd) << 32) | surfId;
+            if (m_surfaces.find(surfaceKey) == m_surfaces.end()) {
                 SurfaceEntry entry{};
                 int frameW = winW;
                 int frameH = winH + DisplayScale::titleBarHeight();
@@ -222,13 +223,13 @@ void Compositor::processIPC() {
                 entry.width  = static_cast<uint32_t>(winW);
                 entry.height = static_cast<uint32_t>(winH);
                 entry.stride = entry.width * 4;
-                m_surfaces[surfId] = entry;
+                m_surfaces[surfaceKey] = entry;
                 std::cout << "[LCL Compositor] Created Window (ID: " << entry.windowId
                           << ") for Surface " << surfId
                           << " from client PID " << msg.pid << "\n";
                 m_needsRedraw = true;
             } else {
-                m_surfaces[surfId].clientFd = msg.clientFd;
+                m_surfaces[surfaceKey].clientFd = msg.clientFd;
             }
 
         // --- ATTACH_BUFFER: mmap the SCM_RIGHTS memfd into compositor address space ---
@@ -244,11 +245,14 @@ void Compositor::processIPC() {
                 stride = bm->stride > 0 ? bm->stride : w * 4;
             }
 
-            // Ensure surface entry exists
-            if (m_surfaces.find(surfId) == m_surfaces.end()) {
+            uint64_t surfaceKey = (static_cast<uint64_t>(msg.clientFd) << 32) | surfId;
+            if (m_surfaces.find(surfaceKey) == m_surfaces.end()) {
+                static int spawnIndex = 0;
+                int winX = DisplayScale::px(80 + (spawnIndex % 6) * 30);
+                int winY = DisplayScale::px(60 + (spawnIndex % 6) * 30);
+                spawnIndex++;
+
                 SurfaceEntry entry{};
-                int winX = DisplayScale::px(80);
-                int winY = DisplayScale::px(60);
                 int frameW = static_cast<int>(w);
                 int frameH = static_cast<int>(h) + DisplayScale::titleBarHeight();
                 entry.windowId = m_windowManager.createWindow(
@@ -258,10 +262,10 @@ void Compositor::processIPC() {
                 entry.width  = w;
                 entry.height = h;
                 entry.stride = stride;
-                m_surfaces[surfId] = entry;
+                m_surfaces[surfaceKey] = entry;
             }
 
-            auto& entry = m_surfaces[surfId];
+            auto& entry = m_surfaces[surfaceKey];
             entry.clientFd = msg.clientFd;
             entry.width  = w;
             entry.height = h;
@@ -297,16 +301,19 @@ void Compositor::processIPC() {
             m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH);
             m_needsRedraw = true;
 
-        } else if (msg.command == "SPAWN_TERMINAL") {
-            int x = DisplayScale::px(80);
-            int y = DisplayScale::px(60);
-            uint32_t winId = m_windowManager.createWindow(
-                "LCL Terminal", x, y,
-                DisplayScale::px(DisplayScale::kDefaultWinW),
-                DisplayScale::px(DisplayScale::kDefaultWinH),
-                ::lcl::theme::UI::WindowTitleFocused);
-            std::cout << "[LCL Compositor] Created window surface (ID: " << winId << ") for client PID " << msg.pid << "\n";
-            m_needsRedraw = true;
+        } else if (msg.command == "SPAWN_TERMINAL" || msg.command.rfind("SPAWN_TERMINAL", 0) == 0) {
+            pid_t pid = fork();
+            if (pid == 0) {
+                // Child process: execute lcl-terminal binary
+                execl("/home/user/Applications/Terminal.app/bin/lcl-terminal", "lcl-terminal", nullptr);
+                execl("/bin/lcl-terminal", "lcl-terminal", nullptr);
+                execl("/usr/bin/lcl-terminal", "lcl-terminal", nullptr);
+                _exit(1);
+            } else if (pid > 0) {
+                std::cout << "[LCL Compositor] Spawned new LCL Terminal process (PID: " << pid << ")\n";
+            } else {
+                std::cerr << "[LCL Compositor ERROR] Failed to fork process for SPAWN_TERMINAL.\n";
+            }
         }
     }
 }

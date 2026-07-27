@@ -79,8 +79,8 @@ private:
     render::Renderer       m_renderer;
     render::WindowManager  m_windowManager;
 
-    /// IPC surface registry: surfaceId → SurfaceEntry
-    std::unordered_map<uint32_t, SurfaceEntry> m_surfaces;
+    /// IPC surface registry: (clientFd << 32 | surfaceId) → SurfaceEntry
+    std::unordered_map<uint64_t, SurfaceEntry> m_surfaces;
 
     // Loop state
     std::atomic<bool>                    m_running{true};
