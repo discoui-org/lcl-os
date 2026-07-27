@@ -320,8 +320,16 @@ int main() {
         return true; // Intercept & consume directly for PTY shell
     });
 
+    int curW = kSurfW;
+    int curH = kSurfH;
+    bool termNeedsAttach = true;
+    std::vector<uint32_t> localPixels(curW * curH, 0xFF14161D);
+
     // Send initial ATTACH_BUFFER
-    renderTerminalFrame(shmPixels, kSurfW, kSurfH, app, fontRenderer);
+    renderTerminalFrame(localPixels.data(), kSurfW, kSurfH, app, fontRenderer);
+    if (shmPixels) {
+        std::memcpy(shmPixels, localPixels.data(), shmSize);
+    }
 
     lcl::protocol::LCLHeader attachHeader{};
     attachHeader.opcode = lcl::protocol::LCLOpcode::AttachBuffer;
@@ -335,17 +343,18 @@ int main() {
     attachMsg.format = 1; // ARGB8888
 
     lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, shmFd);
+    termNeedsAttach = false;
     std::cout << "[LCL Terminal] Sent initial ATTACH_BUFFER (memfd: " << shmFd << ") for Surface 1.\n";
     std::cout << "[LCL Terminal] Standalone process running (PID: " << getpid() << "). PTY shell active.\n";
 
     // 7. Event loop: poll IPC keypresses, PTY output & update SHM frame
     auto lastBlink = std::chrono::steady_clock::now();
 
-    int curW = kSurfW;
-    int curH = kSurfH;
-
     while (app.isAlive()) {
         bool updated = app.update();
+
+        int targetW = -1;
+        int targetH = -1;
 
         // Drain pending IPC input events & resize ConfigureBounds from Compositor
         while (true) {
@@ -374,45 +383,64 @@ int main() {
                     int newH = reqH;
                     lcl::apps::TerminalApp::getSnappedDimensions(reqW, reqH, newW, newH);
 
-                    if (newW > 0 && newH > 0 && (newW != curW || newH != curH)) {
-                        curW = newW;
-                        curH = newH;
-
-                        if (shmPixels) {
-                            munmap(shmPixels, shmSize);
-                            shmPixels = nullptr;
-                        }
-                        if (shmFd >= 0) {
-                            close(shmFd);
-                            shmFd = -1;
-                        }
-
-                        shmSize = curW * curH * 4;
-                        shmFd = memfd_create("lcl_term_shm", MFD_CLOEXEC);
-                        if (shmFd >= 0) {
-                            ftruncate(shmFd, shmSize);
-                            shmPixels = reinterpret_cast<uint32_t*>(
-                                mmap(nullptr, shmSize, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd, 0));
-
-                            if (shmPixels == MAP_FAILED) {
-                                shmPixels = nullptr;
-                            }
-                        }
-
-                        app.resize(curW, curH);
-                        windowApp.getRootWidget()->getYogaNode().setWidth(static_cast<float>(curW));
-                        windowApp.getRootWidget()->getYogaNode().setHeight(static_cast<float>(curH));
-
-                        attachMsg.width = curW;
-                        attachMsg.height = curH;
-                        attachMsg.stride = curW * 4;
-
-                        updated = true;
+                    if (newW > 0 && newH > 0) {
+                        targetW = newW;
+                        targetH = newH;
                     }
                 }
             } else {
                 break;
             }
+        }
+
+        // Event Coalescing: Execute resize ONCE for the most recent dimensions in socket queue
+        if (targetW > 0 && targetH > 0 && (targetW != curW || targetH != curH)) {
+            curW = targetW;
+            curH = targetH;
+
+            if (shmPixels) {
+                munmap(shmPixels, shmSize);
+                shmPixels = nullptr;
+            }
+            if (shmFd >= 0) {
+                close(shmFd);
+                shmFd = -1;
+            }
+
+            shmSize = curW * curH * 4;
+            localPixels.resize(curW * curH, 0xFF14161D);
+
+            shmFd = memfd_create("lcl_term_shm", MFD_CLOEXEC);
+            if (shmFd >= 0) {
+                ftruncate(shmFd, shmSize);
+                shmPixels = reinterpret_cast<uint32_t*>(
+                    mmap(nullptr, shmSize, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd, 0));
+
+                if (shmPixels == MAP_FAILED) {
+                    shmPixels = nullptr;
+                } else {
+                    std::fill_n(shmPixels, curW * curH, 0xFF14161D);
+                }
+            }
+
+            app.resize(curW, curH);
+            windowApp.getRootWidget()->getYogaNode().setWidth(static_cast<float>(curW));
+            windowApp.getRootWidget()->getYogaNode().setHeight(static_cast<float>(curH));
+
+            // Pre-render terminal layout for new dimensions & copy to shmPixels BEFORE committing to Compositor!
+            if (shmPixels) {
+                renderTerminalFrame(localPixels.data(), curW, curH, app, fontRenderer);
+                std::memcpy(shmPixels, localPixels.data(), shmSize);
+            }
+
+            attachMsg.width = curW;
+            attachMsg.height = curH;
+            attachMsg.stride = curW * 4;
+
+            int passFd = shmFd;
+            lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, passFd);
+            termNeedsAttach = false;
+            updated = false;
         }
 
         auto now = std::chrono::steady_clock::now();
@@ -423,9 +451,13 @@ int main() {
         }
 
         if (updated && shmPixels) {
-            renderTerminalFrame(shmPixels, curW, curH, app, fontRenderer);
+            renderTerminalFrame(localPixels.data(), curW, curH, app, fontRenderer);
+            std::memcpy(shmPixels, localPixels.data(), shmSize);
+
             // Re-notify compositor of buffer redraw
-            lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, shmFd);
+            int passFd = termNeedsAttach ? shmFd : -1;
+            lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, passFd);
+            termNeedsAttach = false;
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(16));

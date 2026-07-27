@@ -288,6 +288,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                             else                   topWin.resizeEdge = ResizeEdge::BottomRight; // Center default
                         }
 
+                        topWin.activeResizeEdge = topWin.resizeEdge;
+                        topWin.anchorRight = topWin.x + topWin.width;
+                        topWin.anchorBottom = topWin.y + topWin.height;
                         topWin.resizeStartX = m_mouseX;
                         topWin.resizeStartY = m_mouseY;
                         topWin.initialX = topWin.x;
@@ -304,6 +307,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         // Edge / Corner Resize
                         topWin.isResizing = true;
                         topWin.resizeEdge = edge;
+                        topWin.activeResizeEdge = edge;
+                        topWin.anchorRight = topWin.x + topWin.width;
+                        topWin.anchorBottom = topWin.y + topWin.height;
                         topWin.resizeStartX = m_mouseX;
                         topWin.resizeStartY = m_mouseY;
                         topWin.initialX = topWin.x;
@@ -348,23 +354,36 @@ void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int fra
     int finalX = win.x;
     int finalY = win.y;
 
-    // Generic opposite-edge anchor offset for client surface buffers applies ONLY during window RESIZE
-    if (win.isResizing) {
-        finalX = win.pendingX;
-        finalY = win.pendingY;
+    // Use activeResizeEdge (remains active across client commits until queue is fully drained)
+    ResizeEdge edgeToUse = (win.isResizing ? win.resizeEdge : win.activeResizeEdge);
 
-        int diffW = win.pendingWidth - frameW;
-        int diffH = win.pendingHeight - frameH;
+    if (edgeToUse != ResizeEdge::None) {
+        int rightAnchor = (win.anchorRight > 0 ? win.anchorRight : (win.isResizing ? win.pendingX + win.pendingWidth : win.x + win.width));
+        int bottomAnchor = (win.anchorBottom > 0 ? win.anchorBottom : (win.isResizing ? win.pendingY + win.pendingHeight : win.y + win.height));
 
-        if (win.resizeEdge == ResizeEdge::Left ||
-            win.resizeEdge == ResizeEdge::TopLeft ||
-            win.resizeEdge == ResizeEdge::BottomLeft) {
-            finalX += diffW;
+        // Sol kenar sürüklendiyse: Sağ kenar (rightAnchor) sabittir!
+        if (edgeToUse == ResizeEdge::Left ||
+            edgeToUse == ResizeEdge::TopLeft ||
+            edgeToUse == ResizeEdge::BottomLeft) {
+            finalX = rightAnchor - frameW;
+        } else if (win.isResizing) {
+            finalX = win.pendingX;
         }
-        if (win.resizeEdge == ResizeEdge::Top ||
-            win.resizeEdge == ResizeEdge::TopLeft ||
-            win.resizeEdge == ResizeEdge::TopRight) {
-            finalY += diffH;
+
+        // Üst kenar sürüklendiyse: Alt kenar (bottomAnchor) sabittir!
+        if (edgeToUse == ResizeEdge::Top ||
+            edgeToUse == ResizeEdge::TopLeft ||
+            edgeToUse == ResizeEdge::TopRight) {
+            finalY = bottomAnchor - frameH;
+        } else if (win.isResizing) {
+            finalY = win.pendingY;
+        }
+
+        // activeResizeEdge sıfırlanma kuralı: Mouse bırakıldıysa VE gelen tampon hedefe ulaştıysa (veya son karedir)
+        if (!win.isResizing && (frameW == win.pendingWidth || frameH == win.pendingHeight)) {
+            win.activeResizeEdge = ResizeEdge::None;
+            win.anchorRight = 0;
+            win.anchorBottom = 0;
         }
     }
 
@@ -375,8 +394,10 @@ void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int fra
         win.y = finalY;
         win.pendingX = finalX;
         win.pendingY = finalY;
-        win.pendingWidth = frameW;
-        win.pendingHeight = frameH;
+        if (!win.isResizing) {
+            win.pendingWidth = frameW;
+            win.pendingHeight = frameH;
+        }
         win.markDirty();
     }
 }

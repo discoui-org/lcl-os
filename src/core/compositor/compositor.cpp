@@ -333,32 +333,39 @@ void Compositor::processIPC() {
 
             auto& entry = m_surfaces[surfaceKey];
             entry.clientFd = msg.clientFd;
-            entry.width  = w;
-            entry.height = h;
-            entry.stride = stride;
 
             int fd = msg.passedFd;
             if (fd >= 0) {
                 size_t shmSize = static_cast<size_t>(stride) * h;
-                void* pixels = mmap(nullptr, shmSize, PROT_READ, MAP_SHARED, fd, 0);
-                if (pixels != MAP_FAILED) {
-                    if (entry.pixels && entry.shmSize > 0) {
-                        munmap(entry.pixels, entry.shmSize);
-                    }
-                    if (entry.shmFd >= 0 && entry.shmFd != fd) {
-                        close(entry.shmFd);
-                    }
-                    entry.pixels  = pixels;
-                    entry.shmSize = shmSize;
-                    entry.shmFd   = fd;
-
-                    // std::cout << "[LCL Compositor] Attached SHM Buffer (FD: " << fd
-                    //           << ", " << w << "x" << h << ", stride: " << stride << ") for Surface " << surfId
-                    //           << " from client PID " << msg.pid << "\n";
+                if (entry.pixels && entry.shmSize == shmSize && entry.width == w && entry.height == h) {
+                    // Buffer is ALREADY mapped in compositor address space with identical size & dimensions!
+                    // Do NOT unmap/remap memory on every frame to avoid rendering race conditions.
+                    close(fd);
                 } else {
-                    std::cerr << "[LCL Compositor ERROR] mmap failed for memfd " << fd
-                              << ": " << strerror(errno) << "\n";
+                    void* pixels = mmap(nullptr, shmSize, PROT_READ, MAP_SHARED, fd, 0);
+                    if (pixels != MAP_FAILED) {
+                        if (entry.pixels && entry.shmSize > 0) {
+                            munmap(entry.pixels, entry.shmSize);
+                        }
+                        if (entry.shmFd >= 0 && entry.shmFd != fd) {
+                            close(entry.shmFd);
+                        }
+                        entry.pixels  = pixels;
+                        entry.shmSize = shmSize;
+                        entry.shmFd   = fd;
+                        entry.width   = w;
+                        entry.height  = h;
+                        entry.stride  = stride;
+                    } else {
+                        std::cerr << "[LCL Compositor ERROR] mmap failed for memfd " << fd
+                                  << ": " << strerror(errno) << "\n";
+                        close(fd);
+                    }
                 }
+            } else {
+                entry.width  = w;
+                entry.height = h;
+                entry.stride = stride;
             }
 
             // Notify WindowManager of client surface buffer commit

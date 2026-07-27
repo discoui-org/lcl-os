@@ -80,6 +80,8 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
     }
 
     m_shmSize = static_cast<size_t>(width) * height * 4;
+    m_pixelBuffer.resize(width * height, 0xFF14161D);
+
     m_shmFd = memfd_create("lcl_ui_app_shm", MFD_CLOEXEC);
     if (m_shmFd >= 0) {
         ftruncate(m_shmFd, m_shmSize);
@@ -88,11 +90,13 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
         if (m_shmPixels == MAP_FAILED) {
             m_shmPixels = nullptr;
         } else {
-            // Re-bind SkiaRenderer to draw directly into SHM memory
-            m_renderer.setTargetPixels(m_shmPixels, width, height);
-            m_renderer.initialize(width, height, nullptr, m_shmPixels);
+            std::fill_n(m_shmPixels, width * height, 0xFF14161D);
         }
     }
+
+    m_renderer.setTargetPixels(m_pixelBuffer.data(), width, height);
+    m_renderer.initialize(width, height, nullptr, m_pixelBuffer.data());
+    m_shmNeedsAttach = true;
 }
 
 bool WindowApp::connectCompositor(const std::string& socketPath) {
@@ -175,7 +179,11 @@ void WindowApp::resize(uint32_t width, uint32_t height) {
 
     if (m_ipcConnected) {
         allocateSHM(width, height);
-        if (m_shmFd >= 0 && m_shmPixels) {
+
+        // Pre-render layout into m_pixelBuffer & copy to m_shmPixels BEFORE committing buffer to Compositor!
+        renderFrame();
+
+        if (m_socketFd >= 0 && m_shmFd >= 0) {
             lcl::protocol::LCLHeader attachHeader{};
             attachHeader.opcode = lcl::protocol::LCLOpcode::AttachBuffer;
             attachHeader.payloadSize = sizeof(lcl::protocol::LCLMsgAttachBuffer);
@@ -188,12 +196,17 @@ void WindowApp::resize(uint32_t width, uint32_t height) {
             attachMsg.format = 1;
 
             lcl::protocol::sendMsgWithFd(m_socketFd, attachHeader, &attachMsg, m_shmFd);
+            m_shmNeedsAttach = false;
         }
     }
 }
 
 void WindowApp::pollIPC() {
     if (!m_ipcConnected || m_socketFd < 0) return;
+
+    uint32_t latestWidth = 0;
+    uint32_t latestHeight = 0;
+    bool pendingResize = false;
 
     while (true) {
         lcl::protocol::LCLHeader header{};
@@ -222,7 +235,9 @@ void WindowApp::pollIPC() {
                        payload.size() >= sizeof(lcl::protocol::LCLMsgConfigureBounds)) {
                 auto* cfg = reinterpret_cast<const lcl::protocol::LCLMsgConfigureBounds*>(payload.data());
                 if (cfg->width > 0 && cfg->height > 0) {
-                    resize(cfg->width, cfg->height);
+                    latestWidth = cfg->width;
+                    latestHeight = cfg->height;
+                    pendingResize = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
                 m_running = false;
@@ -230,6 +245,11 @@ void WindowApp::pollIPC() {
         } else {
             break;
         }
+    }
+
+    // Event Coalescing: Execute resize ONCE for the most recent dimensions in socket queue
+    if (pendingResize && (latestWidth != m_width || latestHeight != m_height)) {
+        resize(latestWidth, latestHeight);
     }
 }
 
@@ -330,6 +350,12 @@ bool WindowApp::renderFrame() {
 
     m_renderPass.clear();
 
+    // Copy 100% complete rendered frame to SHM buffer atomically
+    if (m_shmPixels && !m_pixelBuffer.empty()) {
+        size_t copyBytes = std::min(m_shmSize, m_pixelBuffer.size() * sizeof(uint32_t));
+        std::memcpy(m_shmPixels, m_pixelBuffer.data(), copyBytes);
+    }
+
     // If connected over IPC, notify compositor of buffer commit
     if (m_ipcConnected && m_socketFd >= 0 && m_shmFd >= 0) {
         lcl::protocol::LCLHeader attachHeader{};
@@ -343,7 +369,9 @@ bool WindowApp::renderFrame() {
         attachMsg.stride = m_width * 4;
         attachMsg.format = 1;
 
-        lcl::protocol::sendMsgWithFd(m_socketFd, attachHeader, &attachMsg, m_shmFd);
+        int passFd = m_shmNeedsAttach ? m_shmFd : -1;
+        lcl::protocol::sendMsgWithFd(m_socketFd, attachHeader, &attachMsg, passFd);
+        m_shmNeedsAttach = false;
     }
 
     return true;

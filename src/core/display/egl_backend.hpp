@@ -86,6 +86,7 @@ private:
     EGLConfig m_eglConfig{nullptr};
 
     uint32_t m_currentFBId{0};
+    bool m_crtcSet{false};
     bool m_initialized{false};
 };
 

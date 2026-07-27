@@ -28,6 +28,7 @@ EGLBackend::EGLBackend(EGLBackend&& other) noexcept
       m_eglSurface(other.m_eglSurface),
       m_eglConfig(other.m_eglConfig),
       m_currentFBId(other.m_currentFBId),
+      m_crtcSet(other.m_crtcSet),
       m_initialized(other.m_initialized) {
     other.m_drmFd = -1;
     other.m_gbmDevice = nullptr;
@@ -56,6 +57,7 @@ EGLBackend& EGLBackend::operator=(EGLBackend&& other) noexcept {
         m_eglSurface = other.m_eglSurface;
         m_eglConfig = other.m_eglConfig;
         m_currentFBId = other.m_currentFBId;
+        m_crtcSet = other.m_crtcSet;
         m_initialized = other.m_initialized;
 
         other.m_drmFd = -1;
@@ -242,6 +244,13 @@ bool EGLBackend::initialize(int drmFd, uint32_t width, uint32_t height, uint32_t
         return false;
     }
 
+    // Enable hardware VSync synchronization (1 = wait for VBlank on buffer swap)
+    if (eglSwapInterval(m_eglDisplay, 1) == EGL_TRUE) {
+        std::cout << "[LCL EGL] Hardware VSync enabled (eglSwapInterval = 1).\n";
+    } else {
+        std::cerr << "[LCL EGL WARNING] Failed to set eglSwapInterval(1).\n";
+    }
+
     m_initialized = true;
     std::cout << "[LCL EGL] Hardware-Accelerated EGL/GBM Context active (" << m_width << "x" << m_height << ")!\n";
     return true;
@@ -314,7 +323,16 @@ bool EGLBackend::swapBuffers() {
 
     // Perform DRM Page Flip / Scanout update if CRTC ID is set
     if (m_crtcId > 0 && fbId > 0) {
-        drmModeSetCrtc(m_drmFd, m_crtcId, fbId, 0, 0, &m_connectorId, 1, NULL);
+        if (!m_crtcSet) {
+            // Perform initial DRM CRTC modeset scanout setup ONCE
+            if (drmModeSetCrtc(m_drmFd, m_crtcId, fbId, 0, 0, &m_connectorId, 1, nullptr) == 0) {
+                m_crtcSet = true;
+                std::cout << "[LCL EGL] Initial DRM CRTC modeset configured successfully (FB ID: " << fbId << ").\n";
+            }
+        } else {
+            // Subsequent frames: use page flip to swap scanout buffer at VBlank without CRTC reset
+            drmModePageFlip(m_drmFd, m_crtcId, fbId, 0, nullptr);
+        }
     }
 
     // Release previously rendered buffer back to GBM surface pool
@@ -355,6 +373,7 @@ void EGLBackend::shutdown() {
         m_gbmDevice = nullptr;
     }
 
+    m_crtcSet = false;
     m_initialized = false;
 }
 

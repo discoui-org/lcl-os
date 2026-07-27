@@ -48,12 +48,15 @@ struct Window {
     // Resize state
     bool isResizing{false};
     ResizeEdge resizeEdge{ResizeEdge::None};
+    ResizeEdge activeResizeEdge{ResizeEdge::None};
     int resizeStartX{0};
     int resizeStartY{0};
     int initialX{0};
     int initialY{0};
     int initialWidth{0};
     int initialHeight{0};
+    int anchorRight{0};
+    int anchorBottom{0};
 
     uint32_t headerColor{0xFF38BDF8};
 
