@@ -216,19 +216,33 @@ void WindowApp::pollIPC() {
             if (header.opcode == lcl::protocol::LCLOpcode::InputEvent &&
                 payload.size() >= sizeof(lcl::protocol::LCLMsgInputEvent)) {
                 auto* inputMsg = reinterpret_cast<const lcl::protocol::LCLMsgInputEvent*>(payload.data());
-                if (inputMsg->type == 1) { // KeyboardKey
-                    if (inputMsg->pressed) {
-                        sendKeyDown(inputMsg->key, 0, inputMsg->modifiers);
-                    } else {
-                        sendKeyUp(inputMsg->key, inputMsg->modifiers);
-                    }
-                } else if (inputMsg->type == 2) { // PointerMotion
+                if (inputMsg->type == 1) { // KeyDown
+                    sendKeyDown(inputMsg->key, static_cast<char32_t>(inputMsg->codepoint), inputMsg->modifiers);
+                } else if (inputMsg->type == 2) { // KeyUp
+                    sendKeyUp(inputMsg->key, inputMsg->modifiers);
+                } else if (inputMsg->type == 3) { // PointerMotion
                     sendPointerMove(inputMsg->x, inputMsg->y);
-                } else if (inputMsg->type == 3) { // PointerButton
+                } else if (inputMsg->type == 4) { // PointerButton
                     if (inputMsg->pressed) {
                         sendPointerDown(inputMsg->x, inputMsg->y, inputMsg->key);
                     } else {
                         sendPointerUp(inputMsg->x, inputMsg->y, inputMsg->key);
+                    }
+                } else if (inputMsg->type == 5) { // KeyPress / TextInput
+                    if (inputMsg->codepoint > 0) {
+                        std::string utf8;
+                        char32_t cp = inputMsg->codepoint;
+                        if (cp <= 0x7F) {
+                            utf8.push_back(static_cast<char>(cp));
+                        } else if (cp <= 0x7FF) {
+                            utf8.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+                            utf8.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                        } else if (cp <= 0xFFFF) {
+                            utf8.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+                            utf8.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                            utf8.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                        }
+                        sendTextInput(utf8);
                     }
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::ConfigureBounds &&

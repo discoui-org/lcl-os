@@ -118,13 +118,23 @@ bool Compositor::initialize() {
                         header.opcode = protocol::LCLOpcode::InputEvent;
                         header.payloadSize = sizeof(protocol::LCLMsgInputEvent);
 
+                        // 1. Raw Key Event (1 = KeyDown, 2 = KeyUp)
                         protocol::LCLMsgInputEvent inputMsg{};
                         inputMsg.surfaceId = surfId;
-                        inputMsg.type = 1; // KeyboardKey
+                        inputMsg.type = ev.pressed ? 1 : 2;
                         inputMsg.key = ev.key;
                         inputMsg.pressed = ev.pressed ? 1 : 0;
+                        inputMsg.modifiers = ev.modifiers;
+                        inputMsg.codepoint = ev.codepoint;
 
                         protocol::sendMsgWithFd(entry.clientFd, header, &inputMsg);
+
+                        // 2. High-level KeyPress / TextInput Event (type = 5) on keydown when character is printable
+                        if (ev.pressed && ev.codepoint != 0) {
+                            protocol::LCLMsgInputEvent pressMsg = inputMsg;
+                            pressMsg.type = 5; // KeyPress / TextInput
+                            protocol::sendMsgWithFd(entry.clientFd, header, &pressMsg);
+                        }
                         break;
                     }
                 }

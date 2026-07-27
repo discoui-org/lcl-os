@@ -88,10 +88,11 @@ struct LCLMsgAckResponse {
 
 struct LCLMsgInputEvent {
     uint32_t surfaceId{0};
-    uint32_t type{0};      // 1 = KeyboardKey, 2 = PointerMotion, 3 = PointerButton
+    uint32_t type{0};      // 1 = KeyDown, 2 = KeyUp, 3 = PointerMotion, 4 = PointerButton, 5 = KeyPress/TextInput
     uint32_t key{0};       // Linux evdev keycode (e.g. KEY_A, KEY_ENTER)
     uint8_t  pressed{0};   // 1 = Down, 0 = Up
-    uint8_t  modifiers{0};
+    uint8_t  modifiers{0}; // Bitmask: 0x01=Shift, 0x02=Ctrl, 0x04=Alt, 0x08=CapsLock, 0x10=Super
+    uint32_t codepoint{0}; // Translated UTF-8 / ASCII codepoint (e.g. 'A', 'a', '1', '\n')
     float    x{0.0f};
     float    y{0.0f};
 };

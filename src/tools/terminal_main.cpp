@@ -316,7 +316,7 @@ int main() {
     // Initialize WindowApp & direct raw keypress hook for PTY input routing
     lcl::ui::WindowApp windowApp(kSurfW, kSurfH, "LCL Terminal");
     windowApp.setOnRawKeyEvent([&app](const lcl::ui::KeyEvent& ev) {
-        app.handleKey(ev.keyCode, ev.type == lcl::ui::KeyEventType::KeyDown);
+        app.handleKey(ev.keyCode, ev.type == lcl::ui::KeyEventType::KeyDown, ev.modifiers, ev.codepoint);
         return true; // Intercept & consume directly for PTY shell
     });
 
@@ -365,11 +365,23 @@ int main() {
                 if (header.opcode == lcl::protocol::LCLOpcode::InputEvent &&
                     payload.size() >= sizeof(lcl::protocol::LCLMsgInputEvent)) {
                     auto* inputMsg = reinterpret_cast<const lcl::protocol::LCLMsgInputEvent*>(payload.data());
-                    if (inputMsg->type == 1) { // KeyboardKey
-                        if (inputMsg->pressed) {
-                            windowApp.sendKeyDown(inputMsg->key, 0, inputMsg->modifiers);
-                        } else {
-                            windowApp.sendKeyUp(inputMsg->key, inputMsg->modifiers);
+                    if (inputMsg->type == 1) { // KeyDown
+                        windowApp.sendKeyDown(inputMsg->key, static_cast<char32_t>(inputMsg->codepoint), inputMsg->modifiers);
+                        updated = true;
+                    } else if (inputMsg->type == 2) { // KeyUp
+                        windowApp.sendKeyUp(inputMsg->key, inputMsg->modifiers);
+                        updated = true;
+                    } else if (inputMsg->type == 5) { // KeyPress / TextInput
+                        if (inputMsg->codepoint > 0) {
+                            std::string utf8;
+                            char32_t cp = inputMsg->codepoint;
+                            if (cp <= 0x7F) {
+                                utf8.push_back(static_cast<char>(cp));
+                            } else if (cp <= 0x7FF) {
+                                utf8.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+                                utf8.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                            }
+                            windowApp.sendTextInput(utf8);
                         }
                         updated = true;
                     }

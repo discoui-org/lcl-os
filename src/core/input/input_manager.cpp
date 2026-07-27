@@ -1,4 +1,5 @@
 #include "core/input/input_manager.hpp"
+#include "core/input/key_mapper.hpp"
 #include <iostream>
 #include <fcntl.h>
 #include <unistd.h>
@@ -328,6 +329,21 @@ size_t InputManager::dispatchLibinputEvents(int screenWidth, int screenHeight) {
                 outEv.type = InputEventType::KeyboardKey;
                 outEv.key = libinput_event_keyboard_get_key(k);
                 outEv.pressed = libinput_event_keyboard_get_key_state(k) == LIBINPUT_KEY_STATE_PRESSED;
+
+                if (outEv.key == KEY_LEFTSHIFT || outEv.key == KEY_RIGHTSHIFT) {
+                    m_shiftPressed = outEv.pressed;
+                } else if (outEv.key == KEY_LEFTCTRL || outEv.key == KEY_RIGHTCTRL) {
+                    m_ctrlPressed = outEv.pressed;
+                } else if (outEv.key == KEY_LEFTALT || outEv.key == KEY_RIGHTALT) {
+                    m_altPressed = outEv.pressed;
+                } else if (outEv.key == KEY_LEFTMETA || outEv.key == KEY_RIGHTMETA) {
+                    m_superPressed = outEv.pressed;
+                } else if (outEv.key == KEY_CAPSLOCK && outEv.pressed) {
+                    m_capsLockActive = !m_capsLockActive;
+                }
+
+                outEv.modifiers = getActiveModifiers();
+                outEv.codepoint = KeyMapper::toCodepoint(outEv.key, outEv.modifiers);
                 if (m_eventCallback) m_eventCallback(outEv);
                 break;
             }
@@ -444,8 +460,16 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                     count++;
                 }
             } else if (ev.type == EV_KEY) {
-                if (ev.code == KEY_LEFTMETA || ev.code == KEY_RIGHTMETA) {
+                if (ev.code == KEY_LEFTSHIFT || ev.code == KEY_RIGHTSHIFT) {
+                    m_shiftPressed = (ev.value != 0);
+                } else if (ev.code == KEY_LEFTCTRL || ev.code == KEY_RIGHTCTRL) {
+                    m_ctrlPressed = (ev.value != 0);
+                } else if (ev.code == KEY_LEFTALT || ev.code == KEY_RIGHTALT) {
+                    m_altPressed = (ev.value != 0);
+                } else if (ev.code == KEY_LEFTMETA || ev.code == KEY_RIGHTMETA) {
                     m_superPressed = (ev.value != 0);
+                } else if (ev.code == KEY_CAPSLOCK && ev.value == 1) {
+                    m_capsLockActive = !m_capsLockActive;
                 }
 
                 InputEvent outEv{};
@@ -476,6 +500,8 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                 } else {
                     outEv.type = InputEventType::KeyboardKey;
                     outEv.key = ev.code;
+                    outEv.modifiers = getActiveModifiers();
+                    outEv.codepoint = KeyMapper::toCodepoint(outEv.key, outEv.modifiers);
                     if (m_eventCallback) m_eventCallback(outEv);
                     count++;
                 }
@@ -505,6 +531,16 @@ void InputManager::cleanup() {
 
     if (m_libinput) { libinput_unref(m_libinput); m_libinput = nullptr; }
     if (m_udev) { udev_unref(m_udev); m_udev = nullptr; }
+}
+
+uint8_t InputManager::getActiveModifiers() const {
+    uint8_t mods = 0;
+    if (m_shiftPressed)   mods |= LCL_MOD_SHIFT;
+    if (m_ctrlPressed)    mods |= LCL_MOD_CTRL;
+    if (m_altPressed)     mods |= LCL_MOD_ALT;
+    if (m_capsLockActive) mods |= LCL_MOD_CAPSLOCK;
+    if (m_superPressed)   mods |= LCL_MOD_SUPER;
+    return mods;
 }
 
 } // namespace lcl::core

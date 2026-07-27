@@ -27,6 +27,8 @@ struct InputEvent {
     bool isRepeat{false};
     uint32_t key{0};
     bool superPressed{false};
+    uint8_t modifiers{0};
+    char32_t codepoint{0};
     std::string deviceName;
 };
 
@@ -123,6 +125,12 @@ private:
     bool m_initialized{false};
     bool m_usingEvdev{false};
     bool m_superPressed{false};
+    bool m_shiftPressed{false};
+    bool m_ctrlPressed{false};
+    bool m_altPressed{false};
+    bool m_capsLockActive{false};
+
+    uint8_t getActiveModifiers() const;
 };
 
 } // namespace lcl::core

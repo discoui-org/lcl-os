@@ -35,7 +35,7 @@ public:
      * is delegated to the shell (bash/readline) inside the PTY.
      */
     void handleInput(const core::InputEvent& ev);
-    void handleKey(uint32_t keycode, bool pressed);
+    void handleKey(uint32_t keycode, bool pressed, uint8_t modifiers = 0, char32_t codepoint = 0);
 
     /**
      * @brief Clear terminal line buffer (Ctrl+L / clear ANSI escape sequence).
@@ -64,8 +64,6 @@ public:
     int  getAckClientFd() const  { return m_ackClientFd; }
 
 private:
-    std::string keycodeToASCII(uint32_t keycode, bool shift);
-
     int m_windowId{-1};
     core::PTYManager m_ptyManager;
     std::vector<std::string> m_lines;
@@ -73,8 +71,6 @@ private:
     std::chrono::steady_clock::time_point m_lastInputTime;
     int m_ackClientFd{-1}; ///< Client socket FD awaiting DONE ACK (-1 = none)
     bool m_initialized{false};
-    bool m_shiftPressed{false};
-    bool m_ctrlPressed{false};
 };
 
 } // namespace lcl::apps

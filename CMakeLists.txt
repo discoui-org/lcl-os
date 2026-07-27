@@ -30,6 +30,7 @@ add_executable(lcl-core
     src/core/display/display_scale.cpp
     src/core/display/egl_backend.cpp
     src/core/input/input_manager.cpp
+    src/core/input/key_mapper.cpp
     src/core/ipc/ipc_manager.cpp
     src/core/ipc/lcl_protocol.cpp
     src/core/session/startup_manager.cpp
@@ -100,6 +101,7 @@ target_link_libraries(lcl-desktop-wm PRIVATE
 add_executable(lcl-terminal
     src/tools/terminal_main.cpp
     src/apps/terminal/terminal_app.cpp
+    src/core/input/key_mapper.cpp
     src/core/terminal/pty_manager.cpp
     src/core/display/display_scale.cpp
     src/core/ipc/ipc_manager.cpp
@@ -140,6 +142,7 @@ if(BUILD_TESTS)
         tests/test_display_scale.cpp
         tests/test_ipc_manager.cpp
         tests/test_input_manager.cpp
+        tests/test_key_mapper.cpp
         tests/test_lcl_ui.cpp
         tests/test_lcl_ui_events.cpp
         src/core/ipc/lcl_protocol.cpp
@@ -147,6 +150,7 @@ if(BUILD_TESTS)
         src/core/app/app_bundle_parser.cpp
         src/core/display/display_scale.cpp
         src/core/input/input_manager.cpp
+        src/core/input/key_mapper.cpp
     )
 
     target_compile_options(lcl_unit_tests PRIVATE -frtti)
