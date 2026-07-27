@@ -255,10 +255,24 @@ void WindowApp::pollIPC() {
 
 void WindowApp::runEventLoop() {
     m_running = true;
+    constexpr auto targetPeriod = std::chrono::microseconds(6944); // 144 Hz target period (~6.944 ms)
+
     while (m_running && !g_appSignalReceived.load()) {
+        auto frameStart = std::chrono::high_resolution_clock::now();
+
         pollIPC();
-        renderFrame();
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        bool rendered = renderFrame();
+
+        if (rendered) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::high_resolution_clock::now() - frameStart);
+            if (elapsed < targetPeriod) {
+                std::this_thread::sleep_for(targetPeriod - elapsed);
+            }
+        } else {
+            // Idle state: sleep 2ms when no redraws are needed to avoid CPU busy spinning
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
     }
     m_running = false;
     if (m_socketFd >= 0) {
@@ -337,6 +351,7 @@ bool WindowApp::renderFrame() {
     }
 
     Rect damageRect = m_renderPass.getDamageRect();
+    m_renderPass.clear();
 
     m_renderer.beginFrame();
     m_renderPass.begin(nullptr);
@@ -347,8 +362,6 @@ bool WindowApp::renderFrame() {
 
     m_renderPass.end(nullptr);
     m_renderer.endFrame();
-
-    m_renderPass.clear();
 
     // Copy 100% complete rendered frame to SHM buffer atomically
     if (m_shmPixels && !m_pixelBuffer.empty()) {

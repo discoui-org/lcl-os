@@ -460,7 +460,7 @@ int main() {
             termNeedsAttach = false;
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        std::this_thread::sleep_for(std::chrono::microseconds(6900));
     }
 
     app.shutdown();

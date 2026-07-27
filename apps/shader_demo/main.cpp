@@ -103,6 +103,9 @@ public:
         char timeBuf[128];
         std::snprintf(timeBuf, sizeof(timeBuf), "Animation Time: %.2fs", t);
         skia->drawString(static_cast<int>(cardX + 24), static_cast<int>(cardY + 130), timeBuf, 0xFF38BDF8);
+
+        // Continuously mark dirty to trigger next animation frame
+        markDirty();
     }
 
 private:
@@ -127,27 +130,15 @@ int main() {
     rootContainer->getYogaNode().setHeight(static_cast<float>(height));
 
     auto shaderWidget = std::make_unique<ShaderCanvasWidget>();
-    auto* shaderWidgetPtr = shaderWidget.get();
     shaderWidget->getYogaNode().setWidth(static_cast<float>(width));
     shaderWidget->getYogaNode().setHeight(static_cast<float>(height));
 
     rootContainer->addChild(std::move(shaderWidget));
     app.setRootWidget(std::move(rootContainer));
 
-    if (!app.connectCompositor()) {
-        std::cerr << "[ShaderDemo ERROR] Could not connect to compositor socket.\n";
-        return 1;
-    }
-
-    std::cout << "[ShaderDemo] Connected to Compositor! Running 144Hz animation loop...\n";
-
-    // 144 FPS continuous animation render loop (~6.94ms target frame period)
-    while (app.renderFrame()) {
-        // Poll IPC socket for events and window resizes
-        shaderWidgetPtr->markDirty();
-
-        // 144 Hz frame pacing budget (~6.9ms)
-        std::this_thread::sleep_for(std::chrono::microseconds(6900));
+    if (app.connectCompositor()) {
+        std::cout << "[ShaderDemo] App connected to compositor! Running live desktop UI loop...\n";
+        app.runEventLoop();
     }
 
     return 0;

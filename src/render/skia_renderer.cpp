@@ -275,13 +275,15 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
         int srcY = y - dstY;
         const uint32_t* srcRow = pixelData + (srcY * stridePixels);
         uint32_t* dstRow = &m_targetPixels[y * m_width];
+        int copyWidth = clipX2 - clipX1;
 
-        for (int x = clipX1; x < clipX2; ++x) {
-            int srcX = x - dstX;
-            uint32_t pixel = srcRow[srcX];
-            if (opacity >= 0.99f) {
-                dstRow[x] = pixel;
-            } else {
+        if (opacity >= 0.99f) {
+            int srcXOffset = clipX1 - dstX;
+            std::memcpy(dstRow + clipX1, srcRow + srcXOffset, copyWidth * sizeof(uint32_t));
+        } else {
+            for (int x = clipX1; x < clipX2; ++x) {
+                int srcX = x - dstX;
+                uint32_t pixel = srcRow[srcX];
                 uint8_t srcA = static_cast<uint8_t>(((pixel >> 24) & 0xFF) * opacity);
                 float a = srcA / 255.0f;
                 float invA = 1.0f - a;
