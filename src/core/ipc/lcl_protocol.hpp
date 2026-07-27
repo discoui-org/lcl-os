@@ -26,7 +26,13 @@ enum class LCLOpcode : uint32_t {
     ConfigureBounds = 4,
     AttachBuffer = 5,
     InputEvent = 6,
-    AckResponse = 7
+    AckResponse = 7,
+    SetDecorationMode = 8
+};
+
+enum class LCLDecorationMode : uint32_t {
+    SSD = 0, // Server-Side Decoration
+    CSD = 1  // Client-Side Decoration
 };
 
 #pragma pack(push, 1)
@@ -88,6 +94,11 @@ struct LCLMsgInputEvent {
     uint8_t  modifiers{0};
     float    x{0.0f};
     float    y{0.0f};
+};
+
+struct LCLMsgSetDecorationMode {
+    uint32_t surfaceId{0};
+    LCLDecorationMode mode{LCLDecorationMode::SSD};
 };
 
 #pragma pack(pop)

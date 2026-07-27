@@ -301,6 +301,26 @@ void Compositor::processIPC() {
             m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH);
             m_needsRedraw = true;
 
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetDecorationMode ||
+                   msg.command.rfind("SET_DECORATION_MODE", 0) == 0) {
+            uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | 1;
+            auto it = m_surfaces.find(surfaceKey);
+            if (it != m_surfaces.end()) {
+                lcl::protocol::LCLDecorationMode mode = lcl::protocol::LCLDecorationMode::SSD;
+                if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetDecorationMode)) {
+                    auto* decMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetDecorationMode*>(msg.payload.data());
+                    mode = decMsg->mode;
+                } else if (msg.command.find("CSD") != std::string::npos) {
+                    mode = lcl::protocol::LCLDecorationMode::CSD;
+                }
+                render::DecorationMode wmMode = (mode == lcl::protocol::LCLDecorationMode::CSD) ?
+                    render::DecorationMode::CSD : render::DecorationMode::SSD;
+                m_windowManager.setDecorationMode(it->second.windowId, wmMode);
+                std::cout << "[LCL Compositor] Set decoration mode for Window " << it->second.windowId
+                          << " to " << (wmMode == render::DecorationMode::CSD ? "CSD" : "SSD") << "\n";
+                m_needsRedraw = true;
+            }
+
         } else if (msg.command == "SPAWN_TERMINAL" || msg.command.rfind("SPAWN_TERMINAL", 0) == 0) {
             pid_t pid = fork();
             if (pid == 0) {
@@ -331,11 +351,11 @@ void Compositor::tickCursorBlink() {
 void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
 
-    // --- Build legacy WindowRenderContent list (text-based fallback for windows without SHM) ---
+    // --- Build fallback content list for windows without active SHM buffers ---
     std::vector<render::WindowRenderContent> contents;
     for (const auto& win : m_windowManager.getWindows()) {
         bool hasShmBuffer = false;
-        for (const auto& [surfId, entry] : m_surfaces) {
+        for (const auto& [surfKey, entry] : m_surfaces) {
             if (entry.windowId == win.id && entry.pixels) {
                 hasShmBuffer = true;
                 break;
@@ -356,36 +376,52 @@ void Compositor::renderFrame() {
     // --- Begin Skia frame ---
     m_renderer.getSkiaRenderer()->beginFrame();
 
-    // 1. Black desktop background
+    // 1. Clear Desktop Canvas (Black background)
     m_renderer.clear(0xFF000000);
 
-    // 2. Render windows with text-content fallback
-    m_renderer.renderDesktop(m_windowManager, contents);
-
-    // 3. Composite IPC client SHM framebuffers on top of their windows
-    for (const auto& [surfId, entry] : m_surfaces) {
-        if (!entry.pixels) continue;
-
-        // Find the matching window to get its position
-        const render::Window* win = nullptr;
-        for (const auto& w : m_windowManager.getWindows()) {
-            if (w.id == entry.windowId) { win = &w; break; }
+    // 2. Atomic Z-Stacking Window Group Rendering (Frame + Client Surface per Window in Z-order)
+    using core::DisplayScale;
+    for (const auto& win : m_windowManager.getWindows()) {
+        // A. Render Server-Side Window Frame (Titlebar & Border) if SSD enabled
+        if (win.decorationMode == render::DecorationMode::SSD) {
+            m_renderer.drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
         }
-        if (!win) continue;
 
-        // Draw SHM pixel buffer inside window content area (below title bar)
-        using core::DisplayScale;
-        int dstX = win->x;
-        int dstY = win->y + DisplayScale::titleBarHeight();
-        int srcW = static_cast<int>(entry.width);
-        int srcH = static_cast<int>(entry.height);
-        int stridePixels = static_cast<int>(entry.stride / 4);
+        // B. Find matching client SHM surface buffer for this window
+        const SurfaceEntry* matchingSurface = nullptr;
+        for (const auto& [surfKey, entry] : m_surfaces) {
+            if (entry.windowId == win.id && entry.pixels) {
+                matchingSurface = &entry;
+                break;
+            }
+        }
 
-        m_renderer.getSkiaRenderer()->drawBuffer(
-            dstX, dstY, srcW, srcH,
-            reinterpret_cast<const uint32_t*>(entry.pixels),
-            stridePixels, 1.0f);
+        if (matchingSurface) {
+            int titleOffset = (win.decorationMode == render::DecorationMode::SSD) ? DisplayScale::titleBarHeight() : 0;
+            int dstX = win.x;
+            int dstY = win.y + titleOffset;
+            int srcW = static_cast<int>(matchingSurface->width);
+            int srcH = static_cast<int>(matchingSurface->height);
+            int stridePixels = static_cast<int>(matchingSurface->stride / 4);
+
+            m_renderer.getSkiaRenderer()->drawBuffer(
+                dstX, dstY, srcW, srcH,
+                reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
+                stridePixels, 1.0f);
+        } else {
+            // Render text fallback content if SHM buffer is not yet attached
+            const render::WindowRenderContent* content = nullptr;
+            for (const auto& c : contents) {
+                if (c.windowId == win.id) { content = &c; break; }
+            }
+            if (content) {
+                m_renderer.renderWindowContent(win, content);
+            }
+        }
     }
+
+    // 3. Render Mouse Cursor on top of all windows
+    m_renderer.drawCursor(m_windowManager.getMouseX(), m_windowManager.getMouseY());
 
     m_renderer.swapBuffers();
     m_windowManager.clearAllDirty();

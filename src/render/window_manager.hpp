@@ -20,6 +20,11 @@ enum class ResizeEdge {
     BottomRight
 };
 
+enum class DecorationMode {
+    SSD, // Server-Side Decoration
+    CSD  // Client-Side Decoration
+};
+
 struct Window {
     uint32_t id{0};
     std::string title;
@@ -33,6 +38,7 @@ struct Window {
     int pendingHeight{300};
     int zIndex{0};
     bool isFocused{false};
+    DecorationMode decorationMode{DecorationMode::SSD};
 
     // Drag state
     bool isDragging{false};
@@ -120,6 +126,11 @@ public:
      * @param frameH Total attached surface frame height (including titlebar).
      */
     void commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH);
+
+    /**
+     * @brief Set decoration mode (SSD/CSD) for a window.
+     */
+    void setDecorationMode(uint32_t windowId, DecorationMode mode);
 
     /**
      * @brief Focus a window by ID and bring it to top z-order.

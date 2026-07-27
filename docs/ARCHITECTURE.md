@@ -150,3 +150,17 @@ Guest display boot args (when `NATIVE=1`):
 1. **Client Applications (User Space / UI Kits):** Kendi iç düzenini (Flexbox, Grid, Monospace Cell) yönetir. WM'den gelen pencere resize isteklerini (`RESIZE_REQUEST` / `ConfigureBounds`) alır. Kendi mantığına göre uygun boyutta SHM buffer allocate eder ve `ATTACH_BUFFER` ile sunar. WM veya Compositor'ün ekran koordinatları (\(X, Y\)) hakkında bilgi sahibi değildir.
 2. **Window Manager (WM):** Pencere geometrisi, odak yönetimi, sürükleme/boyutlandırma durum makinelerinin (`WM Drag/Resize State`) tek sahibidir. Sürüklenen kenara (`ResizeEdge`) göre sabit kalacak anchor noktasını korur. Client'tan gelen gerçek tampon boyutunu (\(frameW, frameH\)) kabul eder, `commitSurfaceGeometry` metodu üzerinden offset hesabını yapar ve pencerenin nihai dünya koordinatlarını (\(X_{final}, Y_{final}\)) belirler. Uygulamaya özel kod barındıramaz.
 3. **Compositor (Presentation Engine):** "Kör Çizici" (Blind Renderer) olarak çalışır. Tamponların ekrana çizimi, z-index harmanlaması (blending) ve vSync eşzamanlamasını üstlenir. Pencere durum makinelerinden veya kenar hesaplarından bağımsızdır. WM'in onayladığı geometriyi ve Client'ın sunduğu tamponu vSync anında atomic olarak ekrana çeker.
+
+---
+
+## 6. Z-Indexing & Hybrid Decoration Protocol (SSD/CSD Negotiation)
+
+1. **Sub-surface Grouping & Atomic Z-Stacking (`window_manager` & `compositor`):**
+   - Her pencere ve ona ait tüm alt yüzeyler (Titlebar + Window Border + Client SHM Buffer) tek bir **Pencere Grubu (Window Stack Element)** olarak ele alınır.
+   - Compositor render döngüsü (`renderFrame`), `WindowManager` z-order sıralamasını (`m_windows` vektörünü) en alttan en üste doğru izler.
+   - Her pencere için önce başlık çubuğu/çerçeve (SSD), hemen ardından istemcinin SHM tamponu çizilir. Odaklanan pencere atomik olarak Z-Stack'in en üstüne (\(Z_{\text{max}}\)) yükseltildiğinde hem çerçeve hem de içerik tamponu en üste taşınır.
+
+2. **Common Decoration Negotiation Protocol (`lcl_protocol`):**
+   - `LCLOpcode::SetDecorationMode` IPC mesajı ile istemciler `SSD` (Server-Side Decoration) veya `CSD` (Client-Side Decoration) modlarını talep eder.
+   - **Masaüstü WM (`lcl-desktop-wm`):** Varsayılan olarak `SSD` modunda pencere başlık çubuğunu çizer. İstemci `CSD` talep ederse başlık çubuğu çizimini devre dışı bırakarak tüm render alanını istemciye devreder.
+   - **Mobil WM (`lcl-mobile-wm`):** Mobil deneyiminde `SSD` çizimini reddederek uygulamalara tam ekran (fullscreen) uygulama alanı sağlar.

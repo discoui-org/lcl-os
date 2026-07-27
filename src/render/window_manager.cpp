@@ -381,6 +381,17 @@ void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int fra
     }
 }
 
+void WindowManager::setDecorationMode(uint32_t windowId, DecorationMode mode) {
+    for (auto& win : m_windows) {
+        if (win.id == windowId) {
+            win.decorationMode = mode;
+            win.markDirty();
+            m_mouseDirty = true;
+            break;
+        }
+    }
+}
+
 void WindowManager::focusWindow(uint32_t windowId) {
     auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
         return w.id == windowId;

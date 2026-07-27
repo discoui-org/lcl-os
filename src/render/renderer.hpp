@@ -90,6 +90,7 @@ public:
     void renderLCLDesktopShell(const std::string& statusMessage);
     void renderDesktop(const WindowManager& windowManager, const std::vector<WindowRenderContent>& windowContents);
     void drawWindowFrame(int x, int y, int width, int height, const std::string& title, uint32_t headerColor);
+    void renderWindowContent(const Window& win, const WindowRenderContent* content);
 
     /**
      * @brief Present back buffer onto DRM display CRTC or log virtual frame.
@@ -106,7 +107,6 @@ private:
     // --- Modular render passes (called by renderDesktop) ---
     void renderBackground();
     void renderTaskbar();
-    void renderWindowContent(const Window& win, const WindowRenderContent* content);
 
     // --- DRM dumb buffer management ---
     bool createDumbBuffer();
