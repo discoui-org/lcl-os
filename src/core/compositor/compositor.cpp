@@ -286,9 +286,9 @@ void Compositor::processIPC() {
                     entry.shmSize = shmSize;
                     entry.shmFd   = fd;
 
-                    std::cout << "[LCL Compositor] Attached SHM Buffer (FD: " << fd
-                              << ", " << w << "x" << h << ", stride: " << stride << ") for Surface " << surfId
-                              << " from client PID " << msg.pid << "\n";
+                    // std::cout << "[LCL Compositor] Attached SHM Buffer (FD: " << fd
+                    //           << ", " << w << "x" << h << ", stride: " << stride << ") for Surface " << surfId
+                    //           << " from client PID " << msg.pid << "\n";
                 } else {
                     std::cerr << "[LCL Compositor ERROR] mmap failed for memfd " << fd
                               << ": " << strerror(errno) << "\n";
