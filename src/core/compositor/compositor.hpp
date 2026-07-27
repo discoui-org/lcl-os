@@ -95,7 +95,7 @@ private:
     std::chrono::steady_clock::time_point m_lastBlinkCheck;
 
     // Diagnostic Overlay & FPS metrics
-    bool                                 m_showFpsOverlay{true};
+    bool                                 m_showFpsOverlay{false};
     uint32_t                             m_fpsFrameCount{0};
     float                                m_currentFps{0.0f};
     float                                m_currentFrameMs{0.0f};

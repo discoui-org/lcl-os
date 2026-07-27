@@ -540,7 +540,7 @@ echo "===================================================="
     )
 
     log("Resolving dynamic library dependencies...")
-    bins = [BINARY, OPEN_BIN, WM_BIN, TERM_BIN, DEMO_BIN, SHADER_BIN] + [p for p in host_bins.values() if p.is_file()]
+    bins = [BINARY, OPEN_BIN, WM_BIN, TERM_BIN, DEMO_BIN] + [p for p in host_bins.values() if p.is_file()]
     for bin_path in bins:
         copy_ldd_deps(bin_path, dest_lib)
 
