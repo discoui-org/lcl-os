@@ -171,11 +171,12 @@ std::string PTYManager::getWorkingDirectory() const {
 
 void PTYManager::shutdown() {
     if (m_childPid > 0) {
-        std::cout << "[LCL PTY] Terminating shell process PID: " << m_childPid << "...\n";
-        kill(m_childPid, SIGTERM);
+        std::cout << "[LCL PTY] Terminating shell process group PGID: " << m_childPid << "...\n";
+        kill(-m_childPid, SIGHUP);
+        kill(-m_childPid, SIGTERM);
         usleep(10000);
         if (kill(m_childPid, 0) == 0) {
-            kill(m_childPid, SIGKILL);
+            kill(-m_childPid, SIGKILL);
         }
         waitpid(m_childPid, nullptr, WNOHANG);
         m_childPid = -1;

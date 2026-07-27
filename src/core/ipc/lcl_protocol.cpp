@@ -63,8 +63,13 @@ bool recvMsgWithFd(int socketFd, LCLHeader& header, std::vector<uint8_t>& payloa
     msg.msg_controllen = sizeof(cmsgu.control);
 
     // Use MSG_DONTWAIT so non-blocking sockets return EAGAIN cleanly
+    errno = 0;
     ssize_t n = recvmsg(socketFd, &msg, MSG_DONTWAIT);
-    if (n <= 0) return false;  // includes EAGAIN (errno set), closed, or error
+    if (n == 0) {
+        errno = ECONNRESET; // Orderly shutdown (EOF) by peer
+        return false;
+    }
+    if (n < 0) return false;  // EAGAIN, EWOULDBLOCK, or error
     if (n < static_cast<ssize_t>(sizeof(LCLHeader))) return false;
     if (header.magic != LCL_PROTOCOL_MAGIC) return false;
 

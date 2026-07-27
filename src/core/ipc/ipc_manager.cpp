@@ -119,22 +119,25 @@ std::vector<IPCClientMessage> IPCManager::pollMessages() {
             }
 
             // Real error or EOF — fd is dead
-            if (errno != 0) {
-                // Check for actual disconnect vs empty-binary-frame
-                char probe;
-                ssize_t pr = recv(fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT);
-                if (pr == 0) {
-                    // EOF: client disconnected
-                    close(fd);
-                    fdAlive = false;
-                    break;
-                }
-            }
-            // Otherwise: might be a legacy text command — break out to text fallback
+            close(fd);
+            fdAlive = false;
             break;
         }
 
         if (!fdAlive) {
+            struct ucred cred{};
+            socklen_t len = sizeof(cred);
+            getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len);
+
+            IPCClientMessage discMsg{};
+            discMsg.clientFd = fd;
+            discMsg.pid = cred.pid;
+            discMsg.uid = cred.uid;
+            discMsg.gid = cred.gid;
+            discMsg.command = "CLIENT_DISCONNECT";
+            discMsg.header.opcode = protocol::LCLOpcode::SurfaceDestroy;
+            messages.push_back(discMsg);
+
             it = m_clientFds.erase(it);
             continue;
         }

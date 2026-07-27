@@ -7,13 +7,36 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <cstring>
+#include <signal.h>
+#include <atomic>
 #include <thread>
 #include <chrono>
 
 namespace lcl::ui {
 
+static std::atomic<bool> g_appSignalReceived{false};
+
+static void setupAppSignalHandlers() {
+    static bool handlersSet = false;
+    if (handlersSet) return;
+    handlersSet = true;
+
+    struct sigaction sa{};
+    sa.sa_handler = [](int sig) {
+        (void)sig;
+        g_appSignalReceived = true;
+    };
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGHUP, &sa, nullptr);
+}
+
 WindowApp::WindowApp(uint32_t width, uint32_t height, const std::string& title)
     : m_width(width), m_height(height), m_title(title) {
+    setupAppSignalHandlers();
     m_pixelBuffer.resize(width * height, 0xFF000000);
     m_initialized = m_renderer.initialize(width, height, nullptr, m_pixelBuffer.data());
 
@@ -201,6 +224,8 @@ void WindowApp::pollIPC() {
                 if (cfg->width > 0 && cfg->height > 0) {
                     resize(cfg->width, cfg->height);
                 }
+            } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
+                m_running = false;
             }
         } else {
             break;
@@ -210,10 +235,15 @@ void WindowApp::pollIPC() {
 
 void WindowApp::runEventLoop() {
     m_running = true;
-    while (m_running) {
+    while (m_running && !g_appSignalReceived.load()) {
         pollIPC();
         renderFrame();
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    m_running = false;
+    if (m_socketFd >= 0) {
+        close(m_socketFd);
+        m_socketFd = -1;
     }
 }
 

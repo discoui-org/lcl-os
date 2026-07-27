@@ -7,6 +7,7 @@
 #include <thread>
 #include <chrono>
 #include <sys/mman.h>
+#include <csignal>
 
 namespace lcl::core {
 
@@ -41,6 +42,8 @@ Compositor::~Compositor() {
 
 bool Compositor::initialize() {
     if (m_initialized) return true;
+
+    signal(SIGPIPE, SIG_IGN);
 
     std::cout << "====================================================\n"
               << "  LCL Core Linux (LCL) v0.1.0 - Core Engine\n"
@@ -229,7 +232,34 @@ void Compositor::processIPC() {
         bool isAttachBuffer  = (msg.header.opcode == lcl::protocol::LCLOpcode::AttachBuffer) ||
                                (msg.command.rfind("ATTACH_BUFFER:", 0) == 0);
 
-        if (isSurfaceCreate) {
+        bool isDisconnect   = (msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) ||
+                               (msg.command.rfind("CLIENT_DISCONNECT", 0) == 0);
+
+        if (isDisconnect) {
+            std::vector<uint64_t> surfacesToRemove;
+            for (auto& [surfKey, entry] : m_surfaces) {
+                if (entry.clientFd == msg.clientFd || (msg.pid > 0 && (surfKey >> 32) == static_cast<uint64_t>(msg.pid))) {
+                    if (entry.windowId > 0) {
+                        std::cout << "[LCL Compositor] Removing Window ID: " << entry.windowId
+                                  << " for disconnected client FD: " << msg.clientFd << "\n";
+                        m_windowManager.removeWindow(entry.windowId);
+                    }
+                    if (entry.pixels && entry.shmSize > 0) {
+                        munmap(entry.pixels, entry.shmSize);
+                        entry.pixels = nullptr;
+                    }
+                    if (entry.shmFd >= 0) {
+                        close(entry.shmFd);
+                        entry.shmFd = -1;
+                    }
+                    surfacesToRemove.push_back(surfKey);
+                }
+            }
+            for (uint64_t key : surfacesToRemove) {
+                m_surfaces.erase(key);
+            }
+            m_needsRedraw = true;
+        } else if (isSurfaceCreate) {
             uint32_t surfId = 1;
             std::string title = "LCL Terminal";
             int winX = DisplayScale::px(80);
