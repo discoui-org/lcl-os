@@ -80,6 +80,16 @@ struct LCLMsgAckResponse {
     char message[128]{0};
 };
 
+struct LCLMsgInputEvent {
+    uint32_t surfaceId{0};
+    uint32_t type{0};      // 1 = KeyboardKey, 2 = PointerMotion, 3 = PointerButton
+    uint32_t key{0};       // Linux evdev keycode (e.g. KEY_A, KEY_ENTER)
+    uint8_t  pressed{0};   // 1 = Down, 0 = Up
+    uint8_t  modifiers{0};
+    float    x{0.0f};
+    float    y{0.0f};
+};
+
 #pragma pack(pop)
 
 /**

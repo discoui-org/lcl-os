@@ -22,6 +22,7 @@ BINARY = BUILD_DIR / "lcl-core"
 OPEN_BIN = BUILD_DIR / "lcl-open"
 WM_BIN = BUILD_DIR / "lcl-desktop-wm"
 TERM_BIN = BUILD_DIR / "lcl-terminal"
+DEMO_BIN = BUILD_DIR / "apps" / "ui_demo" / "lcl_ui_demo"
 INITRAMFS_DIR = BUILD_DIR / "initramfs_root"
 INITRAMFS_IMG = BUILD_DIR / "initramfs.cpio.gz"
 CACHE_DIR = BUILD_DIR / "qemu-cache"
@@ -473,6 +474,31 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
     if TERM_BIN.is_file():
         shutil.copy2(TERM_BIN, dest_bin / "lcl-terminal")
 
+    if DEMO_BIN.is_file():
+        shutil.copy2(DEMO_BIN, dest_bin / "lcl_ui_demo")
+
+    uidemo_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "UIDemo.app"
+    (uidemo_app / "bin").mkdir(parents=True, exist_ok=True)
+    (uidemo_app / "assets").mkdir(parents=True, exist_ok=True)
+    write_text(
+        uidemo_app / "metadata.json",
+        """{
+    "name": "LCL UI Demo",
+    "executable": "bin/ui_demo",
+    "version": "1.0.0",
+    "icon": "assets/icon.png"
+}
+""",
+    )
+    if DEMO_BIN.is_file():
+        shutil.copy2(DEMO_BIN, uidemo_app / "bin" / "ui_demo")
+    else:
+        write_text(
+            uidemo_app / "bin" / "ui_demo",
+            "#!/bin/sh\n/usr/bin/lcl_ui_demo 2>/dev/null || echo 'LCL UI Demo App'\n",
+            executable=True,
+        )
+
     term_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "Terminal.app"
     (term_app / "bin").mkdir(parents=True, exist_ok=True)
     (term_app / "assets").mkdir(parents=True, exist_ok=True)
@@ -526,7 +552,7 @@ echo "===================================================="
     )
 
     log("Resolving dynamic library dependencies...")
-    bins = [BINARY, OPEN_BIN] + [p for p in host_bins.values() if p.is_file()]
+    bins = [BINARY, OPEN_BIN, WM_BIN, TERM_BIN, DEMO_BIN] + [p for p in host_bins.values() if p.is_file()]
     for bin_path in bins:
         copy_ldd_deps(bin_path, dest_lib)
 

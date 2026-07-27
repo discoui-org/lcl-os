@@ -16,6 +16,7 @@
 #include "core/ipc/ipc_manager.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "render/font_renderer.hpp"
+#include "lcl-ui/core/window_app.hpp"
 
 // Simple 8x16 VGA font glyph row mask helper for fallback rendering
 static uint8_t getSimpleGlyphRow(char c, int row) {
@@ -306,6 +307,19 @@ int main() {
         return 1;
     }
 
+    // Set socket non-blocking for IPC input polling
+    int flags = fcntl(socketFd, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(socketFd, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    // Initialize WindowApp & direct raw keypress hook for PTY input routing
+    lcl::ui::WindowApp windowApp(kSurfW, kSurfH, "LCL Terminal");
+    windowApp.setOnRawKeyEvent([&app](const lcl::ui::KeyEvent& ev) {
+        app.handleKey(ev.keyCode, ev.type == lcl::ui::KeyEventType::KeyDown);
+        return true; // Intercept & consume directly for PTY shell
+    });
+
     // Send initial ATTACH_BUFFER
     renderTerminalFrame(shmPixels, kSurfW, kSurfH, app, fontRenderer);
 
@@ -324,11 +338,78 @@ int main() {
     std::cout << "[LCL Terminal] Sent initial ATTACH_BUFFER (memfd: " << shmFd << ") for Surface 1.\n";
     std::cout << "[LCL Terminal] Standalone process running (PID: " << getpid() << "). PTY shell active.\n";
 
-    // 7. Event loop: poll PTY output & update SHM frame
+    // 7. Event loop: poll IPC keypresses, PTY output & update SHM frame
     auto lastBlink = std::chrono::steady_clock::now();
+
+    int curW = kSurfW;
+    int curH = kSurfH;
 
     while (app.isAlive()) {
         bool updated = app.update();
+
+        // Drain pending IPC input events & resize ConfigureBounds from Compositor
+        while (true) {
+            lcl::protocol::LCLHeader header{};
+            std::vector<uint8_t> payload;
+            int receivedFd = -1;
+            if (lcl::protocol::recvMsgWithFd(socketFd, header, payload, receivedFd)) {
+                if (header.opcode == lcl::protocol::LCLOpcode::InputEvent &&
+                    payload.size() >= sizeof(lcl::protocol::LCLMsgInputEvent)) {
+                    auto* inputMsg = reinterpret_cast<const lcl::protocol::LCLMsgInputEvent*>(payload.data());
+                    if (inputMsg->type == 1) { // KeyboardKey
+                        if (inputMsg->pressed) {
+                            windowApp.sendKeyDown(inputMsg->key, 0, inputMsg->modifiers);
+                        } else {
+                            windowApp.sendKeyUp(inputMsg->key, inputMsg->modifiers);
+                        }
+                        updated = true;
+                    }
+                } else if (header.opcode == lcl::protocol::LCLOpcode::ConfigureBounds &&
+                           payload.size() >= sizeof(lcl::protocol::LCLMsgConfigureBounds)) {
+                    auto* cfg = reinterpret_cast<const lcl::protocol::LCLMsgConfigureBounds*>(payload.data());
+                    int newW = static_cast<int>(cfg->width);
+                    int newH = static_cast<int>(cfg->height);
+
+                    if (newW > 0 && newH > 0 && (newW != curW || newH != curH)) {
+                        curW = newW;
+                        curH = newH;
+
+                        if (shmPixels) {
+                            munmap(shmPixels, shmSize);
+                            shmPixels = nullptr;
+                        }
+                        if (shmFd >= 0) {
+                            close(shmFd);
+                            shmFd = -1;
+                        }
+
+                        shmSize = curW * curH * 4;
+                        shmFd = memfd_create("lcl_term_shm", MFD_CLOEXEC);
+                        if (shmFd >= 0) {
+                            ftruncate(shmFd, shmSize);
+                            shmPixels = reinterpret_cast<uint32_t*>(
+                                mmap(nullptr, shmSize, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd, 0));
+
+                            if (shmPixels == MAP_FAILED) {
+                                shmPixels = nullptr;
+                            }
+                        }
+
+                        app.resize(curW, curH);
+                        windowApp.getRootWidget()->getYogaNode().setWidth(static_cast<float>(curW));
+                        windowApp.getRootWidget()->getYogaNode().setHeight(static_cast<float>(curH));
+
+                        attachMsg.width = curW;
+                        attachMsg.height = curH;
+                        attachMsg.stride = curW * 4;
+
+                        updated = true;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
 
         auto now = std::chrono::steady_clock::now();
         auto blinkMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastBlink).count();
@@ -338,9 +419,9 @@ int main() {
         }
 
         if (updated && shmPixels) {
-            renderTerminalFrame(shmPixels, kSurfW, kSurfH, app, fontRenderer);
+            renderTerminalFrame(shmPixels, curW, curH, app, fontRenderer);
             // Re-notify compositor of buffer redraw
-            lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg);
+            lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, shmFd);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(16));

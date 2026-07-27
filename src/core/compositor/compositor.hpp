@@ -56,6 +56,7 @@ public:
     /// Per-IPC-surface metadata tracked by the compositor.
     struct SurfaceEntry {
         uint32_t windowId{0};    ///< Corresponding WindowManager window id
+        int      clientFd{-1};   ///< Socket FD of client process
         int      shmFd{-1};     ///< memfd descriptor received via SCM_RIGHTS
         void*    pixels{nullptr};///< mmap'd pixel pointer into the SHM buffer
         uint32_t width{0};

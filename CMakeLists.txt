@@ -109,14 +109,17 @@ add_executable(lcl-terminal
 
 target_include_directories(lcl-terminal PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
 )
 
 target_link_libraries(lcl-terminal PRIVATE
+    lcl-ui
     Threads::Threads
 )
 
 # Subdirectories
 add_subdirectory(lcl-ui)
+add_subdirectory(apps/ui_demo)
 
 # Unit Testing Framework Configuration
 option(BUILD_TESTS "Build LCL OS unit tests" ON)

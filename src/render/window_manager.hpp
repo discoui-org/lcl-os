@@ -27,6 +27,8 @@ struct Window {
     int y{0};
     int width{400};
     int height{300};
+    int pendingWidth{400};
+    int pendingHeight{300};
     int zIndex{0};
     bool isFocused{false};
 
@@ -128,6 +130,13 @@ public:
      * @brief Clear dirty flags across all windows.
      */
     void clearAllDirty();
+
+    uint32_t getFocusedWindowId() const {
+        for (auto it = m_windows.rbegin(); it != m_windows.rend(); ++it) {
+            if (it->isFocused) return it->id;
+        }
+        return 0;
+    }
 
     const std::vector<Window>& getWindows() const { return m_windows; }
     std::vector<Window>& getWindowsMutable() { return m_windows; }

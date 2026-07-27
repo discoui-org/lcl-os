@@ -43,6 +43,8 @@ uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int
     win.y = y;
     win.width = width;
     win.height = height;
+    win.pendingWidth = width;
+    win.pendingHeight = height;
     win.headerColor = headerColor;
     win.isFocused = true;
     win.markDirty();
@@ -200,11 +202,11 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                     }
                 }
 
-                if (newX != win.x || newY != win.y || newW != win.width || newH != win.height) {
+                if (newX != win.x || newY != win.y || newW != win.pendingWidth || newH != win.pendingHeight) {
                     win.x = newX;
                     win.y = newY;
-                    win.width = newW;
-                    win.height = newH;
+                    win.pendingWidth = newW;
+                    win.pendingHeight = newH;
                     win.markDirty();
                     stateChanged = true;
                 }

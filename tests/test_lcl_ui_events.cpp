@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "lcl-ui/core/events.hpp"
 #include "lcl-ui/core/event_dispatcher.hpp"
+#include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/text.hpp"
@@ -188,4 +189,32 @@ TEST(LclUiEventsTest, KeyboardEventRouting) {
     bool textHandled = dispatcher.dispatchTextInputEvent(textEv);
     EXPECT_TRUE(textHandled);
     EXPECT_EQ(widgetPtr->lastTextInput, "Hello");
+}
+
+TEST(LclUiEventsTest, WindowAppDirectEventCallbacks) {
+    WindowApp app(400, 300, "Test Window");
+
+    int rawKeyCount = 0;
+    int lastRawKey = 0;
+    app.setOnRawKeyEvent([&rawKeyCount, &lastRawKey](const KeyEvent& ev) {
+        rawKeyCount++;
+        lastRawKey = ev.keyCode;
+        return true; // Intercept & consume
+    });
+
+    bool handled = app.sendKeyDown(65, 'A', 0);
+    EXPECT_TRUE(handled);
+    EXPECT_EQ(rawKeyCount, 1);
+    EXPECT_EQ(lastRawKey, 65);
+
+    int rawPointerCount = 0;
+    app.setOnRawPointerEvent([&rawPointerCount](const PointerEvent& ev) {
+        (void)ev;
+        rawPointerCount++;
+        return true; // Intercept & consume
+    });
+
+    bool ptrHandled = app.sendPointerDown(50.0f, 50.0f, 0);
+    EXPECT_TRUE(ptrHandled);
+    EXPECT_EQ(rawPointerCount, 1);
 }

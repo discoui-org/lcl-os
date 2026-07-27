@@ -73,10 +73,59 @@ bool Compositor::initialize() {
     // --- IPC (Unix Domain Socket, SO_PEERCRED auth, 0600 perms) ---
     m_ipcManager.initialize(kCompositorSocket);
 
-    // --- Wire input events → WindowManager ---
+    // --- Wire input events → WindowManager & focused IPC client ---
     m_inputManager.setEventCallback([this](const InputEvent& ev) {
-        if (m_windowManager.processInputEvent(ev)) {
+        bool stateChanged = m_windowManager.processInputEvent(ev);
+        if (stateChanged) {
             m_needsRedraw = true;
+
+            // Notify surface clients if window bounds changed during resize
+            for (const auto& win : m_windowManager.getWindows()) {
+                for (const auto& [surfId, entry] : m_surfaces) {
+                    if (entry.windowId == win.id && entry.clientFd >= 0) {
+                        uint32_t contentW = static_cast<uint32_t>(win.pendingWidth > 0 ? win.pendingWidth : win.width);
+                        uint32_t contentH = static_cast<uint32_t>(std::max(1, (win.pendingHeight > 0 ? win.pendingHeight : win.height) - DisplayScale::titleBarHeight()));
+                        if (contentW != entry.width || contentH != entry.height) {
+                            protocol::LCLHeader header{};
+                            header.opcode = protocol::LCLOpcode::ConfigureBounds;
+                            header.payloadSize = sizeof(protocol::LCLMsgConfigureBounds);
+
+                            protocol::LCLMsgConfigureBounds cfgMsg{};
+                            cfgMsg.surfaceId = surfId;
+                            cfgMsg.x = win.x;
+                            cfgMsg.y = win.y;
+                            cfgMsg.width = contentW;
+                            cfgMsg.height = contentH;
+                            cfgMsg.isFocused = win.isFocused ? 1 : 0;
+
+                            protocol::sendMsgWithFd(entry.clientFd, header, &cfgMsg);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (ev.type == InputEventType::KeyboardKey) {
+            uint32_t focusedWinId = m_windowManager.getFocusedWindowId();
+            if (focusedWinId > 0) {
+                for (const auto& [surfId, entry] : m_surfaces) {
+                    if (entry.windowId == focusedWinId && entry.clientFd >= 0) {
+                        protocol::LCLHeader header{};
+                        header.opcode = protocol::LCLOpcode::InputEvent;
+                        header.payloadSize = sizeof(protocol::LCLMsgInputEvent);
+
+                        protocol::LCLMsgInputEvent inputMsg{};
+                        inputMsg.surfaceId = surfId;
+                        inputMsg.type = 1; // KeyboardKey
+                        inputMsg.key = ev.key;
+                        inputMsg.pressed = ev.pressed ? 1 : 0;
+
+                        protocol::sendMsgWithFd(entry.clientFd, header, &inputMsg);
+                        break;
+                    }
+                }
+            }
         }
     });
 
@@ -164,9 +213,12 @@ void Compositor::processIPC() {
 
             if (m_surfaces.find(surfId) == m_surfaces.end()) {
                 SurfaceEntry entry{};
+                int frameW = winW;
+                int frameH = winH + DisplayScale::titleBarHeight();
                 entry.windowId = m_windowManager.createWindow(
-                    title, winX, winY, winW, winH,
+                    title, winX, winY, frameW, frameH,
                     ::lcl::theme::UI::WindowTitleFocused);
+                entry.clientFd = msg.clientFd;
                 entry.width  = static_cast<uint32_t>(winW);
                 entry.height = static_cast<uint32_t>(winH);
                 entry.stride = entry.width * 4;
@@ -175,6 +227,8 @@ void Compositor::processIPC() {
                           << ") for Surface " << surfId
                           << " from client PID " << msg.pid << "\n";
                 m_needsRedraw = true;
+            } else {
+                m_surfaces[surfId].clientFd = msg.clientFd;
             }
 
         // --- ATTACH_BUFFER: mmap the SCM_RIGHTS memfd into compositor address space ---
@@ -190,47 +244,68 @@ void Compositor::processIPC() {
                 stride = bm->stride > 0 ? bm->stride : w * 4;
             }
 
+            // Ensure surface entry exists
+            if (m_surfaces.find(surfId) == m_surfaces.end()) {
+                SurfaceEntry entry{};
+                int winX = DisplayScale::px(80);
+                int winY = DisplayScale::px(60);
+                int frameW = static_cast<int>(w);
+                int frameH = static_cast<int>(h) + DisplayScale::titleBarHeight();
+                entry.windowId = m_windowManager.createWindow(
+                    "LCL Terminal", winX, winY, frameW, frameH,
+                    ::lcl::theme::UI::WindowTitleFocused);
+                entry.clientFd = msg.clientFd;
+                entry.width  = w;
+                entry.height = h;
+                entry.stride = stride;
+                m_surfaces[surfId] = entry;
+            }
+
+            auto& entry = m_surfaces[surfId];
+            entry.clientFd = msg.clientFd;
+            entry.width  = w;
+            entry.height = h;
+            entry.stride = stride;
+
             int fd = msg.passedFd;
             if (fd >= 0) {
                 size_t shmSize = static_cast<size_t>(stride) * h;
                 void* pixels = mmap(nullptr, shmSize, PROT_READ, MAP_SHARED, fd, 0);
                 if (pixels != MAP_FAILED) {
-                    // Ensure surface exists
-                    if (m_surfaces.find(surfId) == m_surfaces.end()) {
-                        SurfaceEntry entry{};
-                        int winX = DisplayScale::px(80);
-                        int winY = DisplayScale::px(60);
-                        entry.windowId = m_windowManager.createWindow(
-                            "LCL Terminal", winX, winY, w, h,
-                            ::lcl::theme::UI::WindowTitleFocused);
-                        entry.width  = w;
-                        entry.height = h;
-                        entry.stride = stride;
-                        m_surfaces[surfId] = entry;
-                    }
-
-                    auto& entry = m_surfaces[surfId];
                     if (entry.pixels && entry.shmSize > 0) {
                         munmap(entry.pixels, entry.shmSize);
                     }
+                    if (entry.shmFd >= 0 && entry.shmFd != fd) {
+                        close(entry.shmFd);
+                    }
                     entry.pixels  = pixels;
                     entry.shmSize = shmSize;
-                    entry.width   = w;
-                    entry.height  = h;
-                    entry.stride  = stride;
                     entry.shmFd   = fd;
+
                     std::cout << "[LCL Compositor] Attached SHM Buffer (FD: " << fd
-                              << ", " << w << "x" << h << ") for Surface " << surfId
+                              << ", " << w << "x" << h << ", stride: " << stride << ") for Surface " << surfId
                               << " from client PID " << msg.pid << "\n";
                 } else {
-                    std::cerr << "[DEBUG-COMP ERROR] mmap failed for memfd " << fd
+                    std::cerr << "[LCL Compositor ERROR] mmap failed for memfd " << fd
                               << ": " << strerror(errno) << "\n";
                 }
-                m_needsRedraw = true;
-            } else if (m_surfaces.find(surfId) != m_surfaces.end() && m_surfaces[surfId].pixels) {
-                // Buffer commit notification for existing attached SHM buffer
-                m_needsRedraw = true;
             }
+
+            // Sync window frame dimensions in WindowManager to match surface size + titlebar
+            int frameW = static_cast<int>(w);
+            int frameH = static_cast<int>(h) + DisplayScale::titleBarHeight();
+
+            for (auto& win : m_windowManager.getWindowsMutable()) {
+                if (win.id == entry.windowId) {
+                    if (win.width != frameW || win.height != frameH) {
+                        win.width = frameW;
+                        win.height = frameH;
+                        win.markDirty();
+                    }
+                    break;
+                }
+            }
+            m_needsRedraw = true;
 
         } else if (msg.command == "SPAWN_TERMINAL") {
             int x = DisplayScale::px(80);

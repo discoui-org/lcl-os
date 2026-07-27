@@ -1,4 +1,5 @@
 #include "apps/terminal/terminal_app.hpp"
+#include "core/display/display_scale.hpp"
 #include <iostream>
 #include <linux/input-event-codes.h>
 
@@ -199,23 +200,42 @@ bool TerminalApp::update() {
     return true;
 }
 
+void TerminalApp::resize(int width, int height) {
+    if (!m_initialized) return;
+
+    int cellW = core::DisplayScale::px(8);
+    int cellH = core::DisplayScale::px(16);
+    int pad = core::DisplayScale::windowPad();
+
+    int cols = std::max(1, (width - pad * 2) / cellW);
+    int rows = std::max(1, (height - pad * 2) / cellH);
+
+    m_ptyManager.resizeWindow(cols, rows);
+}
+
 void TerminalApp::handleInput(const core::InputEvent& ev) {
     if (!m_initialized) return;
 
     if (ev.type == core::InputEventType::KeyboardKey) {
-        m_lastInputTime = std::chrono::steady_clock::now(); // Reset typing timer on keypress
-        if (ev.key == KEY_LEFTSHIFT || ev.key == KEY_RIGHTSHIFT) {
-            m_shiftPressed = ev.pressed;
-            return;
-        }
-        if (ev.key == KEY_LEFTCTRL || ev.key == KEY_RIGHTCTRL) {
-            m_ctrlPressed = ev.pressed;
-            return;
-        }
-        if (!ev.pressed) return; // Only act on key down
-        std::string seq = keycodeToASCII(ev.key, m_shiftPressed);
-        if (!seq.empty()) m_ptyManager.writeInput(seq);
+        handleKey(ev.key, ev.pressed);
     }
+}
+
+void TerminalApp::handleKey(uint32_t keycode, bool pressed) {
+    if (!m_initialized) return;
+
+    m_lastInputTime = std::chrono::steady_clock::now(); // Reset typing timer on keypress
+    if (keycode == KEY_LEFTSHIFT || keycode == KEY_RIGHTSHIFT) {
+        m_shiftPressed = pressed;
+        return;
+    }
+    if (keycode == KEY_LEFTCTRL || keycode == KEY_RIGHTCTRL) {
+        m_ctrlPressed = pressed;
+        return;
+    }
+    if (!pressed) return; // Only act on key down
+    std::string seq = keycodeToASCII(keycode, m_shiftPressed);
+    if (!seq.empty()) m_ptyManager.writeInput(seq);
 }
 
 std::string TerminalApp::keycodeToASCII(uint32_t keycode, bool shift) {

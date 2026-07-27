@@ -35,11 +35,13 @@ public:
      * is delegated to the shell (bash/readline) inside the PTY.
      */
     void handleInput(const core::InputEvent& ev);
+    void handleKey(uint32_t keycode, bool pressed);
 
     /**
      * @brief Clear terminal line buffer (Ctrl+L / clear ANSI escape sequence).
      */
     void clearBuffer();
+    void resize(int width, int height);
 
     /**
      * @brief Shut down Terminal PTY process and cleanup.
