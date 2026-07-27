@@ -176,6 +176,8 @@ private:
     std::vector<Window> m_windows;
     int m_mouseX{512};
     int m_mouseY{384};
+    double m_subpixelX{512.0};
+    double m_subpixelY{384.0};
     uint32_t m_nextWindowId{1};
     bool m_initialized{false};
     bool m_mouseDirty{true};

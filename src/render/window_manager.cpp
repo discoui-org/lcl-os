@@ -16,6 +16,8 @@ bool WindowManager::initialize(uint32_t screenWidth, uint32_t screenHeight) {
     m_screenHeight = screenHeight;
     m_mouseX = screenWidth / 2;
     m_mouseY = screenHeight / 2;
+    m_subpixelX = static_cast<double>(m_mouseX);
+    m_subpixelY = static_cast<double>(m_mouseY);
     m_windows.clear();
     m_initialized = true;
 
@@ -105,14 +107,32 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
         int oldY = m_mouseY;
 
         if (event.absoluteX >= 0.0 && event.absoluteY >= 0.0) {
-            m_mouseX = std::clamp(static_cast<int>(event.absoluteX), 0, static_cast<int>(m_screenWidth) - 1);
-            m_mouseY = std::clamp(static_cast<int>(event.absoluteY), 0, static_cast<int>(m_screenHeight) - 1);
+            m_subpixelX = event.absoluteX;
+            m_subpixelY = event.absoluteY;
         } else {
-            m_mouseX = std::clamp(m_mouseX + static_cast<int>(event.dx), 0, static_cast<int>(m_screenWidth) - 1);
-            m_mouseY = std::clamp(m_mouseY + static_cast<int>(event.dy), 0, static_cast<int>(m_screenHeight) - 1);
+            // Relative mouse motion: apply subpixel precision + speed sensitivity scale & acceleration
+            constexpr double mouseSensitivity = 1.8;
+            double dx = event.dx * mouseSensitivity;
+            double dy = event.dy * mouseSensitivity;
+
+            // Non-linear acceleration for fast flick movements
+            double speedSq = dx * dx + dy * dy;
+            if (speedSq > 9.0) {
+                double factor = 1.0 + std::min(1.5, (speedSq - 9.0) * 0.01);
+                dx *= factor;
+                dy *= factor;
+            }
+
+            m_subpixelX += dx;
+            m_subpixelY += dy;
         }
 
-        if (m_mouseX != oldX || m_mouseY != oldY) {
+        m_subpixelX = std::clamp(m_subpixelX, 0.0, static_cast<double>(m_screenWidth - 1));
+        m_subpixelY = std::clamp(m_subpixelY, 0.0, static_cast<double>(m_screenHeight - 1));
+        m_mouseX = static_cast<int>(m_subpixelX);
+        m_mouseY = static_cast<int>(m_subpixelY);
+
+        if (m_mouseX != oldX || m_mouseY != oldY || event.dx != 0.0 || event.dy != 0.0 || event.absoluteX >= 0.0) {
             m_mouseDirty = true;
             stateChanged = true;
         }

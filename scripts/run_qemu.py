@@ -1180,9 +1180,6 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
         logical_h = host.logical_height or host.height
         physical_w = host.physical_width or logical_w
         physical_h = host.physical_height or logical_h
-        # True Retina only when physical pixels > logical points.
-        # GNOME scaling-factor (e.g. 4) with physical==logical is NOT FB HiDPI —
-        # using scale=4 there makes a tiny/broken UI and mis-labels the path.
         true_retina = (
             physical_w > 0
             and logical_w > 0

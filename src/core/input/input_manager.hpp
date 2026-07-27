@@ -96,6 +96,10 @@ private:
         int currentAbsY{-1};
         bool absXUpdated{false};
         bool absYUpdated{false};
+        double currentRelX{0.0};
+        double currentRelY{0.0};
+        bool relXUpdated{false};
+        bool relYUpdated{false};
     };
     std::vector<EvdevDevice> m_evdevDevices;
 
