@@ -129,6 +129,8 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                 if (newX != win.x || newY != win.y) {
                     win.x = newX;
                     win.y = newY;
+                    win.pendingX = newX;
+                    win.pendingY = newY;
                     win.markDirty();
                     stateChanged = true;
                 }
@@ -343,11 +345,14 @@ void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int fra
     if (it == m_windows.end()) return;
 
     Window& win = *it;
-    int finalX = win.pendingX;
-    int finalY = win.pendingY;
+    int finalX = win.x;
+    int finalY = win.y;
 
-    // Generic opposite-edge anchor offset for client surface buffers (e.g. monospace character cell snapping)
+    // Generic opposite-edge anchor offset for client surface buffers applies ONLY during window RESIZE
     if (win.isResizing) {
+        finalX = win.pendingX;
+        finalY = win.pendingY;
+
         int diffW = win.pendingWidth - frameW;
         int diffH = win.pendingHeight - frameH;
 
