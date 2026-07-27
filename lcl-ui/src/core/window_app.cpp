@@ -65,7 +65,8 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
         if (m_shmPixels == MAP_FAILED) {
             m_shmPixels = nullptr;
         } else {
-            // Re-initialize SkiaRenderer to draw directly into SHM memory
+            // Re-bind SkiaRenderer to draw directly into SHM memory
+            m_renderer.setTargetPixels(m_shmPixels, width, height);
             m_renderer.initialize(width, height, nullptr, m_shmPixels);
         }
     }
@@ -125,22 +126,13 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // 3. Allocate SHM memory buffer and attach to compositor
     allocateSHM(m_width, m_height);
 
-    if (m_shmFd >= 0 && m_shmPixels) {
-        lcl::protocol::LCLHeader attachHeader{};
-        attachHeader.opcode = lcl::protocol::LCLOpcode::AttachBuffer;
-        attachHeader.payloadSize = sizeof(lcl::protocol::LCLMsgAttachBuffer);
-
-        lcl::protocol::LCLMsgAttachBuffer attachMsg{};
-        attachMsg.surfaceId = 1;
-        attachMsg.width = m_width;
-        attachMsg.height = m_height;
-        attachMsg.stride = m_width * 4;
-        attachMsg.format = 1; // ARGB8888
-
-        lcl::protocol::sendMsgWithFd(m_socketFd, attachHeader, &attachMsg, m_shmFd);
-    }
-
     m_ipcConnected = true;
+    if (m_rootWidget) {
+        m_rootWidget->markDirty();
+    }
+    m_firstFrame = true;
+    renderFrame();
+
     std::cout << "[lcl-ui] Connected to Compositor IPC socket successfully (" << m_title << ").\n";
     return true;
 }
@@ -300,7 +292,7 @@ bool WindowApp::renderFrame() {
     m_renderPass.begin(nullptr);
 
     if (m_rootWidget && m_rootWidget->isVisible()) {
-        m_rootWidget->draw(nullptr, damageRect);
+        m_rootWidget->draw(reinterpret_cast<SkCanvas*>(&m_renderer), damageRect);
     }
 
     m_renderPass.end(nullptr);

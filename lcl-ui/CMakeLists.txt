@@ -30,6 +30,7 @@ add_library(lcl-ui STATIC
     src/widgets/text.cpp
     src/widgets/button.cpp
     ${CMAKE_SOURCE_DIR}/src/render/skia_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/render/font_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/core/display/egl_backend.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ipc/lcl_protocol.cpp
 )

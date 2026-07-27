@@ -1,4 +1,5 @@
 #include "lcl-ui/widgets/button.hpp"
+#include "render/skia_renderer.hpp"
 
 namespace lcl::ui {
 
@@ -67,7 +68,23 @@ bool Button::onPointerUp(const PointerEvent& event) {
 
 void Button::draw(SkCanvas* canvas, const Rect& damageRect) {
     if (!m_visible || !m_absoluteBounds.intersects(damageRect)) return;
-    Container::draw(canvas, damageRect);
+
+    auto* renderer = reinterpret_cast<::lcl::render::SkiaRenderer*>(canvas);
+    if (renderer) {
+        ::lcl::render::SkiaRect r{m_absoluteBounds.x, m_absoluteBounds.y, m_absoluteBounds.width, m_absoluteBounds.height};
+        ::lcl::render::SkiaColor btnBg;
+        if (m_state == ButtonState::Hover) {
+            btnBg = {59, 130, 246, 255}; // Bright Blue `#3B82F6`
+        } else if (m_state == ButtonState::Active) {
+            btnBg = {29, 78, 216, 255};  // Dark Blue `#1D4ED8`
+        } else {
+            btnBg = {37, 99, 235, 255};  // Primary Blue `#2563EB`
+        }
+        ::lcl::render::SkiaColor borderClr{147, 197, 253, 200}; // Light blue border `#93C5FD`
+        renderer->drawRoundedRect(r, 8.0f, btnBg, borderClr, 1.5f);
+    }
+
+    Widget::draw(canvas, damageRect);
 }
 
 } // namespace lcl::ui

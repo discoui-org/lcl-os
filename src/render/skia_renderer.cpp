@@ -64,12 +64,15 @@ SkiaRenderer::~SkiaRenderer() {
 }
 
 bool SkiaRenderer::initialize(uint32_t width, uint32_t height, lcl::core::EGLBackend* eglBackend, uint32_t* targetPixels) {
+    if (targetPixels) {
+        m_targetPixels = targetPixels;
+    }
+    if (width > 0) m_width = width;
+    if (height > 0) m_height = height;
+
     if (m_initialized) return true;
 
-    m_width = width;
-    m_height = height;
     m_eglBackend = eglBackend;
-    m_targetPixels = targetPixels;
 
     if (m_eglBackend && m_eglBackend->isInitialized()) {
         m_backendType = SkiaBackendType::OpenGL_EGL;
@@ -244,6 +247,16 @@ void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, const SkiaCo
     (void)y2;
     SkiaRect rect = { x1, y1, std::abs(x2 - x1) + strokeWidth, strokeWidth };
     drawRect(rect, color);
+}
+
+void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fgColor) {
+    if (!m_initialized || !m_targetPixels || text.empty()) return;
+    if (!m_fontRenderer.isInitialized()) {
+        m_fontRenderer.loadFont("/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf", 15.0f);
+    }
+    if (m_fontRenderer.isInitialized()) {
+        m_fontRenderer.renderString(m_targetPixels, m_width, m_height, x, y, text, fgColor);
+    }
 }
 
 void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint32_t* pixelData, int stridePixels, float opacity) {

@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "render/font_renderer.hpp"
+
 namespace lcl::core {
 class EGLBackend;
 }
@@ -70,9 +72,13 @@ public:
     bool initialize(uint32_t width, uint32_t height, lcl::core::EGLBackend* eglBackend = nullptr, uint32_t* targetPixels = nullptr);
 
     /**
-     * @brief Set target buffer for software rasterization.
+     * @brief Set target buffer and dimensions for software rasterization.
      */
-    void setTargetPixels(uint32_t* targetPixels) { m_targetPixels = targetPixels; }
+    void setTargetPixels(uint32_t* targetPixels, uint32_t width = 0, uint32_t height = 0) {
+        m_targetPixels = targetPixels;
+        if (width > 0) m_width = width;
+        if (height > 0) m_height = height;
+    }
 
     /**
      * @brief Shutdown Skia renderer.
@@ -96,6 +102,7 @@ public:
     void drawDropShadow(const SkiaRect& rect, float radius, float blur, const SkiaColor& shadowColor);
     void drawCircle(float cx, float cy, float radius, const SkiaColor& color);
     void drawLine(float x1, float y1, float x2, float y2, const SkiaColor& color, float strokeWidth = 1.0f);
+    void drawString(int x, int y, const std::string& text, uint32_t fgColor);
     void drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint32_t* pixelData, int stridePixels = 0, float opacity = 1.0f);
 
     // Accessors
@@ -114,6 +121,7 @@ private:
 
     std::vector<uint32_t> m_rasterPixels;
     uint32_t* m_targetPixels{nullptr};
+    FontRenderer m_fontRenderer;
     bool m_initialized{false};
 
     uint32_t m_glTexture{0};
