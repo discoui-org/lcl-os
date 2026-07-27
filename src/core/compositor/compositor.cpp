@@ -126,6 +126,42 @@ bool Compositor::initialize() {
                     }
                 }
             }
+        } else if (ev.type == InputEventType::PointerMotion || ev.type == InputEventType::PointerButton) {
+            uint32_t focusedWinId = m_windowManager.getFocusedWindowId();
+            if (focusedWinId > 0) {
+                const render::Window* targetWin = nullptr;
+                for (const auto& win : m_windowManager.getWindows()) {
+                    if (win.id == focusedWinId) {
+                        targetWin = &win;
+                        break;
+                    }
+                }
+                if (targetWin) {
+                    for (const auto& [surfId, entry] : m_surfaces) {
+                        if (entry.windowId == focusedWinId && entry.clientFd >= 0) {
+                            int titleOffset = (targetWin->decorationMode == render::DecorationMode::SSD)
+                                              ? DisplayScale::titleBarHeight() : 0;
+                            float localX = static_cast<float>(m_windowManager.getMouseX() - targetWin->x);
+                            float localY = static_cast<float>(m_windowManager.getMouseY() - targetWin->y - titleOffset);
+
+                            protocol::LCLHeader header{};
+                            header.opcode = protocol::LCLOpcode::InputEvent;
+                            header.payloadSize = sizeof(protocol::LCLMsgInputEvent);
+
+                            protocol::LCLMsgInputEvent inputMsg{};
+                            inputMsg.surfaceId = surfId;
+                            inputMsg.type = (ev.type == InputEventType::PointerMotion) ? 2 : 3;
+                            inputMsg.x = localX;
+                            inputMsg.y = localY;
+                            inputMsg.key = ev.button;
+                            inputMsg.pressed = ev.pressed ? 1 : 0;
+
+                            protocol::sendMsgWithFd(entry.clientFd, header, &inputMsg);
+                            break;
+                        }
+                    }
+                }
+            }
         }
     });
 
