@@ -183,7 +183,11 @@ size_t InputManager::rescanEvdevDevices() {
         if (alreadyOpened) continue;
 
         int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-        if (fd < 0) continue;
+        if (fd < 0) {
+            std::cerr << "[LCL Input DIAG] open(" << path << ") failed: "
+                      << std::strerror(errno) << " (errno=" << errno << ")\n";
+            continue;
+        }
 
         EvdevDevice dev{};
         dev.fd = fd;
@@ -241,7 +245,14 @@ size_t InputManager::rescanEvdevDevices() {
                        ((keyBits[BTN_TOOL_FINGER / 8] >> (BTN_TOOL_FINGER % 8)) & 1);
         }
 
-        if (hasTouch) {
+        // NOTE: BTN_TOUCH/BTN_TOOL_FINGER alone is NOT a reliable touchpad signal —
+        // absolute single-point pointer devices (QEMU's "QEMU Virtio Tablet", graphics
+        // tablets, some touchscreens) also expose these bits but never toggle them during
+        // plain hover/movement, which previously starved PointerMotion dispatch (cursor
+        // frozen at its initial position) because motion was gated behind `isTouching`.
+        // Genuine gesture touchpads report the multitouch protocol (ABS_MT_POSITION_X/Y),
+        // so require that instead to classify a device as a touch-gated touchpad.
+        if (hasMTAbsX || hasMTAbsY) {
             dev.isTouchpad = true;
         }
 
@@ -249,8 +260,21 @@ size_t InputManager::rescanEvdevDevices() {
             uint8_t evBits[KEY_MAX / 8 + 1] = {};
             ioctl(fd, EVIOCGBIT(0, sizeof(evBits)), evBits);
             bool hasKey = (evBits[EV_KEY / 8] >> (EV_KEY % 8)) & 1;
-            if (!hasKey) { close(fd); continue; }
+            if (!hasKey) {
+                std::cerr << "[LCL Input DIAG] Skipping " << path << " [" << dev.name
+                          << "]: no REL/ABS pointer axes and no EV_KEY capability.\n";
+                close(fd);
+                continue;
+            }
         }
+
+        std::cerr << "[LCL Input DIAG] Accepted " << path << " [" << dev.name << "]"
+                   << " hasRelX=" << dev.hasRelX << " hasRelY=" << dev.hasRelY
+                   << " hasAbsX=" << dev.hasAbsX << " hasAbsY=" << dev.hasAbsY
+                   << " hasTouch=" << hasTouch << " isTouchpad=" << dev.isTouchpad
+                   << " absXRange=[" << dev.absXMin << "," << dev.absXMax << "]"
+                   << " absYRange=[" << dev.absYMin << "," << dev.absYMax << "]"
+                   << " currentAbs=(" << dev.currentAbsX << "," << dev.currentAbsY << ")\n";
 
         m_evdevDevices.push_back(dev);
         newCount++;
@@ -492,7 +516,9 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                 outEv.isRepeat = (ev.value == 2);
                 outEv.superPressed = m_superPressed;
 
-                if (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER) {
+                if (dev.isTouchpad && (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER)) {
+                    // Genuine gesture touchpad: use touch-down/up as the drag gate and
+                    // synthesize a left-click so tap-to-click still works.
                     outEv.type = InputEventType::PointerButton;
                     outEv.button = BTN_LEFT;
                     if (ev.value != 0) {
@@ -511,6 +537,10 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                     outEv.button = ev.code;
                     if (m_eventCallback) m_eventCallback(outEv);
                     count++;
+                } else if (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER) {
+                    // Non-touchpad absolute pointer (e.g. QEMU Virtio Tablet) exposes this
+                    // bit but real clicks arrive via BTN_LEFT/RIGHT/MIDDLE — ignore it here
+                    // so it doesn't synthesize spurious clicks.
                 } else {
                     outEv.type = InputEventType::KeyboardKey;
                     outEv.key = ev.code;
