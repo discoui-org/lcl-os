@@ -36,3 +36,9 @@ install_manifest.txt
 # Operating System files
 .DS_Store
 Thumbs.db
+
+# Python bytecode & cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

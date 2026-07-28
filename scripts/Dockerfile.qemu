@@ -26,6 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     coreutils \
     util-linux \
+    pciutils \
+    usbutils \
     findutils \
     grep \
     sed \
@@ -33,7 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     ca-certificates \
     curl \
-    && apt-get install -y linux-image-generic \
+    && apt-get install -y linux-image-generic linux-firmware \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

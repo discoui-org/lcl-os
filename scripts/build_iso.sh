@@ -11,14 +11,12 @@ echo "===================================================="
 echo "  LCL OS - Limine Bootable ISO / LiveUSB Builder    "
 echo "===================================================="
 
-# 1. Ensure kernel and initramfs artifacts exist
+# 1. Compile binaries and package kernel and initramfs
 KERNEL_SRC="${BUILD_DIR}/qemu-cache/vmlinuz"
 INITRAMFS_SRC="${BUILD_DIR}/initramfs.cpio.gz"
 
-if [ ! -f "$KERNEL_SRC" ] || [ ! -f "$INITRAMFS_SRC" ]; then
-    echo "[ISO Build] Packaging kernel and initramfs via Docker..."
-    python3 "${SCRIPT_DIR}/run_qemu.py" --package-only
-fi
+echo "[ISO Build] Compiling binaries & packaging kernel/initramfs via Docker..."
+python3 "${SCRIPT_DIR}/run_qemu.py" --package-only
 
 if [ ! -f "$KERNEL_SRC" ] || [ ! -f "$INITRAMFS_SRC" ]; then
     echo "ERROR: Kernel ($KERNEL_SRC) or initramfs ($INITRAMFS_SRC) not found!"

@@ -254,7 +254,7 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
     if target.exists():
         shutil.rmtree(target)
 
-    log(f"Packaging DRM, USB & input kernel modules ({kver})...")
+    log(f"Packaging DRM, USB, I2C, touchpad & input kernel modules ({kver})...")
     target.mkdir(parents=True, exist_ok=True)
     copied_any = False
     for rel in (
@@ -265,6 +265,10 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
         "kernel/drivers/input",
         "kernel/drivers/usb",
         "kernel/drivers/i2c",
+        "kernel/drivers/pinctrl",
+        "kernel/drivers/spi",
+        "kernel/drivers/platform",
+        "kernel/drivers/acpi",
         "kernel/drivers/bus",
         "kernel/drivers/mfd",
         "kernel/drivers/char/virtio_console",
@@ -352,6 +356,7 @@ def package_initramfs(kernel_path: Path) -> None:
         "dev",
         "tmp",
         "etc",
+        "var/log",
         "usr/bin",
         "usr/lib",
         "usr/share",
@@ -378,22 +383,31 @@ def package_initramfs(kernel_path: Path) -> None:
 
     shutil.copy2(BINARY, INITRAMFS_DIR / "usr" / "bin" / "lcl-core")
 
-    # Tools from the Docker image only (never host OS userland)
-    host_bins = {
-        "sh": Path("/bin/sh"),
-        "bash": Path(which("bash") or "/usr/bin/bash"),
-        "mount": Path("/bin/mount"),
-        "mkdir": Path("/bin/mkdir"),
-        "sleep": Path("/bin/sleep"),
-        "ls": Path("/bin/ls"),
-        "cat": Path("/bin/cat"),
-        "uname": Path("/usr/bin/uname"),
-        "grep": Path("/usr/bin/grep"),
-        "printf": Path("/usr/bin/printf"),
-        "modprobe": Path("/sbin/modprobe"),
-        "depmod": Path("/sbin/depmod"),
-        "kmod": Path("/bin/kmod"),
-    }
+    def find_host_bin(name: str) -> Path | None:
+        p = which(name)
+        if p:
+            found = Path(p)
+            if found.is_file():
+                return found
+        for cand in (f"/usr/bin/{name}", f"/bin/{name}", f"/usr/sbin/{name}", f"/sbin/{name}"):
+            cp = Path(cand)
+            if cp.is_file():
+                return cp
+        return None
+
+    util_names = [
+        "sh", "bash", "mount", "mkdir", "sleep", "ls", "cat", "uname", "grep",
+        "printf", "modprobe", "depmod", "kmod", "dmesg", "tee", "find", "cp",
+        "mv", "rm", "chmod", "chown", "touch", "wc", "head", "tail", "lspci", "lsusb"
+    ]
+
+    host_bins: dict[str, Path] = {}
+    for name in util_names:
+        bin_path = find_host_bin(name)
+        if bin_path:
+            host_bins[name] = bin_path
+        else:
+            log(f"WARNING: Host utility '{name}' not found for initramfs packaging")
 
     log("Packaging GNU Bash and essential utilities...")
     dest_bin = INITRAMFS_DIR / "usr" / "bin"
@@ -422,6 +436,20 @@ def package_initramfs(kernel_path: Path) -> None:
             else:
                 shutil.copy2(item, dest)
 
+    # Selective hardware firmware packaging (skip huge wifi/sound/net vendor blobs)
+    fw_dst = INITRAMFS_DIR / "usr" / "lib" / "firmware"
+    fw_dst.mkdir(parents=True, exist_ok=True)
+    essential_fw_dirs = ("intel/i915", "i2c")
+    for fw_src in (Path("/usr/lib/firmware"), Path("/lib/firmware")):
+        if fw_src.is_dir():
+            for rel_sub in essential_fw_dirs:
+                src_sub = fw_src / rel_sub
+                if src_sub.is_dir():
+                    dst_sub = fw_dst / rel_sub
+                    dst_sub.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(src_sub, dst_sub, dirs_exist_ok=True)
+            break
+
     write_text(
         dest_bin / "clear",
         "#!/bin/sh\nprintf \"\\033[2J\\033[H\"\n",
@@ -430,7 +458,8 @@ def package_initramfs(kernel_path: Path) -> None:
 
     write_text(
         INITRAMFS_DIR / "etc" / "profile",
-        """export HOME=/home/user
+        """export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
+export HOME=/home/user
 export TERM=xterm-256color
 export HISTSIZE=500
 export HISTFILESIZE=1000
@@ -444,7 +473,8 @@ fi
 
     write_text(
         INITRAMFS_DIR / "home" / "user" / ".bashrc",
-        """export TERM=xterm-256color
+        """export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
+export TERM=xterm-256color
 export PS1='\\[\\033[1;34m\\]\\W\\[\\033[0m\\] ❯ '
 export HISTSIZE=500
 alias ls='ls --color=auto'
@@ -599,10 +629,11 @@ echo "===================================================="
     write_text(
         INITRAMFS_DIR / "init",
         """#!/bin/sh
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-mkdir -p /dev/pts /dev/input /home/user/Desktop /home/user/Documents /home/user/Downloads /home/user/Applications
+mkdir -p /var/log /var/tmp /dev/pts /dev/input /home/user/Desktop /home/user/Documents /home/user/Downloads /home/user/Applications
 mount -t devpts devpts /dev/pts -o mode=0620,ptmxmode=0666 2>/dev/null || mount -t devpts devpts /dev/pts 2>/dev/null || true
 if [ ! -e /dev/ptmx ]; then
     mknod -m 666 /dev/ptmx c 5 2 2>/dev/null || ln -sf pts/ptmx /dev/ptmx 2>/dev/null || true
@@ -618,7 +649,7 @@ else
     ls -la /lib/modules 2>/dev/null || true
 fi
 
-# Load GPU, USB, I2C, HID & input stack BEFORE creating any device nodes
+# Load GPU, USB, I2C, Pin Control & Touchpad stack BEFORE starting compositor
 modprobe virtio_pci || true
 modprobe virtio_dma_buf || true
 modprobe drm || true
@@ -635,16 +666,28 @@ modprobe xhci_pci || true
 modprobe ehci_hcd || true
 modprobe ehci_pci || true
 modprobe usbhid || true
-modprobe hid_generic || true
-modprobe hid_multitouch || true
 
-# I2C & Laptop Touchpad drivers
+# Intel/AMD Pin Control & I2C Bus Controllers (required for laptop Touchpad GPIO interrupts)
+modprobe pinctrl_intel || true
+modprobe intel_lpss || true
+modprobe intel_lpss_pci || true
 modprobe i2c_core || true
 modprobe i2c_designware_core || true
+modprobe i2c_designware_pci || true
 modprobe i2c_designware_platform || true
+
+# PS/2 & Serio Bus (Legacy / Synaptics / Elantech touchpads)
+modprobe i8042 || true
+modprobe serio || true
+modprobe psmouse || true
+
+# HID & Multitouch (Modern I2C-HID & USB-HID laptop touchpads)
+modprobe hid || true
+modprobe hid_generic || true
+modprobe hid_multitouch || true
 modprobe i2c_hid || true
 modprobe i2c_hid_acpi || true
-modprobe psmouse || true
+modprobe i2c_hid_of || true
 modprobe evdev || true
 modprobe qemu_fw_cfg || true
 
@@ -655,6 +698,10 @@ for alias_file in $(find /sys/bus /sys/devices -name modalias 2>/dev/null); do
         modprobe $alias 2>/dev/null || true
     fi
 done
+
+# Save kernel dmesg log and input device inventory to /var/log
+dmesg > /var/log/dmesg.log 2>&1 || true
+ls -la /dev/input/ > /var/log/input_devices.log 2>&1 || true
 
 # Wait for /dev/dri/card* (up to ~3s)
 i=0
@@ -674,12 +721,22 @@ echo "DRM devices detected:"
 ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
 echo "Input devices detected:"
 ls /dev/input/ 2>/dev/null || echo "  (none yet)"
-echo "Loaded drm-related modules:"
-/bin/lcl-core &
+
+# --- Emergency Debug Shell Check (lcl.debug=1 in /proc/cmdline) ---
+if grep -q "lcl.debug=1" /proc/cmdline 2>/dev/null; then
+    echo "===================================================="
+    echo " [init DEBUG] Emergency debug shell active (lcl.debug=1)"
+    echo " [init DEBUG] /var/log/dmesg.log and /var/log/input_devices.log are ready."
+    echo " [init DEBUG] Type 'exit' to resume booting compositor GUI."
+    echo "===================================================="
+    /bin/sh
+fi
+
+/bin/lcl-core 2>&1 | tee /var/log/lcl_compositor.log &
 sleep 0.2
 if [ -x /usr/bin/lcl-desktop-wm ]; then
     echo "[init] Starting lcl-desktop-wm daemon..."
-    /usr/bin/lcl-desktop-wm &
+    /usr/bin/lcl-desktop-wm 2>&1 | tee /var/log/lcl_wm.log &
 fi
 wait
 """,
