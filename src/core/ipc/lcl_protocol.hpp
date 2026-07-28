@@ -27,12 +27,21 @@ enum class LCLOpcode : uint32_t {
     AttachBuffer = 5,
     InputEvent = 6,
     AckResponse = 7,
-    SetDecorationMode = 8
+    SetDecorationMode = 8,
+    SetWindowLayer = 9,
+    SetReservedZone = 10
 };
 
 enum class LCLDecorationMode : uint32_t {
     SSD = 0, // Server-Side Decoration
-    CSD = 1  // Client-Side Decoration
+    CSD = 1, // Client-Side Decoration
+    None = 2 // Frameless / No Decoration
+};
+
+enum class LCLWindowLayer : uint32_t {
+    Bottom = 0,  // Wallpaper / Background
+    Normal = 1,  // Standard Application Windows
+    TopMost = 2  // Menu Bar, Dock, System Overlays
 };
 
 #pragma pack(push, 1)
@@ -100,6 +109,20 @@ struct LCLMsgInputEvent {
 struct LCLMsgSetDecorationMode {
     uint32_t surfaceId{0};
     LCLDecorationMode mode{LCLDecorationMode::SSD};
+};
+
+struct LCLMsgSetWindowLayer {
+    uint32_t surfaceId{0};
+    LCLWindowLayer layer{LCLWindowLayer::Normal};
+    uint8_t unfocusable{0}; // 1 = unfocusable (does not steal focus), 0 = focusable
+};
+
+struct LCLMsgSetReservedZone {
+    uint32_t surfaceId{0};
+    uint32_t top{0};    // Reserved inset from top of screen (Menu bar height, e.g. 32px)
+    uint32_t bottom{0}; // Reserved inset from bottom of screen (Dock height)
+    uint32_t left{0};   // Reserved inset from left edge
+    uint32_t right{0};  // Reserved inset from right edge
 };
 
 #pragma pack(pop)

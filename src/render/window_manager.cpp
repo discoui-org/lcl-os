@@ -54,6 +54,7 @@ uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int
     win.markDirty();
 
     m_windows.push_back(win);
+    sortWindowsByLayer();
     m_mouseDirty = true;
     std::cout << "[LCL WindowManager] Created window ID: " << win.id << " ('" << title << "') at (" << x << "," << y << ").\n";
     return win.id;
@@ -69,8 +70,13 @@ bool WindowManager::removeWindow(uint32_t windowId) {
         m_windows.erase(it);
 
         if (!m_windows.empty()) {
-            m_windows.back().isFocused = true;
-            m_windows.back().headerColor = lcl::theme::UI::WindowTitleFocused;
+            for (auto revIt = m_windows.rbegin(); revIt != m_windows.rend(); ++revIt) {
+                if (!revIt->isUnfocusable) {
+                    revIt->isFocused = true;
+                    revIt->headerColor = lcl::theme::UI::WindowTitleFocused;
+                    break;
+                }
+            }
         }
         markAllDirty();
         return true;
@@ -141,7 +147,8 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
             stateChanged = true;
         }
 
-        const int menuH = core::DisplayScale::menuBarHeight();
+        const int topInset = std::max(core::DisplayScale::menuBarHeight(), static_cast<int>(m_reservedZone.top));
+        const int bottomInset = static_cast<int>(m_reservedZone.bottom);
         const int minW = core::DisplayScale::px(180);
         const int minH = core::DisplayScale::px(100);
 
@@ -149,7 +156,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
             // Dragging (Move)
             if (win.isDragging) {
                 int newX = std::clamp(m_mouseX - win.dragOffsetX, 0, static_cast<int>(m_screenWidth) - win.width);
-                int newY = std::clamp(m_mouseY - win.dragOffsetY, menuH, static_cast<int>(m_screenHeight) - win.height);
+                int newY = std::clamp(m_mouseY - win.dragOffsetY, topInset, static_cast<int>(m_screenHeight) - win.height - bottomInset);
                 if (newX != win.x || newY != win.y) {
                     win.x = newX;
                     win.y = newY;
@@ -188,7 +195,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                     case ResizeEdge::Top: {
                         int candidateH = win.initialHeight - deltaY;
                         if (candidateH >= minH) {
-                            newY = std::clamp(win.initialY + deltaY, menuH, static_cast<int>(m_screenHeight) - minH);
+                            newY = std::clamp(win.initialY + deltaY, topInset, static_cast<int>(m_screenHeight) - minH);
                             newH = win.initialHeight + (win.initialY - newY);
                         }
                         break;
@@ -210,7 +217,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         newW = std::max(minW, win.initialWidth + deltaX);
                         int candidateH = win.initialHeight - deltaY;
                         if (candidateH >= minH) {
-                            newY = std::clamp(win.initialY + deltaY, menuH, static_cast<int>(m_screenHeight) - minH);
+                            newY = std::clamp(win.initialY + deltaY, topInset, static_cast<int>(m_screenHeight) - minH);
                             newH = win.initialHeight + (win.initialY - newY);
                         }
                         break;
@@ -223,7 +230,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         }
                         int candidateH = win.initialHeight - deltaY;
                         if (candidateH >= minH) {
-                            newY = std::clamp(win.initialY + deltaY, menuH, static_cast<int>(m_screenHeight) - minH);
+                            newY = std::clamp(win.initialY + deltaY, topInset, static_cast<int>(m_screenHeight) - minH);
                             newH = win.initialHeight + (win.initialY - newY);
                         }
                         break;
@@ -243,12 +250,15 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
     } else if (event.type == core::InputEventType::PointerButton) {
         if (event.pressed) {
             // Strict Top-to-Bottom Z-Order Hit-Testing Bug Fix:
-            // Find top-most target window under cursor FIRST without mutating array structure mid-loop!
+            // Find top-most interactable window under cursor FIRST without mutating array structure mid-loop!
             uint32_t targetWinId = 0;
             const int border = core::DisplayScale::px(8);
 
             for (int i = static_cast<int>(m_windows.size()) - 1; i >= 0; --i) {
                 const auto& win = m_windows[i];
+                if (win.isUnfocusable || win.layer == protocol::LCLWindowLayer::Bottom) {
+                    continue; // Skip unfocusable background surfaces (e.g. Wallpaper)
+                }
                 if (m_mouseX >= win.x - border && m_mouseX < win.x + win.width + border &&
                     m_mouseY >= win.y - border && m_mouseY < win.y + win.height + border) {
                     targetWinId = win.id;
@@ -257,100 +267,108 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
             }
 
             if (targetWinId > 0) {
-                // Focus target window and bring to top z-order
+                // Focus target window and bring to top z-order within its layer
                 focusWindow(targetWinId);
 
-                // Now m_windows.back() is guaranteed to be the focused top-most window
-                auto& topWin = m_windows.back();
-                const int titleH = core::DisplayScale::titleBarHeight();
-                const int btn = core::DisplayScale::trafficBtn();
-                const int btnPad = core::DisplayScale::px(10);
+                // Find the target window directly by ID (layer sorting may keep it in Normal/TopMost layer)
+                auto targetIt = std::find_if(m_windows.begin(), m_windows.end(), [targetWinId](const Window& w) {
+                    return w.id == targetWinId;
+                });
 
-                // Close button check (only when explicitly clicked or Super shortcut used)
-                if (event.superPressed && event.button == BTN_MIDDLE) {
-                    removeWindow(topWin.id);
-                    stateChanged = true;
-                } else if (!event.superPressed &&
-                           m_mouseX >= topWin.x + btnPad && m_mouseX <= topWin.x + btnPad + btn &&
-                           m_mouseY >= topWin.y + btnPad && m_mouseY <= topWin.y + btnPad + btn) {
-                    std::cout << "[LCL WM] Close button clicked on window ID: " << topWin.id << "\n";
-                    removeWindow(topWin.id);
-                    stateChanged = true;
-                } else if (event.superPressed) {
-                    // GNOME / KDE Style Super Shortcuts
-                    if (event.button == BTN_LEFT) {
-                        // Super + Left Click = Move
-                        topWin.isDragging = true;
-                        topWin.dragOffsetX = m_mouseX - topWin.x;
-                        topWin.dragOffsetY = m_mouseY - topWin.y;
-                        topWin.markDirty();
+                if (targetIt != m_windows.end()) {
+                    auto& targetWin = *targetIt;
+                    const int titleH = (targetWin.decorationMode == DecorationMode::SSD) ? core::DisplayScale::titleBarHeight() : 0;
+                    const int btn = core::DisplayScale::trafficBtn();
+                    const int btnPad = core::DisplayScale::px(10);
+
+                    // Close button check (only when explicitly clicked or Super shortcut used)
+                    if (event.superPressed && event.button == BTN_MIDDLE) {
+                        removeWindow(targetWin.id);
                         stateChanged = true;
-                    } else if (event.button == BTN_RIGHT) {
-                        // Super + Right Click = Normalized Aspect-Aware Grid (3x3 Dynamic Bounding Box Stretch)
-                        topWin.isResizing = true;
+                    } else if (!event.superPressed && targetWin.decorationMode == DecorationMode::SSD &&
+                               m_mouseX >= targetWin.x + btnPad && m_mouseX <= targetWin.x + btnPad + btn &&
+                               m_mouseY >= targetWin.y + btnPad && m_mouseY <= targetWin.y + btnPad + btn) {
+                        std::cout << "[LCL WM] Close button clicked on window ID: " << targetWin.id << "\n";
+                        removeWindow(targetWin.id);
+                        stateChanged = true;
+                    } else if (event.superPressed) {
+                        // GNOME / KDE Style Super Shortcuts
+                        if (event.button == BTN_LEFT) {
+                            // Super + Left Click = Move
+                            targetWin.isDragging = true;
+                            targetWin.dragOffsetX = m_mouseX - targetWin.x;
+                            targetWin.dragOffsetY = m_mouseY - targetWin.y;
+                            targetWin.markDirty();
+                            stateChanged = true;
+                        } else if (event.button == BTN_RIGHT) {
+                            // Super + Right Click = Normalized Aspect-Aware Grid
+                            targetWin.isResizing = true;
 
-                        // Calculate normalized click position in window local bounds [0.0, 1.0]
-                        double normX = (topWin.width > 0)
-                            ? static_cast<double>(m_mouseX - topWin.x) / static_cast<double>(topWin.width)
-                            : 0.5;
-                        double normY = (topWin.height > 0)
-                            ? static_cast<double>(m_mouseY - topWin.y) / static_cast<double>(topWin.height)
-                            : 0.5;
+                            double normX = (targetWin.width > 0)
+                                ? static_cast<double>(m_mouseX - targetWin.x) / static_cast<double>(targetWin.width)
+                                : 0.5;
+                            double normY = (targetWin.height > 0)
+                                ? static_cast<double>(m_mouseY - targetWin.y) / static_cast<double>(targetWin.height)
+                                : 0.5;
 
-                        // 3x3 Aspect-Aware Bounding Box Grid Mapping (Thresholds: 0.33 & 0.66)
-                        if (normY < 0.33) {
-                            if (normX < 0.33)      topWin.resizeEdge = ResizeEdge::TopLeft;
-                            else if (normX > 0.66) topWin.resizeEdge = ResizeEdge::TopRight;
-                            else                   topWin.resizeEdge = ResizeEdge::Top;
-                        } else if (normY > 0.66) {
-                            if (normX < 0.33)      topWin.resizeEdge = ResizeEdge::BottomLeft;
-                            else if (normX > 0.66) topWin.resizeEdge = ResizeEdge::BottomRight;
-                            else                   topWin.resizeEdge = ResizeEdge::Bottom;
-                        } else {
-                            if (normX < 0.33)      topWin.resizeEdge = ResizeEdge::Left;
-                            else if (normX > 0.66) topWin.resizeEdge = ResizeEdge::Right;
-                            else                   topWin.resizeEdge = ResizeEdge::BottomRight; // Center default
+                            if (normY < 0.33) {
+                                if (normX < 0.33)      targetWin.resizeEdge = ResizeEdge::TopLeft;
+                                else if (normX > 0.66) targetWin.resizeEdge = ResizeEdge::TopRight;
+                                else                   targetWin.resizeEdge = ResizeEdge::Top;
+                            } else if (normY > 0.66) {
+                                if (normX < 0.33)      targetWin.resizeEdge = ResizeEdge::BottomLeft;
+                                else if (normX > 0.66) targetWin.resizeEdge = ResizeEdge::BottomRight;
+                                else                   targetWin.resizeEdge = ResizeEdge::Bottom;
+                            } else {
+                                if (normX < 0.33)      targetWin.resizeEdge = ResizeEdge::Left;
+                                else if (normX > 0.66) targetWin.resizeEdge = ResizeEdge::Right;
+                                else                   targetWin.resizeEdge = ResizeEdge::BottomRight;
+                            }
+
+                            targetWin.activeResizeEdge = targetWin.resizeEdge;
+                            targetWin.anchorRight = targetWin.x + targetWin.width;
+                            targetWin.anchorBottom = targetWin.y + targetWin.height;
+                            targetWin.resizeStartX = m_mouseX;
+                            targetWin.resizeStartY = m_mouseY;
+                            targetWin.initialX = targetWin.x;
+                            targetWin.initialY = targetWin.y;
+                            targetWin.initialWidth = targetWin.width;
+                            targetWin.initialHeight = targetWin.height;
+                            targetWin.markDirty();
+                            stateChanged = true;
                         }
-
-                        topWin.activeResizeEdge = topWin.resizeEdge;
-                        topWin.anchorRight = topWin.x + topWin.width;
-                        topWin.anchorBottom = topWin.y + topWin.height;
-                        topWin.resizeStartX = m_mouseX;
-                        topWin.resizeStartY = m_mouseY;
-                        topWin.initialX = topWin.x;
-                        topWin.initialY = topWin.y;
-                        topWin.initialWidth = topWin.width;
-                        topWin.initialHeight = topWin.height;
-                        topWin.markDirty();
-                        stateChanged = true;
-                    }
-                } else if (event.button == BTN_LEFT) {
-                    // Normal Left Click
-                    ResizeEdge edge = detectResizeEdge(m_mouseX, m_mouseY, topWin);
-                    if (edge != ResizeEdge::None) {
-                        // Edge / Corner Resize
-                        topWin.isResizing = true;
-                        topWin.resizeEdge = edge;
-                        topWin.activeResizeEdge = edge;
-                        topWin.anchorRight = topWin.x + topWin.width;
-                        topWin.anchorBottom = topWin.y + topWin.height;
-                        topWin.resizeStartX = m_mouseX;
-                        topWin.resizeStartY = m_mouseY;
-                        topWin.initialX = topWin.x;
-                        topWin.initialY = topWin.y;
-                        topWin.initialWidth = topWin.width;
-                        topWin.initialHeight = topWin.height;
-                        topWin.markDirty();
-                        stateChanged = true;
-                    } else if (m_mouseY < topWin.y + titleH) {
-                        // Header Drag Move
-                        topWin.isDragging = true;
-                        topWin.dragOffsetX = m_mouseX - topWin.x;
-                        topWin.dragOffsetY = m_mouseY - topWin.y;
-                        topWin.markDirty();
-                        stateChanged = true;
+                    } else if (event.button == BTN_LEFT) {
+                        // Normal Left Click
+                        ResizeEdge edge = detectResizeEdge(m_mouseX, m_mouseY, targetWin);
+                        if (edge != ResizeEdge::None) {
+                            // Edge / Corner Resize
+                            targetWin.isResizing = true;
+                            targetWin.resizeEdge = edge;
+                            targetWin.activeResizeEdge = edge;
+                            targetWin.anchorRight = targetWin.x + targetWin.width;
+                            targetWin.anchorBottom = targetWin.y + targetWin.height;
+                            targetWin.resizeStartX = m_mouseX;
+                            targetWin.resizeStartY = m_mouseY;
+                            targetWin.initialX = targetWin.x;
+                            targetWin.initialY = targetWin.y;
+                            targetWin.initialWidth = targetWin.width;
+                            targetWin.initialHeight = targetWin.height;
+                            targetWin.markDirty();
+                            stateChanged = true;
+                        } else if (titleH > 0 && m_mouseY < targetWin.y + titleH) {
+                            // Header Drag Move
+                            targetWin.isDragging = true;
+                            targetWin.dragOffsetX = m_mouseX - targetWin.x;
+                            targetWin.dragOffsetY = m_mouseY - targetWin.y;
+                            targetWin.markDirty();
+                            stateChanged = true;
+                        }
                     }
                 }
+            } else {
+                // Clicked on empty desktop background
+                unfocusAll();
+                stateChanged = true;
             }
         } else {
             // Button Released: Release dragging and resizing for all windows
@@ -426,6 +444,12 @@ void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int fra
     }
 }
 
+void WindowManager::sortWindowsByLayer() {
+    std::stable_sort(m_windows.begin(), m_windows.end(), [](const Window& a, const Window& b) {
+        return static_cast<uint32_t>(a.layer) < static_cast<uint32_t>(b.layer);
+    });
+}
+
 void WindowManager::setDecorationMode(uint32_t windowId, DecorationMode mode) {
     for (auto& win : m_windows) {
         if (win.id == windowId) {
@@ -437,6 +461,28 @@ void WindowManager::setDecorationMode(uint32_t windowId, DecorationMode mode) {
     }
 }
 
+void WindowManager::setWindowLayer(uint32_t windowId, protocol::LCLWindowLayer layer, bool unfocusable) {
+    for (auto& win : m_windows) {
+        if (win.id == windowId) {
+            win.layer = layer;
+            win.isUnfocusable = unfocusable;
+            if (unfocusable && win.isFocused) {
+                win.isFocused = false;
+                win.headerColor = lcl::theme::UI::WindowTitleBlurred;
+            }
+            win.markDirty();
+            break;
+        }
+    }
+    sortWindowsByLayer();
+    m_mouseDirty = true;
+}
+
+void WindowManager::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right) {
+    m_reservedZone = {top, bottom, left, right};
+    std::cout << "[LCL WindowManager] Reserved Zone set to top=" << top << " bottom=" << bottom << " left=" << left << " right=" << right << "\n";
+}
+
 void WindowManager::focusWindow(uint32_t windowId) {
     auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
         return w.id == windowId;
@@ -446,12 +492,15 @@ void WindowManager::focusWindow(uint32_t windowId) {
         Window target = *it;
         m_windows.erase(it);
 
-        unfocusAll();
+        if (!target.isUnfocusable) {
+            unfocusAll();
+            target.isFocused = true;
+            target.headerColor = lcl::theme::UI::WindowTitleFocused;
+        }
 
-        target.isFocused = true;
-        target.headerColor = lcl::theme::UI::WindowTitleFocused;
         target.markDirty();
         m_windows.push_back(target);
+        sortWindowsByLayer();
         m_mouseDirty = true;
     }
 }

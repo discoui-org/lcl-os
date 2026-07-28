@@ -84,17 +84,18 @@ bool Compositor::initialize() {
 
             // Notify surface clients if window bounds changed during resize
             for (const auto& win : m_windowManager.getWindows()) {
-                for (const auto& [surfId, entry] : m_surfaces) {
+                for (const auto& [surfKey, entry] : m_surfaces) {
                     if (entry.windowId == win.id && entry.clientFd >= 0) {
+                        int titleOffset = (win.decorationMode == render::DecorationMode::SSD) ? DisplayScale::titleBarHeight() : 0;
                         uint32_t contentW = static_cast<uint32_t>(win.pendingWidth > 0 ? win.pendingWidth : win.width);
-                        uint32_t contentH = static_cast<uint32_t>(std::max(1, (win.pendingHeight > 0 ? win.pendingHeight : win.height) - DisplayScale::titleBarHeight()));
+                        uint32_t contentH = static_cast<uint32_t>(std::max(1, (win.pendingHeight > 0 ? win.pendingHeight : win.height) - titleOffset));
                         if (contentW != entry.width || contentH != entry.height) {
                             protocol::LCLHeader header{};
                             header.opcode = protocol::LCLOpcode::ConfigureBounds;
                             header.payloadSize = sizeof(protocol::LCLMsgConfigureBounds);
 
                             protocol::LCLMsgConfigureBounds cfgMsg{};
-                            cfgMsg.surfaceId = surfId;
+                            cfgMsg.surfaceId = static_cast<uint32_t>(surfKey & 0xFFFFFFFF);
                             cfgMsg.x = win.x;
                             cfgMsg.y = win.y;
                             cfgMsg.width = contentW;
@@ -112,7 +113,7 @@ bool Compositor::initialize() {
         if (ev.type == InputEventType::KeyboardKey) {
             uint32_t focusedWinId = m_windowManager.getFocusedWindowId();
             if (focusedWinId > 0) {
-                for (const auto& [surfId, entry] : m_surfaces) {
+                for (const auto& [surfKey, entry] : m_surfaces) {
                     if (entry.windowId == focusedWinId && entry.clientFd >= 0) {
                         protocol::LCLHeader header{};
                         header.opcode = protocol::LCLOpcode::InputEvent;
@@ -120,7 +121,7 @@ bool Compositor::initialize() {
 
                         // 1. Raw Key Event (1 = KeyDown, 2 = KeyUp)
                         protocol::LCLMsgInputEvent inputMsg{};
-                        inputMsg.surfaceId = surfId;
+                        inputMsg.surfaceId = static_cast<uint32_t>(surfKey & 0xFFFFFFFF);
                         inputMsg.type = ev.pressed ? 1 : 2;
                         inputMsg.key = ev.key;
                         inputMsg.pressed = ev.pressed ? 1 : 0;
@@ -150,7 +151,7 @@ bool Compositor::initialize() {
                     }
                 }
                 if (targetWin) {
-                    for (const auto& [surfId, entry] : m_surfaces) {
+                    for (const auto& [surfKey, entry] : m_surfaces) {
                         if (entry.windowId == focusedWinId && entry.clientFd >= 0) {
                             int titleOffset = (targetWin->decorationMode == render::DecorationMode::SSD)
                                               ? DisplayScale::titleBarHeight() : 0;
@@ -162,7 +163,7 @@ bool Compositor::initialize() {
                             header.payloadSize = sizeof(protocol::LCLMsgInputEvent);
 
                             protocol::LCLMsgInputEvent inputMsg{};
-                            inputMsg.surfaceId = surfId;
+                            inputMsg.surfaceId = static_cast<uint32_t>(surfKey & 0xFFFFFFFF);
                             inputMsg.type = (ev.type == InputEventType::PointerMotion) ? 3 : 4;
                             inputMsg.x = localX;
                             inputMsg.y = localY;
@@ -256,10 +257,10 @@ void Compositor::processIPC() {
                 auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
                 surfId = sm->surfaceId;
                 if (sm->title[0]) title = sm->title;
-                if (sm->x > 0) winX = sm->x;
-                if (sm->y > 0) winY = sm->y;
-                if (sm->width > 0) winW = sm->width;
-                if (sm->height > 0) winH = sm->height;
+                winX = sm->x;
+                winY = sm->y;
+                winW = (sm->width > 0) ? sm->width : static_cast<int>(m_renderer.getWidth());
+                winH = (sm->height > 0) ? sm->height : static_cast<int>(m_renderer.getHeight());
             }
 
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
@@ -277,11 +278,26 @@ void Compositor::processIPC() {
                 m_surfaces[surfaceKey] = entry;
                 std::cout << "[LCL Compositor] Created Window (ID: " << entry.windowId
                           << ") for Surface " << surfId
-                          << " from client PID " << msg.pid << "\n";
+                          << " from client PID " << msg.pid << " (" << winW << "x" << winH << ")\n";
                 m_needsRedraw = true;
             } else {
                 m_surfaces[surfaceKey].clientFd = msg.clientFd;
             }
+
+            // Immediately send ConfigureBounds back to client so client knows assigned window dimensions
+            protocol::LCLHeader header{};
+            header.opcode = protocol::LCLOpcode::ConfigureBounds;
+            header.payloadSize = sizeof(protocol::LCLMsgConfigureBounds);
+
+            protocol::LCLMsgConfigureBounds cfgMsg{};
+            cfgMsg.surfaceId = surfId;
+            cfgMsg.x = winX;
+            cfgMsg.y = winY;
+            cfgMsg.width = static_cast<uint32_t>(winW);
+            cfgMsg.height = static_cast<uint32_t>(winH);
+            cfgMsg.isFocused = 1;
+
+            protocol::sendMsgWithFd(msg.clientFd, header, &cfgMsg);
 
         // --- ATTACH_BUFFER: mmap the SCM_RIGHTS memfd into compositor address space ---
         } else if (isAttachBuffer) {
@@ -353,29 +369,71 @@ void Compositor::processIPC() {
                 entry.stride = stride;
             }
 
+            // Calculate titleOffset based on window decoration mode
+            int titleOffset = 0;
+            for (const auto& win : m_windowManager.getWindows()) {
+                if (win.id == entry.windowId) {
+                    if (win.decorationMode == render::DecorationMode::SSD) {
+                        titleOffset = DisplayScale::titleBarHeight();
+                    }
+                    break;
+                }
+            }
+
             // Notify WindowManager of client surface buffer commit
             int frameW = static_cast<int>(w);
-            int frameH = static_cast<int>(h) + DisplayScale::titleBarHeight();
+            int frameH = static_cast<int>(h) + titleOffset;
             m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH);
             m_needsRedraw = true;
 
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetDecorationMode ||
                    msg.command.rfind("SET_DECORATION_MODE", 0) == 0) {
-            uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | 1;
+            uint32_t surfId = 1;
+            lcl::protocol::LCLDecorationMode mode = lcl::protocol::LCLDecorationMode::SSD;
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetDecorationMode)) {
+                auto* decMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetDecorationMode*>(msg.payload.data());
+                surfId = decMsg->surfaceId;
+                mode = decMsg->mode;
+            } else if (msg.command.find("CSD") != std::string::npos) {
+                mode = lcl::protocol::LCLDecorationMode::CSD;
+            } else if (msg.command.find("NONE") != std::string::npos || msg.command.find("FRAMELESS") != std::string::npos) {
+                mode = lcl::protocol::LCLDecorationMode::None;
+            }
+            uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             auto it = m_surfaces.find(surfaceKey);
             if (it != m_surfaces.end()) {
-                lcl::protocol::LCLDecorationMode mode = lcl::protocol::LCLDecorationMode::SSD;
-                if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetDecorationMode)) {
-                    auto* decMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetDecorationMode*>(msg.payload.data());
-                    mode = decMsg->mode;
-                } else if (msg.command.find("CSD") != std::string::npos) {
-                    mode = lcl::protocol::LCLDecorationMode::CSD;
+                render::DecorationMode wmMode = render::DecorationMode::SSD;
+                if (mode == lcl::protocol::LCLDecorationMode::CSD) {
+                    wmMode = render::DecorationMode::CSD;
+                } else if (mode == lcl::protocol::LCLDecorationMode::None) {
+                    wmMode = render::DecorationMode::None;
                 }
-                render::DecorationMode wmMode = (mode == lcl::protocol::LCLDecorationMode::CSD) ?
-                    render::DecorationMode::CSD : render::DecorationMode::SSD;
                 m_windowManager.setDecorationMode(it->second.windowId, wmMode);
                 std::cout << "[LCL Compositor] Set decoration mode for Window " << it->second.windowId
-                          << " to " << (wmMode == render::DecorationMode::CSD ? "CSD" : "SSD") << "\n";
+                          << " to " << (wmMode == render::DecorationMode::None ? "None (Frameless)" : (wmMode == render::DecorationMode::CSD ? "CSD" : "SSD")) << "\n";
+                m_needsRedraw = true;
+            }
+
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetWindowLayer) {
+            uint32_t surfId = 1;
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetWindowLayer)) {
+                auto* layerMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetWindowLayer*>(msg.payload.data());
+                surfId = layerMsg->surfaceId;
+                uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
+                auto it = m_surfaces.find(surfaceKey);
+                if (it != m_surfaces.end()) {
+                    m_windowManager.setWindowLayer(it->second.windowId, layerMsg->layer, layerMsg->unfocusable != 0);
+                    std::cout << "[LCL Compositor] Set window layer for Window " << it->second.windowId
+                              << " to " << static_cast<uint32_t>(layerMsg->layer)
+                              << " (unfocusable=" << static_cast<int>(layerMsg->unfocusable) << ")\n";
+                    m_needsRedraw = true;
+                }
+            }
+
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetReservedZone) {
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetReservedZone)) {
+                auto* resMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetReservedZone*>(msg.payload.data());
+                m_windowManager.setReservedZone(resMsg->top, resMsg->bottom, resMsg->left, resMsg->right);
                 m_needsRedraw = true;
             }
 

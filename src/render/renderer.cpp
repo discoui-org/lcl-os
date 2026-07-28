@@ -172,7 +172,7 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
     }
 
     std::cout << "[LCL Render] Initializing Renderer Engine (" << m_width << "x" << m_height << ")...\n";
-    m_softwareBackBuffer.assign(m_width * m_height, lcl::theme::UI::Wallpaper);
+    m_softwareBackBuffer.assign(m_width * m_height, 0xFF000000);
 
     if (m_displayManager && m_displayManager->isInitialized()) {
         if (m_displayManager->getBackendType() == core::DisplayBackendType::DRM_KMS) {

@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include "core/input/input_manager.hpp"
+#include "core/ipc/lcl_protocol.hpp"
 #include "render/damage_tracker.hpp"
 
 namespace lcl::render {
@@ -21,8 +22,16 @@ enum class ResizeEdge {
 };
 
 enum class DecorationMode {
-    SSD, // Server-Side Decoration
-    CSD  // Client-Side Decoration
+    SSD,  // Server-Side Decoration
+    CSD,  // Client-Side Decoration
+    None  // Frameless / No Decoration
+};
+
+struct ReservedZone {
+    uint32_t top{0};
+    uint32_t bottom{0};
+    uint32_t left{0};
+    uint32_t right{0};
 };
 
 struct Window {
@@ -38,7 +47,9 @@ struct Window {
     int pendingHeight{300};
     int zIndex{0};
     bool isFocused{false};
+    bool isUnfocusable{false};
     DecorationMode decorationMode{DecorationMode::SSD};
+    protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
 
     // Drag state
     bool isDragging{false};
@@ -131,14 +142,31 @@ public:
     void commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH);
 
     /**
-     * @brief Set decoration mode (SSD/CSD) for a window.
+     * @brief Set decoration mode (SSD/CSD/None) for a window.
      */
     void setDecorationMode(uint32_t windowId, DecorationMode mode);
 
     /**
-     * @brief Focus a window by ID and bring it to top z-order.
+     * @brief Set window layer (Bottom/Normal/TopMost) and unfocusable flag for a window.
+     */
+    void setWindowLayer(uint32_t windowId, protocol::LCLWindowLayer layer, bool unfocusable = false);
+
+    /**
+     * @brief Set reserved desktop struts (No Window Move Zone for Menu Bar / Dock).
+     */
+    void setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right);
+
+    const ReservedZone& getReservedZone() const { return m_reservedZone; }
+
+    /**
+     * @brief Focus a window by ID and bring it to top z-order within its layer.
      */
     void focusWindow(uint32_t windowId);
+
+    /**
+     * @brief Sort windows by layer (Bottom -> Normal -> TopMost) preserving relative Z-order.
+     */
+    void sortWindowsByLayer();
 
     /**
      * @brief Check if any window or cursor state is dirty.
@@ -174,6 +202,7 @@ private:
     uint32_t m_screenWidth{1024};
     uint32_t m_screenHeight{768};
     std::vector<Window> m_windows;
+    ReservedZone m_reservedZone{};
     int m_mouseX{512};
     int m_mouseY{384};
     double m_subpixelX{512.0};

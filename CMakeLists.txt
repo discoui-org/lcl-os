@@ -104,6 +104,22 @@ target_link_libraries(lcl-desktop-wm PRIVATE
     Threads::Threads
 )
 
+# Standalone Desktop Shell Daemon Target (lcl-desktop-shell)
+add_executable(lcl-desktop-shell
+    src/apps/desktop_shell/main.cpp
+    src/core/ipc/ipc_manager.cpp
+    src/core/ipc/lcl_protocol.cpp
+    src/core/display/display_scale.cpp
+)
+
+target_include_directories(lcl-desktop-shell PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(lcl-desktop-shell PRIVATE
+    Threads::Threads
+)
+
 # Standalone Client Terminal App Target (lcl-terminal)
 add_executable(lcl-terminal
     src/tools/terminal_main.cpp

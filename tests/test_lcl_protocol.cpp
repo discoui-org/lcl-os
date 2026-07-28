@@ -61,3 +61,71 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     close(sv[0]);
     close(sv[1]);
 }
+
+TEST(LCLProtocolTest, SendAndReceiveSetWindowLayerMsg) {
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+
+    LCLHeader headerSend{};
+    headerSend.opcode = LCLOpcode::SetWindowLayer;
+
+    LCLMsgSetWindowLayer msg{};
+    msg.surfaceId = 1;
+    msg.layer = LCLWindowLayer::Bottom;
+    msg.unfocusable = 1;
+
+    headerSend.payloadSize = sizeof(msg);
+
+    EXPECT_TRUE(sendMsgWithFd(sv[0], headerSend, &msg, -1));
+
+    LCLHeader headerRecv{};
+    std::vector<uint8_t> payloadRecv;
+    int receivedFd = -1;
+
+    EXPECT_TRUE(recvMsgWithFd(sv[1], headerRecv, payloadRecv, receivedFd));
+    EXPECT_EQ(headerRecv.opcode, LCLOpcode::SetWindowLayer);
+    ASSERT_EQ(payloadRecv.size(), sizeof(LCLMsgSetWindowLayer));
+
+    const auto* msgRecv = reinterpret_cast<const LCLMsgSetWindowLayer*>(payloadRecv.data());
+    EXPECT_EQ(msgRecv->surfaceId, 1u);
+    EXPECT_EQ(msgRecv->layer, LCLWindowLayer::Bottom);
+    EXPECT_EQ(msgRecv->unfocusable, 1);
+
+    close(sv[0]);
+    close(sv[1]);
+}
+
+TEST(LCLProtocolTest, SendAndReceiveSetReservedZoneMsg) {
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+
+    LCLHeader headerSend{};
+    headerSend.opcode = LCLOpcode::SetReservedZone;
+
+    LCLMsgSetReservedZone msg{};
+    msg.surfaceId = 1;
+    msg.top = 32;
+    msg.bottom = 60;
+    msg.left = 0;
+    msg.right = 0;
+
+    headerSend.payloadSize = sizeof(msg);
+
+    EXPECT_TRUE(sendMsgWithFd(sv[0], headerSend, &msg, -1));
+
+    LCLHeader headerRecv{};
+    std::vector<uint8_t> payloadRecv;
+    int receivedFd = -1;
+
+    EXPECT_TRUE(recvMsgWithFd(sv[1], headerRecv, payloadRecv, receivedFd));
+    EXPECT_EQ(headerRecv.opcode, LCLOpcode::SetReservedZone);
+    ASSERT_EQ(payloadRecv.size(), sizeof(LCLMsgSetReservedZone));
+
+    const auto* msgRecv = reinterpret_cast<const LCLMsgSetReservedZone*>(payloadRecv.data());
+    EXPECT_EQ(msgRecv->surfaceId, 1u);
+    EXPECT_EQ(msgRecv->top, 32u);
+    EXPECT_EQ(msgRecv->bottom, 60u);
+
+    close(sv[0]);
+    close(sv[1]);
+}

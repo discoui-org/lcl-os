@@ -21,6 +21,7 @@ BUILD_DIR = ROOT_DIR / "build"
 BINARY = BUILD_DIR / "lcl-core"
 OPEN_BIN = BUILD_DIR / "lcl-open"
 WM_BIN = BUILD_DIR / "lcl-desktop-wm"
+SHELL_BIN = BUILD_DIR / "lcl-desktop-shell"
 TERM_BIN = BUILD_DIR / "lcl-terminal"
 DEMO_BIN = BUILD_DIR / "apps" / "ui_demo" / "lcl_ui_demo"
 JS_BIN = BUILD_DIR / "lcl-js"
@@ -506,6 +507,9 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
     if WM_BIN.is_file():
         shutil.copy2(WM_BIN, dest_bin / "lcl-desktop-wm")
 
+    if SHELL_BIN.is_file():
+        shutil.copy2(SHELL_BIN, dest_bin / "lcl-desktop-shell")
+
     if TERM_BIN.is_file():
         shutil.copy2(TERM_BIN, dest_bin / "lcl-terminal")
 
@@ -600,7 +604,7 @@ echo "===================================================="
     )
 
     log("Resolving dynamic library dependencies...")
-    bins = [BINARY, OPEN_BIN, WM_BIN, TERM_BIN, DEMO_BIN, JS_BIN] + [p for p in host_bins.values() if p.is_file()]
+    bins = [BINARY, OPEN_BIN, WM_BIN, SHELL_BIN, TERM_BIN, DEMO_BIN, JS_BIN] + [p for p in host_bins.values() if p.is_file()]
     for bin_path in bins:
         copy_ldd_deps(bin_path, dest_lib)
 
@@ -761,6 +765,10 @@ fi
 
 /bin/lcl-core 2>&1 | tee /var/log/lcl_compositor.log &
 sleep 0.2
+if [ -x /usr/bin/lcl-desktop-shell ]; then
+    echo "[init] Starting lcl-desktop-shell..."
+    /usr/bin/lcl-desktop-shell 2>&1 | tee /var/log/lcl_desktop_shell.log &
+fi
 if [ -x /usr/bin/lcl-desktop-wm ]; then
     echo "[init] Starting lcl-desktop-wm daemon..."
     /usr/bin/lcl-desktop-wm 2>&1 | tee /var/log/lcl_wm.log &
