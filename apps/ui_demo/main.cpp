@@ -63,52 +63,7 @@ int main() {
 
     app.setRootWidget(std::move(rootContainer));
 
-    // 3. Render Initial Frame
-    std::cout << "[lcl_ui_demo] Rendering initial frame...\n";
-    bool initialFrameRendered = app.renderFrame();
-    std::cout << "[lcl_ui_demo] Initial frame redrawn: " << (initialFrameRendered ? "YES" : "NO") << std::endl;
-    assert(initialFrameRendered);
-
-    // 4. Simulate Idle Frame (No damage -> should skip redraw)
-    bool idleRendered = app.renderFrame();
-    std::cout << "[lcl_ui_demo] Idle frame redrawn: " << (idleRendered ? "YES" : "NO") << std::endl;
-    assert(!idleRendered);
-
-    // 5. Simulate Hover Input Pipeline (Move pointer over button center)
-    float btnCenterX = btnPtr->getAbsoluteBounds().x + btnPtr->getAbsoluteBounds().width / 2.0f;
-    float btnCenterY = btnPtr->getAbsoluteBounds().y + btnPtr->getAbsoluteBounds().height / 2.0f;
-
-    std::cout << "[lcl_ui_demo] Sending PointerMove to (" << btnCenterX << ", " << btnCenterY << ")...\n";
-    app.sendPointerMove(btnCenterX, btnCenterY);
-    assert(btnPtr->getState() == ButtonState::Hover);
-
-    bool hoverFrameRendered = app.renderFrame();
-    std::cout << "[lcl_ui_demo] Hover frame redrawn: " << (hoverFrameRendered ? "YES" : "NO") << std::endl;
-    assert(hoverFrameRendered);
-
-    // 6. Simulate Pointer Click Pipeline (Down + Up)
-    std::cout << "[lcl_ui_demo] Sending PointerDown & PointerUp to button...\n";
-    app.sendPointerDown(btnCenterX, btnCenterY, 0);
-    app.sendPointerUp(btnCenterX, btnCenterY, 0);
-
-    bool clickFrameRendered = app.renderFrame();
-    std::cout << "[lcl_ui_demo] Click frame redrawn: " << (clickFrameRendered ? "YES" : "NO") << std::endl;
-    assert(clickFrameRendered);
-
-    // 7. Verify State Updates
-    std::cout << "[lcl_ui_demo] Verification: Click Counter = " << clickCounter << std::endl;
-    std::cout << "[lcl_ui_demo] Verification: Button Label = \"" << btnPtr->getLabel() << "\"\n";
-    std::cout << "[lcl_ui_demo] Verification: Text Content = \"" << textPtr->getText() << "\"\n";
-
-    assert(clickCounter == 1);
-    assert(btnPtr->getLabel() == "Tıkla: 1");
-    assert(textPtr->getText() == "Tıklama Sayısı: 1");
-
-    std::cout << "========================================\n";
-    std::cout << "  Phase 1.6 Demo Execution Successful! \n";
-    std::cout << "========================================\n";
-
-    // 8. Connect to Compositor IPC & run live window event loop
+    // 3. Connect to Compositor IPC & run live window event loop
     if (app.connectCompositor()) {
         std::cout << "[lcl_ui_demo] App connected to compositor! Running live desktop UI loop...\n";
         app.runEventLoop();
