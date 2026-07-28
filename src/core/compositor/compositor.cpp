@@ -163,7 +163,7 @@ bool Compositor::initialize() {
 
                             protocol::LCLMsgInputEvent inputMsg{};
                             inputMsg.surfaceId = surfId;
-                            inputMsg.type = (ev.type == InputEventType::PointerMotion) ? 2 : 3;
+                            inputMsg.type = (ev.type == InputEventType::PointerMotion) ? 3 : 4;
                             inputMsg.x = localX;
                             inputMsg.y = localY;
                             inputMsg.key = ev.button;
