@@ -41,6 +41,10 @@ public:
     void markDirty();
     void setRenderPass(RenderPass* pass) { m_renderPass = pass; }
 
+    using GcMarkCallback = std::function<void(void* rt, void* mark_func)>;
+    void setGcMarkCallback(GcMarkCallback cb) { m_gcMarkCallback = std::move(cb); }
+    const GcMarkCallback& getGcMarkCallback() const { return m_gcMarkCallback; }
+
     virtual void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f);
     virtual void draw(SkCanvas* canvas, const Rect& damageRect);
 
@@ -67,6 +71,7 @@ protected:
     bool m_visible{true};
     bool m_focusable{false};
     RenderPass* m_renderPass{nullptr};
+    GcMarkCallback m_gcMarkCallback{nullptr};
 };
 
 } // namespace lcl::ui

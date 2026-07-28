@@ -6,19 +6,26 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Compiler flags
-add_compile_options(-Wall -Wextra -Wpedantic)
-
 # Dependencies
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 
-pkg_check_modules(DRM REQUIRED libdrm)
-pkg_check_modules(GBM REQUIRED gbm)
-pkg_check_modules(EGL REQUIRED egl)
-pkg_check_modules(GLES2 REQUIRED glesv2)
-pkg_check_modules(LIBINPUT REQUIRED libinput)
-pkg_check_modules(UDEV REQUIRED libudev)
+# QuickJS Engine (C-based JavaScript Runtime)
+include(FetchContent)
+FetchContent_Declare(
+    quickjs
+    URL https://github.com/quickjs-ng/quickjs/archive/refs/tags/v0.7.0.tar.gz
+)
+set(BUILD_QJS_LIBC OFF CACHE BOOL "" FORCE)
+set(BUILD_CLI OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(quickjs)
+
+if(TARGET qjs)
+    target_compile_options(qjs PRIVATE -Wno-error -Wno-unused-parameter -Wno-format)
+endif()
+
+# Compiler flags for LCL OS core
+add_compile_options(-Wall -Wextra -Wpedantic)
 
 # Main Compositor Executable Target
 add_executable(lcl-core
@@ -119,9 +126,28 @@ target_link_libraries(lcl-terminal PRIVATE
     Threads::Threads
 )
 
+# JavaScript Runtime Executable Target (lcl-js)
+add_executable(lcl-js
+    src/tools/js_main.cpp
+    src/binding/js_runtime.cpp
+)
+
+target_include_directories(lcl-js PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    ${quickjs_SOURCE_DIR}
+)
+
+target_link_libraries(lcl-js PRIVATE
+    lcl-ui
+    qjs
+    Threads::Threads
+)
+
 # Subdirectories
 add_subdirectory(lcl-ui)
 add_subdirectory(apps/ui_demo)
+add_subdirectory(apps/ui_demo_js)
 
 # Unit Testing Framework Configuration
 option(BUILD_TESTS "Build LCL OS unit tests" ON)
@@ -145,12 +171,14 @@ if(BUILD_TESTS)
         tests/test_key_mapper.cpp
         tests/test_lcl_ui.cpp
         tests/test_lcl_ui_events.cpp
+        tests/test_js_runtime.cpp
         src/core/ipc/lcl_protocol.cpp
         src/core/ipc/ipc_manager.cpp
         src/core/app/app_bundle_parser.cpp
         src/core/display/display_scale.cpp
         src/core/input/input_manager.cpp
         src/core/input/key_mapper.cpp
+        src/binding/js_runtime.cpp
     )
 
     target_compile_options(lcl_unit_tests PRIVATE -frtti)
@@ -160,6 +188,7 @@ if(BUILD_TESTS)
     target_include_directories(lcl_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+        ${quickjs_SOURCE_DIR}
         ${LIBINPUT_INCLUDE_DIRS}
         ${UDEV_INCLUDE_DIRS}
     )
@@ -169,6 +198,7 @@ if(BUILD_TESTS)
         gtest
         Threads::Threads
         lcl-ui
+        qjs
         ${LIBINPUT_LIBRARIES}
         ${UDEV_LIBRARIES}
     )

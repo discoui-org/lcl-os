@@ -23,6 +23,8 @@ OPEN_BIN = BUILD_DIR / "lcl-open"
 WM_BIN = BUILD_DIR / "lcl-desktop-wm"
 TERM_BIN = BUILD_DIR / "lcl-terminal"
 DEMO_BIN = BUILD_DIR / "apps" / "ui_demo" / "lcl_ui_demo"
+JS_BIN = BUILD_DIR / "lcl-js"
+DEMO_JS_DIR = BUILD_DIR / "apps" / "ui_demo_js"
 INITRAMFS_DIR = BUILD_DIR / "initramfs_root"
 INITRAMFS_IMG = BUILD_DIR / "initramfs.cpio.gz"
 CACHE_DIR = BUILD_DIR / "qemu-cache"
@@ -510,6 +512,9 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
     if DEMO_BIN.is_file():
         shutil.copy2(DEMO_BIN, dest_bin / "lcl_ui_demo")
 
+    if JS_BIN.is_file():
+        shutil.copy2(JS_BIN, dest_bin / "lcl-js")
+
     uidemo_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "UIDemo.app"
     (uidemo_app / "bin").mkdir(parents=True, exist_ok=True)
     (uidemo_app / "assets").mkdir(parents=True, exist_ok=True)
@@ -572,8 +577,30 @@ echo "===================================================="
         executable=True,
     )
 
+    uidemo_js_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "UIDemoJS.app"
+    (uidemo_js_app / "bin").mkdir(parents=True, exist_ok=True)
+    (uidemo_js_app / "assets").mkdir(parents=True, exist_ok=True)
+    write_text(
+        uidemo_js_app / "metadata.json",
+        """{
+    "name": "LCL UI Demo JS",
+    "executable": "bin/ui_demo_js",
+    "version": "1.0.0",
+    "icon": "assets/icon.png"
+}
+""",
+    )
+    js_script = ROOT_DIR / "apps" / "ui_demo_js" / "main.js"
+    if js_script.is_file():
+        shutil.copy2(js_script, uidemo_js_app / "bin" / "main.js")
+    write_text(
+        uidemo_js_app / "bin" / "ui_demo_js",
+        "#!/bin/sh\nexec /usr/bin/lcl-js /home/user/Applications/UIDemoJS.app/bin/main.js \"$@\"\n",
+        executable=True,
+    )
+
     log("Resolving dynamic library dependencies...")
-    bins = [BINARY, OPEN_BIN, WM_BIN, TERM_BIN, DEMO_BIN] + [p for p in host_bins.values() if p.is_file()]
+    bins = [BINARY, OPEN_BIN, WM_BIN, TERM_BIN, DEMO_BIN, JS_BIN] + [p for p in host_bins.values() if p.is_file()]
     for bin_path in bins:
         copy_ldd_deps(bin_path, dest_lib)
 
