@@ -10,7 +10,7 @@ namespace lcl::core {
  */
 class DisplayScale {
 public:
-    static constexpr int kMenuBarHeight = 40;
+    static constexpr int kMenuBarHeight = 32;
     static constexpr int kTitleBarHeight = 32;
     static constexpr int kWindowPad = 12;
     static constexpr int kTrafficBtn = 12;

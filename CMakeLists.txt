@@ -110,6 +110,7 @@ add_executable(lcl-desktop-shell
     src/core/ipc/ipc_manager.cpp
     src/core/ipc/lcl_protocol.cpp
     src/core/display/display_scale.cpp
+    src/render/font_renderer.cpp
 )
 
 target_include_directories(lcl-desktop-shell PRIVATE

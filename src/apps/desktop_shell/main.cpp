@@ -7,6 +7,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -19,8 +20,33 @@
 #include "core/ipc/ipc_manager.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "core/display/display_scale.hpp"
+#include "render/font_renderer.hpp"
 
 namespace {
+
+std::string getFormattedTime() {
+    auto now = std::chrono::system_clock::now();
+    std::time_t tt = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_buf{};
+    localtime_r(&tt, &tm_buf);
+
+    int hour12 = tm_buf.tm_hour % 12;
+    if (hour12 == 0) hour12 = 12;
+    const char* ampm = (tm_buf.tm_hour >= 12) ? "PM" : "AM";
+
+    char datePart[32];
+    std::strftime(datePart, sizeof(datePart), "%a %b %e", &tm_buf);
+
+    std::string dateStr = datePart;
+    size_t doubleSpace = dateStr.find("  ");
+    if (doubleSpace != std::string::npos) {
+        dateStr.replace(doubleSpace, 2, " ");
+    }
+
+    char timeBuf[64];
+    std::snprintf(timeBuf, sizeof(timeBuf), "%s %d:%02d %s", dateStr.c_str(), hour12, tm_buf.tm_min, ampm);
+    return std::string(timeBuf);
+}
 
 void renderWallpaper(uint32_t* pixels, uint32_t width, uint32_t height) {
     if (!pixels || width == 0 || height == 0) return;
@@ -89,19 +115,15 @@ void renderWallpaper(uint32_t* pixels, uint32_t width, uint32_t height) {
     std::cout << "[LCL Shell] wallpaper.png not found; rendering procedural gradient wallpaper fallback.\n";
 
     // Fallback: Elegant dark slate & midnight blue linear/radial gradient wallpaper
-    // Top-left:  Deep Slate Blue  #0F172A
-    // Bottom:    Midnight Indigo  #1E1B4B
     for (uint32_t y = 0; y < height; ++y) {
         float fy = static_cast<float>(y) / static_cast<float>(height);
         for (uint32_t x = 0; x < width; ++x) {
             float fx = static_cast<float>(x) / static_cast<float>(width);
 
-            // Base vertical gradient
             float r = 15.0f * (1.0f - fy) + 30.0f * fy;
             float g = 23.0f * (1.0f - fy) + 27.0f * fy;
             float b = 42.0f * (1.0f - fy) + 75.0f * fy;
 
-            // Soft radial ambient light source at (50%, 35%)
             float cx = fx - 0.5f;
             float cy = fy - 0.35f;
             float dist = std::sqrt(cx * cx + cy * cy);
@@ -117,6 +139,25 @@ void renderWallpaper(uint32_t* pixels, uint32_t width, uint32_t height) {
 
             pixels[y * width + x] = (0xFF000000) | (ru << 16) | (gu << 8) | bu;
         }
+    }
+}
+
+void renderMenuBar(uint32_t* pixels, uint32_t width, uint32_t height, lcl::render::FontRenderer& fontRenderer, const std::string& timeStr) {
+    if (!pixels || width == 0 || height == 0) return;
+
+    // Dark slate background #0F172A (0xFF0F172A) with 1px bottom accent border #1E293B (0xFF1E293B)
+    for (uint32_t y = 0; y < height; ++y) {
+        uint32_t bg = (y == height - 1) ? 0xFF1E293B : 0xFF0F172A;
+        std::fill_n(pixels + y * width, width, bg);
+    }
+
+    // Render formatted date/time string aligned to the right side with 20px padding
+    if (fontRenderer.isInitialized() && !timeStr.empty()) {
+        int textW = fontRenderer.getTextWidth(timeStr);
+        int textX = static_cast<int>(width) - textW - 20;
+        if (textX < 0) textX = 10;
+        int textY = (static_cast<int>(height) - fontRenderer.getCellHeight()) / 2;
+        fontRenderer.renderString(pixels, width, height, textX, textY, timeStr, 0xFFF1F5F9);
     }
 }
 
@@ -157,7 +198,22 @@ int main() {
 
     std::cout << "[LCL Shell] Connected to Compositor IPC socket successfully.\n";
 
-    // 2. Register Role as DesktopWallpaper
+    // Initialize FontRenderer for MenuBar time text
+    lcl::render::FontRenderer fontRenderer;
+    std::vector<std::string> fontPaths = {
+        "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
+        "/usr/share/fonts/inter/Inter-Regular.otf",
+        "assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
+        "assets/fonts/inter/Inter-Regular.otf"
+    };
+    for (const auto& fpath : fontPaths) {
+        if (fontRenderer.loadFont(fpath, 14.0f)) {
+            std::cout << "[LCL Shell] Loaded MenuBar font: " << fpath << "\n";
+            break;
+        }
+    }
+
+    // 2. Register Role as DesktopWallpaper / Shell
     lcl::protocol::LCLHeader regHeader{};
     regHeader.opcode = lcl::protocol::LCLOpcode::RegisterRole;
     regHeader.payloadSize = sizeof(lcl::protocol::LCLMsgRegisterRole);
@@ -168,46 +224,47 @@ int main() {
 
     lcl::protocol::sendMsgWithFd(socketFd, regHeader, &regMsg);
 
-    // 3. Request Full-Screen Surface Creation (0,0 = Fullscreen)
+    // 3. Request Surface 1 (Wallpaper) Creation (0,0 = Fullscreen)
     uint32_t width = 1280;
     uint32_t height = 800;
+    const uint32_t menuBarHeight = 32;
 
-    lcl::protocol::LCLHeader surfHeader{};
-    surfHeader.opcode = lcl::protocol::LCLOpcode::SurfaceCreate;
-    surfHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSurfaceCreate);
+    lcl::protocol::LCLHeader wpSurfHeader{};
+    wpSurfHeader.opcode = lcl::protocol::LCLOpcode::SurfaceCreate;
+    wpSurfHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSurfaceCreate);
 
-    lcl::protocol::LCLMsgSurfaceCreate surfMsg{};
-    surfMsg.surfaceId = 1;
-    surfMsg.x = 0;
-    surfMsg.y = 0;
-    surfMsg.width = 0;  // 0 = request full screen width from Compositor
-    surfMsg.height = 0; // 0 = request full screen height from Compositor
-    std::strncpy(surfMsg.title, "LCL Wallpaper", sizeof(surfMsg.title) - 1);
+    lcl::protocol::LCLMsgSurfaceCreate wpSurfMsg{};
+    wpSurfMsg.surfaceId = 1;
+    wpSurfMsg.x = 0;
+    wpSurfMsg.y = 0;
+    wpSurfMsg.width = 0;  // 0 = request full screen width from Compositor
+    wpSurfMsg.height = 0; // 0 = request full screen height from Compositor
+    std::strncpy(wpSurfMsg.title, "LCL Wallpaper", sizeof(wpSurfMsg.title) - 1);
 
-    lcl::protocol::sendMsgWithFd(socketFd, surfHeader, &surfMsg);
+    lcl::protocol::sendMsgWithFd(socketFd, wpSurfHeader, &wpSurfMsg);
 
-    // 4. Set Decoration Mode to None (Frameless)
-    lcl::protocol::LCLHeader decHeader{};
-    decHeader.opcode = lcl::protocol::LCLOpcode::SetDecorationMode;
-    decHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetDecorationMode);
+    // 4. Set Decoration Mode to None (Frameless) for Surface 1
+    lcl::protocol::LCLHeader wpDecHeader{};
+    wpDecHeader.opcode = lcl::protocol::LCLOpcode::SetDecorationMode;
+    wpDecHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetDecorationMode);
 
-    lcl::protocol::LCLMsgSetDecorationMode decMsg{};
-    decMsg.surfaceId = 1;
-    decMsg.mode = lcl::protocol::LCLDecorationMode::None;
+    lcl::protocol::LCLMsgSetDecorationMode wpDecMsg{};
+    wpDecMsg.surfaceId = 1;
+    wpDecMsg.mode = lcl::protocol::LCLDecorationMode::None;
 
-    lcl::protocol::sendMsgWithFd(socketFd, decHeader, &decMsg);
+    lcl::protocol::sendMsgWithFd(socketFd, wpDecHeader, &wpDecMsg);
 
-    // 5. Set Window Layer to BOTTOM and unfocusable = 1
-    lcl::protocol::LCLHeader layerHeader{};
-    layerHeader.opcode = lcl::protocol::LCLOpcode::SetWindowLayer;
-    layerHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetWindowLayer);
+    // 5. Set Window Layer to BOTTOM and unfocusable = 1 for Surface 1
+    lcl::protocol::LCLHeader wpLayerHeader{};
+    wpLayerHeader.opcode = lcl::protocol::LCLOpcode::SetWindowLayer;
+    wpLayerHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetWindowLayer);
 
-    lcl::protocol::LCLMsgSetWindowLayer layerMsg{};
-    layerMsg.surfaceId = 1;
-    layerMsg.layer = lcl::protocol::LCLWindowLayer::Bottom;
-    layerMsg.unfocusable = 1;
+    lcl::protocol::LCLMsgSetWindowLayer wpLayerMsg{};
+    wpLayerMsg.surfaceId = 1;
+    wpLayerMsg.layer = lcl::protocol::LCLWindowLayer::Bottom;
+    wpLayerMsg.unfocusable = 1;
 
-    lcl::protocol::sendMsgWithFd(socketFd, layerHeader, &layerMsg);
+    lcl::protocol::sendMsgWithFd(socketFd, wpLayerHeader, &wpLayerMsg);
 
     // Read initial ConfigureBounds from Compositor (up to 20ms)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -227,50 +284,154 @@ int main() {
         }
     }
 
-    // 6. Create SHM Buffer and Render Wallpaper
-    size_t shmSize = static_cast<size_t>(width) * height * 4;
-    int shmFd = memfd_create("lcl_wallpaper_shm", MFD_CLOEXEC);
-    if (shmFd < 0) {
+    // 6. Request Surface 2 (Menu Bar) Creation
+    lcl::protocol::LCLHeader mbSurfHeader{};
+    mbSurfHeader.opcode = lcl::protocol::LCLOpcode::SurfaceCreate;
+    mbSurfHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSurfaceCreate);
+
+    lcl::protocol::LCLMsgSurfaceCreate mbSurfMsg{};
+    mbSurfMsg.surfaceId = 2;
+    mbSurfMsg.x = 0;
+    mbSurfMsg.y = 0;
+    mbSurfMsg.width = width;
+    mbSurfMsg.height = menuBarHeight;
+    std::strncpy(mbSurfMsg.title, "LCL MenuBar", sizeof(mbSurfMsg.title) - 1);
+
+    lcl::protocol::sendMsgWithFd(socketFd, mbSurfHeader, &mbSurfMsg);
+
+    // Set Decoration Mode None (Frameless) for Surface 2
+    lcl::protocol::LCLHeader mbDecHeader{};
+    mbDecHeader.opcode = lcl::protocol::LCLOpcode::SetDecorationMode;
+    mbDecHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetDecorationMode);
+
+    lcl::protocol::LCLMsgSetDecorationMode mbDecMsg{};
+    mbDecMsg.surfaceId = 2;
+    mbDecMsg.mode = lcl::protocol::LCLDecorationMode::None;
+
+    lcl::protocol::sendMsgWithFd(socketFd, mbDecHeader, &mbDecMsg);
+
+    // Set Window Layer TopMost and unfocusable = 1 for Surface 2
+    lcl::protocol::LCLHeader mbLayerHeader{};
+    mbLayerHeader.opcode = lcl::protocol::LCLOpcode::SetWindowLayer;
+    mbLayerHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetWindowLayer);
+
+    lcl::protocol::LCLMsgSetWindowLayer mbLayerMsg{};
+    mbLayerMsg.surfaceId = 2;
+    mbLayerMsg.layer = lcl::protocol::LCLWindowLayer::TopMost;
+    mbLayerMsg.unfocusable = 1;
+
+    lcl::protocol::sendMsgWithFd(socketFd, mbLayerHeader, &mbLayerMsg);
+
+    // Set Reserved Zone (struts) top = 32
+    lcl::protocol::LCLHeader resHeader{};
+    resHeader.opcode = lcl::protocol::LCLOpcode::SetReservedZone;
+    resHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetReservedZone);
+
+    lcl::protocol::LCLMsgSetReservedZone resMsg{};
+    resMsg.surfaceId = 2;
+    resMsg.top = menuBarHeight;
+    resMsg.bottom = 0;
+    resMsg.left = 0;
+    resMsg.right = 0;
+
+    lcl::protocol::sendMsgWithFd(socketFd, resHeader, &resMsg);
+
+    // 7. Create SHM Buffer and Render Wallpaper (Surface 1)
+    size_t shmSizeWallpaper = static_cast<size_t>(width) * height * 4;
+    int shmFdWallpaper = memfd_create("lcl_wallpaper_shm", MFD_CLOEXEC);
+    if (shmFdWallpaper < 0) {
         std::cerr << "[LCL Shell ERROR] memfd_create failed: " << strerror(errno) << "\n";
         close(socketFd);
         return 1;
     }
 
-    if (ftruncate(shmFd, shmSize) < 0) {
+    if (ftruncate(shmFdWallpaper, shmSizeWallpaper) < 0) {
         std::cerr << "[LCL Shell ERROR] ftruncate failed: " << strerror(errno) << "\n";
-        close(shmFd);
+        close(shmFdWallpaper);
         close(socketFd);
         return 1;
     }
 
-    uint32_t* shmPixels = reinterpret_cast<uint32_t*>(mmap(nullptr, shmSize, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd, 0));
-    if (shmPixels == MAP_FAILED) {
+    uint32_t* shmPixelsWallpaper = reinterpret_cast<uint32_t*>(mmap(nullptr, shmSizeWallpaper, PROT_READ | PROT_WRITE, MAP_SHARED, shmFdWallpaper, 0));
+    if (shmPixelsWallpaper == MAP_FAILED) {
         std::cerr << "[LCL Shell ERROR] mmap failed: " << strerror(errno) << "\n";
-        close(shmFd);
+        close(shmFdWallpaper);
         close(socketFd);
         return 1;
     }
 
-    renderWallpaper(shmPixels, width, height);
+    renderWallpaper(shmPixelsWallpaper, width, height);
 
-    // 7. Attach Buffer to Compositor
-    lcl::protocol::LCLHeader attachHeader{};
-    attachHeader.opcode = lcl::protocol::LCLOpcode::AttachBuffer;
-    attachHeader.payloadSize = sizeof(lcl::protocol::LCLMsgAttachBuffer);
+    lcl::protocol::LCLHeader wpAttachHeader{};
+    wpAttachHeader.opcode = lcl::protocol::LCLOpcode::AttachBuffer;
+    wpAttachHeader.payloadSize = sizeof(lcl::protocol::LCLMsgAttachBuffer);
 
-    lcl::protocol::LCLMsgAttachBuffer attachMsg{};
-    attachMsg.surfaceId = 1;
-    attachMsg.width = width;
-    attachMsg.height = height;
-    attachMsg.stride = width * 4;
-    attachMsg.format = 1;
+    lcl::protocol::LCLMsgAttachBuffer wpAttachMsg{};
+    wpAttachMsg.surfaceId = 1;
+    wpAttachMsg.width = width;
+    wpAttachMsg.height = height;
+    wpAttachMsg.stride = width * 4;
+    wpAttachMsg.format = 1;
 
-    lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, shmFd);
+    lcl::protocol::sendMsgWithFd(socketFd, wpAttachHeader, &wpAttachMsg, shmFdWallpaper);
     std::cout << "[LCL Shell] Wallpaper surface attached (" << width << "x" << height << ") at LAYER_BOTTOM.\n";
 
-    // 8. Event Loop
+    // 8. Create SHM Buffer and Render MenuBar (Surface 2)
+    size_t shmSizeMenuBar = static_cast<size_t>(width) * menuBarHeight * 4;
+    int shmFdMenuBar = memfd_create("lcl_menubar_shm", MFD_CLOEXEC);
+    if (shmFdMenuBar < 0) {
+        std::cerr << "[LCL Shell ERROR] memfd_create for menubar failed: " << strerror(errno) << "\n";
+        close(shmFdWallpaper);
+        close(socketFd);
+        return 1;
+    }
+
+    if (ftruncate(shmFdMenuBar, shmSizeMenuBar) < 0) {
+        std::cerr << "[LCL Shell ERROR] ftruncate for menubar failed: " << strerror(errno) << "\n";
+        close(shmFdMenuBar);
+        close(shmFdWallpaper);
+        close(socketFd);
+        return 1;
+    }
+
+    uint32_t* shmPixelsMenuBar = reinterpret_cast<uint32_t*>(mmap(nullptr, shmSizeMenuBar, PROT_READ | PROT_WRITE, MAP_SHARED, shmFdMenuBar, 0));
+    if (shmPixelsMenuBar == MAP_FAILED) {
+        std::cerr << "[LCL Shell ERROR] mmap for menubar failed: " << strerror(errno) << "\n";
+        close(shmFdMenuBar);
+        close(shmFdWallpaper);
+        close(socketFd);
+        return 1;
+    }
+
+    std::string currentTimeStr = getFormattedTime();
+    std::string lastTimeStr = currentTimeStr;
+    renderMenuBar(shmPixelsMenuBar, width, menuBarHeight, fontRenderer, currentTimeStr);
+
+    lcl::protocol::LCLHeader mbAttachHeader{};
+    mbAttachHeader.opcode = lcl::protocol::LCLOpcode::AttachBuffer;
+    mbAttachHeader.payloadSize = sizeof(lcl::protocol::LCLMsgAttachBuffer);
+
+    lcl::protocol::LCLMsgAttachBuffer mbAttachMsg{};
+    mbAttachMsg.surfaceId = 2;
+    mbAttachMsg.width = width;
+    mbAttachMsg.height = menuBarHeight;
+    mbAttachMsg.stride = width * 4;
+    mbAttachMsg.format = 1;
+
+    lcl::protocol::sendMsgWithFd(socketFd, mbAttachHeader, &mbAttachMsg, shmFdMenuBar);
+    std::cout << "[LCL Shell] MenuBar surface attached (" << width << "x" << menuBarHeight << ") at LAYER_TOPMOST.\n";
+
+    // 9. Main Shell Loop
     bool running = true;
     while (running) {
+        // Per-second time update check
+        currentTimeStr = getFormattedTime();
+        if (currentTimeStr != lastTimeStr) {
+            lastTimeStr = currentTimeStr;
+            renderMenuBar(shmPixelsMenuBar, width, menuBarHeight, fontRenderer, currentTimeStr);
+            lcl::protocol::sendMsgWithFd(socketFd, mbAttachHeader, &mbAttachMsg, -1);
+        }
+
         lcl::protocol::LCLHeader header{};
         std::vector<uint8_t> payload;
         int receivedFd = -1;
@@ -279,21 +440,37 @@ int main() {
             if (header.opcode == lcl::protocol::LCLOpcode::ConfigureBounds &&
                 payload.size() >= sizeof(lcl::protocol::LCLMsgConfigureBounds)) {
                 auto* cfg = reinterpret_cast<const lcl::protocol::LCLMsgConfigureBounds*>(payload.data());
-                if (cfg->width > 0 && cfg->height > 0 && (cfg->width != width || cfg->height != height)) {
-                    width = cfg->width;
-                    height = cfg->height;
+                if (cfg->surfaceId == 1) { // Wallpaper surface
+                    if (cfg->width > 0 && cfg->height > 0 && (cfg->width != width || cfg->height != height)) {
+                        width = cfg->width;
+                        height = cfg->height;
 
-                    munmap(shmPixels, shmSize);
-                    shmSize = static_cast<size_t>(width) * height * 4;
-                    ftruncate(shmFd, shmSize);
-                    shmPixels = reinterpret_cast<uint32_t*>(mmap(nullptr, shmSize, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd, 0));
+                        munmap(shmPixelsWallpaper, shmSizeWallpaper);
+                        shmSizeWallpaper = static_cast<size_t>(width) * height * 4;
+                        ftruncate(shmFdWallpaper, shmSizeWallpaper);
+                        shmPixelsWallpaper = reinterpret_cast<uint32_t*>(mmap(nullptr, shmSizeWallpaper, PROT_READ | PROT_WRITE, MAP_SHARED, shmFdWallpaper, 0));
 
-                    if (shmPixels != MAP_FAILED) {
-                        renderWallpaper(shmPixels, width, height);
-                        attachMsg.width = width;
-                        attachMsg.height = height;
-                        attachMsg.stride = width * 4;
-                        lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, shmFd);
+                        if (shmPixelsWallpaper != MAP_FAILED) {
+                            renderWallpaper(shmPixelsWallpaper, width, height);
+                            wpAttachMsg.width = width;
+                            wpAttachMsg.height = height;
+                            wpAttachMsg.stride = width * 4;
+                            lcl::protocol::sendMsgWithFd(socketFd, wpAttachHeader, &wpAttachMsg, shmFdWallpaper);
+                        }
+
+                        // Reallocate MenuBar SHM as well on width resize
+                        munmap(shmPixelsMenuBar, shmSizeMenuBar);
+                        shmSizeMenuBar = static_cast<size_t>(width) * menuBarHeight * 4;
+                        ftruncate(shmFdMenuBar, shmSizeMenuBar);
+                        shmPixelsMenuBar = reinterpret_cast<uint32_t*>(mmap(nullptr, shmSizeMenuBar, PROT_READ | PROT_WRITE, MAP_SHARED, shmFdMenuBar, 0));
+
+                        if (shmPixelsMenuBar != MAP_FAILED) {
+                            renderMenuBar(shmPixelsMenuBar, width, menuBarHeight, fontRenderer, currentTimeStr);
+                            mbAttachMsg.width = width;
+                            mbAttachMsg.height = menuBarHeight;
+                            mbAttachMsg.stride = width * 4;
+                            lcl::protocol::sendMsgWithFd(socketFd, mbAttachHeader, &mbAttachMsg, shmFdMenuBar);
+                        }
                     }
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
@@ -301,11 +478,13 @@ int main() {
             }
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    if (shmPixels != MAP_FAILED) munmap(shmPixels, shmSize);
-    if (shmFd >= 0) close(shmFd);
+    if (shmPixelsWallpaper != MAP_FAILED) munmap(shmPixelsWallpaper, shmSizeWallpaper);
+    if (shmFdWallpaper >= 0) close(shmFdWallpaper);
+    if (shmPixelsMenuBar != MAP_FAILED) munmap(shmPixelsMenuBar, shmSizeMenuBar);
+    if (shmFdMenuBar >= 0) close(shmFdMenuBar);
     if (socketFd >= 0) close(socketFd);
 
     return 0;

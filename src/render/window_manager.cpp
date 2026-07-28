@@ -38,13 +38,19 @@ void WindowManager::unfocusAll() {
 uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int width, int height, uint32_t headerColor) {
     unfocusAll();
 
+    const int topInset = static_cast<int>(m_reservedZone.top);
+    int clampedY = y;
+    if (clampedY < topInset) {
+        clampedY = topInset;
+    }
+
     Window win{};
     win.id = m_nextWindowId++;
     win.title = title;
     win.x = x;
-    win.y = y;
+    win.y = clampedY;
     win.pendingX = x;
-    win.pendingY = y;
+    win.pendingY = clampedY;
     win.width = width;
     win.height = height;
     win.pendingWidth = width;
@@ -147,7 +153,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
             stateChanged = true;
         }
 
-        const int topInset = std::max(core::DisplayScale::menuBarHeight(), static_cast<int>(m_reservedZone.top));
+        const int topInset = static_cast<int>(m_reservedZone.top);
         const int bottomInset = static_cast<int>(m_reservedZone.bottom);
         const int minW = core::DisplayScale::px(180);
         const int minH = core::DisplayScale::px(100);
