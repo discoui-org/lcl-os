@@ -91,8 +91,8 @@ lcl-os/
 │   └── fonts/                      # TrueType font assets (JetBrains Mono, Inter)
 ├── docs/                           # Documentation & Agent prompts
 │   ├── ARCHITECTURE.md             # System architecture specification
-│   ├── AG_NEW_INSTANCE_PROMPT.md   # AntiGravity instance bootstrapper prompt
-│   └── GEMINI_NEW_INSTANCE_PROMPT.md # Gemini instance bootstrapper prompt
+│   ├── AG_NEW_INSTANCE_PROMPT.md   # Katrina instance bootstrapper prompt
+│   └── Leo_NEW_INSTANCE_PROMPT.md # Leo instance bootstrapper prompt
 ├── scripts/                        # System build & QEMU launcher
 │   ├── run_qemu.py                 # Cross-platform QEMU launcher (Linux/macOS/Windows)
 │   ├── run_qemu.sh                 # Thin wrapper -> run_qemu.py

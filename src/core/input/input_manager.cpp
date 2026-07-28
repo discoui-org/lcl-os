@@ -218,6 +218,7 @@ size_t InputManager::rescanEvdevDevices() {
                 if (ioctl(fd, EVIOCGABS(axisX), &absinfo) >= 0) {
                     dev.absXMin = absinfo.minimum;
                     dev.absXMax = std::max(absinfo.maximum, absinfo.minimum + 1);
+                    dev.currentAbsX = absinfo.value;
                 }
             }
             if (axisY >= 0) {
@@ -225,6 +226,7 @@ size_t InputManager::rescanEvdevDevices() {
                 if (ioctl(fd, EVIOCGABS(axisY), &absinfo) >= 0) {
                     dev.absYMin = absinfo.minimum;
                     dev.absYMax = std::max(absinfo.maximum, absinfo.minimum + 1);
+                    dev.currentAbsY = absinfo.value;
                 }
             }
 
@@ -239,7 +241,7 @@ size_t InputManager::rescanEvdevDevices() {
                        ((keyBits[BTN_TOOL_FINGER / 8] >> (BTN_TOOL_FINGER % 8)) & 1);
         }
 
-        if (hasTouch || (dev.hasAbsX && dev.hasAbsY && !dev.hasRelX)) {
+        if (hasTouch) {
             dev.isTouchpad = true;
         }
 
@@ -389,15 +391,14 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
 
         while (read(dev.fd, &ev, sizeof(ev)) == static_cast<ssize_t>(sizeof(ev))) {
             if (ev.type == EV_REL) {
-                InputEvent outEv{};
-                outEv.type = InputEventType::PointerMotion;
-                outEv.deviceName = dev.name;
-                if (ev.code == REL_X) outEv.dx = ev.value;
-                if (ev.code == REL_Y) outEv.dy = ev.value;
-                if ((ev.code == REL_X || ev.code == REL_Y) && m_eventCallback) {
-                    m_eventCallback(outEv);
+                if (ev.code == REL_X) {
+                    dev.currentRelX += ev.value;
+                    dev.relXUpdated = true;
                 }
-                count++;
+                if (ev.code == REL_Y) {
+                    dev.currentRelY += ev.value;
+                    dev.relYUpdated = true;
+                }
             } else if (ev.type == EV_ABS) {
                 if (ev.code == ABS_X || ev.code == ABS_MT_POSITION_X) {
                     dev.currentAbsX = ev.value;
@@ -408,7 +409,20 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                     dev.absYUpdated = true;
                 }
             } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
-                if ((dev.absXUpdated || dev.absYUpdated) && (dev.hasAbsX || dev.hasAbsY)) {
+                if (dev.relXUpdated || dev.relYUpdated) {
+                    InputEvent outEv{};
+                    outEv.type = InputEventType::PointerMotion;
+                    outEv.deviceName = dev.name;
+                    outEv.dx = dev.currentRelX;
+                    outEv.dy = dev.currentRelY;
+                    if (m_eventCallback) m_eventCallback(outEv);
+
+                    dev.currentRelX = 0.0;
+                    dev.currentRelY = 0.0;
+                    dev.relXUpdated = false;
+                    dev.relYUpdated = false;
+                    count++;
+                } else if ((dev.absXUpdated || dev.absYUpdated) && (dev.hasAbsX || dev.hasAbsY)) {
                     if (dev.isTouchpad) {
                         if (dev.isTouching) {
                             double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);

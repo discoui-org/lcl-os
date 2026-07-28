@@ -106,10 +106,14 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
         int oldX = m_mouseX;
         int oldY = m_mouseY;
 
-        if (event.absoluteX >= 0.0 && event.absoluteY >= 0.0) {
+        if (event.absoluteX >= 0.0) {
             m_subpixelX = event.absoluteX;
+        }
+        if (event.absoluteY >= 0.0) {
             m_subpixelY = event.absoluteY;
-        } else {
+        }
+
+        if (event.absoluteX < 0.0 && event.absoluteY < 0.0) {
             // Relative mouse motion: apply subpixel precision + speed sensitivity scale & acceleration
             constexpr double mouseSensitivity = 1.8;
             double dx = event.dx * mouseSensitivity;
