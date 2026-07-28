@@ -50,6 +50,7 @@ struct Window {
     bool isUnfocusable{false};
     DecorationMode decorationMode{DecorationMode::SSD};
     protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
+    std::vector<protocol::FilterOp> backdropFilters;
 
     // Drag state
     bool isDragging{false};
@@ -150,6 +151,11 @@ public:
      * @brief Set window layer (Bottom/Normal/TopMost) and unfocusable flag for a window.
      */
     void setWindowLayer(uint32_t windowId, protocol::LCLWindowLayer layer, bool unfocusable = false);
+
+    /**
+     * @brief Set ordered backdrop filter pipeline for a window.
+     */
+    void setBackdropFilters(uint32_t windowId, const std::vector<protocol::FilterOp>& filters);
 
     /**
      * @brief Set reserved desktop struts (No Window Move Zone for Menu Bar / Dock).

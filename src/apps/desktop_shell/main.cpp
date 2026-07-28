@@ -152,9 +152,10 @@ void renderWallpaper(uint32_t* pixels, uint32_t width, uint32_t height) {
 void renderMenuBar(uint32_t* pixels, uint32_t width, uint32_t height, lcl::render::FontRenderer& fontRenderer, const std::string& timeStr) {
     if (!pixels || width == 0 || height == 0) return;
 
-    // Dark slate background #0F172A (0xFF0F172A) with 1px bottom accent border #1E293B (0xFF1E293B)
+    // Translucent dark slate background #0F172A with ~40% alpha (0x660F172A)
+    // Bottom 1px accent border with ~60% alpha (0x991E293B)
     for (uint32_t y = 0; y < height; ++y) {
-        uint32_t bg = (y == height - 1) ? 0xFF1E293B : 0xFF0F172A;
+        uint32_t bg = (y == height - 1) ? 0x991E293B : 0x660F172A;
         std::fill_n(pixels + y * width, width, bg);
     }
 
@@ -342,6 +343,30 @@ int main() {
     resMsg.right = 0;
 
     lcl::protocol::sendMsgWithFd(socketFd, resHeader, &resMsg);
+
+    // Set Backdrop Filter Pipeline for Surface 2 (Menu Bar)
+    // Ordered Pipeline: Blur(15px) -> Saturation(1.4) -> Brightness(1.1)
+    std::vector<lcl::protocol::FilterOp> mbFilters = {
+        { lcl::protocol::FilterType::Blur, 15.0f },
+        { lcl::protocol::FilterType::Saturation, 1.4f },
+        { lcl::protocol::FilterType::Brightness, 1.1f }
+    };
+
+    lcl::protocol::LCLHeader filterHeader{};
+    filterHeader.opcode = lcl::protocol::LCLOpcode::SetBackdropFilter;
+    filterHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader) +
+                               mbFilters.size() * sizeof(lcl::protocol::FilterOp);
+
+    std::vector<uint8_t> filterPayload(filterHeader.payloadSize);
+    auto* filterMsgHeader = reinterpret_cast<lcl::protocol::LCLMsgSetBackdropFilterHeader*>(filterPayload.data());
+    filterMsgHeader->surfaceId = 2;
+    filterMsgHeader->filterCount = static_cast<uint32_t>(mbFilters.size());
+
+    std::memcpy(filterPayload.data() + sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader),
+                mbFilters.data(),
+                mbFilters.size() * sizeof(lcl::protocol::FilterOp));
+
+    lcl::protocol::sendMsgWithFd(socketFd, filterHeader, filterPayload.data());
 
     // 7. Create SHM Buffer and Initialize Solid Black Wallpaper (Surface 1)
     size_t shmSizeWallpaper = static_cast<size_t>(width) * height * 4;

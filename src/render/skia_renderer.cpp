@@ -301,17 +301,17 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
         int srcY = y - dstY;
         const uint32_t* srcRow = pixelData + (srcY * stridePixels);
         uint32_t* dstRow = &m_targetPixels[y * m_width];
-        int copyWidth = clipX2 - clipX1;
 
-        if (opacity >= 0.99f) {
-            int srcXOffset = clipX1 - dstX;
-            std::memcpy(dstRow + clipX1, srcRow + srcXOffset, copyWidth * sizeof(uint32_t));
-        } else {
-            for (int x = clipX1; x < clipX2; ++x) {
-                int srcX = x - dstX;
-                uint32_t pixel = srcRow[srcX];
-                uint8_t srcA = static_cast<uint8_t>(((pixel >> 24) & 0xFF) * opacity);
-                float a = srcA / 255.0f;
+        for (int x = clipX1; x < clipX2; ++x) {
+            int srcX = x - dstX;
+            uint32_t pixel = srcRow[srcX];
+            uint8_t rawA = static_cast<uint8_t>((pixel >> 24) & 0xFF);
+            if (rawA == 0) continue;
+
+            if (rawA == 255 && opacity >= 0.99f) {
+                dstRow[x] = pixel;
+            } else {
+                float a = (rawA / 255.0f) * opacity;
                 float invA = 1.0f - a;
 
                 uint32_t bg = dstRow[x];
@@ -322,6 +322,300 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
                 dstRow[x] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
             }
         }
+    }
+}
+
+namespace {
+
+struct ColorMatrix4x4 {
+    float m[3][3]{
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f}
+    };
+    float o[3]{0.0f, 0.0f, 0.0f};
+
+    bool isIdentity() const {
+        return m[0][0] == 1.0f && m[0][1] == 0.0f && m[0][2] == 0.0f && o[0] == 0.0f &&
+               m[1][0] == 0.0f && m[1][1] == 1.0f && m[1][2] == 0.0f && o[1] == 0.0f &&
+               m[2][0] == 0.0f && m[2][1] == 0.0f && m[2][2] == 1.0f && o[2] == 0.0f;
+    }
+
+    void reset() {
+        m[0][0] = 1.0f; m[0][1] = 0.0f; m[0][2] = 0.0f; o[0] = 0.0f;
+        m[1][0] = 0.0f; m[1][1] = 1.0f; m[1][2] = 0.0f; o[1] = 0.0f;
+        m[2][0] = 0.0f; m[2][1] = 0.0f; m[2][2] = 1.0f; o[2] = 0.0f;
+    }
+
+    void multiply(const ColorMatrix4x4& next) {
+        float newM[3][3]{};
+        float newO[3]{};
+
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                newM[r][c] = next.m[r][0] * m[0][c] + next.m[r][1] * m[1][c] + next.m[r][2] * m[2][c];
+            }
+            newO[r] = next.m[r][0] * o[0] + next.m[r][1] * o[1] + next.m[r][2] * o[2] + next.o[r];
+        }
+
+        std::memcpy(m, newM, sizeof(m));
+        std::memcpy(o, newO, sizeof(o));
+    }
+};
+
+ColorMatrix4x4 createBrightnessMatrix(float value) {
+    ColorMatrix4x4 mat;
+    mat.m[0][0] = value;
+    mat.m[1][1] = value;
+    mat.m[2][2] = value;
+    return mat;
+}
+
+ColorMatrix4x4 createContrastMatrix(float value) {
+    ColorMatrix4x4 mat;
+    mat.m[0][0] = value;
+    mat.m[1][1] = value;
+    mat.m[2][2] = value;
+    float offset = 127.5f * (1.0f - value);
+    mat.o[0] = offset;
+    mat.o[1] = offset;
+    mat.o[2] = offset;
+    return mat;
+}
+
+ColorMatrix4x4 createSaturationMatrix(float value) {
+    ColorMatrix4x4 mat;
+    constexpr float rw = 0.2126f;
+    constexpr float gw = 0.7152f;
+    constexpr float bw = 0.0722f;
+
+    mat.m[0][0] = (1.0f - value) * rw + value;
+    mat.m[0][1] = (1.0f - value) * gw;
+    mat.m[0][2] = (1.0f - value) * bw;
+
+    mat.m[1][0] = (1.0f - value) * rw;
+    mat.m[1][1] = (1.0f - value) * gw + value;
+    mat.m[1][2] = (1.0f - value) * bw;
+
+    mat.m[2][0] = (1.0f - value) * rw;
+    mat.m[2][1] = (1.0f - value) * gw;
+    mat.m[2][2] = (1.0f - value) * bw + value;
+
+    return mat;
+}
+
+ColorMatrix4x4 createGrayscaleMatrix(float value) {
+    float s = 1.0f - std::clamp(value, 0.0f, 1.0f);
+    return createSaturationMatrix(s);
+}
+
+ColorMatrix4x4 createInvertMatrix(float value) {
+    ColorMatrix4x4 mat;
+    float v = std::clamp(value, 0.0f, 1.0f);
+    float scale = 1.0f - 2.0f * v;
+    float offset = 255.0f * v;
+
+    mat.m[0][0] = scale;
+    mat.m[1][1] = scale;
+    mat.m[2][2] = scale;
+
+    mat.o[0] = offset;
+    mat.o[1] = offset;
+    mat.o[2] = offset;
+
+    return mat;
+}
+
+inline int mirrorIndex(int p, int max) {
+    if (max <= 1) return 0;
+    if (p < 0) {
+        p = -p;
+    }
+    if (p >= max) {
+        p = 2 * max - 2 - p;
+    }
+    return std::clamp(p, 0, max - 1);
+}
+
+void applyColorMatrixToPixels(std::vector<uint32_t>& pixels, int w, int h, const ColorMatrix4x4& mat) {
+    if (mat.isIdentity() || pixels.empty()) return;
+
+    size_t count = static_cast<size_t>(w) * h;
+    for (size_t i = 0; i < count; ++i) {
+        uint32_t p = pixels[i];
+        float r = static_cast<float>((p >> 16) & 0xFF);
+        float g = static_cast<float>((p >> 8) & 0xFF);
+        float b = static_cast<float>(p & 0xFF);
+
+        float outR = mat.m[0][0] * r + mat.m[0][1] * g + mat.m[0][2] * b + mat.o[0];
+        float outG = mat.m[1][0] * r + mat.m[1][1] * g + mat.m[1][2] * b + mat.o[1];
+        float outB = mat.m[2][0] * r + mat.m[2][1] * g + mat.m[2][2] * b + mat.o[2];
+
+        uint8_t ru = static_cast<uint8_t>(std::clamp(outR, 0.0f, 255.0f));
+        uint8_t gu = static_cast<uint8_t>(std::clamp(outG, 0.0f, 255.0f));
+        uint8_t bu = static_cast<uint8_t>(std::clamp(outB, 0.0f, 255.0f));
+
+        pixels[i] = (p & 0xFF000000) | (ru << 16) | (gu << 8) | bu;
+    }
+}
+
+void applyBoxBlurToPixels(std::vector<uint32_t>& pixels, int w, int h, float blurRadius) {
+    if (w <= 0 || h <= 0 || blurRadius <= 0.5f || pixels.empty()) return;
+
+    int radius = std::clamp(static_cast<int>(blurRadius), 1, 16);
+
+    // Adaptive Downsample factor: 1/8 size for large areas (>= 400px), 1/4 size for small regions
+    int scaleFactor = (w >= 400 || h >= 300) ? 8 : 4;
+    int sw = std::max(1, w / scaleFactor);
+    int sh = std::max(1, h / scaleFactor);
+
+    std::vector<uint32_t> smallBuf(sw * sh);
+
+    // Downsample W x H -> sw x sh
+    for (int sy = 0; sh > 0 && sy < sh; ++sy) {
+        int srcY = std::min(h - 1, sy * scaleFactor);
+        for (int sx = 0; sw > 0 && sx < sw; ++sx) {
+            int srcX = std::min(w - 1, sx * scaleFactor);
+            smallBuf[sy * sw + sx] = pixels[srcY * w + srcX];
+        }
+    }
+
+    int smallRadius = std::max(1, radius / scaleFactor);
+    std::vector<uint32_t> blurBuf(sw * sh);
+
+    // 2-pass Box Blur on smallBuf with Mirror Edge Mode (Reflect Edge Sampling)
+    for (int pass = 0; pass < 2; ++pass) {
+        // Horizontal pass
+        for (int y = 0; y < sh; ++y) {
+            for (int x = 0; x < sw; ++x) {
+                int rAcc = 0, gAcc = 0, bAcc = 0, count = 0;
+                for (int dx = -smallRadius; dx <= smallRadius; ++dx) {
+                    int kx = mirrorIndex(x + dx, sw);
+                    uint32_t p = smallBuf[y * sw + kx];
+                    rAcc += (p >> 16) & 0xFF;
+                    gAcc += (p >> 8) & 0xFF;
+                    bAcc += p & 0xFF;
+                    count++;
+                }
+                blurBuf[y * sw + x] = (0xFF000000) |
+                    (static_cast<uint32_t>(rAcc / count) << 16) |
+                    (static_cast<uint32_t>(gAcc / count) << 8) |
+                    static_cast<uint32_t>(bAcc / count);
+            }
+        }
+
+        // Vertical pass
+        for (int y = 0; y < sh; ++y) {
+            for (int x = 0; x < sw; ++x) {
+                int rAcc = 0, gAcc = 0, bAcc = 0, count = 0;
+                for (int dy = -smallRadius; dy <= smallRadius; ++dy) {
+                    int ky = mirrorIndex(y + dy, sh);
+                    uint32_t p = blurBuf[ky * sw + x];
+                    rAcc += (p >> 16) & 0xFF;
+                    gAcc += (p >> 8) & 0xFF;
+                    bAcc += p & 0xFF;
+                    count++;
+                }
+                smallBuf[y * sw + x] = (0xFF000000) |
+                    (static_cast<uint32_t>(rAcc / count) << 16) |
+                    (static_cast<uint32_t>(gAcc / count) << 8) |
+                    static_cast<uint32_t>(bAcc / count);
+            }
+        }
+    }
+
+    // Bilinear upsample sw x sh -> W x H
+    for (int y = 0; y < h; ++y) {
+        float v = (static_cast<float>(y) + 0.5f) * (static_cast<float>(sh) / static_cast<float>(h)) - 0.5f;
+        int y0 = mirrorIndex(static_cast<int>(std::floor(v)), sh);
+        int y1 = mirrorIndex(y0 + 1, sh);
+        float fy = v - std::floor(v);
+
+        for (int x = 0; x < w; ++x) {
+            float u = (static_cast<float>(x) + 0.5f) * (static_cast<float>(sw) / static_cast<float>(w)) - 0.5f;
+            int x0 = mirrorIndex(static_cast<int>(std::floor(u)), sw);
+            int x1 = mirrorIndex(x0 + 1, sw);
+            float fx = u - std::floor(u);
+
+            uint32_t p00 = smallBuf[y0 * sw + x0];
+            uint32_t p01 = smallBuf[y0 * sw + x1];
+            uint32_t p10 = smallBuf[y1 * sw + x0];
+            uint32_t p11 = smallBuf[y1 * sw + x1];
+
+            auto lerp = [](float a, float b, float t) { return a + t * (b - a); };
+
+            float r = lerp(lerp((p00 >> 16) & 0xFF, (p01 >> 16) & 0xFF, fx), lerp((p10 >> 16) & 0xFF, (p11 >> 16) & 0xFF, fx), fy);
+            float g = lerp(lerp((p00 >> 8) & 0xFF, (p01 >> 8) & 0xFF, fx), lerp((p10 >> 8) & 0xFF, (p11 >> 8) & 0xFF, fx), fy);
+            float b = lerp(lerp(p00 & 0xFF, p01 & 0xFF, fx), lerp(p10 & 0xFF, p11 & 0xFF, fx), fy);
+
+            pixels[y * w + x] = (0xFF000000) |
+                (static_cast<uint32_t>(std::clamp(r, 0.0f, 255.0f)) << 16) |
+                (static_cast<uint32_t>(std::clamp(g, 0.0f, 255.0f)) << 8) |
+                static_cast<uint32_t>(std::clamp(b, 0.0f, 255.0f));
+        }
+    }
+}
+
+} // namespace
+
+void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, const std::vector<protocol::FilterOp>& filters) {
+    if (!m_initialized || !m_targetPixels || srcW <= 0 || srcH <= 0 || filters.empty()) return;
+
+    int clipX1 = std::max(0, dstX);
+    int clipY1 = std::max(0, dstY);
+    int clipX2 = std::min(static_cast<int>(m_width), dstX + srcW);
+    int clipY2 = std::min(static_cast<int>(m_height), dstY + srcH);
+
+    if (clipX1 >= clipX2 || clipY1 >= clipY2) return;
+
+    int w = clipX2 - clipX1;
+    int h = clipY2 - clipY1;
+
+    // 1. Crop backdrop area from m_targetPixels
+    std::vector<uint32_t> crop(static_cast<size_t>(w) * h);
+    for (int y = 0; y < h; ++y) {
+        std::memcpy(&crop[y * w], &m_targetPixels[(clipY1 + y) * m_width + clipX1], w * sizeof(uint32_t));
+    }
+
+    // 2. Process filters in order, grouping consecutive color matrices
+    ColorMatrix4x4 pendingColorMatrix;
+
+    for (const auto& op : filters) {
+        switch (op.type) {
+            case protocol::FilterType::Brightness:
+                pendingColorMatrix.multiply(createBrightnessMatrix(op.value));
+                break;
+            case protocol::FilterType::Contrast:
+                pendingColorMatrix.multiply(createContrastMatrix(op.value));
+                break;
+            case protocol::FilterType::Saturation:
+                pendingColorMatrix.multiply(createSaturationMatrix(op.value));
+                break;
+            case protocol::FilterType::Grayscale:
+                pendingColorMatrix.multiply(createGrayscaleMatrix(op.value));
+                break;
+            case protocol::FilterType::Invert:
+                pendingColorMatrix.multiply(createInvertMatrix(op.value));
+                break;
+            case protocol::FilterType::Blur:
+                if (!pendingColorMatrix.isIdentity()) {
+                    applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
+                    pendingColorMatrix.reset();
+                }
+                applyBoxBlurToPixels(crop, w, h, op.value);
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (!pendingColorMatrix.isIdentity()) {
+        applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
+    }
+
+    // 3. Write filtered backdrop crop back to m_targetPixels
+    for (int y = 0; y < h; ++y) {
+        std::memcpy(&m_targetPixels[(clipY1 + y) * m_width + clipX1], &crop[y * w], w * sizeof(uint32_t));
     }
 }
 

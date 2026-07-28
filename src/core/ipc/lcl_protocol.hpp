@@ -29,7 +29,8 @@ enum class LCLOpcode : uint32_t {
     AckResponse = 7,
     SetDecorationMode = 8,
     SetWindowLayer = 9,
-    SetReservedZone = 10
+    SetReservedZone = 10,
+    SetBackdropFilter = 11
 };
 
 enum class LCLDecorationMode : uint32_t {
@@ -44,7 +45,22 @@ enum class LCLWindowLayer : uint32_t {
     TopMost = 2  // Menu Bar, Dock, System Overlays
 };
 
+enum class FilterType : uint8_t {
+    None = 0,
+    Blur = 1,
+    Brightness = 2,
+    Contrast = 3,
+    Saturation = 4,
+    Grayscale = 5,
+    Invert = 6
+};
+
 #pragma pack(push, 1)
+
+struct FilterOp {
+    FilterType type{FilterType::None};
+    float value{0.0f};
+};
 
 struct LCLHeader {
     uint32_t magic{LCL_PROTOCOL_MAGIC};
@@ -123,6 +139,11 @@ struct LCLMsgSetReservedZone {
     uint32_t bottom{0}; // Reserved inset from bottom of screen (Dock height)
     uint32_t left{0};   // Reserved inset from left edge
     uint32_t right{0};  // Reserved inset from right edge
+};
+
+struct LCLMsgSetBackdropFilterHeader {
+    uint32_t surfaceId{0};
+    uint32_t filterCount{0}; // Followed by FilterOp array payload in socket stream
 };
 
 #pragma pack(pop)

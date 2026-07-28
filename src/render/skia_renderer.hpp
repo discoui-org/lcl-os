@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "core/ipc/lcl_protocol.hpp"
 #include "render/font_renderer.hpp"
 
 namespace lcl::core {
@@ -104,6 +105,7 @@ public:
     void drawLine(float x1, float y1, float x2, float y2, const SkiaColor& color, float strokeWidth = 1.0f);
     void drawString(int x, int y, const std::string& text, uint32_t fgColor);
     void drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint32_t* pixelData, int stridePixels = 0, float opacity = 1.0f);
+    void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, const std::vector<protocol::FilterOp>& filters);
 
     // Accessors
     uint32_t getWidth() const { return m_width; }

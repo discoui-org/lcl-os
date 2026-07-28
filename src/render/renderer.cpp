@@ -452,7 +452,6 @@ void Renderer::drawWindowFrame(int x, int y, int width, int height, const std::s
     const int titleTy = DisplayScale::px(8);
 
     drawFilledRect(x, y, width, titleH, headerColor);
-    drawFilledRect(x, y + titleH, width, height - titleH, lcl::theme::UI::WindowBodyBg);
     drawRect(x, y, width, height, lcl::theme::UI::WindowBorder);
     drawString(x + titleTx, y + titleTy, title, lcl::theme::UI::WindowTitleText);
     drawFilledRect(x + pad, y + pad, btn, btn, lcl::theme::UI::BtnClose);

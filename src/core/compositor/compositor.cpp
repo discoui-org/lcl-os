@@ -437,6 +437,29 @@ void Compositor::processIPC() {
                 m_needsRedraw = true;
             }
 
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetBackdropFilter) {
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader)) {
+                auto* filterHeader = reinterpret_cast<const lcl::protocol::LCLMsgSetBackdropFilterHeader*>(msg.payload.data());
+                size_t expectedSize = sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader) +
+                                       filterHeader->filterCount * sizeof(lcl::protocol::FilterOp);
+                if (msg.payload.size() >= expectedSize) {
+                    const auto* ops = reinterpret_cast<const lcl::protocol::FilterOp*>(
+                        msg.payload.data() + sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader));
+                    std::vector<lcl::protocol::FilterOp> filters(ops, ops + filterHeader->filterCount);
+
+                    uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | filterHeader->surfaceId;
+                    auto it = m_surfaces.find(surfaceKey);
+                    if (it != m_surfaces.end()) {
+                        it->second.backdropFilters = filters;
+                        m_windowManager.setBackdropFilters(it->second.windowId, filters);
+                        std::cout << "[LCL Compositor] Set " << filters.size()
+                                  << " backdrop filter(s) for Surface " << filterHeader->surfaceId
+                                  << " (Window ID: " << it->second.windowId << ")\n";
+                        m_needsRedraw = true;
+                    }
+                }
+            }
+
         } else if (msg.command == "SPAWN_TERMINAL" || msg.command.rfind("SPAWN_TERMINAL", 0) == 0) {
             pid_t pid = fork();
             if (pid == 0) {
@@ -607,18 +630,31 @@ void Compositor::renderFrame() {
     // 2. Atomic Z-Stacking Window Group Rendering (Frame + Client Surface per Window in Z-order)
     using core::DisplayScale;
     for (const auto& win : m_windowManager.getWindows()) {
-        // A. Render Server-Side Window Frame (Titlebar & Border) if SSD enabled
-        if (win.decorationMode == render::DecorationMode::SSD) {
-            m_renderer.drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
-        }
-
-        // B. Find matching client SHM surface buffer for this window
+        // A. Find matching client SHM surface buffer for this window
         const SurfaceEntry* matchingSurface = nullptr;
         for (const auto& [surfKey, entry] : m_surfaces) {
             if (entry.windowId == win.id && entry.pixels) {
                 matchingSurface = &entry;
                 break;
             }
+        }
+
+        // B. Apply Backdrop Filter if pipeline configured on window or surface
+        const auto& filters = !win.backdropFilters.empty() ? win.backdropFilters :
+                              (matchingSurface ? matchingSurface->backdropFilters : std::vector<protocol::FilterOp>{});
+        if (!filters.empty()) {
+            int titleOffset = (win.decorationMode == render::DecorationMode::SSD) ? DisplayScale::titleBarHeight() : 0;
+            int filterX = win.x;
+            int filterY = win.y + titleOffset;
+            int filterW = matchingSurface ? static_cast<int>(matchingSurface->width) : win.width;
+            int filterH = matchingSurface ? static_cast<int>(matchingSurface->height) : std::max(1, win.height - titleOffset);
+
+            m_renderer.getSkiaRenderer()->applyBackdropFilter(filterX, filterY, filterW, filterH, filters);
+        }
+
+        // C. Render Server-Side Window Frame (Titlebar & Border) if SSD enabled
+        if (win.decorationMode == render::DecorationMode::SSD) {
+            m_renderer.drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
         }
 
         if (matchingSurface) {

@@ -146,8 +146,8 @@ static void renderTerminalFrame(uint32_t* shmPixels, int width, int height,
                                 lcl::render::FontRenderer& fontRenderer) {
     if (!shmPixels || width <= 0 || height <= 0) return;
 
-    // Dark terminal background color (ARGB)
-    const uint32_t kBgColor   = 0xFF14161D;
+    // Translucent dark terminal background color (ARGB - ~85% alpha dark slate)
+    const uint32_t kBgColor   = 0xD90F172A;
     const uint32_t kTextColor = 0xFF38BDF8;   // Electric Cyan text
     const uint32_t kCursorColor = 0xFF00FF88; // Bright Green cursor block
 
@@ -268,6 +268,31 @@ int main() {
     lcl::protocol::sendMsgWithFd(socketFd, surfHeader, &surfMsg);
     std::cout << "[LCL Terminal] Requested surface creation (ID: 1, " << kSurfW << "x" << kSurfH << ") from compositor.\n";
 
+    // Set Backdrop Filter Pipeline for Surface 1 (Terminal)
+    // Ordered Pipeline: Blur(12px) -> Saturation(1.2) -> Brightness(0.95)
+    std::vector<lcl::protocol::FilterOp> termFilters = {
+        { lcl::protocol::FilterType::Blur, 12.0f },
+        { lcl::protocol::FilterType::Saturation, 1.2f },
+        { lcl::protocol::FilterType::Brightness, 0.95f }
+    };
+
+    lcl::protocol::LCLHeader filterHeader{};
+    filterHeader.opcode = lcl::protocol::LCLOpcode::SetBackdropFilter;
+    filterHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader) +
+                               termFilters.size() * sizeof(lcl::protocol::FilterOp);
+
+    std::vector<uint8_t> filterPayload(filterHeader.payloadSize);
+    auto* filterMsgHeader = reinterpret_cast<lcl::protocol::LCLMsgSetBackdropFilterHeader*>(filterPayload.data());
+    filterMsgHeader->surfaceId = 1;
+    filterMsgHeader->filterCount = static_cast<uint32_t>(termFilters.size());
+
+    std::memcpy(filterPayload.data() + sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader),
+                termFilters.data(),
+                termFilters.size() * sizeof(lcl::protocol::FilterOp));
+
+    lcl::protocol::sendMsgWithFd(socketFd, filterHeader, filterPayload.data());
+    std::cout << "[LCL Terminal] Set Backdrop Filter pipeline (Blur: 12px, Saturation: 1.2, Brightness: 0.95).\n";
+
     // 4. Create Shared Memory (memfd) Framebuffer for Surface 1
     size_t shmSize = kSurfW * kSurfH * 4;
     int shmFd = memfd_create("lcl_terminal_shm", MFD_CLOEXEC);
@@ -323,7 +348,7 @@ int main() {
     int curW = kSurfW;
     int curH = kSurfH;
     bool termNeedsAttach = true;
-    std::vector<uint32_t> localPixels(curW * curH, 0xFF14161D);
+    std::vector<uint32_t> localPixels(curW * curH, 0xD90F172A);
 
     // Send initial ATTACH_BUFFER
     renderTerminalFrame(localPixels.data(), kSurfW, kSurfH, app, fontRenderer);
@@ -420,7 +445,7 @@ int main() {
             }
 
             shmSize = curW * curH * 4;
-            localPixels.resize(curW * curH, 0xFF14161D);
+            localPixels.resize(curW * curH, 0xD90F172A);
 
             shmFd = memfd_create("lcl_term_shm", MFD_CLOEXEC);
             if (shmFd >= 0) {
@@ -431,7 +456,7 @@ int main() {
                 if (shmPixels == MAP_FAILED) {
                     shmPixels = nullptr;
                 } else {
-                    std::fill_n(shmPixels, curW * curH, 0xFF14161D);
+                    std::fill_n(shmPixels, curW * curH, 0xD90F172A);
                 }
             }
 

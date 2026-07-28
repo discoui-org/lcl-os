@@ -249,15 +249,30 @@ void FontRenderer::renderStringClipped(uint32_t* backBuffer, int screenWidth, in
                     size_t pixelIndex = static_cast<size_t>(py * screenWidth + px);
                     uint32_t bgPixel = backBuffer[pixelIndex];
 
+                    uint8_t bgA = static_cast<uint8_t>((bgPixel >> 24) & 0xFF);
                     uint8_t bgR = static_cast<uint8_t>((bgPixel >> 16) & 0xFF);
                     uint8_t bgG = static_cast<uint8_t>((bgPixel >> 8) & 0xFF);
                     uint8_t bgB = static_cast<uint8_t>(bgPixel & 0xFF);
 
-                    uint8_t outR = static_cast<uint8_t>(fgR * alpha + bgR * (1.0f - alpha));
-                    uint8_t outG = static_cast<uint8_t>(fgG * alpha + bgG * (1.0f - alpha));
-                    uint8_t outB = static_cast<uint8_t>(fgB * alpha + bgB * (1.0f - alpha));
+                    float aText = alpha; // glyph coverage alpha
+                    float aBg = bgA / 255.0f;
+                    float aOut = aText + aBg * (1.0f - aText);
 
-                    backBuffer[pixelIndex] = (0xFF000000) | (outR << 16) | (outG << 8) | outB;
+                    if (aOut > 0.001f) {
+                        float outR = (aText * fgR + (1.0f - aText) * aBg * bgR) / aOut;
+                        float outG = (aText * fgG + (1.0f - aText) * aBg * bgG) / aOut;
+                        float outB = (aText * fgB + (1.0f - aText) * aBg * bgB) / aOut;
+
+                        uint8_t rByte = static_cast<uint8_t>(std::clamp(outR, 0.0f, 255.0f));
+                        uint8_t gByte = static_cast<uint8_t>(std::clamp(outG, 0.0f, 255.0f));
+                        uint8_t bByte = static_cast<uint8_t>(std::clamp(outB, 0.0f, 255.0f));
+                        uint8_t aByte = static_cast<uint8_t>(std::clamp(aOut * 255.0f, 0.0f, 255.0f));
+
+                        backBuffer[pixelIndex] = (static_cast<uint32_t>(aByte) << 24) |
+                                                 (static_cast<uint32_t>(rByte) << 16) |
+                                                 (static_cast<uint32_t>(gByte) << 8)  |
+                                                  static_cast<uint32_t>(bByte);
+                    }
                 }
             }
         }

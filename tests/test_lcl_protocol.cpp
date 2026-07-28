@@ -129,3 +129,49 @@ TEST(LCLProtocolTest, SendAndReceiveSetReservedZoneMsg) {
     close(sv[0]);
     close(sv[1]);
 }
+
+TEST(LCLProtocolTest, SendAndReceiveSetBackdropFilterMsg) {
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+
+    std::vector<FilterOp> filters = {
+        { FilterType::Blur, 15.0f },
+        { FilterType::Saturation, 1.4f },
+        { FilterType::Brightness, 1.1f }
+    };
+
+    LCLHeader headerSend{};
+    headerSend.opcode = LCLOpcode::SetBackdropFilter;
+    headerSend.payloadSize = sizeof(LCLMsgSetBackdropFilterHeader) + filters.size() * sizeof(FilterOp);
+
+    std::vector<uint8_t> payloadSend(headerSend.payloadSize);
+    auto* hdr = reinterpret_cast<LCLMsgSetBackdropFilterHeader*>(payloadSend.data());
+    hdr->surfaceId = 2;
+    hdr->filterCount = static_cast<uint32_t>(filters.size());
+    std::memcpy(payloadSend.data() + sizeof(LCLMsgSetBackdropFilterHeader), filters.data(), filters.size() * sizeof(FilterOp));
+
+    EXPECT_TRUE(sendMsgWithFd(sv[0], headerSend, payloadSend.data(), -1));
+
+    LCLHeader headerRecv{};
+    std::vector<uint8_t> payloadRecv;
+    int receivedFd = -1;
+
+    EXPECT_TRUE(recvMsgWithFd(sv[1], headerRecv, payloadRecv, receivedFd));
+    EXPECT_EQ(headerRecv.opcode, LCLOpcode::SetBackdropFilter);
+    ASSERT_EQ(payloadRecv.size(), headerSend.payloadSize);
+
+    const auto* hdrRecv = reinterpret_cast<const LCLMsgSetBackdropFilterHeader*>(payloadRecv.data());
+    EXPECT_EQ(hdrRecv->surfaceId, 2u);
+    EXPECT_EQ(hdrRecv->filterCount, 3u);
+
+    const auto* opsRecv = reinterpret_cast<const FilterOp*>(payloadRecv.data() + sizeof(LCLMsgSetBackdropFilterHeader));
+    EXPECT_EQ(opsRecv[0].type, FilterType::Blur);
+    EXPECT_FLOAT_EQ(opsRecv[0].value, 15.0f);
+    EXPECT_EQ(opsRecv[1].type, FilterType::Saturation);
+    EXPECT_FLOAT_EQ(opsRecv[1].value, 1.4f);
+    EXPECT_EQ(opsRecv[2].type, FilterType::Brightness);
+    EXPECT_FLOAT_EQ(opsRecv[2].value, 1.1f);
+
+    close(sv[0]);
+    close(sv[1]);
+}

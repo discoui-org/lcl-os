@@ -63,6 +63,7 @@ public:
         uint32_t height{0};
         uint32_t stride{0};     ///< Row stride in bytes
         size_t   shmSize{0};    ///< Total SHM buffer bytes
+        std::vector<protocol::FilterOp> backdropFilters;
     };
 
     void toggleFpsOverlay() noexcept { m_showFpsOverlay = !m_showFpsOverlay; }
