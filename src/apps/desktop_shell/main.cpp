@@ -24,6 +24,13 @@
 
 namespace {
 
+struct AsyncWallpaperTask {
+    std::atomic<bool> ready{false};
+    std::vector<uint32_t> pixels;
+    uint32_t w{0};
+    uint32_t h{0};
+};
+
 std::string getFormattedTime() {
     auto now = std::chrono::system_clock::now();
     std::time_t tt = std::chrono::system_clock::to_time_t(now);
@@ -336,7 +343,7 @@ int main() {
 
     lcl::protocol::sendMsgWithFd(socketFd, resHeader, &resMsg);
 
-    // 7. Create SHM Buffer and Render Wallpaper (Surface 1)
+    // 7. Create SHM Buffer and Initialize Solid Black Wallpaper (Surface 1)
     size_t shmSizeWallpaper = static_cast<size_t>(width) * height * 4;
     int shmFdWallpaper = memfd_create("lcl_wallpaper_shm", MFD_CLOEXEC);
     if (shmFdWallpaper < 0) {
@@ -360,7 +367,8 @@ int main() {
         return 1;
     }
 
-    renderWallpaper(shmPixelsWallpaper, width, height);
+    // Fill initial wallpaper buffer with solid black (0xFF000000)
+    std::fill_n(shmPixelsWallpaper, width * height, 0xFF000000);
 
     lcl::protocol::LCLHeader wpAttachHeader{};
     wpAttachHeader.opcode = lcl::protocol::LCLOpcode::AttachBuffer;
@@ -374,7 +382,19 @@ int main() {
     wpAttachMsg.format = 1;
 
     lcl::protocol::sendMsgWithFd(socketFd, wpAttachHeader, &wpAttachMsg, shmFdWallpaper);
-    std::cout << "[LCL Shell] Wallpaper surface attached (" << width << "x" << height << ") at LAYER_BOTTOM.\n";
+    std::cout << "[LCL Shell] Initial black wallpaper surface attached (" << width << "x" << height << ") at LAYER_BOTTOM.\n";
+
+    // Launch Async Background Thread for loading and decoding wallpaper.png
+    auto wpTask = std::make_shared<AsyncWallpaperTask>();
+    wpTask->w = width;
+    wpTask->h = height;
+
+    std::thread bgWpThread([wpTask]() {
+        wpTask->pixels.resize(wpTask->w * wpTask->h, 0xFF000000);
+        renderWallpaper(wpTask->pixels.data(), wpTask->w, wpTask->h);
+        wpTask->ready.store(true);
+    });
+    bgWpThread.detach();
 
     // 8. Create SHM Buffer and Render MenuBar (Surface 2)
     size_t shmSizeMenuBar = static_cast<size_t>(width) * menuBarHeight * 4;
@@ -424,6 +444,16 @@ int main() {
     // 9. Main Shell Loop
     bool running = true;
     while (running) {
+        // Check if async wallpaper image decoding finished
+        if (wpTask && wpTask->ready.load()) {
+            if (wpTask->w == width && wpTask->h == height && !wpTask->pixels.empty()) {
+                std::memcpy(shmPixelsWallpaper, wpTask->pixels.data(), wpTask->pixels.size() * sizeof(uint32_t));
+                lcl::protocol::sendMsgWithFd(socketFd, wpAttachHeader, &wpAttachMsg, -1);
+                std::cout << "[LCL Shell] Async wallpaper image loaded (" << width << "x" << height << ") and attached.\n";
+            }
+            wpTask.reset();
+        }
+
         // Per-second time update check
         currentTimeStr = getFormattedTime();
         if (currentTimeStr != lastTimeStr) {
@@ -451,11 +481,22 @@ int main() {
                         shmPixelsWallpaper = reinterpret_cast<uint32_t*>(mmap(nullptr, shmSizeWallpaper, PROT_READ | PROT_WRITE, MAP_SHARED, shmFdWallpaper, 0));
 
                         if (shmPixelsWallpaper != MAP_FAILED) {
-                            renderWallpaper(shmPixelsWallpaper, width, height);
+                            std::fill_n(shmPixelsWallpaper, width * height, 0xFF000000);
                             wpAttachMsg.width = width;
                             wpAttachMsg.height = height;
                             wpAttachMsg.stride = width * 4;
                             lcl::protocol::sendMsgWithFd(socketFd, wpAttachHeader, &wpAttachMsg, shmFdWallpaper);
+
+                            // Trigger new async wallpaper load for resized dimensions
+                            wpTask = std::make_shared<AsyncWallpaperTask>();
+                            wpTask->w = width;
+                            wpTask->h = height;
+                            std::thread bgResizeThread([wpTask]() {
+                                wpTask->pixels.resize(wpTask->w * wpTask->h, 0xFF000000);
+                                renderWallpaper(wpTask->pixels.data(), wpTask->w, wpTask->h);
+                                wpTask->ready.store(true);
+                            });
+                            bgResizeThread.detach();
                         }
 
                         // Reallocate MenuBar SHM as well on width resize

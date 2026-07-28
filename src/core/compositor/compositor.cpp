@@ -634,13 +634,15 @@ void Compositor::renderFrame() {
                 reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
                 stridePixels, 1.0f);
         } else {
-            // Render text fallback content if SHM buffer is not yet attached
-            const render::WindowRenderContent* content = nullptr;
-            for (const auto& c : contents) {
-                if (c.windowId == win.id) { content = &c; break; }
-            }
-            if (content) {
-                m_renderer.renderWindowContent(win, content);
+            // Render text fallback content ONLY for standard SSD decorated application windows
+            if (win.decorationMode == render::DecorationMode::SSD) {
+                const render::WindowRenderContent* content = nullptr;
+                for (const auto& c : contents) {
+                    if (c.windowId == win.id) { content = &c; break; }
+                }
+                if (content) {
+                    m_renderer.renderWindowContent(win, content);
+                }
             }
         }
     }
