@@ -11,10 +11,12 @@
 GPU ?= 0
 NATIVE ?= 0
 UEFI ?= 0
+USB ?=
 USB_DEV ?= /dev/disk/by-id/usb-SanDisk_Cruzer_Blade_04019222101620123055-0:0
 QEMU_NATIVE_FLAG := $(if $(filter 1 yes true on,$(NATIVE)),--native,)
 QEMU_GPU_FLAG := $(if $(filter 1 yes true on,$(GPU)),--gpu,)
 QEMU_UEFI_FLAG := $(if $(filter 1 yes true on,$(UEFI)),--uefi,)
+QEMU_USB_FLAG := $(if $(USB),--usb $(USB),)
 
 build compile:
 	python3 scripts/run_qemu.py --build-only
@@ -23,13 +25,13 @@ qemu-prep:
 	python3 scripts/run_qemu.py
 
 qemu:
-	python3 scripts/run_qemu.py --run $(QEMU_NATIVE_FLAG) $(QEMU_GPU_FLAG)
+	python3 scripts/run_qemu.py --run $(QEMU_NATIVE_FLAG) $(QEMU_GPU_FLAG) $(QEMU_USB_FLAG)
 
 iso:
 	./scripts/build_iso.sh
 
 qemu-iso: iso
-	python3 scripts/run_qemu.py --iso --run $(QEMU_NATIVE_FLAG) $(QEMU_GPU_FLAG) $(QEMU_UEFI_FLAG)
+	python3 scripts/run_qemu.py --iso --run $(QEMU_NATIVE_FLAG) $(QEMU_GPU_FLAG) $(QEMU_UEFI_FLAG) $(QEMU_USB_FLAG)
 
 flash flash-usb: iso
 	@if [ ! -b "$(USB_DEV)" ] && [ ! -e "$(USB_DEV)" ]; then \

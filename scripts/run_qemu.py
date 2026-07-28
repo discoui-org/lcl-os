@@ -254,7 +254,7 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
     if target.exists():
         shutil.rmtree(target)
 
-    log(f"Packaging DRM & input kernel modules ({kver})...")
+    log(f"Packaging DRM, USB & input kernel modules ({kver})...")
     target.mkdir(parents=True, exist_ok=True)
     copied_any = False
     for rel in (
@@ -263,7 +263,10 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
         "kernel/drivers/gpu/drm/virtio",
         "kernel/drivers/hid",
         "kernel/drivers/input",
-        "kernel/drivers/virtio",
+        "kernel/drivers/usb",
+        "kernel/drivers/i2c",
+        "kernel/drivers/bus",
+        "kernel/drivers/mfd",
         "kernel/drivers/char/virtio_console",
     ):
         src = kmod_base / rel
@@ -615,7 +618,7 @@ else
     ls -la /lib/modules 2>/dev/null || true
 fi
 
-# Load GPU / input stack BEFORE creating any device nodes (let devtmpfs populate)
+# Load GPU, USB, I2C, HID & input stack BEFORE creating any device nodes
 modprobe virtio_pci || true
 modprobe virtio_dma_buf || true
 modprobe drm || true
@@ -624,10 +627,34 @@ modprobe virtio_gpu || true
 modprobe bochs || true
 modprobe simpledrm || true
 modprobe virtio_input || true
+
+# USB controllers & HID (Logitech & physical USB mice/keyboards)
+modprobe usbcore || true
+modprobe xhci_hcd || true
+modprobe xhci_pci || true
+modprobe ehci_hcd || true
+modprobe ehci_pci || true
 modprobe usbhid || true
 modprobe hid_generic || true
+modprobe hid_multitouch || true
+
+# I2C & Laptop Touchpad drivers
+modprobe i2c_core || true
+modprobe i2c_designware_core || true
+modprobe i2c_designware_platform || true
+modprobe i2c_hid || true
+modprobe i2c_hid_acpi || true
+modprobe psmouse || true
 modprobe evdev || true
 modprobe qemu_fw_cfg || true
+
+# Auto-probe hardware drivers via /sys modaliases
+for alias_file in $(find /sys/bus /sys/devices -name modalias 2>/dev/null); do
+    alias=$(cat "$alias_file" 2>/dev/null)
+    if [ -n "$alias" ]; then
+        modprobe $alias 2>/dev/null || true
+    fi
+done
 
 # Wait for /dev/dri/card* (up to ~3s)
 i=0
@@ -1156,6 +1183,7 @@ def launch_qemu(
     native: bool = False,
     iso_mode: bool = False,
     uefi_mode: bool = False,
+    usb_passthrough: str | None = None,
 ) -> None:
     qemu = find_qemu()
     if not iso_mode:
@@ -1199,6 +1227,24 @@ def launch_qemu(
 
     want_gl = os.environ.get("LCL_QEMU_GL", "").lower() in ("1", "true", "yes", "on")
 
+    extra_qemu: list[str] = []
+
+    usb_target = usb_passthrough or os.environ.get("LCL_QEMU_USB", "")
+    if usb_target:
+        if ":" in usb_target:
+            parts = usb_target.split(":", 1)
+            vid = parts[0].strip()
+            pid = parts[1].strip()
+            vid = vid if vid.startswith("0x") else f"0x{vid}"
+            pid = pid if pid.startswith("0x") else f"0x{pid}"
+            extra_qemu.extend([
+                "-device", "qemu-xhci,id=xhci",
+                "-device", f"usb-host,vendorid={vid},productid={pid}",
+            ])
+            log(f"USB Passthrough enabled for device {vid}:{pid}")
+        else:
+            log(f"WARNING: Invalid USB passthrough spec '{usb_target}'. Format must be VENDOR:PRODUCT (e.g. 046d:c077)")
+
     # Probe available display backends once
     try:
         disp_help = subprocess.check_output(
@@ -1210,7 +1256,6 @@ def launch_qemu(
         disp_help = ""
     backends = {line.strip() for line in disp_help.splitlines() if line.strip()}
 
-    extra_qemu: list[str] = []
     # Always disable default stdvga when attaching virtio-vga (avoids dual-head / stuck BIOS fb)
     # GL path is opt-in: virtio-vga-gl + gl=on often hangs on Linux ("Booting from ROM..." freeze).
     if want_gl:
@@ -1369,6 +1414,11 @@ def main() -> None:
         help="Enable 3D VirGL GPU acceleration in QEMU",
     )
     parser.add_argument(
+        "--usb",
+        metavar="VENDOR:PRODUCT",
+        help="Pass through host USB device to QEMU (e.g. --usb 046d:c077 or USB=046d:c077 with make qemu)",
+    )
+    parser.add_argument(
         "--inside-docker",
         action="store_true",
         help=argparse.SUPPRESS,
@@ -1407,7 +1457,13 @@ def main() -> None:
     log(f"Kernel: {kernel}")
 
     if args.run:
-        launch_qemu(kernel, native=args.native, iso_mode=args.iso, uefi_mode=args.uefi)
+        launch_qemu(
+            kernel,
+            native=args.native,
+            iso_mode=args.iso,
+            uefi_mode=args.uefi,
+            usb_passthrough=args.usb,
+        )
     else:
         log("Boot environment ready!")
         log(f"Run '{Path(sys.argv[0]).name} --run' to launch QEMU in live VM.")

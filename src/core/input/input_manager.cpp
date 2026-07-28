@@ -432,6 +432,15 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                     dev.currentAbsY = ev.value;
                     dev.absYUpdated = true;
                 }
+                if (ev.code == ABS_MT_TRACKING_ID) {
+                    if (ev.value >= 0) {
+                        dev.isTouching = true;
+                    } else {
+                        dev.isTouching = false;
+                        dev.lastTouchX = -1;
+                        dev.lastTouchY = -1;
+                    }
+                }
             } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
                 if (dev.relXUpdated || dev.relYUpdated) {
                     InputEvent outEv{};
@@ -448,6 +457,10 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                     count++;
                 } else if ((dev.absXUpdated || dev.absYUpdated) && (dev.hasAbsX || dev.hasAbsY)) {
                     if (dev.isTouchpad) {
+                        if (!dev.isTouching && dev.currentAbsX >= 0 && dev.currentAbsY >= 0) {
+                            dev.isTouching = true;
+                        }
+
                         if (dev.isTouching) {
                             double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
                             double rangeY = static_cast<double>(dev.absYMax - dev.absYMin);
