@@ -1,4 +1,5 @@
 #include "core/input/input_manager.hpp"
+#include "core/input/key_mapper.hpp"
 #include <iostream>
 #include <fcntl.h>
 #include <unistd.h>
@@ -7,9 +8,11 @@
 #include <cstring>
 #include <cerrno>
 #include <algorithm>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <linux/netlink.h>
 #include <linux/input.h>
 #include <linux/input-event-codes.h>
-#include <sys/ioctl.h>
 
 namespace {
 
@@ -35,10 +38,13 @@ InputManager::~InputManager() { shutdown(); }
 InputManager::InputManager(InputManager&& other) noexcept
     : m_udev(other.m_udev), m_libinput(other.m_libinput),
       m_evdevDevices(std::move(other.m_evdevDevices)),
+      m_netlinkFd(other.m_netlinkFd),
+      m_dispatchCounter(other.m_dispatchCounter),
       m_seatName(std::move(other.m_seatName)),
       m_eventCallback(std::move(other.m_eventCallback)),
       m_initialized(other.m_initialized), m_usingEvdev(other.m_usingEvdev) {
     other.m_udev = nullptr; other.m_libinput = nullptr;
+    other.m_netlinkFd = -1;
     other.m_initialized = false; other.m_usingEvdev = false;
 }
 
@@ -47,10 +53,13 @@ InputManager& InputManager::operator=(InputManager&& other) noexcept {
         shutdown();
         m_udev = other.m_udev; m_libinput = other.m_libinput;
         m_evdevDevices = std::move(other.m_evdevDevices);
+        m_netlinkFd = other.m_netlinkFd;
+        m_dispatchCounter = other.m_dispatchCounter;
         m_seatName = std::move(other.m_seatName);
         m_eventCallback = std::move(other.m_eventCallback);
         m_initialized = other.m_initialized; m_usingEvdev = other.m_usingEvdev;
         other.m_udev = nullptr; other.m_libinput = nullptr;
+        other.m_netlinkFd = -1;
         other.m_initialized = false; other.m_usingEvdev = false;
     }
     return *this;
@@ -104,80 +113,186 @@ bool InputManager::initWithLibinputUdev(const std::string& seatName) {
     return true;
 }
 
-bool InputManager::initWithEvdev() {
-    const std::string inputDir = "/dev/input";
-    DIR* dir = opendir(inputDir.c_str());
-    if (!dir) {
-        std::cerr << "[LCL Input] Cannot open " << inputDir << ": " << std::strerror(errno) << "\n";
+bool InputManager::initUeventSocket() {
+    if (m_netlinkFd >= 0) return true;
+    m_netlinkFd = socket(AF_NETLINK, SOCK_RAW, NETLINK_KOBJECT_UEVENT);
+    if (m_netlinkFd < 0) return false;
+
+    struct sockaddr_nl sa{};
+    sa.nl_family = AF_NETLINK;
+    sa.nl_groups = 1; // Broadcast group 1
+
+    if (bind(m_netlinkFd, reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa)) < 0) {
+        close(m_netlinkFd);
+        m_netlinkFd = -1;
         return false;
     }
 
+    int flags = fcntl(m_netlinkFd, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(m_netlinkFd, F_SETFL, flags | O_NONBLOCK);
+    }
+    return true;
+}
+
+void InputManager::processUeventHotplug() {
+    if (m_netlinkFd < 0) return;
+    char buf[4096];
+    while (true) {
+        ssize_t len = recv(m_netlinkFd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+        if (len <= 0) break;
+        buf[len] = '\0';
+
+        std::string ueventStr(buf, static_cast<size_t>(len));
+        bool isAdd = (ueventStr.find("add@") != std::string::npos) ||
+                     (ueventStr.find("ACTION=add") != std::string::npos);
+        bool isInput = (ueventStr.find("SUBSYSTEM=input") != std::string::npos);
+
+        if (isAdd && isInput) {
+            rescanEvdevDevices();
+        }
+    }
+}
+
+void InputManager::performPeriodicRescan() {
+    m_dispatchCounter++;
+    if (m_evdevDevices.empty() || (m_dispatchCounter % 100 == 0)) {
+        rescanEvdevDevices();
+    }
+}
+
+size_t InputManager::rescanEvdevDevices() {
+    const std::string inputDir = "/dev/input";
+    DIR* dir = opendir(inputDir.c_str());
+    if (!dir) return 0;
+
+    size_t newCount = 0;
     struct dirent* ent = nullptr;
     while ((ent = readdir(dir)) != nullptr) {
         std::string name = ent->d_name;
         if (name.rfind("event", 0) != 0) continue;
 
         std::string path = inputDir + "/" + name;
+        bool alreadyOpened = false;
+        for (const auto& dev : m_evdevDevices) {
+            if (dev.path == path && dev.fd >= 0) {
+                alreadyOpened = true;
+                break;
+            }
+        }
+        if (alreadyOpened) continue;
+
         int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-        if (fd < 0) continue;
+        if (fd < 0) {
+            std::cerr << "[LCL Input DIAG] open(" << path << ") failed: "
+                      << std::strerror(errno) << " (errno=" << errno << ")\n";
+            continue;
+        }
 
         EvdevDevice dev{};
         dev.fd = fd;
         dev.path = path;
 
-        // Read device name
         char devname[256] = {0};
         if (ioctl(fd, EVIOCGNAME(sizeof(devname)), devname) >= 0) {
             dev.name = devname;
         }
 
-        // Check relative axis capability
         uint8_t relBits[KEY_MAX / 8 + 1] = {};
         if (ioctl(fd, EVIOCGBIT(EV_REL, sizeof(relBits)), relBits) >= 0) {
             dev.hasRelX = (relBits[REL_X / 8] >> (REL_X % 8)) & 1;
             dev.hasRelY = (relBits[REL_Y / 8] >> (REL_Y % 8)) & 1;
         }
 
-        // Check absolute axis capability and ranges
         uint8_t absBits[KEY_MAX / 8 + 1] = {};
+        bool hasMTAbsX = false;
+        bool hasMTAbsY = false;
         if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(absBits)), absBits) >= 0) {
             dev.hasAbsX = (absBits[ABS_X / 8] >> (ABS_X % 8)) & 1;
             dev.hasAbsY = (absBits[ABS_Y / 8] >> (ABS_Y % 8)) & 1;
 
-            if (dev.hasAbsX) {
+            hasMTAbsX = (absBits[ABS_MT_POSITION_X / 8] >> (ABS_MT_POSITION_X % 8)) & 1;
+            hasMTAbsY = (absBits[ABS_MT_POSITION_Y / 8] >> (ABS_MT_POSITION_Y % 8)) & 1;
+
+            int axisX = dev.hasAbsX ? ABS_X : (hasMTAbsX ? ABS_MT_POSITION_X : -1);
+            int axisY = dev.hasAbsY ? ABS_Y : (hasMTAbsY ? ABS_MT_POSITION_Y : -1);
+
+            if (axisX >= 0) {
                 struct input_absinfo absinfo{};
-                if (ioctl(fd, EVIOCGABS(ABS_X), &absinfo) >= 0) {
+                if (ioctl(fd, EVIOCGABS(axisX), &absinfo) >= 0) {
                     dev.absXMin = absinfo.minimum;
                     dev.absXMax = std::max(absinfo.maximum, absinfo.minimum + 1);
+                    dev.currentAbsX = absinfo.value;
                 }
             }
-            if (dev.hasAbsY) {
+            if (axisY >= 0) {
                 struct input_absinfo absinfo{};
-                if (ioctl(fd, EVIOCGABS(ABS_Y), &absinfo) >= 0) {
+                if (ioctl(fd, EVIOCGABS(axisY), &absinfo) >= 0) {
                     dev.absYMin = absinfo.minimum;
                     dev.absYMax = std::max(absinfo.maximum, absinfo.minimum + 1);
+                    dev.currentAbsY = absinfo.value;
                 }
             }
+
+            if (hasMTAbsX) dev.hasAbsX = true;
+            if (hasMTAbsY) dev.hasAbsY = true;
+        }
+
+        uint8_t keyBits[KEY_MAX / 8 + 1] = {};
+        bool hasTouch = false;
+        if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keyBits)), keyBits) >= 0) {
+            hasTouch = ((keyBits[BTN_TOUCH / 8] >> (BTN_TOUCH % 8)) & 1) ||
+                       ((keyBits[BTN_TOOL_FINGER / 8] >> (BTN_TOOL_FINGER % 8)) & 1);
+        }
+
+        // NOTE: BTN_TOUCH/BTN_TOOL_FINGER alone is NOT a reliable touchpad signal —
+        // absolute single-point pointer devices (QEMU's "QEMU Virtio Tablet", graphics
+        // tablets, some touchscreens) also expose these bits but never toggle them during
+        // plain hover/movement, which previously starved PointerMotion dispatch (cursor
+        // frozen at its initial position) because motion was gated behind `isTouching`.
+        // Genuine gesture touchpads report the multitouch protocol (ABS_MT_POSITION_X/Y),
+        // so require that instead to classify a device as a touch-gated touchpad.
+        if (hasMTAbsX || hasMTAbsY) {
+            dev.isTouchpad = true;
         }
 
         if (!dev.hasRelX && !dev.hasRelY && !dev.hasAbsX && !dev.hasAbsY) {
-            // Device has no pointer axes — check if keyboard
             uint8_t evBits[KEY_MAX / 8 + 1] = {};
             ioctl(fd, EVIOCGBIT(0, sizeof(evBits)), evBits);
             bool hasKey = (evBits[EV_KEY / 8] >> (EV_KEY % 8)) & 1;
-            if (!hasKey) { close(fd); continue; }
+            if (!hasKey) {
+                std::cerr << "[LCL Input DIAG] Skipping " << path << " [" << dev.name
+                          << "]: no REL/ABS pointer axes and no EV_KEY capability.\n";
+                close(fd);
+                continue;
+            }
         }
 
+        std::cerr << "[LCL Input DIAG] Accepted " << path << " [" << dev.name << "]"
+                   << " hasRelX=" << dev.hasRelX << " hasRelY=" << dev.hasRelY
+                   << " hasAbsX=" << dev.hasAbsX << " hasAbsY=" << dev.hasAbsY
+                   << " hasTouch=" << hasTouch << " isTouchpad=" << dev.isTouchpad
+                   << " absXRange=[" << dev.absXMin << "," << dev.absXMax << "]"
+                   << " absYRange=[" << dev.absYMin << "," << dev.absYMax << "]"
+                   << " currentAbs=(" << dev.currentAbsX << "," << dev.currentAbsY << ")\n";
+
         m_evdevDevices.push_back(dev);
+        newCount++;
         std::cout << "[LCL Input] evdev: Opened " << path << " [" << dev.name << "]"
                   << " rel(" << dev.hasRelX << "," << dev.hasRelY << ")"
-                  << " abs(" << dev.hasAbsX << "," << dev.hasAbsY << ")\n";
+                  << " abs(" << dev.hasAbsX << "," << dev.hasAbsY << ")"
+                  << " touchpad(" << dev.isTouchpad << ")\n";
     }
     closedir(dir);
+    return newCount;
+}
+
+bool InputManager::initWithEvdev() {
+    initUeventSocket();
+    rescanEvdevDevices();
 
     if (m_evdevDevices.empty()) {
-        std::cerr << "[LCL Input ERROR] No evdev devices accessible.\n";
-        return false;
+        std::cerr << "[LCL Input ERROR] No evdev devices accessible yet (will retry via uevent/hotplug).\n";
     }
 
     m_usingEvdev = true;
@@ -240,6 +355,21 @@ size_t InputManager::dispatchLibinputEvents(int screenWidth, int screenHeight) {
                 outEv.type = InputEventType::KeyboardKey;
                 outEv.key = libinput_event_keyboard_get_key(k);
                 outEv.pressed = libinput_event_keyboard_get_key_state(k) == LIBINPUT_KEY_STATE_PRESSED;
+
+                if (outEv.key == KEY_LEFTSHIFT || outEv.key == KEY_RIGHTSHIFT) {
+                    m_shiftPressed = outEv.pressed;
+                } else if (outEv.key == KEY_LEFTCTRL || outEv.key == KEY_RIGHTCTRL) {
+                    m_ctrlPressed = outEv.pressed;
+                } else if (outEv.key == KEY_LEFTALT || outEv.key == KEY_RIGHTALT) {
+                    m_altPressed = outEv.pressed;
+                } else if (outEv.key == KEY_LEFTMETA || outEv.key == KEY_RIGHTMETA) {
+                    m_superPressed = outEv.pressed;
+                } else if (outEv.key == KEY_CAPSLOCK && outEv.pressed) {
+                    m_capsLockActive = !m_capsLockActive;
+                }
+
+                outEv.modifiers = getActiveModifiers();
+                outEv.codepoint = KeyMapper::toCodepoint(outEv.key, outEv.modifiers);
                 if (m_eventCallback) m_eventCallback(outEv);
                 break;
             }
@@ -253,19 +383,31 @@ size_t InputManager::dispatchLibinputEvents(int screenWidth, int screenHeight) {
 }
 
 size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
+    processUeventHotplug();
+    performPeriodicRescan();
+
     if (m_evdevDevices.empty()) return 0;
 
     std::vector<struct pollfd> fds;
-    fds.reserve(m_evdevDevices.size());
+    fds.reserve(m_evdevDevices.size() + (m_netlinkFd >= 0 ? 1 : 0));
     for (auto& d : m_evdevDevices) {
         fds.push_back({d.fd, POLLIN, 0});
+    }
+
+    size_t netlinkIdx = fds.size();
+    if (m_netlinkFd >= 0) {
+        fds.push_back({m_netlinkFd, POLLIN, 0});
     }
 
     int ready = poll(fds.data(), static_cast<nfds_t>(fds.size()), 0);
     if (ready <= 0) return 0;
 
+    if (m_netlinkFd >= 0 && (fds[netlinkIdx].revents & POLLIN)) {
+        processUeventHotplug();
+    }
+
     size_t count = 0;
-    for (size_t i = 0; i < fds.size(); ++i) {
+    for (size_t i = 0; i < m_evdevDevices.size(); ++i) {
         if (!(fds[i].revents & POLLIN)) continue;
 
         auto& dev = m_evdevDevices[i];
@@ -273,48 +415,112 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
 
         while (read(dev.fd, &ev, sizeof(ev)) == static_cast<ssize_t>(sizeof(ev))) {
             if (ev.type == EV_REL) {
-                InputEvent outEv{};
-                outEv.type = InputEventType::PointerMotion;
-                outEv.deviceName = dev.name;
-                if (ev.code == REL_X) outEv.dx = ev.value;
-                if (ev.code == REL_Y) outEv.dy = ev.value;
-                if ((ev.code == REL_X || ev.code == REL_Y) && m_eventCallback) {
-                    m_eventCallback(outEv);
+                if (ev.code == REL_X) {
+                    dev.currentRelX += ev.value;
+                    dev.relXUpdated = true;
                 }
-                count++;
+                if (ev.code == REL_Y) {
+                    dev.currentRelY += ev.value;
+                    dev.relYUpdated = true;
+                }
             } else if (ev.type == EV_ABS) {
-                if (ev.code == ABS_X) {
+                if (ev.code == ABS_X || ev.code == ABS_MT_POSITION_X) {
                     dev.currentAbsX = ev.value;
                     dev.absXUpdated = true;
                 }
-                if (ev.code == ABS_Y) {
+                if (ev.code == ABS_Y || ev.code == ABS_MT_POSITION_Y) {
                     dev.currentAbsY = ev.value;
                     dev.absYUpdated = true;
                 }
+                if (ev.code == ABS_MT_TRACKING_ID) {
+                    if (ev.value >= 0) {
+                        dev.isTouching = true;
+                    } else {
+                        dev.isTouching = false;
+                        dev.lastTouchX = -1;
+                        dev.lastTouchY = -1;
+                    }
+                }
             } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
-                if ((dev.absXUpdated || dev.absYUpdated) && (dev.hasAbsX || dev.hasAbsY)) {
+                if (dev.relXUpdated || dev.relYUpdated) {
                     InputEvent outEv{};
                     outEv.type = InputEventType::PointerMotion;
                     outEv.deviceName = dev.name;
-
-                    double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
-                    double rangeY = static_cast<double>(dev.absYMax - dev.absYMin);
-                    if (rangeX <= 0.0) rangeX = 1.0;
-                    if (rangeY <= 0.0) rangeY = 1.0;
-
-                    outEv.absoluteX = (dev.currentAbsX >= 0) ?
-                        (static_cast<double>(dev.currentAbsX - dev.absXMin) / rangeX * screenWidth) : -1.0;
-                    outEv.absoluteY = (dev.currentAbsY >= 0) ?
-                        (static_cast<double>(dev.currentAbsY - dev.absYMin) / rangeY * screenHeight) : -1.0;
-
+                    outEv.dx = dev.currentRelX;
+                    outEv.dy = dev.currentRelY;
                     if (m_eventCallback) m_eventCallback(outEv);
+
+                    dev.currentRelX = 0.0;
+                    dev.currentRelY = 0.0;
+                    dev.relXUpdated = false;
+                    dev.relYUpdated = false;
+                    count++;
+                } else if ((dev.absXUpdated || dev.absYUpdated) && (dev.hasAbsX || dev.hasAbsY)) {
+                    if (dev.isTouchpad) {
+                        if (!dev.isTouching && dev.currentAbsX >= 0 && dev.currentAbsY >= 0) {
+                            dev.isTouching = true;
+                        }
+
+                        if (dev.isTouching) {
+                            double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
+                            double rangeY = static_cast<double>(dev.absYMax - dev.absYMin);
+                            if (rangeX <= 0.0) rangeX = 1.0;
+                            if (rangeY <= 0.0) rangeY = 1.0;
+
+                            double dx = 0.0;
+                            double dy = 0.0;
+
+                            if (dev.lastTouchX >= 0 && dev.currentAbsX >= 0) {
+                                dx = (static_cast<double>(dev.currentAbsX - dev.lastTouchX) / rangeX) * screenWidth * 1.5;
+                            }
+                            if (dev.lastTouchY >= 0 && dev.currentAbsY >= 0) {
+                                dy = (static_cast<double>(dev.currentAbsY - dev.lastTouchY) / rangeY) * screenHeight * 1.5;
+                            }
+
+                            dev.lastTouchX = dev.currentAbsX;
+                            dev.lastTouchY = dev.currentAbsY;
+
+                            if ((dx != 0.0 || dy != 0.0) && m_eventCallback) {
+                                InputEvent outEv{};
+                                outEv.type = InputEventType::PointerMotion;
+                                outEv.deviceName = dev.name;
+                                outEv.dx = dx;
+                                outEv.dy = dy;
+                                m_eventCallback(outEv);
+                            }
+                        }
+                    } else {
+                        InputEvent outEv{};
+                        outEv.type = InputEventType::PointerMotion;
+                        outEv.deviceName = dev.name;
+
+                        double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
+                        double rangeY = static_cast<double>(dev.absYMax - dev.absYMin);
+                        if (rangeX <= 0.0) rangeX = 1.0;
+                        if (rangeY <= 0.0) rangeY = 1.0;
+
+                        outEv.absoluteX = (dev.currentAbsX >= 0) ?
+                            (static_cast<double>(dev.currentAbsX - dev.absXMin) / rangeX * screenWidth) : -1.0;
+                        outEv.absoluteY = (dev.currentAbsY >= 0) ?
+                            (static_cast<double>(dev.currentAbsY - dev.absYMin) / rangeY * screenHeight) : -1.0;
+
+                        if (m_eventCallback) m_eventCallback(outEv);
+                    }
                     dev.absXUpdated = false;
                     dev.absYUpdated = false;
                     count++;
                 }
             } else if (ev.type == EV_KEY) {
-                if (ev.code == KEY_LEFTMETA || ev.code == KEY_RIGHTMETA) {
+                if (ev.code == KEY_LEFTSHIFT || ev.code == KEY_RIGHTSHIFT) {
+                    m_shiftPressed = (ev.value != 0);
+                } else if (ev.code == KEY_LEFTCTRL || ev.code == KEY_RIGHTCTRL) {
+                    m_ctrlPressed = (ev.value != 0);
+                } else if (ev.code == KEY_LEFTALT || ev.code == KEY_RIGHTALT) {
+                    m_altPressed = (ev.value != 0);
+                } else if (ev.code == KEY_LEFTMETA || ev.code == KEY_RIGHTMETA) {
                     m_superPressed = (ev.value != 0);
+                } else if (ev.code == KEY_CAPSLOCK && ev.value == 1) {
+                    m_capsLockActive = !m_capsLockActive;
                 }
 
                 InputEvent outEv{};
@@ -323,15 +529,39 @@ size_t InputManager::dispatchEvdevEvents(int screenWidth, int screenHeight) {
                 outEv.isRepeat = (ev.value == 2);
                 outEv.superPressed = m_superPressed;
 
-                if (ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE) {
+                if (dev.isTouchpad && (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER)) {
+                    // Genuine gesture touchpad: use touch-down/up as the drag gate and
+                    // synthesize a left-click so tap-to-click still works.
+                    outEv.type = InputEventType::PointerButton;
+                    outEv.button = BTN_LEFT;
+                    if (ev.value != 0) {
+                        dev.isTouching = true;
+                        dev.lastTouchX = dev.currentAbsX;
+                        dev.lastTouchY = dev.currentAbsY;
+                    } else {
+                        dev.isTouching = false;
+                        dev.lastTouchX = -1;
+                        dev.lastTouchY = -1;
+                    }
+                    if (m_eventCallback) m_eventCallback(outEv);
+                    count++;
+                } else if (ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE) {
                     outEv.type = InputEventType::PointerButton;
                     outEv.button = ev.code;
+                    if (m_eventCallback) m_eventCallback(outEv);
+                    count++;
+                } else if (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER) {
+                    // Non-touchpad absolute pointer (e.g. QEMU Virtio Tablet) exposes this
+                    // bit but real clicks arrive via BTN_LEFT/RIGHT/MIDDLE — ignore it here
+                    // so it doesn't synthesize spurious clicks.
                 } else {
                     outEv.type = InputEventType::KeyboardKey;
                     outEv.key = ev.code;
+                    outEv.modifiers = getActiveModifiers();
+                    outEv.codepoint = KeyMapper::toCodepoint(outEv.key, outEv.modifiers);
+                    if (m_eventCallback) m_eventCallback(outEv);
+                    count++;
                 }
-                if (m_eventCallback) m_eventCallback(outEv);
-                count++;
             }
         }
     }
@@ -351,8 +581,23 @@ void InputManager::cleanup() {
     }
     m_evdevDevices.clear();
 
+    if (m_netlinkFd >= 0) {
+        close(m_netlinkFd);
+        m_netlinkFd = -1;
+    }
+
     if (m_libinput) { libinput_unref(m_libinput); m_libinput = nullptr; }
     if (m_udev) { udev_unref(m_udev); m_udev = nullptr; }
+}
+
+uint8_t InputManager::getActiveModifiers() const {
+    uint8_t mods = 0;
+    if (m_shiftPressed)   mods |= LCL_MOD_SHIFT;
+    if (m_ctrlPressed)    mods |= LCL_MOD_CTRL;
+    if (m_altPressed)     mods |= LCL_MOD_ALT;
+    if (m_capsLockActive) mods |= LCL_MOD_CAPSLOCK;
+    if (m_superPressed)   mods |= LCL_MOD_SUPER;
+    return mods;
 }
 
 } // namespace lcl::core

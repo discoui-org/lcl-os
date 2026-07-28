@@ -86,19 +86,24 @@ The LCL architecture consists of 4 main decoupled layers:
 ```text
 lcl-os/
 ├── Makefile                        # make build | qemu | qemu NATIVE=1
-├── CMakeLists.txt                  # Root CMake build configuration
+├── CMakeLists.txt                  # Root CMake build configuration (with BUILD_TESTS support)
 ├── assets/                         # System fonts and visual assets
 │   └── fonts/                      # TrueType font assets (JetBrains Mono, Inter)
 ├── docs/                           # Documentation & Agent prompts
 │   ├── ARCHITECTURE.md             # System architecture specification
-│   ├── AG_NEW_INSTANCE_PROMPT.md   # AntiGravity instance bootstrapper prompt
-│   └── GEMINI_NEW_INSTANCE_PROMPT.md # Gemini instance bootstrapper prompt
+│   ├── AG_NEW_INSTANCE_PROMPT.md   # Katrina instance bootstrapper prompt
+│   └── Leo_NEW_INSTANCE_PROMPT.md # Leo instance bootstrapper prompt
 ├── scripts/                        # System build & QEMU launcher
 │   ├── run_qemu.py                 # Cross-platform QEMU launcher (Linux/macOS/Windows)
-│   ├── run_qemu.sh                 # Thin wrapper → run_qemu.py
+│   ├── run_qemu.sh                 # Thin wrapper -> run_qemu.py
 │   ├── Dockerfile.qemu             # linux/amd64 builder image (macOS/Windows)
 │   └── fetch_fonts.sh              # Font asset fetcher
 ├── shell/                          # Shell Presentation Layer
+├── tests/                          # CTest & GoogleTest native unit testing suite
+│   ├── test_lcl_protocol.cpp       # IPC binary protocol & header tests
+│   ├── test_app_bundle_parser.cpp  # .app bundle metadata parsing & directory scan
+│   ├── test_display_scale.cpp      # HiDPI scale factor & pixel conversion math
+│   └── test_ipc_manager.cpp        # Unix Domain Socket & SO_PEERCRED authentication
 └── src/                            # Core C++20 Engine & Applications
     ├── main.cpp                    # Application entry point & compositor loop
     ├── apps/                       # Native system applications
@@ -116,10 +121,14 @@ lcl-os/
 
 ### Build & QEMU (dev hosts)
 
-**Always Docker** for compile + kernel/initramfs (`scripts/Dockerfile.qemu`, Ubuntu amd64).  
-The host OS kernel/modules are never packaged (avoids CachyOS/Arch DRM breakage).  
-QEMU itself runs on the host.
+**Host-side Fast Unit Testing** (Runs in ~0.03 seconds natively on Linux host without QEMU):
+```bash
+cmake -B build -DBUILD_TESTS=ON
+cmake --build build --target lcl_unit_tests
+ctest --test-dir build --output-on-failure
+```
 
+**System Integration & Compositor Execution (QEMU Docker Builder)**:
 ```bash
 make qemu            # default 1280x800, host refresh rate
 make qemu NATIVE=1   # host resolution + scale + fullscreen
@@ -131,3 +140,35 @@ Guest display boot args (when `NATIVE=1`):
 - QEMU cocoa: `full-screen=on,zoom-to-fit=on` (fill screen if mode list is inexact)
 
 `DisplayManager` prefers boot-requested mode. `DisplayScale` multiplies fonts/chrome/windows by `lcl.scale`.
+
+---
+
+## 5. Window Management & Compositing Layer Separation
+
+`lcl-os` grafik ve pencere katmanında sorumlulukların ayrıştırılması (Separation of Concerns) kesin kurallarla tanımlanmıştır:
+
+1. **Client Applications (User Space / UI Kits):** Kendi iç düzenini (Flexbox, Grid, Monospace Cell) yönetir. WM'den gelen pencere resize isteklerini (`RESIZE_REQUEST` / `ConfigureBounds`) alır. Kendi mantığına göre uygun boyutta SHM buffer allocate eder ve `ATTACH_BUFFER` ile sunar. WM veya Compositor'ün ekran koordinatları (\(X, Y\)) hakkında bilgi sahibi değildir.
+2. **Window Manager (WM):** Pencere geometrisi, odak yönetimi, sürükleme/boyutlandırma durum makinelerinin (`WM Drag/Resize State`) tek sahibidir. Sürüklenen kenara (`ResizeEdge`) göre sabit kalacak anchor noktasını korur. Client'tan gelen gerçek tampon boyutunu (\(frameW, frameH\)) kabul eder, `commitSurfaceGeometry` metodu üzerinden offset hesabını yapar ve pencerenin nihai dünya koordinatlarını (\(X_{final}, Y_{final}\)) belirler. Uygulamaya özel kod barındıramaz.
+3. **Compositor (Presentation Engine):** "Kör Çizici" (Blind Renderer) olarak çalışır. Tamponların ekrana çizimi, z-index harmanlaması (blending) ve vSync eşzamanlamasını üstlenir. Pencere durum makinelerinden veya kenar hesaplarından bağımsızdır. WM'in onayladığı geometriyi ve Client'ın sunduğu tamponu vSync anında atomic olarak ekrana çeker.
+
+---
+
+## 6. Z-Indexing & Hybrid Decoration Protocol (SSD/CSD Negotiation)
+
+1. **Sub-surface Grouping & Atomic Z-Stacking (`window_manager` & `compositor`):**
+   - Her pencere ve ona ait tüm alt yüzeyler (Titlebar + Window Border + Client SHM Buffer) tek bir **Pencere Grubu (Window Stack Element)** olarak ele alınır.
+   - Compositor render döngüsü (`renderFrame`), `WindowManager` z-order sıralamasını (`m_windows` vektörünü) en alttan en üste doğru izler.
+   - Her pencere için önce başlık çubuğu/çerçeve (SSD), hemen ardından istemcinin SHM tamponu çizilir. Odaklanan pencere atomik olarak Z-Stack'in en üstüne (\(Z_{\text{max}}\)) yükseltildiğinde hem çerçeve hem de içerik tamponu en üste taşınır.
+
+2. **Common Decoration Negotiation Protocol (`lcl_protocol`):**
+   - `LCLOpcode::SetDecorationMode` IPC mesajı ile istemciler `SSD` (Server-Side Decoration) veya `CSD` (Client-Side Decoration) modlarını talep eder.
+   - **Masaüstü WM (`lcl-desktop-wm`):** Varsayılan olarak `SSD` modunda pencere başlık çubuğunu çizer. İstemci `CSD` talep ederse başlık çubuğu çizimini devre dışı bırakarak tüm render alanını istemciye devreder.
+   - **Mobil WM (`lcl-mobile-wm`):** Mobil deneyiminde `SSD` çizimini reddederek uygulamalara tam ekran (fullscreen) uygulama alanı sağlar.
+
+---
+
+## 7. Unix Domain Socket IPC & Disconnect Detection
+
+1. **Secure Domain Socket Protocol:** Compositor IPC operates on `/tmp/lcl_compositor.sock` with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
+2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). `lcl::protocol::recvMsgWithFd()` explicitly sets `errno = ECONNRESET` to prevent stale `errno = EAGAIN` from `accept4()` from masking client disconnects.
+3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits `CLIENT_DISCONNECT` (`SurfaceDestroy`) upon socket EOF. `Compositor` unmaps SHM buffers and calls `WindowManager::removeWindow(windowId)` to immediately unregister and erase spatial window surfaces belonging to terminated client processes.

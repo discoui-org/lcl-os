@@ -14,6 +14,9 @@ find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 
 pkg_check_modules(DRM REQUIRED libdrm)
+pkg_check_modules(GBM REQUIRED gbm)
+pkg_check_modules(EGL REQUIRED egl)
+pkg_check_modules(GLES2 REQUIRED glesv2)
 pkg_check_modules(LIBINPUT REQUIRED libinput)
 pkg_check_modules(UDEV REQUIRED libudev)
 
@@ -25,24 +28,34 @@ add_executable(lcl-core
     src/core/app/app_bundle_parser.cpp
     src/core/display/display_manager.cpp
     src/core/display/display_scale.cpp
+    src/core/display/egl_backend.cpp
     src/core/input/input_manager.cpp
+    src/core/input/key_mapper.cpp
     src/core/ipc/ipc_manager.cpp
+    src/core/ipc/lcl_protocol.cpp
     src/core/session/startup_manager.cpp
     src/core/terminal/pty_manager.cpp
     src/render/font_renderer.cpp
     src/render/renderer.cpp
+    src/render/skia_renderer.cpp
     src/render/window_manager.cpp
 )
 
 target_include_directories(lcl-core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${DRM_INCLUDE_DIRS}
+    ${GBM_INCLUDE_DIRS}
+    ${EGL_INCLUDE_DIRS}
+    ${GLES2_INCLUDE_DIRS}
     ${LIBINPUT_INCLUDE_DIRS}
     ${UDEV_INCLUDE_DIRS}
 )
 
 target_link_libraries(lcl-core PRIVATE
     ${DRM_LIBRARIES}
+    ${GBM_LIBRARIES}
+    ${EGL_LIBRARIES}
+    ${GLES2_LIBRARIES}
     ${LIBINPUT_LIBRARIES}
     ${UDEV_LIBRARIES}
     Threads::Threads
@@ -50,6 +63,9 @@ target_link_libraries(lcl-core PRIVATE
 
 target_compile_options(lcl-core PRIVATE
     ${DRM_CFLAGS_OTHER}
+    ${GBM_CFLAGS_OTHER}
+    ${EGL_CFLAGS_OTHER}
+    ${GLES2_CFLAGS_OTHER}
     ${LIBINPUT_CFLAGS_OTHER}
     ${UDEV_CFLAGS_OTHER}
 )
@@ -59,8 +75,106 @@ add_executable(lcl-open
     src/tools/open_main.cpp
     src/core/app/app_bundle_parser.cpp
     src/core/ipc/ipc_manager.cpp
+    src/core/ipc/lcl_protocol.cpp
 )
 
 target_include_directories(lcl-open PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+# Standalone Window Manager Daemon Target (lcl-desktop-wm)
+add_executable(lcl-desktop-wm
+    src/tools/desktop_wm_main.cpp
+    src/core/ipc/ipc_manager.cpp
+    src/core/ipc/lcl_protocol.cpp
+)
+
+target_include_directories(lcl-desktop-wm PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(lcl-desktop-wm PRIVATE
+    Threads::Threads
+)
+
+# Standalone Client Terminal App Target (lcl-terminal)
+add_executable(lcl-terminal
+    src/tools/terminal_main.cpp
+    src/apps/terminal/terminal_app.cpp
+    src/core/input/key_mapper.cpp
+    src/core/terminal/pty_manager.cpp
+    src/core/display/display_scale.cpp
+    src/core/ipc/ipc_manager.cpp
+    src/core/ipc/lcl_protocol.cpp
+    src/render/font_renderer.cpp
+)
+
+target_include_directories(lcl-terminal PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+)
+
+target_link_libraries(lcl-terminal PRIVATE
+    lcl-ui
+    Threads::Threads
+)
+
+# Subdirectories
+add_subdirectory(lcl-ui)
+add_subdirectory(apps/ui_demo)
+
+# Unit Testing Framework Configuration
+option(BUILD_TESTS "Build LCL OS unit tests" ON)
+
+if(BUILD_TESTS)
+    enable_testing()
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    add_executable(lcl_unit_tests
+        tests/test_lcl_protocol.cpp
+        tests/test_app_bundle_parser.cpp
+        tests/test_display_scale.cpp
+        tests/test_ipc_manager.cpp
+        tests/test_input_manager.cpp
+        tests/test_key_mapper.cpp
+        tests/test_lcl_ui.cpp
+        tests/test_lcl_ui_events.cpp
+        src/core/ipc/lcl_protocol.cpp
+        src/core/ipc/ipc_manager.cpp
+        src/core/app/app_bundle_parser.cpp
+        src/core/display/display_scale.cpp
+        src/core/input/input_manager.cpp
+        src/core/input/key_mapper.cpp
+    )
+
+    target_compile_options(lcl_unit_tests PRIVATE -frtti)
+    target_compile_options(gtest PRIVATE -frtti)
+    target_compile_options(gtest_main PRIVATE -frtti)
+
+    target_include_directories(lcl_unit_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+        ${LIBINPUT_INCLUDE_DIRS}
+        ${UDEV_INCLUDE_DIRS}
+    )
+
+    target_link_libraries(lcl_unit_tests PRIVATE
+        gtest_main
+        gtest
+        Threads::Threads
+        lcl-ui
+        ${LIBINPUT_LIBRARIES}
+        ${UDEV_LIBRARIES}
+    )
+
+    include(GoogleTest)
+    gtest_discover_tests(lcl_unit_tests)
+endif()
+
+

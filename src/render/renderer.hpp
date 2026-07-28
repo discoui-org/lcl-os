@@ -8,18 +8,12 @@
 #include <xf86drmMode.h>
 #include "core/display/display_manager.hpp"
 #include "render/window_manager.hpp"
+#include "render/render_types.hpp"
 
 #include "render/font_renderer.hpp"
+#include "render/skia_renderer.hpp"
 
 namespace lcl::render {
-
-struct WindowRenderContent {
-    uint32_t windowId{0};
-    std::vector<std::string> lines;
-    std::string suggestion;
-    int cursorCol{-1};
-    bool forceCursorSolid{false};
-};
 
 struct Color {
     uint8_t r{0};
@@ -96,6 +90,7 @@ public:
     void renderLCLDesktopShell(const std::string& statusMessage);
     void renderDesktop(const WindowManager& windowManager, const std::vector<WindowRenderContent>& windowContents);
     void drawWindowFrame(int x, int y, int width, int height, const std::string& title, uint32_t headerColor);
+    void renderWindowContent(const Window& win, const WindowRenderContent* content);
 
     /**
      * @brief Present back buffer onto DRM display CRTC or log virtual frame.
@@ -106,12 +101,12 @@ public:
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
     uint64_t getRenderedFrames() const { return m_renderedFrames; }
+    SkiaRenderer* getSkiaRenderer() { return &m_skiaRenderer; }
 
 private:
     // --- Modular render passes (called by renderDesktop) ---
     void renderBackground();
     void renderTaskbar();
-    void renderWindowContent(const Window& win, const WindowRenderContent* content);
 
     // --- DRM dumb buffer management ---
     bool createDumbBuffer();
@@ -119,6 +114,7 @@ private:
 
     core::DisplayManager* m_displayManager{nullptr};
     FontRenderer m_fontRenderer;
+    SkiaRenderer m_skiaRenderer;
     uint32_t m_width{1024};
     uint32_t m_height{768};
     bool m_initialized{false};

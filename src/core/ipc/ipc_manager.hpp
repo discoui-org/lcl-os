@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include "core/ipc/lcl_protocol.hpp"
 
 namespace lcl::core {
 
@@ -18,6 +19,9 @@ struct IPCClientMessage {
     uid_t uid{0};
     gid_t gid{0};
     std::string command;
+    int passedFd{-1};
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
 };
 
 class IPCManager {

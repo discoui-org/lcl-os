@@ -20,15 +20,25 @@ enum class ResizeEdge {
     BottomRight
 };
 
+enum class DecorationMode {
+    SSD, // Server-Side Decoration
+    CSD  // Client-Side Decoration
+};
+
 struct Window {
     uint32_t id{0};
     std::string title;
     int x{0};
     int y{0};
+    int pendingX{0};
+    int pendingY{0};
     int width{400};
     int height{300};
+    int pendingWidth{400};
+    int pendingHeight{300};
     int zIndex{0};
     bool isFocused{false};
+    DecorationMode decorationMode{DecorationMode::SSD};
 
     // Drag state
     bool isDragging{false};
@@ -38,12 +48,15 @@ struct Window {
     // Resize state
     bool isResizing{false};
     ResizeEdge resizeEdge{ResizeEdge::None};
+    ResizeEdge activeResizeEdge{ResizeEdge::None};
     int resizeStartX{0};
     int resizeStartY{0};
     int initialX{0};
     int initialY{0};
     int initialWidth{0};
     int initialHeight{0};
+    int anchorRight{0};
+    int anchorBottom{0};
 
     uint32_t headerColor{0xFF38BDF8};
 
@@ -110,6 +123,19 @@ public:
     bool processInputEvent(const core::InputEvent& ev);
 
     /**
+     * @brief Commit attached client surface geometry and calculate position shift for anchor preservation.
+     * @param windowId Target window ID.
+     * @param frameW Total attached surface frame width.
+     * @param frameH Total attached surface frame height (including titlebar).
+     */
+    void commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH);
+
+    /**
+     * @brief Set decoration mode (SSD/CSD) for a window.
+     */
+    void setDecorationMode(uint32_t windowId, DecorationMode mode);
+
+    /**
      * @brief Focus a window by ID and bring it to top z-order.
      */
     void focusWindow(uint32_t windowId);
@@ -129,6 +155,13 @@ public:
      */
     void clearAllDirty();
 
+    uint32_t getFocusedWindowId() const {
+        for (auto it = m_windows.rbegin(); it != m_windows.rend(); ++it) {
+            if (it->isFocused) return it->id;
+        }
+        return 0;
+    }
+
     const std::vector<Window>& getWindows() const { return m_windows; }
     std::vector<Window>& getWindowsMutable() { return m_windows; }
     int getMouseX() const { return m_mouseX; }
@@ -143,6 +176,8 @@ private:
     std::vector<Window> m_windows;
     int m_mouseX{512};
     int m_mouseY{384};
+    double m_subpixelX{512.0};
+    double m_subpixelY{384.0};
     uint32_t m_nextWindowId{1};
     bool m_initialized{false};
     bool m_mouseDirty{true};

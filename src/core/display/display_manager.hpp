@@ -7,6 +7,8 @@
 #include <xf86drmMode.h>
 #include <linux/fb.h>
 
+#include "core/display/egl_backend.hpp"
+
 namespace lcl::core {
 
 enum class DisplayBackendType {
@@ -103,6 +105,9 @@ public:
     bool moveHardwareCursor(int x, int y);
     bool isHardwareCursorActive() const { return m_drmDevice.hasHardwareCursor; }
 
+    // EGL Hardware Backend Accessor
+    EGLBackend* getEGLBackend() { return &m_eglBackend; }
+
 private:
     bool probeDRMWithRetry(const std::string& devicePath);
     bool probeDRMResources();
@@ -114,6 +119,7 @@ private:
     std::string m_devicePath;
     DRMDevice m_drmDevice;
     FBDevice m_fbDevice;
+    EGLBackend m_eglBackend;
     DisplayMode m_activeMode;
     DisplayBackendType m_backendType{DisplayBackendType::None};
     bool m_initialized{false};

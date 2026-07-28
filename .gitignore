@@ -1,5 +1,7 @@
-# Build output directory
+# Build & Compilation outputs
 build/
+build_host/
+build_*/
 bin/
 lib/
 out/
@@ -13,13 +15,15 @@ out/
 .clang-format
 .clang-d
 
-# Cache and temporary files
-.cache/
-CMakeFiles/
+# CMake FetchContent & Generated files
+*_deps/
+*_subbuild/
+.cmake/
 CMakeCache.txt
+CMakeFiles/
 cmake_install.cmake
 install_manifest.txt
-# CMake-generated Makefiles live under build/ (already ignored)
+.cache/
 
 # Object files and compiled binaries
 *.o
@@ -32,3 +36,9 @@ install_manifest.txt
 # Operating System files
 .DS_Store
 Thumbs.db
+
+# Python bytecode & cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

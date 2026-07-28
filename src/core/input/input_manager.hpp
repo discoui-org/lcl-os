@@ -27,6 +27,8 @@ struct InputEvent {
     bool isRepeat{false};
     uint32_t key{0};
     bool superPressed{false};
+    uint8_t modifiers{0};
+    char32_t codepoint{0};
     std::string deviceName;
 };
 
@@ -90,20 +92,46 @@ private:
         bool hasRelY{false};
         bool hasAbsX{false};
         bool hasAbsY{false};
+        bool isTouchpad{false};
+
         int absXMin{0}, absXMax{1};
         int absYMin{0}, absYMax{1};
         int currentAbsX{-1};
         int currentAbsY{-1};
+
+        // Touchpad tracking
+        int lastTouchX{-1};
+        int lastTouchY{-1};
+        bool isTouching{false};
+
         bool absXUpdated{false};
         bool absYUpdated{false};
+        double currentRelX{0.0};
+        double currentRelY{0.0};
+        bool relXUpdated{false};
+        bool relYUpdated{false};
     };
     std::vector<EvdevDevice> m_evdevDevices;
 
+    bool initUeventSocket();
+    void processUeventHotplug();
+    size_t rescanEvdevDevices();
+    void performPeriodicRescan();
+
+    int m_netlinkFd{-1};
+    uint64_t m_dispatchCounter{0};
     std::string m_seatName;
     EventCallback m_eventCallback;
     bool m_initialized{false};
     bool m_usingEvdev{false};
     bool m_superPressed{false};
+    bool m_shiftPressed{false};
+    bool m_ctrlPressed{false};
+    bool m_altPressed{false};
+    bool m_capsLockActive{false};
+
+    uint8_t getActiveModifiers() const;
 };
 
 } // namespace lcl::core
+

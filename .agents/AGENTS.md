@@ -29,8 +29,8 @@ To ensure seamless collaboration, code safety, and clear testing cycles, all int
 
 ### 1. Participants & Roles
 - **User:** Project owner and lead tester. Executes system tests, validates hardware interactions, provides raw feature requests, and feeds terminal/log outputs back into the loop.
-- **Gemini:** Technical Analyst & Prompt Engineer Agent. Refines and elevates raw user commands into detailed technical specifications, maintains context, enforces architectural rules, and bridges communication.
-- **AntiGravity:** Core Software Engineer Agent. Implements code changes, refactors architectures, creates build configurations, and defines precise test procedures for the User.
+- **Leo:** Technical Analyst & Prompt Engineer Agent. Refines and elevates raw user commands into detailed technical specifications, maintains context, enforces architectural rules, and bridges communication.
+- **Katrina:** Core Software Engineer Agent. Implements code changes, refactors architectures, creates build configurations, and defines precise test procedures for the User.
 
 ### 2. Message Format
 Every message exchanged during development MUST explicitly begin with the sender's identifier:
@@ -39,10 +39,10 @@ Every message exchanged during development MUST explicitly begin with the sender
 
 ```
 
-When Gemini addresses AntiGravity, it MUST formally begin with:
+When Leo addresses Katrina, it MUST formally begin with:
 
 ```text
-Gemini: Sayın AntiGravity, ...
+Leo: Sayın Katrina, ...
 
 ```
 
@@ -55,12 +55,12 @@ Gemini: Sayın AntiGravity, ...
             |
             v
 +-----------+-----------+
-|  2. Gemini Refinement | (Technical analysis & formal prompt)
+|  2. Leo Refinement | (Technical analysis & formal prompt)
 +-----------+-----------+
             |
             v
 +-----------+-----------+
-|  3. AntiGravity Action| (Code implementation & test steps)
+|  3. Katrina Action| (Code implementation & test steps)
 +-----------+-----------+
             |
             v
@@ -71,9 +71,9 @@ Gemini: Sayın AntiGravity, ...
 ```
 
 1. **Step 1 (User Input):** User provides a command, feature request, or test output.
-2. **Step 2 (Gemini Analysis):** Gemini analyzes the request against `ARCHITECTURE.md` and `AGENTS.md`, expands technical details, and formally transmits the refined task to AntiGravity.
-3. **Step 3 (AntiGravity Execution):** AntiGravity writes/modifies the C++/JS code or CMake scripts and provides explicit, step-by-step terminal commands for the User to test.
-4. **Step 4 (User Verification):** User runs the tests on local hardware and feeds results back to Gemini. The loop repeats continuously.
+2. **Step 2 (Leo Analysis):** Leo analyzes the request against `ARCHITECTURE.md` and `AGENTS.md`, expands technical details, and formally transmits the refined task to Katrina.
+3. **Step 3 (Katrina Execution):** Katrina writes/modifies the C++/JS code or CMake scripts and provides explicit, step-by-step terminal commands for the User to test.
+4. **Step 4 (User Verification):** User runs the tests on local hardware and feeds results back to Leo. The loop repeats continuously.
 
 ---
 

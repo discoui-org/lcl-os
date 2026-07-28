@@ -20,6 +20,9 @@ ROOT_DIR = SCRIPT_DIR.parent
 BUILD_DIR = ROOT_DIR / "build"
 BINARY = BUILD_DIR / "lcl-core"
 OPEN_BIN = BUILD_DIR / "lcl-open"
+WM_BIN = BUILD_DIR / "lcl-desktop-wm"
+TERM_BIN = BUILD_DIR / "lcl-terminal"
+DEMO_BIN = BUILD_DIR / "apps" / "ui_demo" / "lcl_ui_demo"
 INITRAMFS_DIR = BUILD_DIR / "initramfs_root"
 INITRAMFS_IMG = BUILD_DIR / "initramfs.cpio.gz"
 CACHE_DIR = BUILD_DIR / "qemu-cache"
@@ -251,7 +254,7 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
     if target.exists():
         shutil.rmtree(target)
 
-    log(f"Packaging DRM & input kernel modules ({kver})...")
+    log(f"Packaging DRM, USB, I2C, touchpad & input kernel modules ({kver})...")
     target.mkdir(parents=True, exist_ok=True)
     copied_any = False
     for rel in (
@@ -260,7 +263,14 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
         "kernel/drivers/gpu/drm/virtio",
         "kernel/drivers/hid",
         "kernel/drivers/input",
-        "kernel/drivers/virtio",
+        "kernel/drivers/usb",
+        "kernel/drivers/i2c",
+        "kernel/drivers/pinctrl",
+        "kernel/drivers/spi",
+        "kernel/drivers/platform",
+        "kernel/drivers/acpi",
+        "kernel/drivers/bus",
+        "kernel/drivers/mfd",
         "kernel/drivers/char/virtio_console",
     ):
         src = kmod_base / rel
@@ -346,6 +356,7 @@ def package_initramfs(kernel_path: Path) -> None:
         "dev",
         "tmp",
         "etc",
+        "var/log",
         "usr/bin",
         "usr/lib",
         "usr/share",
@@ -372,22 +383,31 @@ def package_initramfs(kernel_path: Path) -> None:
 
     shutil.copy2(BINARY, INITRAMFS_DIR / "usr" / "bin" / "lcl-core")
 
-    # Tools from the Docker image only (never host OS userland)
-    host_bins = {
-        "sh": Path("/bin/sh"),
-        "bash": Path(which("bash") or "/usr/bin/bash"),
-        "mount": Path("/bin/mount"),
-        "mkdir": Path("/bin/mkdir"),
-        "sleep": Path("/bin/sleep"),
-        "ls": Path("/bin/ls"),
-        "cat": Path("/bin/cat"),
-        "uname": Path("/usr/bin/uname"),
-        "grep": Path("/usr/bin/grep"),
-        "printf": Path("/usr/bin/printf"),
-        "modprobe": Path("/sbin/modprobe"),
-        "depmod": Path("/sbin/depmod"),
-        "kmod": Path("/bin/kmod"),
-    }
+    def find_host_bin(name: str) -> Path | None:
+        p = which(name)
+        if p:
+            found = Path(p)
+            if found.is_file():
+                return found
+        for cand in (f"/usr/bin/{name}", f"/bin/{name}", f"/usr/sbin/{name}", f"/sbin/{name}"):
+            cp = Path(cand)
+            if cp.is_file():
+                return cp
+        return None
+
+    util_names = [
+        "sh", "bash", "mount", "mkdir", "sleep", "ls", "cat", "uname", "grep",
+        "printf", "modprobe", "depmod", "kmod", "dmesg", "tee", "find", "cp",
+        "mv", "rm", "chmod", "chown", "touch", "wc", "head", "tail", "lspci", "lsusb"
+    ]
+
+    host_bins: dict[str, Path] = {}
+    for name in util_names:
+        bin_path = find_host_bin(name)
+        if bin_path:
+            host_bins[name] = bin_path
+        else:
+            log(f"WARNING: Host utility '{name}' not found for initramfs packaging")
 
     log("Packaging GNU Bash and essential utilities...")
     dest_bin = INITRAMFS_DIR / "usr" / "bin"
@@ -416,6 +436,20 @@ def package_initramfs(kernel_path: Path) -> None:
             else:
                 shutil.copy2(item, dest)
 
+    # Selective hardware firmware packaging (skip huge wifi/sound/net vendor blobs)
+    fw_dst = INITRAMFS_DIR / "usr" / "lib" / "firmware"
+    fw_dst.mkdir(parents=True, exist_ok=True)
+    essential_fw_dirs = ("intel/i915", "i2c")
+    for fw_src in (Path("/usr/lib/firmware"), Path("/lib/firmware")):
+        if fw_src.is_dir():
+            for rel_sub in essential_fw_dirs:
+                src_sub = fw_src / rel_sub
+                if src_sub.is_dir():
+                    dst_sub = fw_dst / rel_sub
+                    dst_sub.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(src_sub, dst_sub, dirs_exist_ok=True)
+            break
+
     write_text(
         dest_bin / "clear",
         "#!/bin/sh\nprintf \"\\033[2J\\033[H\"\n",
@@ -424,7 +458,8 @@ def package_initramfs(kernel_path: Path) -> None:
 
     write_text(
         INITRAMFS_DIR / "etc" / "profile",
-        """export HOME=/home/user
+        """export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
+export HOME=/home/user
 export TERM=xterm-256color
 export HISTSIZE=500
 export HISTFILESIZE=1000
@@ -438,7 +473,8 @@ fi
 
     write_text(
         INITRAMFS_DIR / "home" / "user" / ".bashrc",
-        """export TERM=xterm-256color
+        """export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
+export TERM=xterm-256color
 export PS1='\\[\\033[1;34m\\]\\W\\[\\033[0m\\] ❯ '
 export HISTSIZE=500
 alias ls='ls --color=auto'
@@ -465,29 +501,48 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
             executable=True,
         )
 
-    term_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "Terminal.app"
-    (term_app / "bin").mkdir(parents=True, exist_ok=True)
-    (term_app / "assets").mkdir(parents=True, exist_ok=True)
+    if WM_BIN.is_file():
+        shutil.copy2(WM_BIN, dest_bin / "lcl-desktop-wm")
+
+    if TERM_BIN.is_file():
+        shutil.copy2(TERM_BIN, dest_bin / "lcl-terminal")
+
+    if DEMO_BIN.is_file():
+        shutil.copy2(DEMO_BIN, dest_bin / "lcl_ui_demo")
+
+    uidemo_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "UIDemo.app"
+    (uidemo_app / "bin").mkdir(parents=True, exist_ok=True)
+    (uidemo_app / "assets").mkdir(parents=True, exist_ok=True)
     write_text(
-        term_app / "metadata.json",
+        uidemo_app / "metadata.json",
         """{
-    "name": "LCL Terminal",
-    "executable": "bin/terminal",
+    "name": "LCL UI Demo",
+    "executable": "bin/ui_demo",
     "version": "1.0.0",
     "icon": "assets/icon.png"
 }
 """,
     )
+    if DEMO_BIN.is_file():
+        shutil.copy2(DEMO_BIN, uidemo_app / "bin" / "ui_demo")
+    else:
+        write_text(
+            uidemo_app / "bin" / "ui_demo",
+            "#!/bin/sh\n/usr/bin/lcl_ui_demo 2>/dev/null || echo 'LCL UI Demo App'\n",
+            executable=True,
+        )
+
+    term_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "Terminal.app"
+    (term_app / "assets").mkdir(parents=True, exist_ok=True)
     write_text(
-        term_app / "bin" / "terminal",
-        """#!/bin/sh
-echo "===================================================="
-echo "          LCL OS Terminal Subsystem App             "
-echo "===================================================="
-echo "Interactive PTY Shell active on seat0."
-echo "===================================================="
+        term_app / "metadata.json",
+        """{
+    "name": "LCL Terminal",
+    "executable": "/bin/lcl-terminal",
+    "version": "1.0.0",
+    "icon": "assets/icon.png"
+}
 """,
-        executable=True,
     )
 
     sysmon_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "SystemMonitor.app"
@@ -518,9 +573,46 @@ echo "===================================================="
     )
 
     log("Resolving dynamic library dependencies...")
-    bins = [BINARY, OPEN_BIN] + [p for p in host_bins.values() if p.is_file()]
+    bins = [BINARY, OPEN_BIN, WM_BIN, TERM_BIN, DEMO_BIN] + [p for p in host_bins.values() if p.is_file()]
     for bin_path in bins:
         copy_ldd_deps(bin_path, dest_lib)
+
+    # Package Mesa DRI and GBM drivers for EGL hardware acceleration
+    log("Packaging Mesa DRI and GBM graphics drivers...")
+    dri_dirs = [
+        Path("/usr/lib/x86_64-linux-gnu/dri"),
+        Path("/usr/lib/dri"),
+        Path("/usr/lib/x86_64-linux-gnu/gbm"),
+        Path("/usr/lib/gbm"),
+    ]
+    for dri_src in dri_dirs:
+        if dri_src.is_dir():
+            dri_dst = INITRAMFS_DIR / "usr" / "lib" / "x86_64-linux-gnu" / dri_src.name
+            dri_dst.mkdir(parents=True, exist_ok=True)
+            for item in dri_src.iterdir():
+                if item.is_file():
+                    shutil.copy2(item, dri_dst / item.name, follow_symlinks=True)
+                    copy_ldd_deps(item, dest_lib)
+
+    # Package GLVND vendor configs (/usr/share/glvnd, /etc/glvnd) and Mesa vendor drivers
+    log("Packaging GLVND vendor configs & Mesa EGL drivers...")
+    glvnd_share = Path("/usr/share/glvnd")
+    if glvnd_share.is_dir():
+        shutil.copytree(glvnd_share, INITRAMFS_DIR / "usr" / "share" / "glvnd", dirs_exist_ok=True)
+
+    glvnd_etc = Path("/etc/glvnd")
+    if glvnd_etc.is_dir():
+        shutil.copytree(glvnd_etc, INITRAMFS_DIR / "etc" / "glvnd", dirs_exist_ok=True)
+
+    drirc_share = Path("/usr/share/drirc.d")
+    if drirc_share.is_dir():
+        shutil.copytree(drirc_share, INITRAMFS_DIR / "usr" / "share" / "drirc.d", dirs_exist_ok=True)
+
+    for lib_pattern in ("libEGL_mesa*", "libGLX_mesa*", "libgbm*", "libglapi*"):
+        for mesa_lib in Path("/usr/lib/x86_64-linux-gnu").glob(lib_pattern):
+            if mesa_lib.is_file():
+                shutil.copy2(mesa_lib, dest_lib / mesa_lib.name, follow_symlinks=True)
+                copy_ldd_deps(mesa_lib, dest_lib)
 
     package_kernel_modules(kernel_path, INITRAMFS_DIR)
 
@@ -537,10 +629,11 @@ echo "===================================================="
     write_text(
         INITRAMFS_DIR / "init",
         """#!/bin/sh
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-mkdir -p /dev/pts /dev/input /home/user/Desktop /home/user/Documents /home/user/Downloads /home/user/Applications
+mkdir -p /var/log /var/tmp /dev/pts /dev/input /home/user/Desktop /home/user/Documents /home/user/Downloads /home/user/Applications
 mount -t devpts devpts /dev/pts -o mode=0620,ptmxmode=0666 2>/dev/null || mount -t devpts devpts /dev/pts 2>/dev/null || true
 if [ ! -e /dev/ptmx ]; then
     mknod -m 666 /dev/ptmx c 5 2 2>/dev/null || ln -sf pts/ptmx /dev/ptmx 2>/dev/null || true
@@ -556,7 +649,7 @@ else
     ls -la /lib/modules 2>/dev/null || true
 fi
 
-# Load GPU / input stack BEFORE creating any device nodes (let devtmpfs populate)
+# Load GPU, USB, I2C, Pin Control & Touchpad stack BEFORE starting compositor
 modprobe virtio_pci || true
 modprobe virtio_dma_buf || true
 modprobe drm || true
@@ -565,10 +658,50 @@ modprobe virtio_gpu || true
 modprobe bochs || true
 modprobe simpledrm || true
 modprobe virtio_input || true
+
+# USB controllers & HID (Logitech & physical USB mice/keyboards)
+modprobe usbcore || true
+modprobe xhci_hcd || true
+modprobe xhci_pci || true
+modprobe ehci_hcd || true
+modprobe ehci_pci || true
 modprobe usbhid || true
+
+# Intel/AMD Pin Control & I2C Bus Controllers (required for laptop Touchpad GPIO interrupts)
+modprobe pinctrl_intel || true
+modprobe intel_lpss || true
+modprobe intel_lpss_pci || true
+modprobe i2c_core || true
+modprobe i2c_designware_core || true
+modprobe i2c_designware_pci || true
+modprobe i2c_designware_platform || true
+
+# PS/2 & Serio Bus (Legacy / Synaptics / Elantech touchpads)
+modprobe i8042 || true
+modprobe serio || true
+modprobe psmouse || true
+
+# HID & Multitouch (Modern I2C-HID & USB-HID laptop touchpads)
+modprobe hid || true
 modprobe hid_generic || true
+modprobe hid_multitouch || true
+modprobe i2c_hid || true
+modprobe i2c_hid_acpi || true
+modprobe i2c_hid_of || true
 modprobe evdev || true
 modprobe qemu_fw_cfg || true
+
+# Auto-probe hardware drivers via /sys modaliases
+for alias_file in $(find /sys/bus /sys/devices -name modalias 2>/dev/null); do
+    alias=$(cat "$alias_file" 2>/dev/null)
+    if [ -n "$alias" ]; then
+        modprobe $alias 2>/dev/null || true
+    fi
+done
+
+# Save kernel dmesg log and input device inventory to /var/log
+dmesg > /var/log/dmesg.log 2>&1 || true
+ls -la /dev/input/ > /var/log/input_devices.log 2>&1 || true
 
 # Wait for /dev/dri/card* (up to ~3s)
 i=0
@@ -588,9 +721,24 @@ echo "DRM devices detected:"
 ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
 echo "Input devices detected:"
 ls /dev/input/ 2>/dev/null || echo "  (none yet)"
-echo "Loaded drm-related modules:"
-cat /proc/modules 2>/dev/null | grep -E 'virtio|drm|bochs' || echo "  (none)"
-exec /bin/lcl-core
+
+# --- Emergency Debug Shell Check (lcl.debug=1 in /proc/cmdline) ---
+if grep -q "lcl.debug=1" /proc/cmdline 2>/dev/null; then
+    echo "===================================================="
+    echo " [init DEBUG] Emergency debug shell active (lcl.debug=1)"
+    echo " [init DEBUG] /var/log/dmesg.log and /var/log/input_devices.log are ready."
+    echo " [init DEBUG] Type 'exit' to resume booting compositor GUI."
+    echo "===================================================="
+    /bin/sh
+fi
+
+/bin/lcl-core 2>&1 | tee /var/log/lcl_compositor.log &
+sleep 0.2
+if [ -x /usr/bin/lcl-desktop-wm ]; then
+    echo "[init] Starting lcl-desktop-wm daemon..."
+    /usr/bin/lcl-desktop-wm 2>&1 | tee /var/log/lcl_wm.log &
+fi
+wait
 """,
         executable=True,
     )
@@ -891,7 +1039,7 @@ def detect_host_display() -> HostDisplay:
                 if pm:
                     info.physical_width = _clamp_dim(pm.group(1))
                     info.physical_height = _clamp_dim(pm.group(2))
-                if not info.refresh_hz or info.refresh_hz == 60:
+                if not info.refresh_hz:
                     blob = " ".join(str(v) for v in disp.values())
                     hm = re.search(r"@\s*([0-9.]+)\s*Hz", blob, re.I)
                     if hm:
@@ -1072,12 +1220,34 @@ def validate_kernel(kernel: Path) -> None:
         log(f"WARNING: {kernel} may not be a bzImage (HdrS missing). QEMU -kernel might fail.")
 
 
-def launch_qemu(kernel: Path, native: bool = False) -> None:
+def find_ovmf_firmware() -> Path | None:
+    candidates = [
+        Path("/usr/share/edk2/x64/OVMF_CODE.4m.fd"),
+        Path("/usr/share/edk2/x64/OVMF_CODE.fd"),
+        Path("/usr/share/OVMF/OVMF_CODE.fd"),
+        Path("/usr/share/ovmf/OVMF.fd"),
+        Path("/usr/share/qemu/OVMF.fd"),
+        Path("/usr/share/edk2/x64/OVMF.4m.fd"),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def launch_qemu(
+    kernel: Path,
+    native: bool = False,
+    iso_mode: bool = False,
+    uefi_mode: bool = False,
+    usb_passthrough: str | None = None,
+) -> None:
     qemu = find_qemu()
-    if not INITRAMFS_IMG.is_file():
-        err(f"Missing initramfs: {INITRAMFS_IMG}")
-        sys.exit(1)
-    validate_kernel(kernel)
+    if not iso_mode:
+        if not INITRAMFS_IMG.is_file():
+            err(f"Missing initramfs: {INITRAMFS_IMG}")
+            sys.exit(1)
+        validate_kernel(kernel)
 
     memory = "2G"
     cpus = "2"
@@ -1090,9 +1260,6 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
         logical_h = host.logical_height or host.height
         physical_w = host.physical_width or logical_w
         physical_h = host.physical_height or logical_h
-        # True Retina only when physical pixels > logical points.
-        # GNOME scaling-factor (e.g. 4) with physical==logical is NOT FB HiDPI —
-        # using scale=4 there makes a tiny/broken UI and mis-labels the path.
         true_retina = (
             physical_w > 0
             and logical_w > 0
@@ -1117,6 +1284,24 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
 
     want_gl = os.environ.get("LCL_QEMU_GL", "").lower() in ("1", "true", "yes", "on")
 
+    extra_qemu: list[str] = []
+
+    usb_target = usb_passthrough or os.environ.get("LCL_QEMU_USB", "")
+    if usb_target:
+        if ":" in usb_target:
+            parts = usb_target.split(":", 1)
+            vid = parts[0].strip()
+            pid = parts[1].strip()
+            vid = vid if vid.startswith("0x") else f"0x{vid}"
+            pid = pid if pid.startswith("0x") else f"0x{pid}"
+            extra_qemu.extend([
+                "-device", "qemu-xhci,id=xhci",
+                "-device", f"usb-host,vendorid={vid},productid={pid}",
+            ])
+            log(f"USB Passthrough enabled for device {vid}:{pid}")
+        else:
+            log(f"WARNING: Invalid USB passthrough spec '{usb_target}'. Format must be VENDOR:PRODUCT (e.g. 046d:c077)")
+
     # Probe available display backends once
     try:
         disp_help = subprocess.check_output(
@@ -1128,7 +1313,6 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
         disp_help = ""
     backends = {line.strip() for line in disp_help.splitlines() if line.strip()}
 
-    extra_qemu: list[str] = []
     # Always disable default stdvga when attaching virtio-vga (avoids dual-head / stuck BIOS fb)
     # GL path is opt-in: virtio-vga-gl + gl=on often hangs on Linux ("Booting from ROM..." freeze).
     if want_gl:
@@ -1182,11 +1366,15 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
             )
             if scale > 1.01:
                 print("  - HiDPI: physical FB + scaled UI (sharp Retina path)")
+    print(f"  - Boot Mode: {'ISO CD-ROM (' + ('UEFI' if uefi_mode else 'BIOS') + ')' if iso_mode else 'Direct Kernel Boot'}")
     print(f"  - Accelerator: {' '.join(accel)}")
     print(f"  - GPU: {' '.join(gpu)}{'  (LCL_QEMU_GL=1 for VirGL)' if not want_gl else ''}")
     print(f"  - Display: {display[1]}")
-    print(f"  - Kernel: {kernel}")
-    print(f"  - Initrd: {INITRAMFS_IMG}")
+    if iso_mode:
+        print(f"  - ISO Image: {BUILD_DIR / 'lcl-os.iso'}")
+    else:
+        print(f"  - Kernel: {kernel}")
+        print(f"  - Initrd: {INITRAMFS_IMG}")
     print("----------------------------------------------------")
 
     # Resolution -> DRM/KMS via kernel video= + lcl.width/height (DisplayManager picks mode)
@@ -1200,24 +1388,44 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
     if host.physical_width and host.physical_height:
         lcl_params += f" lcl.physical={host.physical_width}x{host.physical_height}"
 
-    # Keep early messages on tty0 so a hung GPU still shows progress (not frozen SeaBIOS text).
-    # Serial mirrors the same log on the host terminal.
     append = (
         f"console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200 "
         f"{video_mode} {lcl_params} "
         f"rdinit=/init loglevel=6"
     )
+
     cmd = [
         qemu,
         *accel,
         "-machine",
         "q35",
-        "-kernel",
-        str(kernel),
-        "-initrd",
-        str(INITRAMFS_IMG),
-        "-append",
-        append,
+    ]
+
+    if uefi_mode:
+        ovmf = find_ovmf_firmware()
+        if not ovmf:
+            err("UEFI requested (--uefi), but OVMF firmware file not found.")
+            sys.exit(1)
+        log(f"UEFI boot mode enabled. Firmware: {ovmf}")
+        cmd.extend(["-drive", f"if=pflash,format=raw,readonly=on,file={ovmf}"])
+
+    if iso_mode:
+        iso_path = BUILD_DIR / "lcl-os.iso"
+        if not iso_path.is_file():
+            err(f"Missing ISO file: {iso_path}. Please run 'make iso' first.")
+            sys.exit(1)
+        cmd.extend(["-boot", "d", "-cdrom", str(iso_path)])
+    else:
+        cmd.extend([
+            "-kernel",
+            str(kernel),
+            "-initrd",
+            str(INITRAMFS_IMG),
+            "-append",
+            append,
+        ])
+
+    cmd.extend([
         "-m",
         memory,
         "-smp",
@@ -1232,7 +1440,7 @@ def launch_qemu(kernel: Path, native: bool = False) -> None:
         "-serial",
         "stdio",
         "-no-reboot",
-    ]
+    ])
     log("QEMU cmdline: " + " ".join(cmd))
     os.execvp(qemu, cmd)
 
@@ -1242,6 +1450,8 @@ def main() -> None:
     parser.add_argument("--run", "-r", action="store_true", help="Launch QEMU after packaging")
     parser.add_argument("--build-only", action="store_true", help="Only build binaries (Docker)")
     parser.add_argument("--package-only", action="store_true", help="Build + package initramfs (no QEMU)")
+    parser.add_argument("--iso", action="store_true", help="Boot from build/lcl-os.iso CD-ROM image")
+    parser.add_argument("--uefi", action="store_true", help="Use OVMF UEFI firmware for QEMU boot")
     parser.add_argument("--clean", action="store_true", help="Remove build/ directory safely")
     parser.add_argument(
         "--docker",
@@ -1255,11 +1465,25 @@ def main() -> None:
         help="Match host resolution + DPI scale (video= + lcl.scale cmdline)",
     )
     parser.add_argument(
+        "--gpu",
+        "-g",
+        action="store_true",
+        help="Enable 3D VirGL GPU acceleration in QEMU",
+    )
+    parser.add_argument(
+        "--usb",
+        metavar="VENDOR:PRODUCT",
+        help="Pass through host USB device to QEMU (e.g. --usb 046d:c077 or USB=046d:c077 with make qemu)",
+    )
+    parser.add_argument(
         "--inside-docker",
         action="store_true",
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
+
+    if args.gpu:
+        os.environ["LCL_QEMU_GL"] = "1"
 
     if args.clean:
         clean_build()
@@ -1290,7 +1514,13 @@ def main() -> None:
     log(f"Kernel: {kernel}")
 
     if args.run:
-        launch_qemu(kernel, native=args.native)
+        launch_qemu(
+            kernel,
+            native=args.native,
+            iso_mode=args.iso,
+            uefi_mode=args.uefi,
+            usb_passthrough=args.usb,
+        )
     else:
         log("Boot environment ready!")
         log(f"Run '{Path(sys.argv[0]).name} --run' to launch QEMU in live VM.")

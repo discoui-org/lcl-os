@@ -72,52 +72,77 @@ std::vector<IPCClientMessage> IPCManager::pollMessages() {
     // 2. Poll messages from active connected client sockets
     for (auto it = m_clientFds.begin(); it != m_clientFds.end(); ) {
         int fd = *it;
-        char buf[512];
-        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        bool fdAlive = true;
 
-        if (n > 0) {
-            buf[n] = '\0';
-            std::string rawData(buf, n);
+        // Drain ALL pending binary protocol messages from this fd in one shot
+        while (true) {
+            protocol::LCLHeader header{};
+            std::vector<uint8_t> payload;
+            int rFd = -1;
 
-            // Kernel-level identity validation via SO_PEERCRED
-            struct ucred cred{};
-            socklen_t len = sizeof(cred);
-            if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) == 0) {
-                // Split multi-line commands if any
-                std::string cur;
-                for (char c : rawData) {
-                    if (c == '\n') {
-                        if (!cur.empty()) {
-                            messages.push_back({fd, cred.pid, cred.uid, cred.gid, cur});
-                            cur.clear();
-                        }
-                    } else if (c != '\r') {
-                        cur.push_back(c);
-                    }
+            if (protocol::recvMsgWithFd(fd, header, payload, rFd)) {
+                struct ucred cred{};
+                socklen_t len = sizeof(cred);
+                getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len);
+
+                IPCClientMessage msg;
+                msg.clientFd = fd;
+                msg.pid = cred.pid;
+                msg.uid = cred.uid;
+                msg.gid = cred.gid;
+                msg.passedFd = rFd;
+                msg.header = header;
+                msg.payload = payload;
+
+                if (header.opcode == protocol::LCLOpcode::RegisterRole && payload.size() >= sizeof(protocol::LCLMsgRegisterRole)) {
+                    auto* reg = reinterpret_cast<const protocol::LCLMsgRegisterRole*>(payload.data());
+                    msg.command = "REGISTER_ROLE:" + std::string(reg->clientName);
+                } else if (header.opcode == protocol::LCLOpcode::SurfaceCreate && payload.size() >= sizeof(protocol::LCLMsgSurfaceCreate)) {
+                    auto* surf = reinterpret_cast<const protocol::LCLMsgSurfaceCreate*>(payload.data());
+                    msg.command = "SURFACE_CREATE:" + std::to_string(surf->surfaceId);
+                } else if (header.opcode == protocol::LCLOpcode::AttachBuffer && payload.size() >= sizeof(protocol::LCLMsgAttachBuffer)) {
+                    auto* buf = reinterpret_cast<const protocol::LCLMsgAttachBuffer*>(payload.data());
+                    msg.command = "ATTACH_BUFFER:" + std::to_string(buf->surfaceId);
+                } else {
+                    msg.command = "PROTOCOL_OPCODE_" + std::to_string(static_cast<uint32_t>(header.opcode));
                 }
-                if (!cur.empty()) {
-                    messages.push_back({fd, cred.pid, cred.uid, cred.gid, cur});
-                }
-            } else {
-                std::cerr << "[LCL IPC SECURITY WARNING] SO_PEERCRED failed for client FD " << fd << ". Rejecting connection.\n";
-                close(fd);
-                it = m_clientFds.erase(it);
+
+                messages.push_back(msg);
+                // Continue draining more messages from this fd
                 continue;
             }
-            ++it;
-        } else if (n == 0) {
-            // Client closed connection
-            close(fd);
-            it = m_clientFds.erase(it);
-        } else {
-            if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                ++it;
-            } else {
-                // Connection error
-                close(fd);
-                it = m_clientFds.erase(it);
+
+            // recvMsgWithFd returned false: check why
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // No more data — fd is still alive, stop draining
+                break;
             }
+
+            // Real error or EOF — fd is dead
+            close(fd);
+            fdAlive = false;
+            break;
         }
+
+        if (!fdAlive) {
+            struct ucred cred{};
+            socklen_t len = sizeof(cred);
+            getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len);
+
+            IPCClientMessage discMsg{};
+            discMsg.clientFd = fd;
+            discMsg.pid = cred.pid;
+            discMsg.uid = cred.uid;
+            discMsg.gid = cred.gid;
+            discMsg.command = "CLIENT_DISCONNECT";
+            discMsg.header.opcode = protocol::LCLOpcode::SurfaceDestroy;
+            messages.push_back(discMsg);
+
+            it = m_clientFds.erase(it);
+            continue;
+        }
+
+        ++it;
     }
 
     return messages;

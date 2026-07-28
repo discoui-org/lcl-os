@@ -192,6 +192,10 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
         }
     }
 
+    // Initialize Skia Hardware / Software Rendering Backend
+    core::EGLBackend* eglBackend = m_displayManager ? m_displayManager->getEGLBackend() : nullptr;
+    m_skiaRenderer.initialize(m_width, m_height, eglBackend, m_softwareBackBuffer.data());
+
     // Initialize TrueType Vector Font Engine (JetBrains Mono TTF with fallback)
     std::vector<std::string> fontPaths = {
         "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
@@ -368,9 +372,31 @@ void Renderer::drawFilledRect(int x, int y, int width, int height, uint32_t argb
     int startY = std::max(0, y);
     int endY = std::min(static_cast<int>(m_height), y + height);
 
-    for (int j = startY; j < endY; ++j) {
-        for (int i = startX; i < endX; ++i) {
-            m_softwareBackBuffer[j * m_width + i] = argbColor;
+    uint8_t a = (argbColor >> 24) & 0xFF;
+    if (a == 255) {
+        for (int j = startY; j < endY; ++j) {
+            std::fill_n(&m_softwareBackBuffer[j * m_width + startX], endX - startX, argbColor);
+        }
+    } else if (a > 0) {
+        float alpha = a / 255.0f;
+        float invAlpha = 1.0f - alpha;
+        uint8_t srcR = (argbColor >> 16) & 0xFF;
+        uint8_t srcG = (argbColor >> 8) & 0xFF;
+        uint8_t srcB = argbColor & 0xFF;
+
+        for (int j = startY; j < endY; ++j) {
+            for (int i = startX; i < endX; ++i) {
+                uint32_t bg = m_softwareBackBuffer[j * m_width + i];
+                uint8_t bgR = (bg >> 16) & 0xFF;
+                uint8_t bgG = (bg >> 8) & 0xFF;
+                uint8_t bgB = bg & 0xFF;
+
+                uint8_t r = static_cast<uint8_t>(srcR * alpha + bgR * invAlpha);
+                uint8_t g = static_cast<uint8_t>(srcG * alpha + bgG * invAlpha);
+                uint8_t b = static_cast<uint8_t>(srcB * alpha + bgB * invAlpha);
+
+                m_softwareBackBuffer[j * m_width + i] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
+            }
         }
     }
 }
@@ -436,27 +462,15 @@ void Renderer::drawWindowFrame(int x, int y, int width, int height, const std::s
 
 void Renderer::renderLCLDesktopShell(const std::string& statusMessage) {
     (void)statusMessage;
-    using core::DisplayScale;
-    clear(lcl::theme::UI::Wallpaper);
-    const int menuH = DisplayScale::menuBarHeight();
-    drawFilledRect(0, 0, m_width, menuH, lcl::theme::UI::TaskbarBg);
-    drawRect(0, menuH - 1, m_width, 1, lcl::theme::UI::TaskbarBorder);
-    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6), DisplayScale::px(80), DisplayScale::px(28), lcl::theme::UI::TaskbarLogoBtn);
-    drawString(DisplayScale::px(20), DisplayScale::px(12), "LCL OS", lcl::theme::UI::TaskbarLogoBtnText);
-    drawWindowFrame(DisplayScale::px(80), DisplayScale::px(80), DisplayScale::px(540), DisplayScale::px(360),
-                    "LCL Terminal / Core Engine", lcl::theme::UI::WindowTitleFocused);
-    drawWindowFrame(DisplayScale::px(360), DisplayScale::px(200), DisplayScale::px(460), DisplayScale::px(300),
-                    "LCL System Monitor", lcl::theme::UI::WindowTitleBlurred);
+    clear(0xFF000000);
     drawCursor(static_cast<int>(m_width / 2), static_cast<int>(m_height / 2));
 }
 
 void Renderer::renderDesktop(const WindowManager& windowManager,
                               const std::vector<WindowRenderContent>& windowContents) {
-    // 1. Layered composition in z-order
-    renderBackground();
-    renderTaskbar();
+    // beginFrame() is called by the compositor before renderDesktop() — do NOT call it here.
 
-    // 2. Render each window (frame + terminal content + cursor)
+    // 1. Render registered client surfaces/windows (with text-based fallback content)
     for (const auto& win : windowManager.getWindows()) {
         const WindowRenderContent* content = nullptr;
         for (const auto& c : windowContents) {
@@ -465,7 +479,7 @@ void Renderer::renderDesktop(const WindowManager& windowManager,
         renderWindowContent(win, content);
     }
 
-    // 3. Mouse cursor on top of everything
+    // 2. Mouse cursor on top of everything
     if (m_displayManager && m_displayManager->isHardwareCursorActive()) {
         m_displayManager->moveHardwareCursor(windowManager.getMouseX(), windowManager.getMouseY());
     } else {
@@ -478,32 +492,11 @@ void Renderer::renderDesktop(const WindowManager& windowManager,
 // -----------------------------------------------------------------------
 
 void Renderer::renderBackground() {
-    clear(lcl::theme::UI::Wallpaper);
+    clear(0xFF000000);
 }
 
 void Renderer::renderTaskbar() {
-    using core::DisplayScale;
-    const int menuH = DisplayScale::menuBarHeight();
-
-    drawFilledRect(0, 0, m_width, menuH, lcl::theme::UI::TaskbarBg);
-    drawRect(0, menuH - 1, m_width, 1, lcl::theme::UI::TaskbarBorder);
-
-    // LCL logo button (left)
-    drawFilledRect(DisplayScale::px(10), DisplayScale::px(6),
-                   DisplayScale::px(90), DisplayScale::px(28),
-                   lcl::theme::UI::TaskbarLogoBtn);
-    drawString(DisplayScale::px(20), DisplayScale::px(12),
-               "LCL Core", lcl::theme::UI::TaskbarLogoBtnText);
-
-    // Driver/version status text (right)
-    std::string hwInfo = "LCL OS v0.1.0 (" +
-        (m_displayManager && m_displayManager->isHardwareAccelerated()
-             ? m_displayManager->getDriverName() : "DRM FB") + ")";
-    const int monoW = DisplayScale::px(8);
-    drawString(static_cast<int>(m_width)
-                   - static_cast<int>(hwInfo.length()) * monoW
-                   - DisplayScale::px(20),
-               DisplayScale::px(12), hwInfo, lcl::theme::UI::TaskbarStatusText);
+    // No-op: Compositor core does not render built-in taskbars/panels (handled via lcl-protocol layer-shell clients)
 }
 
 void Renderer::renderWindowContent(const Window& win, const WindowRenderContent* content) {
@@ -615,9 +608,14 @@ void Renderer::renderWindowContent(const Window& win, const WindowRenderContent*
 void Renderer::swapBuffers() {
     m_renderedFrames++;
 
+    if (m_skiaRenderer.getBackendType() == SkiaBackendType::OpenGL_EGL) {
+        m_skiaRenderer.endFrame();
+    }
+
     if (m_displayManager && m_displayManager->isInitialized()) {
+        const uint32_t* srcPixels = m_skiaRenderer.getRasterBuffer() ? m_skiaRenderer.getRasterBuffer() : m_softwareBackBuffer.data();
         if (m_usingDRMHardware && m_dumbBuffer.pixelData && m_dumbBuffer.fbId > 0) {
-            std::memcpy(m_dumbBuffer.pixelData, m_softwareBackBuffer.data(), std::min(m_dumbBuffer.size, m_softwareBackBuffer.size() * sizeof(uint32_t)));
+            std::memcpy(m_dumbBuffer.pixelData, srcPixels, std::min(m_dumbBuffer.size, m_width * m_height * sizeof(uint32_t)));
 
             int drmFd = m_displayManager->getDRMFd();
             if (drmFd >= 0) {
@@ -628,7 +626,7 @@ void Renderer::swapBuffers() {
             if (fbPixels) {
                 size_t copyBytes = std::min(static_cast<size_t>(m_width * m_height * sizeof(uint32_t)),
                                             static_cast<size_t>(m_displayManager->getFBDevice().size));
-                std::memcpy(fbPixels, m_softwareBackBuffer.data(), copyBytes);
+                std::memcpy(fbPixels, srcPixels, copyBytes);
             }
         }
     }

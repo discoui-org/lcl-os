@@ -16,10 +16,12 @@ bool WindowManager::initialize(uint32_t screenWidth, uint32_t screenHeight) {
     m_screenHeight = screenHeight;
     m_mouseX = screenWidth / 2;
     m_mouseY = screenHeight / 2;
+    m_subpixelX = static_cast<double>(m_mouseX);
+    m_subpixelY = static_cast<double>(m_mouseY);
     m_windows.clear();
     m_initialized = true;
 
-    std::cout << "[LCL WindowManager] Initialized canvas (" << m_screenWidth << "x" << m_screenHeight << ") with 0 dummy windows.\n";
+    std::cout << "[LCL WindowManager] Initialized compositor canvas (" << m_screenWidth << "x" << m_screenHeight << ") [0 active surfaces].\n";
     return true;
 }
 
@@ -41,8 +43,12 @@ uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int
     win.title = title;
     win.x = x;
     win.y = y;
+    win.pendingX = x;
+    win.pendingY = y;
     win.width = width;
     win.height = height;
+    win.pendingWidth = width;
+    win.pendingHeight = height;
     win.headerColor = headerColor;
     win.isFocused = true;
     win.markDirty();
@@ -100,15 +106,37 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
         int oldX = m_mouseX;
         int oldY = m_mouseY;
 
-        if (event.absoluteX >= 0.0 && event.absoluteY >= 0.0) {
-            m_mouseX = std::clamp(static_cast<int>(event.absoluteX), 0, static_cast<int>(m_screenWidth) - 1);
-            m_mouseY = std::clamp(static_cast<int>(event.absoluteY), 0, static_cast<int>(m_screenHeight) - 1);
-        } else {
-            m_mouseX = std::clamp(m_mouseX + static_cast<int>(event.dx), 0, static_cast<int>(m_screenWidth) - 1);
-            m_mouseY = std::clamp(m_mouseY + static_cast<int>(event.dy), 0, static_cast<int>(m_screenHeight) - 1);
+        if (event.absoluteX >= 0.0) {
+            m_subpixelX = event.absoluteX;
+        }
+        if (event.absoluteY >= 0.0) {
+            m_subpixelY = event.absoluteY;
         }
 
-        if (m_mouseX != oldX || m_mouseY != oldY) {
+        if (event.absoluteX < 0.0 && event.absoluteY < 0.0) {
+            // Relative mouse motion: apply subpixel precision + speed sensitivity scale & acceleration
+            constexpr double mouseSensitivity = 1.8;
+            double dx = event.dx * mouseSensitivity;
+            double dy = event.dy * mouseSensitivity;
+
+            // Non-linear acceleration for fast flick movements
+            double speedSq = dx * dx + dy * dy;
+            if (speedSq > 9.0) {
+                double factor = 1.0 + std::min(1.5, (speedSq - 9.0) * 0.01);
+                dx *= factor;
+                dy *= factor;
+            }
+
+            m_subpixelX += dx;
+            m_subpixelY += dy;
+        }
+
+        m_subpixelX = std::clamp(m_subpixelX, 0.0, static_cast<double>(m_screenWidth - 1));
+        m_subpixelY = std::clamp(m_subpixelY, 0.0, static_cast<double>(m_screenHeight - 1));
+        m_mouseX = static_cast<int>(m_subpixelX);
+        m_mouseY = static_cast<int>(m_subpixelY);
+
+        if (m_mouseX != oldX || m_mouseY != oldY || event.dx != 0.0 || event.dy != 0.0 || event.absoluteX >= 0.0) {
             m_mouseDirty = true;
             stateChanged = true;
         }
@@ -125,6 +153,8 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                 if (newX != win.x || newY != win.y) {
                     win.x = newX;
                     win.y = newY;
+                    win.pendingX = newX;
+                    win.pendingY = newY;
                     win.markDirty();
                     stateChanged = true;
                 }
@@ -200,11 +230,11 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                     }
                 }
 
-                if (newX != win.x || newY != win.y || newW != win.width || newH != win.height) {
-                    win.x = newX;
-                    win.y = newY;
-                    win.width = newW;
-                    win.height = newH;
+                if (newX != win.pendingX || newY != win.pendingY || newW != win.pendingWidth || newH != win.pendingHeight) {
+                    win.pendingX = newX;
+                    win.pendingY = newY;
+                    win.pendingWidth = newW;
+                    win.pendingHeight = newH;
                     win.markDirty();
                     stateChanged = true;
                 }
@@ -236,9 +266,14 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                 const int btn = core::DisplayScale::trafficBtn();
                 const int btnPad = core::DisplayScale::px(10);
 
-                // Close button check
-                if (m_mouseX >= topWin.x + btnPad && m_mouseX <= topWin.x + btnPad + btn &&
-                    m_mouseY >= topWin.y + btnPad && m_mouseY <= topWin.y + btnPad + btn) {
+                // Close button check (only when explicitly clicked or Super shortcut used)
+                if (event.superPressed && event.button == BTN_MIDDLE) {
+                    removeWindow(topWin.id);
+                    stateChanged = true;
+                } else if (!event.superPressed &&
+                           m_mouseX >= topWin.x + btnPad && m_mouseX <= topWin.x + btnPad + btn &&
+                           m_mouseY >= topWin.y + btnPad && m_mouseY <= topWin.y + btnPad + btn) {
+                    std::cout << "[LCL WM] Close button clicked on window ID: " << topWin.id << "\n";
                     removeWindow(topWin.id);
                     stateChanged = true;
                 } else if (event.superPressed) {
@@ -277,6 +312,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                             else                   topWin.resizeEdge = ResizeEdge::BottomRight; // Center default
                         }
 
+                        topWin.activeResizeEdge = topWin.resizeEdge;
+                        topWin.anchorRight = topWin.x + topWin.width;
+                        topWin.anchorBottom = topWin.y + topWin.height;
                         topWin.resizeStartX = m_mouseX;
                         topWin.resizeStartY = m_mouseY;
                         topWin.initialX = topWin.x;
@@ -293,6 +331,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         // Edge / Corner Resize
                         topWin.isResizing = true;
                         topWin.resizeEdge = edge;
+                        topWin.activeResizeEdge = edge;
+                        topWin.anchorRight = topWin.x + topWin.width;
+                        topWin.anchorBottom = topWin.y + topWin.height;
                         topWin.resizeStartX = m_mouseX;
                         topWin.resizeStartY = m_mouseY;
                         topWin.initialX = topWin.x;
@@ -325,6 +366,75 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
         }
     }
     return stateChanged;
+}
+
+void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH) {
+    auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
+        return w.id == windowId;
+    });
+    if (it == m_windows.end()) return;
+
+    Window& win = *it;
+    int finalX = win.x;
+    int finalY = win.y;
+
+    // Use activeResizeEdge (remains active across client commits until queue is fully drained)
+    ResizeEdge edgeToUse = (win.isResizing ? win.resizeEdge : win.activeResizeEdge);
+
+    if (edgeToUse != ResizeEdge::None) {
+        int rightAnchor = (win.anchorRight > 0 ? win.anchorRight : (win.isResizing ? win.pendingX + win.pendingWidth : win.x + win.width));
+        int bottomAnchor = (win.anchorBottom > 0 ? win.anchorBottom : (win.isResizing ? win.pendingY + win.pendingHeight : win.y + win.height));
+
+        // Sol kenar sürüklendiyse: Sağ kenar (rightAnchor) sabittir!
+        if (edgeToUse == ResizeEdge::Left ||
+            edgeToUse == ResizeEdge::TopLeft ||
+            edgeToUse == ResizeEdge::BottomLeft) {
+            finalX = rightAnchor - frameW;
+        } else if (win.isResizing) {
+            finalX = win.pendingX;
+        }
+
+        // Üst kenar sürüklendiyse: Alt kenar (bottomAnchor) sabittir!
+        if (edgeToUse == ResizeEdge::Top ||
+            edgeToUse == ResizeEdge::TopLeft ||
+            edgeToUse == ResizeEdge::TopRight) {
+            finalY = bottomAnchor - frameH;
+        } else if (win.isResizing) {
+            finalY = win.pendingY;
+        }
+
+        // activeResizeEdge sıfırlanma kuralı: Mouse bırakıldıysa VE gelen tampon hedefe ulaştıysa (veya son karedir)
+        if (!win.isResizing && (frameW == win.pendingWidth || frameH == win.pendingHeight)) {
+            win.activeResizeEdge = ResizeEdge::None;
+            win.anchorRight = 0;
+            win.anchorBottom = 0;
+        }
+    }
+
+    if (win.width != frameW || win.height != frameH || win.x != finalX || win.y != finalY) {
+        win.width = frameW;
+        win.height = frameH;
+        win.x = finalX;
+        win.y = finalY;
+        win.pendingX = finalX;
+        win.pendingY = finalY;
+        if (!win.isResizing) {
+            win.pendingWidth = frameW;
+            win.pendingHeight = frameH;
+        }
+        win.markDirty();
+    }
+}
+
+void WindowManager::setDecorationMode(uint32_t windowId, DecorationMode mode) {
+    for (auto& win : m_windows) {
+        if (win.id == windowId) {
+            win.decorationMode = mode;
+            win.markDirty();
+            m_mouseDirty = true;
+            break;
+        }
+    }
 }
 
 void WindowManager::focusWindow(uint32_t windowId) {
