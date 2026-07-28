@@ -13,6 +13,9 @@
 #include <sys/un.h>
 #include <sys/mman.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "render/stb_image.h"
+
 #include "core/ipc/ipc_manager.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "core/display/display_scale.hpp"
@@ -22,7 +25,70 @@ namespace {
 void renderWallpaper(uint32_t* pixels, uint32_t width, uint32_t height) {
     if (!pixels || width == 0 || height == 0) return;
 
-    // Elegant dark slate & midnight blue linear/radial gradient wallpaper
+    std::vector<std::string> candidatePaths = {
+        "/usr/share/wallpapers/wallpaper.png",
+        "/usr/share/wallpaper.png",
+        "/home/user/wallpaper.png",
+        "assets/wallpaper.png",
+        "wallpaper.png",
+        "../wallpaper.png"
+    };
+
+    int imgW = 0, imgH = 0, channels = 0;
+    unsigned char* imgData = nullptr;
+    std::string loadedPath;
+
+    for (const auto& path : candidatePaths) {
+        imgData = stbi_load(path.c_str(), &imgW, &imgH, &channels, 4);
+        if (imgData) {
+            loadedPath = path;
+            break;
+        }
+    }
+
+    if (imgData && imgW > 0 && imgH > 0) {
+        std::cout << "[LCL Shell] Loaded wallpaper image from '" << loadedPath
+                  << "' (" << imgW << "x" << imgH << " -> " << width << "x" << height << ").\n";
+
+        // Bilinear interpolation scaling to target surface
+        for (uint32_t y = 0; y < height; ++y) {
+            float v = (static_cast<float>(y) + 0.5f) * (static_cast<float>(imgH) / static_cast<float>(height)) - 0.5f;
+            int y0 = std::clamp(static_cast<int>(std::floor(v)), 0, imgH - 1);
+            int y1 = std::clamp(y0 + 1, 0, imgH - 1);
+            float fy = v - std::floor(v);
+
+            for (uint32_t x = 0; x < width; ++x) {
+                float u = (static_cast<float>(x) + 0.5f) * (static_cast<float>(imgW) / static_cast<float>(width)) - 0.5f;
+                int x0 = std::clamp(static_cast<int>(std::floor(u)), 0, imgW - 1);
+                int x1 = std::clamp(x0 + 1, 0, imgW - 1);
+                float fx = u - std::floor(u);
+
+                const unsigned char* p00 = imgData + (y0 * imgW + x0) * 4;
+                const unsigned char* p01 = imgData + (y0 * imgW + x1) * 4;
+                const unsigned char* p10 = imgData + (y1 * imgW + x0) * 4;
+                const unsigned char* p11 = imgData + (y1 * imgW + x1) * 4;
+
+                auto lerp = [](float a, float b, float t) { return a + t * (b - a); };
+
+                float r = lerp(lerp(p00[0], p01[0], fx), lerp(p10[0], p11[0], fx), fy);
+                float g = lerp(lerp(p00[1], p01[1], fx), lerp(p10[1], p11[1], fx), fy);
+                float b = lerp(lerp(p00[2], p01[2], fx), lerp(p10[2], p11[2], fx), fy);
+
+                uint8_t ru = static_cast<uint8_t>(std::clamp(r, 0.0f, 255.0f));
+                uint8_t gu = static_cast<uint8_t>(std::clamp(g, 0.0f, 255.0f));
+                uint8_t bu = static_cast<uint8_t>(std::clamp(b, 0.0f, 255.0f));
+
+                pixels[y * width + x] = (0xFF000000) | (ru << 16) | (gu << 8) | bu;
+            }
+        }
+
+        stbi_image_free(imgData);
+        return;
+    }
+
+    std::cout << "[LCL Shell] wallpaper.png not found; rendering procedural gradient wallpaper fallback.\n";
+
+    // Fallback: Elegant dark slate & midnight blue linear/radial gradient wallpaper
     // Top-left:  Deep Slate Blue  #0F172A
     // Bottom:    Midnight Indigo  #1E1B4B
     for (uint32_t y = 0; y < height; ++y) {

@@ -439,6 +439,14 @@ def package_initramfs(kernel_path: Path) -> None:
             else:
                 shutil.copy2(item, dest)
 
+    wp_src = ROOT_DIR / "wallpaper.png"
+    if wp_src.is_file():
+        log("Packaging wallpaper.png into initramfs...")
+        wp_dir = INITRAMFS_DIR / "usr" / "share" / "wallpapers"
+        wp_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(wp_src, wp_dir / "wallpaper.png")
+        shutil.copy2(wp_src, INITRAMFS_DIR / "usr" / "share" / "wallpaper.png")
+
     # Selective hardware firmware packaging (skip huge wifi/sound/net vendor blobs)
     fw_dst = INITRAMFS_DIR / "usr" / "lib" / "firmware"
     fw_dst.mkdir(parents=True, exist_ok=True)
