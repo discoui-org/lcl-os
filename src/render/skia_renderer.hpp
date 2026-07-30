@@ -131,6 +131,26 @@ private:
     int32_t m_aPosLoc{-1};
     int32_t m_aTexLoc{-1};
     int32_t m_uTextureLoc{-1};
+
+    // GPU FBO & Shader Handles for Backdrop Filters
+    bool m_glFBOReady{false};
+    uint32_t m_glFBO[2]{0, 0};
+    uint32_t m_glFBOTexture[2]{0, 0};
+
+    uint32_t m_glBlurProgram{0};
+    int32_t m_aBlurPosLoc{-1};
+    int32_t m_aBlurTexLoc{-1};
+    int32_t m_uBlurTextureLoc{-1};
+    int32_t m_uBlurDirLoc{-1};
+    int32_t m_uBlurSigmaLoc{-1};
+    int32_t m_uBlurRadiusLoc{-1};
+
+    uint32_t m_glColorMatrixProgram{0};
+    int32_t m_aColorPosLoc{-1};
+    int32_t m_aColorTexLoc{-1};
+    int32_t m_uColorTextureLoc{-1};
+    int32_t m_uColorMatrixLoc{-1};
+    int32_t m_uColorOffsetLoc{-1};
 };
 
 } // namespace lcl::render

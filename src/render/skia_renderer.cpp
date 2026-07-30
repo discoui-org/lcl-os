@@ -56,6 +56,95 @@ bool SkiaRenderer::initGLShader() {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_width, m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glBindTexture(GL_TEXTURE_2D, 0);
 
+    // --- GLSL 2-Pass Gaussian Blur Fragment Shader ---
+    const char* fBlurSrc =
+        "precision mediump float;\n"
+        "varying vec2 vTexCoord;\n"
+        "uniform sampler2D uTexture;\n"
+        "uniform vec2 uDirection;\n"
+        "uniform float uSigma;\n"
+        "uniform int uRadius;\n"
+        "void main() {\n"
+        "    if (uSigma <= 0.1) {\n"
+        "        gl_FragColor = texture2D(uTexture, vTexCoord);\n"
+        "        return;\n"
+        "    }\n"
+        "    vec4 colorAcc = vec4(0.0);\n"
+        "    float weightAcc = 0.0;\n"
+        "    float twoSigmaSq = 2.0 * uSigma * uSigma;\n"
+        "    for (int i = -32; i <= 32; ++i) {\n"
+        "        if (i < -uRadius || i > uRadius) continue;\n"
+        "        float fi = float(i);\n"
+        "        float weight = exp(-(fi * fi) / twoSigmaSq);\n"
+        "        vec2 coord = vTexCoord + uDirection * fi;\n"
+        "        colorAcc += texture2D(uTexture, coord) * weight;\n"
+        "        weightAcc += weight;\n"
+        "    }\n"
+        "    gl_FragColor = colorAcc / weightAcc;\n"
+        "}\n";
+
+    GLuint vsBlur = compileShader(GL_VERTEX_SHADER, vSrc);
+    GLuint fsBlur = compileShader(GL_FRAGMENT_SHADER, fBlurSrc);
+    m_glBlurProgram = glCreateProgram();
+    glAttachShader(m_glBlurProgram, vsBlur);
+    glAttachShader(m_glBlurProgram, fsBlur);
+    glLinkProgram(m_glBlurProgram);
+    glDeleteShader(vsBlur);
+    glDeleteShader(fsBlur);
+
+    m_aBlurPosLoc = glGetAttribLocation(m_glBlurProgram, "aPosition");
+    m_aBlurTexLoc = glGetAttribLocation(m_glBlurProgram, "aTexCoord");
+    m_uBlurTextureLoc = glGetUniformLocation(m_glBlurProgram, "uTexture");
+    m_uBlurDirLoc = glGetUniformLocation(m_glBlurProgram, "uDirection");
+    m_uBlurSigmaLoc = glGetUniformLocation(m_glBlurProgram, "uSigma");
+    m_uBlurRadiusLoc = glGetUniformLocation(m_glBlurProgram, "uRadius");
+
+    // --- GLSL Color Matrix Fragment Shader ---
+    const char* fColorMatrixSrc =
+        "precision mediump float;\n"
+        "varying vec2 vTexCoord;\n"
+        "uniform sampler2D uTexture;\n"
+        "uniform mat3 uColorMatrix;\n"
+        "uniform vec3 uColorOffset;\n"
+        "void main() {\n"
+        "    vec4 c = texture2D(uTexture, vTexCoord);\n"
+        "    vec3 rgb = uColorMatrix * c.rgb + (uColorOffset / 255.0);\n"
+        "    gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);\n"
+        "}\n";
+
+    GLuint vsColor = compileShader(GL_VERTEX_SHADER, vSrc);
+    GLuint fsColor = compileShader(GL_FRAGMENT_SHADER, fColorMatrixSrc);
+    m_glColorMatrixProgram = glCreateProgram();
+    glAttachShader(m_glColorMatrixProgram, vsColor);
+    glAttachShader(m_glColorMatrixProgram, fsColor);
+    glLinkProgram(m_glColorMatrixProgram);
+    glDeleteShader(vsColor);
+    glDeleteShader(fsColor);
+
+    m_aColorPosLoc = glGetAttribLocation(m_glColorMatrixProgram, "aPosition");
+    m_aColorTexLoc = glGetAttribLocation(m_glColorMatrixProgram, "aTexCoord");
+    m_uColorTextureLoc = glGetUniformLocation(m_glColorMatrixProgram, "uTexture");
+    m_uColorMatrixLoc = glGetUniformLocation(m_glColorMatrixProgram, "uColorMatrix");
+    m_uColorOffsetLoc = glGetUniformLocation(m_glColorMatrixProgram, "uColorOffset");
+
+    // --- Initialize GLES2 Ping-Pong Framebuffer Objects (FBOs) ---
+    glGenTextures(2, m_glFBOTexture);
+    glGenFramebuffers(2, m_glFBO);
+    for (int i = 0; i < 2; ++i) {
+        glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[i]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_width, m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[i]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_glFBOTexture[i], 0);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    m_glFBOReady = true;
+
     return true;
 }
 
@@ -101,6 +190,21 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height, lcl::core::EGLBac
 }
 
 void SkiaRenderer::shutdown() {
+    if (m_glFBOReady) {
+        glDeleteFramebuffers(2, m_glFBO);
+        glDeleteTextures(2, m_glFBOTexture);
+        m_glFBO[0] = m_glFBO[1] = 0;
+        m_glFBOTexture[0] = m_glFBOTexture[1] = 0;
+        m_glFBOReady = false;
+    }
+    if (m_glBlurProgram > 0) {
+        glDeleteProgram(m_glBlurProgram);
+        m_glBlurProgram = 0;
+    }
+    if (m_glColorMatrixProgram > 0) {
+        glDeleteProgram(m_glColorMatrixProgram);
+        m_glColorMatrixProgram = 0;
+    }
     if (m_glTexture > 0) {
         glDeleteTextures(1, &m_glTexture);
         m_glTexture = 0;
@@ -459,13 +563,14 @@ void applyColorMatrixToPixels(std::vector<uint32_t>& pixels, int w, int h, const
     }
 }
 
-void applyBoxBlurToPixels(std::vector<uint32_t>& pixels, int w, int h, float blurRadius) {
+void applyGaussianBlurToPixels(std::vector<uint32_t>& pixels, int w, int h, float blurRadius) {
     if (w <= 0 || h <= 0 || blurRadius <= 0.5f || pixels.empty()) return;
 
-    int radius = std::clamp(static_cast<int>(blurRadius), 1, 16);
+    float sigma = std::max(0.5f, blurRadius / 2.0f);
+    int R = std::max(1, static_cast<int>(std::ceil(3.0f * sigma)));
 
-    // Adaptive Downsample factor: 1/8 size for large areas (>= 400px), 1/4 size for small regions
-    int scaleFactor = (w >= 400 || h >= 300) ? 8 : 4;
+    // Adaptive scale factor for CPU performance: 1x..4x downsampling
+    int scaleFactor = std::clamp(R / 4, 1, 4);
     int sw = std::max(1, w / scaleFactor);
     int sh = std::max(1, h / scaleFactor);
 
@@ -480,51 +585,58 @@ void applyBoxBlurToPixels(std::vector<uint32_t>& pixels, int w, int h, float blu
         }
     }
 
-    int smallRadius = std::max(1, radius / scaleFactor);
+    int sR = std::max(1, R / scaleFactor);
+    float sSigma = std::max(0.5f, sigma / static_cast<float>(scaleFactor));
+    float twoSigmaSq = 2.0f * sSigma * sSigma;
+
+    std::vector<float> weights(2 * sR + 1);
+    for (int k = -sR; k <= sR; ++k) {
+        float fk = static_cast<float>(k);
+        weights[k + sR] = std::exp(-(fk * fk) / twoSigmaSq);
+    }
+
     std::vector<uint32_t> blurBuf(sw * sh);
 
-    // 2-pass Box Blur on smallBuf with Mirror Edge Mode (Reflect Edge Sampling)
-    for (int pass = 0; pass < 2; ++pass) {
-        // Horizontal pass
-        for (int y = 0; y < sh; ++y) {
-            for (int x = 0; x < sw; ++x) {
-                int rAcc = 0, gAcc = 0, bAcc = 0, count = 0;
-                for (int dx = -smallRadius; dx <= smallRadius; ++dx) {
-                    int kx = mirrorIndex(x + dx, sw);
-                    uint32_t p = smallBuf[y * sw + kx];
-                    rAcc += (p >> 16) & 0xFF;
-                    gAcc += (p >> 8) & 0xFF;
-                    bAcc += p & 0xFF;
-                    count++;
-                }
-                blurBuf[y * sw + x] = (0xFF000000) |
-                    (static_cast<uint32_t>(rAcc / count) << 16) |
-                    (static_cast<uint32_t>(gAcc / count) << 8) |
-                    static_cast<uint32_t>(bAcc / count);
+    // 2-Pass Separable Gaussian Convolution (Horizontal then Vertical)
+    for (int y = 0; y < sh; ++y) {
+        for (int x = 0; x < sw; ++x) {
+            float rAcc = 0.0f, gAcc = 0.0f, bAcc = 0.0f, wAcc = 0.0f;
+            for (int dx = -sR; dx <= sR; ++dx) {
+                int kx = mirrorIndex(x + dx, sw);
+                uint32_t p = smallBuf[y * sw + kx];
+                float wVal = weights[dx + sR];
+                rAcc += static_cast<float>((p >> 16) & 0xFF) * wVal;
+                gAcc += static_cast<float>((p >> 8) & 0xFF) * wVal;
+                bAcc += static_cast<float>(p & 0xFF) * wVal;
+                wAcc += wVal;
             }
-        }
-
-        // Vertical pass
-        for (int y = 0; y < sh; ++y) {
-            for (int x = 0; x < sw; ++x) {
-                int rAcc = 0, gAcc = 0, bAcc = 0, count = 0;
-                for (int dy = -smallRadius; dy <= smallRadius; ++dy) {
-                    int ky = mirrorIndex(y + dy, sh);
-                    uint32_t p = blurBuf[ky * sw + x];
-                    rAcc += (p >> 16) & 0xFF;
-                    gAcc += (p >> 8) & 0xFF;
-                    bAcc += p & 0xFF;
-                    count++;
-                }
-                smallBuf[y * sw + x] = (0xFF000000) |
-                    (static_cast<uint32_t>(rAcc / count) << 16) |
-                    (static_cast<uint32_t>(gAcc / count) << 8) |
-                    static_cast<uint32_t>(bAcc / count);
-            }
+            blurBuf[y * sw + x] = (0xFF000000) |
+                (static_cast<uint32_t>(std::clamp(rAcc / wAcc, 0.0f, 255.0f)) << 16) |
+                (static_cast<uint32_t>(std::clamp(gAcc / wAcc, 0.0f, 255.0f)) << 8) |
+                static_cast<uint32_t>(std::clamp(bAcc / wAcc, 0.0f, 255.0f));
         }
     }
 
-    // Bilinear upsample sw x sh -> W x H
+    for (int y = 0; y < sh; ++y) {
+        for (int x = 0; x < sw; ++x) {
+            float rAcc = 0.0f, gAcc = 0.0f, bAcc = 0.0f, wAcc = 0.0f;
+            for (int dy = -sR; dy <= sR; ++dy) {
+                int ky = mirrorIndex(y + dy, sh);
+                uint32_t p = blurBuf[ky * sw + x];
+                float wVal = weights[dy + sR];
+                rAcc += static_cast<float>((p >> 16) & 0xFF) * wVal;
+                gAcc += static_cast<float>((p >> 8) & 0xFF) * wVal;
+                bAcc += static_cast<float>(p & 0xFF) * wVal;
+                wAcc += wVal;
+            }
+            smallBuf[y * sw + x] = (0xFF000000) |
+                (static_cast<uint32_t>(std::clamp(rAcc / wAcc, 0.0f, 255.0f)) << 16) |
+                (static_cast<uint32_t>(std::clamp(gAcc / wAcc, 0.0f, 255.0f)) << 8) |
+                static_cast<uint32_t>(std::clamp(bAcc / wAcc, 0.0f, 255.0f));
+        }
+    }
+
+    // Bilinear upsample sw x sh -> W x H with Mirror Edge Mode
     for (int y = 0; y < h; ++y) {
         float v = (static_cast<float>(y) + 0.5f) * (static_cast<float>(sh) / static_cast<float>(h)) - 0.5f;
         int y0 = mirrorIndex(static_cast<int>(std::floor(v)), sh);
@@ -577,43 +689,179 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
         std::memcpy(&crop[y * w], &m_targetPixels[(clipY1 + y) * m_width + clipX1], w * sizeof(uint32_t));
     }
 
-    // 2. Process filters in order, grouping consecutive color matrices
-    ColorMatrix4x4 pendingColorMatrix;
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
+        m_eglBackend->makeCurrent();
 
-    for (const auto& op : filters) {
-        switch (op.type) {
-            case protocol::FilterType::Brightness:
-                pendingColorMatrix.multiply(createBrightnessMatrix(op.value));
-                break;
-            case protocol::FilterType::Contrast:
-                pendingColorMatrix.multiply(createContrastMatrix(op.value));
-                break;
-            case protocol::FilterType::Saturation:
-                pendingColorMatrix.multiply(createSaturationMatrix(op.value));
-                break;
-            case protocol::FilterType::Grayscale:
-                pendingColorMatrix.multiply(createGrayscaleMatrix(op.value));
-                break;
-            case protocol::FilterType::Invert:
-                pendingColorMatrix.multiply(createInvertMatrix(op.value));
-                break;
-            case protocol::FilterType::Blur:
-                if (!pendingColorMatrix.isIdentity()) {
-                    applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
-                    pendingColorMatrix.reset();
+        // Reallocate both FBO textures to match exact crop dimensions (w, h)
+        glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[0]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, crop.data());
+
+        glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[1]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+        // Quad geometry in NDC (-1..+1) and UVs (0..1)
+        static const float quad[16] = {
+            -1.0f,  1.0f,  0.0f, 1.0f,
+            -1.0f, -1.0f,  0.0f, 0.0f,
+             1.0f,  1.0f,  1.0f, 1.0f,
+             1.0f, -1.0f,  1.0f, 0.0f,
+        };
+
+        ColorMatrix4x4 pendingColorMatrix;
+        int currentTex = 0; // 0 or 1 index into m_glFBOTexture / m_glFBO
+
+        auto renderColorPass = [&]() {
+            if (pendingColorMatrix.isIdentity()) return;
+            int nextTex = 1 - currentTex;
+
+            glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[nextTex]);
+            glViewport(0, 0, w, h);
+
+            glUseProgram(m_glColorMatrixProgram);
+
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glVertexAttribPointer(m_aColorPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
+            glEnableVertexAttribArray(m_aColorPosLoc);
+            glVertexAttribPointer(m_aColorTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
+            glEnableVertexAttribArray(m_aColorTexLoc);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[currentTex]);
+            glUniform1i(m_uColorTextureLoc, 0);
+
+            // Set Color Matrix & Offset uniforms
+            float mat3Val[9] = {
+                pendingColorMatrix.m[0][0], pendingColorMatrix.m[1][0], pendingColorMatrix.m[2][0],
+                pendingColorMatrix.m[0][1], pendingColorMatrix.m[1][1], pendingColorMatrix.m[2][1],
+                pendingColorMatrix.m[0][2], pendingColorMatrix.m[1][2], pendingColorMatrix.m[2][2]
+            };
+            glUniformMatrix3fv(m_uColorMatrixLoc, 1, GL_FALSE, mat3Val);
+            glUniform3fv(m_uColorOffsetLoc, 1, pendingColorMatrix.o);
+
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+            glDisableVertexAttribArray(m_aColorPosLoc);
+            glDisableVertexAttribArray(m_aColorTexLoc);
+
+            currentTex = nextTex;
+            pendingColorMatrix.reset();
+        };
+
+        for (const auto& op : filters) {
+            switch (op.type) {
+                case protocol::FilterType::Brightness:
+                    pendingColorMatrix.multiply(createBrightnessMatrix(op.value));
+                    break;
+                case protocol::FilterType::Contrast:
+                    pendingColorMatrix.multiply(createContrastMatrix(op.value));
+                    break;
+                case protocol::FilterType::Saturation:
+                    pendingColorMatrix.multiply(createSaturationMatrix(op.value));
+                    break;
+                case protocol::FilterType::Grayscale:
+                    pendingColorMatrix.multiply(createGrayscaleMatrix(op.value));
+                    break;
+                case protocol::FilterType::Invert:
+                    pendingColorMatrix.multiply(createInvertMatrix(op.value));
+                    break;
+                case protocol::FilterType::Blur: {
+                    renderColorPass();
+
+                    float sigma = std::max(0.5f, op.value / 2.0f);
+                    int radius = std::clamp(static_cast<int>(std::ceil(3.0f * sigma)), 1, 32);
+
+                    // 1. Horizontal Pass
+                    int blurPass1 = 1 - currentTex;
+                    glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[blurPass1]);
+                    glViewport(0, 0, w, h);
+
+                    glUseProgram(m_glBlurProgram);
+
+                    glBindBuffer(GL_ARRAY_BUFFER, 0);
+                    glVertexAttribPointer(m_aBlurPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
+                    glEnableVertexAttribArray(m_aBlurPosLoc);
+                    glVertexAttribPointer(m_aBlurTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
+                    glEnableVertexAttribArray(m_aBlurTexLoc);
+
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[currentTex]);
+                    glUniform1i(m_uBlurTextureLoc, 0);
+                    glUniform2f(m_uBlurDirLoc, 1.0f / static_cast<float>(w), 0.0f);
+                    glUniform1f(m_uBlurSigmaLoc, sigma);
+                    glUniform1i(m_uBlurRadiusLoc, radius);
+
+                    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+                    // 2. Vertical Pass
+                    int blurPass2 = currentTex;
+                    glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[blurPass2]);
+                    glViewport(0, 0, w, h);
+
+                    glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[blurPass1]);
+                    glUniform1i(m_uBlurTextureLoc, 0);
+                    glUniform2f(m_uBlurDirLoc, 0.0f, 1.0f / static_cast<float>(h));
+                    glUniform1f(m_uBlurSigmaLoc, sigma);
+                    glUniform1i(m_uBlurRadiusLoc, radius);
+
+                    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+                    glDisableVertexAttribArray(m_aBlurPosLoc);
+                    glDisableVertexAttribArray(m_aBlurTexLoc);
+                    break;
                 }
-                applyBoxBlurToPixels(crop, w, h, op.value);
-                break;
-            default:
-                break;
+                default:
+                    break;
+            }
+        }
+
+        renderColorPass();
+
+        // Read pixels back from current FBO texture
+        glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[currentTex]);
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, crop.data());
+
+        // Restore main framebuffer and viewport
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, m_width, m_height);
+    } else {
+        // CPU Software Fallback Path
+        ColorMatrix4x4 pendingColorMatrix;
+
+        for (const auto& op : filters) {
+            switch (op.type) {
+                case protocol::FilterType::Brightness:
+                    pendingColorMatrix.multiply(createBrightnessMatrix(op.value));
+                    break;
+                case protocol::FilterType::Contrast:
+                    pendingColorMatrix.multiply(createContrastMatrix(op.value));
+                    break;
+                case protocol::FilterType::Saturation:
+                    pendingColorMatrix.multiply(createSaturationMatrix(op.value));
+                    break;
+                case protocol::FilterType::Grayscale:
+                    pendingColorMatrix.multiply(createGrayscaleMatrix(op.value));
+                    break;
+                case protocol::FilterType::Invert:
+                    pendingColorMatrix.multiply(createInvertMatrix(op.value));
+                    break;
+                case protocol::FilterType::Blur:
+                    if (!pendingColorMatrix.isIdentity()) {
+                        applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
+                        pendingColorMatrix.reset();
+                    }
+                    applyGaussianBlurToPixels(crop, w, h, op.value);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if (!pendingColorMatrix.isIdentity()) {
+            applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
         }
     }
 
-    if (!pendingColorMatrix.isIdentity()) {
-        applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
-    }
-
-    // 3. Write filtered backdrop crop back to m_targetPixels
+    // Write back filtered backdrop crop to m_targetPixels
     for (int y = 0; y < h; ++y) {
         std::memcpy(&m_targetPixels[(clipY1 + y) * m_width + clipX1], &crop[y * w], w * sizeof(uint32_t));
     }
