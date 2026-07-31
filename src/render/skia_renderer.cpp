@@ -72,8 +72,7 @@ bool SkiaRenderer::initGLShader() {
         "    vec4 colorAcc = vec4(0.0);\n"
         "    float weightAcc = 0.0;\n"
         "    float twoSigmaSq = 2.0 * uSigma * uSigma;\n"
-        "    for (int i = -32; i <= 32; ++i) {\n"
-        "        if (i < -uRadius || i > uRadius) continue;\n"
+        "    for (int i = -16; i <= 16; ++i) {\n"
         "        float fi = float(i);\n"
         "        float weight = exp(-(fi * fi) / twoSigmaSq);\n"
         "        vec2 coord = vTexCoord + uDirection * fi;\n"
@@ -401,10 +400,24 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
 
     if (clipX1 >= clipX2 || clipY1 >= clipY2) return;
 
+    int copyWidth = clipX2 - clipX1;
+    int srcX1 = clipX1 - dstX;
+    bool isOpaqueFast = (opacity >= 0.99f);
+
     for (int y = clipY1; y < clipY2; ++y) {
         int srcY = y - dstY;
         const uint32_t* srcRow = pixelData + (srcY * stridePixels);
         uint32_t* dstRow = &m_targetPixels[y * m_width];
+
+        // Fast-path: Direct memcpy for opaque rows (wallpapers and opaque window surfaces)
+        if (isOpaqueFast && ((srcRow[srcX1] & 0xFF000000) == 0xFF000000)) {
+            uint32_t midPixel = srcRow[srcX1 + (copyWidth >> 1)];
+            uint32_t lastPixel = srcRow[srcX1 + copyWidth - 1];
+            if ((midPixel & 0xFF000000) == 0xFF000000 && (lastPixel & 0xFF000000) == 0xFF000000) {
+                std::memcpy(&dstRow[clipX1], &srcRow[srcX1], copyWidth * sizeof(uint32_t));
+                continue;
+            }
+        }
 
         for (int x = clipX1; x < clipX2; ++x) {
             int srcX = x - dstX;
@@ -412,7 +425,7 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
             uint8_t rawA = static_cast<uint8_t>((pixel >> 24) & 0xFF);
             if (rawA == 0) continue;
 
-            if (rawA == 255 && opacity >= 0.99f) {
+            if (rawA == 255 && isOpaqueFast) {
                 dstRow[x] = pixel;
             } else {
                 float a = (rawA / 255.0f) * opacity;
@@ -566,104 +579,70 @@ void applyColorMatrixToPixels(std::vector<uint32_t>& pixels, int w, int h, const
 void applyGaussianBlurToPixels(std::vector<uint32_t>& pixels, int w, int h, float blurRadius) {
     if (w <= 0 || h <= 0 || blurRadius <= 0.5f || pixels.empty()) return;
 
-    float sigma = std::max(0.5f, blurRadius / 2.0f);
-    int R = std::max(1, static_cast<int>(std::ceil(3.0f * sigma)));
+    int radius = std::clamp(static_cast<int>(blurRadius), 1, 64);
+    int windowSize = 2 * radius + 1;
+    float invWindow = 1.0f / static_cast<float>(windowSize);
 
-    // Adaptive scale factor for CPU performance: 1x..4x downsampling
-    int scaleFactor = std::clamp(R / 4, 1, 4);
-    int sw = std::max(1, w / scaleFactor);
-    int sh = std::max(1, h / scaleFactor);
+    std::vector<uint32_t> temp(pixels.size());
 
-    std::vector<uint32_t> smallBuf(sw * sh);
-
-    // Downsample W x H -> sw x sh
-    for (int sy = 0; sh > 0 && sy < sh; ++sy) {
-        int srcY = std::min(h - 1, sy * scaleFactor);
-        for (int sx = 0; sw > 0 && sx < sw; ++sx) {
-            int srcX = std::min(w - 1, sx * scaleFactor);
-            smallBuf[sy * sw + sx] = pixels[srcY * w + srcX];
-        }
-    }
-
-    int sR = std::max(1, R / scaleFactor);
-    float sSigma = std::max(0.5f, sigma / static_cast<float>(scaleFactor));
-    float twoSigmaSq = 2.0f * sSigma * sSigma;
-
-    std::vector<float> weights(2 * sR + 1);
-    for (int k = -sR; k <= sR; ++k) {
-        float fk = static_cast<float>(k);
-        weights[k + sR] = std::exp(-(fk * fk) / twoSigmaSq);
-    }
-
-    std::vector<uint32_t> blurBuf(sw * sh);
-
-    // 2-Pass Separable Gaussian Convolution (Horizontal then Vertical)
-    for (int y = 0; y < sh; ++y) {
-        for (int x = 0; x < sw; ++x) {
-            float rAcc = 0.0f, gAcc = 0.0f, bAcc = 0.0f, wAcc = 0.0f;
-            for (int dx = -sR; dx <= sR; ++dx) {
-                int kx = mirrorIndex(x + dx, sw);
-                uint32_t p = smallBuf[y * sw + kx];
-                float wVal = weights[dx + sR];
-                rAcc += static_cast<float>((p >> 16) & 0xFF) * wVal;
-                gAcc += static_cast<float>((p >> 8) & 0xFF) * wVal;
-                bAcc += static_cast<float>(p & 0xFF) * wVal;
-                wAcc += wVal;
-            }
-            blurBuf[y * sw + x] = (0xFF000000) |
-                (static_cast<uint32_t>(std::clamp(rAcc / wAcc, 0.0f, 255.0f)) << 16) |
-                (static_cast<uint32_t>(std::clamp(gAcc / wAcc, 0.0f, 255.0f)) << 8) |
-                static_cast<uint32_t>(std::clamp(bAcc / wAcc, 0.0f, 255.0f));
-        }
-    }
-
-    for (int y = 0; y < sh; ++y) {
-        for (int x = 0; x < sw; ++x) {
-            float rAcc = 0.0f, gAcc = 0.0f, bAcc = 0.0f, wAcc = 0.0f;
-            for (int dy = -sR; dy <= sR; ++dy) {
-                int ky = mirrorIndex(y + dy, sh);
-                uint32_t p = blurBuf[ky * sw + x];
-                float wVal = weights[dy + sR];
-                rAcc += static_cast<float>((p >> 16) & 0xFF) * wVal;
-                gAcc += static_cast<float>((p >> 8) & 0xFF) * wVal;
-                bAcc += static_cast<float>(p & 0xFF) * wVal;
-                wAcc += wVal;
-            }
-            smallBuf[y * sw + x] = (0xFF000000) |
-                (static_cast<uint32_t>(std::clamp(rAcc / wAcc, 0.0f, 255.0f)) << 16) |
-                (static_cast<uint32_t>(std::clamp(gAcc / wAcc, 0.0f, 255.0f)) << 8) |
-                static_cast<uint32_t>(std::clamp(bAcc / wAcc, 0.0f, 255.0f));
-        }
-    }
-
-    // Bilinear upsample sw x sh -> W x H with Mirror Edge Mode
+    // 1. Horizontal Pass (Sliding window over rows)
     for (int y = 0; y < h; ++y) {
-        float v = (static_cast<float>(y) + 0.5f) * (static_cast<float>(sh) / static_cast<float>(h)) - 0.5f;
-        int y0 = mirrorIndex(static_cast<int>(std::floor(v)), sh);
-        int y1 = mirrorIndex(y0 + 1, sh);
-        float fy = v - std::floor(v);
+        int rowOffset = y * w;
+        uint32_t rAcc = 0, gAcc = 0, bAcc = 0;
+
+        for (int dx = -radius; dx <= radius; ++dx) {
+            int kx = mirrorIndex(dx, w);
+            uint32_t p = pixels[rowOffset + kx];
+            rAcc += (p >> 16) & 0xFF;
+            gAcc += (p >> 8) & 0xFF;
+            bAcc += p & 0xFF;
+        }
 
         for (int x = 0; x < w; ++x) {
-            float u = (static_cast<float>(x) + 0.5f) * (static_cast<float>(sw) / static_cast<float>(w)) - 0.5f;
-            int x0 = mirrorIndex(static_cast<int>(std::floor(u)), sw);
-            int x1 = mirrorIndex(x0 + 1, sw);
-            float fx = u - std::floor(u);
+            temp[rowOffset + x] = (0xFF000000) |
+                (static_cast<uint32_t>(rAcc * invWindow) << 16) |
+                (static_cast<uint32_t>(gAcc * invWindow) << 8) |
+                static_cast<uint32_t>(bAcc * invWindow);
 
-            uint32_t p00 = smallBuf[y0 * sw + x0];
-            uint32_t p01 = smallBuf[y0 * sw + x1];
-            uint32_t p10 = smallBuf[y1 * sw + x0];
-            uint32_t p11 = smallBuf[y1 * sw + x1];
+            int leftKx = mirrorIndex(x - radius, w);
+            int rightKx = mirrorIndex(x + radius + 1, w);
 
-            auto lerp = [](float a, float b, float t) { return a + t * (b - a); };
+            uint32_t leftP = pixels[rowOffset + leftKx];
+            uint32_t rightP = pixels[rowOffset + rightKx];
 
-            float r = lerp(lerp((p00 >> 16) & 0xFF, (p01 >> 16) & 0xFF, fx), lerp((p10 >> 16) & 0xFF, (p11 >> 16) & 0xFF, fx), fy);
-            float g = lerp(lerp((p00 >> 8) & 0xFF, (p01 >> 8) & 0xFF, fx), lerp((p10 >> 8) & 0xFF, (p11 >> 8) & 0xFF, fx), fy);
-            float b = lerp(lerp(p00 & 0xFF, p01 & 0xFF, fx), lerp(p10 & 0xFF, p11 & 0xFF, fx), fy);
+            rAcc += ((rightP >> 16) & 0xFF) - ((leftP >> 16) & 0xFF);
+            gAcc += ((rightP >> 8) & 0xFF) - ((leftP >> 8) & 0xFF);
+            bAcc += (rightP & 0xFF) - (leftP & 0xFF);
+        }
+    }
 
+    // 2. Vertical Pass (Sliding window over columns)
+    for (int x = 0; x < w; ++x) {
+        uint32_t rAcc = 0, gAcc = 0, bAcc = 0;
+
+        for (int dy = -radius; dy <= radius; ++dy) {
+            int ky = mirrorIndex(dy, h);
+            uint32_t p = temp[ky * w + x];
+            rAcc += (p >> 16) & 0xFF;
+            gAcc += (p >> 8) & 0xFF;
+            bAcc += p & 0xFF;
+        }
+
+        for (int y = 0; y < h; ++y) {
             pixels[y * w + x] = (0xFF000000) |
-                (static_cast<uint32_t>(std::clamp(r, 0.0f, 255.0f)) << 16) |
-                (static_cast<uint32_t>(std::clamp(g, 0.0f, 255.0f)) << 8) |
-                static_cast<uint32_t>(std::clamp(b, 0.0f, 255.0f));
+                (static_cast<uint32_t>(rAcc * invWindow) << 16) |
+                (static_cast<uint32_t>(gAcc * invWindow) << 8) |
+                static_cast<uint32_t>(bAcc * invWindow);
+
+            int topKy = mirrorIndex(y - radius, h);
+            int bottomKy = mirrorIndex(y + radius + 1, h);
+
+            uint32_t topP = temp[topKy * w + x];
+            uint32_t bottomP = temp[bottomKy * w + x];
+
+            rAcc += ((bottomP >> 16) & 0xFF) - ((topP >> 16) & 0xFF);
+            gAcc += ((bottomP >> 8) & 0xFF) - ((topP >> 8) & 0xFF);
+            bAcc += (bottomP & 0xFF) - (topP & 0xFF);
         }
     }
 }
@@ -690,16 +669,37 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
     }
 
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
+        int logScale = 1;
+        for (const auto& op : filters) {
+            if (op.type == protocol::FilterType::Blur && op.value > 8.0f) {
+                logScale = std::clamp(1 + static_cast<int>(std::floor(std::log2(op.value / 8.0f))), 1, 4);
+            }
+        }
+
+        int targetW = std::max(1, w / logScale);
+        int targetH = std::max(1, h / logScale);
+
+        std::vector<uint32_t> downBuf(static_cast<size_t>(targetW) * targetH);
+        if (logScale > 1) {
+            for (int dy = 0; dy < targetH; ++dy) {
+                int sy = std::min(h - 1, dy * logScale);
+                for (int dx = 0; dx < targetW; ++dx) {
+                    int sx = std::min(w - 1, dx * logScale);
+                    downBuf[dy * targetW + dx] = crop[sy * w + sx];
+                }
+            }
+        } else {
+            downBuf = crop;
+        }
+
         m_eglBackend->makeCurrent();
 
-        // Reallocate both FBO textures to match exact crop dimensions (w, h)
         glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[0]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, crop.data());
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, targetW, targetH, 0, GL_RGBA, GL_UNSIGNED_BYTE, downBuf.data());
 
         glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[1]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, targetW, targetH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
-        // Quad geometry in NDC (-1..+1) and UVs (0..1)
         static const float quad[16] = {
             -1.0f,  1.0f,  0.0f, 1.0f,
             -1.0f, -1.0f,  0.0f, 0.0f,
@@ -708,14 +708,14 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
         };
 
         ColorMatrix4x4 pendingColorMatrix;
-        int currentTex = 0; // 0 or 1 index into m_glFBOTexture / m_glFBO
+        int currentTex = 0;
 
         auto renderColorPass = [&]() {
             if (pendingColorMatrix.isIdentity()) return;
             int nextTex = 1 - currentTex;
 
             glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[nextTex]);
-            glViewport(0, 0, w, h);
+            glViewport(0, 0, targetW, targetH);
 
             glUseProgram(m_glColorMatrixProgram);
 
@@ -729,7 +729,6 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
             glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[currentTex]);
             glUniform1i(m_uColorTextureLoc, 0);
 
-            // Set Color Matrix & Offset uniforms
             float mat3Val[9] = {
                 pendingColorMatrix.m[0][0], pendingColorMatrix.m[1][0], pendingColorMatrix.m[2][0],
                 pendingColorMatrix.m[0][1], pendingColorMatrix.m[1][1], pendingColorMatrix.m[2][1],
@@ -767,13 +766,14 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
                 case protocol::FilterType::Blur: {
                     renderColorPass();
 
-                    float sigma = std::max(0.5f, op.value / 2.0f);
+                    float adjustedValue = op.value / static_cast<float>(logScale);
+                    float sigma = std::max(0.5f, adjustedValue / 2.0f);
                     int radius = std::clamp(static_cast<int>(std::ceil(3.0f * sigma)), 1, 32);
 
-                    // 1. Horizontal Pass
+                    // Horizontal Pass
                     int blurPass1 = 1 - currentTex;
                     glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[blurPass1]);
-                    glViewport(0, 0, w, h);
+                    glViewport(0, 0, targetW, targetH);
 
                     glUseProgram(m_glBlurProgram);
 
@@ -786,20 +786,20 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[currentTex]);
                     glUniform1i(m_uBlurTextureLoc, 0);
-                    glUniform2f(m_uBlurDirLoc, 1.0f / static_cast<float>(w), 0.0f);
+                    glUniform2f(m_uBlurDirLoc, 1.0f / static_cast<float>(targetW), 0.0f);
                     glUniform1f(m_uBlurSigmaLoc, sigma);
                     glUniform1i(m_uBlurRadiusLoc, radius);
 
                     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-                    // 2. Vertical Pass
+                    // Vertical Pass
                     int blurPass2 = currentTex;
                     glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[blurPass2]);
-                    glViewport(0, 0, w, h);
+                    glViewport(0, 0, targetW, targetH);
 
                     glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[blurPass1]);
                     glUniform1i(m_uBlurTextureLoc, 0);
-                    glUniform2f(m_uBlurDirLoc, 0.0f, 1.0f / static_cast<float>(h));
+                    glUniform2f(m_uBlurDirLoc, 0.0f, 1.0f / static_cast<float>(targetH));
                     glUniform1f(m_uBlurSigmaLoc, sigma);
                     glUniform1i(m_uBlurRadiusLoc, radius);
 
@@ -816,15 +816,46 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
 
         renderColorPass();
 
-        // Read pixels back from current FBO texture
         glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[currentTex]);
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, crop.data());
+        glReadPixels(0, 0, targetW, targetH, GL_RGBA, GL_UNSIGNED_BYTE, downBuf.data());
 
-        // Restore main framebuffer and viewport
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, m_width, m_height);
+
+        if (logScale > 1) {
+            for (int y = 0; y < h; ++y) {
+                float v = (static_cast<float>(y) + 0.5f) * (static_cast<float>(targetH) / static_cast<float>(h)) - 0.5f;
+                int y0 = std::clamp(static_cast<int>(std::floor(v)), 0, targetH - 1);
+                int y1 = std::clamp(y0 + 1, 0, targetH - 1);
+                float fy = v - std::floor(v);
+
+                for (int x = 0; x < w; ++x) {
+                    float u = (static_cast<float>(x) + 0.5f) * (static_cast<float>(targetW) / static_cast<float>(w)) - 0.5f;
+                    int x0 = std::clamp(static_cast<int>(std::floor(u)), 0, targetW - 1);
+                    int x1 = std::clamp(x0 + 1, 0, targetW - 1);
+                    float fx = u - std::floor(u);
+
+                    uint32_t p00 = downBuf[y0 * targetW + x0];
+                    uint32_t p01 = downBuf[y0 * targetW + x1];
+                    uint32_t p10 = downBuf[y1 * targetW + x0];
+                    uint32_t p11 = downBuf[y1 * targetW + x1];
+
+                    auto lerp = [](float a, float b, float t) { return a + t * (b - a); };
+
+                    float r = lerp(lerp((p00 >> 16) & 0xFF, (p01 >> 16) & 0xFF, fx), lerp((p10 >> 16) & 0xFF, (p11 >> 16) & 0xFF, fx), fy);
+                    float g = lerp(lerp((p00 >> 8) & 0xFF, (p01 >> 8) & 0xFF, fx), lerp((p10 >> 8) & 0xFF, (p11 >> 8) & 0xFF, fx), fy);
+                    float b = lerp(lerp(p00 & 0xFF, p01 & 0xFF, fx), lerp(p10 & 0xFF, p11 & 0xFF, fx), fy);
+
+                    crop[y * w + x] = (0xFF000000) |
+                        (static_cast<uint32_t>(std::clamp(r, 0.0f, 255.0f)) << 16) |
+                        (static_cast<uint32_t>(std::clamp(g, 0.0f, 255.0f)) << 8) |
+                        static_cast<uint32_t>(std::clamp(b, 0.0f, 255.0f));
+                }
+            }
+        } else {
+            crop = downBuf;
+        }
     } else {
-        // CPU Software Fallback Path
         ColorMatrix4x4 pendingColorMatrix;
 
         for (const auto& op : filters) {

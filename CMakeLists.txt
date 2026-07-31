@@ -10,6 +10,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 
+pkg_check_modules(DRM libdrm)
+pkg_check_modules(GBM gbm)
+pkg_check_modules(EGL egl)
+pkg_check_modules(GLES2 glesv2)
+pkg_check_modules(LIBINPUT libinput)
+pkg_check_modules(UDEV libudev)
+
 # QuickJS Engine (C-based JavaScript Runtime)
 include(FetchContent)
 FetchContent_Declare(

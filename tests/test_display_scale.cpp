@@ -20,7 +20,7 @@ TEST(DisplayScaleTest, EnvironmentScaleOverride) {
 
     EXPECT_FLOAT_EQ(DisplayScale::factor(), 2.0f);
     EXPECT_EQ(DisplayScale::px(100), 200);
-    EXPECT_EQ(DisplayScale::menuBarHeight(), 80);
+    EXPECT_EQ(DisplayScale::menuBarHeight(), 64);
     EXPECT_EQ(DisplayScale::titleBarHeight(), 64);
 
     unsetenv("LCL_SCALE");
