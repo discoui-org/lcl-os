@@ -609,6 +609,7 @@ void Renderer::swapBuffers() {
 
     if (m_skiaRenderer.getBackendType() == SkiaBackendType::OpenGL_EGL) {
         m_skiaRenderer.endFrame();
+        return; // EGL/GBM handles buffer swapping & page flip directly!
     }
 
     if (m_displayManager && m_displayManager->isInitialized()) {

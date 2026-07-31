@@ -132,10 +132,13 @@ private:
     int32_t m_aTexLoc{-1};
     int32_t m_uTextureLoc{-1};
 
-    // GPU FBO & Shader Handles for Backdrop Filters
+    // GPU FBO & Shader Handles for Backdrop Filters & Scene Compositing
     bool m_glFBOReady{false};
     uint32_t m_glFBO[2]{0, 0};
     uint32_t m_glFBOTexture[2]{0, 0};
+
+    uint32_t m_glSceneFBO{0};
+    uint32_t m_glSceneTexture{0};
 
     uint32_t m_glBlurProgram{0};
     int32_t m_aBlurPosLoc{-1};
@@ -151,6 +154,18 @@ private:
     int32_t m_uColorTextureLoc{-1};
     int32_t m_uColorMatrixLoc{-1};
     int32_t m_uColorOffsetLoc{-1};
+
+    // GPU BGRA Surface Compositing Handles
+    uint32_t m_glClientTexture{0};
+    uint32_t m_glBgraProgram{0};
+    int32_t m_aBgraPosLoc{-1};
+    int32_t m_aBgraTexLoc{-1};
+    int32_t m_uBgraTextureLoc{-1};
+    int32_t m_uBgraOpacityLoc{-1};
+
+    // Helper for rendering textured quads on GPU
+    void drawTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
+    void drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
 };
 
 } // namespace lcl::render

@@ -219,13 +219,20 @@ bool EGLBackend::initialize(int drmFd, uint32_t width, uint32_t height, uint32_t
         return false;
     }
 
-    // 5. Create EGL Context (GLES 2/3 / OpenGL)
-    static const EGLint contextAttribs[] = {
+    // 5. Create EGL Context (GLES 3 preferred for EGL 1.5 fence sync, GLES 2 fallback)
+    static const EGLint contextAttribs3[] = {
+        EGL_CONTEXT_CLIENT_VERSION, 3,
+        EGL_NONE
+    };
+    static const EGLint contextAttribs2[] = {
         EGL_CONTEXT_CLIENT_VERSION, 2,
         EGL_NONE
     };
 
-    m_eglContext = eglCreateContext(m_eglDisplay, m_eglConfig, EGL_NO_CONTEXT, contextAttribs);
+    m_eglContext = eglCreateContext(m_eglDisplay, m_eglConfig, EGL_NO_CONTEXT, contextAttribs3);
+    if (m_eglContext == EGL_NO_CONTEXT) {
+        m_eglContext = eglCreateContext(m_eglDisplay, m_eglConfig, EGL_NO_CONTEXT, contextAttribs2);
+    }
     if (m_eglContext == EGL_NO_CONTEXT) {
         std::cerr << "[LCL EGL] Failed to create EGL context: 0x" << std::hex << eglGetError() << std::dec << "\n";
         shutdown();
@@ -360,15 +367,18 @@ bool EGLBackend::swapBuffers() {
 
     // Perform DRM Page Flip / Scanout update if CRTC ID is set
     if (m_crtcId > 0 && fbId > 0) {
-        if (!m_crtcSet) {
-            // Perform initial DRM CRTC modeset scanout setup ONCE
-            if (drmModeSetCrtc(m_drmFd, m_crtcId, fbId, 0, 0, &m_connectorId, 1, nullptr) == 0) {
-                m_crtcSet = true;
-                std::cout << "[LCL EGL] Initial DRM CRTC modeset configured successfully (FB ID: " << fbId << ").\n";
+        int ret = drmModePageFlip(m_drmFd, m_crtcId, fbId, 0, nullptr);
+        if (ret != 0 && !m_crtcSet) {
+            drmModeCrtcPtr crtc = drmModeGetCrtc(m_drmFd, m_crtcId);
+            if (crtc) {
+                if (drmModeSetCrtc(m_drmFd, m_crtcId, fbId, 0, 0, &m_connectorId, 1, &crtc->mode) == 0) {
+                    m_crtcSet = true;
+                    std::cout << "[LCL EGL] Initial DRM CRTC modeset configured successfully (FB ID: " << fbId << ").\n";
+                }
+                drmModeFreeCrtc(crtc);
             }
         } else {
-            // Subsequent frames: use page flip to swap scanout buffer at VBlank without CRTC reset
-            drmModePageFlip(m_drmFd, m_crtcId, fbId, 0, nullptr);
+            m_crtcSet = true;
         }
     }
 

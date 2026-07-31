@@ -31,7 +31,7 @@ bool SkiaRenderer::initGLShader() {
         "uniform sampler2D uTexture;\n"
         "void main() {\n"
         "    vec4 c = texture2D(uTexture, vTexCoord);\n"
-        "    gl_FragColor = vec4(c.b, c.g, c.r, c.a);\n"
+        "    gl_FragColor = vec4(c.rgb, 1.0);\n"
         "}\n";
 
     GLuint vs = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -79,7 +79,8 @@ bool SkiaRenderer::initGLShader() {
         "        colorAcc += texture2D(uTexture, coord) * weight;\n"
         "        weightAcc += weight;\n"
         "    }\n"
-        "    gl_FragColor = colorAcc / weightAcc;\n"
+        "    vec4 finalColor = colorAcc / weightAcc;\n"
+        "    gl_FragColor = vec4(finalColor.rgb, 1.0);\n"
         "}\n";
 
     GLuint vsBlur = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -108,7 +109,7 @@ bool SkiaRenderer::initGLShader() {
         "void main() {\n"
         "    vec4 c = texture2D(uTexture, vTexCoord);\n"
         "    vec3 rgb = uColorMatrix * c.rgb + (uColorOffset / 255.0);\n"
-        "    gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);\n"
+        "    gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);\n"
         "}\n";
 
     GLuint vsColor = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -126,6 +127,31 @@ bool SkiaRenderer::initGLShader() {
     m_uColorMatrixLoc = glGetUniformLocation(m_glColorMatrixProgram, "uColorMatrix");
     m_uColorOffsetLoc = glGetUniformLocation(m_glColorMatrixProgram, "uColorOffset");
 
+    // --- GLSL BGRA Client Surface Fragment Shader ---
+    const char* fBgraSrc =
+        "precision mediump float;\n"
+        "varying vec2 vTexCoord;\n"
+        "uniform sampler2D uTexture;\n"
+        "uniform float uOpacity;\n"
+        "void main() {\n"
+        "    vec4 c = texture2D(uTexture, vTexCoord);\n"
+        "    gl_FragColor = vec4(c.b, c.g, c.r, c.a * uOpacity);\n"
+        "}\n";
+
+    GLuint vsBgra = compileShader(GL_VERTEX_SHADER, vSrc);
+    GLuint fsBgra = compileShader(GL_FRAGMENT_SHADER, fBgraSrc);
+    m_glBgraProgram = glCreateProgram();
+    glAttachShader(m_glBgraProgram, vsBgra);
+    glAttachShader(m_glBgraProgram, fsBgra);
+    glLinkProgram(m_glBgraProgram);
+    glDeleteShader(vsBgra);
+    glDeleteShader(fsBgra);
+
+    m_aBgraPosLoc = glGetAttribLocation(m_glBgraProgram, "aPosition");
+    m_aBgraTexLoc = glGetAttribLocation(m_glBgraProgram, "aTexCoord");
+    m_uBgraTextureLoc = glGetUniformLocation(m_glBgraProgram, "uTexture");
+    m_uBgraOpacityLoc = glGetUniformLocation(m_glBgraProgram, "uOpacity");
+
     // --- Initialize GLES2 Ping-Pong Framebuffer Objects (FBOs) ---
     glGenTextures(2, m_glFBOTexture);
     glGenFramebuffers(2, m_glFBO);
@@ -140,6 +166,20 @@ bool SkiaRenderer::initGLShader() {
         glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[i]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_glFBOTexture[i], 0);
     }
+
+    // --- Initialize Pure GPU Scene FBO & Texture ---
+    glGenTextures(1, &m_glSceneTexture);
+    glBindTexture(GL_TEXTURE_2D, m_glSceneTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_width, m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    glGenFramebuffers(1, &m_glSceneFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_glSceneTexture, 0);
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
     m_glFBOReady = true;
@@ -189,6 +229,20 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height, lcl::core::EGLBac
 }
 
 void SkiaRenderer::shutdown() {
+    if (m_glClientTexture > 0) {
+        glDeleteTextures(1, &m_glClientTexture);
+        m_glClientTexture = 0;
+    }
+    if (m_glBgraProgram > 0) {
+        glDeleteProgram(m_glBgraProgram);
+        m_glBgraProgram = 0;
+    }
+    if (m_glSceneFBO > 0) {
+        glDeleteFramebuffers(1, &m_glSceneFBO);
+        glDeleteTextures(1, &m_glSceneTexture);
+        m_glSceneFBO = 0;
+        m_glSceneTexture = 0;
+    }
     if (m_glFBOReady) {
         glDeleteFramebuffers(2, m_glFBO);
         glDeleteTextures(2, m_glFBOTexture);
@@ -218,8 +272,95 @@ void SkiaRenderer::shutdown() {
     m_initialized = false;
 }
 
+void SkiaRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity) {
+    if (textureId == 0 || m_glProgram == 0) return;
+
+    float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
+    float y1 = 1.0f - (y / static_cast<float>(m_height)) * 2.0f;
+    float x2 = ((x + w) / static_cast<float>(m_width)) * 2.0f - 1.0f;
+    float y2 = 1.0f - ((y + h) / static_cast<float>(m_height)) * 2.0f;
+
+    float quad[16] = {
+        x1, y1,  0.0f, 1.0f,
+        x1, y2,  0.0f, 0.0f,
+        x2, y1,  1.0f, 1.0f,
+        x2, y2,  1.0f, 0.0f,
+    };
+
+    glUseProgram(m_glProgram);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textureId);
+    glUniform1i(m_uTextureLoc, 0);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glVertexAttribPointer(m_aPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
+    glEnableVertexAttribArray(m_aPosLoc);
+    glVertexAttribPointer(m_aTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
+    glEnableVertexAttribArray(m_aTexLoc);
+
+    if (opacity < 0.999f) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    }
+
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    if (opacity < 0.999f) {
+        glDisable(GL_BLEND);
+    }
+
+    glDisableVertexAttribArray(m_aPosLoc);
+    glDisableVertexAttribArray(m_aTexLoc);
+}
+
+void SkiaRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity) {
+    if (textureId == 0 || m_glBgraProgram == 0) return;
+
+    float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
+    float y1 = 1.0f - (y / static_cast<float>(m_height)) * 2.0f;
+    float x2 = ((x + w) / static_cast<float>(m_width)) * 2.0f - 1.0f;
+    float y2 = 1.0f - ((y + h) / static_cast<float>(m_height)) * 2.0f;
+
+    // UV orientation for raw CPU buffer memory: Top-Left maps to (0,0), Bottom-Left maps to (0,1)
+    float quad[16] = {
+        x1, y1,  0.0f, 0.0f,
+        x1, y2,  0.0f, 1.0f,
+        x2, y1,  1.0f, 0.0f,
+        x2, y2,  1.0f, 1.0f,
+    };
+
+    glUseProgram(m_glBgraProgram);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textureId);
+    glUniform1i(m_uBgraTextureLoc, 0);
+    glUniform1f(m_uBgraOpacityLoc, opacity);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glVertexAttribPointer(m_aBgraPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
+    glEnableVertexAttribArray(m_aBgraPosLoc);
+    glVertexAttribPointer(m_aBgraTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
+    glEnableVertexAttribArray(m_aBgraTexLoc);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    glDisable(GL_BLEND);
+    glDisableVertexAttribArray(m_aBgraPosLoc);
+    glDisableVertexAttribArray(m_aBgraTexLoc);
+}
+
 void SkiaRenderer::beginFrame() {
     if (!m_initialized) return;
+
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && m_glSceneFBO > 0) {
+        m_eglBackend->makeCurrent();
+        glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+        glViewport(0, 0, m_width, m_height);
+        glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
 
     if (m_targetPixels) {
         std::fill_n(m_targetPixels, m_width * m_height, 0xFF14161D);
@@ -231,34 +372,11 @@ void SkiaRenderer::endFrame() {
 
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
         m_eglBackend->makeCurrent();
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, m_width, m_height);
-
-        if (m_targetPixels && m_glTexture > 0) {
-            glBindTexture(GL_TEXTURE_2D, m_glTexture);
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_width, m_height, GL_RGBA, GL_UNSIGNED_BYTE, m_targetPixels);
-
-            glUseProgram(m_glProgram);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, m_glTexture);
-            glUniform1i(m_uTextureLoc, 0);
-
-            static const float quad[] = {
-                -1.0f,  1.0f,  0.0f, 0.0f,
-                -1.0f, -1.0f,  0.0f, 1.0f,
-                 1.0f,  1.0f,  1.0f, 0.0f,
-                 1.0f, -1.0f,  1.0f, 1.0f,
-            };
-
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
-            glVertexAttribPointer(m_aPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
-            glEnableVertexAttribArray(m_aPosLoc);
-            glVertexAttribPointer(m_aTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
-            glEnableVertexAttribArray(m_aTexLoc);
-
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-            glDisableVertexAttribArray(m_aPosLoc);
-            glDisableVertexAttribArray(m_aTexLoc);
+        if (m_glSceneTexture > 0) {
+            drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height);
         }
 
         glFlush();
@@ -389,9 +507,39 @@ void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fg
 }
 
 void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint32_t* pixelData, int stridePixels, float opacity) {
-    if (!m_initialized || !pixelData || !m_targetPixels || srcW <= 0 || srcH <= 0) return;
+    if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0) return;
 
     if (stridePixels <= 0) stridePixels = srcW;
+
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
+        m_eglBackend->makeCurrent();
+
+        if (m_glClientTexture == 0) {
+            glGenTextures(1, &m_glClientTexture);
+            glBindTexture(GL_TEXTURE_2D, m_glClientTexture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        }
+
+        glBindTexture(GL_TEXTURE_2D, m_glClientTexture);
+        if (stridePixels == srcW) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, srcW, srcH, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixelData);
+        } else {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, srcW, srcH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            for (int y = 0; y < srcH; ++y) {
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, srcW, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelData + (y * stridePixels));
+            }
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+        glViewport(0, 0, m_width, m_height);
+
+        drawBgraTextureQuad(m_glClientTexture, dstX, dstY, srcW, srcH, opacity);
+    }
+
+    if (!m_targetPixels) return;
 
     int clipX1 = std::max(0, dstX);
     int clipY1 = std::max(0, dstY);
@@ -650,7 +798,7 @@ void applyGaussianBlurToPixels(std::vector<uint32_t>& pixels, int w, int h, floa
 } // namespace
 
 void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, const std::vector<protocol::FilterOp>& filters) {
-    if (!m_initialized || !m_targetPixels || srcW <= 0 || srcH <= 0 || filters.empty()) return;
+    if (!m_initialized || srcW <= 0 || srcH <= 0 || filters.empty()) return;
 
     int clipX1 = std::max(0, dstX);
     int clipY1 = std::max(0, dstY);
@@ -662,13 +810,9 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
     int w = clipX2 - clipX1;
     int h = clipY2 - clipY1;
 
-    // 1. Crop backdrop area from m_targetPixels
-    std::vector<uint32_t> crop(static_cast<size_t>(w) * h);
-    for (int y = 0; y < h; ++y) {
-        std::memcpy(&crop[y * w], &m_targetPixels[(clipY1 + y) * m_width + clipX1], w * sizeof(uint32_t));
-    }
-
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
+        m_eglBackend->makeCurrent();
+
         int logScale = 1;
         for (const auto& op : filters) {
             if (op.type == protocol::FilterType::Blur && op.value > 8.0f) {
@@ -679,26 +823,21 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
         int targetW = std::max(1, w / logScale);
         int targetH = std::max(1, h / logScale);
 
-        std::vector<uint32_t> downBuf(static_cast<size_t>(targetW) * targetH);
-        if (logScale > 1) {
-            for (int dy = 0; dy < targetH; ++dy) {
-                int sy = std::min(h - 1, dy * logScale);
-                for (int dx = 0; dx < targetW; ++dx) {
-                    int sx = std::min(w - 1, dx * logScale);
-                    downBuf[dy * targetW + dx] = crop[sy * w + sx];
-                }
-            }
-        } else {
-            downBuf = crop;
-        }
-
-        m_eglBackend->makeCurrent();
+        // 1. Crop backdrop area directly INSIDE GPU VRAM using glCopyTexSubImage2D!
+        // ZERO CPU MEMCPY! ZERO GLREADPIXELS!
+        glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
 
         glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[0]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, targetW, targetH, 0, GL_RGBA, GL_UNSIGNED_BYTE, downBuf.data());
+        if (targetW != static_cast<int>(m_width) || targetH != static_cast<int>(m_height)) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, targetW, targetH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        }
+        int glCropY = static_cast<int>(m_height) - clipY2;
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, clipX1, glCropY, targetW, targetH);
 
         glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[1]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, targetW, targetH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        if (targetW != static_cast<int>(m_width) || targetH != static_cast<int>(m_height)) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, targetW, targetH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        }
 
         static const float quad[16] = {
             -1.0f,  1.0f,  0.0f, 1.0f,
@@ -816,83 +955,57 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
 
         renderColorPass();
 
-        glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[currentTex]);
-        glReadPixels(0, 0, targetW, targetH, GL_RGBA, GL_UNSIGNED_BYTE, downBuf.data());
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        // 2. Draw final blurred GLSL texture directly back into m_glSceneFBO ON GPU!
+        // ZERO GLREADPIXELS! ZERO CPU MEMCPY!
+        glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
         glViewport(0, 0, m_width, m_height);
 
-        if (logScale > 1) {
-            for (int y = 0; y < h; ++y) {
-                float v = (static_cast<float>(y) + 0.5f) * (static_cast<float>(targetH) / static_cast<float>(h)) - 0.5f;
-                int y0 = std::clamp(static_cast<int>(std::floor(v)), 0, targetH - 1);
-                int y1 = std::clamp(y0 + 1, 0, targetH - 1);
-                float fy = v - std::floor(v);
+        drawTextureQuad(m_glFBOTexture[currentTex], clipX1, clipY1, w, h);
+        return;
+    }
 
-                for (int x = 0; x < w; ++x) {
-                    float u = (static_cast<float>(x) + 0.5f) * (static_cast<float>(targetW) / static_cast<float>(w)) - 0.5f;
-                    int x0 = std::clamp(static_cast<int>(std::floor(u)), 0, targetW - 1);
-                    int x1 = std::clamp(x0 + 1, 0, targetW - 1);
-                    float fx = u - std::floor(u);
+    // CPU Software Fallback Path (only when OpenGL ES is unavailable)
+    if (!m_targetPixels) return;
 
-                    uint32_t p00 = downBuf[y0 * targetW + x0];
-                    uint32_t p01 = downBuf[y0 * targetW + x1];
-                    uint32_t p10 = downBuf[y1 * targetW + x0];
-                    uint32_t p11 = downBuf[y1 * targetW + x1];
+    std::vector<uint32_t> crop(static_cast<size_t>(w) * h);
+    for (int y = 0; y < h; ++y) {
+        std::memcpy(&crop[y * w], &m_targetPixels[(clipY1 + y) * m_width + clipX1], w * sizeof(uint32_t));
+    }
 
-                    auto lerp = [](float a, float b, float t) { return a + t * (b - a); };
-
-                    float r = lerp(lerp((p00 >> 16) & 0xFF, (p01 >> 16) & 0xFF, fx), lerp((p10 >> 16) & 0xFF, (p11 >> 16) & 0xFF, fx), fy);
-                    float g = lerp(lerp((p00 >> 8) & 0xFF, (p01 >> 8) & 0xFF, fx), lerp((p10 >> 8) & 0xFF, (p11 >> 8) & 0xFF, fx), fy);
-                    float b = lerp(lerp(p00 & 0xFF, p01 & 0xFF, fx), lerp(p10 & 0xFF, p11 & 0xFF, fx), fy);
-
-                    crop[y * w + x] = (0xFF000000) |
-                        (static_cast<uint32_t>(std::clamp(r, 0.0f, 255.0f)) << 16) |
-                        (static_cast<uint32_t>(std::clamp(g, 0.0f, 255.0f)) << 8) |
-                        static_cast<uint32_t>(std::clamp(b, 0.0f, 255.0f));
+    ColorMatrix4x4 pendingColorMatrix;
+    for (const auto& op : filters) {
+        switch (op.type) {
+            case protocol::FilterType::Brightness:
+                pendingColorMatrix.multiply(createBrightnessMatrix(op.value));
+                break;
+            case protocol::FilterType::Contrast:
+                pendingColorMatrix.multiply(createContrastMatrix(op.value));
+                break;
+            case protocol::FilterType::Saturation:
+                pendingColorMatrix.multiply(createSaturationMatrix(op.value));
+                break;
+            case protocol::FilterType::Grayscale:
+                pendingColorMatrix.multiply(createGrayscaleMatrix(op.value));
+                break;
+            case protocol::FilterType::Invert:
+                pendingColorMatrix.multiply(createInvertMatrix(op.value));
+                break;
+            case protocol::FilterType::Blur:
+                if (!pendingColorMatrix.isIdentity()) {
+                    applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
+                    pendingColorMatrix.reset();
                 }
-            }
-        } else {
-            crop = downBuf;
-        }
-    } else {
-        ColorMatrix4x4 pendingColorMatrix;
-
-        for (const auto& op : filters) {
-            switch (op.type) {
-                case protocol::FilterType::Brightness:
-                    pendingColorMatrix.multiply(createBrightnessMatrix(op.value));
-                    break;
-                case protocol::FilterType::Contrast:
-                    pendingColorMatrix.multiply(createContrastMatrix(op.value));
-                    break;
-                case protocol::FilterType::Saturation:
-                    pendingColorMatrix.multiply(createSaturationMatrix(op.value));
-                    break;
-                case protocol::FilterType::Grayscale:
-                    pendingColorMatrix.multiply(createGrayscaleMatrix(op.value));
-                    break;
-                case protocol::FilterType::Invert:
-                    pendingColorMatrix.multiply(createInvertMatrix(op.value));
-                    break;
-                case protocol::FilterType::Blur:
-                    if (!pendingColorMatrix.isIdentity()) {
-                        applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
-                        pendingColorMatrix.reset();
-                    }
-                    applyGaussianBlurToPixels(crop, w, h, op.value);
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        if (!pendingColorMatrix.isIdentity()) {
-            applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
+                applyGaussianBlurToPixels(crop, w, h, op.value);
+                break;
+            default:
+                break;
         }
     }
 
-    // Write back filtered backdrop crop to m_targetPixels
+    if (!pendingColorMatrix.isIdentity()) {
+        applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
+    }
+
     for (int y = 0; y < h; ++y) {
         std::memcpy(&m_targetPixels[(clipY1 + y) * m_width + clipX1], &crop[y * w], w * sizeof(uint32_t));
     }
