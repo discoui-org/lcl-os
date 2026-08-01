@@ -262,6 +262,17 @@ bool Renderer::createDumbBuffer() {
 }
 
 void Renderer::clear(uint32_t argbColor) {
+    if (m_skiaRenderer.getBackendType() == SkiaBackendType::OpenGL_EGL) {
+        // On the GPU/EGL backend, m_softwareBackBuffer (== SkiaRenderer::m_targetPixels,
+        // they are the same allocation) is ONLY a transparent CPU "window chrome"
+        // overlay layer that SkiaRenderer::endFrame() alpha-composites on top of the
+        // GPU scene texture. SkiaRenderer::beginFrame() already resets it to fully
+        // transparent (0x00000000) each frame; filling it with an opaque color here
+        // would turn the overlay into a full-screen opaque quad and hide the entire
+        // GPU-rendered scene (client buffers, backdrop blur) beneath it. The actual
+        // background clear is handled by the GPU scene FBO clear in beginFrame().
+        return;
+    }
     std::fill(m_softwareBackBuffer.begin(), m_softwareBackBuffer.end(), argbColor);
 }
 

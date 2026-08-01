@@ -363,7 +363,12 @@ void SkiaRenderer::beginFrame() {
     }
 
     if (m_targetPixels) {
-        std::fill_n(m_targetPixels, m_width * m_height, 0xFF14161D);
+        // GPU path uses m_targetPixels as an alpha-blended CPU overlay layer.
+        // Software path still treats it as the final opaque framebuffer.
+        const uint32_t clearColor = (m_backendType == SkiaBackendType::OpenGL_EGL)
+            ? 0x00000000
+            : 0xFF14161D;
+        std::fill_n(m_targetPixels, m_width * m_height, clearColor);
     }
 }
 
@@ -377,6 +382,23 @@ void SkiaRenderer::endFrame() {
         glViewport(0, 0, m_width, m_height);
         if (m_glSceneTexture > 0) {
             drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height);
+        }
+
+        // Composite CPU raster layer (window chrome, text overlays, cursor) on top
+        // of the GPU scene while preserving per-pixel alpha.
+        if (m_targetPixels && m_glTexture > 0) {
+            glBindTexture(GL_TEXTURE_2D, m_glTexture);
+            glTexSubImage2D(
+                GL_TEXTURE_2D,
+                0,
+                0,
+                0,
+                static_cast<GLsizei>(m_width),
+                static_cast<GLsizei>(m_height),
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                m_targetPixels);
+            drawBgraTextureQuad(m_glTexture, 0, 0, m_width, m_height, 1.0f);
         }
 
         glFlush();
@@ -537,6 +559,7 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
         glViewport(0, 0, m_width, m_height);
 
         drawBgraTextureQuad(m_glClientTexture, dstX, dstY, srcW, srcH, opacity);
+        return;
     }
 
     if (!m_targetPixels) return;
@@ -823,16 +846,44 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, c
         int targetW = std::max(1, w / logScale);
         int targetH = std::max(1, h / logScale);
 
-        // 1. Crop backdrop area directly INSIDE GPU VRAM using glCopyTexSubImage2D!
-        // ZERO CPU MEMCPY! ZERO GLREADPIXELS!
-        glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
-
+        // 1. Downsample the FULL source sub-rect of the current scene texture into
+        // a smaller FBO target. This avoids the zoom artifact caused by copying only
+        // the top-left corner with glCopyTexSubImage2D.
         glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[0]);
         if (targetW != static_cast<int>(m_width) || targetH != static_cast<int>(m_height)) {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, targetW, targetH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         }
-        int glCropY = static_cast<int>(m_height) - clipY2;
-        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, clipX1, glCropY, targetW, targetH);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[0]);
+        glViewport(0, 0, targetW, targetH);
+
+        float uLeft = static_cast<float>(clipX1) / static_cast<float>(m_width);
+        float uRight = static_cast<float>(clipX2) / static_cast<float>(m_width);
+        float vTop = 1.0f - (static_cast<float>(clipY1) / static_cast<float>(m_height));
+        float vBottom = 1.0f - (static_cast<float>(clipY2) / static_cast<float>(m_height));
+
+        float cropQuad[16] = {
+            -1.0f,  1.0f,  uLeft,  vTop,
+            -1.0f, -1.0f,  uLeft,  vBottom,
+             1.0f,  1.0f,  uRight, vTop,
+             1.0f, -1.0f,  uRight, vBottom,
+        };
+
+        glUseProgram(m_glProgram);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_glSceneTexture);
+        glUniform1i(m_uTextureLoc, 0);
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glVertexAttribPointer(m_aPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), cropQuad);
+        glEnableVertexAttribArray(m_aPosLoc);
+        glVertexAttribPointer(m_aTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), cropQuad + 2);
+        glEnableVertexAttribArray(m_aTexLoc);
+
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        glDisableVertexAttribArray(m_aPosLoc);
+        glDisableVertexAttribArray(m_aTexLoc);
 
         glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[1]);
         if (targetW != static_cast<int>(m_width) || targetH != static_cast<int>(m_height)) {
