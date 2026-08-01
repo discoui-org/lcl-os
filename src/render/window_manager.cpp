@@ -156,29 +156,15 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
 
         const int topInset = static_cast<int>(m_reservedZone.top);
         const int bottomInset = static_cast<int>(m_reservedZone.bottom);
+        const int leftInset = static_cast<int>(m_reservedZone.left);
+        const int rightInset = static_cast<int>(m_reservedZone.right);
         const int minW = core::DisplayScale::px(180);
         const int minH = core::DisplayScale::px(100);
+        const int maxW = std::max(minW, static_cast<int>(m_screenWidth) - leftInset - rightInset);
+        const int maxH = std::max(minH, static_cast<int>(m_screenHeight) - topInset - bottomInset);
 
         for (auto& win : m_windows) {
-            // Dragging (Move)
-            if (win.isDragging) {
-                int newX = m_mouseX - win.dragOffsetX;
-                int newY = std::max(topInset, m_mouseY - win.dragOffsetY);
-
-                win.lastDragVelX = static_cast<float>(newX - win.x);
-                win.lastDragVelY = static_cast<float>(newY - win.y);
-                win.snapBackActive = false;
-
-                if (newX != win.x || newY != win.y) {
-                    win.x = newX;
-                    win.y = newY;
-                    win.pendingX = newX;
-                    win.pendingY = newY;
-                    win.markDirty();
-                    stateChanged = true;
-                }
-            }
-            // Resizing
+            // Resizing has priority and must never mix with drag updates.
             if (win.isResizing) {
                 int deltaX = m_mouseX - win.resizeStartX;
                 int deltaY = m_mouseY - win.resizeStartY;
@@ -191,60 +177,60 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                 switch (win.resizeEdge) {
                     case ResizeEdge::Right:
                     case ResizeEdge::None: // Default Super + RightClick resize corner
-                        newW = std::max(minW, win.initialWidth + deltaX);
+                        newW = std::clamp(win.initialWidth + deltaX, minW, maxW);
                         break;
                     case ResizeEdge::Bottom:
-                        newH = std::max(minH, win.initialHeight + deltaY);
+                        newH = std::clamp(win.initialHeight + deltaY, minH, maxH);
                         break;
                     case ResizeEdge::Left: {
                         int candidateW = win.initialWidth - deltaX;
-                        if (candidateW >= minW) {
-                            newX = win.initialX + deltaX;
-                            newW = candidateW;
-                        }
+                        newW = std::clamp(candidateW, minW, maxW);
+                        newX = win.initialX + (win.initialWidth - newW);
                         break;
                     }
                     case ResizeEdge::Top: {
+                        const int bottomAnchor = win.initialY + win.initialHeight;
                         int candidateH = win.initialHeight - deltaY;
-                        if (candidateH >= minH) {
-                            newY = std::clamp(win.initialY + deltaY, topInset, static_cast<int>(m_screenHeight) - minH);
-                            newH = win.initialHeight + (win.initialY - newY);
-                        }
+                        newH = std::clamp(candidateH, minH, maxH);
+                        newY = bottomAnchor - newH;
+                        newY = std::clamp(newY, topInset, static_cast<int>(m_screenHeight) - minH);
+                        newH = bottomAnchor - newY;
+                        newH = std::clamp(newH, minH, maxH);
                         break;
                     }
                     case ResizeEdge::BottomRight:
-                        newW = std::max(minW, win.initialWidth + deltaX);
-                        newH = std::max(minH, win.initialHeight + deltaY);
+                        newW = std::clamp(win.initialWidth + deltaX, minW, maxW);
+                        newH = std::clamp(win.initialHeight + deltaY, minH, maxH);
                         break;
                     case ResizeEdge::BottomLeft: {
                         int candidateW = win.initialWidth - deltaX;
-                        if (candidateW >= minW) {
-                            newX = win.initialX + deltaX;
-                            newW = candidateW;
-                        }
-                        newH = std::max(minH, win.initialHeight + deltaY);
+                        newW = std::clamp(candidateW, minW, maxW);
+                        newX = win.initialX + (win.initialWidth - newW);
+                        newH = std::clamp(win.initialHeight + deltaY, minH, maxH);
                         break;
                     }
                     case ResizeEdge::TopRight: {
-                        newW = std::max(minW, win.initialWidth + deltaX);
+                        const int bottomAnchor = win.initialY + win.initialHeight;
+                        newW = std::clamp(win.initialWidth + deltaX, minW, maxW);
                         int candidateH = win.initialHeight - deltaY;
-                        if (candidateH >= minH) {
-                            newY = std::clamp(win.initialY + deltaY, topInset, static_cast<int>(m_screenHeight) - minH);
-                            newH = win.initialHeight + (win.initialY - newY);
-                        }
+                        newH = std::clamp(candidateH, minH, maxH);
+                        newY = bottomAnchor - newH;
+                        newY = std::clamp(newY, topInset, static_cast<int>(m_screenHeight) - minH);
+                        newH = bottomAnchor - newY;
+                        newH = std::clamp(newH, minH, maxH);
                         break;
                     }
                     case ResizeEdge::TopLeft: {
+                        const int bottomAnchor = win.initialY + win.initialHeight;
                         int candidateW = win.initialWidth - deltaX;
-                        if (candidateW >= minW) {
-                            newX = win.initialX + deltaX;
-                            newW = candidateW;
-                        }
+                        newW = std::clamp(candidateW, minW, maxW);
+                        newX = win.initialX + (win.initialWidth - newW);
                         int candidateH = win.initialHeight - deltaY;
-                        if (candidateH >= minH) {
-                            newY = std::clamp(win.initialY + deltaY, topInset, static_cast<int>(m_screenHeight) - minH);
-                            newH = win.initialHeight + (win.initialY - newY);
-                        }
+                        newH = std::clamp(candidateH, minH, maxH);
+                        newY = bottomAnchor - newH;
+                        newY = std::clamp(newY, topInset, static_cast<int>(m_screenHeight) - minH);
+                        newH = bottomAnchor - newY;
+                        newH = std::clamp(newH, minH, maxH);
                         break;
                     }
                 }
@@ -254,6 +240,22 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                     win.pendingY = newY;
                     win.pendingWidth = newW;
                     win.pendingHeight = newH;
+                    win.markDirty();
+                    stateChanged = true;
+                }
+            } else if (win.isDragging) {
+                int newX = m_mouseX - win.dragOffsetX;
+                int newY = std::max(topInset, m_mouseY - win.dragOffsetY);
+
+                win.lastDragVelX = static_cast<float>(newX - win.x);
+                win.lastDragVelY = static_cast<float>(newY - win.y);
+                win.snapBackActive = false;
+
+                if (newX != win.x || newY != win.y) {
+                    win.x = newX;
+                    win.y = newY;
+                    win.pendingX = newX;
+                    win.pendingY = newY;
                     win.markDirty();
                     stateChanged = true;
                 }
@@ -310,6 +312,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         if (event.button == BTN_LEFT) {
                             // Super + Left Click = Move
                             targetWin.isDragging = true;
+                            targetWin.isResizing = false;
                             targetWin.snapBackActive = false;
                             targetWin.snapVelX = 0.0f;
                             targetWin.snapVelY = 0.0f;
@@ -319,6 +322,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                             stateChanged = true;
                         } else if (event.button == BTN_RIGHT) {
                             // Super + Right Click = Normalized Aspect-Aware Grid
+                            targetWin.isDragging = false;
                             targetWin.isResizing = true;
                             targetWin.snapBackActive = false;
                             targetWin.snapVelX = 0.0f;
@@ -362,6 +366,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         ResizeEdge edge = detectResizeEdge(m_mouseX, m_mouseY, targetWin);
                         if (edge != ResizeEdge::None) {
                             // Edge / Corner Resize
+                            targetWin.isDragging = false;
                             targetWin.isResizing = true;
                             targetWin.snapBackActive = false;
                             targetWin.snapVelX = 0.0f;
@@ -381,6 +386,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         } else if (titleH > 0 && m_mouseY < targetWin.y + titleH) {
                             // Header Drag Move
                             targetWin.isDragging = true;
+                            targetWin.isResizing = false;
                             targetWin.snapBackActive = false;
                             targetWin.snapVelX = 0.0f;
                             targetWin.snapVelY = 0.0f;
@@ -399,14 +405,16 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
         } else {
             // Button Released: Release dragging and resizing for all windows
             constexpr int kVisibleSafePx = 50;
-            const int safeLeft = 0;
+            const int safeLeft = static_cast<int>(m_reservedZone.left);
             const int safeTop = static_cast<int>(m_reservedZone.top);
-            const int safeRight = static_cast<int>(m_screenWidth);
+            const int safeRight = static_cast<int>(m_screenWidth) - static_cast<int>(m_reservedZone.right);
             const int safeBottom = static_cast<int>(m_screenHeight) - static_cast<int>(m_reservedZone.bottom);
 
             for (auto& win : m_windows) {
                 if (win.isDragging || win.isResizing) {
-                    if (win.isDragging) {
+                    const bool wasResizing = win.isResizing;
+                    const bool wasDragging = win.isDragging;
+                    if (wasResizing || wasDragging) {
                         const int minSafeX = safeLeft - std::max(0, win.width - kVisibleSafePx);
                         const int maxSafeX = safeRight - kVisibleSafePx;
                         const int maxSafeY = safeBottom - kVisibleSafePx;
@@ -421,8 +429,13 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                             win.snapY = static_cast<float>(win.y);
                             win.snapTargetX = targetX;
                             win.snapTargetY = targetY;
-                            win.snapVelX = win.lastDragVelX * 25.0f;
-                            win.snapVelY = win.lastDragVelY * 25.0f;
+                            if (wasDragging) {
+                                win.snapVelX = win.lastDragVelX * 25.0f;
+                                win.snapVelY = win.lastDragVelY * 25.0f;
+                            } else {
+                                win.snapVelX = 0.0f;
+                                win.snapVelY = 0.0f;
+                            }
                         }
                     }
 

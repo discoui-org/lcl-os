@@ -527,19 +527,45 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
     if JS_BIN.is_file():
         shutil.copy2(JS_BIN, dest_bin / "lcl-js")
 
+    def copy_bundle_manifest_and_icon(src_meta: Path, dst_bundle: Path) -> bool:
+        if not src_meta.is_file():
+            return False
+
+        shutil.copy2(src_meta, dst_bundle / "metadata.json")
+        try:
+            meta_obj = json.loads(src_meta.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log(f"WARNING: failed to parse {src_meta}: {exc}")
+            return True
+
+        icon_rel = str(meta_obj.get("icon", "")).strip()
+        if not icon_rel:
+            return True
+
+        src_icon = src_meta.parent / icon_rel
+        dst_icon = dst_bundle / icon_rel
+        if src_icon.is_file():
+            dst_icon.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_icon, dst_icon)
+        else:
+            log(f"WARNING: icon missing for {src_meta}: {src_icon}")
+
+        return True
+
     uidemo_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "UIDemo.app"
     (uidemo_app / "bin").mkdir(parents=True, exist_ok=True)
     (uidemo_app / "assets").mkdir(parents=True, exist_ok=True)
-    write_text(
-        uidemo_app / "metadata.json",
-        """{
+    if not copy_bundle_manifest_and_icon(ROOT_DIR / "apps" / "ui_demo" / "metadata.json", uidemo_app):
+        write_text(
+            uidemo_app / "metadata.json",
+            """{
     "name": "LCL UI Demo",
     "executable": "bin/ui_demo",
     "version": "1.0.0",
     "icon": "assets/icon.png"
 }
 """,
-    )
+        )
     if DEMO_BIN.is_file():
         shutil.copy2(DEMO_BIN, uidemo_app / "bin" / "ui_demo")
     else:
@@ -550,17 +576,19 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
         )
 
     term_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "Terminal.app"
+    (term_app / "bin").mkdir(parents=True, exist_ok=True)
     (term_app / "assets").mkdir(parents=True, exist_ok=True)
-    write_text(
-        term_app / "metadata.json",
-        """{
+    if not copy_bundle_manifest_and_icon(ROOT_DIR / "src" / "apps" / "terminal" / "metadata.json", term_app):
+        write_text(
+            term_app / "metadata.json",
+            """{
     "name": "LCL Terminal",
     "executable": "/bin/lcl-terminal",
     "version": "1.0.0",
     "icon": "assets/icon.png"
 }
 """,
-    )
+        )
 
     sysmon_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "SystemMonitor.app"
     (sysmon_app / "bin").mkdir(parents=True, exist_ok=True)
@@ -592,16 +620,17 @@ echo "===================================================="
     uidemo_js_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "UIDemoJS.app"
     (uidemo_js_app / "bin").mkdir(parents=True, exist_ok=True)
     (uidemo_js_app / "assets").mkdir(parents=True, exist_ok=True)
-    write_text(
-        uidemo_js_app / "metadata.json",
-        """{
+    if not copy_bundle_manifest_and_icon(ROOT_DIR / "apps" / "ui_demo_js" / "metadata.json", uidemo_js_app):
+        write_text(
+            uidemo_js_app / "metadata.json",
+            """{
     "name": "LCL UI Demo JS",
     "executable": "bin/ui_demo_js",
     "version": "1.0.0",
     "icon": "assets/icon.png"
 }
 """,
-    )
+        )
     js_script = ROOT_DIR / "apps" / "ui_demo_js" / "main.js"
     if js_script.is_file():
         shutil.copy2(js_script, uidemo_js_app / "bin" / "main.js")
