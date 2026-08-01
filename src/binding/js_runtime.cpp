@@ -459,6 +459,26 @@ JSValue js_widget_setBorderRadius(JSContext* ctx, JSValueConst this_val, int arg
     double radius = 0.0;
     JS_ToFloat64(ctx, &radius, argv[0]);
     container->setBorderRadius(static_cast<float>(std::max(0.0, radius)));
+
+    if (argc >= 2) {
+        double roundness = 2.0;
+        JS_ToFloat64(ctx, &roundness, argv[1]);
+        container->setBorderRoundness(static_cast<float>(std::clamp(roundness, 2.0, 8.0)));
+    }
+
+    return JS_UNDEFINED;
+}
+
+JSValue js_widget_setBorderRoundness(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* container = dynamic_cast<lcl::ui::Container*>(wrap->widget);
+    if (!container || argc < 1) return JS_UNDEFINED;
+
+    double roundness = 2.0;
+    JS_ToFloat64(ctx, &roundness, argv[0]);
+    container->setBorderRoundness(static_cast<float>(std::clamp(roundness, 2.0, 8.0)));
     return JS_UNDEFINED;
 }
 
@@ -762,7 +782,8 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, widgetProto, "setBackgroundColor", JS_NewCFunction(m_ctx, js_widget_setBackgroundColor, "setBackgroundColor", 4));
     JS_SetPropertyStr(m_ctx, widgetProto, "setBorderColor", JS_NewCFunction(m_ctx, js_widget_setBorderColor, "setBorderColor", 4));
     JS_SetPropertyStr(m_ctx, widgetProto, "setBorderWidth", JS_NewCFunction(m_ctx, js_widget_setBorderWidth, "setBorderWidth", 1));
-    JS_SetPropertyStr(m_ctx, widgetProto, "setBorderRadius", JS_NewCFunction(m_ctx, js_widget_setBorderRadius, "setBorderRadius", 1));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setBorderRadius", JS_NewCFunction(m_ctx, js_widget_setBorderRadius, "setBorderRadius", 2));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setBorderRoundness", JS_NewCFunction(m_ctx, js_widget_setBorderRoundness, "setBorderRoundness", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setLabel", JS_NewCFunction(m_ctx, js_button_setLabel, "setLabel", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "getLabel", JS_NewCFunction(m_ctx, js_button_getLabel, "getLabel", 0));
     JS_SetPropertyStr(m_ctx, widgetProto, "setOnClick", JS_NewCFunction(m_ctx, js_button_setOnClick, "setOnClick", 1));

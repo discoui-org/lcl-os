@@ -667,6 +667,9 @@ void Compositor::renderFrame() {
     auto* skia = m_renderer.getSkiaRenderer();
     skia->beginFrame();
 
+    constexpr float kWindowCornerRadiusPx = 20.0f;
+    constexpr float kWindowCornerRoundness = 3.4f;
+
     auto toUiColor = [](uint32_t argb) -> lcl::ui::Color {
         return lcl::ui::Color{
             static_cast<uint8_t>((argb >> 16) & 0xFF),
@@ -681,7 +684,8 @@ void Compositor::renderFrame() {
         auto root = std::make_unique<lcl::ui::Container>();
         root->setRenderPass(&pass);
         root->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-        root->setBorderRadius(0.0f);
+        root->setBorderRadius(kWindowCornerRadiusPx);
+        root->setBorderRoundness(kWindowCornerRoundness);
         root->getYogaNode().setWidth(static_cast<float>(win.width));
         root->getYogaNode().setHeight(static_cast<float>(win.height));
 
@@ -689,6 +693,23 @@ void Compositor::renderFrame() {
         const float btn = static_cast<float>(DisplayScale::trafficBtn());
         const float gap = static_cast<float>(DisplayScale::trafficGap());
         const float pad = static_cast<float>(DisplayScale::px(10));
+        const float titleLeft = static_cast<float>(DisplayScale::px(14));
+        const float rightPad = static_cast<float>(DisplayScale::px(10));
+
+        std::string titleLabel = win.title;
+        float titleStartX = std::max(titleLeft, pad + (gap * 2.0f) + btn + static_cast<float>(DisplayScale::px(12)));
+        float titleAvailW = std::max(0.0f, static_cast<float>(win.width) - titleStartX - rightPad);
+        float approxCharW = std::max(1.0f, static_cast<float>(DisplayScale::fontSize()) * 0.6f);
+        int maxChars = static_cast<int>(titleAvailW / approxCharW);
+        if (maxChars <= 0) {
+            titleLabel.clear();
+        } else if (static_cast<int>(titleLabel.size()) > maxChars) {
+            if (maxChars <= 3) {
+                titleLabel = titleLabel.substr(0, static_cast<size_t>(maxChars));
+            } else {
+                titleLabel = titleLabel.substr(0, static_cast<size_t>(maxChars - 3)) + "...";
+            }
+        }
 
         auto titleBar = std::make_unique<lcl::ui::Container>();
         // Transparent titlebar surface; text and accents are layered widgets.
@@ -700,12 +721,13 @@ void Compositor::renderFrame() {
         titleBar->getYogaNode().setWidth(static_cast<float>(win.width));
         titleBar->getYogaNode().setHeight(titleH);
 
-        auto titleText = std::make_unique<lcl::ui::Text>(win.title);
+        auto titleText = std::make_unique<lcl::ui::Text>(titleLabel);
         titleText->setTextColor(lcl::ui::Color{230, 245, 255, 220});
         titleText->setFontSize(static_cast<float>(DisplayScale::fontSize()));
         titleText->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        titleText->getYogaNode().setPosition(YGEdgeLeft, static_cast<float>(DisplayScale::px(14)));
+        titleText->getYogaNode().setPosition(YGEdgeLeft, titleStartX);
         titleText->getYogaNode().setPosition(YGEdgeTop, static_cast<float>(DisplayScale::px(8)));
+        titleText->getYogaNode().setWidth(titleAvailW);
         titleBar->addChild(std::move(titleText));
 
         auto titleSep = std::make_unique<lcl::ui::Container>();
@@ -733,48 +755,21 @@ void Compositor::renderFrame() {
         titleBar->addChild(mkTraffic(pad + gap, ::lcl::theme::UI::BtnMinimize));
         titleBar->addChild(mkTraffic(pad + (gap * 2.0f), ::lcl::theme::UI::BtnMaximize));
 
-        auto borderTop = std::make_unique<lcl::ui::Container>();
-        borderTop->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
-        borderTop->setBorderRadius(0.0f);
-        borderTop->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        borderTop->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-        borderTop->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-        borderTop->getYogaNode().setWidth(static_cast<float>(win.width));
-        borderTop->getYogaNode().setHeight(1.0f);
-
-        auto borderBottom = std::make_unique<lcl::ui::Container>();
-        borderBottom->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
-        borderBottom->setBorderRadius(0.0f);
-        borderBottom->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        borderBottom->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-        borderBottom->getYogaNode().setPosition(YGEdgeTop, static_cast<float>(win.height - 1));
-        borderBottom->getYogaNode().setWidth(static_cast<float>(win.width));
-        borderBottom->getYogaNode().setHeight(1.0f);
-
-        auto borderLeft = std::make_unique<lcl::ui::Container>();
-        borderLeft->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
-        borderLeft->setBorderRadius(0.0f);
-        borderLeft->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        borderLeft->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-        borderLeft->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-        borderLeft->getYogaNode().setWidth(1.0f);
-        borderLeft->getYogaNode().setHeight(static_cast<float>(win.height));
-
-        auto borderRight = std::make_unique<lcl::ui::Container>();
-        borderRight->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
-        borderRight->setBorderRadius(0.0f);
-        borderRight->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        borderRight->getYogaNode().setPosition(YGEdgeLeft, static_cast<float>(win.width - 1));
-        borderRight->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-        borderRight->getYogaNode().setWidth(1.0f);
-        borderRight->getYogaNode().setHeight(static_cast<float>(win.height));
+        auto frameBorder = std::make_unique<lcl::ui::Container>();
+        frameBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
+        frameBorder->setBorderColor(toUiColor(::lcl::theme::UI::WindowBorder));
+        frameBorder->setBorderWidth(1.0f);
+        frameBorder->setBorderRadius(kWindowCornerRadiusPx);
+        frameBorder->setBorderRoundness(kWindowCornerRoundness);
+        frameBorder->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        frameBorder->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+        frameBorder->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+        frameBorder->getYogaNode().setWidth(static_cast<float>(win.width));
+        frameBorder->getYogaNode().setHeight(static_cast<float>(win.height));
 
         root->addChild(std::move(titleBar));
         root->addChild(std::move(titleSep));
-        root->addChild(std::move(borderTop));
-        root->addChild(std::move(borderBottom));
-        root->addChild(std::move(borderLeft));
-        root->addChild(std::move(borderRight));
+        root->addChild(std::move(frameBorder));
 
         root->getYogaNode().calculateLayout(static_cast<float>(win.width), static_cast<float>(win.height));
         root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
@@ -848,7 +843,8 @@ void Compositor::renderFrame() {
             m_renderer.getSkiaRenderer()->drawBuffer(
                 dstX, dstY, srcW, srcH,
                 reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
-                stridePixels, 1.0f);
+                stridePixels,
+                1.0f);
 
             if (!matchingSurface->effectRegions.empty()) {
                 applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground);

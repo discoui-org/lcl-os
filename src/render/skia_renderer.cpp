@@ -134,17 +134,24 @@ bool SkiaRenderer::initGLShader() {
         "uniform sampler2D uTexture;\n"
         "uniform vec2 uSizePx;\n"
         "uniform float uRadiusPx;\n"
+        "uniform float uRoundnessExp;\n"
         "uniform float uOpacity;\n"
-        "float sdRoundRect(vec2 p, vec2 b, float r) {\n"
+        "float sdSuperRoundRect(vec2 p, vec2 b, float r, float n) {\n"
         "    vec2 q = abs(p) - b + vec2(r);\n"
-        "    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;\n"
+        "    if (q.x <= 0.0 || q.y <= 0.0) {\n"
+        "        return max(q.x, q.y) - r;\n"
+        "    }\n"
+        "    vec2 qq = max(q, 0.0) / max(r, 0.001);\n"
+        "    float k = pow(pow(qq.x, n) + pow(qq.y, n), 1.0 / n);\n"
+        "    return (k - 1.0) * r;\n"
         "}\n"
         "void main() {\n"
         "    vec4 c = texture2D(uTexture, vTexCoord);\n"
         "    float r = clamp(uRadiusPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
+        "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
         "    vec2 p = (vTexCoord - vec2(0.5)) * uSizePx;\n"
         "    vec2 halfSize = uSizePx * 0.5;\n"
-        "    float d = sdRoundRect(p, halfSize, r);\n"
+        "    float d = sdSuperRoundRect(p, halfSize, r, n);\n"
         "    float edge = 1.0;\n"
         "    float mask = 1.0 - smoothstep(0.0, edge, d);\n"
         "    gl_FragColor = vec4(c.rgb, c.a * mask * uOpacity);\n"
@@ -164,6 +171,7 @@ bool SkiaRenderer::initGLShader() {
     m_uMaskTextureLoc = glGetUniformLocation(m_glMaskProgram, "uTexture");
     m_uMaskSizeLoc = glGetUniformLocation(m_glMaskProgram, "uSizePx");
     m_uMaskRadiusLoc = glGetUniformLocation(m_glMaskProgram, "uRadiusPx");
+    m_uMaskRoundnessLoc = glGetUniformLocation(m_glMaskProgram, "uRoundnessExp");
     m_uMaskOpacityLoc = glGetUniformLocation(m_glMaskProgram, "uOpacity");
 
     // --- GLSL Refraction Pass Shader (thickness/refraction/dispersion core) ---
@@ -430,7 +438,14 @@ void SkiaRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w
     glDisableVertexAttribArray(m_aTexLoc);
 }
 
-void SkiaRenderer::drawMaskedTextureQuad(uint32_t textureId, float x, float y, float w, float h, float cornerRadius, float opacity) {
+void SkiaRenderer::drawMaskedTextureQuad(uint32_t textureId,
+                                         float x,
+                                         float y,
+                                         float w,
+                                         float h,
+                                         float cornerRadius,
+                                         float cornerRoundness,
+                                         float opacity) {
     if (textureId == 0 || m_glMaskProgram == 0) return;
 
     float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
@@ -451,6 +466,7 @@ void SkiaRenderer::drawMaskedTextureQuad(uint32_t textureId, float x, float y, f
     glUniform1i(m_uMaskTextureLoc, 0);
     glUniform2f(m_uMaskSizeLoc, std::max(1.0f, w), std::max(1.0f, h));
     glUniform1f(m_uMaskRadiusLoc, std::max(0.0f, cornerRadius));
+    glUniform1f(m_uMaskRoundnessLoc, std::clamp(cornerRoundness, 2.0f, 8.0f));
     glUniform1f(m_uMaskOpacityLoc, std::clamp(opacity, 0.0f, 1.0f));
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -644,7 +660,12 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
     }
 }
 
-void SkiaRenderer::drawRoundedRect(const SkiaRect& rect, float radius, const SkiaColor& color, const SkiaColor& borderColor, float borderWidth) {
+void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
+                                   float radius,
+                                   const SkiaColor& color,
+                                   const SkiaColor& borderColor,
+                                   float borderWidth,
+                                   float roundness) {
     if (!m_initialized) return;
 
     int w = std::max(1, static_cast<int>(std::lround(rect.width)));
@@ -654,8 +675,9 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect, float radius, const Ski
 
     float r = std::clamp(radius, 0.0f, std::min(static_cast<float>(w), static_cast<float>(h)) * 0.5f);
     float bw = std::max(0.0f, borderWidth);
+    const float n = std::clamp(roundness, 2.0f, 8.0f);
 
-    auto insideRounded = [](float px, float py, float rw, float rh, float rr) {
+    auto insideRounded = [n](float px, float py, float rw, float rh, float rr) {
         if (px < 0.0f || py < 0.0f || px > rw || py > rh) return false;
         if (rr <= 0.001f) return true;
 
@@ -667,9 +689,12 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect, float radius, const Ski
         if ((inLeft || inRight) && (inTop || inBottom)) {
             float cx = inLeft ? rr : (rw - rr);
             float cy = inTop ? rr : (rh - rr);
-            float dx = px - cx;
-            float dy = py - cy;
-            return (dx * dx + dy * dy) <= (rr * rr);
+            float dx = std::abs(px - cx) / rr;
+            float dy = std::abs(py - cy) / rr;
+            if (n <= 2.001f) {
+                return (dx * dx + dy * dy) <= 1.0f;
+            }
+            return std::pow(dx, n) + std::pow(dy, n) <= 1.0f;
         }
         return true;
     };
@@ -684,18 +709,27 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect, float radius, const Ski
     const float innerH = std::max(0.0f, static_cast<float>(h) - bw * 2.0f);
     const float innerR = std::max(0.0f, r - bw);
 
-    constexpr int kAaSamples = 4;
-    constexpr float kInvSampleCount = 1.0f / static_cast<float>(kAaSamples * kAaSamples);
+    const int aaSamples = (!hasFill && hasBorder) ? 2 : 4;
+    const float invSampleCount = 1.0f / static_cast<float>(aaSamples * aaSamples);
 
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
+            if (!hasFill && hasBorder && innerW > 0.0f && innerH > 0.0f) {
+                // Border-only frame path: skip interior pixels that cannot contribute.
+                float pxCenter = static_cast<float>(x) + 0.5f;
+                float pyCenter = static_cast<float>(y) + 0.5f;
+                if (insideRounded(pxCenter - bw, pyCenter - bw, innerW, innerH, innerR)) {
+                    continue;
+                }
+            }
+
             int outerHit = 0;
             int innerHit = 0;
 
-            for (int sy = 0; sy < kAaSamples; ++sy) {
-                for (int sx = 0; sx < kAaSamples; ++sx) {
-                    float px = static_cast<float>(x) + (static_cast<float>(sx) + 0.5f) / static_cast<float>(kAaSamples);
-                    float py = static_cast<float>(y) + (static_cast<float>(sy) + 0.5f) / static_cast<float>(kAaSamples);
+            for (int sy = 0; sy < aaSamples; ++sy) {
+                for (int sx = 0; sx < aaSamples; ++sx) {
+                    float px = static_cast<float>(x) + (static_cast<float>(sx) + 0.5f) / static_cast<float>(aaSamples);
+                    float py = static_cast<float>(y) + (static_cast<float>(sy) + 0.5f) / static_cast<float>(aaSamples);
 
                     if (!insideRounded(px, py, static_cast<float>(w), static_cast<float>(h), r)) {
                         continue;
@@ -713,8 +747,8 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect, float radius, const Ski
                 continue;
             }
 
-            const float outerCov = static_cast<float>(outerHit) * kInvSampleCount;
-            const float innerCov = static_cast<float>(innerHit) * kInvSampleCount;
+            const float outerCov = static_cast<float>(outerHit) * invSampleCount;
+            const float innerCov = static_cast<float>(innerHit) * invSampleCount;
 
             float borderCov = 0.0f;
             float fillCov = 0.0f;
@@ -795,7 +829,15 @@ void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fg
     }
 }
 
-void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint32_t* pixelData, int stridePixels, float opacity) {
+void SkiaRenderer::drawBuffer(int dstX,
+                              int dstY,
+                              int srcW,
+                              int srcH,
+                              const uint32_t* pixelData,
+                              int stridePixels,
+                              float opacity,
+                              float cornerRadius,
+                              float cornerRoundness) {
     if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0) return;
 
     if (stridePixels <= 0) stridePixels = srcW;
@@ -825,7 +867,18 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
         glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
         glViewport(0, 0, m_width, m_height);
 
-        drawBgraTextureQuad(m_glClientTexture, dstX, dstY, srcW, srcH, opacity);
+        if (cornerRadius > 0.001f) {
+            drawMaskedTextureQuad(m_glClientTexture,
+                                  static_cast<float>(dstX),
+                                  static_cast<float>(dstY),
+                                  static_cast<float>(srcW),
+                                  static_cast<float>(srcH),
+                                  cornerRadius,
+                                  cornerRoundness,
+                                  opacity);
+        } else {
+            drawBgraTextureQuad(m_glClientTexture, dstX, dstY, srcW, srcH, opacity);
+        }
         return;
     }
 
@@ -841,6 +894,31 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
     int copyWidth = clipX2 - clipX1;
     int srcX1 = clipX1 - dstX;
     bool isOpaqueFast = (opacity >= 0.99f);
+    float rr = std::clamp(cornerRadius, 0.0f, std::min(static_cast<float>(srcW), static_cast<float>(srcH)) * 0.5f);
+    float n = std::clamp(cornerRoundness, 2.0f, 8.0f);
+
+    auto insideRoundedMask = [rr, n, srcW, srcH](float px, float py) {
+        if (rr <= 0.001f) return true;
+        if (px < 0.0f || py < 0.0f || px > static_cast<float>(srcW) || py > static_cast<float>(srcH)) return false;
+
+        bool inLeft = px < rr;
+        bool inRight = px > (static_cast<float>(srcW) - rr);
+        bool inTop = py < rr;
+        bool inBottom = py > (static_cast<float>(srcH) - rr);
+
+        if ((inLeft || inRight) && (inTop || inBottom)) {
+            float cx = inLeft ? rr : (static_cast<float>(srcW) - rr);
+            float cy = inTop ? rr : (static_cast<float>(srcH) - rr);
+            float dx = std::abs(px - cx) / rr;
+            float dy = std::abs(py - cy) / rr;
+            if (n <= 2.001f) {
+                return (dx * dx + dy * dy) <= 1.0f;
+            }
+            return std::pow(dx, n) + std::pow(dy, n) <= 1.0f;
+        }
+
+        return true;
+    };
 
     for (int y = clipY1; y < clipY2; ++y) {
         int srcY = y - dstY;
@@ -848,7 +926,7 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
         uint32_t* dstRow = &m_targetPixels[y * m_width];
 
         // Fast-path: Direct memcpy for opaque rows (wallpapers and opaque window surfaces)
-        if (isOpaqueFast && ((srcRow[srcX1] & 0xFF000000) == 0xFF000000)) {
+        if (rr <= 0.001f && isOpaqueFast && ((srcRow[srcX1] & 0xFF000000) == 0xFF000000)) {
             uint32_t midPixel = srcRow[srcX1 + (copyWidth >> 1)];
             uint32_t lastPixel = srcRow[srcX1 + copyWidth - 1];
             if ((midPixel & 0xFF000000) == 0xFF000000 && (lastPixel & 0xFF000000) == 0xFF000000) {
@@ -859,6 +937,14 @@ void SkiaRenderer::drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint
 
         for (int x = clipX1; x < clipX2; ++x) {
             int srcX = x - dstX;
+            if (rr > 0.001f) {
+                float px = static_cast<float>(srcX) + 0.5f;
+                float py = static_cast<float>(srcY) + 0.5f;
+                if (!insideRoundedMask(px, py)) {
+                    continue;
+                }
+            }
+
             uint32_t pixel = srcRow[srcX];
             uint8_t rawA = static_cast<uint8_t>((pixel >> 24) & 0xFF);
             if (rawA == 0) continue;
@@ -1340,7 +1426,14 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
         glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
         glViewport(0, 0, m_width, m_height);
 
-        drawMaskedTextureQuad(m_glFBOTexture[currentTex], clipX1, clipY1, static_cast<float>(w), static_cast<float>(h), cornerRadius, opacity);
+        drawMaskedTextureQuad(m_glFBOTexture[currentTex],
+                      clipX1,
+                      clipY1,
+                      static_cast<float>(w),
+                      static_cast<float>(h),
+                      cornerRadius,
+                      2.0f,
+                      opacity);
         return;
     }
 

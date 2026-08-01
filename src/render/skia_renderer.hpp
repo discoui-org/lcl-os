@@ -99,12 +99,25 @@ public:
     // --- Skia 2D Canvas Primitives ---
     void drawBackgroundGradient(const SkiaColor& topColor, const SkiaColor& bottomColor);
     void drawRect(const SkiaRect& rect, const SkiaColor& color);
-    void drawRoundedRect(const SkiaRect& rect, float radius, const SkiaColor& color, const SkiaColor& borderColor = {0,0,0,0}, float borderWidth = 0.0f);
+    void drawRoundedRect(const SkiaRect& rect,
+                         float radius,
+                         const SkiaColor& color,
+                         const SkiaColor& borderColor = {0,0,0,0},
+                         float borderWidth = 0.0f,
+                         float roundness = 2.0f);
     void drawDropShadow(const SkiaRect& rect, float radius, float blur, const SkiaColor& shadowColor);
     void drawCircle(float cx, float cy, float radius, const SkiaColor& color);
     void drawLine(float x1, float y1, float x2, float y2, const SkiaColor& color, float strokeWidth = 1.0f);
     void drawString(int x, int y, const std::string& text, uint32_t fgColor);
-    void drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint32_t* pixelData, int stridePixels = 0, float opacity = 1.0f);
+    void drawBuffer(int dstX,
+                    int dstY,
+                    int srcW,
+                    int srcH,
+                    const uint32_t* pixelData,
+                    int stridePixels = 0,
+                    float opacity = 1.0f,
+                    float cornerRadius = 0.0f,
+                    float cornerRoundness = 2.0f);
     void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, float cornerRadius, float opacity, const std::vector<protocol::FilterOp>& filters);
 
     // Accessors
@@ -161,6 +174,7 @@ private:
     int32_t m_uMaskTextureLoc{-1};
     int32_t m_uMaskSizeLoc{-1};
     int32_t m_uMaskRadiusLoc{-1};
+    int32_t m_uMaskRoundnessLoc{-1};
     int32_t m_uMaskOpacityLoc{-1};
 
     uint32_t m_glRefractionProgram{0};
@@ -184,7 +198,7 @@ private:
 
     // Helper for rendering textured quads on GPU
     void drawTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
-    void drawMaskedTextureQuad(uint32_t textureId, float x, float y, float w, float h, float cornerRadius, float opacity);
+    void drawMaskedTextureQuad(uint32_t textureId, float x, float y, float w, float h, float cornerRadius, float cornerRoundness, float opacity);
     void drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
 };
 

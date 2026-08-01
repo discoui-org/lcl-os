@@ -98,6 +98,29 @@ static void renderTerminalFrame(uint32_t *shmPixels, int width, int height,
   }
 }
 
+static void applyRoundedCornerClip(uint32_t *pixels, int width, int height,
+                                   int radiusPx) {
+  if (!pixels || width <= 0 || height <= 0 || radiusPx <= 0)
+    return;
+
+  const int r = std::max(1, std::min(radiusPx, std::min(width, height) / 2));
+  const int rr = r * r;
+
+  for (int y = 0; y < r; ++y) {
+    for (int x = 0; x < r; ++x) {
+      const int dx = r - x;
+      const int dy = r - y;
+      if ((dx * dx + dy * dy) <= rr)
+        continue;
+
+      pixels[y * width + x] = 0x00000000u;
+      pixels[y * width + (width - 1 - x)] = 0x00000000u;
+      pixels[(height - 1 - y) * width + x] = 0x00000000u;
+      pixels[(height - 1 - y) * width + (width - 1 - x)] = 0x00000000u;
+    }
+  }
+}
+
 int main() {
   std::cout << "====================================================\n"
             << "  lcl-terminal v0.1.0 - Standalone Client App      \n"
@@ -149,6 +172,7 @@ int main() {
   const int kSurfW = 540;
   const int kSurfH = 360;
   const int kClientTitleBarH = 34;
+  const int kTerminalCornerRadiusPx = 20;
 
   lcl::protocol::LCLHeader surfHeader{};
   surfHeader.opcode = lcl::protocol::LCLOpcode::SurfaceCreate;
@@ -205,6 +229,7 @@ int main() {
     graphRegion.height = static_cast<uint32_t>(height);
     graphRegion.source = lcl::protocol::EffectSourceType::Backdrop;
     graphRegion.blendMode = lcl::protocol::EffectBlendMode::Normal;
+    graphRegion.cornerRadius = static_cast<float>(kTerminalCornerRadiusPx);
     graphRegion.filterCount = static_cast<uint16_t>(termFilters.size());
     graphRegion.filterOffset = 0;
     graphRegion.opacity = 1.0f;
@@ -389,6 +414,8 @@ int main() {
   renderTerminalFrame(localPixels.data(), kSurfW, kSurfH, app, fontRenderer,
                       kClientTitleBarH);
   drawTitlebarWidgets(kSurfW, kSurfH);
+  applyRoundedCornerClip(localPixels.data(), kSurfW, kSurfH,
+                         kTerminalCornerRadiusPx);
   if (shmPixels) {
     std::memcpy(shmPixels, localPixels.data(), shmSize);
   }
@@ -535,6 +562,8 @@ int main() {
         renderTerminalFrame(localPixels.data(), curW, curH, app, fontRenderer,
                             kClientTitleBarH);
         drawTitlebarWidgets(curW, curH);
+        applyRoundedCornerClip(localPixels.data(), curW, curH,
+                               kTerminalCornerRadiusPx);
         std::memcpy(shmPixels, localPixels.data(), shmSize);
       }
 
@@ -560,6 +589,8 @@ int main() {
       renderTerminalFrame(localPixels.data(), curW, curH, app, fontRenderer,
                           kClientTitleBarH);
       drawTitlebarWidgets(curW, curH);
+      applyRoundedCornerClip(localPixels.data(), curW, curH,
+                 kTerminalCornerRadiusPx);
       std::memcpy(shmPixels, localPixels.data(), shmSize);
 
       // Re-notify compositor of buffer redraw

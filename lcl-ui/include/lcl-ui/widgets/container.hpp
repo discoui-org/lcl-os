@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "lcl-ui/widgets/widget.hpp"
 
 namespace lcl::ui {
@@ -28,6 +30,12 @@ public:
     void setBorderRadius(float radius) { m_borderRadius = (radius < 0.0f) ? 0.0f : radius; markDirty(); }
     float getBorderRadius() const { return m_borderRadius; }
 
+    void setBorderRoundness(float roundness) {
+        m_borderRoundness = std::clamp(roundness, 2.0f, 8.0f);
+        markDirty();
+    }
+    float getBorderRoundness() const { return m_borderRoundness; }
+
     void draw(SkCanvas* canvas, const Rect& damageRect) override;
 
 private:
@@ -35,6 +43,7 @@ private:
     Color m_borderColor{0, 0, 0, 0};
     float m_borderWidth{0.0f};
     float m_borderRadius{12.0f};
+    float m_borderRoundness{3.2f};
 };
 
 } // namespace lcl::ui
