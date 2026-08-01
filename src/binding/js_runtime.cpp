@@ -7,10 +7,12 @@
 #include <algorithm>
 
 #include "lcl-ui/core/window_app.hpp"
+#include "lcl-ui/core/animation.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "lcl-ui/widgets/image.hpp"
 
 namespace lcl::binding {
 
@@ -19,6 +21,7 @@ namespace {
 // QuickJS Class IDs
 JSClassID g_window_app_class_id = 0;
 JSClassID g_widget_class_id = 0;
+JSClassID g_animation_engine_class_id = 0;
 
 struct JsWindowAppWrapper {
     lcl::ui::WindowApp* app{nullptr};
@@ -27,6 +30,10 @@ struct JsWindowAppWrapper {
 struct JsWidgetWrapper {
     lcl::ui::Widget* widget{nullptr};
     bool ownedByCpp{false};
+};
+
+struct JsAnimationEngineWrapper {
+    lcl::ui::AnimationEngine* engine{nullptr};
 };
 
 // Finalizers
@@ -49,6 +56,18 @@ void js_widget_finalizer(JSRuntime* rt, JSValue val) {
         if (!wrapper->ownedByCpp && wrapper->widget) {
             delete wrapper->widget;
             wrapper->widget = nullptr;
+        }
+        delete wrapper;
+    }
+}
+
+void js_animation_engine_finalizer(JSRuntime* rt, JSValue val) {
+    (void)rt;
+    auto* wrapper = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque(val, g_animation_engine_class_id));
+    if (wrapper) {
+        if (wrapper->engine) {
+            delete wrapper->engine;
+            wrapper->engine = nullptr;
         }
         delete wrapper;
     }
@@ -86,6 +105,50 @@ static JSClassDef js_widget_class = {
     nullptr,
     nullptr
 };
+
+static JSClassDef js_animation_engine_class = {
+    "AnimationEngine",
+    js_animation_engine_finalizer,
+    nullptr,
+    nullptr,
+    nullptr
+};
+
+lcl::ui::EasingName easingFromString(const std::string& name) {
+    using lcl::ui::EasingName;
+    if (name == "linear") return EasingName::Linear;
+    if (name == "easeInSine") return EasingName::EaseInSine;
+    if (name == "easeOutSine") return EasingName::EaseOutSine;
+    if (name == "easeInOutSine") return EasingName::EaseInOutSine;
+    if (name == "easeInQuad") return EasingName::EaseInQuad;
+    if (name == "easeOutQuad") return EasingName::EaseOutQuad;
+    if (name == "easeInOutQuad") return EasingName::EaseInOutQuad;
+    if (name == "easeInCubic") return EasingName::EaseInCubic;
+    if (name == "easeOutCubic") return EasingName::EaseOutCubic;
+    if (name == "easeInOutCubic") return EasingName::EaseInOutCubic;
+    if (name == "easeInQuart") return EasingName::EaseInQuart;
+    if (name == "easeOutQuart") return EasingName::EaseOutQuart;
+    if (name == "easeInOutQuart") return EasingName::EaseInOutQuart;
+    if (name == "easeInQuint") return EasingName::EaseInQuint;
+    if (name == "easeOutQuint") return EasingName::EaseOutQuint;
+    if (name == "easeInOutQuint") return EasingName::EaseInOutQuint;
+    if (name == "easeInExpo") return EasingName::EaseInExpo;
+    if (name == "easeOutExpo") return EasingName::EaseOutExpo;
+    if (name == "easeInOutExpo") return EasingName::EaseInOutExpo;
+    if (name == "easeInCirc") return EasingName::EaseInCirc;
+    if (name == "easeOutCirc") return EasingName::EaseOutCirc;
+    if (name == "easeInOutCirc") return EasingName::EaseInOutCirc;
+    if (name == "easeInBack") return EasingName::EaseInBack;
+    if (name == "easeOutBack") return EasingName::EaseOutBack;
+    if (name == "easeInOutBack") return EasingName::EaseInOutBack;
+    if (name == "easeInElastic") return EasingName::EaseInElastic;
+    if (name == "easeOutElastic") return EasingName::EaseOutElastic;
+    if (name == "easeInOutElastic") return EasingName::EaseInOutElastic;
+    if (name == "easeInBounce") return EasingName::EaseInBounce;
+    if (name == "easeOutBounce") return EasingName::EaseOutBounce;
+    if (name == "easeInOutBounce") return EasingName::EaseInOutBounce;
+    return EasingName::EaseOutCubic;
+}
 
 // ------------------------------------------------------------
 // console.log Implementation
@@ -347,6 +410,23 @@ JSValue js_text_constructor(JSContext* ctx, JSValueConst new_target, int argc, J
 
     auto* wrapper = new JsWidgetWrapper();
     wrapper->widget = new lcl::ui::Text(text);
+    JS_SetOpaque(obj, wrapper);
+    return obj;
+}
+
+JSValue js_image_constructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv) {
+    (void)new_target;
+    std::string sourcePath = "";
+    if (argc >= 1) {
+        const char* str = JS_ToCString(ctx, argv[0]);
+        if (str) { sourcePath = str; JS_FreeCString(ctx, str); }
+    }
+
+    JSValue obj = JS_NewObjectClass(ctx, g_widget_class_id);
+    if (JS_IsException(obj)) return obj;
+
+    auto* wrapper = new JsWidgetWrapper();
+    wrapper->widget = new lcl::ui::Image(sourcePath);
     JS_SetOpaque(obj, wrapper);
     return obj;
 }
@@ -665,12 +745,287 @@ JSValue js_effect_setOpacity(JSContext* ctx, JSValueConst this_val, int argc, JS
     auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
     if (!wrap || !wrap->widget) return JS_EXCEPTION;
 
-    auto* blurSurface = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
-    if (!blurSurface || argc < 1) return JS_UNDEFINED;
+    if (argc < 1) return JS_UNDEFINED;
 
     double opacity = 1.0;
     JS_ToFloat64(ctx, &opacity, argv[0]);
-    blurSurface->setOpacity(static_cast<float>(std::clamp(opacity, 0.0, 1.0)));
+    const float clamped = static_cast<float>(std::clamp(opacity, 0.0, 1.0));
+
+    auto* blurSurface = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
+    if (blurSurface) {
+        blurSurface->setOpacity(clamped);
+    }
+
+    auto* image = dynamic_cast<lcl::ui::Image*>(wrap->widget);
+    if (image) {
+        image->setOpacity(clamped);
+    }
+
+    return JS_UNDEFINED;
+}
+
+JSValue js_image_setSourcePath(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* image = dynamic_cast<lcl::ui::Image*>(wrap->widget);
+    if (!image || argc < 1) return JS_NewBool(ctx, false);
+
+    const char* str = JS_ToCString(ctx, argv[0]);
+    if (!str) return JS_NewBool(ctx, false);
+    const bool ok = image->setSourcePath(str);
+    JS_FreeCString(ctx, str);
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue js_image_clearSource(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)argc;
+    (void)argv;
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* image = dynamic_cast<lcl::ui::Image*>(wrap->widget);
+    if (image) {
+        image->clearSource();
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue js_image_setFit(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* image = dynamic_cast<lcl::ui::Image*>(wrap->widget);
+    if (!image || argc < 1) return JS_UNDEFINED;
+
+    const char* str = JS_ToCString(ctx, argv[0]);
+    if (!str) return JS_UNDEFINED;
+
+    std::string fit = str;
+    JS_FreeCString(ctx, str);
+
+    if (fit == "fill") {
+        image->setFit(lcl::ui::ImageFit::Fill);
+    } else {
+        image->setFit(lcl::ui::ImageFit::Contain);
+    }
+
+    return JS_UNDEFINED;
+}
+
+JSValue js_image_setCornerRadius(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* image = dynamic_cast<lcl::ui::Image*>(wrap->widget);
+    if (!image || argc < 1) return JS_UNDEFINED;
+
+    double radius = 0.0;
+    JS_ToFloat64(ctx, &radius, argv[0]);
+    image->setCornerRadius(static_cast<float>(std::max(0.0, radius)));
+
+    if (argc >= 2) {
+        double roundness = 2.0;
+        JS_ToFloat64(ctx, &roundness, argv[1]);
+        image->setCornerRoundness(static_cast<float>(std::clamp(roundness, 2.0, 8.0)));
+    }
+
+    return JS_UNDEFINED;
+}
+
+JSValue js_image_setCornerRoundness(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* image = dynamic_cast<lcl::ui::Image*>(wrap->widget);
+    if (!image || argc < 1) return JS_UNDEFINED;
+
+    double roundness = 2.0;
+    JS_ToFloat64(ctx, &roundness, argv[0]);
+    image->setCornerRoundness(static_cast<float>(std::clamp(roundness, 2.0, 8.0)));
+    return JS_UNDEFINED;
+}
+
+// ------------------------------------------------------------
+// AnimationEngine Methods
+// ------------------------------------------------------------
+JSValue js_animation_engine_constructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv) {
+    (void)new_target;
+    (void)argc;
+    (void)argv;
+
+    JSValue obj = JS_NewObjectClass(ctx, g_animation_engine_class_id);
+    if (JS_IsException(obj)) return obj;
+
+    auto* wrapper = new JsAnimationEngineWrapper();
+    wrapper->engine = new lcl::ui::AnimationEngine();
+    JS_SetOpaque(obj, wrapper);
+    return obj;
+}
+
+JSValue js_animation_createChannel(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque2(ctx, this_val, g_animation_engine_class_id));
+    if (!wrap || !wrap->engine) return JS_EXCEPTION;
+
+    int64_t objectId = 0;
+    int32_t propertyId = 0;
+    double initialValue = 0.0;
+    if (argc >= 1) JS_ToInt64(ctx, &objectId, argv[0]);
+    if (argc >= 2) JS_ToInt32(ctx, &propertyId, argv[1]);
+    if (argc >= 3) JS_ToFloat64(ctx, &initialValue, argv[2]);
+
+    lcl::ui::ChannelKey key{};
+    key.objectId = static_cast<uint64_t>(std::max<int64_t>(0, objectId));
+    key.propertyId = static_cast<uint32_t>(std::max<int32_t>(0, propertyId));
+    lcl::ui::ChannelId id = wrap->engine->ensureChannel(key, static_cast<float>(initialValue));
+    return JS_NewFloat64(ctx, static_cast<double>(id));
+}
+
+JSValue js_animation_animateSpring(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque2(ctx, this_val, g_animation_engine_class_id));
+    if (!wrap || !wrap->engine) return JS_EXCEPTION;
+
+    int64_t channelId = 0;
+    double target = 0.0;
+    double omega = 18.0;
+    double zeta = 1.0;
+    double mass = 1.0;
+    if (argc >= 1) JS_ToInt64(ctx, &channelId, argv[0]);
+    if (argc >= 2) JS_ToFloat64(ctx, &target, argv[1]);
+    if (argc >= 3) JS_ToFloat64(ctx, &omega, argv[2]);
+    if (argc >= 4) JS_ToFloat64(ctx, &zeta, argv[3]);
+    if (argc >= 5) JS_ToFloat64(ctx, &mass, argv[4]);
+
+    lcl::ui::MotionSpec spec{};
+    spec.mode = lcl::ui::MotionMode::Spring;
+    spec.spring.mass = static_cast<float>(std::max(0.0001, mass));
+    spec.spring.omega = static_cast<float>(std::max(0.01, omega));
+    spec.spring.zeta = static_cast<float>(std::max(0.01, zeta));
+
+    bool ok = wrap->engine->animateTo(static_cast<lcl::ui::ChannelId>(std::max<int64_t>(0, channelId)),
+                                      static_cast<float>(target),
+                                      spec);
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue js_animation_animateTween(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque2(ctx, this_val, g_animation_engine_class_id));
+    if (!wrap || !wrap->engine) return JS_EXCEPTION;
+
+    int64_t channelId = 0;
+    double target = 0.0;
+    double durationSec = 0.18;
+    double delaySec = 0.0;
+    std::string easing = "easeOutCubic";
+
+    if (argc >= 1) JS_ToInt64(ctx, &channelId, argv[0]);
+    if (argc >= 2) JS_ToFloat64(ctx, &target, argv[1]);
+    if (argc >= 3) JS_ToFloat64(ctx, &durationSec, argv[2]);
+    if (argc >= 4) {
+        const char* str = JS_ToCString(ctx, argv[3]);
+        if (str) {
+            easing = str;
+            JS_FreeCString(ctx, str);
+        }
+    }
+    if (argc >= 5) JS_ToFloat64(ctx, &delaySec, argv[4]);
+
+    lcl::ui::MotionSpec spec{};
+    spec.mode = lcl::ui::MotionMode::Tween;
+    spec.tween.durationSec = static_cast<float>(std::max(0.0001, durationSec));
+    spec.tween.delaySec = static_cast<float>(std::max(0.0, delaySec));
+    spec.tween.easing = easingFromString(easing);
+
+    bool ok = wrap->engine->animateTo(static_cast<lcl::ui::ChannelId>(std::max<int64_t>(0, channelId)),
+                                      static_cast<float>(target),
+                                      spec);
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue js_animation_retarget(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque2(ctx, this_val, g_animation_engine_class_id));
+    if (!wrap || !wrap->engine) return JS_EXCEPTION;
+
+    int64_t channelId = 0;
+    double target = 0.0;
+    if (argc >= 1) JS_ToInt64(ctx, &channelId, argv[0]);
+    if (argc >= 2) JS_ToFloat64(ctx, &target, argv[1]);
+
+    bool ok = wrap->engine->retarget(static_cast<lcl::ui::ChannelId>(std::max<int64_t>(0, channelId)),
+                                     static_cast<float>(target));
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue js_animation_stop(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque2(ctx, this_val, g_animation_engine_class_id));
+    if (!wrap || !wrap->engine) return JS_EXCEPTION;
+
+    int64_t channelId = 0;
+    int snap = 1;
+    if (argc >= 1) JS_ToInt64(ctx, &channelId, argv[0]);
+    if (argc >= 2) snap = JS_ToBool(ctx, argv[1]);
+
+    bool ok = wrap->engine->stop(static_cast<lcl::ui::ChannelId>(std::max<int64_t>(0, channelId)), snap != 0);
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue js_animation_isActive(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque2(ctx, this_val, g_animation_engine_class_id));
+    if (!wrap || !wrap->engine) return JS_EXCEPTION;
+
+    int64_t channelId = 0;
+    if (argc >= 1) JS_ToInt64(ctx, &channelId, argv[0]);
+    bool active = wrap->engine->isActive(static_cast<lcl::ui::ChannelId>(std::max<int64_t>(0, channelId)));
+    return JS_NewBool(ctx, active);
+}
+
+JSValue js_animation_sample(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque2(ctx, this_val, g_animation_engine_class_id));
+    if (!wrap || !wrap->engine) return JS_EXCEPTION;
+
+    int64_t channelId = 0;
+    if (argc >= 1) JS_ToInt64(ctx, &channelId, argv[0]);
+
+    lcl::ui::AnimatedSample s = wrap->engine->sample(static_cast<lcl::ui::ChannelId>(std::max<int64_t>(0, channelId)));
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "value", JS_NewFloat64(ctx, static_cast<double>(s.value)));
+    JS_SetPropertyStr(ctx, out, "velocity", JS_NewFloat64(ctx, static_cast<double>(s.velocity)));
+    JS_SetPropertyStr(ctx, out, "active", JS_NewBool(ctx, s.active));
+    return out;
+}
+
+JSValue js_animation_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque2(ctx, this_val, g_animation_engine_class_id));
+    if (!wrap || !wrap->engine) return JS_EXCEPTION;
+
+    double dtSec = 1.0 / 60.0;
+    if (argc >= 1) JS_ToFloat64(ctx, &dtSec, argv[0]);
+    std::vector<lcl::ui::ChannelId> completed = wrap->engine->tick(static_cast<float>(std::max(0.0, dtSec)));
+
+    JSValue arr = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < static_cast<uint32_t>(completed.size()); ++i) {
+        JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, static_cast<double>(completed[i])));
+    }
+    return arr;
+}
+
+JSValue js_animation_clearObjectChannels(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque2(ctx, this_val, g_animation_engine_class_id));
+    if (!wrap || !wrap->engine) return JS_EXCEPTION;
+
+    int64_t objectId = 0;
+    if (argc >= 1) JS_ToInt64(ctx, &objectId, argv[0]);
+    size_t count = wrap->engine->clearObjectChannels(static_cast<uint64_t>(std::max<int64_t>(0, objectId)));
+    return JS_NewInt32(ctx, static_cast<int32_t>(count));
+}
+
+JSValue js_animation_clearAll(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)argc;
+    (void)argv;
+    auto* wrap = static_cast<JsAnimationEngineWrapper*>(JS_GetOpaque2(ctx, this_val, g_animation_engine_class_id));
+    if (!wrap || !wrap->engine) return JS_EXCEPTION;
+
+    wrap->engine->clearAll();
     return JS_UNDEFINED;
 }
 
@@ -840,6 +1195,9 @@ void JsRuntime::registerLclBindings() {
     JS_NewClassID(m_rt, &g_widget_class_id);
     JS_NewClass(m_rt, g_widget_class_id, &js_widget_class);
 
+    JS_NewClassID(m_rt, &g_animation_engine_class_id);
+    JS_NewClass(m_rt, g_animation_engine_class_id, &js_animation_engine_class);
+
     // Prototypes
     JSValue windowAppProto = JS_NewObject(m_ctx);
     JS_SetPropertyStr(m_ctx, windowAppProto, "setRootWidget", JS_NewCFunction(m_ctx, js_window_app_setRootWidget, "setRootWidget", 1));
@@ -881,7 +1239,25 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, widgetProto, "getText", JS_NewCFunction(m_ctx, js_text_getText, "getText", 0));
     JS_SetPropertyStr(m_ctx, widgetProto, "setFontSize", JS_NewCFunction(m_ctx, js_text_setFontSize, "setFontSize", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setTextColor", JS_NewCFunction(m_ctx, js_text_setTextColor, "setTextColor", 4));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setSourcePath", JS_NewCFunction(m_ctx, js_image_setSourcePath, "setSourcePath", 1));
+    JS_SetPropertyStr(m_ctx, widgetProto, "clearSource", JS_NewCFunction(m_ctx, js_image_clearSource, "clearSource", 0));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setFit", JS_NewCFunction(m_ctx, js_image_setFit, "setFit", 1));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setCornerRadius", JS_NewCFunction(m_ctx, js_image_setCornerRadius, "setCornerRadius", 2));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setCornerRoundness", JS_NewCFunction(m_ctx, js_image_setCornerRoundness, "setCornerRoundness", 1));
     JS_SetClassProto(m_ctx, g_widget_class_id, widgetProto);
+
+    JSValue animationProto = JS_NewObject(m_ctx);
+    JS_SetPropertyStr(m_ctx, animationProto, "createChannel", JS_NewCFunction(m_ctx, js_animation_createChannel, "createChannel", 3));
+    JS_SetPropertyStr(m_ctx, animationProto, "animateSpring", JS_NewCFunction(m_ctx, js_animation_animateSpring, "animateSpring", 5));
+    JS_SetPropertyStr(m_ctx, animationProto, "animateTween", JS_NewCFunction(m_ctx, js_animation_animateTween, "animateTween", 5));
+    JS_SetPropertyStr(m_ctx, animationProto, "retarget", JS_NewCFunction(m_ctx, js_animation_retarget, "retarget", 2));
+    JS_SetPropertyStr(m_ctx, animationProto, "stop", JS_NewCFunction(m_ctx, js_animation_stop, "stop", 2));
+    JS_SetPropertyStr(m_ctx, animationProto, "isActive", JS_NewCFunction(m_ctx, js_animation_isActive, "isActive", 1));
+    JS_SetPropertyStr(m_ctx, animationProto, "sample", JS_NewCFunction(m_ctx, js_animation_sample, "sample", 1));
+    JS_SetPropertyStr(m_ctx, animationProto, "tick", JS_NewCFunction(m_ctx, js_animation_tick, "tick", 1));
+    JS_SetPropertyStr(m_ctx, animationProto, "clearObjectChannels", JS_NewCFunction(m_ctx, js_animation_clearObjectChannels, "clearObjectChannels", 1));
+    JS_SetPropertyStr(m_ctx, animationProto, "clearAll", JS_NewCFunction(m_ctx, js_animation_clearAll, "clearAll", 0));
+    JS_SetClassProto(m_ctx, g_animation_engine_class_id, animationProto);
 
     // Global LCL namespace object
     JSValue lclObj = JS_NewObject(m_ctx);
@@ -905,6 +1281,14 @@ void JsRuntime::registerLclBindings() {
     JSValue textCtor = JS_NewCFunction2(m_ctx, js_text_constructor, "Text", 1, JS_CFUNC_constructor, 0);
     JS_SetConstructor(m_ctx, textCtor, widgetProto);
     JS_SetPropertyStr(m_ctx, lclObj, "Text", textCtor);
+
+    JSValue imageCtor = JS_NewCFunction2(m_ctx, js_image_constructor, "Image", 1, JS_CFUNC_constructor, 0);
+    JS_SetConstructor(m_ctx, imageCtor, widgetProto);
+    JS_SetPropertyStr(m_ctx, lclObj, "Image", imageCtor);
+
+    JSValue animationCtor = JS_NewCFunction2(m_ctx, js_animation_engine_constructor, "AnimationEngine", 0, JS_CFUNC_constructor, 0);
+    JS_SetConstructor(m_ctx, animationCtor, animationProto);
+    JS_SetPropertyStr(m_ctx, lclObj, "AnimationEngine", animationCtor);
 
     JS_SetPropertyStr(m_ctx, global, "LCL", lclObj);
 

@@ -82,6 +82,7 @@ struct Window {
 
     bool closeRequested{false};
     bool drawInsetBorder{true};
+    float cornerRadiusPx{-1.0f}; // < 0 means use compositor default policy
 
     uint32_t headerColor{0xFF38BDF8};
 
@@ -175,6 +176,11 @@ public:
      * @brief Enable or disable compositor-forced inset border for a window.
      */
     void setInsetBorderEnabled(uint32_t windowId, bool enabled);
+
+    /**
+     * @brief Set compositor mask corner radius for a window in pixels.
+     */
+    void setWindowCornerRadius(uint32_t windowId, float radiusPx);
 
     /**
      * @brief Set reserved desktop struts (No Window Move Zone for Menu Bar / Dock).

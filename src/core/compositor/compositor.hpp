@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
@@ -75,6 +76,7 @@ public:
         uint32_t height{0};
         uint32_t stride{0};     ///< Row stride in bytes
         size_t   shmSize{0};    ///< Total SHM buffer bytes
+        std::string appId;
         std::vector<SurfaceEffectRegion> effectRegions;
 
         // Last configure sent to client; used to dedupe high-frequency resize spam.
@@ -104,6 +106,7 @@ private:
     void tickCursorBlink();
     void renderFrame();
     void renderDiagnosticOverlay();
+    void publishWindowListToShellClients();
 
     // Subsystems — declared in init order, destructed in reverse
     DisplayManager         m_displayManager;
@@ -115,6 +118,7 @@ private:
 
     /// IPC surface registry: (clientFd << 32 | surfaceId) → SurfaceEntry
     std::unordered_map<uint64_t, SurfaceEntry> m_surfaces;
+    std::unordered_map<int, protocol::LCLRole> m_clientRoles;
 
     // Loop state
     std::atomic<bool>                    m_running{true};
@@ -131,6 +135,7 @@ private:
     float                                m_currentFrameMs{0.0f};
     std::chrono::steady_clock::time_point m_lastFpsTime;
     std::chrono::steady_clock::time_point m_lastTransitionTick;
+    uint64_t                              m_lastWindowListHash{0};
 };
 
 } // namespace lcl::core

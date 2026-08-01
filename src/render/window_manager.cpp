@@ -626,6 +626,20 @@ void WindowManager::setInsetBorderEnabled(uint32_t windowId, bool enabled) {
     }
 }
 
+void WindowManager::setWindowCornerRadius(uint32_t windowId, float radiusPx) {
+    const float clamped = std::max(0.0f, radiusPx);
+    for (auto& win : m_windows) {
+        if (win.id == windowId) {
+            if (std::abs(win.cornerRadiusPx - clamped) > 0.01f) {
+                win.cornerRadiusPx = clamped;
+                win.markDirty();
+                m_mouseDirty = true;
+            }
+            break;
+        }
+    }
+}
+
 void WindowManager::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right) {
     m_reservedZone = {top, bottom, left, right};
     std::cout << "[LCL WindowManager] Reserved Zone set to top=" << top << " bottom=" << bottom << " left=" << left << " right=" << right << "\n";

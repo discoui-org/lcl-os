@@ -58,6 +58,7 @@ public:
     bool requestWindowMove(float localX, float localY);
     bool requestWindowClose();
     bool setDecorationMode(lcl::protocol::LCLDecorationMode mode);
+    bool setWindowCornerRadius(float radiusPx);
     void setExternalIpcSocket(int socketFd);
     void setCsdTitlebarEnabled(bool enabled) { m_csdTitlebarEnabled = enabled; }
     void configureCsdTitlebar(float height, float closeLeft, float closeTop, float closeSize);

@@ -21,6 +21,7 @@ FetchContent_MakeAvailable(yoga)
 
 add_library(lcl-ui STATIC
     src/core/animation.cpp
+    src/core/image_loader.cpp
     src/core/rect.cpp
     src/core/render_pass.cpp
     src/core/event_dispatcher.cpp
@@ -29,6 +30,7 @@ add_library(lcl-ui STATIC
     src/widgets/widget.cpp
     src/widgets/container.cpp
     src/widgets/text.cpp
+    src/widgets/image.cpp
     src/widgets/button.cpp
     src/widgets/backdrop_surface.cpp
     src/widgets/filter_group.cpp

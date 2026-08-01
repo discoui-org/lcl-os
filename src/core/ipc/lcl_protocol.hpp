@@ -34,7 +34,9 @@ enum class LCLOpcode : uint32_t {
     ClearEffectGraph = 12,
     BeginWindowMove = 13,
     RequestSurfaceClose = 14,
-    SetInsetBorder = 15
+    SetInsetBorder = 15,
+    SetWindowCornerRadius = 16,
+    WindowListUpdate = 17
 };
 
 enum class LCLDecorationMode : uint32_t {
@@ -131,6 +133,7 @@ struct LCLMsgSurfaceCreate {
     uint32_t width{0};
     uint32_t height{0};
     char title[128]{0};
+    char appId[64]{0};
 };
 
 struct LCLMsgSurfaceDestroy {
@@ -214,6 +217,22 @@ struct LCLMsgRequestSurfaceClose {
 struct LCLMsgSetInsetBorder {
     uint32_t surfaceId{0};
     uint8_t enabled{1};
+};
+
+struct LCLMsgSetWindowCornerRadius {
+    uint32_t surfaceId{0};
+    float radiusPx{0.0f};
+};
+
+struct LCLMsgWindowListHeader {
+    uint32_t windowCount{0};
+};
+
+struct LCLMsgWindowListEntry {
+    uint32_t windowId{0};
+    uint8_t isFocused{0};
+    char title[128]{0};
+    char appId[64]{0};
 };
 
 #pragma pack(pop)

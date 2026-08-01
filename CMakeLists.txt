@@ -118,15 +118,18 @@ add_executable(lcl-desktop-shell
     src/apps/desktop_shell/main.cpp
     src/core/ipc/ipc_manager.cpp
     src/core/ipc/lcl_protocol.cpp
+    src/core/app/app_bundle_parser.cpp
     src/core/display/display_scale.cpp
     src/render/font_renderer.cpp
 )
 
 target_include_directories(lcl-desktop-shell PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
 )
 
 target_link_libraries(lcl-desktop-shell PRIVATE
+    lcl-ui
     Threads::Threads
 )
 

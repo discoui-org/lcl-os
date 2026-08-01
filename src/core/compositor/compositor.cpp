@@ -12,8 +12,12 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <cstring>
+#include <filesystem>
+#include <array>
 #include <sys/mman.h>
 #include <csignal>
+#include <unistd.h>
 
 namespace lcl::core {
 
@@ -32,6 +36,36 @@ float easeInCubic(float x) {
 uint8_t applyOpacityToAlpha(uint8_t alpha, float opacity) {
     const float scaled = std::clamp(static_cast<float>(alpha) * std::clamp(opacity, 0.0f, 1.0f), 0.0f, 255.0f);
     return static_cast<uint8_t>(std::lround(scaled));
+}
+
+std::string inferAppIdFromPid(pid_t pid) {
+    if (pid <= 0) return "";
+
+    std::array<char, 64> procPath{};
+    std::snprintf(procPath.data(), procPath.size(), "/proc/%d/exe", static_cast<int>(pid));
+
+    std::array<char, 4096> resolved{};
+    ssize_t n = readlink(procPath.data(), resolved.data(), resolved.size() - 1);
+    if (n <= 0) return "";
+    resolved[static_cast<size_t>(n)] = '\0';
+
+    std::filesystem::path exePath(resolved.data());
+    for (auto cur = exePath; !cur.empty(); cur = cur.parent_path()) {
+        if (cur.extension() == ".app") {
+            return cur.stem().string();
+        }
+        if (cur == cur.root_path()) {
+            break;
+        }
+    }
+
+    return exePath.stem().string();
+}
+
+uint64_t fnv1aMix(uint64_t h, uint8_t byte) {
+    h ^= static_cast<uint64_t>(byte);
+    h *= 1099511628211ull;
+    return h;
 }
 
 } // namespace
@@ -332,7 +366,16 @@ void Compositor::processIPC() {
         bool isDisconnect   = (msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) ||
                                (msg.command.rfind("CLIENT_DISCONNECT", 0) == 0);
 
+        if (msg.header.opcode == lcl::protocol::LCLOpcode::RegisterRole) {
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgRegisterRole)) {
+                auto* reg = reinterpret_cast<const lcl::protocol::LCLMsgRegisterRole*>(msg.payload.data());
+                m_clientRoles[msg.clientFd] = reg->role;
+            }
+            continue;
+        }
+
         if (isDisconnect) {
+            m_clientRoles.erase(msg.clientFd);
             std::vector<uint64_t> surfacesToRemove;
             for (auto& [surfKey, entry] : m_surfaces) {
                 if (entry.clientFd == msg.clientFd || (msg.pid > 0 && (surfKey >> 32) == static_cast<uint64_t>(msg.pid))) {
@@ -387,6 +430,7 @@ void Compositor::processIPC() {
                 entry.width  = static_cast<uint32_t>(winW);
                 entry.height = static_cast<uint32_t>(winH);
                 entry.stride = entry.width * 4;
+                entry.appId = inferAppIdFromPid(msg.pid);
                 m_surfaces[surfaceKey] = entry;
                 std::cout << "[LCL Compositor] Created Window (ID: " << entry.windowId
                           << ") for Surface " << surfId
@@ -441,6 +485,7 @@ void Compositor::processIPC() {
                 entry.width  = w;
                 entry.height = h;
                 entry.stride = stride;
+                entry.appId = inferAppIdFromPid(msg.pid);
                 m_surfaces[surfaceKey] = entry;
             }
 
@@ -634,6 +679,17 @@ void Compositor::processIPC() {
                 }
             }
 
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetWindowCornerRadius) {
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetWindowCornerRadius)) {
+                auto* radiusMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetWindowCornerRadius*>(msg.payload.data());
+                uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | radiusMsg->surfaceId;
+                auto it = m_surfaces.find(surfaceKey);
+                if (it != m_surfaces.end()) {
+                    m_windowManager.setWindowCornerRadius(it->second.windowId, radiusMsg->radiusPx);
+                    m_needsRedraw = true;
+                }
+            }
+
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetReservedZone) {
             if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetReservedZone)) {
                 auto* resMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetReservedZone*>(msg.payload.data());
@@ -715,6 +771,70 @@ void Compositor::processIPC() {
             } else {
                 std::cerr << "[LCL Compositor ERROR] Failed to fork process for SPAWN_TERMINAL.\n";
             }
+        }
+    }
+
+    publishWindowListToShellClients();
+}
+
+void Compositor::publishWindowListToShellClients() {
+    std::vector<protocol::LCLMsgWindowListEntry> entries;
+    entries.reserve(m_windowManager.getWindows().size());
+
+    uint64_t hash = 1469598103934665603ull;
+    for (const auto& win : m_windowManager.getWindows()) {
+        if (win.layer == protocol::LCLWindowLayer::Bottom) continue;
+        if (win.layer == protocol::LCLWindowLayer::TopMost && win.isUnfocusable) continue;
+
+        protocol::LCLMsgWindowListEntry e{};
+        e.windowId = win.id;
+        e.isFocused = win.isFocused ? 1 : 0;
+        std::strncpy(e.title, win.title.c_str(), sizeof(e.title) - 1);
+
+        for (const auto& [_, surf] : m_surfaces) {
+            if (surf.windowId == win.id && !surf.appId.empty()) {
+                std::strncpy(e.appId, surf.appId.c_str(), sizeof(e.appId) - 1);
+                break;
+            }
+        }
+
+        hash = fnv1aMix(hash, static_cast<uint8_t>(e.windowId & 0xFF));
+        hash = fnv1aMix(hash, static_cast<uint8_t>((e.windowId >> 8) & 0xFF));
+        hash = fnv1aMix(hash, static_cast<uint8_t>((e.windowId >> 16) & 0xFF));
+        hash = fnv1aMix(hash, static_cast<uint8_t>((e.windowId >> 24) & 0xFF));
+        hash = fnv1aMix(hash, e.isFocused);
+        for (char c : e.title) {
+            if (c == '\0') break;
+            hash = fnv1aMix(hash, static_cast<uint8_t>(c));
+        }
+        hash = fnv1aMix(hash, 0xFF);
+        for (char c : e.appId) {
+            if (c == '\0') break;
+            hash = fnv1aMix(hash, static_cast<uint8_t>(c));
+        }
+        entries.push_back(e);
+    }
+
+    if (hash == m_lastWindowListHash) {
+        return;
+    }
+    m_lastWindowListHash = hash;
+
+    protocol::LCLMsgWindowListHeader listHeader{};
+    listHeader.windowCount = static_cast<uint32_t>(entries.size());
+    std::vector<uint8_t> payload(sizeof(listHeader) + entries.size() * sizeof(protocol::LCLMsgWindowListEntry));
+    std::memcpy(payload.data(), &listHeader, sizeof(listHeader));
+    if (!entries.empty()) {
+        std::memcpy(payload.data() + sizeof(listHeader), entries.data(), entries.size() * sizeof(protocol::LCLMsgWindowListEntry));
+    }
+
+    protocol::LCLHeader header{};
+    header.opcode = protocol::LCLOpcode::WindowListUpdate;
+    header.payloadSize = static_cast<uint32_t>(payload.size());
+
+    for (const auto& [fd, role] : m_clientRoles) {
+        if (role == protocol::LCLRole::DesktopWallpaper || role == protocol::LCLRole::ShellPanel) {
+            protocol::sendMsgWithFd(fd, header, payload.data());
         }
     }
 }
@@ -844,6 +964,8 @@ void Compositor::renderDiagnosticOverlay() {
 void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
 
+    publishWindowListToShellClients();
+
     const auto now = std::chrono::steady_clock::now();
     float dtSec = std::chrono::duration<float>(now - m_lastTransitionTick).count();
     m_lastTransitionTick = now;
@@ -907,6 +1029,23 @@ void Compositor::renderFrame() {
 
     constexpr float kWindowCornerRadiusPx = 20.0f;
     constexpr float kWindowCornerRoundness = 2.0f;
+
+    auto resolveWindowCornerRadiusPx = [&](const render::Window& win) {
+        if (win.cornerRadiusPx >= 0.0f) {
+            return win.cornerRadiusPx;
+        }
+
+        if (win.decorationMode == render::DecorationMode::SSD) {
+            return kWindowCornerRadiusPx;
+        }
+
+        if (win.decorationMode == render::DecorationMode::None &&
+            win.title.find("Terminal") != std::string::npos) {
+            return kWindowCornerRadiusPx;
+        }
+
+        return 0.0f;
+    };
 
     auto drawSsdChromeWithLclUi = [&](const render::Window& win,
                                       float chromeOpacity,
@@ -1044,7 +1183,11 @@ void Compositor::renderFrame() {
     auto drawForcedInsetBorder = [&](const render::Window& win, float opacity, float scale) {
         const uint8_t outerA = applyOpacityToAlpha(120, opacity);
         const uint8_t innerA = applyOpacityToAlpha(86, opacity);
-        const float radius = std::max(0.0f, kWindowCornerRadiusPx * scale);
+        float baseRadius = resolveWindowCornerRadiusPx(win);
+        if (baseRadius <= 0.001f) {
+            baseRadius = kWindowCornerRadiusPx;
+        }
+        const float radius = std::max(0.0f, baseRadius * scale);
 
         auto* sr = m_renderer.getSkiaRenderer();
         sr->drawRoundedRect(
@@ -1155,17 +1298,15 @@ void Compositor::renderFrame() {
                 drawH = std::max(1, scaledWinH - scaledTitleOffset);
             }
 
-            const bool maskToWindowShape =
-                (win.decorationMode == render::DecorationMode::SSD) ||
-                (win.decorationMode == render::DecorationMode::None &&
-                 win.title.find("Terminal") != std::string::npos);
+            const float windowCornerRadiusPx = resolveWindowCornerRadiusPx(win);
+            const bool maskToWindowShape = windowCornerRadiusPx > 0.001f;
 
             m_renderer.getSkiaRenderer()->drawBuffer(
                 drawX, drawY, srcW, srcH,
                 reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
                 stridePixels,
                 windowOpacity,
-                maskToWindowShape ? kWindowCornerRadiusPx : 0.0f,
+                maskToWindowShape ? windowCornerRadiusPx : 0.0f,
                 kWindowCornerRoundness,
                 win.decorationMode == render::DecorationMode::SSD,
                 drawW,

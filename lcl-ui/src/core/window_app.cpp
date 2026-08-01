@@ -359,6 +359,20 @@ bool WindowApp::setDecorationMode(lcl::protocol::LCLDecorationMode mode) {
     return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
 }
 
+bool WindowApp::setWindowCornerRadius(float radiusPx) {
+    if (!m_ipcConnected || m_socketFd < 0) return false;
+
+    lcl::protocol::LCLHeader header{};
+    header.opcode = lcl::protocol::LCLOpcode::SetWindowCornerRadius;
+    header.payloadSize = sizeof(lcl::protocol::LCLMsgSetWindowCornerRadius);
+
+    lcl::protocol::LCLMsgSetWindowCornerRadius msg{};
+    msg.surfaceId = 1;
+    msg.radiusPx = std::max(0.0f, radiusPx);
+
+    return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
+}
+
 void WindowApp::configureCsdTitlebar(float height, float closeLeft, float closeTop, float closeSize) {
     m_csdTitlebarHeight = std::max(0.0f, height);
     m_csdCloseLeft = closeLeft;
