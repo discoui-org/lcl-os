@@ -88,7 +88,7 @@ lcl-os/
 ├── Makefile                        # make build | qemu | qemu NATIVE=1
 ├── CMakeLists.txt                  # Root CMake build configuration (with BUILD_TESTS support)
 ├── assets/                         # System fonts and visual assets
-│   └── fonts/                      # TrueType font assets (JetBrains Mono, Inter)
+│   └── fonts/                      # TrueType font assets (Inter)
 ├── docs/                           # Documentation & Agent prompts
 │   ├── ARCHITECTURE.md             # System architecture specification
 │   ├── AG_NEW_INSTANCE_PROMPT.md   # Katrina instance bootstrapper prompt

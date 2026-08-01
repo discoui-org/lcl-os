@@ -24,16 +24,15 @@ public:
 
         m_label = std::make_unique<Text>(label);
         m_label->setFontSize(16.0f);
-        m_label->setTextColor(Color{255, 255, 255, 255});
+        m_label->setTextColor(Color{236, 239, 244, 255});
         m_labelPtr = m_label.get();
         addChild(std::move(m_label));
 
-        setGlass(20.0f, 1.40f, 7.0f);
-        setBackgroundColor(Color{255, 255, 255, 0});
-        setBorderColor(Color{255, 255, 255, 170});
-        setBorderWidth(2.0f);
-        setBorderRadius(20.0f);
-        setOpacity(0.96f);
+        setBackgroundColor(Color{36, 42, 52, 255});
+        setBorderColor(Color{86, 95, 112, 255});
+        setBorderWidth(1.0f);
+        setBorderRadius(14.0f);
+        setOpacity(1.0f);
     }
 
     void setOnClick(std::function<void()> cb) { m_onClick = std::move(cb); }
@@ -44,21 +43,26 @@ public:
 
     bool onPointerEnter(const PointerEvent& event) override {
         (void)event;
-        if (!m_pressed) setBorderColor(Color{255, 255, 255, 205});
+        if (!m_pressed) {
+            setBackgroundColor(Color{44, 50, 61, 255});
+            setBorderColor(Color{110, 122, 143, 255});
+        }
         return true;
     }
 
     bool onPointerLeave(const PointerEvent& event) override {
         (void)event;
         m_pressed = false;
-        setBorderColor(Color{255, 255, 255, 170});
+        setBackgroundColor(Color{36, 42, 52, 255});
+        setBorderColor(Color{86, 95, 112, 255});
         return true;
     }
 
     bool onPointerDown(const PointerEvent& event) override {
         (void)event;
         m_pressed = true;
-        setBorderColor(Color{255, 255, 255, 235});
+        setBackgroundColor(Color{52, 58, 72, 255});
+        setBorderColor(Color{136, 148, 172, 255});
         return true;
     }
 
@@ -66,7 +70,8 @@ public:
         (void)event;
         bool wasPressed = m_pressed;
         m_pressed = false;
-        setBorderColor(Color{255, 255, 255, 205});
+        setBackgroundColor(Color{44, 50, 61, 255});
+        setBorderColor(Color{110, 122, 143, 255});
         if (wasPressed && m_onClick) m_onClick();
         return true;
     }
@@ -96,7 +101,7 @@ int main() {
     rootContainer->getYogaNode().setJustifyContent(YGJustifyCenter);
     rootContainer->getYogaNode().setAlignItems(YGAlignCenter);
     rootContainer->getYogaNode().setGap(YGGutterAll, 20.0f);
-    rootContainer->setBackgroundColor(Color{0, 0, 0, 0});
+    rootContainer->setBackgroundColor(Color{17, 19, 23, 255});
 
     // Inner Card Container
     auto cardContainer = std::make_unique<Container>();
@@ -104,20 +109,22 @@ int main() {
     cardContainer->getYogaNode().setAlignItems(YGAlignCenter);
     cardContainer->getYogaNode().setPadding(YGEdgeAll, 24.0f);
     cardContainer->getYogaNode().setGap(YGGutterAll, 16.0f);
-    cardContainer->setBackgroundColor(Color{255, 255, 255, 0});
-    cardContainer->setBorderColor(Color{180, 210, 255, 0});
-    cardContainer->setBorderWidth(0.0f);
-    cardContainer->setBorderRadius(18.0f);
+    cardContainer->setBackgroundColor(Color{26, 30, 36, 255});
+    cardContainer->setBorderColor(Color{10, 12, 16, 120});
+    cardContainer->setBorderWidth(1.0f);
+    cardContainer->setBorderRadius(20.0f);
+    cardContainer->setBorderRoundness(2.4f);
 
     // Button & Text Widgets
     auto clickButton = std::make_unique<BlurButton>("Tıkla: 0");
     BlurButton* btnPtr = clickButton.get();
-    clickButton->getYogaNode().setWidth(160.0f);
+    clickButton->getYogaNode().setWidth(176.0f);
     clickButton->getYogaNode().setHeight(44.0f);
 
     auto statusText = std::make_unique<Text>("Tıklama Sayısı: 0");
     Text* textPtr = statusText.get();
     statusText->setFontSize(16.0f);
+    statusText->setTextColor(Color{196, 202, 211, 255});
 
     // Application State & Interactive Counter Callback
     static int clickCounter = 0;

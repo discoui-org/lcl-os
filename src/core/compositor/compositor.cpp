@@ -671,15 +671,6 @@ void Compositor::renderFrame() {
     constexpr float kWindowCornerRadiusPx = 20.0f;
     constexpr float kWindowCornerRoundness = 3.4f;
 
-    auto toUiColor = [](uint32_t argb) -> lcl::ui::Color {
-        return lcl::ui::Color{
-            static_cast<uint8_t>((argb >> 16) & 0xFF),
-            static_cast<uint8_t>((argb >> 8) & 0xFF),
-            static_cast<uint8_t>(argb & 0xFF),
-            static_cast<uint8_t>((argb >> 24) & 0xFF)
-        };
-    };
-
     auto drawSsdChromeWithLclUi = [&](const render::Window& win) {
         lcl::ui::RenderPass pass;
         auto root = std::make_unique<lcl::ui::Container>();
@@ -704,30 +695,33 @@ void Compositor::renderFrame() {
             static_cast<float>(DisplayScale::fontSize()),
             chromeStyle);
 
-        auto titleSep = std::make_unique<lcl::ui::Container>();
-        titleSep->setBackgroundColor(lcl::ui::Color{180, 220, 255, 58});
-        titleSep->setBorderRadius(0.0f);
-        titleSep->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        titleSep->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-        titleSep->getYogaNode().setPosition(YGEdgeTop, titleH - 1.0f);
-        titleSep->getYogaNode().setWidth(static_cast<float>(win.width));
-        titleSep->getYogaNode().setHeight(1.0f);
+        auto outerInsetBorder = std::make_unique<lcl::ui::Container>();
+        outerInsetBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
+        outerInsetBorder->setBorderColor(lcl::ui::Color{10, 12, 16, 120});
+        outerInsetBorder->setBorderWidth(1.0f);
+        outerInsetBorder->setBorderRadius(kWindowCornerRadiusPx);
+        outerInsetBorder->setBorderRoundness(2.0f);
+        outerInsetBorder->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        outerInsetBorder->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+        outerInsetBorder->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+        outerInsetBorder->getYogaNode().setWidth(static_cast<float>(win.width));
+        outerInsetBorder->getYogaNode().setHeight(static_cast<float>(win.height));
 
-        auto frameBorder = std::make_unique<lcl::ui::Container>();
-        frameBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-        frameBorder->setBorderColor(toUiColor(::lcl::theme::UI::WindowBorder));
-        frameBorder->setBorderWidth(1.0f);
-        frameBorder->setBorderRadius(kWindowCornerRadiusPx);
-        frameBorder->setBorderRoundness(kWindowCornerRoundness);
-        frameBorder->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        frameBorder->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-        frameBorder->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-        frameBorder->getYogaNode().setWidth(static_cast<float>(win.width));
-        frameBorder->getYogaNode().setHeight(static_cast<float>(win.height));
+        auto innerInsetBorder = std::make_unique<lcl::ui::Container>();
+        innerInsetBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
+        innerInsetBorder->setBorderColor(lcl::ui::Color{245, 248, 252, 86});
+        innerInsetBorder->setBorderWidth(1.0f);
+        innerInsetBorder->setBorderRadius(std::max(0.0f, kWindowCornerRadiusPx - 1.0f));
+        innerInsetBorder->setBorderRoundness(2.0f);
+        innerInsetBorder->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        innerInsetBorder->getYogaNode().setPosition(YGEdgeLeft, 1.0f);
+        innerInsetBorder->getYogaNode().setPosition(YGEdgeTop, 1.0f);
+        innerInsetBorder->getYogaNode().setWidth(std::max(0.0f, static_cast<float>(win.width) - 2.0f));
+        innerInsetBorder->getYogaNode().setHeight(std::max(0.0f, static_cast<float>(win.height) - 2.0f));
 
         root->addChild(std::move(titleBar));
-        root->addChild(std::move(titleSep));
-        root->addChild(std::move(frameBorder));
+        root->addChild(std::move(outerInsetBorder));
+        root->addChild(std::move(innerInsetBorder));
 
         root->getYogaNode().calculateLayout(static_cast<float>(win.width), static_cast<float>(win.height));
         root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
@@ -750,7 +744,7 @@ void Compositor::renderFrame() {
         const float ctrlTop = std::max(4.0f, (titleH - ctrlSize) * 0.5f);
 
         root->getYogaNode().setWidth(static_cast<float>(win.width));
-        root->getYogaNode().setHeight(titleH);
+        root->getYogaNode().setHeight(static_cast<float>(win.height));
 
         auto mkHeaderControl = [&](float left, const char* glyph) {
             auto button = std::make_unique<lcl::ui::Container>();
@@ -780,10 +774,37 @@ void Compositor::renderFrame() {
         root->addChild(mkHeaderControl(ctrlLeft + ctrlSize + ctrlGap, "-"));
         root->addChild(mkHeaderControl(ctrlLeft + (ctrlSize + ctrlGap) * 2.0f, "+"));
 
-        root->getYogaNode().calculateLayout(static_cast<float>(win.width), titleH);
+        auto outerInsetBorder = std::make_unique<lcl::ui::Container>();
+        outerInsetBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
+        outerInsetBorder->setBorderColor(lcl::ui::Color{10, 12, 16, 120});
+        outerInsetBorder->setBorderWidth(1.0f);
+        outerInsetBorder->setBorderRadius(kWindowCornerRadiusPx);
+        outerInsetBorder->setBorderRoundness(2.0f);
+        outerInsetBorder->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        outerInsetBorder->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+        outerInsetBorder->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+        outerInsetBorder->getYogaNode().setWidth(static_cast<float>(win.width));
+        outerInsetBorder->getYogaNode().setHeight(static_cast<float>(win.height));
+
+        auto innerInsetBorder = std::make_unique<lcl::ui::Container>();
+        innerInsetBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
+        innerInsetBorder->setBorderColor(lcl::ui::Color{245, 248, 252, 86});
+        innerInsetBorder->setBorderWidth(1.0f);
+        innerInsetBorder->setBorderRadius(std::max(0.0f, kWindowCornerRadiusPx - 1.0f));
+        innerInsetBorder->setBorderRoundness(2.0f);
+        innerInsetBorder->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        innerInsetBorder->getYogaNode().setPosition(YGEdgeLeft, 1.0f);
+        innerInsetBorder->getYogaNode().setPosition(YGEdgeTop, 1.0f);
+        innerInsetBorder->getYogaNode().setWidth(std::max(0.0f, static_cast<float>(win.width) - 2.0f));
+        innerInsetBorder->getYogaNode().setHeight(std::max(0.0f, static_cast<float>(win.height) - 2.0f));
+
+        root->addChild(std::move(outerInsetBorder));
+        root->addChild(std::move(innerInsetBorder));
+
+        root->getYogaNode().calculateLayout(static_cast<float>(win.width), static_cast<float>(win.height));
         root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
 
-        lcl::ui::Rect damage{static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), titleH};
+        lcl::ui::Rect damage{static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), static_cast<float>(win.height)};
         root->draw(reinterpret_cast<SkCanvas*>(skia), damage);
     };
 

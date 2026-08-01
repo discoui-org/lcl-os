@@ -13,7 +13,7 @@ rootContainer.setDirection("column");
 rootContainer.setJustifyContent("center");
 rootContainer.setAlignItems("center");
 rootContainer.setGap(20);
-rootContainer.setBackgroundColor(0, 0, 0, 0);
+rootContainer.setBackgroundColor(17, 19, 23, 255);
 
 // Inner Card Container
 const cardContainer = new LCL.Container();
@@ -21,10 +21,10 @@ cardContainer.setDirection("column");
 cardContainer.setAlignItems("center");
 cardContainer.setPadding(24);
 cardContainer.setGap(16);
-cardContainer.setBackgroundColor(255, 255, 255, 0);
-cardContainer.setBorderColor(180, 210, 255, 0);
-cardContainer.setBorderWidth(0);
-cardContainer.setBorderRadius(18);
+cardContainer.setBackgroundColor(26, 30, 36, 255);
+cardContainer.setBorderColor(10, 12, 16, 120);
+cardContainer.setBorderWidth(1);
+cardContainer.setBorderRadius(20);
 
 // Application State & Interactive Counter Callback
 let clickCounter = 0;
@@ -37,21 +37,20 @@ clickButton.setDirection("row");
 clickButton.setJustifyContent("center");
 clickButton.setAlignItems("center");
 clickButton.setPadding(10);
-clickButton.setBackgroundColor(255, 255, 255, 0);
-clickButton.setBorderColor(255, 255, 255, 170);
-clickButton.setBorderWidth(2);
-clickButton.setBorderRadius(20);
-clickButton.setGlass(20, 1.4, 7);
-clickButton.setOpacity(0.86);
+clickButton.setBackgroundColor(36, 42, 52, 255);
+clickButton.setBorderColor(86, 95, 112, 255);
+clickButton.setBorderWidth(1);
+clickButton.setBorderRadius(14);
+clickButton.setOpacity(1.0);
 
 const buttonLabel = new LCL.Text("Tıkla: 0");
 buttonLabel.setFontSize(16);
-buttonLabel.setTextColor(255, 255, 255, 255);
+buttonLabel.setTextColor(236, 239, 244, 255);
 clickButton.addChild(buttonLabel);
 
 const statusText = new LCL.Text("Tıklama Sayısı: 0");
 statusText.setFontSize(16);
-statusText.setTextColor(255, 255, 255, 220);
+statusText.setTextColor(196, 202, 211, 255);
 
 clickButton.setOnClick(() => {
     clickCounter++;

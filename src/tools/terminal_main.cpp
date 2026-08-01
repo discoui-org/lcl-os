@@ -31,10 +31,10 @@ static void renderTerminalFrame(uint32_t *shmPixels, int width, int height,
   if (!shmPixels || width <= 0 || height <= 0)
     return;
 
-  // Fully transparent terminal background; compositor effects provide glass look.
-  const uint32_t kBgColor = 0x00000000;
-  const uint32_t kTextColor = 0xFF38BDF8;   // Electric Cyan text
-  const uint32_t kCursorColor = 0xFF00FF88; // Bright Green cursor block
+  // Dark neutral glass-tinted background for libadwaita/macOS hybrid theme.
+  const uint32_t kBgColor = 0xB8111317;
+  const uint32_t kTextColor = 0xFFECEFF4;
+  const uint32_t kCursorColor = 0xFFC4CAD3;
 
   std::fill(shmPixels, shmPixels + (width * height), kBgColor);
 
@@ -210,7 +210,7 @@ int main() {
   terminalGlass.value = 1.0f; // reserved for legacy strength; ignored by glass shader
   terminalGlass.profile = static_cast<uint8_t>(lcl::protocol::GlassProfile::Auto); // reserved
   terminalGlass.params[0] = 30.0f; // thickness (pixels)
-  terminalGlass.params[1] = 1.85f; // refraction factor
+  terminalGlass.params[1] = 3.0f; // refraction factor
   terminalGlass.params[2] = 12.0f; // dispersion gain
 
   std::vector<lcl::protocol::FilterOp> termFilters = {terminalBlur,
@@ -319,7 +319,6 @@ int main() {
   titlebarRoot->getYogaNode().setHeight(static_cast<float>(kSurfH));
 
   lcl::ui::Container *titleBarWidget = nullptr;
-  lcl::ui::Container *titleSepWidget = nullptr;
 
   auto titleBar = std::make_unique<lcl::ui::Container>();
   titleBarWidget = titleBar.get();
@@ -344,25 +343,14 @@ int main() {
   titleText->getYogaNode().setPosition(YGEdgeTop, 9.0f);
   titleBar->addChild(std::move(titleText));
 
-  auto titleSep = std::make_unique<lcl::ui::Container>();
-  titleSepWidget = titleSep.get();
-  titleSep->setBackgroundColor(lcl::ui::Color{180, 220, 255, 58});
-  titleSep->setBorderRadius(0.0f);
-  titleSep->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-  titleSep->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-  titleSep->getYogaNode().setPosition(YGEdgeTop, static_cast<float>(kClientTitleBarH - 1));
-  titleSep->getYogaNode().setWidth(static_cast<float>(kSurfW));
-  titleSep->getYogaNode().setHeight(1.0f);
-
   titlebarRoot->addChild(std::move(titleBar));
-  titlebarRoot->addChild(std::move(titleSep));
 
   lcl::ui::WindowApp titlebarApp(kSurfW, kSurfH, "LCL Terminal Titlebar");
   titlebarApp.setRootWidget(std::move(titlebarRoot));
 
   int curW = kSurfW;
   int curH = kSurfH;
-  std::vector<uint32_t> localPixels(curW * curH, 0xD90F172A);
+  std::vector<uint32_t> localPixels(curW * curH, 0xB8111317);
 
   auto drawTitlebarWidgets = [&](int frameW, int frameH) {
     auto &titlebarRenderer = titlebarApp.getRenderer();
@@ -375,11 +363,6 @@ int main() {
     }
     if (titleBarWidget) {
       titleBarWidget->getYogaNode().setWidth(static_cast<float>(frameW));
-    }
-    if (titleSepWidget) {
-      titleSepWidget->getYogaNode().setPosition(
-          YGEdgeTop, static_cast<float>(kClientTitleBarH - 1));
-      titleSepWidget->getYogaNode().setWidth(static_cast<float>(frameW));
     }
     if (auto *root = titlebarApp.getRootWidget()) {
       root->getYogaNode().calculateLayout(static_cast<float>(frameW),
@@ -519,7 +502,7 @@ int main() {
       }
 
       shmSize = curW * curH * 4;
-      localPixels.resize(curW * curH, 0xD90F172A);
+      localPixels.resize(curW * curH, 0xB8111317);
 
       shmFd = memfd_create("lcl_term_shm", MFD_CLOEXEC);
       if (shmFd >= 0) {
@@ -530,7 +513,7 @@ int main() {
         if (shmPixels == MAP_FAILED) {
           shmPixels = nullptr;
         } else {
-          std::fill_n(shmPixels, curW * curH, 0xD90F172A);
+          std::fill_n(shmPixels, curW * curH, 0xB8111317);
         }
       }
 

@@ -209,9 +209,7 @@ int main() {
     // Initialize FontRenderer for MenuBar time text
     lcl::render::FontRenderer fontRenderer;
     std::vector<std::string> fontPaths = {
-        "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
         "/usr/share/fonts/inter/Inter-Regular.otf",
-        "assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
         "assets/fonts/inter/Inter-Regular.otf"
     };
     for (const auto& fpath : fontPaths) {

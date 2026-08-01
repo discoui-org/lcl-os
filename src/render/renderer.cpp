@@ -196,10 +196,8 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
     core::EGLBackend* eglBackend = m_displayManager ? m_displayManager->getEGLBackend() : nullptr;
     m_skiaRenderer.initialize(m_width, m_height, eglBackend, m_softwareBackBuffer.data());
 
-    // Initialize TrueType Vector Font Engine (JetBrains Mono TTF with fallback)
+    // Initialize TrueType Vector Font Engine (Inter TTF/OTF)
     std::vector<std::string> fontPaths = {
-        "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
-        "assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
         "/usr/share/fonts/inter/Inter-Regular.otf",
         "assets/fonts/inter/Inter-Regular.otf"
     };

@@ -709,7 +709,11 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
     const float innerH = std::max(0.0f, static_cast<float>(h) - bw * 2.0f);
     const float innerR = std::max(0.0f, r - bw);
 
-    const int aaSamples = (!hasFill && hasBorder) ? 2 : 4;
+    int aaSamples = 4;
+    if (!hasFill && hasBorder) {
+        // Border-only shapes need denser coverage to avoid jagged arcs.
+        aaSamples = (bw <= 1.5f) ? 6 : 5;
+    }
     const float invSampleCount = 1.0f / static_cast<float>(aaSamples * aaSamples);
 
     for (int y = 0; y < h; ++y) {
@@ -812,7 +816,7 @@ void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, const SkiaCo
 void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fgColor) {
     if (!m_initialized || text.empty()) return;
     if (!m_fontRenderer.isInitialized()) {
-        m_fontRenderer.loadFont("/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf", 15.0f);
+        m_fontRenderer.loadFont("/usr/share/fonts/inter/Inter-Regular.otf", 15.0f);
     }
 
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && m_fontRenderer.isInitialized()) {
