@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <chrono>
 #include "core/input/input_manager.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "render/damage_tracker.hpp"
@@ -55,6 +56,16 @@ struct Window {
     bool isDragging{false};
     int dragOffsetX{0};
     int dragOffsetY{0};
+    float lastDragVelX{0.0f};
+    float lastDragVelY{0.0f};
+
+    bool snapBackActive{false};
+    float snapX{0.0f};
+    float snapY{0.0f};
+    float snapVelX{0.0f};
+    float snapVelY{0.0f};
+    float snapTargetX{0.0f};
+    float snapTargetY{0.0f};
 
     // Resize state
     bool isResizing{false};
@@ -135,6 +146,12 @@ public:
      * @return True if window state or mouse position changed requiring redraw.
      */
     bool processInputEvent(const core::InputEvent& ev);
+
+    /**
+     * @brief Advance spring snap-back animations for dragged windows.
+     * @return True if any window geometry changed.
+     */
+    bool updateAnimations();
 
     /**
      * @brief Commit attached client surface geometry and calculate position shift for anchor preservation.
@@ -218,6 +235,7 @@ private:
     uint32_t m_nextWindowId{1};
     bool m_initialized{false};
     bool m_mouseDirty{true};
+    std::chrono::steady_clock::time_point m_lastAnimTick{};
 };
 
 } // namespace lcl::render

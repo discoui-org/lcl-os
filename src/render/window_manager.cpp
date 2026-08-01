@@ -20,6 +20,7 @@ bool WindowManager::initialize(uint32_t screenWidth, uint32_t screenHeight) {
     m_subpixelY = static_cast<double>(m_mouseY);
     m_windows.clear();
     m_initialized = true;
+    m_lastAnimTick = std::chrono::steady_clock::now();
 
     std::cout << "[LCL WindowManager] Initialized compositor canvas (" << m_screenWidth << "x" << m_screenHeight << ") [0 active surfaces].\n";
     return true;
@@ -161,8 +162,13 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
         for (auto& win : m_windows) {
             // Dragging (Move)
             if (win.isDragging) {
-                int newX = std::clamp(m_mouseX - win.dragOffsetX, 0, static_cast<int>(m_screenWidth) - win.width);
-                int newY = std::clamp(m_mouseY - win.dragOffsetY, topInset, static_cast<int>(m_screenHeight) - win.height - bottomInset);
+                int newX = m_mouseX - win.dragOffsetX;
+                int newY = std::max(topInset, m_mouseY - win.dragOffsetY);
+
+                win.lastDragVelX = static_cast<float>(newX - win.x);
+                win.lastDragVelY = static_cast<float>(newY - win.y);
+                win.snapBackActive = false;
+
                 if (newX != win.x || newY != win.y) {
                     win.x = newX;
                     win.y = newY;
@@ -304,6 +310,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         if (event.button == BTN_LEFT) {
                             // Super + Left Click = Move
                             targetWin.isDragging = true;
+                            targetWin.snapBackActive = false;
+                            targetWin.snapVelX = 0.0f;
+                            targetWin.snapVelY = 0.0f;
                             targetWin.dragOffsetX = m_mouseX - targetWin.x;
                             targetWin.dragOffsetY = m_mouseY - targetWin.y;
                             targetWin.markDirty();
@@ -311,6 +320,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         } else if (event.button == BTN_RIGHT) {
                             // Super + Right Click = Normalized Aspect-Aware Grid
                             targetWin.isResizing = true;
+                            targetWin.snapBackActive = false;
+                            targetWin.snapVelX = 0.0f;
+                            targetWin.snapVelY = 0.0f;
 
                             double normX = (targetWin.width > 0)
                                 ? static_cast<double>(m_mouseX - targetWin.x) / static_cast<double>(targetWin.width)
@@ -351,6 +363,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         if (edge != ResizeEdge::None) {
                             // Edge / Corner Resize
                             targetWin.isResizing = true;
+                            targetWin.snapBackActive = false;
+                            targetWin.snapVelX = 0.0f;
+                            targetWin.snapVelY = 0.0f;
                             targetWin.resizeEdge = edge;
                             targetWin.activeResizeEdge = edge;
                             targetWin.anchorRight = targetWin.x + targetWin.width;
@@ -366,6 +381,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         } else if (titleH > 0 && m_mouseY < targetWin.y + titleH) {
                             // Header Drag Move
                             targetWin.isDragging = true;
+                            targetWin.snapBackActive = false;
+                            targetWin.snapVelX = 0.0f;
+                            targetWin.snapVelY = 0.0f;
                             targetWin.dragOffsetX = m_mouseX - targetWin.x;
                             targetWin.dragOffsetY = m_mouseY - targetWin.y;
                             targetWin.markDirty();
@@ -380,8 +398,34 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
             }
         } else {
             // Button Released: Release dragging and resizing for all windows
+            constexpr int kVisibleSafePx = 50;
+            const int safeLeft = 0;
+            const int safeTop = static_cast<int>(m_reservedZone.top);
+            const int safeRight = static_cast<int>(m_screenWidth);
+            const int safeBottom = static_cast<int>(m_screenHeight) - static_cast<int>(m_reservedZone.bottom);
+
             for (auto& win : m_windows) {
                 if (win.isDragging || win.isResizing) {
+                    if (win.isDragging) {
+                        const int minSafeX = safeLeft - std::max(0, win.width - kVisibleSafePx);
+                        const int maxSafeX = safeRight - kVisibleSafePx;
+                        const int maxSafeY = safeBottom - kVisibleSafePx;
+
+                        const float targetX = static_cast<float>(std::clamp(win.x, minSafeX, maxSafeX));
+                        const float targetY = static_cast<float>(std::clamp(win.y, safeTop, maxSafeY));
+
+                        if (std::abs(targetX - static_cast<float>(win.x)) > 0.5f ||
+                            std::abs(targetY - static_cast<float>(win.y)) > 0.5f) {
+                            win.snapBackActive = true;
+                            win.snapX = static_cast<float>(win.x);
+                            win.snapY = static_cast<float>(win.y);
+                            win.snapTargetX = targetX;
+                            win.snapTargetY = targetY;
+                            win.snapVelX = win.lastDragVelX * 25.0f;
+                            win.snapVelY = win.lastDragVelY * 25.0f;
+                        }
+                    }
+
                     win.isDragging = false;
                     win.isResizing = false;
                     win.resizeEdge = ResizeEdge::None;
@@ -392,6 +436,76 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
         }
     }
     return stateChanged;
+}
+
+bool WindowManager::updateAnimations() {
+    if (!m_initialized) return false;
+
+    const auto now = std::chrono::steady_clock::now();
+    float dt = std::chrono::duration<float>(now - m_lastAnimTick).count();
+    m_lastAnimTick = now;
+    dt = std::clamp(dt, 1.0f / 240.0f, 1.0f / 30.0f);
+
+    bool changed = false;
+    constexpr float kSpring = 180.0f;
+    constexpr float kDamping = 24.0f;
+
+    for (auto& win : m_windows) {
+        if (!win.snapBackActive) continue;
+
+        if (win.isDragging || win.isResizing) {
+            win.snapBackActive = false;
+            win.snapVelX = 0.0f;
+            win.snapVelY = 0.0f;
+            continue;
+        }
+
+        const float dx = win.snapTargetX - win.snapX;
+        const float dy = win.snapTargetY - win.snapY;
+
+        const float ax = (kSpring * dx) - (kDamping * win.snapVelX);
+        const float ay = (kSpring * dy) - (kDamping * win.snapVelY);
+
+        win.snapVelX += ax * dt;
+        win.snapVelY += ay * dt;
+        win.snapX += win.snapVelX * dt;
+        win.snapY += win.snapVelY * dt;
+
+        const int newX = static_cast<int>(std::lround(win.snapX));
+        const int newY = static_cast<int>(std::lround(win.snapY));
+
+        if (newX != win.x || newY != win.y) {
+            win.x = newX;
+            win.y = newY;
+            win.pendingX = newX;
+            win.pendingY = newY;
+            win.markDirty();
+            changed = true;
+        }
+
+        const bool donePos = std::abs(win.snapTargetX - win.snapX) < 0.5f &&
+                             std::abs(win.snapTargetY - win.snapY) < 0.5f;
+        const bool doneVel = std::abs(win.snapVelX) < 2.5f && std::abs(win.snapVelY) < 2.5f;
+        if (donePos && doneVel) {
+            win.snapX = win.snapTargetX;
+            win.snapY = win.snapTargetY;
+            win.x = static_cast<int>(std::lround(win.snapTargetX));
+            win.y = static_cast<int>(std::lround(win.snapTargetY));
+            win.pendingX = win.x;
+            win.pendingY = win.y;
+            win.snapVelX = 0.0f;
+            win.snapVelY = 0.0f;
+            win.snapBackActive = false;
+            win.markDirty();
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        m_mouseDirty = true;
+    }
+
+    return changed;
 }
 
 void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH) {

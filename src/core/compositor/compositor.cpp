@@ -752,6 +752,9 @@ void Compositor::run() {
         auto frameStart = std::chrono::high_resolution_clock::now();
 
         processInput();
+        if (m_windowManager.updateAnimations()) {
+            m_needsRedraw = true;
+        }
         processIPC();
         tickCursorBlink();
 
