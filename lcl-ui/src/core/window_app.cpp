@@ -46,6 +46,7 @@ WindowApp::WindowApp(uint32_t width, uint32_t height, const std::string& title)
     defaultRoot->getYogaNode().setWidth(static_cast<float>(width));
     defaultRoot->getYogaNode().setHeight(static_cast<float>(height));
     setRootWidget(std::move(defaultRoot));
+    m_lastResizeApply = std::chrono::steady_clock::now();
 }
 
 WindowApp::~WindowApp() {
@@ -96,8 +97,9 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
         }
     }
 
+    // Resize path: keep existing renderer instance and only retarget the backing pixels.
+    // Re-initializing renderer every configure event causes heavy stalls while dragging.
     m_renderer.setTargetPixels(m_pixelBuffer.data(), width, height);
-    m_renderer.initialize(width, height, nullptr, m_pixelBuffer.data());
     m_shmNeedsAttach = true;
 }
 
@@ -181,25 +183,9 @@ void WindowApp::resize(uint32_t width, uint32_t height) {
 
     if (m_ipcConnected) {
         allocateSHM(width, height);
-
-        // Pre-render layout into m_pixelBuffer & copy to m_shmPixels BEFORE committing buffer to Compositor!
-        renderFrame();
-
-        if (m_socketFd >= 0 && m_shmFd >= 0) {
-            lcl::protocol::LCLHeader attachHeader{};
-            attachHeader.opcode = lcl::protocol::LCLOpcode::AttachBuffer;
-            attachHeader.payloadSize = sizeof(lcl::protocol::LCLMsgAttachBuffer);
-
-            lcl::protocol::LCLMsgAttachBuffer attachMsg{};
-            attachMsg.surfaceId = 1;
-            attachMsg.width = width;
-            attachMsg.height = height;
-            attachMsg.stride = width * 4;
-            attachMsg.format = 1;
-
-            lcl::protocol::sendMsgWithFd(m_socketFd, attachHeader, &attachMsg, m_shmFd);
-            m_shmNeedsAttach = false;
-        }
+        // Defer render+attach to the main loop's renderFrame() so each resize tick
+        // produces at most one frame and one attach commit.
+        m_firstFrame = true;
     }
 }
 
@@ -263,9 +249,34 @@ void WindowApp::pollIPC() {
         }
     }
 
-    // Event Coalescing: Execute resize ONCE for the most recent dimensions in socket queue
-    if (pendingResize && (latestWidth != m_width || latestHeight != m_height)) {
-        resize(latestWidth, latestHeight);
+    if (pendingResize && (latestWidth > 0 && latestHeight > 0)) {
+        m_pendingResizeWidth = latestWidth;
+        m_pendingResizeHeight = latestHeight;
+        m_hasPendingResize = true;
+    }
+
+    // Throttled resize apply: demos update every pixel while dragging; applying each
+    // configure causes SHM recreate storms. Keep latest target and apply at a bounded rate.
+    if (m_hasPendingResize &&
+        (m_pendingResizeWidth != m_width || m_pendingResizeHeight != m_height)) {
+        const auto now = std::chrono::steady_clock::now();
+        constexpr auto kMinResizeInterval = std::chrono::milliseconds(22);
+
+        const uint32_t dx = (m_pendingResizeWidth > m_width)
+            ? (m_pendingResizeWidth - m_width)
+            : (m_width - m_pendingResizeWidth);
+        const uint32_t dy = (m_pendingResizeHeight > m_height)
+            ? (m_pendingResizeHeight - m_height)
+            : (m_height - m_pendingResizeHeight);
+
+        const bool largeJump = (dx >= 48u) || (dy >= 48u);
+        const bool intervalElapsed = (now - m_lastResizeApply) >= kMinResizeInterval;
+
+        if (largeJump || intervalElapsed) {
+            resize(m_pendingResizeWidth, m_pendingResizeHeight);
+            m_hasPendingResize = false;
+            m_lastResizeApply = now;
+        }
     }
 }
 
@@ -281,7 +292,8 @@ void WindowApp::runEventLoop() {
         if (rendered) {
             auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::high_resolution_clock::now() - frameStart);
-            constexpr auto minFramePeriod = std::chrono::microseconds(1000); // 1000 FPS safety ceiling
+            // Keep app-side pacing close to terminal loop to avoid resize thrash.
+            constexpr auto minFramePeriod = std::chrono::microseconds(6900);
             if (elapsed < minFramePeriod) {
                 std::this_thread::sleep_for(minFramePeriod - elapsed);
             }
@@ -462,10 +474,13 @@ bool WindowApp::renderFrame() {
                 std::memcpy(dst, flatFilters.data(), flatFilters.size() * sizeof(lcl::protocol::FilterOp));
             }
 
-            lcl::protocol::LCLHeader graphHeader{};
-            graphHeader.opcode = lcl::protocol::LCLOpcode::SetEffectGraph;
-            graphHeader.payloadSize = static_cast<uint32_t>(payload.size());
-            lcl::protocol::sendMsgWithFd(m_socketFd, graphHeader, payload.data());
+            if (payload != m_lastEffectGraphPayload) {
+                lcl::protocol::LCLHeader graphHeader{};
+                graphHeader.opcode = lcl::protocol::LCLOpcode::SetEffectGraph;
+                graphHeader.payloadSize = static_cast<uint32_t>(payload.size());
+                lcl::protocol::sendMsgWithFd(m_socketFd, graphHeader, payload.data());
+                m_lastEffectGraphPayload = std::move(payload);
+            }
             m_effectGraphActive = true;
         } else if (m_effectGraphActive) {
             lcl::protocol::LCLMsgClearEffectGraph clearMsg{};
@@ -476,6 +491,7 @@ bool WindowApp::renderFrame() {
             clearHeader.payloadSize = sizeof(clearMsg);
             lcl::protocol::sendMsgWithFd(m_socketFd, clearHeader, &clearMsg);
             m_effectGraphActive = false;
+            m_lastEffectGraphPayload.clear();
         }
     }
 

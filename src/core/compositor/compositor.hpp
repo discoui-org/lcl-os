@@ -70,6 +70,14 @@ public:
         uint32_t stride{0};     ///< Row stride in bytes
         size_t   shmSize{0};    ///< Total SHM buffer bytes
         std::vector<SurfaceEffectRegion> effectRegions;
+
+        // Last configure sent to client; used to dedupe high-frequency resize spam.
+        int      configuredX{0};
+        int      configuredY{0};
+        uint32_t configuredWidth{0};
+        uint32_t configuredHeight{0};
+        uint8_t  configuredFocused{0};
+        std::chrono::steady_clock::time_point lastConfigureSent{};
     };
 
     void toggleFpsOverlay() noexcept { m_showFpsOverlay = !m_showFpsOverlay; }

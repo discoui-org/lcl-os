@@ -117,7 +117,8 @@ public:
                     int stridePixels = 0,
                     float opacity = 1.0f,
                     float cornerRadius = 0.0f,
-                    float cornerRoundness = 2.0f);
+                    float cornerRoundness = 2.0f,
+                    bool squareTopCorners = false);
     void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, float cornerRadius, float opacity, const std::vector<protocol::FilterOp>& filters);
 
     // Accessors
@@ -177,6 +178,25 @@ private:
     int32_t m_uMaskRoundnessLoc{-1};
     int32_t m_uMaskOpacityLoc{-1};
 
+    uint32_t m_glMaskBgraProgram{0};
+    int32_t m_aMaskBgraPosLoc{-1};
+    int32_t m_aMaskBgraTexLoc{-1};
+    int32_t m_uMaskBgraTextureLoc{-1};
+    int32_t m_uMaskBgraSizeLoc{-1};
+    int32_t m_uMaskBgraCornerRadiiLoc{-1};
+    int32_t m_uMaskBgraRoundnessLoc{-1};
+    int32_t m_uMaskBgraOpacityLoc{-1};
+
+    uint32_t m_glRoundRectProgram{0};
+    int32_t m_aRoundRectPosLoc{-1};
+    int32_t m_aRoundRectTexLoc{-1};
+    int32_t m_uRoundRectSizeLoc{-1};
+    int32_t m_uRoundRectRadiusLoc{-1};
+    int32_t m_uRoundRectRoundnessLoc{-1};
+    int32_t m_uRoundRectBorderWidthLoc{-1};
+    int32_t m_uRoundRectFillColorLoc{-1};
+    int32_t m_uRoundRectBorderColorLoc{-1};
+
     uint32_t m_glRefractionProgram{0};
     int32_t m_aRefractPosLoc{-1};
     int32_t m_aRefractTexLoc{-1};
@@ -190,6 +210,8 @@ private:
 
     // GPU BGRA Surface Compositing Handles
     uint32_t m_glClientTexture{0};
+    int32_t m_glClientTextureWidth{0};
+    int32_t m_glClientTextureHeight{0};
     uint32_t m_glBgraProgram{0};
     int32_t m_aBgraPosLoc{-1};
     int32_t m_aBgraTexLoc{-1};
@@ -199,7 +221,25 @@ private:
     // Helper for rendering textured quads on GPU
     void drawTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
     void drawMaskedTextureQuad(uint32_t textureId, float x, float y, float w, float h, float cornerRadius, float cornerRoundness, float opacity);
+    void drawMaskedBgraTextureQuad(uint32_t textureId,
+                                   float x,
+                                   float y,
+                                   float w,
+                                   float h,
+                                   float cornerRadius,
+                                   float cornerRoundness,
+                                   float opacity,
+                                   bool squareTopCorners = false);
     void drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
+    void drawGpuRoundedRect(float x,
+                            float y,
+                            float w,
+                            float h,
+                            float radius,
+                            float roundness,
+                            float borderWidth,
+                            const SkiaColor& fill,
+                            const SkiaColor& border);
 };
 
 } // namespace lcl::render

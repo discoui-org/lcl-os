@@ -174,6 +174,147 @@ bool SkiaRenderer::initGLShader() {
     m_uMaskRoundnessLoc = glGetUniformLocation(m_glMaskProgram, "uRoundnessExp");
     m_uMaskOpacityLoc = glGetUniformLocation(m_glMaskProgram, "uOpacity");
 
+    // --- GLSL Rounded Mask Composite Shader (BGRA-aware client surfaces) ---
+    const char* fMaskBgraSrc =
+        "precision highp float;\n"
+        "varying vec2 vTexCoord;\n"
+        "uniform sampler2D uTexture;\n"
+        "uniform vec2 uSizePx;\n"
+        "uniform vec4 uCornerRadiiPx;\n"
+        "uniform float uRoundnessExp;\n"
+        "uniform float uOpacity;\n"
+        "float sdBox(vec2 p, vec2 b) {\n"
+        "    vec2 q = abs(p) - b;\n"
+        "    vec2 oq = max(q, 0.0);\n"
+        "    return length(oq) + min(max(q.x, q.y), 0.0);\n"
+        "}\n"
+        "float cornerRadiusForPoint(vec2 p, vec4 radii) {\n"
+        "    if (p.x < 0.0) {\n"
+        "        return (p.y < 0.0) ? radii.x : radii.w;\n"
+        "    }\n"
+        "    return (p.y < 0.0) ? radii.y : radii.z;\n"
+        "}\n"
+        "float sdSuperRoundRect(vec2 p, vec2 b, float r, float n) {\n"
+        "    if (r <= 0.001) {\n"
+        "        return sdBox(p, b);\n"
+        "    }\n"
+        "    vec2 q = abs(p) - b + vec2(r);\n"
+        "    if (q.x <= 0.0 || q.y <= 0.0) {\n"
+        "        return max(q.x, q.y) - r;\n"
+        "    }\n"
+        "    vec2 qq = max(q, 0.0) / max(r, 0.001);\n"
+        "    float k = pow(pow(qq.x, n) + pow(qq.y, n), 1.0 / n);\n"
+        "    return (k - 1.0) * r;\n"
+        "}\n"
+        "void main() {\n"
+        "    vec4 c = texture2D(uTexture, vTexCoord);\n"
+        "    vec4 clampedR = clamp(uCornerRadiiPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
+        "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
+        "    vec2 p = (vTexCoord - vec2(0.5)) * uSizePx;\n"
+        "    vec2 halfSize = uSizePx * 0.5;\n"
+        "    float r = cornerRadiusForPoint(p, clampedR);\n"
+        "    float d = sdSuperRoundRect(p, halfSize, r, n);\n"
+        "    float edge = 1.0;\n"
+        "    float mask = 1.0 - smoothstep(0.0, edge, d);\n"
+        "    gl_FragColor = vec4(c.b, c.g, c.r, c.a * mask * uOpacity);\n"
+        "}\n";
+
+    GLuint vsMaskBgra = compileShader(GL_VERTEX_SHADER, vSrc);
+    GLuint fsMaskBgra = compileShader(GL_FRAGMENT_SHADER, fMaskBgraSrc);
+    m_glMaskBgraProgram = glCreateProgram();
+    glAttachShader(m_glMaskBgraProgram, vsMaskBgra);
+    glAttachShader(m_glMaskBgraProgram, fsMaskBgra);
+    glLinkProgram(m_glMaskBgraProgram);
+    glDeleteShader(vsMaskBgra);
+    glDeleteShader(fsMaskBgra);
+
+    m_aMaskBgraPosLoc = glGetAttribLocation(m_glMaskBgraProgram, "aPosition");
+    m_aMaskBgraTexLoc = glGetAttribLocation(m_glMaskBgraProgram, "aTexCoord");
+    m_uMaskBgraTextureLoc = glGetUniformLocation(m_glMaskBgraProgram, "uTexture");
+    m_uMaskBgraSizeLoc = glGetUniformLocation(m_glMaskBgraProgram, "uSizePx");
+    m_uMaskBgraCornerRadiiLoc = glGetUniformLocation(m_glMaskBgraProgram, "uCornerRadiiPx");
+    m_uMaskBgraRoundnessLoc = glGetUniformLocation(m_glMaskBgraProgram, "uRoundnessExp");
+    m_uMaskBgraOpacityLoc = glGetUniformLocation(m_glMaskBgraProgram, "uOpacity");
+
+    // --- GLSL Rounded Rect Fill+Border Shader ---
+    const char* vRoundRectSrc =
+        "attribute vec2 aPosition;\n"
+        "attribute vec2 aTexCoord;\n"
+        "varying vec2 vRectPx;\n"
+        "uniform vec2 uSizePx;\n"
+        "void main() {\n"
+        "    gl_Position = vec4(aPosition, 0.0, 1.0);\n"
+        "    vRectPx = aTexCoord * uSizePx;\n"
+        "}\n";
+
+    const char* fRoundRectSrc =
+        "precision highp float;\n"
+        "varying vec2 vRectPx;\n"
+        "uniform vec2 uSizePx;\n"
+        "uniform float uRadiusPx;\n"
+        "uniform float uRoundnessExp;\n"
+        "uniform float uBorderWidthPx;\n"
+        "uniform vec4 uFillColor;\n"
+        "uniform vec4 uBorderColor;\n"
+        "float sdSuperRoundRect(vec2 p, vec2 b, float r, float n) {\n"
+        "    vec2 q = abs(p) - b + vec2(r);\n"
+        "    if (q.x <= 0.0 || q.y <= 0.0) {\n"
+        "        return max(q.x, q.y) - r;\n"
+        "    }\n"
+        "    vec2 qq = max(q, 0.0) / max(r, 0.001);\n"
+        "    float k = pow(pow(qq.x, n) + pow(qq.y, n), 1.0 / n);\n"
+        "    return (k - 1.0) * r;\n"
+        "}\n"
+        "void main() {\n"
+        "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
+        "    float r = clamp(uRadiusPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
+        "    vec2 p = vRectPx - (uSizePx * 0.5);\n"
+        "    vec2 halfOuter = uSizePx * 0.5;\n"
+        "    float sdOuter = sdSuperRoundRect(p, halfOuter, r, n);\n"
+        "    float outerMask = 1.0 - smoothstep(0.0, 1.0, sdOuter);\n"
+        "\n"
+        "    float bw = max(0.0, uBorderWidthPx);\n"
+        "    float innerMask = 0.0;\n"
+        "    if (bw > 0.001 && (uSizePx.x - 2.0 * bw) > 0.0 && (uSizePx.y - 2.0 * bw) > 0.0) {\n"
+        "        vec2 innerSize = uSizePx - vec2(2.0 * bw);\n"
+        "        vec2 halfInner = innerSize * 0.5;\n"
+        "        float innerR = max(0.0, r - bw);\n"
+        "        float sdInner = sdSuperRoundRect(p, halfInner, innerR, n);\n"
+        "        innerMask = 1.0 - smoothstep(0.0, 1.0, sdInner);\n"
+        "    }\n"
+        "\n"
+        "    float borderMask = (bw > 0.001) ? max(0.0, outerMask - innerMask) : 0.0;\n"
+        "    float fillMask = (bw > 0.001) ? innerMask : outerMask;\n"
+        "\n"
+        "    float aBorder = uBorderColor.a * borderMask;\n"
+        "    float aFill = uFillColor.a * fillMask;\n"
+        "    float outA = clamp(aBorder + aFill, 0.0, 1.0);\n"
+        "    if (outA <= 0.0001) {\n"
+        "        discard;\n"
+        "    }\n"
+        "\n"
+        "    vec3 outRgb = (uBorderColor.rgb * aBorder + uFillColor.rgb * aFill) / outA;\n"
+        "    gl_FragColor = vec4(outRgb, outA);\n"
+        "}\n";
+
+    GLuint vsRoundRect = compileShader(GL_VERTEX_SHADER, vRoundRectSrc);
+    GLuint fsRoundRect = compileShader(GL_FRAGMENT_SHADER, fRoundRectSrc);
+    m_glRoundRectProgram = glCreateProgram();
+    glAttachShader(m_glRoundRectProgram, vsRoundRect);
+    glAttachShader(m_glRoundRectProgram, fsRoundRect);
+    glLinkProgram(m_glRoundRectProgram);
+    glDeleteShader(vsRoundRect);
+    glDeleteShader(fsRoundRect);
+
+    m_aRoundRectPosLoc = glGetAttribLocation(m_glRoundRectProgram, "aPosition");
+    m_aRoundRectTexLoc = glGetAttribLocation(m_glRoundRectProgram, "aTexCoord");
+    m_uRoundRectSizeLoc = glGetUniformLocation(m_glRoundRectProgram, "uSizePx");
+    m_uRoundRectRadiusLoc = glGetUniformLocation(m_glRoundRectProgram, "uRadiusPx");
+    m_uRoundRectRoundnessLoc = glGetUniformLocation(m_glRoundRectProgram, "uRoundnessExp");
+    m_uRoundRectBorderWidthLoc = glGetUniformLocation(m_glRoundRectProgram, "uBorderWidthPx");
+    m_uRoundRectFillColorLoc = glGetUniformLocation(m_glRoundRectProgram, "uFillColor");
+    m_uRoundRectBorderColorLoc = glGetUniformLocation(m_glRoundRectProgram, "uBorderColor");
+
     // --- GLSL Refraction Pass Shader (thickness/refraction/dispersion core) ---
     const char* fRefractSrc =
         "precision highp float;\n"
@@ -349,6 +490,8 @@ void SkiaRenderer::shutdown() {
     if (m_glClientTexture > 0) {
         glDeleteTextures(1, &m_glClientTexture);
         m_glClientTexture = 0;
+        m_glClientTextureWidth = 0;
+        m_glClientTextureHeight = 0;
     }
     if (m_glBgraProgram > 0) {
         glDeleteProgram(m_glBgraProgram);
@@ -378,6 +521,14 @@ void SkiaRenderer::shutdown() {
     if (m_glMaskProgram > 0) {
         glDeleteProgram(m_glMaskProgram);
         m_glMaskProgram = 0;
+    }
+    if (m_glMaskBgraProgram > 0) {
+        glDeleteProgram(m_glMaskBgraProgram);
+        m_glMaskBgraProgram = 0;
+    }
+    if (m_glRoundRectProgram > 0) {
+        glDeleteProgram(m_glRoundRectProgram);
+        m_glRoundRectProgram = 0;
     }
     if (m_glRefractionProgram > 0) {
         glDeleteProgram(m_glRefractionProgram);
@@ -521,6 +672,114 @@ void SkiaRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y, flo
     glDisable(GL_BLEND);
     glDisableVertexAttribArray(m_aBgraPosLoc);
     glDisableVertexAttribArray(m_aBgraTexLoc);
+}
+
+void SkiaRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
+                                             float x,
+                                             float y,
+                                             float w,
+                                             float h,
+                                             float cornerRadius,
+                                             float cornerRoundness,
+                                             float opacity,
+                                             bool squareTopCorners) {
+    if (textureId == 0 || m_glMaskBgraProgram == 0) return;
+
+    float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
+    float y1 = 1.0f - (y / static_cast<float>(m_height)) * 2.0f;
+    float x2 = ((x + w) / static_cast<float>(m_width)) * 2.0f - 1.0f;
+    float y2 = 1.0f - ((y + h) / static_cast<float>(m_height)) * 2.0f;
+
+    // Match raw client buffer orientation (same as drawBgraTextureQuad)
+    float quad[16] = {
+        x1, y1,  0.0f, 0.0f,
+        x1, y2,  0.0f, 1.0f,
+        x2, y1,  1.0f, 0.0f,
+        x2, y2,  1.0f, 1.0f,
+    };
+
+    glUseProgram(m_glMaskBgraProgram);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textureId);
+    glUniform1i(m_uMaskBgraTextureLoc, 0);
+    glUniform2f(m_uMaskBgraSizeLoc, std::max(1.0f, w), std::max(1.0f, h));
+    float clampedRadius = std::clamp(cornerRadius, 0.0f, std::min(w, h) * 0.5f);
+    float topRadius = squareTopCorners ? 0.0f : clampedRadius;
+    glUniform4f(m_uMaskBgraCornerRadiiLoc,
+                topRadius,
+                topRadius,
+                clampedRadius,
+                clampedRadius);
+    glUniform1f(m_uMaskBgraRoundnessLoc, std::clamp(cornerRoundness, 2.0f, 8.0f));
+    glUniform1f(m_uMaskBgraOpacityLoc, std::clamp(opacity, 0.0f, 1.0f));
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glVertexAttribPointer(m_aMaskBgraPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
+    glEnableVertexAttribArray(m_aMaskBgraPosLoc);
+    glVertexAttribPointer(m_aMaskBgraTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
+    glEnableVertexAttribArray(m_aMaskBgraTexLoc);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glDisable(GL_BLEND);
+
+    glDisableVertexAttribArray(m_aMaskBgraPosLoc);
+    glDisableVertexAttribArray(m_aMaskBgraTexLoc);
+}
+
+void SkiaRenderer::drawGpuRoundedRect(float x,
+                                      float y,
+                                      float w,
+                                      float h,
+                                      float radius,
+                                      float roundness,
+                                      float borderWidth,
+                                      const SkiaColor& fill,
+                                      const SkiaColor& border) {
+    if (m_glRoundRectProgram == 0 || w <= 0.0f || h <= 0.0f) return;
+
+    float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
+    float y1 = 1.0f - (y / static_cast<float>(m_height)) * 2.0f;
+    float x2 = ((x + w) / static_cast<float>(m_width)) * 2.0f - 1.0f;
+    float y2 = 1.0f - ((y + h) / static_cast<float>(m_height)) * 2.0f;
+
+    float quad[16] = {
+        x1, y1,  0.0f, 1.0f,
+        x1, y2,  0.0f, 0.0f,
+        x2, y1,  1.0f, 1.0f,
+        x2, y2,  1.0f, 0.0f,
+    };
+
+    glUseProgram(m_glRoundRectProgram);
+    glUniform2f(m_uRoundRectSizeLoc, std::max(1.0f, w), std::max(1.0f, h));
+    glUniform1f(m_uRoundRectRadiusLoc, std::max(0.0f, radius));
+    glUniform1f(m_uRoundRectRoundnessLoc, std::clamp(roundness, 2.0f, 8.0f));
+    glUniform1f(m_uRoundRectBorderWidthLoc, std::max(0.0f, borderWidth));
+    glUniform4f(m_uRoundRectFillColorLoc,
+                static_cast<float>(fill.r) / 255.0f,
+                static_cast<float>(fill.g) / 255.0f,
+                static_cast<float>(fill.b) / 255.0f,
+                static_cast<float>(fill.a) / 255.0f);
+    glUniform4f(m_uRoundRectBorderColorLoc,
+                static_cast<float>(border.r) / 255.0f,
+                static_cast<float>(border.g) / 255.0f,
+                static_cast<float>(border.b) / 255.0f,
+                static_cast<float>(border.a) / 255.0f);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glVertexAttribPointer(m_aRoundRectPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
+    glEnableVertexAttribArray(m_aRoundRectPosLoc);
+    glVertexAttribPointer(m_aRoundRectTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
+    glEnableVertexAttribArray(m_aRoundRectTexLoc);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glDisable(GL_BLEND);
+
+    glDisableVertexAttribArray(m_aRoundRectPosLoc);
+    glDisableVertexAttribArray(m_aRoundRectTexLoc);
 }
 
 void SkiaRenderer::beginFrame() {
@@ -668,6 +927,23 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
                                    float roundness) {
     if (!m_initialized) return;
 
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend && m_glRoundRectProgram > 0) {
+        m_eglBackend->makeCurrent();
+        glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+        glViewport(0, 0, m_width, m_height);
+
+        drawGpuRoundedRect(rect.x,
+                           rect.y,
+                           std::max(1.0f, rect.width),
+                           std::max(1.0f, rect.height),
+                           radius,
+                           roundness,
+                           borderWidth,
+                           color,
+                           borderColor);
+        return;
+    }
+
     int w = std::max(1, static_cast<int>(std::lround(rect.width)));
     int h = std::max(1, static_cast<int>(std::lround(rect.height)));
     int dstX = static_cast<int>(std::lround(rect.x));
@@ -711,8 +987,16 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
 
     int aaSamples = 4;
     if (!hasFill && hasBorder) {
-        // Border-only shapes need denser coverage to avoid jagged arcs.
-        aaSamples = (bw <= 1.5f) ? 6 : 5;
+        // Border-only shapes need dense coverage on corners, but large windows
+        // become expensive during live resize. Adapt sample density by area.
+        const int area = w * h;
+        if (area > 420000) {
+            aaSamples = 3;
+        } else if (area > 180000) {
+            aaSamples = 4;
+        } else {
+            aaSamples = (bw <= 1.5f) ? 6 : 5;
+        }
     }
     const float invSampleCount = 1.0f / static_cast<float>(aaSamples * aaSamples);
 
@@ -841,7 +1125,8 @@ void SkiaRenderer::drawBuffer(int dstX,
                               int stridePixels,
                               float opacity,
                               float cornerRadius,
-                              float cornerRoundness) {
+                              float cornerRoundness,
+                              bool squareTopCorners) {
     if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0) return;
 
     if (stridePixels <= 0) stridePixels = srcW;
@@ -859,10 +1144,17 @@ void SkiaRenderer::drawBuffer(int dstX,
         }
 
         glBindTexture(GL_TEXTURE_2D, m_glClientTexture);
-        if (stridePixels == srcW) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, srcW, srcH, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixelData);
-        } else {
+        bool textureSizeChanged =
+            (m_glClientTextureWidth != srcW) || (m_glClientTextureHeight != srcH);
+        if (textureSizeChanged) {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, srcW, srcH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            m_glClientTextureWidth = srcW;
+            m_glClientTextureHeight = srcH;
+        }
+
+        if (stridePixels == srcW) {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, srcW, srcH, GL_RGBA, GL_UNSIGNED_BYTE, pixelData);
+        } else {
             for (int y = 0; y < srcH; ++y) {
                 glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, srcW, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelData + (y * stridePixels));
             }
@@ -872,14 +1164,15 @@ void SkiaRenderer::drawBuffer(int dstX,
         glViewport(0, 0, m_width, m_height);
 
         if (cornerRadius > 0.001f) {
-            drawMaskedTextureQuad(m_glClientTexture,
-                                  static_cast<float>(dstX),
-                                  static_cast<float>(dstY),
-                                  static_cast<float>(srcW),
-                                  static_cast<float>(srcH),
-                                  cornerRadius,
-                                  cornerRoundness,
-                                  opacity);
+            drawMaskedBgraTextureQuad(m_glClientTexture,
+                                      static_cast<float>(dstX),
+                                      static_cast<float>(dstY),
+                                      static_cast<float>(srcW),
+                                      static_cast<float>(srcH),
+                                      cornerRadius,
+                                      cornerRoundness,
+                                      opacity,
+                                      squareTopCorners);
         } else {
             drawBgraTextureQuad(m_glClientTexture, dstX, dstY, srcW, srcH, opacity);
         }
@@ -901,7 +1194,7 @@ void SkiaRenderer::drawBuffer(int dstX,
     float rr = std::clamp(cornerRadius, 0.0f, std::min(static_cast<float>(srcW), static_cast<float>(srcH)) * 0.5f);
     float n = std::clamp(cornerRoundness, 2.0f, 8.0f);
 
-    auto insideRoundedMask = [rr, n, srcW, srcH](float px, float py) {
+    auto insideRoundedMask = [rr, n, srcW, srcH, squareTopCorners](float px, float py) {
         if (rr <= 0.001f) return true;
         if (px < 0.0f || py < 0.0f || px > static_cast<float>(srcW) || py > static_cast<float>(srcH)) return false;
 
@@ -911,6 +1204,10 @@ void SkiaRenderer::drawBuffer(int dstX,
         bool inBottom = py > (static_cast<float>(srcH) - rr);
 
         if ((inLeft || inRight) && (inTop || inBottom)) {
+            if (squareTopCorners && inTop) {
+                return true;
+            }
+
             float cx = inLeft ? rr : (static_cast<float>(srcW) - rr);
             float cy = inTop ? rr : (static_cast<float>(srcH) - rr);
             float dx = std::abs(px - cx) / rr;

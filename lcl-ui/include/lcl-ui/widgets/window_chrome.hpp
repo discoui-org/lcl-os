@@ -24,6 +24,7 @@ struct HeaderControlsStyle {
     Color buttonBorder{230, 238, 248, 92};
     Color buttonGlyph{232, 240, 248, 210};
     Color titleColor{230, 245, 255, 220};
+    Color titleBarBackground{0, 0, 0, 0};
 
     float buttonBorderWidth{1.0f};
     float buttonRoundness{2.0f};
@@ -63,7 +64,7 @@ inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
                                                            float titleFontSize,
                                                            const HeaderControlsStyle& style = HeaderControlsStyle{}) {
     auto titleBar = std::make_unique<Container>();
-    titleBar->setBackgroundColor(Color{255, 255, 255, 0});
+    titleBar->setBackgroundColor(style.titleBarBackground);
     titleBar->setBorderRadius(0.0f);
     titleBar->getYogaNode().setPositionType(YGPositionTypeAbsolute);
     titleBar->getYogaNode().setPosition(YGEdgeLeft, 0.0f);

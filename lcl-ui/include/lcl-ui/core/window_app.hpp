@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <chrono>
 
 namespace lcl::ui {
 
@@ -87,6 +88,11 @@ private:
     bool m_firstFrame{true};
     bool m_shmNeedsAttach{true};
     bool m_effectGraphActive{false};
+    std::vector<uint8_t> m_lastEffectGraphPayload;
+    uint32_t m_pendingResizeWidth{0};
+    uint32_t m_pendingResizeHeight{0};
+    bool m_hasPendingResize{false};
+    std::chrono::steady_clock::time_point m_lastResizeApply{};
     bool m_running{false};
 };
 

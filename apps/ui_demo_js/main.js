@@ -24,7 +24,7 @@ cardContainer.setGap(16);
 cardContainer.setBackgroundColor(26, 30, 36, 255);
 cardContainer.setBorderColor(10, 12, 16, 120);
 cardContainer.setBorderWidth(1);
-cardContainer.setBorderRadius(20);
+cardContainer.setBorderRadius(0);
 
 // Application State & Interactive Counter Callback
 let clickCounter = 0;

@@ -112,8 +112,7 @@ int main() {
     cardContainer->setBackgroundColor(Color{26, 30, 36, 255});
     cardContainer->setBorderColor(Color{10, 12, 16, 120});
     cardContainer->setBorderWidth(1.0f);
-    cardContainer->setBorderRadius(20.0f);
-    cardContainer->setBorderRoundness(2.4f);
+    cardContainer->setBorderRadius(0.0f);
 
     // Button & Text Widgets
     auto clickButton = std::make_unique<BlurButton>("Tıkla: 0");

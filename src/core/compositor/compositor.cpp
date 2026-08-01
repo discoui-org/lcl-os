@@ -669,15 +669,13 @@ void Compositor::renderFrame() {
     skia->beginFrame();
 
     constexpr float kWindowCornerRadiusPx = 20.0f;
-    constexpr float kWindowCornerRoundness = 3.4f;
+    constexpr float kWindowCornerRoundness = 2.0f;
 
     auto drawSsdChromeWithLclUi = [&](const render::Window& win) {
         lcl::ui::RenderPass pass;
         auto root = std::make_unique<lcl::ui::Container>();
         root->setRenderPass(&pass);
         root->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-        root->setBorderRadius(kWindowCornerRadiusPx);
-        root->setBorderRoundness(kWindowCornerRoundness);
         root->getYogaNode().setWidth(static_cast<float>(win.width));
         root->getYogaNode().setHeight(static_cast<float>(win.height));
 
@@ -686,6 +684,7 @@ void Compositor::renderFrame() {
         chromeStyle.titleMinLeft = static_cast<float>(DisplayScale::px(14));
         chromeStyle.titleGapAfterControls = static_cast<float>(DisplayScale::px(12));
         chromeStyle.titleRightPadding = static_cast<float>(DisplayScale::px(10));
+        chromeStyle.titleBarBackground = lcl::ui::Color{17, 19, 23, 255};
 
         auto titleBar = lcl::ui::chrome::buildLibadwaitaTitleBar(
             static_cast<float>(win.width),
@@ -735,7 +734,6 @@ void Compositor::renderFrame() {
         auto root = std::make_unique<lcl::ui::Container>();
         root->setRenderPass(&pass);
         root->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-        root->setBorderRadius(0.0f);
 
         const float titleH = static_cast<float>(DisplayScale::titleBarHeight());
         const float ctrlSize = 16.0f;
@@ -858,11 +856,6 @@ void Compositor::renderFrame() {
             applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Backdrop);
         }
 
-        // C. Render Server-Side Window Frame (Titlebar & Border) if SSD enabled
-        if (win.decorationMode == render::DecorationMode::SSD) {
-            drawSsdChromeWithLclUi(win);
-        }
-
         if (matchingSurface) {
             int dstX = win.x;
             int dstY = win.y + titleOffset;
@@ -870,11 +863,19 @@ void Compositor::renderFrame() {
             int srcH = static_cast<int>(matchingSurface->height);
             int stridePixels = static_cast<int>(matchingSurface->stride / 4);
 
+            const bool maskToWindowShape =
+                (win.decorationMode == render::DecorationMode::SSD) ||
+                (win.decorationMode == render::DecorationMode::None &&
+                 win.title.find("Terminal") != std::string::npos);
+
             m_renderer.getSkiaRenderer()->drawBuffer(
                 dstX, dstY, srcW, srcH,
                 reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
                 stridePixels,
-                1.0f);
+                1.0f,
+                maskToWindowShape ? kWindowCornerRadiusPx : 0.0f,
+                kWindowCornerRoundness,
+                win.decorationMode == render::DecorationMode::SSD);
 
             if (!matchingSurface->effectRegions.empty()) {
                 applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground);
@@ -903,6 +904,11 @@ void Compositor::renderFrame() {
                     }
                 }
             }
+        }
+
+        // C. Render Server-Side Window Frame (Titlebar & Inset Border) on top of content.
+        if (win.decorationMode == render::DecorationMode::SSD) {
+            drawSsdChromeWithLclUi(win);
         }
     }
 

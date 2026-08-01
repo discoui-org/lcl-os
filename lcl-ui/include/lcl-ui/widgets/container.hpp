@@ -42,7 +42,7 @@ private:
     Color m_backgroundColor{0, 0, 0, 0};
     Color m_borderColor{0, 0, 0, 0};
     float m_borderWidth{0.0f};
-    float m_borderRadius{12.0f};
+    float m_borderRadius{0.0f};
     float m_borderRoundness{3.2f};
 };
 
