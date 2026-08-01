@@ -9,6 +9,7 @@
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/text.hpp"
 
 namespace lcl::binding {
@@ -241,6 +242,17 @@ JSValue js_button_constructor(JSContext* ctx, JSValueConst new_target, int argc,
     return obj;
 }
 
+JSValue js_backdrop_surface_constructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv) {
+    (void)new_target; (void)argc; (void)argv;
+    JSValue obj = JS_NewObjectClass(ctx, g_widget_class_id);
+    if (JS_IsException(obj)) return obj;
+
+    auto* wrapper = new JsWidgetWrapper();
+    wrapper->widget = new lcl::ui::BackdropSurface();
+    JS_SetOpaque(obj, wrapper);
+    return obj;
+}
+
 JSValue js_text_constructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv) {
     (void)new_target;
     std::string text = "";
@@ -380,6 +392,140 @@ JSValue js_widget_addChild(JSContext* ctx, JSValueConst this_val, int argc, JSVa
     return JS_UNDEFINED;
 }
 
+JSValue js_widget_setBackgroundColor(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* container = dynamic_cast<lcl::ui::Container*>(wrap->widget);
+    if (!container || argc < 3) return JS_UNDEFINED;
+
+    int r = 0, g = 0, b = 0, a = 255;
+    JS_ToInt32(ctx, &r, argv[0]);
+    JS_ToInt32(ctx, &g, argv[1]);
+    JS_ToInt32(ctx, &b, argv[2]);
+    if (argc >= 4) JS_ToInt32(ctx, &a, argv[3]);
+
+    container->setBackgroundColor(lcl::ui::Color{
+        static_cast<uint8_t>(std::clamp(r, 0, 255)),
+        static_cast<uint8_t>(std::clamp(g, 0, 255)),
+        static_cast<uint8_t>(std::clamp(b, 0, 255)),
+        static_cast<uint8_t>(std::clamp(a, 0, 255))
+    });
+    return JS_UNDEFINED;
+}
+
+JSValue js_widget_setBorderColor(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* container = dynamic_cast<lcl::ui::Container*>(wrap->widget);
+    if (!container || argc < 3) return JS_UNDEFINED;
+
+    int r = 0, g = 0, b = 0, a = 255;
+    JS_ToInt32(ctx, &r, argv[0]);
+    JS_ToInt32(ctx, &g, argv[1]);
+    JS_ToInt32(ctx, &b, argv[2]);
+    if (argc >= 4) JS_ToInt32(ctx, &a, argv[3]);
+
+    container->setBorderColor(lcl::ui::Color{
+        static_cast<uint8_t>(std::clamp(r, 0, 255)),
+        static_cast<uint8_t>(std::clamp(g, 0, 255)),
+        static_cast<uint8_t>(std::clamp(b, 0, 255)),
+        static_cast<uint8_t>(std::clamp(a, 0, 255))
+    });
+    return JS_UNDEFINED;
+}
+
+JSValue js_widget_setBorderWidth(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* container = dynamic_cast<lcl::ui::Container*>(wrap->widget);
+    if (!container || argc < 1) return JS_UNDEFINED;
+
+    double width = 0.0;
+    JS_ToFloat64(ctx, &width, argv[0]);
+    container->setBorderWidth(static_cast<float>(std::max(0.0, width)));
+    return JS_UNDEFINED;
+}
+
+JSValue js_text_setTextColor(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* txt = dynamic_cast<lcl::ui::Text*>(wrap->widget);
+    if (!txt || argc < 3) return JS_UNDEFINED;
+
+    int r = 0, g = 0, b = 0, a = 255;
+    JS_ToInt32(ctx, &r, argv[0]);
+    JS_ToInt32(ctx, &g, argv[1]);
+    JS_ToInt32(ctx, &b, argv[2]);
+    if (argc >= 4) JS_ToInt32(ctx, &a, argv[3]);
+
+    txt->setTextColor(lcl::ui::Color{
+        static_cast<uint8_t>(std::clamp(r, 0, 255)),
+        static_cast<uint8_t>(std::clamp(g, 0, 255)),
+        static_cast<uint8_t>(std::clamp(b, 0, 255)),
+        static_cast<uint8_t>(std::clamp(a, 0, 255))
+    });
+    return JS_UNDEFINED;
+}
+
+JSValue js_effect_addFilter(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* blurSurface = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
+    if (!blurSurface || argc < 2) return JS_UNDEFINED;
+
+    const char* filterName = JS_ToCString(ctx, argv[0]);
+    if (!filterName) return JS_UNDEFINED;
+
+    double value = 0.0;
+    JS_ToFloat64(ctx, &value, argv[1]);
+
+    std::string name = filterName;
+    JS_FreeCString(ctx, filterName);
+
+    lcl::protocol::FilterType filterType = lcl::protocol::FilterType::None;
+    if (name == "blur") filterType = lcl::protocol::FilterType::Blur;
+    else if (name == "brightness") filterType = lcl::protocol::FilterType::Brightness;
+    else if (name == "contrast") filterType = lcl::protocol::FilterType::Contrast;
+    else if (name == "saturation") filterType = lcl::protocol::FilterType::Saturation;
+    else if (name == "grayscale") filterType = lcl::protocol::FilterType::Grayscale;
+    else if (name == "invert") filterType = lcl::protocol::FilterType::Invert;
+
+    if (filterType != lcl::protocol::FilterType::None) {
+        blurSurface->addFilter(filterType, static_cast<float>(value));
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue js_effect_clearFilters(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)argc; (void)argv;
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* blurSurface = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
+    if (blurSurface) {
+        blurSurface->clearFilters();
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue js_effect_setOpacity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* blurSurface = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
+    if (!blurSurface || argc < 1) return JS_UNDEFINED;
+
+    double opacity = 1.0;
+    JS_ToFloat64(ctx, &opacity, argv[0]);
+    blurSurface->setOpacity(static_cast<float>(std::clamp(opacity, 0.0, 1.0)));
+    return JS_UNDEFINED;
+}
+
 // ------------------------------------------------------------
 // Button / Text Specific Methods
 // ------------------------------------------------------------
@@ -415,7 +561,8 @@ JSValue js_button_setOnClick(JSContext* ctx, JSValueConst this_val, int argc, JS
     if (!wrap || !wrap->widget) return JS_EXCEPTION;
 
     auto* btn = dynamic_cast<lcl::ui::Button*>(wrap->widget);
-    if (btn && argc >= 1 && JS_IsFunction(ctx, argv[0])) {
+    auto* blurSurface = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
+    if ((btn || blurSurface) && argc >= 1 && JS_IsFunction(ctx, argv[0])) {
         JSValue funcVal = JS_DupValue(ctx, argv[0]);
         JSRuntime* rt = JS_GetRuntime(ctx);
         JSContext* ctxRef = ctx;
@@ -436,15 +583,18 @@ JSValue js_button_setOnClick(JSContext* ctx, JSValueConst this_val, int argc, JS
         holder->ctx = ctxRef;
         holder->func = funcVal;
 
-        btn->setOnClick([holder]() {
+        auto clickThunk = [holder]() {
             JSValue ret = JS_Call(holder->ctx, holder->func, JS_UNDEFINED, 0, nullptr);
             if (JS_IsException(ret)) {
                 JsRuntime::printException(holder->ctx);
             }
             JS_FreeValue(holder->ctx, ret);
-        });
+        };
 
-        btn->setGcMarkCallback([holder](void* rtPtr, void* markFuncPtr) {
+        if (btn) btn->setOnClick(clickThunk);
+        if (blurSurface) blurSurface->setOnClick(clickThunk);
+
+        wrap->widget->setGcMarkCallback([holder](void* rtPtr, void* markFuncPtr) {
             auto* rt = reinterpret_cast<JSRuntime*>(rtPtr);
             auto* mark_func = reinterpret_cast<JS_MarkFunc*>(markFuncPtr);
             if (holder && !JS_IsUndefined(holder->func)) {
@@ -562,12 +712,19 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, widgetProto, "setPadding", JS_NewCFunction(m_ctx, js_widget_setPadding, "setPadding", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setGap", JS_NewCFunction(m_ctx, js_widget_setGap, "setGap", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "addChild", JS_NewCFunction(m_ctx, js_widget_addChild, "addChild", 1));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setBackgroundColor", JS_NewCFunction(m_ctx, js_widget_setBackgroundColor, "setBackgroundColor", 4));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setBorderColor", JS_NewCFunction(m_ctx, js_widget_setBorderColor, "setBorderColor", 4));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setBorderWidth", JS_NewCFunction(m_ctx, js_widget_setBorderWidth, "setBorderWidth", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setLabel", JS_NewCFunction(m_ctx, js_button_setLabel, "setLabel", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "getLabel", JS_NewCFunction(m_ctx, js_button_getLabel, "getLabel", 0));
     JS_SetPropertyStr(m_ctx, widgetProto, "setOnClick", JS_NewCFunction(m_ctx, js_button_setOnClick, "setOnClick", 1));
+    JS_SetPropertyStr(m_ctx, widgetProto, "addFilter", JS_NewCFunction(m_ctx, js_effect_addFilter, "addFilter", 2));
+    JS_SetPropertyStr(m_ctx, widgetProto, "clearFilters", JS_NewCFunction(m_ctx, js_effect_clearFilters, "clearFilters", 0));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setOpacity", JS_NewCFunction(m_ctx, js_effect_setOpacity, "setOpacity", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setText", JS_NewCFunction(m_ctx, js_text_setText, "setText", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "getText", JS_NewCFunction(m_ctx, js_text_getText, "getText", 0));
     JS_SetPropertyStr(m_ctx, widgetProto, "setFontSize", JS_NewCFunction(m_ctx, js_text_setFontSize, "setFontSize", 1));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setTextColor", JS_NewCFunction(m_ctx, js_text_setTextColor, "setTextColor", 4));
     JS_SetClassProto(m_ctx, g_widget_class_id, widgetProto);
 
     // Global LCL namespace object
@@ -584,6 +741,10 @@ void JsRuntime::registerLclBindings() {
     JSValue buttonCtor = JS_NewCFunction2(m_ctx, js_button_constructor, "Button", 1, JS_CFUNC_constructor, 0);
     JS_SetConstructor(m_ctx, buttonCtor, widgetProto);
     JS_SetPropertyStr(m_ctx, lclObj, "Button", buttonCtor);
+
+    JSValue backdropCtor = JS_NewCFunction2(m_ctx, js_backdrop_surface_constructor, "BackdropSurface", 0, JS_CFUNC_constructor, 0);
+    JS_SetConstructor(m_ctx, backdropCtor, widgetProto);
+    JS_SetPropertyStr(m_ctx, lclObj, "BackdropSurface", backdropCtor);
 
     JSValue textCtor = JS_NewCFunction2(m_ctx, js_text_constructor, "Text", 1, JS_CFUNC_constructor, 0);
     JS_SetConstructor(m_ctx, textCtor, widgetProto);

@@ -24,16 +24,15 @@ public:
 
         m_label = std::make_unique<Text>(label);
         m_label->setFontSize(16.0f);
-        m_label->setTextColor(Color{245, 247, 255, 255});
+        m_label->setTextColor(Color{255, 255, 255, 255});
         m_labelPtr = m_label.get();
         addChild(std::move(m_label));
 
-        addFilter(lcl::protocol::FilterType::Blur, 26.0f);
-        addFilter(lcl::protocol::FilterType::Saturation, 1.25f);
-        addFilter(lcl::protocol::FilterType::Brightness, 1.05f);
-        setBackgroundColor(Color{255, 255, 255, 34});
-        setBorderColor(Color{190, 220, 255, 145});
-        setBorderWidth(1.0f);
+        addFilter(lcl::protocol::FilterType::Blur, 22.0f);
+        setBackgroundColor(Color{255, 255, 255, 0});
+        setBorderColor(Color{255, 255, 255, 170});
+        setBorderWidth(2.0f);
+        setOpacity(0.72f);
     }
 
     void setOnClick(std::function<void()> cb) { m_onClick = std::move(cb); }
@@ -44,23 +43,21 @@ public:
 
     bool onPointerEnter(const PointerEvent& event) override {
         (void)event;
-        if (!m_pressed) {
-            setBackgroundColor(Color{255, 255, 255, 48});
-        }
+        if (!m_pressed) setBorderColor(Color{255, 255, 255, 205});
         return true;
     }
 
     bool onPointerLeave(const PointerEvent& event) override {
         (void)event;
         m_pressed = false;
-        setBackgroundColor(Color{255, 255, 255, 34});
+        setBorderColor(Color{255, 255, 255, 170});
         return true;
     }
 
     bool onPointerDown(const PointerEvent& event) override {
         (void)event;
         m_pressed = true;
-        setBackgroundColor(Color{195, 225, 255, 62});
+        setBorderColor(Color{255, 255, 255, 235});
         return true;
     }
 
@@ -68,7 +65,7 @@ public:
         (void)event;
         bool wasPressed = m_pressed;
         m_pressed = false;
-        setBackgroundColor(Color{255, 255, 255, 48});
+        setBorderColor(Color{255, 255, 255, 205});
         if (wasPressed && m_onClick) m_onClick();
         return true;
     }
@@ -98,7 +95,7 @@ int main() {
     rootContainer->getYogaNode().setJustifyContent(YGJustifyCenter);
     rootContainer->getYogaNode().setAlignItems(YGAlignCenter);
     rootContainer->getYogaNode().setGap(YGGutterAll, 20.0f);
-    rootContainer->setBackgroundColor(Color{0, 0, 0, 1});
+    rootContainer->setBackgroundColor(Color{0, 0, 0, 0});
 
     // Inner Card Container
     auto cardContainer = std::make_unique<Container>();
@@ -106,9 +103,9 @@ int main() {
     cardContainer->getYogaNode().setAlignItems(YGAlignCenter);
     cardContainer->getYogaNode().setPadding(YGEdgeAll, 24.0f);
     cardContainer->getYogaNode().setGap(YGGutterAll, 16.0f);
-    cardContainer->setBackgroundColor(Color{255, 255, 255, 12});
-    cardContainer->setBorderColor(Color{180, 210, 255, 95});
-    cardContainer->setBorderWidth(1.0f);
+    cardContainer->setBackgroundColor(Color{255, 255, 255, 0});
+    cardContainer->setBorderColor(Color{180, 210, 255, 0});
+    cardContainer->setBorderWidth(0.0f);
 
     // Button & Text Widgets
     auto clickButton = std::make_unique<BlurButton>("Tıkla: 0");

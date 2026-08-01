@@ -2,6 +2,7 @@
 
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/core/effects.hpp"
+#include <functional>
 
 namespace lcl::ui {
 
@@ -20,12 +21,21 @@ public:
     void setOpacity(float opacity);
     float getOpacity() const { return m_opacity; }
 
+    void setOnClick(std::function<void()> callback) { m_onClick = std::move(callback); }
+
+    bool onPointerEnter(const PointerEvent& event) override;
+    bool onPointerLeave(const PointerEvent& event) override;
+    bool onPointerDown(const PointerEvent& event) override;
+    bool onPointerUp(const PointerEvent& event) override;
+
     void collectEffects(std::vector<EffectRegion>& outEffects) const override;
 
 private:
     std::vector<lcl::protocol::FilterOp> m_filters;
     EffectBlend m_blendMode{EffectBlend::Normal};
     float m_opacity{1.0f};
+    std::function<void()> m_onClick{nullptr};
+    bool m_pressed{false};
 };
 
 } // namespace lcl::ui

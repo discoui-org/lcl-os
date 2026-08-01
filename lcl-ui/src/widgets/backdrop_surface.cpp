@@ -5,8 +5,9 @@
 namespace lcl::ui {
 
 BackdropSurface::BackdropSurface() {
-    // Subtle frosted tint by default so backdrop effects are visible.
-    setBackgroundColor(Color{255, 255, 255, 28});
+    // Keep default fully transparent; demos/apps can opt in to tint explicitly.
+    setBackgroundColor(Color{255, 255, 255, 0});
+    setFocusable(true);
 }
 
 void BackdropSurface::setFilters(const std::vector<lcl::protocol::FilterOp>& filters) {
@@ -27,6 +28,33 @@ void BackdropSurface::clearFilters() {
 void BackdropSurface::setOpacity(float opacity) {
     m_opacity = std::clamp(opacity, 0.0f, 1.0f);
     markDirty();
+}
+
+bool BackdropSurface::onPointerEnter(const PointerEvent& event) {
+    (void)event;
+    return true;
+}
+
+bool BackdropSurface::onPointerLeave(const PointerEvent& event) {
+    (void)event;
+    m_pressed = false;
+    return true;
+}
+
+bool BackdropSurface::onPointerDown(const PointerEvent& event) {
+    (void)event;
+    m_pressed = true;
+    return true;
+}
+
+bool BackdropSurface::onPointerUp(const PointerEvent& event) {
+    (void)event;
+    bool wasPressed = m_pressed;
+    m_pressed = false;
+    if (wasPressed && m_onClick) {
+        m_onClick();
+    }
+    return true;
 }
 
 void BackdropSurface::collectEffects(std::vector<EffectRegion>& outEffects) const {
