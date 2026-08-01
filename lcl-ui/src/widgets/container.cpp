@@ -16,9 +16,30 @@ void Container::draw(SkCanvas* canvas, const Rect& damageRect) {
         if (hasBackground || hasBorder) {
             ::lcl::render::SkiaColor c{m_backgroundColor.r, m_backgroundColor.g, m_backgroundColor.b, m_backgroundColor.a};
             ::lcl::render::SkiaColor bc{m_borderColor.r, m_borderColor.g, m_borderColor.b, m_borderColor.a};
-            renderer->drawRoundedRect(r, m_borderRadius, c, bc,
-                                      hasBorder ? m_borderWidth : 0.0f,
-                                      m_borderRoundness);
+
+            // Fast path for rectangular boxes: avoid expensive rounded-rect AA sampling.
+            if (m_borderRadius <= 0.0f) {
+                if (hasBorder) {
+                    renderer->drawRect(r, bc);
+                }
+
+                if (hasBackground) {
+                    if (hasBorder && m_borderWidth > 0.0f) {
+                        const float inset = m_borderWidth;
+                        const float innerW = std::max(0.0f, r.width - inset * 2.0f);
+                        const float innerH = std::max(0.0f, r.height - inset * 2.0f);
+                        if (innerW > 0.0f && innerH > 0.0f) {
+                            renderer->drawRect({r.x + inset, r.y + inset, innerW, innerH}, c);
+                        }
+                    } else {
+                        renderer->drawRect(r, c);
+                    }
+                }
+            } else {
+                renderer->drawRoundedRect(r, m_borderRadius, c, bc,
+                                          hasBorder ? m_borderWidth : 0.0f,
+                                          m_borderRoundness);
+            }
         }
     }
 

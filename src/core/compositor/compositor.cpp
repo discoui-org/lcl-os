@@ -684,7 +684,35 @@ void Compositor::renderFrame() {
         chromeStyle.titleMinLeft = static_cast<float>(DisplayScale::px(14));
         chromeStyle.titleGapAfterControls = static_cast<float>(DisplayScale::px(12));
         chromeStyle.titleRightPadding = static_cast<float>(DisplayScale::px(10));
-        chromeStyle.titleBarBackground = lcl::ui::Color{17, 19, 23, 255};
+        // Titlebar bg is drawn directly below with exact compositor corner geometry.
+        chromeStyle.titleBarBackground = lcl::ui::Color{0, 0, 0, 0};
+        chromeStyle.titleBarCornerRadiusAdjust = -1.0f;
+        chromeStyle.titleBarRoundness = kWindowCornerRoundness;
+
+        const float inset = 1.0f;
+        const float bgX = static_cast<float>(win.x) + inset;
+        const float bgY = static_cast<float>(win.y) + inset;
+        const float bgW = std::max(0.0f, static_cast<float>(win.width) - inset * 2.0f);
+        const float bgH = std::max(0.0f, titleH);
+        const float bgRadius = std::max(0.0f, kWindowCornerRadiusPx - inset);
+        const lcl::render::SkiaColor titleBgColor{17, 19, 23, 255};
+
+        if (bgW > 0.0f && bgH > 0.0f) {
+            // Rounded top silhouette aligned with SSD border mask.
+            skia->drawRoundedRect(
+                {bgX, bgY, bgW, bgH},
+                bgRadius,
+                titleBgColor,
+                {0, 0, 0, 0},
+                0.0f,
+                kWindowCornerRoundness);
+
+            // Flatten titlebar bottom edge while keeping rounded top corners.
+            const float stripH = std::min(bgRadius, bgH);
+            if (stripH > 0.0f) {
+                skia->drawRect({bgX, bgY + bgH - stripH, bgW, stripH}, titleBgColor);
+            }
+        }
 
         auto titleBar = lcl::ui::chrome::buildLibadwaitaTitleBar(
             static_cast<float>(win.width),
