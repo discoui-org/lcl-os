@@ -59,12 +59,12 @@ void renderWallpaper(uint32_t* pixels, uint32_t width, uint32_t height) {
     if (!pixels || width == 0 || height == 0) return;
 
     std::vector<std::string> candidatePaths = {
-        "/usr/share/wallpapers/wallpaper.png",
-        "/usr/share/wallpaper.png",
-        "/home/user/wallpaper.png",
-        "assets/wallpaper.png",
-        "wallpaper.png",
-        "../wallpaper.png"
+        "/usr/share/wallpapers/wallpaper.jpg",
+        "/usr/share/wallpaper.jpg",
+        "/home/user/wallpaper.jpg",
+        "assets/wallpaper.jpg",
+        "wallpaper.jpg",
+        "../wallpaper.jpg"
     };
 
     int imgW = 0, imgH = 0, channels = 0;
@@ -119,7 +119,7 @@ void renderWallpaper(uint32_t* pixels, uint32_t width, uint32_t height) {
         return;
     }
 
-    std::cout << "[LCL Shell] wallpaper.png not found; rendering procedural gradient wallpaper fallback.\n";
+    std::cout << "[LCL Shell] wallpaper.jpg not found; rendering procedural gradient wallpaper fallback.\n";
 
     // Fallback: Elegant dark slate & midnight blue linear/radial gradient wallpaper
     for (uint32_t y = 0; y < height; ++y) {
@@ -409,7 +409,7 @@ int main() {
     lcl::protocol::sendMsgWithFd(socketFd, wpAttachHeader, &wpAttachMsg, shmFdWallpaper);
     std::cout << "[LCL Shell] Initial black wallpaper surface attached (" << width << "x" << height << ") at LAYER_BOTTOM.\n";
 
-    // Launch Async Background Thread for loading and decoding wallpaper.png
+    // Launch Async Background Thread for loading and decoding wallpaper.jpg
     auto wpTask = std::make_shared<AsyncWallpaperTask>();
     wpTask->w = width;
     wpTask->h = height;
