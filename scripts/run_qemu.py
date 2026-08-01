@@ -1313,6 +1313,10 @@ def launch_qemu(
     iso_mode: bool = False,
     uefi_mode: bool = False,
     usb_passthrough: str | None = None,
+    retina: bool = False,
+    scale_override: float | None = None,
+    width_override: int | None = None,
+    height_override: int | None = None,
 ) -> None:
     qemu = find_qemu()
     if not iso_mode:
@@ -1326,10 +1330,45 @@ def launch_qemu(
     host = detect_host_display()
     refresh_hz = host.refresh_hz
 
-    if native:
-        host_dpr = host.scale if host.scale > 0 else 1.0
-        logical_w = host.logical_width or host.width
-        logical_h = host.logical_height or host.height
+    # Environment variable overrides
+    if not retina and os.environ.get("RETINA", "").lower() in ("1", "true", "yes", "on"):
+        retina = True
+
+    env_scale = os.environ.get("SCALE") or os.environ.get("LCL_SCALE")
+    if scale_override is None and env_scale:
+        try:
+            scale_override = float(env_scale)
+        except ValueError:
+            pass
+
+    env_width = os.environ.get("WIDTH") or os.environ.get("LCL_WIDTH")
+    if width_override is None and env_width:
+        try:
+            width_override = int(env_width)
+        except ValueError:
+            pass
+
+    env_height = os.environ.get("HEIGHT") or os.environ.get("LCL_HEIGHT")
+    if height_override is None and env_height:
+        try:
+            height_override = int(env_height)
+        except ValueError:
+            pass
+
+    if retina:
+        # 13" MacBook Air Retina baseline: 2560x1600 physical resolution, 2.0x UI scale (1280x800 logical viewport)
+        width = width_override or 2560
+        height = height_override or 1600
+        scale = scale_override or 2.0
+        host_dpr = scale
+        host.logical_width = width // 2
+        host.logical_height = height // 2
+        host.physical_width = width
+        host.physical_height = height
+    elif native:
+        host_dpr = scale_override or (host.scale if host.scale > 0 else 1.0)
+        logical_w = width_override or host.logical_width or host.width
+        logical_h = height_override or host.logical_height or host.height
         physical_w = host.physical_width or logical_w
         physical_h = host.physical_height or logical_h
         true_retina = (
@@ -1339,14 +1378,15 @@ def launch_qemu(
         )
         if true_retina:
             width, height = physical_w, physical_h
-            scale = host_dpr if host_dpr > 1.01 else float(physical_w) / float(logical_w)
+            scale = scale_override or (host_dpr if host_dpr > 1.01 else float(physical_w) / float(logical_w))
         else:
             width, height = logical_w, logical_h
-            scale = 1.0
+            scale = scale_override or 1.0
     else:
-        width, height = 1280, 800
-        scale = 1.0
-        host_dpr = 1.0
+        width = width_override or 1280
+        height = height_override or 800
+        scale = scale_override or 1.0
+        host_dpr = scale
 
     kvm = Path("/dev/kvm")
     if kvm.exists() and os.access(kvm, os.R_OK | os.W_OK):
@@ -1537,6 +1577,29 @@ def main() -> None:
         help="Match host resolution + DPI scale (video= + lcl.scale cmdline)",
     )
     parser.add_argument(
+        "--retina",
+        action="store_true",
+        help="Launch in 13\" MacBook Air Retina mode (2560x1600 @ 2.0x UI scale)",
+    )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        metavar="FACTOR",
+        help="Set custom UI scale factor (e.g. 1.25, 1.5, 2.0)",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        metavar="PX",
+        help="Set custom display width in pixels (e.g. 2560)",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        metavar="PX",
+        help="Set custom display height in pixels (e.g. 1600)",
+    )
+    parser.add_argument(
         "--gpu",
         "-g",
         action="store_true",
@@ -1592,6 +1655,10 @@ def main() -> None:
             iso_mode=args.iso,
             uefi_mode=args.uefi,
             usb_passthrough=args.usb,
+            retina=args.retina,
+            scale_override=args.scale,
+            width_override=args.width,
+            height_override=args.height,
         )
     else:
         log("Boot environment ready!")
