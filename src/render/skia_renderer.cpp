@@ -425,7 +425,21 @@ void SkiaRenderer::drawBackgroundGradient(const SkiaColor& topColor, const SkiaC
 }
 
 void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
-    if (!m_initialized || !m_targetPixels) return;
+    if (!m_initialized) return;
+
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+        int x1 = std::clamp(static_cast<int>(rect.x), 0, static_cast<int>(m_width));
+        int y1 = std::clamp(static_cast<int>(rect.y), 0, static_cast<int>(m_height));
+        int x2 = std::clamp(static_cast<int>(rect.x + rect.width), 0, static_cast<int>(m_width));
+        int y2 = std::clamp(static_cast<int>(rect.y + rect.height), 0, static_cast<int>(m_height));
+        if (x1 >= x2 || y1 >= y2 || color.a == 0) return;
+
+        std::vector<uint32_t> fill(static_cast<size_t>(x2 - x1) * static_cast<size_t>(y2 - y1), color.toARGB());
+        drawBuffer(x1, y1, x2 - x1, y2 - y1, fill.data(), x2 - x1, 1.0f);
+        return;
+    }
+
+    if (!m_targetPixels) return;
 
     int x1 = std::clamp(static_cast<int>(rect.x), 0, static_cast<int>(m_width));
     int y1 = std::clamp(static_cast<int>(rect.y), 0, static_cast<int>(m_height));
@@ -503,11 +517,21 @@ void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, const SkiaCo
 }
 
 void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fgColor) {
-    if (!m_initialized || !m_targetPixels || text.empty()) return;
+    if (!m_initialized || text.empty()) return;
     if (!m_fontRenderer.isInitialized()) {
         m_fontRenderer.loadFont("/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf", 15.0f);
     }
-    if (m_fontRenderer.isInitialized()) {
+
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && m_fontRenderer.isInitialized()) {
+        int textW = std::max(1, m_fontRenderer.getTextWidth(text));
+        int textH = std::max(1, m_fontRenderer.getCellHeight() + 2);
+        std::vector<uint32_t> glyphPixels(static_cast<size_t>(textW) * static_cast<size_t>(textH), 0x00000000);
+        m_fontRenderer.renderString(glyphPixels.data(), textW, textH, 0, 1, text, fgColor);
+        drawBuffer(x, y, textW, textH, glyphPixels.data(), textW, 1.0f);
+        return;
+    }
+
+    if (m_fontRenderer.isInitialized() && m_targetPixels) {
         m_fontRenderer.renderString(m_targetPixels, m_width, m_height, x, y, text, fgColor);
     }
 }

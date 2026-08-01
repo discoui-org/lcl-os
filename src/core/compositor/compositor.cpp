@@ -1,6 +1,10 @@
 #include "core/compositor/compositor.hpp"
 #include "core/display/display_scale.hpp"
 #include "theme/palette.hpp"
+#include "lcl-ui/core/rect.hpp"
+#include "lcl-ui/core/render_pass.hpp"
+#include "lcl-ui/widgets/container.hpp"
+#include "lcl-ui/widgets/text.hpp"
 
 #include <iostream>
 #include <algorithm>
@@ -8,7 +12,6 @@
 #include <chrono>
 #include <sys/mman.h>
 #include <csignal>
-#include <cstring>
 
 namespace lcl::core {
 
@@ -626,34 +629,102 @@ void Compositor::renderFrame() {
     auto* skia = m_renderer.getSkiaRenderer();
     skia->beginFrame();
 
-    const bool gpuSceneCompositing =
-        skia && skia->getBackendType() == render::SkiaBackendType::OpenGL_EGL;
-    uint32_t* overlayPixels = skia ? skia->getRasterBuffer() : nullptr;
+    auto toUiColor = [](uint32_t argb) -> lcl::ui::Color {
+        return lcl::ui::Color{
+            static_cast<uint8_t>((argb >> 16) & 0xFF),
+            static_cast<uint8_t>((argb >> 8) & 0xFF),
+            static_cast<uint8_t>(argb & 0xFF),
+            static_cast<uint8_t>((argb >> 24) & 0xFF)
+        };
+    };
 
-    auto promoteCpuRegionToGpu = [&](int x, int y, int w, int h) {
-        if (!gpuSceneCompositing || !overlayPixels || w <= 0 || h <= 0) return;
+    auto drawSsdChromeWithLclUi = [&](const render::Window& win) {
+        lcl::ui::RenderPass pass;
+        auto root = std::make_unique<lcl::ui::Container>();
+        root->setRenderPass(&pass);
+        root->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
+        root->getYogaNode().setWidth(static_cast<float>(win.width));
+        root->getYogaNode().setHeight(static_cast<float>(win.height));
 
-        int clipX1 = std::max(0, x);
-        int clipY1 = std::max(0, y);
-        int clipX2 = std::min(static_cast<int>(m_renderer.getWidth()), x + w);
-        int clipY2 = std::min(static_cast<int>(m_renderer.getHeight()), y + h);
-        if (clipX1 >= clipX2 || clipY1 >= clipY2) return;
+        const float titleH = static_cast<float>(DisplayScale::titleBarHeight());
+        const float btn = static_cast<float>(DisplayScale::trafficBtn());
+        const float gap = static_cast<float>(DisplayScale::trafficGap());
+        const float pad = static_cast<float>(DisplayScale::px(10));
 
-        int copyW = clipX2 - clipX1;
-        int copyH = clipY2 - clipY1;
-        std::vector<uint32_t> region(static_cast<size_t>(copyW) * static_cast<size_t>(copyH), 0x00000000);
+        auto titleBar = std::make_unique<lcl::ui::Container>();
+        titleBar->setBackgroundColor(toUiColor(win.headerColor));
+        titleBar->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        titleBar->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+        titleBar->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+        titleBar->getYogaNode().setWidth(static_cast<float>(win.width));
+        titleBar->getYogaNode().setHeight(titleH);
 
-        for (int row = 0; row < copyH; ++row) {
-            const uint32_t* src = &overlayPixels[(clipY1 + row) * m_renderer.getWidth() + clipX1];
-            std::memcpy(&region[static_cast<size_t>(row) * static_cast<size_t>(copyW)], src, static_cast<size_t>(copyW) * sizeof(uint32_t));
-        }
+        auto titleText = std::make_unique<lcl::ui::Text>(win.title);
+        titleText->setTextColor(toUiColor(::lcl::theme::UI::WindowTitleText));
+        titleText->setFontSize(static_cast<float>(DisplayScale::fontSize()));
+        titleText->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        titleText->getYogaNode().setPosition(YGEdgeLeft, static_cast<float>(DisplayScale::px(70)));
+        titleText->getYogaNode().setPosition(YGEdgeTop, static_cast<float>(DisplayScale::px(8)));
+        titleBar->addChild(std::move(titleText));
 
-        skia->drawBuffer(clipX1, clipY1, copyW, copyH, region.data(), copyW, 1.0f);
+        auto mkTraffic = [&](float left, uint32_t color) {
+            auto dot = std::make_unique<lcl::ui::Container>();
+            dot->setBackgroundColor(toUiColor(color));
+            dot->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+            dot->getYogaNode().setPosition(YGEdgeLeft, left);
+            dot->getYogaNode().setPosition(YGEdgeTop, pad);
+            dot->getYogaNode().setWidth(btn);
+            dot->getYogaNode().setHeight(btn);
+            return dot;
+        };
 
-        for (int row = 0; row < copyH; ++row) {
-            uint32_t* dst = &overlayPixels[(clipY1 + row) * m_renderer.getWidth() + clipX1];
-            std::fill_n(dst, copyW, 0x00000000);
-        }
+        titleBar->addChild(mkTraffic(pad, ::lcl::theme::UI::BtnClose));
+        titleBar->addChild(mkTraffic(pad + gap, ::lcl::theme::UI::BtnMinimize));
+        titleBar->addChild(mkTraffic(pad + (gap * 2.0f), ::lcl::theme::UI::BtnMaximize));
+
+        auto borderTop = std::make_unique<lcl::ui::Container>();
+        borderTop->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
+        borderTop->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        borderTop->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+        borderTop->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+        borderTop->getYogaNode().setWidth(static_cast<float>(win.width));
+        borderTop->getYogaNode().setHeight(1.0f);
+
+        auto borderBottom = std::make_unique<lcl::ui::Container>();
+        borderBottom->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
+        borderBottom->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        borderBottom->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+        borderBottom->getYogaNode().setPosition(YGEdgeTop, static_cast<float>(win.height - 1));
+        borderBottom->getYogaNode().setWidth(static_cast<float>(win.width));
+        borderBottom->getYogaNode().setHeight(1.0f);
+
+        auto borderLeft = std::make_unique<lcl::ui::Container>();
+        borderLeft->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
+        borderLeft->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        borderLeft->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+        borderLeft->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+        borderLeft->getYogaNode().setWidth(1.0f);
+        borderLeft->getYogaNode().setHeight(static_cast<float>(win.height));
+
+        auto borderRight = std::make_unique<lcl::ui::Container>();
+        borderRight->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
+        borderRight->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        borderRight->getYogaNode().setPosition(YGEdgeLeft, static_cast<float>(win.width - 1));
+        borderRight->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+        borderRight->getYogaNode().setWidth(1.0f);
+        borderRight->getYogaNode().setHeight(static_cast<float>(win.height));
+
+        root->addChild(std::move(titleBar));
+        root->addChild(std::move(borderTop));
+        root->addChild(std::move(borderBottom));
+        root->addChild(std::move(borderLeft));
+        root->addChild(std::move(borderRight));
+
+        root->getYogaNode().calculateLayout(static_cast<float>(win.width), static_cast<float>(win.height));
+        root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
+
+        lcl::ui::Rect damage{static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), static_cast<float>(win.height)};
+        root->draw(reinterpret_cast<SkCanvas*>(skia), damage);
     };
 
     // 1. Clear Desktop Canvas (Black background)
@@ -686,8 +757,7 @@ void Compositor::renderFrame() {
 
         // C. Render Server-Side Window Frame (Titlebar & Border) if SSD enabled
         if (win.decorationMode == render::DecorationMode::SSD) {
-            m_renderer.drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
-            promoteCpuRegionToGpu(win.x, win.y, win.width, win.height);
+            drawSsdChromeWithLclUi(win);
         }
 
         if (matchingSurface) {
@@ -710,35 +780,21 @@ void Compositor::renderFrame() {
                     if (c.windowId == win.id) { content = &c; break; }
                 }
                 if (content) {
-                    m_renderer.renderWindowContent(win, content);
-                    promoteCpuRegionToGpu(win.x, win.y, win.width, win.height);
+                    int titleOffset = DisplayScale::titleBarHeight();
+                    int textX = win.x + DisplayScale::windowPad();
+                    int textY = win.y + titleOffset + DisplayScale::px(12);
+                    for (const auto& line : content->lines) {
+                        skia->drawString(textX, textY, line, lcl::theme::UI::TerminalText);
+                        textY += DisplayScale::px(18);
+                    }
                 }
             }
         }
     }
 
-    // 3. Render Diagnostic FPS Overlay
-    renderDiagnosticOverlay();
-    if (gpuSceneCompositing) {
-        int screenW = static_cast<int>(m_renderer.getWidth());
-        int cardW = DisplayScale::px(220);
-        int cardH = DisplayScale::px(70);
-        int cardX = screenW - cardW - DisplayScale::px(16);
-        int cardY = DisplayScale::px(16);
-        promoteCpuRegionToGpu(cardX, cardY, cardW, cardH);
-    }
-
-    // 4. Render cursor on top of all windows
+    // 3. Hardware cursor only (no software cursor fallback)
     if (m_displayManager.isHardwareCursorActive()) {
         m_displayManager.moveHardwareCursor(m_windowManager.getMouseX(), m_windowManager.getMouseY());
-    } else {
-        m_renderer.drawCursor(m_windowManager.getMouseX(), m_windowManager.getMouseY());
-        if (gpuSceneCompositing) {
-            int scale = std::max(1, DisplayScale::px(1));
-            int cursorW = 12 * scale;
-            int cursorH = 16 * scale;
-            promoteCpuRegionToGpu(m_windowManager.getMouseX(), m_windowManager.getMouseY(), cursorW, cursorH);
-        }
     }
 
     m_renderer.swapBuffers();

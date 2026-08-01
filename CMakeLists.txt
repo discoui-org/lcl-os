@@ -57,6 +57,7 @@ add_executable(lcl-core
 
 target_include_directories(lcl-core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
     ${DRM_INCLUDE_DIRS}
     ${GBM_INCLUDE_DIRS}
     ${EGL_INCLUDE_DIRS}
@@ -66,6 +67,7 @@ target_include_directories(lcl-core PRIVATE
 )
 
 target_link_libraries(lcl-core PRIVATE
+    lcl-ui
     ${DRM_LIBRARIES}
     ${GBM_LIBRARIES}
     ${EGL_LIBRARIES}
