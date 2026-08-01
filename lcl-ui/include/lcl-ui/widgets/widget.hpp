@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lcl-ui/core/rect.hpp"
+#include "lcl-ui/core/effects.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/events.hpp"
 #include "lcl-ui/layout/yoga_node.hpp"
@@ -47,6 +48,7 @@ public:
 
     virtual void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f);
     virtual void draw(SkCanvas* canvas, const Rect& damageRect);
+    virtual void collectEffects(std::vector<EffectRegion>& outEffects) const;
 
     // Polymorphic Event Handlers (Return true if handled, false to bubble to parent)
     virtual bool onPointerEnter(const PointerEvent& event) { (void)event; return false; }

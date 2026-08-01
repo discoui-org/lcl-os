@@ -130,7 +130,7 @@ TEST(LCLProtocolTest, SendAndReceiveSetReservedZoneMsg) {
     close(sv[1]);
 }
 
-TEST(LCLProtocolTest, SendAndReceiveSetBackdropFilterMsg) {
+TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     int sv[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
 
@@ -140,15 +140,33 @@ TEST(LCLProtocolTest, SendAndReceiveSetBackdropFilterMsg) {
         { FilterType::Brightness, 1.1f }
     };
 
+    EffectRegion region{};
+    region.x = 10;
+    region.y = 20;
+    region.width = 300;
+    region.height = 180;
+    region.source = EffectSourceType::Backdrop;
+    region.blendMode = EffectBlendMode::Normal;
+    region.filterCount = static_cast<uint16_t>(filters.size());
+    region.filterOffset = 0;
+    region.opacity = 0.85f;
+
+    LCLMsgSetEffectGraphHeader graph{};
+    graph.surfaceId = 2;
+    graph.regionCount = 1;
+    graph.filterCount = static_cast<uint32_t>(filters.size());
+
     LCLHeader headerSend{};
-    headerSend.opcode = LCLOpcode::SetBackdropFilter;
-    headerSend.payloadSize = sizeof(LCLMsgSetBackdropFilterHeader) + filters.size() * sizeof(FilterOp);
+    headerSend.opcode = LCLOpcode::SetEffectGraph;
+    headerSend.payloadSize = sizeof(LCLMsgSetEffectGraphHeader) + sizeof(EffectRegion) + filters.size() * sizeof(FilterOp);
 
     std::vector<uint8_t> payloadSend(headerSend.payloadSize);
-    auto* hdr = reinterpret_cast<LCLMsgSetBackdropFilterHeader*>(payloadSend.data());
-    hdr->surfaceId = 2;
-    hdr->filterCount = static_cast<uint32_t>(filters.size());
-    std::memcpy(payloadSend.data() + sizeof(LCLMsgSetBackdropFilterHeader), filters.data(), filters.size() * sizeof(FilterOp));
+    uint8_t* dst = payloadSend.data();
+    std::memcpy(dst, &graph, sizeof(graph));
+    dst += sizeof(graph);
+    std::memcpy(dst, &region, sizeof(region));
+    dst += sizeof(region);
+    std::memcpy(dst, filters.data(), filters.size() * sizeof(FilterOp));
 
     EXPECT_TRUE(sendMsgWithFd(sv[0], headerSend, payloadSend.data(), -1));
 
@@ -157,14 +175,27 @@ TEST(LCLProtocolTest, SendAndReceiveSetBackdropFilterMsg) {
     int receivedFd = -1;
 
     EXPECT_TRUE(recvMsgWithFd(sv[1], headerRecv, payloadRecv, receivedFd));
-    EXPECT_EQ(headerRecv.opcode, LCLOpcode::SetBackdropFilter);
+    EXPECT_EQ(headerRecv.opcode, LCLOpcode::SetEffectGraph);
     ASSERT_EQ(payloadRecv.size(), headerSend.payloadSize);
 
-    const auto* hdrRecv = reinterpret_cast<const LCLMsgSetBackdropFilterHeader*>(payloadRecv.data());
-    EXPECT_EQ(hdrRecv->surfaceId, 2u);
-    EXPECT_EQ(hdrRecv->filterCount, 3u);
+    const auto* graphRecv = reinterpret_cast<const LCLMsgSetEffectGraphHeader*>(payloadRecv.data());
+    EXPECT_EQ(graphRecv->surfaceId, 2u);
+    EXPECT_EQ(graphRecv->regionCount, 1u);
+    EXPECT_EQ(graphRecv->filterCount, 3u);
 
-    const auto* opsRecv = reinterpret_cast<const FilterOp*>(payloadRecv.data() + sizeof(LCLMsgSetBackdropFilterHeader));
+    const auto* regionRecv = reinterpret_cast<const EffectRegion*>(
+        payloadRecv.data() + sizeof(LCLMsgSetEffectGraphHeader));
+    EXPECT_EQ(regionRecv->x, 10);
+    EXPECT_EQ(regionRecv->y, 20);
+    EXPECT_EQ(regionRecv->width, 300u);
+    EXPECT_EQ(regionRecv->height, 180u);
+    EXPECT_EQ(regionRecv->source, EffectSourceType::Backdrop);
+    EXPECT_EQ(regionRecv->blendMode, EffectBlendMode::Normal);
+    EXPECT_EQ(regionRecv->filterCount, 3u);
+    EXPECT_EQ(regionRecv->filterOffset, 0u);
+    EXPECT_FLOAT_EQ(regionRecv->opacity, 0.85f);
+
+    const auto* opsRecv = reinterpret_cast<const FilterOp*>(payloadRecv.data() + sizeof(LCLMsgSetEffectGraphHeader) + sizeof(EffectRegion));
     EXPECT_EQ(opsRecv[0].type, FilterType::Blur);
     EXPECT_FLOAT_EQ(opsRecv[0].value, 15.0f);
     EXPECT_EQ(opsRecv[1].type, FilterType::Saturation);

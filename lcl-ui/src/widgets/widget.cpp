@@ -65,4 +65,12 @@ void Widget::draw(SkCanvas* canvas, const Rect& damageRect) {
     }
 }
 
+void Widget::collectEffects(std::vector<EffectRegion>& outEffects) const {
+    if (!m_visible) return;
+    for (const auto& child : m_children) {
+        child->collectEffects(outEffects);
+    }
+    (void)outEffects;
+}
+
 } // namespace lcl::ui

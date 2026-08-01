@@ -29,6 +29,8 @@ add_library(lcl-ui STATIC
     src/widgets/container.cpp
     src/widgets/text.cpp
     src/widgets/button.cpp
+    src/widgets/backdrop_surface.cpp
+    src/widgets/filter_group.cpp
     ${CMAKE_SOURCE_DIR}/src/render/skia_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/render/font_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/core/display/egl_backend.cpp

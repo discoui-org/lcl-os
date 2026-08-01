@@ -344,29 +344,47 @@ int main() {
 
     lcl::protocol::sendMsgWithFd(socketFd, resHeader, &resMsg);
 
-    // Set Backdrop Filter Pipeline for Surface 2 (Menu Bar)
-    // Ordered Pipeline: Blur(15px) -> Saturation(1.4) -> Brightness(1.1)
+    // Set Effect Graph for Surface 2 (Menu Bar)
+    // Region: full menu bar surface, Source: Backdrop
+    // Ordered Pipeline: Blur -> Saturation -> Brightness
     std::vector<lcl::protocol::FilterOp> mbFilters = {
         { lcl::protocol::FilterType::Blur, 15.0f },
         { lcl::protocol::FilterType::Saturation, 1.4f },
         { lcl::protocol::FilterType::Brightness, 1.1f }
     };
 
-    lcl::protocol::LCLHeader filterHeader{};
-    filterHeader.opcode = lcl::protocol::LCLOpcode::SetBackdropFilter;
-    filterHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader) +
-                               mbFilters.size() * sizeof(lcl::protocol::FilterOp);
+    lcl::protocol::LCLMsgSetEffectGraphHeader graphMsg{};
+    graphMsg.surfaceId = 2;
+    graphMsg.regionCount = 1;
+    graphMsg.filterCount = static_cast<uint32_t>(mbFilters.size());
 
-    std::vector<uint8_t> filterPayload(filterHeader.payloadSize);
-    auto* filterMsgHeader = reinterpret_cast<lcl::protocol::LCLMsgSetBackdropFilterHeader*>(filterPayload.data());
-    filterMsgHeader->surfaceId = 2;
-    filterMsgHeader->filterCount = static_cast<uint32_t>(mbFilters.size());
+    lcl::protocol::EffectRegion graphRegion{};
+    graphRegion.x = 0;
+    graphRegion.y = 0;
+    graphRegion.width = static_cast<uint32_t>(width);
+    graphRegion.height = static_cast<uint32_t>(menuBarHeight);
+    graphRegion.source = lcl::protocol::EffectSourceType::Backdrop;
+    graphRegion.blendMode = lcl::protocol::EffectBlendMode::Normal;
+    graphRegion.filterCount = static_cast<uint16_t>(mbFilters.size());
+    graphRegion.filterOffset = 0;
+    graphRegion.opacity = 1.0f;
 
-    std::memcpy(filterPayload.data() + sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader),
-                mbFilters.data(),
-                mbFilters.size() * sizeof(lcl::protocol::FilterOp));
+    size_t graphPayloadSize = sizeof(lcl::protocol::LCLMsgSetEffectGraphHeader) +
+                              sizeof(lcl::protocol::EffectRegion) +
+                              mbFilters.size() * sizeof(lcl::protocol::FilterOp);
+    std::vector<uint8_t> graphPayload(graphPayloadSize);
+    uint8_t* graphDst = graphPayload.data();
+    std::memcpy(graphDst, &graphMsg, sizeof(graphMsg));
+    graphDst += sizeof(graphMsg);
+    std::memcpy(graphDst, &graphRegion, sizeof(graphRegion));
+    graphDst += sizeof(graphRegion);
+    std::memcpy(graphDst, mbFilters.data(), mbFilters.size() * sizeof(lcl::protocol::FilterOp));
 
-    lcl::protocol::sendMsgWithFd(socketFd, filterHeader, filterPayload.data());
+    lcl::protocol::LCLHeader graphHeader{};
+    graphHeader.opcode = lcl::protocol::LCLOpcode::SetEffectGraph;
+    graphHeader.payloadSize = static_cast<uint32_t>(graphPayload.size());
+
+    lcl::protocol::sendMsgWithFd(socketFd, graphHeader, graphPayload.data());
 
     // 7. Create SHM Buffer and Initialize Solid Black Wallpaper (Surface 1)
     size_t shmSizeWallpaper = static_cast<size_t>(width) * height * 4;

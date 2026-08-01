@@ -382,34 +382,46 @@ int main() {
   std::cout << "[LCL Terminal] Requested surface creation (ID: 1, " << kSurfW
             << "x" << kSurfH << ") from compositor.\n";
 
-  // Set Backdrop Filter Pipeline for Surface 1 (Terminal)
-  // Ordered Pipeline: Blur(12px) -> Saturation(1.2) -> Brightness(0.95)
+    // Set Effect Graph for Surface 1 (Terminal)
+    // Region: full content surface, Source: Backdrop
+    // Ordered Pipeline: Blur -> Saturation -> Brightness
   std::vector<lcl::protocol::FilterOp> termFilters = {
       {lcl::protocol::FilterType::Blur, 40.0f},
       {lcl::protocol::FilterType::Saturation, 1.2f},
       {lcl::protocol::FilterType::Brightness, 0.95f}};
 
-  lcl::protocol::LCLHeader filterHeader{};
-  filterHeader.opcode = lcl::protocol::LCLOpcode::SetBackdropFilter;
-  filterHeader.payloadSize =
-      sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader) +
-      termFilters.size() * sizeof(lcl::protocol::FilterOp);
+    lcl::protocol::LCLMsgSetEffectGraphHeader graphMsg{};
+    graphMsg.surfaceId = 1;
+    graphMsg.regionCount = 1;
+    graphMsg.filterCount = static_cast<uint32_t>(termFilters.size());
 
-  std::vector<uint8_t> filterPayload(filterHeader.payloadSize);
-  auto *filterMsgHeader =
-      reinterpret_cast<lcl::protocol::LCLMsgSetBackdropFilterHeader *>(
-          filterPayload.data());
-  filterMsgHeader->surfaceId = 1;
-  filterMsgHeader->filterCount = static_cast<uint32_t>(termFilters.size());
+    lcl::protocol::EffectRegion graphRegion{};
+    graphRegion.x = 0;
+    graphRegion.y = 0;
+    graphRegion.width = static_cast<uint32_t>(kSurfW);
+    graphRegion.height = static_cast<uint32_t>(kSurfH);
+    graphRegion.source = lcl::protocol::EffectSourceType::Backdrop;
+    graphRegion.blendMode = lcl::protocol::EffectBlendMode::Normal;
+    graphRegion.filterCount = static_cast<uint16_t>(termFilters.size());
+    graphRegion.filterOffset = 0;
+    graphRegion.opacity = 1.0f;
 
-  std::memcpy(filterPayload.data() +
-                  sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader),
-              termFilters.data(),
-              termFilters.size() * sizeof(lcl::protocol::FilterOp));
+    size_t graphPayloadSize = sizeof(lcl::protocol::LCLMsgSetEffectGraphHeader) +
+                sizeof(lcl::protocol::EffectRegion) +
+                termFilters.size() * sizeof(lcl::protocol::FilterOp);
+    std::vector<uint8_t> graphPayload(graphPayloadSize);
+    uint8_t* graphDst = graphPayload.data();
+    std::memcpy(graphDst, &graphMsg, sizeof(graphMsg));
+    graphDst += sizeof(graphMsg);
+    std::memcpy(graphDst, &graphRegion, sizeof(graphRegion));
+    graphDst += sizeof(graphRegion);
+    std::memcpy(graphDst, termFilters.data(), termFilters.size() * sizeof(lcl::protocol::FilterOp));
 
-  lcl::protocol::sendMsgWithFd(socketFd, filterHeader, filterPayload.data());
-  std::cout << "[LCL Terminal] Set Backdrop Filter pipeline (Blur: 12px, "
-               "Saturation: 1.2, Brightness: 0.95).\n";
+    lcl::protocol::LCLHeader graphHeader{};
+    graphHeader.opcode = lcl::protocol::LCLOpcode::SetEffectGraph;
+    graphHeader.payloadSize = static_cast<uint32_t>(graphPayload.size());
+    lcl::protocol::sendMsgWithFd(socketFd, graphHeader, graphPayload.data());
+    std::cout << "[LCL Terminal] Set effect graph (backdrop blur chain) for surface 1.\n";
 
   // 4. Create Shared Memory (memfd) Framebuffer for Surface 1
   size_t shmSize = kSurfW * kSurfH * 4;

@@ -11,6 +11,8 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <cmath>
+#include <algorithm>
 
 namespace lcl::ui {
 
@@ -374,8 +376,104 @@ bool WindowApp::renderFrame() {
         m_rootWidget->draw(reinterpret_cast<SkCanvas*>(&m_renderer), damageRect);
     }
 
+    std::vector<EffectRegion> uiEffects;
+    if (m_rootWidget) {
+        m_rootWidget->collectEffects(uiEffects);
+    }
+
     m_renderPass.end(nullptr);
     m_renderer.endFrame();
+
+    if (m_ipcConnected && m_socketFd >= 0) {
+        auto toProtoSource = [](EffectSource source) {
+            return (source == EffectSource::Foreground)
+                ? lcl::protocol::EffectSourceType::Foreground
+                : lcl::protocol::EffectSourceType::Backdrop;
+        };
+
+        auto toProtoBlend = [](EffectBlend blend) {
+            switch (blend) {
+                case EffectBlend::Screen:   return lcl::protocol::EffectBlendMode::Screen;
+                case EffectBlend::Multiply: return lcl::protocol::EffectBlendMode::Multiply;
+                case EffectBlend::Overlay:  return lcl::protocol::EffectBlendMode::Overlay;
+                case EffectBlend::Plus:     return lcl::protocol::EffectBlendMode::Plus;
+                case EffectBlend::Normal:
+                default:                    return lcl::protocol::EffectBlendMode::Normal;
+            }
+        };
+
+        std::vector<lcl::protocol::EffectRegion> protoRegions;
+        std::vector<lcl::protocol::FilterOp> flatFilters;
+        protoRegions.reserve(uiEffects.size());
+
+        for (const auto& effect : uiEffects) {
+            if (effect.bounds.isEmpty() || effect.filters.empty()) continue;
+
+            int x = std::max(0, static_cast<int>(std::lround(effect.bounds.x)));
+            int y = std::max(0, static_cast<int>(std::lround(effect.bounds.y)));
+            int w = std::max(0, static_cast<int>(std::lround(effect.bounds.width)));
+            int h = std::max(0, static_cast<int>(std::lround(effect.bounds.height)));
+
+            if (x >= static_cast<int>(m_width) || y >= static_cast<int>(m_height)) continue;
+            w = std::min(w, static_cast<int>(m_width) - x);
+            h = std::min(h, static_cast<int>(m_height) - y);
+            if (w <= 0 || h <= 0) continue;
+
+            lcl::protocol::EffectRegion region{};
+            region.x = x;
+            region.y = y;
+            region.width = static_cast<uint32_t>(w);
+            region.height = static_cast<uint32_t>(h);
+            region.source = toProtoSource(effect.source);
+            region.blendMode = toProtoBlend(effect.blend);
+            region.opacity = std::clamp(effect.opacity, 0.0f, 1.0f);
+            region.filterOffset = static_cast<uint32_t>(flatFilters.size());
+            region.filterCount = static_cast<uint16_t>(std::min<size_t>(effect.filters.size(), 65535));
+
+            flatFilters.insert(
+                flatFilters.end(),
+                effect.filters.begin(),
+                effect.filters.begin() + region.filterCount);
+            protoRegions.push_back(region);
+        }
+
+        if (!protoRegions.empty()) {
+            lcl::protocol::LCLMsgSetEffectGraphHeader graphMsg{};
+            graphMsg.surfaceId = 1;
+            graphMsg.regionCount = static_cast<uint32_t>(protoRegions.size());
+            graphMsg.filterCount = static_cast<uint32_t>(flatFilters.size());
+
+            const size_t payloadSize =
+                sizeof(graphMsg) +
+                protoRegions.size() * sizeof(lcl::protocol::EffectRegion) +
+                flatFilters.size() * sizeof(lcl::protocol::FilterOp);
+
+            std::vector<uint8_t> payload(payloadSize);
+            uint8_t* dst = payload.data();
+            std::memcpy(dst, &graphMsg, sizeof(graphMsg));
+            dst += sizeof(graphMsg);
+            std::memcpy(dst, protoRegions.data(), protoRegions.size() * sizeof(lcl::protocol::EffectRegion));
+            dst += protoRegions.size() * sizeof(lcl::protocol::EffectRegion);
+            if (!flatFilters.empty()) {
+                std::memcpy(dst, flatFilters.data(), flatFilters.size() * sizeof(lcl::protocol::FilterOp));
+            }
+
+            lcl::protocol::LCLHeader graphHeader{};
+            graphHeader.opcode = lcl::protocol::LCLOpcode::SetEffectGraph;
+            graphHeader.payloadSize = static_cast<uint32_t>(payload.size());
+            lcl::protocol::sendMsgWithFd(m_socketFd, graphHeader, payload.data());
+            m_effectGraphActive = true;
+        } else if (m_effectGraphActive) {
+            lcl::protocol::LCLMsgClearEffectGraph clearMsg{};
+            clearMsg.surfaceId = 1;
+
+            lcl::protocol::LCLHeader clearHeader{};
+            clearHeader.opcode = lcl::protocol::LCLOpcode::ClearEffectGraph;
+            clearHeader.payloadSize = sizeof(clearMsg);
+            lcl::protocol::sendMsgWithFd(m_socketFd, clearHeader, &clearMsg);
+            m_effectGraphActive = false;
+        }
+    }
 
     // Double Buffering: Copy 100% complete rendered frame to SHM buffer atomically
     if (m_shmPixels && !m_pixelBuffer.empty()) {

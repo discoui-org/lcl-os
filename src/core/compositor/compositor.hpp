@@ -54,6 +54,11 @@ public:
     bool isRunning() const noexcept { return m_running.load(); }
 
     /// Per-IPC-surface metadata tracked by the compositor.
+    struct SurfaceEffectRegion {
+        protocol::EffectRegion region{};
+        std::vector<protocol::FilterOp> filters;
+    };
+
     struct SurfaceEntry {
         uint32_t windowId{0};    ///< Corresponding WindowManager window id
         int      clientFd{-1};   ///< Socket FD of client process
@@ -63,7 +68,7 @@ public:
         uint32_t height{0};
         uint32_t stride{0};     ///< Row stride in bytes
         size_t   shmSize{0};    ///< Total SHM buffer bytes
-        std::vector<protocol::FilterOp> backdropFilters;
+        std::vector<SurfaceEffectRegion> effectRegions;
     };
 
     void toggleFpsOverlay() noexcept { m_showFpsOverlay = !m_showFpsOverlay; }

@@ -30,7 +30,8 @@ enum class LCLOpcode : uint32_t {
     SetDecorationMode = 8,
     SetWindowLayer = 9,
     SetReservedZone = 10,
-    SetBackdropFilter = 11
+    SetEffectGraph = 11,
+    ClearEffectGraph = 12
 };
 
 enum class LCLDecorationMode : uint32_t {
@@ -55,11 +56,36 @@ enum class FilterType : uint8_t {
     Invert = 6
 };
 
+enum class EffectSourceType : uint8_t {
+    Backdrop = 0,
+    Foreground = 1
+};
+
+enum class EffectBlendMode : uint8_t {
+    Normal = 0,
+    Screen = 1,
+    Multiply = 2,
+    Overlay = 3,
+    Plus = 4
+};
+
 #pragma pack(push, 1)
 
 struct FilterOp {
     FilterType type{FilterType::None};
     float value{0.0f};
+};
+
+struct EffectRegion {
+    int32_t x{0};
+    int32_t y{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    EffectSourceType source{EffectSourceType::Backdrop};
+    EffectBlendMode blendMode{EffectBlendMode::Normal};
+    uint16_t filterCount{0};
+    uint32_t filterOffset{0};
+    float opacity{1.0f};
 };
 
 struct LCLHeader {
@@ -141,9 +167,14 @@ struct LCLMsgSetReservedZone {
     uint32_t right{0};  // Reserved inset from right edge
 };
 
-struct LCLMsgSetBackdropFilterHeader {
+struct LCLMsgSetEffectGraphHeader {
     uint32_t surfaceId{0};
-    uint32_t filterCount{0}; // Followed by FilterOp array payload in socket stream
+    uint32_t regionCount{0}; // Followed by EffectRegion array payload
+    uint32_t filterCount{0}; // Followed by flattened FilterOp array payload
+};
+
+struct LCLMsgClearEffectGraph {
+    uint32_t surfaceId{0};
 };
 
 #pragma pack(pop)

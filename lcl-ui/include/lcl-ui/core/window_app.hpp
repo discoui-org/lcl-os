@@ -86,6 +86,7 @@ private:
     bool m_initialized{false};
     bool m_firstFrame{true};
     bool m_shmNeedsAttach{true};
+    bool m_effectGraphActive{false};
     bool m_running{false};
 };
 

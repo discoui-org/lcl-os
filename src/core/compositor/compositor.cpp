@@ -441,27 +441,61 @@ void Compositor::processIPC() {
                 m_needsRedraw = true;
             }
 
-        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetBackdropFilter) {
-            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader)) {
-                auto* filterHeader = reinterpret_cast<const lcl::protocol::LCLMsgSetBackdropFilterHeader*>(msg.payload.data());
-                size_t expectedSize = sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader) +
-                                       filterHeader->filterCount * sizeof(lcl::protocol::FilterOp);
-                if (msg.payload.size() >= expectedSize) {
-                    const auto* ops = reinterpret_cast<const lcl::protocol::FilterOp*>(
-                        msg.payload.data() + sizeof(lcl::protocol::LCLMsgSetBackdropFilterHeader));
-                    std::vector<lcl::protocol::FilterOp> filters(ops, ops + filterHeader->filterCount);
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetEffectGraph) {
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetEffectGraphHeader)) {
+                auto* graphHeader = reinterpret_cast<const lcl::protocol::LCLMsgSetEffectGraphHeader*>(msg.payload.data());
+                size_t expectedSize = sizeof(lcl::protocol::LCLMsgSetEffectGraphHeader)
+                    + static_cast<size_t>(graphHeader->regionCount) * sizeof(lcl::protocol::EffectRegion)
+                    + static_cast<size_t>(graphHeader->filterCount) * sizeof(lcl::protocol::FilterOp);
 
-                    uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | filterHeader->surfaceId;
+                if (msg.payload.size() >= expectedSize) {
+                    const uint8_t* base = msg.payload.data() + sizeof(lcl::protocol::LCLMsgSetEffectGraphHeader);
+                    const auto* regions = reinterpret_cast<const lcl::protocol::EffectRegion*>(base);
+                    const auto* filters = reinterpret_cast<const lcl::protocol::FilterOp*>(
+                        base + static_cast<size_t>(graphHeader->regionCount) * sizeof(lcl::protocol::EffectRegion));
+
+                    uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | graphHeader->surfaceId;
                     auto it = m_surfaces.find(surfaceKey);
                     if (it != m_surfaces.end()) {
-                        it->second.backdropFilters = filters;
-                        m_windowManager.setBackdropFilters(it->second.windowId, filters);
-                        std::cout << "[LCL Compositor] Set " << filters.size()
-                                  << " backdrop filter(s) for Surface " << filterHeader->surfaceId
-                                  << " (Window ID: " << it->second.windowId << ")\n";
-                        m_needsRedraw = true;
+                        std::vector<SurfaceEffectRegion> parsed;
+                        parsed.reserve(graphHeader->regionCount);
+
+                        bool valid = true;
+                        for (uint32_t i = 0; i < graphHeader->regionCount; ++i) {
+                            const auto& region = regions[i];
+                            size_t offset = static_cast<size_t>(region.filterOffset);
+                            size_t count = static_cast<size_t>(region.filterCount);
+                            if (offset + count > static_cast<size_t>(graphHeader->filterCount)) {
+                                valid = false;
+                                break;
+                            }
+
+                            SurfaceEffectRegion dstRegion;
+                            dstRegion.region = region;
+                            dstRegion.filters.assign(filters + offset, filters + offset + count);
+                            parsed.push_back(std::move(dstRegion));
+                        }
+
+                        if (valid) {
+                            it->second.effectRegions = std::move(parsed);
+                            m_needsRedraw = true;
+                        }
                     }
                 }
+            }
+
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::ClearEffectGraph) {
+            uint32_t surfId = 1;
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgClearEffectGraph)) {
+                auto* clearMsg = reinterpret_cast<const lcl::protocol::LCLMsgClearEffectGraph*>(msg.payload.data());
+                surfId = clearMsg->surfaceId;
+            }
+
+            uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
+            auto it = m_surfaces.find(surfaceKey);
+            if (it != m_surfaces.end()) {
+                it->second.effectRegions.clear();
+                m_needsRedraw = true;
             }
 
         } else if (msg.command == "SPAWN_TERMINAL" || msg.command.rfind("SPAWN_TERMINAL", 0) == 0) {
@@ -732,6 +766,28 @@ void Compositor::renderFrame() {
 
     // 2. Atomic Z-Stacking Window Group Rendering (Frame + Client Surface per Window in Z-order)
     using core::DisplayScale;
+    auto applySurfaceRegionEffects = [&](const render::Window& win,
+                                         const SurfaceEntry& surface,
+                                         protocol::EffectSourceType sourceType) {
+        int titleOffset = (win.decorationMode == render::DecorationMode::SSD)
+            ? DisplayScale::titleBarHeight()
+            : 0;
+
+        for (const auto& fx : surface.effectRegions) {
+            if (fx.region.source != sourceType || fx.filters.empty()) continue;
+
+            int fxX = win.x + fx.region.x;
+            int fxY = win.y + titleOffset + fx.region.y;
+            int fxW = static_cast<int>(fx.region.width);
+            int fxH = static_cast<int>(fx.region.height);
+            if (fxW <= 0 || fxH <= 0) continue;
+
+            // Initial executor supports chain filters with source-type routing.
+            // Advanced blend modes are currently treated as normal blend.
+            m_renderer.getSkiaRenderer()->applyBackdropFilter(fxX, fxY, fxW, fxH, fx.filters);
+        }
+    };
+
     for (const auto& win : m_windowManager.getWindows()) {
         // A. Find matching client SHM surface buffer for this window
         const SurfaceEntry* matchingSurface = nullptr;
@@ -742,17 +798,13 @@ void Compositor::renderFrame() {
             }
         }
 
-        // B. Apply Backdrop Filter if pipeline configured on window or surface
-        const auto& filters = !win.backdropFilters.empty() ? win.backdropFilters :
-                              (matchingSurface ? matchingSurface->backdropFilters : std::vector<protocol::FilterOp>{});
-        if (!filters.empty()) {
-            int titleOffset = (win.decorationMode == render::DecorationMode::SSD) ? DisplayScale::titleBarHeight() : 0;
-            int filterX = win.x;
-            int filterY = win.y + titleOffset;
-            int filterW = matchingSurface ? static_cast<int>(matchingSurface->width) : win.width;
-            int filterH = matchingSurface ? static_cast<int>(matchingSurface->height) : std::max(1, win.height - titleOffset);
+        int titleOffset = (win.decorationMode == render::DecorationMode::SSD)
+            ? DisplayScale::titleBarHeight()
+            : 0;
 
-            m_renderer.getSkiaRenderer()->applyBackdropFilter(filterX, filterY, filterW, filterH, filters);
+        // B. Apply effect-graph backdrop regions (new pipeline only)
+        if (matchingSurface && !matchingSurface->effectRegions.empty()) {
+            applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Backdrop);
         }
 
         // C. Render Server-Side Window Frame (Titlebar & Border) if SSD enabled
@@ -761,7 +813,6 @@ void Compositor::renderFrame() {
         }
 
         if (matchingSurface) {
-            int titleOffset = (win.decorationMode == render::DecorationMode::SSD) ? DisplayScale::titleBarHeight() : 0;
             int dstX = win.x;
             int dstY = win.y + titleOffset;
             int srcW = static_cast<int>(matchingSurface->width);
@@ -772,6 +823,10 @@ void Compositor::renderFrame() {
                 dstX, dstY, srcW, srcH,
                 reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
                 stridePixels, 1.0f);
+
+            if (!matchingSurface->effectRegions.empty()) {
+                applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground);
+            }
         } else {
             // Render text fallback content ONLY for standard SSD decorated application windows
             if (win.decorationMode == render::DecorationMode::SSD) {

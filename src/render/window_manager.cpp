@@ -484,18 +484,6 @@ void WindowManager::setWindowLayer(uint32_t windowId, protocol::LCLWindowLayer l
     m_mouseDirty = true;
 }
 
-void WindowManager::setBackdropFilters(uint32_t windowId, const std::vector<protocol::FilterOp>& filters) {
-    for (auto& win : m_windows) {
-        if (win.id == windowId) {
-            win.backdropFilters = filters;
-            win.markDirty();
-            m_mouseDirty = true;
-            std::cout << "[LCL WindowManager] Set " << filters.size() << " backdrop filter op(s) for Window ID " << windowId << "\n";
-            break;
-        }
-    }
-}
-
 void WindowManager::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right) {
     m_reservedZone = {top, bottom, left, right};
     std::cout << "[LCL WindowManager] Reserved Zone set to top=" << top << " bottom=" << bottom << " left=" << left << " right=" << right << "\n";
