@@ -370,6 +370,9 @@ bool WindowApp::renderFrame() {
     m_renderPass.clear();
 
     m_renderer.beginFrame();
+    if (auto* pixels = m_renderer.getRasterBuffer()) {
+        std::fill_n(pixels, static_cast<size_t>(m_width) * static_cast<size_t>(m_height), 0x00000000);
+    }
     m_renderPass.begin(nullptr);
 
     if (m_rootWidget && m_rootWidget->isVisible()) {

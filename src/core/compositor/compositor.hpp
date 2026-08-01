@@ -57,6 +57,7 @@ public:
     struct SurfaceEffectRegion {
         protocol::EffectRegion region{};
         std::vector<protocol::FilterOp> filters;
+        bool followSurfaceBounds{false};
     };
 
     struct SurfaceEntry {

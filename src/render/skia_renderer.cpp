@@ -456,25 +456,33 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
             std::fill_n(row, x2 - x1, fillARGB);
         }
     } else if (color.a > 0) {
-        uint32_t alpha = color.a;
-        uint32_t invAlpha = 255 - alpha;
-        uint32_t srcR = color.r * alpha;
-        uint32_t srcG = color.g * alpha;
-        uint32_t srcB = color.b * alpha;
+        const float srcA = static_cast<float>(color.a) / 255.0f;
 
         for (int y = y1; y < y2; ++y) {
             uint32_t* row = &m_targetPixels[y * m_width];
             for (int x = x1; x < x2; ++x) {
                 uint32_t bg = row[x];
-                uint32_t bgR = (bg >> 16) & 0xFF;
-                uint32_t bgG = (bg >> 8) & 0xFF;
-                uint32_t bgB = bg & 0xFF;
+                const float bgA = static_cast<float>((bg >> 24) & 0xFF) / 255.0f;
+                const float bgR = static_cast<float>((bg >> 16) & 0xFF);
+                const float bgG = static_cast<float>((bg >> 8) & 0xFF);
+                const float bgB = static_cast<float>(bg & 0xFF);
 
-                uint32_t r = (srcR + bgR * invAlpha) >> 8;
-                uint32_t g = (srcG + bgG * invAlpha) >> 8;
-                uint32_t b = (srcB + bgB * invAlpha) >> 8;
+                const float outA = srcA + bgA * (1.0f - srcA);
+                if (outA <= 0.0001f) {
+                    row[x] = 0x00000000;
+                    continue;
+                }
 
-                row[x] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
+                const float outR = (color.r * srcA + bgR * bgA * (1.0f - srcA)) / outA;
+                const float outG = (color.g * srcA + bgG * bgA * (1.0f - srcA)) / outA;
+                const float outB = (color.b * srcA + bgB * bgA * (1.0f - srcA)) / outA;
+
+                uint32_t a = static_cast<uint32_t>(std::clamp(outA * 255.0f, 0.0f, 255.0f));
+                uint32_t r = static_cast<uint32_t>(std::clamp(outR, 0.0f, 255.0f));
+                uint32_t g = static_cast<uint32_t>(std::clamp(outG, 0.0f, 255.0f));
+                uint32_t b = static_cast<uint32_t>(std::clamp(outB, 0.0f, 255.0f));
+
+                row[x] = (a << 24) | (r << 16) | (g << 8) | b;
             }
         }
     }

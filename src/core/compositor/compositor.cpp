@@ -473,6 +473,10 @@ void Compositor::processIPC() {
                             SurfaceEffectRegion dstRegion;
                             dstRegion.region = region;
                             dstRegion.filters.assign(filters + offset, filters + offset + count);
+                            dstRegion.followSurfaceBounds =
+                                (region.x == 0 && region.y == 0 &&
+                                 region.width == it->second.width &&
+                                 region.height == it->second.height);
                             parsed.push_back(std::move(dstRegion));
                         }
 
@@ -776,10 +780,10 @@ void Compositor::renderFrame() {
         for (const auto& fx : surface.effectRegions) {
             if (fx.region.source != sourceType || fx.filters.empty()) continue;
 
-            int fxX = win.x + fx.region.x;
-            int fxY = win.y + titleOffset + fx.region.y;
-            int fxW = static_cast<int>(fx.region.width);
-            int fxH = static_cast<int>(fx.region.height);
+            int fxX = win.x + (fx.followSurfaceBounds ? 0 : fx.region.x);
+            int fxY = win.y + titleOffset + (fx.followSurfaceBounds ? 0 : fx.region.y);
+            int fxW = fx.followSurfaceBounds ? static_cast<int>(surface.width) : static_cast<int>(fx.region.width);
+            int fxH = fx.followSurfaceBounds ? static_cast<int>(surface.height) : static_cast<int>(fx.region.height);
             if (fxW <= 0 || fxH <= 0) continue;
 
             // Initial executor supports chain filters with source-type routing.

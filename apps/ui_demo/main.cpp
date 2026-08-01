@@ -5,10 +5,82 @@
 
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
-#include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/text.hpp"
 
 using namespace lcl::ui;
+
+namespace {
+
+class BlurButton : public BackdropSurface {
+public:
+    explicit BlurButton(const std::string& label) {
+        setFocusable(true);
+        getYogaNode().setDirection(YGFlexDirectionRow);
+        getYogaNode().setJustifyContent(YGJustifyCenter);
+        getYogaNode().setAlignItems(YGAlignCenter);
+        getYogaNode().setPadding(YGEdgeHorizontal, 16.0f);
+        getYogaNode().setPadding(YGEdgeVertical, 10.0f);
+
+        m_label = std::make_unique<Text>(label);
+        m_label->setFontSize(16.0f);
+        m_label->setTextColor(Color{245, 247, 255, 255});
+        m_labelPtr = m_label.get();
+        addChild(std::move(m_label));
+
+        addFilter(lcl::protocol::FilterType::Blur, 26.0f);
+        addFilter(lcl::protocol::FilterType::Saturation, 1.25f);
+        addFilter(lcl::protocol::FilterType::Brightness, 1.05f);
+        setBackgroundColor(Color{255, 255, 255, 34});
+        setBorderColor(Color{190, 220, 255, 145});
+        setBorderWidth(1.0f);
+    }
+
+    void setOnClick(std::function<void()> cb) { m_onClick = std::move(cb); }
+
+    void setLabel(const std::string& text) {
+        if (m_labelPtr) m_labelPtr->setText(text);
+    }
+
+    bool onPointerEnter(const PointerEvent& event) override {
+        (void)event;
+        if (!m_pressed) {
+            setBackgroundColor(Color{255, 255, 255, 48});
+        }
+        return true;
+    }
+
+    bool onPointerLeave(const PointerEvent& event) override {
+        (void)event;
+        m_pressed = false;
+        setBackgroundColor(Color{255, 255, 255, 34});
+        return true;
+    }
+
+    bool onPointerDown(const PointerEvent& event) override {
+        (void)event;
+        m_pressed = true;
+        setBackgroundColor(Color{195, 225, 255, 62});
+        return true;
+    }
+
+    bool onPointerUp(const PointerEvent& event) override {
+        (void)event;
+        bool wasPressed = m_pressed;
+        m_pressed = false;
+        setBackgroundColor(Color{255, 255, 255, 48});
+        if (wasPressed && m_onClick) m_onClick();
+        return true;
+    }
+
+private:
+    std::unique_ptr<Text> m_label;
+    Text* m_labelPtr{nullptr};
+    std::function<void()> m_onClick;
+    bool m_pressed{false};
+};
+
+} // namespace
 
 int main() {
     std::cout << "========================================\n";
@@ -26,6 +98,7 @@ int main() {
     rootContainer->getYogaNode().setJustifyContent(YGJustifyCenter);
     rootContainer->getYogaNode().setAlignItems(YGAlignCenter);
     rootContainer->getYogaNode().setGap(YGGutterAll, 20.0f);
+    rootContainer->setBackgroundColor(Color{0, 0, 0, 1});
 
     // Inner Card Container
     auto cardContainer = std::make_unique<Container>();
@@ -33,10 +106,13 @@ int main() {
     cardContainer->getYogaNode().setAlignItems(YGAlignCenter);
     cardContainer->getYogaNode().setPadding(YGEdgeAll, 24.0f);
     cardContainer->getYogaNode().setGap(YGGutterAll, 16.0f);
+    cardContainer->setBackgroundColor(Color{255, 255, 255, 12});
+    cardContainer->setBorderColor(Color{180, 210, 255, 95});
+    cardContainer->setBorderWidth(1.0f);
 
     // Button & Text Widgets
-    auto clickButton = std::make_unique<Button>("Tıkla: 0");
-    Button* btnPtr = clickButton.get();
+    auto clickButton = std::make_unique<BlurButton>("Tıkla: 0");
+    BlurButton* btnPtr = clickButton.get();
     clickButton->getYogaNode().setWidth(160.0f);
     clickButton->getYogaNode().setHeight(44.0f);
 
