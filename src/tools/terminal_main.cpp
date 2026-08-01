@@ -331,34 +331,16 @@ int main() {
   titleBar->getYogaNode().setWidth(static_cast<float>(kSurfW));
   titleBar->getYogaNode().setHeight(static_cast<float>(kClientTitleBarH));
 
-  const float btn = 12.0f;
-  const float btnPad = 10.0f;
-  const float btnGap = 18.0f;
-  auto mkTraffic = [&](float left, uint32_t argb) {
-    auto dot = std::make_unique<lcl::ui::Container>();
-    dot->setBackgroundColor(lcl::ui::Color{
-        static_cast<uint8_t>((argb >> 16) & 0xFF),
-        static_cast<uint8_t>((argb >> 8) & 0xFF),
-        static_cast<uint8_t>(argb & 0xFF),
-        static_cast<uint8_t>((argb >> 24) & 0xFF)});
-    dot->setBorderRadius(btn * 0.5f);
-    dot->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    dot->getYogaNode().setPosition(YGEdgeLeft, left);
-    dot->getYogaNode().setPosition(YGEdgeTop, 10.0f);
-    dot->getYogaNode().setWidth(btn);
-    dot->getYogaNode().setHeight(btn);
-    return dot;
-  };
-
-  titleBar->addChild(mkTraffic(btnPad, ::lcl::theme::UI::BtnClose));
-  titleBar->addChild(mkTraffic(btnPad + btnGap, ::lcl::theme::UI::BtnMinimize));
-  titleBar->addChild(mkTraffic(btnPad + btnGap * 2.0f, ::lcl::theme::UI::BtnMaximize));
+  const float ctrlSize = 16.0f;
+  const float ctrlGap = 6.0f;
+  const float ctrlLeft = std::max(8.0f, static_cast<float>(kTerminalCornerRadiusPx) - 8.0f);
+  const float titleLeft = ctrlLeft + (ctrlSize * 3.0f) + (ctrlGap * 2.0f) + 12.0f;
 
   auto titleText = std::make_unique<lcl::ui::Text>("LCL Terminal");
   titleText->setTextColor(lcl::ui::Color{240, 248, 255, 245});
   titleText->setFontSize(14.0f);
   titleText->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-  titleText->getYogaNode().setPosition(YGEdgeLeft, 74.0f);
+  titleText->getYogaNode().setPosition(YGEdgeLeft, titleLeft);
   titleText->getYogaNode().setPosition(YGEdgeTop, 9.0f);
   titleBar->addChild(std::move(titleText));
 

@@ -5,6 +5,7 @@
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "lcl-ui/widgets/window_chrome.hpp"
 
 #include <iostream>
 #include <algorithm>
@@ -690,45 +691,18 @@ void Compositor::renderFrame() {
         root->getYogaNode().setHeight(static_cast<float>(win.height));
 
         const float titleH = static_cast<float>(DisplayScale::titleBarHeight());
-        const float btn = static_cast<float>(DisplayScale::trafficBtn());
-        const float gap = static_cast<float>(DisplayScale::trafficGap());
-        const float pad = static_cast<float>(DisplayScale::px(10));
-        const float titleLeft = static_cast<float>(DisplayScale::px(14));
-        const float rightPad = static_cast<float>(DisplayScale::px(10));
+        lcl::ui::chrome::HeaderControlsStyle chromeStyle;
+        chromeStyle.titleMinLeft = static_cast<float>(DisplayScale::px(14));
+        chromeStyle.titleGapAfterControls = static_cast<float>(DisplayScale::px(12));
+        chromeStyle.titleRightPadding = static_cast<float>(DisplayScale::px(10));
 
-        std::string titleLabel = win.title;
-        float titleStartX = std::max(titleLeft, pad + (gap * 2.0f) + btn + static_cast<float>(DisplayScale::px(12)));
-        float titleAvailW = std::max(0.0f, static_cast<float>(win.width) - titleStartX - rightPad);
-        float approxCharW = std::max(1.0f, static_cast<float>(DisplayScale::fontSize()) * 0.6f);
-        int maxChars = static_cast<int>(titleAvailW / approxCharW);
-        if (maxChars <= 0) {
-            titleLabel.clear();
-        } else if (static_cast<int>(titleLabel.size()) > maxChars) {
-            if (maxChars <= 3) {
-                titleLabel = titleLabel.substr(0, static_cast<size_t>(maxChars));
-            } else {
-                titleLabel = titleLabel.substr(0, static_cast<size_t>(maxChars - 3)) + "...";
-            }
-        }
-
-        auto titleBar = std::make_unique<lcl::ui::Container>();
-        // Transparent titlebar surface; text and accents are layered widgets.
-        titleBar->setBackgroundColor(lcl::ui::Color{255, 255, 255, 0});
-        titleBar->setBorderRadius(0.0f);
-        titleBar->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        titleBar->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-        titleBar->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-        titleBar->getYogaNode().setWidth(static_cast<float>(win.width));
-        titleBar->getYogaNode().setHeight(titleH);
-
-        auto titleText = std::make_unique<lcl::ui::Text>(titleLabel);
-        titleText->setTextColor(lcl::ui::Color{230, 245, 255, 220});
-        titleText->setFontSize(static_cast<float>(DisplayScale::fontSize()));
-        titleText->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        titleText->getYogaNode().setPosition(YGEdgeLeft, titleStartX);
-        titleText->getYogaNode().setPosition(YGEdgeTop, static_cast<float>(DisplayScale::px(8)));
-        titleText->getYogaNode().setWidth(titleAvailW);
-        titleBar->addChild(std::move(titleText));
+        auto titleBar = lcl::ui::chrome::buildLibadwaitaTitleBar(
+            static_cast<float>(win.width),
+            titleH,
+            kWindowCornerRadiusPx,
+            win.title,
+            static_cast<float>(DisplayScale::fontSize()),
+            chromeStyle);
 
         auto titleSep = std::make_unique<lcl::ui::Container>();
         titleSep->setBackgroundColor(lcl::ui::Color{180, 220, 255, 58});
@@ -738,22 +712,6 @@ void Compositor::renderFrame() {
         titleSep->getYogaNode().setPosition(YGEdgeTop, titleH - 1.0f);
         titleSep->getYogaNode().setWidth(static_cast<float>(win.width));
         titleSep->getYogaNode().setHeight(1.0f);
-
-        auto mkTraffic = [&](float left, uint32_t color) {
-            auto dot = std::make_unique<lcl::ui::Container>();
-            dot->setBackgroundColor(toUiColor(color));
-            dot->setBorderRadius(btn * 0.5f);
-            dot->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-            dot->getYogaNode().setPosition(YGEdgeLeft, left);
-            dot->getYogaNode().setPosition(YGEdgeTop, pad);
-            dot->getYogaNode().setWidth(btn);
-            dot->getYogaNode().setHeight(btn);
-            return dot;
-        };
-
-        titleBar->addChild(mkTraffic(pad, ::lcl::theme::UI::BtnClose));
-        titleBar->addChild(mkTraffic(pad + gap, ::lcl::theme::UI::BtnMinimize));
-        titleBar->addChild(mkTraffic(pad + (gap * 2.0f), ::lcl::theme::UI::BtnMaximize));
 
         auto frameBorder = std::make_unique<lcl::ui::Container>();
         frameBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
@@ -775,6 +733,57 @@ void Compositor::renderFrame() {
         root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
 
         lcl::ui::Rect damage{static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), static_cast<float>(win.height)};
+        root->draw(reinterpret_cast<SkCanvas*>(skia), damage);
+    };
+
+    auto drawCsdHeaderControlsOverlay = [&](const render::Window& win) {
+        lcl::ui::RenderPass pass;
+        auto root = std::make_unique<lcl::ui::Container>();
+        root->setRenderPass(&pass);
+        root->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
+        root->setBorderRadius(0.0f);
+
+        const float titleH = static_cast<float>(DisplayScale::titleBarHeight());
+        const float ctrlSize = 16.0f;
+        const float ctrlGap = 6.0f;
+        const float ctrlLeft = std::max(8.0f, kWindowCornerRadiusPx - 8.0f);
+        const float ctrlTop = std::max(4.0f, (titleH - ctrlSize) * 0.5f);
+
+        root->getYogaNode().setWidth(static_cast<float>(win.width));
+        root->getYogaNode().setHeight(titleH);
+
+        auto mkHeaderControl = [&](float left, const char* glyph) {
+            auto button = std::make_unique<lcl::ui::Container>();
+            button->setBackgroundColor(lcl::ui::Color{235, 241, 248, 40});
+            button->setBorderColor(lcl::ui::Color{230, 238, 248, 92});
+            button->setBorderWidth(1.0f);
+            button->setBorderRadius(ctrlSize * 0.5f);
+            button->setBorderRoundness(2.0f);
+            button->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+            button->getYogaNode().setPosition(YGEdgeLeft, left);
+            button->getYogaNode().setPosition(YGEdgeTop, ctrlTop);
+            button->getYogaNode().setWidth(ctrlSize);
+            button->getYogaNode().setHeight(ctrlSize);
+
+            auto icon = std::make_unique<lcl::ui::Text>(glyph);
+            icon->setTextColor(lcl::ui::Color{232, 240, 248, 210});
+            icon->setFontSize(11.0f);
+            icon->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+            icon->getYogaNode().setPosition(YGEdgeLeft, ctrlSize * 0.32f);
+            icon->getYogaNode().setPosition(YGEdgeTop, ctrlSize * 0.16f);
+            button->addChild(std::move(icon));
+
+            return button;
+        };
+
+        root->addChild(mkHeaderControl(ctrlLeft, "x"));
+        root->addChild(mkHeaderControl(ctrlLeft + ctrlSize + ctrlGap, "-"));
+        root->addChild(mkHeaderControl(ctrlLeft + (ctrlSize + ctrlGap) * 2.0f, "+"));
+
+        root->getYogaNode().calculateLayout(static_cast<float>(win.width), titleH);
+        root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
+
+        lcl::ui::Rect damage{static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), titleH};
         root->draw(reinterpret_cast<SkCanvas*>(skia), damage);
     };
 
@@ -848,6 +857,13 @@ void Compositor::renderFrame() {
 
             if (!matchingSurface->effectRegions.empty()) {
                 applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground);
+            }
+
+            // Keep CSD for terminal content while rendering controls through compositor
+            // so buttons match SSD quality (AA/blend pipeline) exactly.
+            if (win.decorationMode == render::DecorationMode::None &&
+                win.title.find("Terminal") != std::string::npos) {
+                drawCsdHeaderControlsOverlay(win);
             }
         } else {
             // Render text fallback content ONLY for standard SSD decorated application windows
