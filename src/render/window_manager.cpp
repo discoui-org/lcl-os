@@ -289,13 +289,15 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
 
                     // Close button check (only when explicitly clicked or Super shortcut used)
                     if (event.superPressed && event.button == BTN_MIDDLE) {
-                        removeWindow(targetWin.id);
+                        targetWin.closeRequested = true;
+                        targetWin.markDirty();
                         stateChanged = true;
                     } else if (!event.superPressed && targetWin.decorationMode == DecorationMode::SSD &&
                                m_mouseX >= targetWin.x + btnPad && m_mouseX <= targetWin.x + btnPad + btn &&
                                m_mouseY >= targetWin.y + btnPad && m_mouseY <= targetWin.y + btnPad + btn) {
                         std::cout << "[LCL WM] Close button clicked on window ID: " << targetWin.id << "\n";
-                        removeWindow(targetWin.id);
+                        targetWin.closeRequested = true;
+                        targetWin.markDirty();
                         stateChanged = true;
                     } else if (event.superPressed) {
                         // GNOME / KDE Style Super Shortcuts
@@ -482,6 +484,19 @@ void WindowManager::setWindowLayer(uint32_t windowId, protocol::LCLWindowLayer l
     }
     sortWindowsByLayer();
     m_mouseDirty = true;
+}
+
+void WindowManager::setInsetBorderEnabled(uint32_t windowId, bool enabled) {
+    for (auto& win : m_windows) {
+        if (win.id == windowId) {
+            if (win.drawInsetBorder != enabled) {
+                win.drawInsetBorder = enabled;
+                win.markDirty();
+                m_mouseDirty = true;
+            }
+            break;
+        }
+    }
 }
 
 void WindowManager::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right) {

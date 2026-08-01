@@ -58,6 +58,7 @@ public:
     bool requestWindowMove(float localX, float localY);
     bool requestWindowClose();
     bool setDecorationMode(lcl::protocol::LCLDecorationMode mode);
+    void setExternalIpcSocket(int socketFd);
     void setCsdTitlebarEnabled(bool enabled) { m_csdTitlebarEnabled = enabled; }
     void configureCsdTitlebar(float height, float closeLeft, float closeTop, float closeSize);
 
@@ -90,6 +91,7 @@ private:
     size_t m_shmSize{0};
     uint32_t* m_shmPixels{nullptr};
     bool m_ipcConnected{false};
+    bool m_ownsSocketFd{true};
 
     bool m_initialized{false};
     bool m_firstFrame{true};

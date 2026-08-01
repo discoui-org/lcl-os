@@ -149,12 +149,17 @@ inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
     titleBar->addChild(mkHeaderControl(ctrlLeft + (style.controlSize + style.controlGap) * 2.0f, "+"));
 
     std::string titleLabel = truncateTitleToWidth(title, titleAvailW, titleFontSize);
+    const float titleTop = std::clamp(
+        ctrlTop + (style.controlSize - titleFontSize) * 0.5f,
+        0.0f,
+        std::max(0.0f, titleHeight - titleFontSize));
+
     auto titleText = std::make_unique<Text>(titleLabel);
     titleText->setTextColor(style.titleColor);
     titleText->setFontSize(titleFontSize);
     titleText->getYogaNode().setPositionType(YGPositionTypeAbsolute);
     titleText->getYogaNode().setPosition(YGEdgeLeft, titleStartX);
-    titleText->getYogaNode().setPosition(YGEdgeTop, std::max(0.0f, (titleHeight - titleFontSize) * 0.45f));
+    titleText->getYogaNode().setPosition(YGEdgeTop, titleTop);
     titleText->getYogaNode().setWidth(titleAvailW);
     titleBar->addChild(std::move(titleText));
 

@@ -29,6 +29,11 @@ float easeInCubic(float x) {
     return x * x * x;
 }
 
+uint8_t applyOpacityToAlpha(uint8_t alpha, float opacity) {
+    const float scaled = std::clamp(static_cast<float>(alpha) * std::clamp(opacity, 0.0f, 1.0f), 0.0f, 255.0f);
+    return static_cast<uint8_t>(std::lround(scaled));
+}
+
 } // namespace
 
 // ============================================================
@@ -127,6 +132,74 @@ bool Compositor::initialize() {
                         break;
                     }
                 }
+            }
+
+            std::vector<uint64_t> surfacesToRemove;
+            std::vector<uint32_t> closeRequests;
+            for (const auto& win : m_windowManager.getWindows()) {
+                if (win.closeRequested) {
+                    closeRequests.push_back(win.id);
+                }
+            }
+
+            for (uint32_t winId : closeRequests) {
+                for (auto& win : m_windowManager.getWindowsMutable()) {
+                    if (win.id == winId) {
+                        win.closeRequested = false;
+                        break;
+                    }
+                }
+
+                uint64_t foundKey = 0;
+                SurfaceEntry* foundSurface = nullptr;
+                for (auto& [surfKey, entry] : m_surfaces) {
+                    if (entry.windowId == winId) {
+                        foundKey = surfKey;
+                        foundSurface = &entry;
+                        break;
+                    }
+                }
+
+                if (!foundSurface) {
+                    m_windowManager.removeWindow(winId);
+                    continue;
+                }
+
+                const uint32_t surfaceId = static_cast<uint32_t>(foundKey & 0xFFFFFFFFull);
+                if (foundSurface->clientFd >= 0) {
+                    protocol::LCLHeader destroyHeader{};
+                    destroyHeader.opcode = protocol::LCLOpcode::SurfaceDestroy;
+                    destroyHeader.payloadSize = sizeof(protocol::LCLMsgSurfaceDestroy);
+
+                    protocol::LCLMsgSurfaceDestroy destroyMsg{};
+                    destroyMsg.surfaceId = surfaceId;
+                    protocol::sendMsgWithFd(foundSurface->clientFd, destroyHeader, &destroyMsg);
+                }
+
+                foundSurface->ignoreBufferCommits = true;
+                if (foundSurface->pixels && foundSurface->width > 0 && foundSurface->height > 0) {
+                    foundSurface->transitionPhase = SurfaceEntry::TransitionPhase::Closing;
+                    foundSurface->transitionElapsedSec = 0.0f;
+                    foundSurface->transitionDurationSec = 0.14f;
+                    foundSurface->transitionOpacity = 1.0f;
+                    foundSurface->transitionScale = 1.0f;
+                    foundSurface->pendingDestroy = false;
+                } else {
+                    m_windowManager.removeWindow(winId);
+                    if (foundSurface->pixels && foundSurface->shmSize > 0) {
+                        munmap(foundSurface->pixels, foundSurface->shmSize);
+                        foundSurface->pixels = nullptr;
+                    }
+                    if (foundSurface->shmFd >= 0) {
+                        close(foundSurface->shmFd);
+                        foundSurface->shmFd = -1;
+                    }
+                    surfacesToRemove.push_back(foundKey);
+                }
+            }
+
+            for (uint64_t key : surfacesToRemove) {
+                m_surfaces.erase(key);
             }
         }
 
@@ -536,9 +609,27 @@ void Compositor::processIPC() {
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
                     m_windowManager.setWindowLayer(it->second.windowId, layerMsg->layer, layerMsg->unfocusable != 0);
+
+                    // Default policy: wallpaper and unfocusable top overlays (menu bar) do not get forced inset borders.
+                    const bool disableInsetBorder =
+                        (layerMsg->layer == lcl::protocol::LCLWindowLayer::Bottom) ||
+                        (layerMsg->layer == lcl::protocol::LCLWindowLayer::TopMost && layerMsg->unfocusable != 0);
+                    m_windowManager.setInsetBorderEnabled(it->second.windowId, !disableInsetBorder);
+
                     std::cout << "[LCL Compositor] Set window layer for Window " << it->second.windowId
                               << " to " << static_cast<uint32_t>(layerMsg->layer)
                               << " (unfocusable=" << static_cast<int>(layerMsg->unfocusable) << ")\n";
+                    m_needsRedraw = true;
+                }
+            }
+
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetInsetBorder) {
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetInsetBorder)) {
+                auto* borderMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetInsetBorder*>(msg.payload.data());
+                uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | borderMsg->surfaceId;
+                auto it = m_surfaces.find(surfaceKey);
+                if (it != m_surfaces.end()) {
+                    m_windowManager.setInsetBorderEnabled(it->second.windowId, borderMsg->enabled != 0);
                     m_needsRedraw = true;
                 }
             }
@@ -814,7 +905,18 @@ void Compositor::renderFrame() {
     constexpr float kWindowCornerRadiusPx = 20.0f;
     constexpr float kWindowCornerRoundness = 2.0f;
 
-    auto drawSsdChromeWithLclUi = [&](const render::Window& win) {
+    auto drawSsdChromeWithLclUi = [&](const render::Window& win,
+                                      float chromeOpacity,
+                                      float chromeScale,
+                                      float scaledTitleHeight) {
+        auto fadeUiColor = [&](const lcl::ui::Color& c) {
+            return lcl::ui::Color{c.r, c.g, c.b, applyOpacityToAlpha(c.a, chromeOpacity)};
+        };
+
+        auto fadeSkiaColor = [&](const lcl::render::SkiaColor& c) {
+            return lcl::render::SkiaColor{c.r, c.g, c.b, applyOpacityToAlpha(c.a, chromeOpacity)};
+        };
+
         lcl::ui::RenderPass pass;
         auto root = std::make_unique<lcl::ui::Container>();
         root->setRenderPass(&pass);
@@ -823,29 +925,34 @@ void Compositor::renderFrame() {
         root->getYogaNode().setHeight(static_cast<float>(win.height));
 
         lcl::ui::chrome::HeaderControlsStyle chromeStyle;
-        chromeStyle.titleMinLeft = static_cast<float>(DisplayScale::px(14));
-        chromeStyle.titleGapAfterControls = static_cast<float>(DisplayScale::px(12));
-        chromeStyle.titleRightPadding = static_cast<float>(DisplayScale::px(10));
+        chromeStyle.controlSize = std::max(10.0f, chromeStyle.controlSize * chromeScale);
+        chromeStyle.controlGap = std::max(3.0f, chromeStyle.controlGap * chromeScale);
+        chromeStyle.minControlLeft = std::max(4.0f, chromeStyle.minControlLeft * chromeScale);
+        chromeStyle.minControlTop = std::max(2.0f, chromeStyle.minControlTop * chromeScale);
+        chromeStyle.titleMinLeft = std::max(6.0f, static_cast<float>(DisplayScale::px(14)) * chromeScale);
+        chromeStyle.titleGapAfterControls = std::max(4.0f, static_cast<float>(DisplayScale::px(12)) * chromeScale);
+        chromeStyle.titleRightPadding = std::max(4.0f, static_cast<float>(DisplayScale::px(10)) * chromeScale);
+        chromeStyle.glyphFontSize = std::max(8.0f, chromeStyle.glyphFontSize * chromeScale);
         // Titlebar bg is drawn directly below with exact compositor corner geometry.
         chromeStyle.titleBarBackground = lcl::ui::Color{0, 0, 0, 0};
         chromeStyle.titleBarCornerRadiusAdjust = -1.0f;
         chromeStyle.titleBarRoundness = kWindowCornerRoundness;
         chromeStyle.buttonRoundness = 2.0f;
         chromeStyle.controlLeftRadiusOffset = chromeStyle.controlSize * 0.5f;
+        chromeStyle.buttonBackground = fadeUiColor(chromeStyle.buttonBackground);
+        chromeStyle.buttonBorder = fadeUiColor(chromeStyle.buttonBorder);
+        chromeStyle.buttonGlyph = fadeUiColor(chromeStyle.buttonGlyph);
+        chromeStyle.titleColor = fadeUiColor(chromeStyle.titleColor);
 
-        const float ctrlInset = std::max(
-            chromeStyle.minControlLeft,
-            kWindowCornerRadiusPx - chromeStyle.controlLeftRadiusOffset);
-        const float computedTitleH = std::ceil(ctrlInset * 2.0f + chromeStyle.controlSize);
-        const float titleH = std::max(static_cast<float>(DisplayScale::titleBarHeight()), computedTitleH);
+        const float titleH = std::max(1.0f, scaledTitleHeight);
 
         const float inset = 1.0f;
         const float bgX = static_cast<float>(win.x) + inset;
         const float bgY = static_cast<float>(win.y) + inset;
         const float bgW = std::max(0.0f, static_cast<float>(win.width) - inset * 2.0f);
         const float bgH = std::max(0.0f, titleH);
-        const float bgRadius = std::max(0.0f, kWindowCornerRadiusPx - inset);
-        const lcl::render::SkiaColor titleBgColor{17, 19, 23, 255};
+        const float bgRadius = std::max(0.0f, (kWindowCornerRadiusPx * chromeScale) - inset);
+        const lcl::render::SkiaColor titleBgColor = fadeSkiaColor({17, 19, 23, 255});
 
         if (bgW > 0.0f && bgH > 0.0f) {
             // Rounded top silhouette aligned with SSD border mask.
@@ -867,38 +974,12 @@ void Compositor::renderFrame() {
         auto titleBar = lcl::ui::chrome::buildLibadwaitaTitleBar(
             static_cast<float>(win.width),
             titleH,
-            kWindowCornerRadiusPx,
+            kWindowCornerRadiusPx * chromeScale,
             win.title,
-            static_cast<float>(DisplayScale::fontSize()),
+            std::max(9.0f, static_cast<float>(DisplayScale::fontSize()) * chromeScale),
             chromeStyle);
 
-        auto outerInsetBorder = std::make_unique<lcl::ui::Container>();
-        outerInsetBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-        outerInsetBorder->setBorderColor(lcl::ui::Color{10, 12, 16, 120});
-        outerInsetBorder->setBorderWidth(1.0f);
-        outerInsetBorder->setBorderRadius(kWindowCornerRadiusPx);
-        outerInsetBorder->setBorderRoundness(2.0f);
-        outerInsetBorder->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        outerInsetBorder->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-        outerInsetBorder->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-        outerInsetBorder->getYogaNode().setWidth(static_cast<float>(win.width));
-        outerInsetBorder->getYogaNode().setHeight(static_cast<float>(win.height));
-
-        auto innerInsetBorder = std::make_unique<lcl::ui::Container>();
-        innerInsetBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-        innerInsetBorder->setBorderColor(lcl::ui::Color{245, 248, 252, 86});
-        innerInsetBorder->setBorderWidth(1.0f);
-        innerInsetBorder->setBorderRadius(std::max(0.0f, kWindowCornerRadiusPx - 1.0f));
-        innerInsetBorder->setBorderRoundness(2.0f);
-        innerInsetBorder->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        innerInsetBorder->getYogaNode().setPosition(YGEdgeLeft, 1.0f);
-        innerInsetBorder->getYogaNode().setPosition(YGEdgeTop, 1.0f);
-        innerInsetBorder->getYogaNode().setWidth(std::max(0.0f, static_cast<float>(win.width) - 2.0f));
-        innerInsetBorder->getYogaNode().setHeight(std::max(0.0f, static_cast<float>(win.height) - 2.0f));
-
         root->addChild(std::move(titleBar));
-        root->addChild(std::move(outerInsetBorder));
-        root->addChild(std::move(innerInsetBorder));
 
         root->getYogaNode().calculateLayout(static_cast<float>(win.width), static_cast<float>(win.height));
         root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
@@ -950,38 +1031,39 @@ void Compositor::renderFrame() {
         root->addChild(mkHeaderControl(ctrlLeft + ctrlSize + ctrlGap, "-"));
         root->addChild(mkHeaderControl(ctrlLeft + (ctrlSize + ctrlGap) * 2.0f, "+"));
 
-        auto outerInsetBorder = std::make_unique<lcl::ui::Container>();
-        outerInsetBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-        outerInsetBorder->setBorderColor(lcl::ui::Color{10, 12, 16, 120});
-        outerInsetBorder->setBorderWidth(1.0f);
-        outerInsetBorder->setBorderRadius(kWindowCornerRadiusPx);
-        outerInsetBorder->setBorderRoundness(2.0f);
-        outerInsetBorder->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        outerInsetBorder->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-        outerInsetBorder->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-        outerInsetBorder->getYogaNode().setWidth(static_cast<float>(win.width));
-        outerInsetBorder->getYogaNode().setHeight(static_cast<float>(win.height));
-
-        auto innerInsetBorder = std::make_unique<lcl::ui::Container>();
-        innerInsetBorder->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-        innerInsetBorder->setBorderColor(lcl::ui::Color{245, 248, 252, 86});
-        innerInsetBorder->setBorderWidth(1.0f);
-        innerInsetBorder->setBorderRadius(std::max(0.0f, kWindowCornerRadiusPx - 1.0f));
-        innerInsetBorder->setBorderRoundness(2.0f);
-        innerInsetBorder->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        innerInsetBorder->getYogaNode().setPosition(YGEdgeLeft, 1.0f);
-        innerInsetBorder->getYogaNode().setPosition(YGEdgeTop, 1.0f);
-        innerInsetBorder->getYogaNode().setWidth(std::max(0.0f, static_cast<float>(win.width) - 2.0f));
-        innerInsetBorder->getYogaNode().setHeight(std::max(0.0f, static_cast<float>(win.height) - 2.0f));
-
-        root->addChild(std::move(outerInsetBorder));
-        root->addChild(std::move(innerInsetBorder));
-
         root->getYogaNode().calculateLayout(static_cast<float>(win.width), static_cast<float>(win.height));
         root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
 
         lcl::ui::Rect damage{static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), static_cast<float>(win.height)};
         root->draw(reinterpret_cast<SkCanvas*>(skia), damage);
+    };
+
+    auto drawForcedInsetBorder = [&](const render::Window& win, float opacity, float scale) {
+        const uint8_t outerA = applyOpacityToAlpha(120, opacity);
+        const uint8_t innerA = applyOpacityToAlpha(86, opacity);
+        const float radius = std::max(0.0f, kWindowCornerRadiusPx * scale);
+
+        auto* sr = m_renderer.getSkiaRenderer();
+        sr->drawRoundedRect(
+            {static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), static_cast<float>(win.height)},
+            radius,
+            {0, 0, 0, 0},
+            {10, 12, 16, outerA},
+            1.0f,
+            kWindowCornerRoundness);
+
+        const float inset = 1.0f;
+        const float innerW = std::max(0.0f, static_cast<float>(win.width) - inset * 2.0f);
+        const float innerH = std::max(0.0f, static_cast<float>(win.height) - inset * 2.0f);
+        if (innerW > 0.0f && innerH > 0.0f) {
+            sr->drawRoundedRect(
+                {static_cast<float>(win.x) + inset, static_cast<float>(win.y) + inset, innerW, innerH},
+                std::max(0.0f, radius - 1.0f),
+                {0, 0, 0, 0},
+                {245, 248, 252, innerA},
+                1.0f,
+                kWindowCornerRoundness);
+        }
     };
 
     // 1. Clear Desktop Canvas (Black background)
@@ -991,7 +1073,8 @@ void Compositor::renderFrame() {
     using core::DisplayScale;
     auto applySurfaceRegionEffects = [&](const render::Window& win,
                                          const SurfaceEntry& surface,
-                                         protocol::EffectSourceType sourceType) {
+                                         protocol::EffectSourceType sourceType,
+                                         float windowOpacity) {
         int titleOffset = (win.decorationMode == render::DecorationMode::SSD)
             ? DisplayScale::titleBarHeight()
             : 0;
@@ -1010,7 +1093,7 @@ void Compositor::renderFrame() {
             m_renderer.getSkiaRenderer()->applyBackdropFilter(
                 fxX, fxY, fxW, fxH,
                 std::max(0.0f, fx.region.cornerRadius),
-                std::clamp(fx.region.opacity, 0.0f, 1.0f),
+                std::clamp(fx.region.opacity * windowOpacity, 0.0f, 1.0f),
                 fx.filters);
         }
     };
@@ -1029,9 +1112,24 @@ void Compositor::renderFrame() {
             ? DisplayScale::titleBarHeight()
             : 0;
 
+        float windowOpacity = 1.0f;
+        float windowScale = 1.0f;
+        if (matchingSurface) {
+            windowOpacity = std::clamp(matchingSurface->transitionOpacity, 0.0f, 1.0f);
+            windowScale = std::clamp(matchingSurface->transitionScale, 0.80f, 1.20f);
+        }
+
+        const float winCenterX = static_cast<float>(win.x) + static_cast<float>(win.width) * 0.5f;
+        const float winCenterY = static_cast<float>(win.y) + static_cast<float>(win.height) * 0.5f;
+        const int scaledWinW = std::max(1, static_cast<int>(std::lround(static_cast<float>(win.width) * windowScale)));
+        const int scaledWinH = std::max(1, static_cast<int>(std::lround(static_cast<float>(win.height) * windowScale)));
+        const int scaledWinX = static_cast<int>(std::lround(winCenterX - static_cast<float>(scaledWinW) * 0.5f));
+        const int scaledWinY = static_cast<int>(std::lround(winCenterY - static_cast<float>(scaledWinH) * 0.5f));
+        const int scaledTitleOffset = static_cast<int>(std::lround(static_cast<float>(titleOffset) * windowScale));
+
         // B. Apply effect-graph backdrop regions (new pipeline only)
         if (matchingSurface && !matchingSurface->effectRegions.empty()) {
-            applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Backdrop);
+            applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Backdrop, windowOpacity);
         }
 
         if (matchingSurface) {
@@ -1040,13 +1138,19 @@ void Compositor::renderFrame() {
             int srcW = static_cast<int>(matchingSurface->width);
             int srcH = static_cast<int>(matchingSurface->height);
             int stridePixels = static_cast<int>(matchingSurface->stride / 4);
-            float surfaceOpacity = std::clamp(matchingSurface->transitionOpacity, 0.0f, 1.0f);
-            float surfaceScale = std::clamp(matchingSurface->transitionScale, 0.80f, 1.20f);
+            int drawW = std::max(1, static_cast<int>(std::lround(static_cast<float>(srcW) * windowScale)));
+            int drawH = std::max(1, static_cast<int>(std::lround(static_cast<float>(srcH) * windowScale)));
+            int drawX = static_cast<int>(std::lround(winCenterX + (static_cast<float>(dstX) - winCenterX) * windowScale));
+            int drawY = static_cast<int>(std::lround(winCenterY + (static_cast<float>(dstY) - winCenterY) * windowScale));
 
-            int drawW = std::max(1, static_cast<int>(std::lround(static_cast<float>(srcW) * surfaceScale)));
-            int drawH = std::max(1, static_cast<int>(std::lround(static_cast<float>(srcH) * surfaceScale)));
-            int drawX = dstX + (srcW - drawW) / 2;
-            int drawY = dstY + (srcH - drawH) / 2;
+            if (win.decorationMode == render::DecorationMode::SSD) {
+                // Keep a strict non-overlapping partition between SSD titlebar and client content
+                // under scaling to avoid double-alpha where layers touch.
+                drawX = scaledWinX;
+                drawY = scaledWinY + scaledTitleOffset;
+                drawW = std::max(1, scaledWinW);
+                drawH = std::max(1, scaledWinH - scaledTitleOffset);
+            }
 
             const bool maskToWindowShape =
                 (win.decorationMode == render::DecorationMode::SSD) ||
@@ -1057,7 +1161,7 @@ void Compositor::renderFrame() {
                 drawX, drawY, srcW, srcH,
                 reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
                 stridePixels,
-                surfaceOpacity,
+                windowOpacity,
                 maskToWindowShape ? kWindowCornerRadiusPx : 0.0f,
                 kWindowCornerRoundness,
                 win.decorationMode == render::DecorationMode::SSD,
@@ -1065,14 +1169,19 @@ void Compositor::renderFrame() {
                 drawH);
 
             if (!matchingSurface->effectRegions.empty()) {
-                applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground);
+                applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground, windowOpacity);
             }
 
             // Keep CSD for terminal content while rendering controls through compositor
             // so buttons match SSD quality (AA/blend pipeline) exactly.
             if (win.decorationMode == render::DecorationMode::None &&
                 win.title.find("Terminal") != std::string::npos) {
-                drawCsdHeaderControlsOverlay(win);
+                render::Window scaledOverlayWin = win;
+                scaledOverlayWin.x = scaledWinX;
+                scaledOverlayWin.y = scaledWinY;
+                scaledOverlayWin.width = scaledWinW;
+                scaledOverlayWin.height = scaledWinH;
+                drawCsdHeaderControlsOverlay(scaledOverlayWin);
             }
         } else {
             // Render text fallback content ONLY for standard SSD decorated application windows
@@ -1095,7 +1204,26 @@ void Compositor::renderFrame() {
 
         // C. Render Server-Side Window Frame (Titlebar & Inset Border) on top of content.
         if (win.decorationMode == render::DecorationMode::SSD) {
-            drawSsdChromeWithLclUi(win);
+            render::Window scaledChromeWin = win;
+            scaledChromeWin.x = scaledWinX;
+            scaledChromeWin.y = scaledWinY;
+            scaledChromeWin.width = scaledWinW;
+            scaledChromeWin.height = scaledWinH;
+            drawSsdChromeWithLclUi(
+                scaledChromeWin,
+                windowOpacity,
+                windowScale,
+                static_cast<float>(scaledTitleOffset));
+        }
+
+        // Forced compositor-owned inset border for every window, independent from app UI.
+        if (win.drawInsetBorder) {
+            render::Window borderWin = win;
+            borderWin.x = scaledWinX;
+            borderWin.y = scaledWinY;
+            borderWin.width = scaledWinW;
+            borderWin.height = scaledWinH;
+            drawForcedInsetBorder(borderWin, windowOpacity, windowScale);
         }
     }
 

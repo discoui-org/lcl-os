@@ -69,6 +69,9 @@ struct Window {
     int anchorRight{0};
     int anchorBottom{0};
 
+    bool closeRequested{false};
+    bool drawInsetBorder{true};
+
     uint32_t headerColor{0xFF38BDF8};
 
     // Damage Tracking & Occlusion Culling
@@ -150,6 +153,11 @@ public:
      * @brief Set window layer (Bottom/Normal/TopMost) and unfocusable flag for a window.
      */
     void setWindowLayer(uint32_t windowId, protocol::LCLWindowLayer layer, bool unfocusable = false);
+
+    /**
+     * @brief Enable or disable compositor-forced inset border for a window.
+     */
+    void setInsetBorderEnabled(uint32_t windowId, bool enabled);
 
     /**
      * @brief Set reserved desktop struts (No Window Move Zone for Menu Bar / Dock).

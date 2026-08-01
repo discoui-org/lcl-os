@@ -59,7 +59,7 @@ WindowApp::~WindowApp() {
         close(m_shmFd);
         m_shmFd = -1;
     }
-    if (m_socketFd >= 0) {
+    if (m_socketFd >= 0 && m_ownsSocketFd) {
         close(m_socketFd);
         m_socketFd = -1;
     }
@@ -158,6 +158,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     allocateSHM(m_width, m_height);
 
     m_ipcConnected = true;
+    m_ownsSocketFd = true;
     if (m_rootWidget) {
         m_rootWidget->markDirty();
     }
@@ -303,10 +304,17 @@ void WindowApp::runEventLoop() {
         }
     }
     m_running = false;
-    if (m_socketFd >= 0) {
+    if (m_socketFd >= 0 && m_ownsSocketFd) {
         close(m_socketFd);
         m_socketFd = -1;
     }
+}
+
+void WindowApp::setExternalIpcSocket(int socketFd) {
+    if (socketFd < 0) return;
+    m_socketFd = socketFd;
+    m_ipcConnected = true;
+    m_ownsSocketFd = false;
 }
 
 bool WindowApp::requestWindowMove(float localX, float localY) {

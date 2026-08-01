@@ -33,7 +33,8 @@ enum class LCLOpcode : uint32_t {
     SetEffectGraph = 11,
     ClearEffectGraph = 12,
     BeginWindowMove = 13,
-    RequestSurfaceClose = 14
+    RequestSurfaceClose = 14,
+    SetInsetBorder = 15
 };
 
 enum class LCLDecorationMode : uint32_t {
@@ -208,6 +209,11 @@ struct LCLMsgBeginWindowMove {
 
 struct LCLMsgRequestSurfaceClose {
     uint32_t surfaceId{0};
+};
+
+struct LCLMsgSetInsetBorder {
+    uint32_t surfaceId{0};
+    uint8_t enabled{1};
 };
 
 #pragma pack(pop)

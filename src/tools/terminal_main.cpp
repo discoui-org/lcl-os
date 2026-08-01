@@ -190,13 +190,13 @@ int main() {
   std::cout << "[LCL Terminal] Requested surface creation (ID: 1, " << kSurfW
             << "x" << kSurfH << ") from compositor.\n";
 
-  // Use client-side titlebar rendering (terminal draws its own transparent bar).
+  // Use client-side decoration mode so terminal owns titlebar interactions.
   lcl::protocol::LCLHeader decHeader{};
   decHeader.opcode = lcl::protocol::LCLOpcode::SetDecorationMode;
   decHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetDecorationMode);
   lcl::protocol::LCLMsgSetDecorationMode decMsg{};
   decMsg.surfaceId = 1;
-  decMsg.mode = lcl::protocol::LCLDecorationMode::None;
+  decMsg.mode = lcl::protocol::LCLDecorationMode::CSD;
   lcl::protocol::sendMsgWithFd(socketFd, decHeader, &decMsg);
 
   // Set Effect Graph for Surface 1 (Terminal)
@@ -333,7 +333,36 @@ int main() {
   const float ctrlSize = 16.0f;
   const float ctrlGap = 6.0f;
   const float ctrlLeft = std::max(8.0f, static_cast<float>(kTerminalCornerRadiusPx) - 8.0f);
+  const float ctrlTop = std::max(8.0f, static_cast<float>(kTerminalCornerRadiusPx) - 12.0f);
   const float titleLeft = ctrlLeft + (ctrlSize * 3.0f) + (ctrlGap * 2.0f) + 12.0f;
+
+  auto mkHeaderControl = [&](float left, const char *glyph) {
+    auto button = std::make_unique<lcl::ui::Container>();
+    button->setBackgroundColor(lcl::ui::Color{235, 241, 248, 56});
+    button->setBorderColor(lcl::ui::Color{230, 238, 248, 120});
+    button->setBorderWidth(1.0f);
+    button->setBorderRadius(ctrlSize * 0.5f);
+    button->setBorderRoundness(2.0f);
+    button->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    button->getYogaNode().setPosition(YGEdgeLeft, left);
+    button->getYogaNode().setPosition(YGEdgeTop, ctrlTop);
+    button->getYogaNode().setWidth(ctrlSize);
+    button->getYogaNode().setHeight(ctrlSize);
+
+    auto icon = std::make_unique<lcl::ui::Text>(glyph);
+    icon->setTextColor(lcl::ui::Color{236, 244, 252, 224});
+    icon->setFontSize(11.0f);
+    icon->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    icon->getYogaNode().setPosition(YGEdgeLeft, ctrlSize * 0.32f);
+    icon->getYogaNode().setPosition(YGEdgeTop, ctrlSize * 0.16f);
+    button->addChild(std::move(icon));
+
+    return button;
+  };
+
+  titleBar->addChild(mkHeaderControl(ctrlLeft, "x"));
+  titleBar->addChild(mkHeaderControl(ctrlLeft + ctrlSize + ctrlGap, "-"));
+  titleBar->addChild(mkHeaderControl(ctrlLeft + (ctrlSize + ctrlGap) * 2.0f, "+"));
 
   auto titleText = std::make_unique<lcl::ui::Text>("LCL Terminal");
   titleText->setTextColor(lcl::ui::Color{240, 248, 255, 245});
@@ -396,6 +425,14 @@ int main() {
   attachMsg.stride = kSurfW * 4;
   attachMsg.format = 1; // ARGB8888
 
+  // Titlebar widget handles drag/close requests through WindowApp APIs.
+  titlebarApp.setExternalIpcSocket(socketFd);
+  titlebarApp.setCsdTitlebarEnabled(true);
+  titlebarApp.configureCsdTitlebar(static_cast<float>(kClientTitleBarH),
+                                   ctrlLeft,
+                                   ctrlTop,
+                                   ctrlSize);
+
   lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, shmFd);
   std::cout << "[LCL Terminal] Sent initial ATTACH_BUFFER (memfd: " << shmFd
             << ") for Surface 1.\n";
@@ -404,8 +441,9 @@ int main() {
 
   // 7. Event loop: poll IPC keypresses, PTY output & update SHM frame
   auto lastBlink = std::chrono::steady_clock::now();
+  bool quitRequested = false;
 
-  while (app.isAlive()) {
+  while (app.isAlive() && !quitRequested) {
     bool updated = app.update();
 
     int targetW = -1;
@@ -459,7 +497,19 @@ int main() {
                             static_cast<char32_t>(inputMsg->codepoint));
               updated = true;
             }
+          } else if (inputMsg->type == 4) { // PointerButton
+            titlebarApp.sendPointerMove(inputMsg->x, inputMsg->y);
+            if (inputMsg->pressed) {
+              titlebarApp.sendPointerDown(inputMsg->x, inputMsg->y, 0);
+            } else {
+              titlebarApp.sendPointerUp(inputMsg->x, inputMsg->y, 0);
+            }
+          } else if (inputMsg->type == 3) { // PointerMotion
+            titlebarApp.sendPointerMove(inputMsg->x, inputMsg->y);
           }
+        } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
+          quitRequested = true;
+          break;
         } else if (header.opcode == lcl::protocol::LCLOpcode::ConfigureBounds &&
                    payload.size() >=
                        sizeof(lcl::protocol::LCLMsgConfigureBounds)) {
