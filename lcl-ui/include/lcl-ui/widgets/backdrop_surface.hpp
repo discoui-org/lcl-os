@@ -32,11 +32,18 @@ public:
     void collectEffects(std::vector<EffectRegion>& outEffects) const override;
 
 private:
+    void applyHoverVisuals();
+    void applyPressedVisuals();
+    void restoreBaseVisuals();
+
     std::vector<lcl::protocol::FilterOp> m_filters;
     EffectBlend m_blendMode{EffectBlend::Normal};
     float m_opacity{1.0f};
     std::function<void()> m_onClick{nullptr};
     bool m_pressed{false};
+    bool m_hasBaseVisuals{false};
+    Color m_baseBackground{0, 0, 0, 0};
+    Color m_baseBorder{0, 0, 0, 0};
 };
 
 } // namespace lcl::ui

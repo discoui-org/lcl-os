@@ -106,8 +106,14 @@ inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
     }
     titleBar->addChild(std::move(bgRoundedTop));
 
-    const float ctrlLeft = std::max(style.minControlLeft, cornerRadius - style.controlLeftRadiusOffset);
-    const float ctrlTop = std::max(style.minControlTop, (titleHeight - style.controlSize) * 0.5f);
+    // Place controls so top and left insets are equal, with radius-centered anchor.
+    // This keeps the close button visually centered against the window corner arc.
+    const float radiusCenterInset = std::max(
+        style.minControlLeft,
+        cornerRadius - style.controlLeftRadiusOffset);
+    const float ctrlInset = std::max(radiusCenterInset, style.minControlTop);
+    const float ctrlLeft = ctrlInset;
+    const float ctrlTop = ctrlInset;
     const float titleStartX = std::max(
         style.titleMinLeft,
         ctrlLeft + (style.controlSize * 3.0f) + (style.controlGap * 2.0f) + style.titleGapAfterControls);
@@ -119,7 +125,8 @@ inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
         button->setBorderColor(style.buttonBorder);
         button->setBorderWidth(style.buttonBorderWidth);
         button->setBorderRadius(style.controlSize * 0.5f);
-        button->setBorderRoundness(style.buttonRoundness);
+        // n=2.0 is true circle mode for the superellipse border path.
+        button->setBorderRoundness(2.0f);
         button->getYogaNode().setPositionType(YGPositionTypeAbsolute);
         button->getYogaNode().setPosition(YGEdgeLeft, left);
         button->getYogaNode().setPosition(YGEdgeTop, ctrlTop);

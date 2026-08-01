@@ -679,7 +679,6 @@ void Compositor::renderFrame() {
         root->getYogaNode().setWidth(static_cast<float>(win.width));
         root->getYogaNode().setHeight(static_cast<float>(win.height));
 
-        const float titleH = static_cast<float>(DisplayScale::titleBarHeight());
         lcl::ui::chrome::HeaderControlsStyle chromeStyle;
         chromeStyle.titleMinLeft = static_cast<float>(DisplayScale::px(14));
         chromeStyle.titleGapAfterControls = static_cast<float>(DisplayScale::px(12));
@@ -688,6 +687,14 @@ void Compositor::renderFrame() {
         chromeStyle.titleBarBackground = lcl::ui::Color{0, 0, 0, 0};
         chromeStyle.titleBarCornerRadiusAdjust = -1.0f;
         chromeStyle.titleBarRoundness = kWindowCornerRoundness;
+        chromeStyle.buttonRoundness = 2.0f;
+        chromeStyle.controlLeftRadiusOffset = chromeStyle.controlSize * 0.5f;
+
+        const float ctrlInset = std::max(
+            chromeStyle.minControlLeft,
+            kWindowCornerRadiusPx - chromeStyle.controlLeftRadiusOffset);
+        const float computedTitleH = std::ceil(ctrlInset * 2.0f + chromeStyle.controlSize);
+        const float titleH = std::max(static_cast<float>(DisplayScale::titleBarHeight()), computedTitleH);
 
         const float inset = 1.0f;
         const float bgX = static_cast<float>(win.x) + inset;
