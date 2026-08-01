@@ -13,6 +13,7 @@ public:
 
     void setFilters(const std::vector<lcl::protocol::FilterOp>& filters);
     void addFilter(lcl::protocol::FilterType type, float value);
+    void setGlass(float thicknessPx, float refractionFactor, float dispersionGain);
     void clearFilters();
 
     void setBlendMode(EffectBlend mode) { m_blendMode = mode; markDirty(); }

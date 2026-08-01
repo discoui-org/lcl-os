@@ -24,6 +24,7 @@ cardContainer.setGap(16);
 cardContainer.setBackgroundColor(255, 255, 255, 0);
 cardContainer.setBorderColor(180, 210, 255, 0);
 cardContainer.setBorderWidth(0);
+cardContainer.setBorderRadius(18);
 
 // Application State & Interactive Counter Callback
 let clickCounter = 0;
@@ -39,8 +40,9 @@ clickButton.setPadding(10);
 clickButton.setBackgroundColor(255, 255, 255, 0);
 clickButton.setBorderColor(255, 255, 255, 170);
 clickButton.setBorderWidth(2);
-clickButton.addFilter("blur", 22);
-clickButton.setOpacity(0.72);
+clickButton.setBorderRadius(20);
+clickButton.setGlass(20, 1.4, 7);
+clickButton.setOpacity(0.86);
 
 const buttonLabel = new LCL.Text("Tıkla: 0");
 buttonLabel.setFontSize(16);

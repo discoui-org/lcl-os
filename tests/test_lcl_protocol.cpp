@@ -136,15 +136,20 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
 
     std::vector<FilterOp> filters = {
         { FilterType::Blur, 15.0f },
+        { FilterType::Glass, 0.6f, static_cast<uint8_t>(GlassProfile::Dense) },
         { FilterType::Saturation, 1.4f },
         { FilterType::Brightness, 1.1f }
     };
+    filters[1].params[0] = 20.0f;
+    filters[1].params[1] = 1.40f;
+    filters[1].params[2] = 7.0f;
 
     EffectRegion region{};
     region.x = 10;
     region.y = 20;
     region.width = 300;
     region.height = 180;
+    region.cornerRadius = 14.0f;
     region.source = EffectSourceType::Backdrop;
     region.blendMode = EffectBlendMode::Normal;
     region.filterCount = static_cast<uint16_t>(filters.size());
@@ -181,7 +186,7 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     const auto* graphRecv = reinterpret_cast<const LCLMsgSetEffectGraphHeader*>(payloadRecv.data());
     EXPECT_EQ(graphRecv->surfaceId, 2u);
     EXPECT_EQ(graphRecv->regionCount, 1u);
-    EXPECT_EQ(graphRecv->filterCount, 3u);
+    EXPECT_EQ(graphRecv->filterCount, 4u);
 
     const auto* regionRecv = reinterpret_cast<const EffectRegion*>(
         payloadRecv.data() + sizeof(LCLMsgSetEffectGraphHeader));
@@ -189,19 +194,26 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     EXPECT_EQ(regionRecv->y, 20);
     EXPECT_EQ(regionRecv->width, 300u);
     EXPECT_EQ(regionRecv->height, 180u);
+    EXPECT_FLOAT_EQ(regionRecv->cornerRadius, 14.0f);
     EXPECT_EQ(regionRecv->source, EffectSourceType::Backdrop);
     EXPECT_EQ(regionRecv->blendMode, EffectBlendMode::Normal);
-    EXPECT_EQ(regionRecv->filterCount, 3u);
+    EXPECT_EQ(regionRecv->filterCount, 4u);
     EXPECT_EQ(regionRecv->filterOffset, 0u);
     EXPECT_FLOAT_EQ(regionRecv->opacity, 0.85f);
 
     const auto* opsRecv = reinterpret_cast<const FilterOp*>(payloadRecv.data() + sizeof(LCLMsgSetEffectGraphHeader) + sizeof(EffectRegion));
     EXPECT_EQ(opsRecv[0].type, FilterType::Blur);
     EXPECT_FLOAT_EQ(opsRecv[0].value, 15.0f);
-    EXPECT_EQ(opsRecv[1].type, FilterType::Saturation);
-    EXPECT_FLOAT_EQ(opsRecv[1].value, 1.4f);
-    EXPECT_EQ(opsRecv[2].type, FilterType::Brightness);
-    EXPECT_FLOAT_EQ(opsRecv[2].value, 1.1f);
+    EXPECT_EQ(opsRecv[1].type, FilterType::Glass);
+    EXPECT_FLOAT_EQ(opsRecv[1].value, 0.6f);
+    EXPECT_EQ(static_cast<GlassProfile>(opsRecv[1].profile), GlassProfile::Dense);
+    EXPECT_FLOAT_EQ(opsRecv[1].params[0], 20.0f);
+    EXPECT_FLOAT_EQ(opsRecv[1].params[1], 1.40f);
+    EXPECT_FLOAT_EQ(opsRecv[1].params[2], 7.0f);
+    EXPECT_EQ(opsRecv[2].type, FilterType::Saturation);
+    EXPECT_FLOAT_EQ(opsRecv[2].value, 1.4f);
+    EXPECT_EQ(opsRecv[3].type, FilterType::Brightness);
+    EXPECT_FLOAT_EQ(opsRecv[3].value, 1.1f);
 
     close(sv[0]);
     close(sv[1]);

@@ -449,6 +449,19 @@ JSValue js_widget_setBorderWidth(JSContext* ctx, JSValueConst this_val, int argc
     return JS_UNDEFINED;
 }
 
+JSValue js_widget_setBorderRadius(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* container = dynamic_cast<lcl::ui::Container*>(wrap->widget);
+    if (!container || argc < 1) return JS_UNDEFINED;
+
+    double radius = 0.0;
+    JS_ToFloat64(ctx, &radius, argv[0]);
+    container->setBorderRadius(static_cast<float>(std::max(0.0, radius)));
+    return JS_UNDEFINED;
+}
+
 JSValue js_text_setTextColor(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
     if (!wrap || !wrap->widget) return JS_EXCEPTION;
@@ -489,6 +502,7 @@ JSValue js_effect_addFilter(JSContext* ctx, JSValueConst this_val, int argc, JSV
 
     lcl::protocol::FilterType filterType = lcl::protocol::FilterType::None;
     if (name == "blur") filterType = lcl::protocol::FilterType::Blur;
+    else if (name == "glass") filterType = lcl::protocol::FilterType::Glass;
     else if (name == "brightness") filterType = lcl::protocol::FilterType::Brightness;
     else if (name == "contrast") filterType = lcl::protocol::FilterType::Contrast;
     else if (name == "saturation") filterType = lcl::protocol::FilterType::Saturation;
@@ -496,8 +510,41 @@ JSValue js_effect_addFilter(JSContext* ctx, JSValueConst this_val, int argc, JSV
     else if (name == "invert") filterType = lcl::protocol::FilterType::Invert;
 
     if (filterType != lcl::protocol::FilterType::None) {
-        blurSurface->addFilter(filterType, static_cast<float>(value));
+        if (filterType == lcl::protocol::FilterType::Glass) {
+            double refractionFactor = 1.4;
+            double dispersionGain = 7.0;
+            if (argc >= 3) JS_ToFloat64(ctx, &refractionFactor, argv[2]);
+            if (argc >= 4) JS_ToFloat64(ctx, &dispersionGain, argv[3]);
+            blurSurface->setGlass(
+                static_cast<float>(std::max(0.0, value)),
+                static_cast<float>(std::max(1.0, refractionFactor)),
+                static_cast<float>(std::max(0.0, dispersionGain)));
+        } else {
+            blurSurface->addFilter(filterType, static_cast<float>(value));
+        }
     }
+    return JS_UNDEFINED;
+}
+
+JSValue js_effect_setGlass(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* blurSurface = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
+    if (!blurSurface || argc < 1) return JS_UNDEFINED;
+
+    double thicknessPx = 20.0;
+    double refractionFactor = 1.4;
+    double dispersionGain = 7.0;
+
+    if (argc >= 1) JS_ToFloat64(ctx, &thicknessPx, argv[0]);
+    if (argc >= 2) JS_ToFloat64(ctx, &refractionFactor, argv[1]);
+    if (argc >= 3) JS_ToFloat64(ctx, &dispersionGain, argv[2]);
+
+    blurSurface->setGlass(
+        static_cast<float>(std::max(0.0, thicknessPx)),
+        static_cast<float>(std::max(1.0, refractionFactor)),
+        static_cast<float>(std::max(0.0, dispersionGain)));
     return JS_UNDEFINED;
 }
 
@@ -715,10 +762,12 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, widgetProto, "setBackgroundColor", JS_NewCFunction(m_ctx, js_widget_setBackgroundColor, "setBackgroundColor", 4));
     JS_SetPropertyStr(m_ctx, widgetProto, "setBorderColor", JS_NewCFunction(m_ctx, js_widget_setBorderColor, "setBorderColor", 4));
     JS_SetPropertyStr(m_ctx, widgetProto, "setBorderWidth", JS_NewCFunction(m_ctx, js_widget_setBorderWidth, "setBorderWidth", 1));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setBorderRadius", JS_NewCFunction(m_ctx, js_widget_setBorderRadius, "setBorderRadius", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setLabel", JS_NewCFunction(m_ctx, js_button_setLabel, "setLabel", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "getLabel", JS_NewCFunction(m_ctx, js_button_getLabel, "getLabel", 0));
     JS_SetPropertyStr(m_ctx, widgetProto, "setOnClick", JS_NewCFunction(m_ctx, js_button_setOnClick, "setOnClick", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "addFilter", JS_NewCFunction(m_ctx, js_effect_addFilter, "addFilter", 2));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setGlass", JS_NewCFunction(m_ctx, js_effect_setGlass, "setGlass", 2));
     JS_SetPropertyStr(m_ctx, widgetProto, "clearFilters", JS_NewCFunction(m_ctx, js_effect_clearFilters, "clearFilters", 0));
     JS_SetPropertyStr(m_ctx, widgetProto, "setOpacity", JS_NewCFunction(m_ctx, js_effect_setOpacity, "setOpacity", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setText", JS_NewCFunction(m_ctx, js_text_setText, "setText", 1));

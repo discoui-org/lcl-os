@@ -53,7 +53,15 @@ enum class FilterType : uint8_t {
     Contrast = 3,
     Saturation = 4,
     Grayscale = 5,
-    Invert = 6
+    Invert = 6,
+    Glass = 7
+};
+
+enum class GlassProfile : uint8_t {
+    Auto = 0,
+    Clear = 1,
+    Frosted = 2,
+    Dense = 3
 };
 
 enum class EffectSourceType : uint8_t {
@@ -74,6 +82,18 @@ enum class EffectBlendMode : uint8_t {
 struct FilterOp {
     FilterType type{FilterType::None};
     float value{0.0f};
+    uint8_t profile{static_cast<uint8_t>(GlassProfile::Auto)};
+
+    // Reserved for future per-filter metadata without protocol reshaping.
+    uint8_t reserved0{0};
+    uint16_t reserved1{0};
+
+    // Optional custom parameters (used by advanced filters like Glass).
+    // Glass mapping:
+    // params[0] = thicknessPx
+    // params[1] = refractionFactor
+    // params[2] = dispersionGain
+    float params[3]{0.0f, 0.0f, 0.0f};
 };
 
 struct EffectRegion {
@@ -81,6 +101,7 @@ struct EffectRegion {
     int32_t y{0};
     uint32_t width{0};
     uint32_t height{0};
+    float cornerRadius{0.0f};
     EffectSourceType source{EffectSourceType::Backdrop};
     EffectBlendMode blendMode{EffectBlendMode::Normal};
     uint16_t filterCount{0};

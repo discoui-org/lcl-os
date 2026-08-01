@@ -681,6 +681,7 @@ void Compositor::renderFrame() {
         auto root = std::make_unique<lcl::ui::Container>();
         root->setRenderPass(&pass);
         root->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
+        root->setBorderRadius(0.0f);
         root->getYogaNode().setWidth(static_cast<float>(win.width));
         root->getYogaNode().setHeight(static_cast<float>(win.height));
 
@@ -691,6 +692,7 @@ void Compositor::renderFrame() {
 
         auto titleBar = std::make_unique<lcl::ui::Container>();
         titleBar->setBackgroundColor(toUiColor(win.headerColor));
+        titleBar->setBorderRadius(0.0f);
         titleBar->getYogaNode().setPositionType(YGPositionTypeAbsolute);
         titleBar->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
         titleBar->getYogaNode().setPosition(YGEdgeTop, 0.0f);
@@ -708,6 +710,7 @@ void Compositor::renderFrame() {
         auto mkTraffic = [&](float left, uint32_t color) {
             auto dot = std::make_unique<lcl::ui::Container>();
             dot->setBackgroundColor(toUiColor(color));
+            dot->setBorderRadius(0.0f);
             dot->getYogaNode().setPositionType(YGPositionTypeAbsolute);
             dot->getYogaNode().setPosition(YGEdgeLeft, left);
             dot->getYogaNode().setPosition(YGEdgeTop, pad);
@@ -722,6 +725,7 @@ void Compositor::renderFrame() {
 
         auto borderTop = std::make_unique<lcl::ui::Container>();
         borderTop->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
+        borderTop->setBorderRadius(0.0f);
         borderTop->getYogaNode().setPositionType(YGPositionTypeAbsolute);
         borderTop->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
         borderTop->getYogaNode().setPosition(YGEdgeTop, 0.0f);
@@ -730,6 +734,7 @@ void Compositor::renderFrame() {
 
         auto borderBottom = std::make_unique<lcl::ui::Container>();
         borderBottom->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
+        borderBottom->setBorderRadius(0.0f);
         borderBottom->getYogaNode().setPositionType(YGPositionTypeAbsolute);
         borderBottom->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
         borderBottom->getYogaNode().setPosition(YGEdgeTop, static_cast<float>(win.height - 1));
@@ -738,6 +743,7 @@ void Compositor::renderFrame() {
 
         auto borderLeft = std::make_unique<lcl::ui::Container>();
         borderLeft->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
+        borderLeft->setBorderRadius(0.0f);
         borderLeft->getYogaNode().setPositionType(YGPositionTypeAbsolute);
         borderLeft->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
         borderLeft->getYogaNode().setPosition(YGEdgeTop, 0.0f);
@@ -746,6 +752,7 @@ void Compositor::renderFrame() {
 
         auto borderRight = std::make_unique<lcl::ui::Container>();
         borderRight->setBackgroundColor(toUiColor(::lcl::theme::UI::WindowBorder));
+        borderRight->setBorderRadius(0.0f);
         borderRight->getYogaNode().setPositionType(YGPositionTypeAbsolute);
         borderRight->getYogaNode().setPosition(YGEdgeLeft, static_cast<float>(win.width - 1));
         borderRight->getYogaNode().setPosition(YGEdgeTop, 0.0f);
@@ -788,7 +795,11 @@ void Compositor::renderFrame() {
 
             // Initial executor supports chain filters with source-type routing.
             // Advanced blend modes are currently treated as normal blend.
-            m_renderer.getSkiaRenderer()->applyBackdropFilter(fxX, fxY, fxW, fxH, fx.filters);
+            m_renderer.getSkiaRenderer()->applyBackdropFilter(
+                fxX, fxY, fxW, fxH,
+                std::max(0.0f, fx.region.cornerRadius),
+                std::clamp(fx.region.opacity, 0.0f, 1.0f),
+                fx.filters);
         }
     };
 

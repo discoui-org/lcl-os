@@ -28,11 +28,12 @@ public:
         m_labelPtr = m_label.get();
         addChild(std::move(m_label));
 
-        addFilter(lcl::protocol::FilterType::Blur, 22.0f);
+        setGlass(20.0f, 1.40f, 7.0f);
         setBackgroundColor(Color{255, 255, 255, 0});
         setBorderColor(Color{255, 255, 255, 170});
         setBorderWidth(2.0f);
-        setOpacity(0.72f);
+        setBorderRadius(20.0f);
+        setOpacity(0.96f);
     }
 
     void setOnClick(std::function<void()> cb) { m_onClick = std::move(cb); }
@@ -106,6 +107,7 @@ int main() {
     cardContainer->setBackgroundColor(Color{255, 255, 255, 0});
     cardContainer->setBorderColor(Color{180, 210, 255, 0});
     cardContainer->setBorderWidth(0.0f);
+    cardContainer->setBorderRadius(18.0f);
 
     // Button & Text Widgets
     auto clickButton = std::make_unique<BlurButton>("Tıkla: 0");

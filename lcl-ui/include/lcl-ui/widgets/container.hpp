@@ -25,12 +25,16 @@ public:
     void setBorderWidth(float width) { m_borderWidth = width; markDirty(); }
     float getBorderWidth() const { return m_borderWidth; }
 
+    void setBorderRadius(float radius) { m_borderRadius = (radius < 0.0f) ? 0.0f : radius; markDirty(); }
+    float getBorderRadius() const { return m_borderRadius; }
+
     void draw(SkCanvas* canvas, const Rect& damageRect) override;
 
 private:
     Color m_backgroundColor{0, 0, 0, 0};
     Color m_borderColor{0, 0, 0, 0};
     float m_borderWidth{0.0f};
+    float m_borderRadius{12.0f};
 };
 
 } // namespace lcl::ui

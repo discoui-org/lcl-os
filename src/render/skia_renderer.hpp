@@ -105,7 +105,7 @@ public:
     void drawLine(float x1, float y1, float x2, float y2, const SkiaColor& color, float strokeWidth = 1.0f);
     void drawString(int x, int y, const std::string& text, uint32_t fgColor);
     void drawBuffer(int dstX, int dstY, int srcW, int srcH, const uint32_t* pixelData, int stridePixels = 0, float opacity = 1.0f);
-    void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, const std::vector<protocol::FilterOp>& filters);
+    void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, float cornerRadius, float opacity, const std::vector<protocol::FilterOp>& filters);
 
     // Accessors
     uint32_t getWidth() const { return m_width; }
@@ -155,6 +155,25 @@ private:
     int32_t m_uColorMatrixLoc{-1};
     int32_t m_uColorOffsetLoc{-1};
 
+    uint32_t m_glMaskProgram{0};
+    int32_t m_aMaskPosLoc{-1};
+    int32_t m_aMaskTexLoc{-1};
+    int32_t m_uMaskTextureLoc{-1};
+    int32_t m_uMaskSizeLoc{-1};
+    int32_t m_uMaskRadiusLoc{-1};
+    int32_t m_uMaskOpacityLoc{-1};
+
+    uint32_t m_glRefractionProgram{0};
+    int32_t m_aRefractPosLoc{-1};
+    int32_t m_aRefractTexLoc{-1};
+    int32_t m_uRefractTextureLoc{-1};
+    int32_t m_uRefractInvSizeLoc{-1};
+    int32_t m_uRefractThicknessLoc{-1};
+    int32_t m_uRefractFactorLoc{-1};
+    int32_t m_uRefractDispersionLoc{-1};
+    int32_t m_uRefractSizeLoc{-1};
+    int32_t m_uRefractRadiusLoc{-1};
+
     // GPU BGRA Surface Compositing Handles
     uint32_t m_glClientTexture{0};
     uint32_t m_glBgraProgram{0};
@@ -165,6 +184,7 @@ private:
 
     // Helper for rendering textured quads on GPU
     void drawTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
+    void drawMaskedTextureQuad(uint32_t textureId, float x, float y, float w, float h, float cornerRadius, float opacity);
     void drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
 };
 

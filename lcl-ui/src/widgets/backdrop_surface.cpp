@@ -20,6 +20,28 @@ void BackdropSurface::addFilter(lcl::protocol::FilterType type, float value) {
     markDirty();
 }
 
+void BackdropSurface::setGlass(float thicknessPx, float refractionFactor, float dispersionGain) {
+
+    m_filters.erase(
+        std::remove_if(
+            m_filters.begin(),
+            m_filters.end(),
+            [](const lcl::protocol::FilterOp& op) {
+                return op.type == lcl::protocol::FilterType::Glass;
+            }),
+        m_filters.end());
+
+    lcl::protocol::FilterOp op{};
+    op.type = lcl::protocol::FilterType::Glass;
+    op.value = 1.0f;
+    op.profile = static_cast<uint8_t>(lcl::protocol::GlassProfile::Auto);
+    op.params[0] = std::max(0.0f, thicknessPx);
+    op.params[1] = std::max(1.0f, refractionFactor);
+    op.params[2] = std::max(0.0f, dispersionGain);
+    m_filters.push_back(op);
+    markDirty();
+}
+
 void BackdropSurface::clearFilters() {
     m_filters.clear();
     markDirty();
@@ -63,6 +85,7 @@ void BackdropSurface::collectEffects(std::vector<EffectRegion>& outEffects) cons
         if (!abs.isEmpty()) {
             EffectRegion region;
             region.bounds = abs;
+            region.cornerRadius = getBorderRadius();
             region.source = EffectSource::Backdrop;
             region.blend = m_blendMode;
             region.opacity = m_opacity;

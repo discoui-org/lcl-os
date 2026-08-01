@@ -12,6 +12,7 @@ Button::Button(const std::string& label) {
     m_yogaNode.setPadding(YGEdgeVertical, 8.0f);
     m_yogaNode.setJustifyContent(YGJustifyCenter);
     m_yogaNode.setAlignItems(YGAlignCenter);
+    setBorderRadius(8.0f);
 
     setFocusable(true);
 }
@@ -81,7 +82,7 @@ void Button::draw(SkCanvas* canvas, const Rect& damageRect) {
             btnBg = {37, 99, 235, 255};  // Primary Blue `#2563EB`
         }
         ::lcl::render::SkiaColor borderClr{147, 197, 253, 200}; // Light blue border `#93C5FD`
-        renderer->drawRoundedRect(r, 8.0f, btnBg, borderClr, 1.5f);
+        renderer->drawRoundedRect(r, getBorderRadius(), btnBg, borderClr, 1.5f);
     }
 
     Widget::draw(canvas, damageRect);

@@ -427,6 +427,7 @@ bool WindowApp::renderFrame() {
             region.y = y;
             region.width = static_cast<uint32_t>(w);
             region.height = static_cast<uint32_t>(h);
+            region.cornerRadius = std::max(0.0f, effect.cornerRadius);
             region.source = toProtoSource(effect.source);
             region.blendMode = toProtoBlend(effect.blend);
             region.opacity = std::clamp(effect.opacity, 0.0f, 1.0f);
