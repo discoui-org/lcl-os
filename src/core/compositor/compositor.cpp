@@ -691,7 +691,8 @@ void Compositor::renderFrame() {
         const float pad = static_cast<float>(DisplayScale::px(10));
 
         auto titleBar = std::make_unique<lcl::ui::Container>();
-        titleBar->setBackgroundColor(toUiColor(win.headerColor));
+        // Transparent titlebar surface; text and accents are layered widgets.
+        titleBar->setBackgroundColor(lcl::ui::Color{255, 255, 255, 0});
         titleBar->setBorderRadius(0.0f);
         titleBar->getYogaNode().setPositionType(YGPositionTypeAbsolute);
         titleBar->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
@@ -700,17 +701,26 @@ void Compositor::renderFrame() {
         titleBar->getYogaNode().setHeight(titleH);
 
         auto titleText = std::make_unique<lcl::ui::Text>(win.title);
-        titleText->setTextColor(toUiColor(::lcl::theme::UI::WindowTitleText));
+        titleText->setTextColor(lcl::ui::Color{230, 245, 255, 220});
         titleText->setFontSize(static_cast<float>(DisplayScale::fontSize()));
         titleText->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        titleText->getYogaNode().setPosition(YGEdgeLeft, static_cast<float>(DisplayScale::px(70)));
+        titleText->getYogaNode().setPosition(YGEdgeLeft, static_cast<float>(DisplayScale::px(14)));
         titleText->getYogaNode().setPosition(YGEdgeTop, static_cast<float>(DisplayScale::px(8)));
         titleBar->addChild(std::move(titleText));
+
+        auto titleSep = std::make_unique<lcl::ui::Container>();
+        titleSep->setBackgroundColor(lcl::ui::Color{180, 220, 255, 58});
+        titleSep->setBorderRadius(0.0f);
+        titleSep->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        titleSep->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+        titleSep->getYogaNode().setPosition(YGEdgeTop, titleH - 1.0f);
+        titleSep->getYogaNode().setWidth(static_cast<float>(win.width));
+        titleSep->getYogaNode().setHeight(1.0f);
 
         auto mkTraffic = [&](float left, uint32_t color) {
             auto dot = std::make_unique<lcl::ui::Container>();
             dot->setBackgroundColor(toUiColor(color));
-            dot->setBorderRadius(0.0f);
+            dot->setBorderRadius(btn * 0.5f);
             dot->getYogaNode().setPositionType(YGPositionTypeAbsolute);
             dot->getYogaNode().setPosition(YGEdgeLeft, left);
             dot->getYogaNode().setPosition(YGEdgeTop, pad);
@@ -760,6 +770,7 @@ void Compositor::renderFrame() {
         borderRight->getYogaNode().setHeight(static_cast<float>(win.height));
 
         root->addChild(std::move(titleBar));
+        root->addChild(std::move(titleSep));
         root->addChild(std::move(borderTop));
         root->addChild(std::move(borderBottom));
         root->addChild(std::move(borderLeft));

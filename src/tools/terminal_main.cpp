@@ -12,20 +12,26 @@
 #include <unistd.h>
 #include <vector>
 
+#include <linux/input-event-codes.h>
+
 #include "apps/terminal/terminal_app.hpp"
 #include "core/ipc/ipc_manager.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-ui/core/window_app.hpp"
+#include "lcl-ui/widgets/container.hpp"
+#include "lcl-ui/widgets/text.hpp"
 #include "render/font_renderer.hpp"
+#include "theme/palette.hpp"
 
 // Render terminal app PTY lines into the SHM pixel buffer
 static void renderTerminalFrame(uint32_t *shmPixels, int width, int height,
                                 const lcl::apps::TerminalApp &app,
-                                lcl::render::FontRenderer &fontRenderer) {
+                                lcl::render::FontRenderer &fontRenderer,
+                                int topInset) {
   if (!shmPixels || width <= 0 || height <= 0)
     return;
 
-  // Translucent dark terminal background color (ARGB - ~85% alpha dark slate)
+  // Fully transparent terminal background; compositor effects provide glass look.
   const uint32_t kBgColor = 0x00000000;
   const uint32_t kTextColor = 0xFF38BDF8;   // Electric Cyan text
   const uint32_t kCursorColor = 0xFF00FF88; // Bright Green cursor block
@@ -33,23 +39,24 @@ static void renderTerminalFrame(uint32_t *shmPixels, int width, int height,
   std::fill(shmPixels, shmPixels + (width * height), kBgColor);
 
   auto content = app.getRenderContent();
-    int fontCellW = fontRenderer.getCellWidth();
-    int fontCellH = fontRenderer.getCellHeight();
+  int fontCellW = fontRenderer.getCellWidth();
+  int fontCellH = fontRenderer.getCellHeight();
   int lineSpacing = fontCellH + 2;
   int pad = 8;
+  int padTop = std::max(pad, topInset + pad);
 
-  int maxRows = std::max(1, (height - 2 * pad) / lineSpacing);
+  int maxRows = std::max(1, (height - padTop - pad) / lineSpacing);
 
   // Auto-scroll: render only the latest maxRows lines
   int startLine = std::max(0, static_cast<int>(content.lines.size()) - maxRows);
-  int curY = pad;
+  int curY = padTop;
 
   for (size_t l = startLine;
        l < content.lines.size() && curY + fontCellH <= height - pad; ++l) {
     const auto &line = content.lines[l];
     if (!line.empty()) {
       fontRenderer.renderStringClipped(shmPixels, width, height, pad, curY,
-                                       line, kTextColor, pad, pad,
+                                       line, kTextColor, pad, padTop,
                                        width - pad, height - pad);
     }
     curY += lineSpacing;
@@ -57,8 +64,8 @@ static void renderTerminalFrame(uint32_t *shmPixels, int width, int height,
 
   // Draw active cursor at write head
   int lastLineY = curY - lineSpacing;
-  if (lastLineY < pad)
-    lastLineY = pad;
+  if (lastLineY < padTop)
+    lastLineY = padTop;
 
   std::string lastLineText = content.lines.empty() ? "" : content.lines.back();
   int caretCol = content.cursorCol;
@@ -141,6 +148,7 @@ int main() {
   // 3. Request Surface Creation
   const int kSurfW = 540;
   const int kSurfH = 360;
+  const int kClientTitleBarH = 34;
 
   lcl::protocol::LCLHeader surfHeader{};
   surfHeader.opcode = lcl::protocol::LCLOpcode::SurfaceCreate;
@@ -158,18 +166,31 @@ int main() {
   std::cout << "[LCL Terminal] Requested surface creation (ID: 1, " << kSurfW
             << "x" << kSurfH << ") from compositor.\n";
 
-    // Set Effect Graph for Surface 1 (Terminal)
-    // Region: full content surface, Source: Backdrop
-    // Refraction test: glass filter with thickness/refraction/dispersion only.
+  // Use client-side titlebar rendering (terminal draws its own transparent bar).
+  lcl::protocol::LCLHeader decHeader{};
+  decHeader.opcode = lcl::protocol::LCLOpcode::SetDecorationMode;
+  decHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSetDecorationMode);
+  lcl::protocol::LCLMsgSetDecorationMode decMsg{};
+  decMsg.surfaceId = 1;
+  decMsg.mode = lcl::protocol::LCLDecorationMode::None;
+  lcl::protocol::sendMsgWithFd(socketFd, decHeader, &decMsg);
+
+  // Set Effect Graph for Surface 1 (Terminal)
+  // Region: full content surface, Source: Backdrop
+  lcl::protocol::FilterOp terminalBlur{};
+  terminalBlur.type = lcl::protocol::FilterType::Blur;
+  terminalBlur.value = 3.5f;
+
   lcl::protocol::FilterOp terminalGlass{};
   terminalGlass.type = lcl::protocol::FilterType::Glass;
   terminalGlass.value = 1.0f; // reserved for legacy strength; ignored by glass shader
   terminalGlass.profile = static_cast<uint8_t>(lcl::protocol::GlassProfile::Auto); // reserved
-  terminalGlass.params[0] = 20.0f; // thickness (pixels)
-  terminalGlass.params[1] = 1.40f; // refraction factor
-  terminalGlass.params[2] = 7.0f;  // dispersion gain
+  terminalGlass.params[0] = 30.0f; // thickness (pixels)
+  terminalGlass.params[1] = 1.85f; // refraction factor
+  terminalGlass.params[2] = 12.0f; // dispersion gain
 
-  std::vector<lcl::protocol::FilterOp> termFilters = {terminalGlass};
+  std::vector<lcl::protocol::FilterOp> termFilters = {terminalBlur,
+                                                      terminalGlass};
 
   auto sendTerminalEffectGraph = [&](int width, int height) {
     lcl::protocol::LCLMsgSetEffectGraphHeader graphMsg{};
@@ -206,7 +227,7 @@ int main() {
   };
 
   sendTerminalEffectGraph(kSurfW, kSurfH);
-    std::cout << "[LCL Terminal] Set effect graph (glass: thickness/refraction/dispersion) for surface 1.\n";
+    std::cout << "[LCL Terminal] Set effect graph (blur + strong glass) for surface 1.\n";
 
   // 4. Create Shared Memory (memfd) Framebuffer for Surface 1
   size_t shmSize = kSurfW * kSurfH * 4;
@@ -265,21 +286,109 @@ int main() {
     fcntl(socketFd, F_SETFL, flags | O_NONBLOCK);
   }
 
-  // Initialize WindowApp & direct raw keypress hook for PTY input routing
-  lcl::ui::WindowApp windowApp(kSurfW, kSurfH, "LCL Terminal");
-  windowApp.setOnRawKeyEvent([&app](const lcl::ui::KeyEvent &ev) {
-    app.handleKey(ev.keyCode, ev.type == lcl::ui::KeyEventType::KeyDown,
-                  ev.modifiers, ev.codepoint);
-    return true; // Intercept & consume directly for PTY shell
-  });
+  // Build client-side titlebar widgets directly inside terminal content surface.
+  auto titlebarRoot = std::make_unique<lcl::ui::Container>();
+  titlebarRoot->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
+  titlebarRoot->setBorderRadius(0.0f);
+  titlebarRoot->getYogaNode().setWidth(static_cast<float>(kSurfW));
+  titlebarRoot->getYogaNode().setHeight(static_cast<float>(kSurfH));
+
+  lcl::ui::Container *titleBarWidget = nullptr;
+  lcl::ui::Container *titleSepWidget = nullptr;
+
+  auto titleBar = std::make_unique<lcl::ui::Container>();
+  titleBarWidget = titleBar.get();
+  titleBar->setBackgroundColor(lcl::ui::Color{255, 255, 255, 0});
+  titleBar->setBorderRadius(0.0f);
+  titleBar->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+  titleBar->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+  titleBar->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+  titleBar->getYogaNode().setWidth(static_cast<float>(kSurfW));
+  titleBar->getYogaNode().setHeight(static_cast<float>(kClientTitleBarH));
+
+  const float btn = 12.0f;
+  const float btnPad = 10.0f;
+  const float btnGap = 18.0f;
+  auto mkTraffic = [&](float left, uint32_t argb) {
+    auto dot = std::make_unique<lcl::ui::Container>();
+    dot->setBackgroundColor(lcl::ui::Color{
+        static_cast<uint8_t>((argb >> 16) & 0xFF),
+        static_cast<uint8_t>((argb >> 8) & 0xFF),
+        static_cast<uint8_t>(argb & 0xFF),
+        static_cast<uint8_t>((argb >> 24) & 0xFF)});
+    dot->setBorderRadius(btn * 0.5f);
+    dot->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    dot->getYogaNode().setPosition(YGEdgeLeft, left);
+    dot->getYogaNode().setPosition(YGEdgeTop, 10.0f);
+    dot->getYogaNode().setWidth(btn);
+    dot->getYogaNode().setHeight(btn);
+    return dot;
+  };
+
+  titleBar->addChild(mkTraffic(btnPad, ::lcl::theme::UI::BtnClose));
+  titleBar->addChild(mkTraffic(btnPad + btnGap, ::lcl::theme::UI::BtnMinimize));
+  titleBar->addChild(mkTraffic(btnPad + btnGap * 2.0f, ::lcl::theme::UI::BtnMaximize));
+
+  auto titleText = std::make_unique<lcl::ui::Text>("LCL Terminal");
+  titleText->setTextColor(lcl::ui::Color{240, 248, 255, 245});
+  titleText->setFontSize(14.0f);
+  titleText->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+  titleText->getYogaNode().setPosition(YGEdgeLeft, 74.0f);
+  titleText->getYogaNode().setPosition(YGEdgeTop, 9.0f);
+  titleBar->addChild(std::move(titleText));
+
+  auto titleSep = std::make_unique<lcl::ui::Container>();
+  titleSepWidget = titleSep.get();
+  titleSep->setBackgroundColor(lcl::ui::Color{180, 220, 255, 58});
+  titleSep->setBorderRadius(0.0f);
+  titleSep->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+  titleSep->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+  titleSep->getYogaNode().setPosition(YGEdgeTop, static_cast<float>(kClientTitleBarH - 1));
+  titleSep->getYogaNode().setWidth(static_cast<float>(kSurfW));
+  titleSep->getYogaNode().setHeight(1.0f);
+
+  titlebarRoot->addChild(std::move(titleBar));
+  titlebarRoot->addChild(std::move(titleSep));
+
+  lcl::ui::WindowApp titlebarApp(kSurfW, kSurfH, "LCL Terminal Titlebar");
+  titlebarApp.setRootWidget(std::move(titlebarRoot));
 
   int curW = kSurfW;
   int curH = kSurfH;
-  bool termNeedsAttach = true;
   std::vector<uint32_t> localPixels(curW * curH, 0xD90F172A);
 
+  auto drawTitlebarWidgets = [&](int frameW, int frameH) {
+    auto &titlebarRenderer = titlebarApp.getRenderer();
+    titlebarRenderer.setTargetPixels(localPixels.data(),
+                                     static_cast<uint32_t>(frameW),
+                                     static_cast<uint32_t>(frameH));
+    if (auto *root = titlebarApp.getRootWidget()) {
+      root->getYogaNode().setWidth(static_cast<float>(frameW));
+      root->getYogaNode().setHeight(static_cast<float>(frameH));
+    }
+    if (titleBarWidget) {
+      titleBarWidget->getYogaNode().setWidth(static_cast<float>(frameW));
+    }
+    if (titleSepWidget) {
+      titleSepWidget->getYogaNode().setPosition(
+          YGEdgeTop, static_cast<float>(kClientTitleBarH - 1));
+      titleSepWidget->getYogaNode().setWidth(static_cast<float>(frameW));
+    }
+    if (auto *root = titlebarApp.getRootWidget()) {
+      root->getYogaNode().calculateLayout(static_cast<float>(frameW),
+                                          static_cast<float>(frameH));
+      root->syncLayout(0.0f, 0.0f);
+      lcl::ui::Rect damage{0.0f, 0.0f, static_cast<float>(frameW),
+                           static_cast<float>(kClientTitleBarH)};
+      root->draw(reinterpret_cast<SkCanvas*>(&titlebarRenderer), damage);
+    }
+  };
+
   // Send initial ATTACH_BUFFER
-  renderTerminalFrame(localPixels.data(), kSurfW, kSurfH, app, fontRenderer);
+  app.resize(kSurfW, std::max(1, kSurfH - kClientTitleBarH));
+  renderTerminalFrame(localPixels.data(), kSurfW, kSurfH, app, fontRenderer,
+                      kClientTitleBarH);
+  drawTitlebarWidgets(kSurfW, kSurfH);
   if (shmPixels) {
     std::memcpy(shmPixels, localPixels.data(), shmSize);
   }
@@ -296,7 +405,6 @@ int main() {
   attachMsg.format = 1; // ARGB8888
 
   lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, shmFd);
-  termNeedsAttach = false;
   std::cout << "[LCL Terminal] Sent initial ATTACH_BUFFER (memfd: " << shmFd
             << ") for Surface 1.\n";
   std::cout << "[LCL Terminal] Standalone process running (PID: " << getpid()
@@ -316,6 +424,7 @@ int main() {
       lcl::protocol::LCLHeader header{};
       std::vector<uint8_t> payload;
       int receivedFd = -1;
+      (void)receivedFd;
       if (lcl::protocol::recvMsgWithFd(socketFd, header, payload, receivedFd)) {
         if (header.opcode == lcl::protocol::LCLOpcode::InputEvent &&
             payload.size() >= sizeof(lcl::protocol::LCLMsgInputEvent)) {
@@ -323,26 +432,41 @@ int main() {
               reinterpret_cast<const lcl::protocol::LCLMsgInputEvent *>(
                   payload.data());
           if (inputMsg->type == 1) { // KeyDown
-            windowApp.sendKeyDown(inputMsg->key,
-                                  static_cast<char32_t>(inputMsg->codepoint),
-                                  inputMsg->modifiers);
-            updated = true;
-          } else if (inputMsg->type == 2) { // KeyUp
-            windowApp.sendKeyUp(inputMsg->key, inputMsg->modifiers);
-            updated = true;
-          } else if (inputMsg->type == 5) { // KeyPress / TextInput
-            if (inputMsg->codepoint > 0) {
-              std::string utf8;
-              char32_t cp = inputMsg->codepoint;
-              if (cp <= 0x7F) {
-                utf8.push_back(static_cast<char>(cp));
-              } else if (cp <= 0x7FF) {
-                utf8.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
-                utf8.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-              }
-              windowApp.sendTextInput(utf8);
+            // Text characters must come only from type=5 to avoid double input.
+            // Keep KeyDown path only for control/navigation keys that do not
+            // reliably emit a text codepoint event.
+            switch (inputMsg->key) {
+              case KEY_ENTER:
+              case KEY_KPENTER:
+              case KEY_BACKSPACE:
+              case KEY_TAB:
+              case KEY_ESC:
+              case KEY_UP:
+              case KEY_DOWN:
+              case KEY_LEFT:
+              case KEY_RIGHT:
+              case KEY_HOME:
+              case KEY_END:
+              case KEY_PAGEUP:
+              case KEY_PAGEDOWN:
+              case KEY_INSERT:
+              case KEY_DELETE:
+                app.handleKey(inputMsg->key, true, inputMsg->modifiers, 0);
+                updated = true;
+                break;
+              default:
+                break;
             }
-            updated = true;
+          } else if (inputMsg->type == 2) { // KeyUp
+            // Terminal input pipeline is press/text-driven; key-up is ignored.
+          } else if (inputMsg->type == 5) { // KeyPress / TextInput
+            // Accept only printable text here. Control keys (Backspace, Enter,
+            // arrows, etc.) are handled only in KeyDown to avoid duplicates.
+            if (inputMsg->codepoint >= 32 && inputMsg->codepoint != 127) {
+              app.handleKey(0, true, inputMsg->modifiers,
+                            static_cast<char32_t>(inputMsg->codepoint));
+              updated = true;
+            }
           }
         } else if (header.opcode == lcl::protocol::LCLOpcode::ConfigureBounds &&
                    payload.size() >=
@@ -350,12 +474,15 @@ int main() {
           auto *cfg =
               reinterpret_cast<const lcl::protocol::LCLMsgConfigureBounds *>(
                   payload.data());
-          int reqW = static_cast<int>(cfg->width);
-          int reqH = static_cast<int>(cfg->height);
+            const int reqW = static_cast<int>(cfg->width);
+            const int reqH = static_cast<int>(cfg->height);
 
-          int newW = reqW;
-          int newH = reqH;
-          lcl::apps::TerminalApp::getSnappedDimensions(reqW, reqH, newW, newH);
+          int contentW = reqW;
+          int contentH = std::max(1, reqH - kClientTitleBarH);
+            lcl::apps::TerminalApp::getSnappedDimensions(contentW, contentH,
+                                   contentW, contentH);
+          int newW = contentW;
+          int newH = contentH + kClientTitleBarH;
 
           if (newW > 0 && newH > 0) {
             targetW = newW;
@@ -398,19 +525,16 @@ int main() {
         }
       }
 
-      app.resize(curW, curH);
-      windowApp.getRootWidget()->getYogaNode().setWidth(
-          static_cast<float>(curW));
-      windowApp.getRootWidget()->getYogaNode().setHeight(
-          static_cast<float>(curH));
-
-        // Keep effect region in sync with current surface size.
+      app.resize(curW, std::max(1, curH - kClientTitleBarH));
+      // Keep effect region in sync with current surface size.
         sendTerminalEffectGraph(curW, curH);
 
       // Pre-render terminal layout for new dimensions & copy to shmPixels
       // BEFORE committing to Compositor!
       if (shmPixels) {
-        renderTerminalFrame(localPixels.data(), curW, curH, app, fontRenderer);
+        renderTerminalFrame(localPixels.data(), curW, curH, app, fontRenderer,
+                            kClientTitleBarH);
+        drawTitlebarWidgets(curW, curH);
         std::memcpy(shmPixels, localPixels.data(), shmSize);
       }
 
@@ -420,7 +544,6 @@ int main() {
 
       int passFd = shmFd;
       lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, passFd);
-      termNeedsAttach = false;
       updated = false;
     }
 
@@ -434,13 +557,13 @@ int main() {
     }
 
     if (updated && shmPixels) {
-      renderTerminalFrame(localPixels.data(), curW, curH, app, fontRenderer);
+      renderTerminalFrame(localPixels.data(), curW, curH, app, fontRenderer,
+                          kClientTitleBarH);
+      drawTitlebarWidgets(curW, curH);
       std::memcpy(shmPixels, localPixels.data(), shmSize);
 
       // Re-notify compositor of buffer redraw
-      int passFd = termNeedsAttach ? shmFd : -1;
-      lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, passFd);
-      termNeedsAttach = false;
+      lcl::protocol::sendMsgWithFd(socketFd, attachHeader, &attachMsg, -1);
     }
 
     std::this_thread::sleep_for(std::chrono::microseconds(6900));

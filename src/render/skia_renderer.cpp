@@ -206,8 +206,7 @@ bool SkiaRenderer::initGLShader() {
         "    float thetaT = safeAsin((1.0 / eta) * sin(thetaI));\n"
         "    float edgeFactor = max(0.0, -tan(thetaT - thetaI));\n"
         "    edgeFactor = min(edgeFactor, 4.0);\n"
-        "    vec2 aspect = vec2(uSizePx.y / max(uSizePx.x, 1.0), 1.0);\n"
-        "    vec2 offsetUv = (-normal * edgeFactor * 0.05 * aspect) * uInvSize;\n"
+        "    vec2 offsetUv = (-normal * edgeFactor * 0.05) * uInvSize;\n"
         "    float disp = max(0.0, uDispersionGain) * 0.02;\n"
         "    vec2 uvR = clamp(vTexCoord + offsetUv * (1.0 + disp), 0.0, 1.0);\n"
         "    vec2 uvG = clamp(vTexCoord + offsetUv, 0.0, 1.0);\n"
@@ -1281,11 +1280,15 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
             glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[currentTex]);
             glUniform1i(m_uRefractTextureLoc, 0);
             glUniform2f(m_uRefractInvSizeLoc, 1.0f / static_cast<float>(targetW), 1.0f / static_cast<float>(targetH));
-            glUniform1f(m_uRefractThicknessLoc, std::max(0.0f, thicknessPx));
+            const float passScale = (w > 0) ? (static_cast<float>(targetW) / static_cast<float>(w)) : 1.0f;
+            const float passThicknessPx = std::max(0.0f, thicknessPx) * passScale;
+            const float passRadiusPx = std::max(0.0f, cornerRadius) * passScale;
+
+            glUniform1f(m_uRefractThicknessLoc, passThicknessPx);
             glUniform1f(m_uRefractFactorLoc, std::max(1.001f, refractionFactor));
             glUniform1f(m_uRefractDispersionLoc, std::max(0.0f, dispersionGain));
             glUniform2f(m_uRefractSizeLoc, static_cast<float>(targetW), static_cast<float>(targetH));
-            glUniform1f(m_uRefractRadiusLoc, std::max(0.0f, cornerRadius));
+            glUniform1f(m_uRefractRadiusLoc, passRadiusPx);
 
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
