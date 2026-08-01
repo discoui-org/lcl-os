@@ -8,6 +8,7 @@
 #include <chrono>
 #include <sys/mman.h>
 #include <csignal>
+#include <cstring>
 
 namespace lcl::core {
 
@@ -622,7 +623,38 @@ void Compositor::renderFrame() {
     }
 
     // --- Begin Skia frame ---
-    m_renderer.getSkiaRenderer()->beginFrame();
+    auto* skia = m_renderer.getSkiaRenderer();
+    skia->beginFrame();
+
+    const bool gpuSceneCompositing =
+        skia && skia->getBackendType() == render::SkiaBackendType::OpenGL_EGL;
+    uint32_t* overlayPixels = skia ? skia->getRasterBuffer() : nullptr;
+
+    auto promoteCpuRegionToGpu = [&](int x, int y, int w, int h) {
+        if (!gpuSceneCompositing || !overlayPixels || w <= 0 || h <= 0) return;
+
+        int clipX1 = std::max(0, x);
+        int clipY1 = std::max(0, y);
+        int clipX2 = std::min(static_cast<int>(m_renderer.getWidth()), x + w);
+        int clipY2 = std::min(static_cast<int>(m_renderer.getHeight()), y + h);
+        if (clipX1 >= clipX2 || clipY1 >= clipY2) return;
+
+        int copyW = clipX2 - clipX1;
+        int copyH = clipY2 - clipY1;
+        std::vector<uint32_t> region(static_cast<size_t>(copyW) * static_cast<size_t>(copyH), 0x00000000);
+
+        for (int row = 0; row < copyH; ++row) {
+            const uint32_t* src = &overlayPixels[(clipY1 + row) * m_renderer.getWidth() + clipX1];
+            std::memcpy(&region[static_cast<size_t>(row) * static_cast<size_t>(copyW)], src, static_cast<size_t>(copyW) * sizeof(uint32_t));
+        }
+
+        skia->drawBuffer(clipX1, clipY1, copyW, copyH, region.data(), copyW, 1.0f);
+
+        for (int row = 0; row < copyH; ++row) {
+            uint32_t* dst = &overlayPixels[(clipY1 + row) * m_renderer.getWidth() + clipX1];
+            std::fill_n(dst, copyW, 0x00000000);
+        }
+    };
 
     // 1. Clear Desktop Canvas (Black background)
     m_renderer.clear(0xFF000000);
@@ -655,6 +687,7 @@ void Compositor::renderFrame() {
         // C. Render Server-Side Window Frame (Titlebar & Border) if SSD enabled
         if (win.decorationMode == render::DecorationMode::SSD) {
             m_renderer.drawWindowFrame(win.x, win.y, win.width, win.height, win.title, win.headerColor);
+            promoteCpuRegionToGpu(win.x, win.y, win.width, win.height);
         }
 
         if (matchingSurface) {
@@ -678,6 +711,7 @@ void Compositor::renderFrame() {
                 }
                 if (content) {
                     m_renderer.renderWindowContent(win, content);
+                    promoteCpuRegionToGpu(win.x, win.y, win.width, win.height);
                 }
             }
         }
@@ -685,9 +719,27 @@ void Compositor::renderFrame() {
 
     // 3. Render Diagnostic FPS Overlay
     renderDiagnosticOverlay();
+    if (gpuSceneCompositing) {
+        int screenW = static_cast<int>(m_renderer.getWidth());
+        int cardW = DisplayScale::px(220);
+        int cardH = DisplayScale::px(70);
+        int cardX = screenW - cardW - DisplayScale::px(16);
+        int cardY = DisplayScale::px(16);
+        promoteCpuRegionToGpu(cardX, cardY, cardW, cardH);
+    }
 
-    // 4. Render Mouse Cursor on top of all windows
-    m_renderer.drawCursor(m_windowManager.getMouseX(), m_windowManager.getMouseY());
+    // 4. Render cursor on top of all windows
+    if (m_displayManager.isHardwareCursorActive()) {
+        m_displayManager.moveHardwareCursor(m_windowManager.getMouseX(), m_windowManager.getMouseY());
+    } else {
+        m_renderer.drawCursor(m_windowManager.getMouseX(), m_windowManager.getMouseY());
+        if (gpuSceneCompositing) {
+            int scale = std::max(1, DisplayScale::px(1));
+            int cursorW = 12 * scale;
+            int cursorH = 16 * scale;
+            promoteCpuRegionToGpu(m_windowManager.getMouseX(), m_windowManager.getMouseY(), cursorW, cursorH);
+        }
+    }
 
     m_renderer.swapBuffers();
     m_windowManager.clearAllDirty();

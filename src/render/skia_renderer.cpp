@@ -363,7 +363,8 @@ void SkiaRenderer::beginFrame() {
     }
 
     if (m_targetPixels) {
-        // GPU path uses m_targetPixels as an alpha-blended CPU overlay layer.
+        // GPU path uses m_targetPixels as a temporary CPU staging surface that can
+        // be flushed into the GPU scene during composition.
         // Software path still treats it as the final opaque framebuffer.
         const uint32_t clearColor = (m_backendType == SkiaBackendType::OpenGL_EGL)
             ? 0x00000000
@@ -382,23 +383,6 @@ void SkiaRenderer::endFrame() {
         glViewport(0, 0, m_width, m_height);
         if (m_glSceneTexture > 0) {
             drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height);
-        }
-
-        // Composite CPU raster layer (window chrome, text overlays, cursor) on top
-        // of the GPU scene while preserving per-pixel alpha.
-        if (m_targetPixels && m_glTexture > 0) {
-            glBindTexture(GL_TEXTURE_2D, m_glTexture);
-            glTexSubImage2D(
-                GL_TEXTURE_2D,
-                0,
-                0,
-                0,
-                static_cast<GLsizei>(m_width),
-                static_cast<GLsizei>(m_height),
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
-                m_targetPixels);
-            drawBgraTextureQuad(m_glTexture, 0, 0, m_width, m_height, 1.0f);
         }
 
         glFlush();
