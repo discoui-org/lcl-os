@@ -20,6 +20,7 @@ set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(yoga)
 
 add_library(lcl-ui STATIC
+    src/core/animation.cpp
     src/core/rect.cpp
     src/core/render_pass.cpp
     src/core/event_dispatcher.cpp

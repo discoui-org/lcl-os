@@ -3,6 +3,7 @@
 #include "lcl-ui/core/rect.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/event_dispatcher.hpp"
+#include "core/ipc/lcl_protocol.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "render/skia_renderer.hpp"
 #include <memory>
@@ -54,6 +55,12 @@ public:
     void runEventLoop();
     void resize(uint32_t width, uint32_t height);
 
+    bool requestWindowMove(float localX, float localY);
+    bool requestWindowClose();
+    bool setDecorationMode(lcl::protocol::LCLDecorationMode mode);
+    void setCsdTitlebarEnabled(bool enabled) { m_csdTitlebarEnabled = enabled; }
+    void configureCsdTitlebar(float height, float closeLeft, float closeTop, float closeSize);
+
     // Frame Execution & Render Loop Pipeline
     void updateLayout();
     bool renderFrame();
@@ -94,6 +101,12 @@ private:
     bool m_hasPendingResize{false};
     std::chrono::steady_clock::time_point m_lastResizeApply{};
     bool m_running{false};
+
+    bool m_csdTitlebarEnabled{false};
+    float m_csdTitlebarHeight{32.0f};
+    float m_csdCloseLeft{10.0f};
+    float m_csdCloseTop{8.0f};
+    float m_csdCloseSize{16.0f};
 };
 
 } // namespace lcl::ui

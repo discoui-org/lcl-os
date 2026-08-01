@@ -211,6 +211,87 @@ JSValue js_window_app_sendPointerUp(JSContext* ctx, JSValueConst this_val, int a
     return JS_NewBool(ctx, handled);
 }
 
+JSValue js_window_app_requestWindowMove(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+
+    double x = 0.0;
+    double y = 0.0;
+    if (argc >= 1) JS_ToFloat64(ctx, &x, argv[0]);
+    if (argc >= 2) JS_ToFloat64(ctx, &y, argv[1]);
+
+    bool ok = appWrap->app->requestWindowMove(static_cast<float>(x), static_cast<float>(y));
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue js_window_app_requestWindowClose(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)argc;
+    (void)argv;
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+
+    bool ok = appWrap->app->requestWindowClose();
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue js_window_app_setCsdTitlebarEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+
+    int enabled = 0;
+    if (argc >= 1) {
+        enabled = JS_ToBool(ctx, argv[0]);
+    }
+    appWrap->app->setCsdTitlebarEnabled(enabled != 0);
+    return JS_UNDEFINED;
+}
+
+JSValue js_window_app_configureCsdTitlebar(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+
+    double height = 32.0;
+    double closeLeft = 10.0;
+    double closeTop = 8.0;
+    double closeSize = 16.0;
+
+    if (argc >= 1) JS_ToFloat64(ctx, &height, argv[0]);
+    if (argc >= 2) JS_ToFloat64(ctx, &closeLeft, argv[1]);
+    if (argc >= 3) JS_ToFloat64(ctx, &closeTop, argv[2]);
+    if (argc >= 4) JS_ToFloat64(ctx, &closeSize, argv[3]);
+
+    appWrap->app->configureCsdTitlebar(
+        static_cast<float>(height),
+        static_cast<float>(closeLeft),
+        static_cast<float>(closeTop),
+        static_cast<float>(closeSize));
+    return JS_UNDEFINED;
+}
+
+JSValue js_window_app_setDecorationMode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+
+    std::string mode = "ssd";
+    if (argc >= 1) {
+        const char* str = JS_ToCString(ctx, argv[0]);
+        if (str) {
+            mode = str;
+            JS_FreeCString(ctx, str);
+        }
+    }
+
+    lcl::protocol::LCLDecorationMode value = lcl::protocol::LCLDecorationMode::SSD;
+    if (mode == "csd") {
+        value = lcl::protocol::LCLDecorationMode::CSD;
+    } else if (mode == "none" || mode == "frameless") {
+        value = lcl::protocol::LCLDecorationMode::None;
+    }
+
+    bool ok = appWrap->app->setDecorationMode(value);
+    return JS_NewBool(ctx, ok);
+}
+
 // ------------------------------------------------------------
 // Widget / Container / Button / Text Constructors
 // ------------------------------------------------------------
@@ -768,6 +849,11 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerMove", JS_NewCFunction(m_ctx, js_window_app_sendPointerMove, "sendPointerMove", 2));
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerDown", JS_NewCFunction(m_ctx, js_window_app_sendPointerDown, "sendPointerDown", 3));
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerUp", JS_NewCFunction(m_ctx, js_window_app_sendPointerUp, "sendPointerUp", 3));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowMove", JS_NewCFunction(m_ctx, js_window_app_requestWindowMove, "requestWindowMove", 2));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowClose", JS_NewCFunction(m_ctx, js_window_app_requestWindowClose, "requestWindowClose", 0));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "setCsdTitlebarEnabled", JS_NewCFunction(m_ctx, js_window_app_setCsdTitlebarEnabled, "setCsdTitlebarEnabled", 1));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "configureCsdTitlebar", JS_NewCFunction(m_ctx, js_window_app_configureCsdTitlebar, "configureCsdTitlebar", 4));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "setDecorationMode", JS_NewCFunction(m_ctx, js_window_app_setDecorationMode, "setDecorationMode", 1));
     JS_SetClassProto(m_ctx, g_window_app_class_id, windowAppProto);
 
     JSValue widgetProto = JS_NewObject(m_ctx);

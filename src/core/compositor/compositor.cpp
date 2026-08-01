@@ -11,10 +11,25 @@
 #include <algorithm>
 #include <thread>
 #include <chrono>
+#include <cmath>
 #include <sys/mman.h>
 #include <csignal>
 
 namespace lcl::core {
+
+namespace {
+
+float easeOutCubic(float x) {
+    x = std::clamp(x, 0.0f, 1.0f);
+    return 1.0f - std::pow(1.0f - x, 3.0f);
+}
+
+float easeInCubic(float x) {
+    x = std::clamp(x, 0.0f, 1.0f);
+    return x * x * x;
+}
+
+} // namespace
 
 // ============================================================
 // Construction / Destruction
@@ -199,6 +214,7 @@ bool Compositor::initialize() {
               << " Hz (~" << (1000000 / hz) << " us per frame budget).\n";
 
     m_lastBlinkCheck = std::chrono::steady_clock::now();
+    m_lastTransitionTick = m_lastBlinkCheck;
     m_initialized = true;
     return true;
 }
@@ -216,6 +232,23 @@ void Compositor::processInput() {
 }
 
 void Compositor::processIPC() {
+    auto beginClosingTransition = [&](SurfaceEntry& entry) {
+        entry.ignoreBufferCommits = true;
+        if (entry.windowId > 0 && entry.pixels && entry.width > 0 && entry.height > 0) {
+            entry.transitionPhase = SurfaceEntry::TransitionPhase::Closing;
+            entry.transitionElapsedSec = 0.0f;
+            entry.transitionDurationSec = 0.14f;
+            entry.transitionOpacity = 1.0f;
+            entry.transitionScale = 1.0f;
+            entry.pendingDestroy = false;
+            std::cout << "[LCL Compositor] Closing transition started for Window ID: "
+                      << entry.windowId << "\n";
+            m_needsRedraw = true;
+            return false;
+        }
+        return true;
+    };
+
     for (const auto& msg : m_ipcManager.pollMessages()) {
         // --- SURFACE_CREATE: register a window on the compositor canvas ---
         bool isSurfaceCreate = (msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceCreate) ||
@@ -230,20 +263,21 @@ void Compositor::processIPC() {
             std::vector<uint64_t> surfacesToRemove;
             for (auto& [surfKey, entry] : m_surfaces) {
                 if (entry.clientFd == msg.clientFd || (msg.pid > 0 && (surfKey >> 32) == static_cast<uint64_t>(msg.pid))) {
-                    if (entry.windowId > 0) {
-                        std::cout << "[LCL Compositor] Removing Window ID: " << entry.windowId
-                                  << " for disconnected client FD: " << msg.clientFd << "\n";
-                        m_windowManager.removeWindow(entry.windowId);
+                    entry.clientFd = -1;
+                    if (beginClosingTransition(entry)) {
+                        if (entry.windowId > 0) {
+                            m_windowManager.removeWindow(entry.windowId);
+                        }
+                        if (entry.pixels && entry.shmSize > 0) {
+                            munmap(entry.pixels, entry.shmSize);
+                            entry.pixels = nullptr;
+                        }
+                        if (entry.shmFd >= 0) {
+                            close(entry.shmFd);
+                            entry.shmFd = -1;
+                        }
+                        surfacesToRemove.push_back(surfKey);
                     }
-                    if (entry.pixels && entry.shmSize > 0) {
-                        munmap(entry.pixels, entry.shmSize);
-                        entry.pixels = nullptr;
-                    }
-                    if (entry.shmFd >= 0) {
-                        close(entry.shmFd);
-                        entry.shmFd = -1;
-                    }
-                    surfacesToRemove.push_back(surfKey);
                 }
             }
             for (uint64_t key : surfacesToRemove) {
@@ -338,6 +372,13 @@ void Compositor::processIPC() {
             }
 
             auto& entry = m_surfaces[surfaceKey];
+            if (entry.ignoreBufferCommits || entry.transitionPhase == SurfaceEntry::TransitionPhase::Closing) {
+                if (msg.passedFd >= 0) {
+                    close(msg.passedFd);
+                }
+                continue;
+            }
+
             entry.clientFd = msg.clientFd;
 
             int fd = msg.passedFd;
@@ -362,6 +403,14 @@ void Compositor::processIPC() {
                         entry.width   = w;
                         entry.height  = h;
                         entry.stride  = stride;
+                        if (!entry.hasCommittedBuffer) {
+                            entry.hasCommittedBuffer = true;
+                            entry.transitionPhase = SurfaceEntry::TransitionPhase::Entering;
+                            entry.transitionElapsedSec = 0.0f;
+                            entry.transitionDurationSec = 0.20f;
+                            entry.transitionOpacity = 0.0f;
+                            entry.transitionScale = 0.96f;
+                        }
                     } else {
                         std::cerr << "[LCL Compositor ERROR] mmap failed for memfd " << fd
                                   << ": " << strerror(errno) << "\n";
@@ -417,6 +466,65 @@ void Compositor::processIPC() {
                 std::cout << "[LCL Compositor] Set decoration mode for Window " << it->second.windowId
                           << " to " << (wmMode == render::DecorationMode::None ? "None (Frameless)" : (wmMode == render::DecorationMode::CSD ? "CSD" : "SSD")) << "\n";
                 m_needsRedraw = true;
+            }
+
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::BeginWindowMove) {
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgBeginWindowMove)) {
+                auto* moveMsg = reinterpret_cast<const lcl::protocol::LCLMsgBeginWindowMove*>(msg.payload.data());
+                uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | moveMsg->surfaceId;
+                auto it = m_surfaces.find(surfaceKey);
+                if (it != m_surfaces.end() && it->second.windowId > 0) {
+                    const uint32_t targetWinId = it->second.windowId;
+                    m_windowManager.focusWindow(targetWinId);
+                    auto& windows = m_windowManager.getWindowsMutable();
+                    auto winIt = std::find_if(windows.begin(), windows.end(), [targetWinId](const render::Window& w) {
+                        return w.id == targetWinId;
+                    });
+                    if (winIt != windows.end()) {
+                        winIt->isDragging = true;
+                        winIt->dragOffsetX = static_cast<int>(std::lround(moveMsg->localX));
+                        winIt->dragOffsetY = static_cast<int>(std::lround(moveMsg->localY));
+                        winIt->markDirty();
+                        m_needsRedraw = true;
+                    }
+                }
+            }
+
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::RequestSurfaceClose) {
+            uint32_t surfId = 1;
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgRequestSurfaceClose)) {
+                auto* closeMsg = reinterpret_cast<const lcl::protocol::LCLMsgRequestSurfaceClose*>(msg.payload.data());
+                surfId = closeMsg->surfaceId;
+            }
+
+            uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
+            auto it = m_surfaces.find(surfaceKey);
+            if (it != m_surfaces.end()) {
+                // Ask client to stop its loop while compositor animates frozen last frame.
+                if (it->second.clientFd >= 0) {
+                    lcl::protocol::LCLHeader destroyHeader{};
+                    destroyHeader.opcode = lcl::protocol::LCLOpcode::SurfaceDestroy;
+                    destroyHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSurfaceDestroy);
+                    lcl::protocol::LCLMsgSurfaceDestroy destroyMsg{};
+                    destroyMsg.surfaceId = surfId;
+                    lcl::protocol::sendMsgWithFd(it->second.clientFd, destroyHeader, &destroyMsg);
+                }
+
+                if (beginClosingTransition(it->second)) {
+                    if (it->second.windowId > 0) {
+                        m_windowManager.removeWindow(it->second.windowId);
+                    }
+                    if (it->second.pixels && it->second.shmSize > 0) {
+                        munmap(it->second.pixels, it->second.shmSize);
+                        it->second.pixels = nullptr;
+                    }
+                    if (it->second.shmFd >= 0) {
+                        close(it->second.shmFd);
+                        it->second.shmFd = -1;
+                    }
+                    m_surfaces.erase(it);
+                    m_needsRedraw = true;
+                }
             }
 
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetWindowLayer) {
@@ -641,6 +749,41 @@ void Compositor::renderDiagnosticOverlay() {
 
 void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    float dtSec = std::chrono::duration<float>(now - m_lastTransitionTick).count();
+    m_lastTransitionTick = now;
+    dtSec = std::clamp(dtSec, 1.0f / 240.0f, 1.0f / 20.0f);
+
+    bool hasActiveTransitions = false;
+    for (auto& [_, entry] : m_surfaces) {
+        if (entry.transitionPhase == SurfaceEntry::TransitionPhase::None) continue;
+
+        hasActiveTransitions = true;
+        entry.transitionElapsedSec += dtSec;
+        const float duration = std::max(0.001f, entry.transitionDurationSec);
+        const float t = std::clamp(entry.transitionElapsedSec / duration, 0.0f, 1.0f);
+
+        if (entry.transitionPhase == SurfaceEntry::TransitionPhase::Entering) {
+            const float y = easeOutCubic(t);
+            entry.transitionOpacity = y;
+            entry.transitionScale = 0.96f + (0.04f * y);
+            if (t >= 1.0f) {
+                entry.transitionPhase = SurfaceEntry::TransitionPhase::None;
+                entry.transitionOpacity = 1.0f;
+                entry.transitionScale = 1.0f;
+            }
+        } else if (entry.transitionPhase == SurfaceEntry::TransitionPhase::Closing) {
+            const float y = easeInCubic(t);
+            entry.transitionOpacity = 1.0f - y;
+            entry.transitionScale = 1.0f - (0.04f * y);
+            if (t >= 1.0f) {
+                entry.transitionOpacity = 0.0f;
+                entry.transitionScale = 0.96f;
+                entry.pendingDestroy = true;
+            }
+        }
+    }
 
     // --- Build fallback content list for windows without active SHM buffers ---
     std::vector<render::WindowRenderContent> contents;
@@ -897,6 +1040,13 @@ void Compositor::renderFrame() {
             int srcW = static_cast<int>(matchingSurface->width);
             int srcH = static_cast<int>(matchingSurface->height);
             int stridePixels = static_cast<int>(matchingSurface->stride / 4);
+            float surfaceOpacity = std::clamp(matchingSurface->transitionOpacity, 0.0f, 1.0f);
+            float surfaceScale = std::clamp(matchingSurface->transitionScale, 0.80f, 1.20f);
+
+            int drawW = std::max(1, static_cast<int>(std::lround(static_cast<float>(srcW) * surfaceScale)));
+            int drawH = std::max(1, static_cast<int>(std::lround(static_cast<float>(srcH) * surfaceScale)));
+            int drawX = dstX + (srcW - drawW) / 2;
+            int drawY = dstY + (srcH - drawH) / 2;
 
             const bool maskToWindowShape =
                 (win.decorationMode == render::DecorationMode::SSD) ||
@@ -904,13 +1054,15 @@ void Compositor::renderFrame() {
                  win.title.find("Terminal") != std::string::npos);
 
             m_renderer.getSkiaRenderer()->drawBuffer(
-                dstX, dstY, srcW, srcH,
+                drawX, drawY, srcW, srcH,
                 reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
                 stridePixels,
-                1.0f,
+                surfaceOpacity,
                 maskToWindowShape ? kWindowCornerRadiusPx : 0.0f,
                 kWindowCornerRoundness,
-                win.decorationMode == render::DecorationMode::SSD);
+                win.decorationMode == render::DecorationMode::SSD,
+                drawW,
+                drawH);
 
             if (!matchingSurface->effectRegions.empty()) {
                 applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground);
@@ -953,8 +1105,30 @@ void Compositor::renderFrame() {
     }
 
     m_renderer.swapBuffers();
+
+    std::vector<uint64_t> surfacesToRemove;
+    for (auto& [surfKey, entry] : m_surfaces) {
+        if (!entry.pendingDestroy) continue;
+
+        if (entry.windowId > 0) {
+            m_windowManager.removeWindow(entry.windowId);
+        }
+        if (entry.pixels && entry.shmSize > 0) {
+            munmap(entry.pixels, entry.shmSize);
+            entry.pixels = nullptr;
+        }
+        if (entry.shmFd >= 0) {
+            close(entry.shmFd);
+            entry.shmFd = -1;
+        }
+        surfacesToRemove.push_back(surfKey);
+    }
+    for (uint64_t key : surfacesToRemove) {
+        m_surfaces.erase(key);
+    }
+
     m_windowManager.clearAllDirty();
-    m_needsRedraw = false;
+    m_needsRedraw = hasActiveTransitions || !surfacesToRemove.empty();
 
     // Increment presented frame count (used by 1.0s sliding window in run loop)
     m_fpsFrameCount++;

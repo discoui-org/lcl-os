@@ -31,7 +31,9 @@ enum class LCLOpcode : uint32_t {
     SetWindowLayer = 9,
     SetReservedZone = 10,
     SetEffectGraph = 11,
-    ClearEffectGraph = 12
+    ClearEffectGraph = 12,
+    BeginWindowMove = 13,
+    RequestSurfaceClose = 14
 };
 
 enum class LCLDecorationMode : uint32_t {
@@ -195,6 +197,16 @@ struct LCLMsgSetEffectGraphHeader {
 };
 
 struct LCLMsgClearEffectGraph {
+    uint32_t surfaceId{0};
+};
+
+struct LCLMsgBeginWindowMove {
+    uint32_t surfaceId{0};
+    float localX{0.0f};
+    float localY{0.0f};
+};
+
+struct LCLMsgRequestSurfaceClose {
     uint32_t surfaceId{0};
 };
 

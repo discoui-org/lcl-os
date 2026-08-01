@@ -118,7 +118,9 @@ public:
                     float opacity = 1.0f,
                     float cornerRadius = 0.0f,
                     float cornerRoundness = 2.0f,
-                    bool squareTopCorners = false);
+                    bool squareTopCorners = false,
+                    int drawWidth = 0,
+                    int drawHeight = 0);
     void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, float cornerRadius, float opacity, const std::vector<protocol::FilterOp>& filters);
 
     // Accessors

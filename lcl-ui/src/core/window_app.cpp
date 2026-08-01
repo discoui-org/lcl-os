@@ -309,6 +309,55 @@ void WindowApp::runEventLoop() {
     }
 }
 
+bool WindowApp::requestWindowMove(float localX, float localY) {
+    if (!m_ipcConnected || m_socketFd < 0) return false;
+
+    lcl::protocol::LCLHeader header{};
+    header.opcode = lcl::protocol::LCLOpcode::BeginWindowMove;
+    header.payloadSize = sizeof(lcl::protocol::LCLMsgBeginWindowMove);
+
+    lcl::protocol::LCLMsgBeginWindowMove msg{};
+    msg.surfaceId = 1;
+    msg.localX = localX;
+    msg.localY = localY;
+
+    return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
+}
+
+bool WindowApp::requestWindowClose() {
+    if (!m_ipcConnected || m_socketFd < 0) return false;
+
+    lcl::protocol::LCLHeader header{};
+    header.opcode = lcl::protocol::LCLOpcode::RequestSurfaceClose;
+    header.payloadSize = sizeof(lcl::protocol::LCLMsgRequestSurfaceClose);
+
+    lcl::protocol::LCLMsgRequestSurfaceClose msg{};
+    msg.surfaceId = 1;
+
+    return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
+}
+
+bool WindowApp::setDecorationMode(lcl::protocol::LCLDecorationMode mode) {
+    if (!m_ipcConnected || m_socketFd < 0) return false;
+
+    lcl::protocol::LCLHeader header{};
+    header.opcode = lcl::protocol::LCLOpcode::SetDecorationMode;
+    header.payloadSize = sizeof(lcl::protocol::LCLMsgSetDecorationMode);
+
+    lcl::protocol::LCLMsgSetDecorationMode msg{};
+    msg.surfaceId = 1;
+    msg.mode = mode;
+
+    return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
+}
+
+void WindowApp::configureCsdTitlebar(float height, float closeLeft, float closeTop, float closeSize) {
+    m_csdTitlebarHeight = std::max(0.0f, height);
+    m_csdCloseLeft = closeLeft;
+    m_csdCloseTop = closeTop;
+    m_csdCloseSize = std::max(0.0f, closeSize);
+}
+
 bool WindowApp::sendPointerMove(float x, float y) {
     PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Move};
     if (m_onRawPointer && m_onRawPointer(ev)) {
@@ -318,6 +367,17 @@ bool WindowApp::sendPointerMove(float x, float y) {
 }
 
 bool WindowApp::sendPointerDown(float x, float y, int button) {
+    if (m_csdTitlebarEnabled && button == 0 && y >= 0.0f && y <= m_csdTitlebarHeight) {
+        const bool inCloseX = x >= m_csdCloseLeft && x <= (m_csdCloseLeft + m_csdCloseSize);
+        const bool inCloseY = y >= m_csdCloseTop && y <= (m_csdCloseTop + m_csdCloseSize);
+        if (inCloseX && inCloseY) {
+            requestWindowClose();
+            return true;
+        }
+        requestWindowMove(x, y);
+        return true;
+    }
+
     PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Down};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;

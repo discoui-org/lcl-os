@@ -61,6 +61,12 @@ public:
     };
 
     struct SurfaceEntry {
+        enum class TransitionPhase {
+            None,
+            Entering,
+            Closing,
+        };
+
         uint32_t windowId{0};    ///< Corresponding WindowManager window id
         int      clientFd{-1};   ///< Socket FD of client process
         int      shmFd{-1};     ///< memfd descriptor received via SCM_RIGHTS
@@ -78,6 +84,15 @@ public:
         uint32_t configuredHeight{0};
         uint8_t  configuredFocused{0};
         std::chrono::steady_clock::time_point lastConfigureSent{};
+
+        TransitionPhase transitionPhase{TransitionPhase::None};
+        float transitionElapsedSec{0.0f};
+        float transitionDurationSec{0.0f};
+        float transitionOpacity{1.0f};
+        float transitionScale{1.0f};
+        bool hasCommittedBuffer{false};
+        bool ignoreBufferCommits{false};
+        bool pendingDestroy{false};
     };
 
     void toggleFpsOverlay() noexcept { m_showFpsOverlay = !m_showFpsOverlay; }
@@ -115,6 +130,7 @@ private:
     float                                m_currentFps{0.0f};
     float                                m_currentFrameMs{0.0f};
     std::chrono::steady_clock::time_point m_lastFpsTime;
+    std::chrono::steady_clock::time_point m_lastTransitionTick;
 };
 
 } // namespace lcl::core

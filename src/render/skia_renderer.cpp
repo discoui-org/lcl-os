@@ -1126,10 +1126,16 @@ void SkiaRenderer::drawBuffer(int dstX,
                               float opacity,
                               float cornerRadius,
                               float cornerRoundness,
-                              bool squareTopCorners) {
+                              bool squareTopCorners,
+                              int drawWidth,
+                              int drawHeight) {
     if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0) return;
 
     if (stridePixels <= 0) stridePixels = srcW;
+
+    const int outW = (drawWidth > 0) ? drawWidth : srcW;
+    const int outH = (drawHeight > 0) ? drawHeight : srcH;
+    if (outW <= 0 || outH <= 0) return;
 
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
         m_eglBackend->makeCurrent();
@@ -1167,14 +1173,14 @@ void SkiaRenderer::drawBuffer(int dstX,
             drawMaskedBgraTextureQuad(m_glClientTexture,
                                       static_cast<float>(dstX),
                                       static_cast<float>(dstY),
-                                      static_cast<float>(srcW),
-                                      static_cast<float>(srcH),
+                                      static_cast<float>(outW),
+                                      static_cast<float>(outH),
                                       cornerRadius,
                                       cornerRoundness,
                                       opacity,
                                       squareTopCorners);
         } else {
-            drawBgraTextureQuad(m_glClientTexture, dstX, dstY, srcW, srcH, opacity);
+            drawBgraTextureQuad(m_glClientTexture, dstX, dstY, outW, outH, opacity);
         }
         return;
     }
@@ -1183,33 +1189,31 @@ void SkiaRenderer::drawBuffer(int dstX,
 
     int clipX1 = std::max(0, dstX);
     int clipY1 = std::max(0, dstY);
-    int clipX2 = std::min(static_cast<int>(m_width), dstX + srcW);
-    int clipY2 = std::min(static_cast<int>(m_height), dstY + srcH);
+    int clipX2 = std::min(static_cast<int>(m_width), dstX + outW);
+    int clipY2 = std::min(static_cast<int>(m_height), dstY + outH);
 
     if (clipX1 >= clipX2 || clipY1 >= clipY2) return;
 
-    int copyWidth = clipX2 - clipX1;
-    int srcX1 = clipX1 - dstX;
     bool isOpaqueFast = (opacity >= 0.99f);
-    float rr = std::clamp(cornerRadius, 0.0f, std::min(static_cast<float>(srcW), static_cast<float>(srcH)) * 0.5f);
+    float rr = std::clamp(cornerRadius, 0.0f, std::min(static_cast<float>(outW), static_cast<float>(outH)) * 0.5f);
     float n = std::clamp(cornerRoundness, 2.0f, 8.0f);
 
-    auto insideRoundedMask = [rr, n, srcW, srcH, squareTopCorners](float px, float py) {
+    auto insideRoundedMask = [rr, n, outW, outH, squareTopCorners](float px, float py) {
         if (rr <= 0.001f) return true;
-        if (px < 0.0f || py < 0.0f || px > static_cast<float>(srcW) || py > static_cast<float>(srcH)) return false;
+        if (px < 0.0f || py < 0.0f || px > static_cast<float>(outW) || py > static_cast<float>(outH)) return false;
 
         bool inLeft = px < rr;
-        bool inRight = px > (static_cast<float>(srcW) - rr);
+        bool inRight = px > (static_cast<float>(outW) - rr);
         bool inTop = py < rr;
-        bool inBottom = py > (static_cast<float>(srcH) - rr);
+        bool inBottom = py > (static_cast<float>(outH) - rr);
 
         if ((inLeft || inRight) && (inTop || inBottom)) {
             if (squareTopCorners && inTop) {
                 return true;
             }
 
-            float cx = inLeft ? rr : (static_cast<float>(srcW) - rr);
-            float cy = inTop ? rr : (static_cast<float>(srcH) - rr);
+            float cx = inLeft ? rr : (static_cast<float>(outW) - rr);
+            float cy = inTop ? rr : (static_cast<float>(outH) - rr);
             float dx = std::abs(px - cx) / rr;
             float dy = std::abs(py - cy) / rr;
             if (n <= 2.001f) {
@@ -1222,25 +1226,19 @@ void SkiaRenderer::drawBuffer(int dstX,
     };
 
     for (int y = clipY1; y < clipY2; ++y) {
-        int srcY = y - dstY;
+        int outY = y - dstY;
+        int srcY = (outY * srcH) / outH;
+        srcY = std::clamp(srcY, 0, srcH - 1);
         const uint32_t* srcRow = pixelData + (srcY * stridePixels);
         uint32_t* dstRow = &m_targetPixels[y * m_width];
 
-        // Fast-path: Direct memcpy for opaque rows (wallpapers and opaque window surfaces)
-        if (rr <= 0.001f && isOpaqueFast && ((srcRow[srcX1] & 0xFF000000) == 0xFF000000)) {
-            uint32_t midPixel = srcRow[srcX1 + (copyWidth >> 1)];
-            uint32_t lastPixel = srcRow[srcX1 + copyWidth - 1];
-            if ((midPixel & 0xFF000000) == 0xFF000000 && (lastPixel & 0xFF000000) == 0xFF000000) {
-                std::memcpy(&dstRow[clipX1], &srcRow[srcX1], copyWidth * sizeof(uint32_t));
-                continue;
-            }
-        }
-
         for (int x = clipX1; x < clipX2; ++x) {
-            int srcX = x - dstX;
+            int outX = x - dstX;
+            int srcX = (outX * srcW) / outW;
+            srcX = std::clamp(srcX, 0, srcW - 1);
             if (rr > 0.001f) {
-                float px = static_cast<float>(srcX) + 0.5f;
-                float py = static_cast<float>(srcY) + 0.5f;
+                float px = static_cast<float>(outX) + 0.5f;
+                float py = static_cast<float>(outY) + 0.5f;
                 if (!insideRoundedMask(px, py)) {
                     continue;
                 }
