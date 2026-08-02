@@ -132,10 +132,10 @@ struct LCLMsgSurfaceCreate {
     int32_t y{0};
     uint32_t width{0};
     uint32_t height{0};
-    // Logical-to-buffer scale. 1.0 keeps the legacy raw-pixel protocol.
-    float bufferScale{1.0f};
     char title[128]{0};
     char appId[64]{0};
+    // Appended for wire compatibility with protocol-v1 clients/compositors.
+    float bufferScale{1.0f}; // Logical-to-buffer scale; 1.0 is legacy raw pixels.
 };
 
 struct LCLMsgSurfaceDestroy {
@@ -148,11 +148,11 @@ struct LCLMsgConfigureBounds {
     int32_t y{0};
     uint32_t width{0};
     uint32_t height{0};
-    // Width/height and input coordinates are in logical pixels at this scale.
-    float bufferScale{1.0f};
     uint32_t headerColor{0};
     uint8_t isFocused{0};
     char title[128]{0};
+    // Appended for wire compatibility with protocol-v1 clients/compositors.
+    float bufferScale{1.0f}; // Width/height and input are logical at this scale.
 };
 
 struct LCLMsgAttachBuffer {

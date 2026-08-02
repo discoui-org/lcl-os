@@ -234,6 +234,28 @@ JSValue js_window_app_renderFrame(JSContext* ctx, JSValueConst this_val, int arg
     return JS_NewBool(ctx, rendered);
 }
 
+JSValue js_window_app_tick(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)argc; (void)argv;
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+
+    return JS_NewBool(ctx, appWrap->app->tick());
+}
+
+JSValue js_window_app_setSurfaceId(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+
+    int32_t surfaceId = 0;
+    if (argc < 1 || JS_ToInt32(ctx, &surfaceId, argv[0]) < 0 || surfaceId <= 0) {
+        return JS_ThrowRangeError(ctx, "surfaceId must be a positive integer");
+    }
+
+    appWrap->app->setSurfaceId(static_cast<uint32_t>(surfaceId));
+    // setSurfaceId intentionally becomes immutable once connected.
+    return JS_NewBool(ctx, appWrap->app->getSurfaceId() == static_cast<uint32_t>(surfaceId));
+}
+
 JSValue js_window_app_sendPointerMove(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
     if (!appWrap || !appWrap->app) return JS_EXCEPTION;
@@ -1203,7 +1225,9 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, windowAppProto, "setRootWidget", JS_NewCFunction(m_ctx, js_window_app_setRootWidget, "setRootWidget", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "connectCompositor", JS_NewCFunction(m_ctx, js_window_app_connectCompositor, "connectCompositor", 0));
     JS_SetPropertyStr(m_ctx, windowAppProto, "runEventLoop", JS_NewCFunction(m_ctx, js_window_app_runEventLoop, "runEventLoop", 0));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "tick", JS_NewCFunction(m_ctx, js_window_app_tick, "tick", 0));
     JS_SetPropertyStr(m_ctx, windowAppProto, "renderFrame", JS_NewCFunction(m_ctx, js_window_app_renderFrame, "renderFrame", 0));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "setSurfaceId", JS_NewCFunction(m_ctx, js_window_app_setSurfaceId, "setSurfaceId", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerMove", JS_NewCFunction(m_ctx, js_window_app_sendPointerMove, "sendPointerMove", 2));
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerDown", JS_NewCFunction(m_ctx, js_window_app_sendPointerDown, "sendPointerDown", 3));
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerUp", JS_NewCFunction(m_ctx, js_window_app_sendPointerUp, "sendPointerUp", 3));

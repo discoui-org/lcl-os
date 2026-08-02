@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <cstddef>
 #include <filesystem>
 #include <array>
 #include <sys/mman.h>
@@ -428,11 +429,24 @@ void Compositor::processIPC() {
             int winH = DisplayScale::px(360);
             float bufferScale = 1.0f;
 
-            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
+            // RegisterRole is delivered on the same ordered stream before
+            // SurfaceCreate.  Apply shell roles at creation time, rather than
+            // briefly creating panels as ordinary decorated windows and waiting
+            // for a later SetDecorationMode/SetWindowLayer pair.
+            const auto roleIt = m_clientRoles.find(msg.clientFd);
+            const protocol::LCLRole clientRole =
+                (roleIt != m_clientRoles.end()) ? roleIt->second : protocol::LCLRole::ClientApp;
+            const bool isWallpaper = clientRole == protocol::LCLRole::DesktopWallpaper;
+            const bool isShellPanel = clientRole == protocol::LCLRole::ShellPanel;
+
+            constexpr size_t kSurfaceCreateV1Size = offsetof(lcl::protocol::LCLMsgSurfaceCreate, bufferScale);
+            if (msg.payload.size() >= kSurfaceCreateV1Size) {
                 auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
                 surfId = sm->surfaceId;
                 if (sm->title[0]) title = sm->title;
-                bufferScale = sanitizeBufferScale(sm->bufferScale);
+                if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
+                    bufferScale = sanitizeBufferScale(sm->bufferScale);
+                }
                 winX = logicalToPhysical(sm->x, bufferScale);
                 winY = logicalToPhysical(sm->y, bufferScale);
                 winW = (sm->width > 0) ? logicalToPhysical(static_cast<int>(sm->width), bufferScale) : static_cast<int>(m_renderer.getWidth());
@@ -447,6 +461,14 @@ void Compositor::processIPC() {
                 entry.windowId = m_windowManager.createWindow(
                     title, winX, winY, frameW, frameH,
                     ::lcl::theme::UI::WindowTitleFocused);
+                if (isWallpaper || isShellPanel) {
+                    const auto layer = isWallpaper
+                        ? protocol::LCLWindowLayer::Bottom
+                        : protocol::LCLWindowLayer::TopMost;
+                    m_windowManager.setDecorationMode(entry.windowId, render::DecorationMode::None);
+                    m_windowManager.setWindowLayer(entry.windowId, layer, true);
+                    m_windowManager.setInsetBorderEnabled(entry.windowId, false);
+                }
                 entry.clientFd = msg.clientFd;
                 entry.width  = static_cast<uint32_t>(winW);
                 entry.height = static_cast<uint32_t>(winH);

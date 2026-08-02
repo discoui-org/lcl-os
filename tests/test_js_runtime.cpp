@@ -50,3 +50,19 @@ TEST(JsRuntimeTest, WidgetCreationAndHierarchyInJS) {
 
     js.shutdown();
 }
+
+TEST(JsRuntimeTest, MultipleWindowsCanUseDistinctSurfaceIdsAndTicks) {
+    JsRuntime js;
+    ASSERT_TRUE(js.initialize());
+
+    EXPECT_TRUE(js.evalCode(R"(
+        globalThis.firstWindow = new LCL.WindowApp(200, 120, "First");
+        globalThis.secondWindow = new LCL.WindowApp(200, 120, "Second");
+        if (!firstWindow.setSurfaceId(1)) throw new Error('first surface id rejected');
+        if (!secondWindow.setSurfaceId(2)) throw new Error('second surface id rejected');
+        firstWindow.tick();
+        secondWindow.tick();
+    )"));
+
+    js.shutdown();
+}

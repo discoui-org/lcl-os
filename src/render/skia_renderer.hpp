@@ -115,7 +115,7 @@ public:
     void drawDropShadow(const SkiaRect& rect, float radius, float blur, const SkiaColor& shadowColor);
     void drawCircle(float cx, float cy, float radius, const SkiaColor& color);
     void drawLine(float x1, float y1, float x2, float y2, const SkiaColor& color, float strokeWidth = 1.0f);
-    void drawString(int x, int y, const std::string& text, uint32_t fgColor);
+    void drawString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize = 15.0f);
     void drawBuffer(int dstX,
                     int dstY,
                     int srcW,

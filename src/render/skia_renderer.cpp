@@ -1130,10 +1130,12 @@ void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, const SkiaCo
     drawRect(rect, color);
 }
 
-void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fgColor) {
+void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize) {
     if (!m_initialized || text.empty()) return;
-    if (!m_fontRenderer.isInitialized()) {
-        m_fontRenderer.loadFont("/usr/share/fonts/inter/Inter-Regular.otf", 15.0f * m_contentScale);
+    const float deviceFontSize = std::max(1.0f, fontSize * m_contentScale);
+    if (!m_fontRenderer.isInitialized() || std::fabs(m_fontRenderer.getFontSize() - deviceFontSize) > 0.01f) {
+        m_fontRenderer = FontRenderer{};
+        m_fontRenderer.loadFont("/usr/share/fonts/inter/Inter-Regular.otf", deviceFontSize);
     }
 
     const int deviceX = scaleCoord(x);

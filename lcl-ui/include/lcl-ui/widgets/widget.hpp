@@ -40,7 +40,7 @@ public:
     bool isFocusable() const { return m_focusable; }
 
     void markDirty();
-    void setRenderPass(RenderPass* pass) { m_renderPass = pass; }
+    void setRenderPass(RenderPass* pass);
 
     using GcMarkCallback = std::function<void(void* rt, void* mark_func)>;
     void setGcMarkCallback(GcMarkCallback cb) { m_gcMarkCallback = std::move(cb); }

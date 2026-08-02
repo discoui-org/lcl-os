@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <cstring>
+#include <cstddef>
 #include <cerrno>
 #include <algorithm>
 
@@ -97,7 +98,8 @@ std::vector<IPCClientMessage> IPCManager::pollMessages() {
                 if (header.opcode == protocol::LCLOpcode::RegisterRole && payload.size() >= sizeof(protocol::LCLMsgRegisterRole)) {
                     auto* reg = reinterpret_cast<const protocol::LCLMsgRegisterRole*>(payload.data());
                     msg.command = "REGISTER_ROLE:" + std::string(reg->clientName);
-                } else if (header.opcode == protocol::LCLOpcode::SurfaceCreate && payload.size() >= sizeof(protocol::LCLMsgSurfaceCreate)) {
+                } else if (header.opcode == protocol::LCLOpcode::SurfaceCreate &&
+                           payload.size() >= offsetof(protocol::LCLMsgSurfaceCreate, bufferScale)) {
                     auto* surf = reinterpret_cast<const protocol::LCLMsgSurfaceCreate*>(payload.data());
                     msg.command = "SURFACE_CREATE:" + std::to_string(surf->surfaceId);
                 } else if (header.opcode == protocol::LCLOpcode::AttachBuffer && payload.size() >= sizeof(protocol::LCLMsgAttachBuffer)) {

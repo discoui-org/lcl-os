@@ -115,7 +115,7 @@ target_link_libraries(lcl-desktop-wm PRIVATE
 
 # Standalone Desktop Shell Daemon Target (lcl-desktop-shell)
 add_executable(lcl-desktop-shell
-    src/apps/desktop_shell/main.cpp
+    src/apps/desktop_shell/ui_main.cpp
     src/core/ipc/ipc_manager.cpp
     src/core/ipc/lcl_protocol.cpp
     src/core/app/app_bundle_parser.cpp
@@ -235,5 +235,4 @@ if(BUILD_TESTS)
     include(GoogleTest)
     gtest_discover_tests(lcl_unit_tests)
 endif()
-
 

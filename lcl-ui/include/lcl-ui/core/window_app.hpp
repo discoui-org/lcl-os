@@ -17,6 +17,7 @@ namespace lcl::ui {
 using RawKeyCallback = std::function<bool(const KeyEvent&)>;
 using RawPointerCallback = std::function<bool(const PointerEvent&)>;
 using RawTextInputCallback = std::function<bool(const TextInputEvent&)>;
+using IpcMessageCallback = std::function<void(const lcl::protocol::LCLHeader&, const std::vector<uint8_t>&)>;
 
 class WindowApp {
 public:
@@ -57,11 +58,25 @@ public:
     // Compositor IPC Client Connection & Loop
     bool connectCompositor(const std::string& socketPath = "/tmp/lcl_compositor.sock");
     void runEventLoop();
+    /** Process compositor messages and render at most one frame; useful for multi-surface shells. */
+    bool tick();
     void resize(uint32_t width, uint32_t height);
+    /** Set logical surface bounds before connectCompositor(). */
+    void setInitialBounds(int32_t x, int32_t y, uint32_t width, uint32_t height);
+
+    void setSurfaceId(uint32_t surfaceId) { if (!m_ipcConnected && surfaceId > 0) m_surfaceId = surfaceId; }
+    uint32_t getSurfaceId() const { return m_surfaceId; }
+    void setRole(lcl::protocol::LCLRole role) { if (!m_ipcConnected) m_role = role; }
+    /** Disable widget-event dispatch for visual-only surfaces such as shell panels. */
+    void setInputEnabled(bool enabled) { m_inputEnabled = enabled; }
+    bool isInputEnabled() const { return m_inputEnabled; }
+    void setOnIpcMessage(IpcMessageCallback callback) { m_onIpcMessage = std::move(callback); }
 
     bool requestWindowMove(float localX, float localY);
     bool requestWindowClose();
     bool setDecorationMode(lcl::protocol::LCLDecorationMode mode);
+    bool setWindowLayer(lcl::protocol::LCLWindowLayer layer, bool unfocusable = false);
+    bool setReservedZone(uint32_t top, uint32_t bottom, uint32_t left = 0, uint32_t right = 0);
     bool setWindowCornerRadius(float radiusPx);
     void setExternalIpcSocket(int socketFd);
     void setCsdTitlebarEnabled(bool enabled) { m_csdTitlebarEnabled = enabled; }
@@ -91,6 +106,7 @@ private:
     RawKeyCallback m_onRawKey{nullptr};
     RawPointerCallback m_onRawPointer{nullptr};
     RawTextInputCallback m_onRawTextInput{nullptr};
+    IpcMessageCallback m_onIpcMessage{nullptr};
 
     std::vector<uint32_t> m_pixelBuffer;
     int m_socketFd{-1};
@@ -99,6 +115,11 @@ private:
     uint32_t* m_shmPixels{nullptr};
     bool m_ipcConnected{false};
     bool m_ownsSocketFd{true};
+    uint32_t m_surfaceId{1};
+    lcl::protocol::LCLRole m_role{lcl::protocol::LCLRole::ClientApp};
+    bool m_inputEnabled{true};
+    int32_t m_initialX{80};
+    int32_t m_initialY{60};
 
     bool m_initialized{false};
     bool m_firstFrame{true};

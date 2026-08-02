@@ -40,7 +40,7 @@ void Text::draw(SkCanvas* canvas, const Rect& damageRect) {
                              (static_cast<uint32_t>(m_textColor.r) << 16) |
                              (static_cast<uint32_t>(m_textColor.g) << 8)  |
                              static_cast<uint32_t>(m_textColor.b);
-        renderer->drawString(textX, textY, m_text, argbColor);
+        renderer->drawString(textX, textY, m_text, argbColor, m_fontSize);
     }
 }
 

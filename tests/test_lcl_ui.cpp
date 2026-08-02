@@ -93,6 +93,25 @@ TEST(LclUiTest, WidgetTreeHierarchy) {
     EXPECT_EQ(btnPtr->getLabel(), "Click Me");
 }
 
+TEST(LclUiTest, RenderPassPropagatesToExistingDescendants) {
+    RenderPass pass;
+    auto root = std::make_unique<Container>();
+    auto child = std::make_unique<Container>();
+    Container* childPtr = child.get();
+    child->getYogaNode().setWidth(20.0f);
+    child->getYogaNode().setHeight(20.0f);
+    root->addChild(std::move(child));
+    root->getYogaNode().setWidth(100.0f);
+    root->getYogaNode().setHeight(100.0f);
+    root->getYogaNode().calculateLayout(100.0f, 100.0f);
+    root->syncLayout();
+    root->setRenderPass(&pass);
+    pass.clear();
+
+    childPtr->markDirty();
+    EXPECT_TRUE(pass.hasDamage());
+}
+
 TEST(LclUiTest, ButtonStateAndClick) {
     auto btn = std::make_unique<Button>("Submit");
     btn->getYogaNode().setWidth(100.0f);

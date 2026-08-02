@@ -5,6 +5,10 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "core/ipc/lcl_protocol.hpp"
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 using namespace lcl::ui;
 
@@ -217,4 +221,39 @@ TEST(LclUiEventsTest, WindowAppDirectEventCallbacks) {
     bool ptrHandled = app.sendPointerDown(50.0f, 50.0f, 0);
     EXPECT_TRUE(ptrHandled);
     EXPECT_EQ(rawPointerCount, 1);
+}
+
+TEST(LclUiEventsTest, VisualOnlyWindowIgnoresCompositorPointerEvents) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+    ASSERT_NE(fcntl(sockets[1], F_SETFL, fcntl(sockets[1], F_GETFL) | O_NONBLOCK), -1);
+
+    {
+        WindowApp panel(320, 32, "Visual Panel");
+        panel.setSurfaceId(9);
+        panel.setInputEnabled(false);
+        panel.setExternalIpcSocket(sockets[1]);
+
+        int pointerEvents = 0;
+        panel.setOnRawPointerEvent([&pointerEvents](const PointerEvent&) {
+            ++pointerEvents;
+            return true;
+        });
+
+        lcl::protocol::LCLHeader header{};
+        header.opcode = lcl::protocol::LCLOpcode::InputEvent;
+        header.payloadSize = sizeof(lcl::protocol::LCLMsgInputEvent);
+        lcl::protocol::LCLMsgInputEvent input{};
+        input.surfaceId = 9;
+        input.type = 3;
+        input.x = 50.0f;
+        input.y = 10.0f;
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[0], header, &input));
+
+        panel.tick();
+        EXPECT_EQ(pointerEvents, 0);
+    }
+
+    close(sockets[0]);
+    close(sockets[1]);
 }

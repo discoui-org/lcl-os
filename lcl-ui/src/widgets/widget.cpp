@@ -8,10 +8,17 @@ Widget::Widget() = default;
 void Widget::addChild(std::unique_ptr<Widget> child) {
     if (!child) return;
     child->m_parent = this;
-    child->m_renderPass = m_renderPass;
+    child->setRenderPass(m_renderPass);
     m_yogaNode.appendChild(&child->getYogaNode());
     m_children.push_back(std::move(child));
     markDirty();
+}
+
+void Widget::setRenderPass(RenderPass* pass) {
+    m_renderPass = pass;
+    for (auto& child : m_children) {
+        child->setRenderPass(pass);
+    }
 }
 
 void Widget::removeChild(Widget* child) {
