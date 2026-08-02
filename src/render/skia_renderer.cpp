@@ -564,15 +564,29 @@ void SkiaRenderer::setContentScale(float scale) {
 
 SkiaRect SkiaRenderer::scaleRect(const SkiaRect& rect) const {
     return {
-        rect.x * m_contentScale,
-        rect.y * m_contentScale,
+        rect.x * m_contentScale + m_contentOriginX,
+        rect.y * m_contentScale + m_contentOriginY,
         rect.width * m_contentScale,
         rect.height * m_contentScale,
     };
 }
 
 int SkiaRenderer::scaleCoord(int value) const {
+    return static_cast<int>(std::lround(static_cast<float>(value) * m_contentScale + m_contentOriginX));
+}
+
+int SkiaRenderer::scaleLength(int value) const {
     return static_cast<int>(std::lround(static_cast<float>(value) * m_contentScale));
+}
+
+bool SkiaRenderer::ensureFont(float logicalFontSize) {
+    const float deviceFontSize = std::max(1.0f, logicalFontSize * m_contentScale);
+    if (!m_fontRenderer.isInitialized() ||
+        std::fabs(m_fontRenderer.getFontSize() - deviceFontSize) > 0.01f) {
+        m_fontRenderer = FontRenderer{};
+        m_fontRenderer.loadFont("/usr/share/fonts/inter/Inter-Regular.otf", deviceFontSize);
+    }
+    return m_fontRenderer.isInitialized();
 }
 
 void SkiaRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity) {
@@ -1132,14 +1146,10 @@ void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, const SkiaCo
 
 void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize) {
     if (!m_initialized || text.empty()) return;
-    const float deviceFontSize = std::max(1.0f, fontSize * m_contentScale);
-    if (!m_fontRenderer.isInitialized() || std::fabs(m_fontRenderer.getFontSize() - deviceFontSize) > 0.01f) {
-        m_fontRenderer = FontRenderer{};
-        m_fontRenderer.loadFont("/usr/share/fonts/inter/Inter-Regular.otf", deviceFontSize);
-    }
+    ensureFont(fontSize);
 
     const int deviceX = scaleCoord(x);
-    const int deviceY = scaleCoord(y);
+    const int deviceY = static_cast<int>(std::lround(static_cast<float>(y) * m_contentScale + m_contentOriginY));
 
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && m_fontRenderer.isInitialized()) {
         int textW = std::max(1, m_fontRenderer.getTextWidth(text));
@@ -1155,6 +1165,11 @@ void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fg
     }
 }
 
+float SkiaRenderer::measureString(const std::string& text, float fontSize) {
+    if (text.empty() || !ensureFont(fontSize)) return 0.0f;
+    return static_cast<float>(m_fontRenderer.getTextWidth(text)) / m_contentScale;
+}
+
 void SkiaRenderer::drawBuffer(int dstX,
                               int dstY,
                               int srcW,
@@ -1168,9 +1183,9 @@ void SkiaRenderer::drawBuffer(int dstX,
                               int drawWidth,
                               int drawHeight) {
     const int deviceX = scaleCoord(dstX);
-    const int deviceY = scaleCoord(dstY);
-    const int deviceW = (drawWidth > 0) ? scaleCoord(drawWidth) : 0;
-    const int deviceH = (drawHeight > 0) ? scaleCoord(drawHeight) : 0;
+    const int deviceY = static_cast<int>(std::lround(static_cast<float>(dstY) * m_contentScale + m_contentOriginY));
+    const int deviceW = (drawWidth > 0) ? scaleLength(drawWidth) : 0;
+    const int deviceH = (drawHeight > 0) ? scaleLength(drawHeight) : 0;
     drawBufferRaw(deviceX, deviceY, srcW, srcH, pixelData, stridePixels, opacity,
                   cornerRadius * m_contentScale, cornerRoundness, squareTopCorners,
                   deviceW, deviceH);

@@ -88,6 +88,11 @@ public:
     void setContentScale(float scale);
     float getContentScale() const { return m_contentScale; }
 
+    /** Physical framebuffer origin for a logical content subtree. */
+    void setContentOrigin(float x, float y) { m_contentOriginX = x; m_contentOriginY = y; }
+    float getContentOriginX() const { return m_contentOriginX; }
+    float getContentOriginY() const { return m_contentOriginY; }
+
     /**
      * @brief Shutdown Skia renderer.
      */
@@ -116,6 +121,8 @@ public:
     void drawCircle(float cx, float cy, float radius, const SkiaColor& color);
     void drawLine(float x1, float y1, float x2, float y2, const SkiaColor& color, float strokeWidth = 1.0f);
     void drawString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize = 15.0f);
+    /** Returns the rendered text width in the caller's logical coordinate space. */
+    float measureString(const std::string& text, float fontSize = 15.0f);
     void drawBuffer(int dstX,
                     int dstY,
                     int srcW,
@@ -140,6 +147,8 @@ private:
     bool initGLShader();
     SkiaRect scaleRect(const SkiaRect& rect) const;
     int scaleCoord(int value) const;
+    int scaleLength(int value) const;
+    bool ensureFont(float logicalFontSize);
     void drawBufferRaw(int dstX,
                        int dstY,
                        int srcW,
@@ -162,6 +171,8 @@ private:
     uint32_t* m_targetPixels{nullptr};
     FontRenderer m_fontRenderer;
     float m_contentScale{1.0f};
+    float m_contentOriginX{0.0f};
+    float m_contentOriginY{0.0f};
     bool m_initialized{false};
 
     uint32_t m_glTexture{0};

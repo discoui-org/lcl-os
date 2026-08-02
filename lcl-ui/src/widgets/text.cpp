@@ -34,13 +34,21 @@ void Text::draw(SkCanvas* canvas, const Rect& damageRect) {
 
     auto* renderer = reinterpret_cast<::lcl::render::SkiaRenderer*>(canvas);
     if (renderer) {
-        int textX = static_cast<int>(m_absoluteBounds.x);
+        // Keep text alignment in logical coordinates; SkiaRenderer performs the
+        // one-and-only logical-to-buffer transform afterwards.
+        const float textWidth = renderer->measureString(m_text, m_fontSize);
+        float textX = m_absoluteBounds.x;
+        if (m_textAlign == TextAlign::Center) {
+            textX += std::max(0.0f, (m_absoluteBounds.width - textWidth) * 0.5f);
+        } else if (m_textAlign == TextAlign::End) {
+            textX += std::max(0.0f, m_absoluteBounds.width - textWidth);
+        }
         int textY = static_cast<int>(m_absoluteBounds.y);
         uint32_t argbColor = (static_cast<uint32_t>(m_textColor.a) << 24) |
                              (static_cast<uint32_t>(m_textColor.r) << 16) |
                              (static_cast<uint32_t>(m_textColor.g) << 8)  |
                              static_cast<uint32_t>(m_textColor.b);
-        renderer->drawString(textX, textY, m_text, argbColor, m_fontSize);
+        renderer->drawString(static_cast<int>(textX), textY, m_text, argbColor, m_fontSize);
     }
 }
 

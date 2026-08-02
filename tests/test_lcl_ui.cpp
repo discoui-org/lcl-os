@@ -158,3 +158,18 @@ TEST(LclUiTest, RendererMapsLogicalCoordinatesToFractionalBufferPixels) {
     EXPECT_EQ(pixels[3 + 3 * 6], 0xFFFF0000u);
     EXPECT_EQ(pixels[4 + 4 * 6], 0x00000000u);
 }
+
+TEST(LclUiTest, RendererMapsLogicalSubtreeToPhysicalOrigin) {
+    std::vector<uint32_t> pixels(12 * 12, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(12, 12, nullptr, pixels.data()));
+
+    renderer.setContentScale(1.5f);
+    renderer.setContentOrigin(3.0f, 2.0f);
+    renderer.drawRect({0.0f, 0.0f, 2.0f, 2.0f}, {0, 255, 0, 255});
+
+    // The 2x2 logical rect becomes 3x3 physical pixels at its physical origin.
+    EXPECT_EQ(pixels[3 + 2 * 12], 0xFF00FF00u);
+    EXPECT_EQ(pixels[5 + 4 * 12], 0xFF00FF00u);
+    EXPECT_EQ(pixels[6 + 5 * 12], 0x00000000u);
+}

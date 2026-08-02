@@ -109,12 +109,19 @@ std::unique_ptr<lcl::ui::Container> makeMenuRoot(uint32_t width, lcl::ui::Text*&
     glass->addFilter(lcl::protocol::FilterType::Blur, 15.0f);
     glass->addFilter(lcl::protocol::FilterType::Saturation, 1.4f);
     glass->addFilter(lcl::protocol::FilterType::Brightness, 1.1f);
+    glass->getYogaNode().setDirection(YGFlexDirectionRow);
+    glass->getYogaNode().setJustifyContent(YGJustifyFlexEnd);
+    glass->getYogaNode().setAlignItems(YGAlignCenter);
+    glass->getYogaNode().setPadding(YGEdgeRight, 20.0f);
     absolute(*glass, 0, 0, width, kMenuBarHeight);
 
     auto text = std::make_unique<lcl::ui::Text>(timeText());
     clock = text.get();
     text->setFontSize(14.0f); text->setTextColor({241, 245, 249, 255});
-    absolute(*text, std::max(10, static_cast<int>(width) - 210), 8, 190, 18);
+    // Fill the logical row so TextAlign::End uses the renderer's measured
+    // glyph width, while the parent keeps the label vertically centred.
+    text->getYogaNode().setFlexGrow(1.0f);
+    text->setTextAlign(lcl::ui::TextAlign::End);
     glass->addChild(std::move(text));
 
     auto border = std::make_unique<lcl::ui::Container>();

@@ -1073,7 +1073,7 @@ void Compositor::renderFrame() {
     auto* skia = m_renderer.getSkiaRenderer();
     skia->beginFrame();
 
-    constexpr float kWindowCornerRadiusPx = 20.0f;
+    constexpr float kWindowCornerRadiusLogical = 20.0f;
     constexpr float kWindowCornerRoundness = 2.0f;
 
     auto resolveWindowCornerRadiusPx = [&](const render::Window& win) {
@@ -1082,12 +1082,12 @@ void Compositor::renderFrame() {
         }
 
         if (win.decorationMode == render::DecorationMode::SSD) {
-            return kWindowCornerRadiusPx;
+            return DisplayScale::pxF(kWindowCornerRadiusLogical);
         }
 
         if (win.decorationMode == render::DecorationMode::None &&
             win.title.find("Terminal") != std::string::npos) {
-            return kWindowCornerRadiusPx;
+            return DisplayScale::pxF(kWindowCornerRadiusLogical);
         }
 
         return 0.0f;
@@ -1095,85 +1095,67 @@ void Compositor::renderFrame() {
 
     auto drawSsdChromeWithLclUi = [&](const render::Window& win,
                                       float chromeOpacity,
-                                      float chromeScale,
-                                      float scaledTitleHeight) {
+                                      float chromeScale) {
         auto fadeUiColor = [&](const lcl::ui::Color& c) {
             return lcl::ui::Color{c.r, c.g, c.b, applyOpacityToAlpha(c.a, chromeOpacity)};
         };
 
-        auto fadeSkiaColor = [&](const lcl::render::SkiaColor& c) {
-            return lcl::render::SkiaColor{c.r, c.g, c.b, applyOpacityToAlpha(c.a, chromeOpacity)};
-        };
+        // Chrome is an lcl-ui subtree: all of its style and Yoga dimensions stay
+        // logical.  Only the renderer knows how to map it into the physical
+        // compositor framebuffer (including the per-window entrance scale).
+        const float dpr = DisplayScale::factor();
+        const float logicalWidth = static_cast<float>(win.width) / dpr;
+        const float logicalHeight = static_cast<float>(win.height) / dpr;
+        const float physicalWidth = static_cast<float>(win.width) * chromeScale;
+        const float physicalHeight = static_cast<float>(win.height) * chromeScale;
+        const float physicalX = static_cast<float>(win.x) +
+            (static_cast<float>(win.width) - physicalWidth) * 0.5f;
+        const float physicalY = static_cast<float>(win.y) +
+            (static_cast<float>(win.height) - physicalHeight) * 0.5f;
+
+        const float previousScale = skia->getContentScale();
+        const float previousOriginX = skia->getContentOriginX();
+        const float previousOriginY = skia->getContentOriginY();
+        skia->setContentScale(dpr * chromeScale);
+        skia->setContentOrigin(physicalX, physicalY);
 
         lcl::ui::RenderPass pass;
         auto root = std::make_unique<lcl::ui::Container>();
         root->setRenderPass(&pass);
         root->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-        root->getYogaNode().setWidth(static_cast<float>(win.width));
-        root->getYogaNode().setHeight(static_cast<float>(win.height));
+        root->getYogaNode().setWidth(logicalWidth);
+        root->getYogaNode().setHeight(logicalHeight);
 
         lcl::ui::chrome::HeaderControlsStyle chromeStyle;
-        chromeStyle.controlSize = std::max(10.0f, chromeStyle.controlSize * chromeScale);
-        chromeStyle.controlGap = std::max(3.0f, chromeStyle.controlGap * chromeScale);
-        chromeStyle.minControlLeft = std::max(4.0f, chromeStyle.minControlLeft * chromeScale);
-        chromeStyle.minControlTop = std::max(2.0f, chromeStyle.minControlTop * chromeScale);
-        chromeStyle.titleMinLeft = std::max(6.0f, static_cast<float>(DisplayScale::px(14)) * chromeScale);
-        chromeStyle.titleGapAfterControls = std::max(4.0f, static_cast<float>(DisplayScale::px(12)) * chromeScale);
-        chromeStyle.titleRightPadding = std::max(4.0f, static_cast<float>(DisplayScale::px(10)) * chromeScale);
-        chromeStyle.glyphFontSize = std::max(8.0f, chromeStyle.glyphFontSize * chromeScale);
-        // Titlebar bg is drawn directly below with exact compositor corner geometry.
-        chromeStyle.titleBarBackground = lcl::ui::Color{0, 0, 0, 0};
+        chromeStyle.titleBarBackground = fadeUiColor(lcl::ui::Color{17, 19, 23, 255});
         chromeStyle.titleBarCornerRadiusAdjust = -1.0f;
         chromeStyle.titleBarRoundness = kWindowCornerRoundness;
         chromeStyle.buttonRoundness = 2.0f;
-        chromeStyle.controlLeftRadiusOffset = chromeStyle.controlSize * 0.5f;
         chromeStyle.buttonBackground = fadeUiColor(chromeStyle.buttonBackground);
         chromeStyle.buttonBorder = fadeUiColor(chromeStyle.buttonBorder);
         chromeStyle.buttonGlyph = fadeUiColor(chromeStyle.buttonGlyph);
         chromeStyle.titleColor = fadeUiColor(chromeStyle.titleColor);
 
-        const float titleH = std::max(1.0f, scaledTitleHeight);
-
-        const float inset = 1.0f;
-        const float bgX = static_cast<float>(win.x) + inset;
-        const float bgY = static_cast<float>(win.y) + inset;
-        const float bgW = std::max(0.0f, static_cast<float>(win.width) - inset * 2.0f);
-        const float bgH = std::max(0.0f, titleH);
-        const float bgRadius = std::max(0.0f, (kWindowCornerRadiusPx * chromeScale) - inset);
-        const lcl::render::SkiaColor titleBgColor = fadeSkiaColor({17, 19, 23, 255});
-
-        if (bgW > 0.0f && bgH > 0.0f) {
-            // Rounded top silhouette aligned with SSD border mask.
-            skia->drawRoundedRect(
-                {bgX, bgY, bgW, bgH},
-                bgRadius,
-                titleBgColor,
-                {0, 0, 0, 0},
-                0.0f,
-                kWindowCornerRoundness);
-
-            // Flatten titlebar bottom edge while keeping rounded top corners.
-            const float stripH = std::min(bgRadius, bgH);
-            if (stripH > 0.0f) {
-                skia->drawRect({bgX, bgY + bgH - stripH, bgW, stripH}, titleBgColor);
-            }
-        }
+        const float titleH = static_cast<float>(DisplayScale::kTitleBarHeight);
 
         auto titleBar = lcl::ui::chrome::buildLibadwaitaTitleBar(
-            static_cast<float>(win.width),
+            logicalWidth,
             titleH,
-            kWindowCornerRadiusPx * chromeScale,
+            kWindowCornerRadiusLogical,
             win.title,
-            std::max(9.0f, static_cast<float>(DisplayScale::fontSize()) * chromeScale),
+            static_cast<float>(DisplayScale::kBaseFontPx),
             chromeStyle);
 
         root->addChild(std::move(titleBar));
 
-        root->getYogaNode().calculateLayout(static_cast<float>(win.width), static_cast<float>(win.height));
-        root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
+        root->getYogaNode().calculateLayout(logicalWidth, logicalHeight);
+        root->syncLayout(0.0f, 0.0f);
 
-        lcl::ui::Rect damage{static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), static_cast<float>(win.height)};
+        lcl::ui::Rect damage{0.0f, 0.0f, logicalWidth, logicalHeight};
         root->draw(reinterpret_cast<SkCanvas*>(skia), damage);
+
+        skia->setContentOrigin(previousOriginX, previousOriginY);
+        skia->setContentScale(previousScale);
     };
 
     auto drawCsdHeaderControlsOverlay = [&](const render::Window& win) {
@@ -1185,7 +1167,7 @@ void Compositor::renderFrame() {
         const float titleH = static_cast<float>(DisplayScale::titleBarHeight());
         const float ctrlSize = 16.0f;
         const float ctrlGap = 6.0f;
-        const float ctrlLeft = std::max(8.0f, kWindowCornerRadiusPx - 8.0f);
+        const float ctrlLeft = std::max(8.0f, DisplayScale::pxF(kWindowCornerRadiusLogical) - 8.0f);
         const float ctrlTop = std::max(4.0f, (titleH - ctrlSize) * 0.5f);
 
         root->getYogaNode().setWidth(static_cast<float>(win.width));
@@ -1231,7 +1213,7 @@ void Compositor::renderFrame() {
         const uint8_t innerA = applyOpacityToAlpha(86, opacity);
         float baseRadius = resolveWindowCornerRadiusPx(win);
         if (baseRadius <= 0.001f) {
-            baseRadius = kWindowCornerRadiusPx;
+            baseRadius = DisplayScale::pxF(kWindowCornerRadiusLogical);
         }
         const float radius = std::max(0.0f, baseRadius * scale);
 
@@ -1394,16 +1376,7 @@ void Compositor::renderFrame() {
 
         // C. Render Server-Side Window Frame (Titlebar & Inset Border) on top of content.
         if (win.decorationMode == render::DecorationMode::SSD) {
-            render::Window scaledChromeWin = win;
-            scaledChromeWin.x = scaledWinX;
-            scaledChromeWin.y = scaledWinY;
-            scaledChromeWin.width = scaledWinW;
-            scaledChromeWin.height = scaledWinH;
-            drawSsdChromeWithLclUi(
-                scaledChromeWin,
-                windowOpacity,
-                windowScale,
-                static_cast<float>(scaledTitleOffset));
+            drawSsdChromeWithLclUi(win, windowOpacity, windowScale);
         }
 
         // Forced compositor-owned inset border for every window, independent from app UI.
