@@ -28,6 +28,10 @@ public:
 
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
+    /** Logical-pixel to shared-buffer-pixel ratio for this client surface. */
+    float getBufferScale() const { return m_bufferScale; }
+    uint32_t getPixelWidth() const;
+    uint32_t getPixelHeight() const;
     const std::string& getTitle() const { return m_title; }
 
     void setRootWidget(std::unique_ptr<Widget> root);
@@ -75,6 +79,8 @@ private:
 
     uint32_t m_width;
     uint32_t m_height;
+    // Public layout/input coordinates remain logical. SHM is rasterized at this DPR.
+    float m_bufferScale{1.0f};
     std::string m_title;
 
     std::unique_ptr<Widget> m_rootWidget;

@@ -548,6 +548,33 @@ void SkiaRenderer::shutdown() {
     m_initialized = false;
 }
 
+void SkiaRenderer::setContentScale(float scale) {
+    const float sanitized = (std::isfinite(scale) && scale >= 0.5f && scale <= 4.0f)
+        ? scale
+        : 1.0f;
+    if (std::fabs(m_contentScale - sanitized) < 0.0001f) {
+        return;
+    }
+
+    m_contentScale = sanitized;
+    // Glyph bitmaps are raster assets, so rebuilding the cache prevents a scaled
+    // client surface from reusing 1x text.
+    m_fontRenderer = FontRenderer{};
+}
+
+SkiaRect SkiaRenderer::scaleRect(const SkiaRect& rect) const {
+    return {
+        rect.x * m_contentScale,
+        rect.y * m_contentScale,
+        rect.width * m_contentScale,
+        rect.height * m_contentScale,
+    };
+}
+
+int SkiaRenderer::scaleCoord(int value) const {
+    return static_cast<int>(std::lround(static_cast<float>(value) * m_contentScale));
+}
+
 void SkiaRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity) {
     if (textureId == 0 || m_glProgram == 0) return;
 
@@ -858,24 +885,26 @@ void SkiaRenderer::drawBackgroundGradient(const SkiaColor& topColor, const SkiaC
 void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
     if (!m_initialized) return;
 
+    const SkiaRect deviceRect = scaleRect(rect);
+
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
-        int x1 = std::clamp(static_cast<int>(rect.x), 0, static_cast<int>(m_width));
-        int y1 = std::clamp(static_cast<int>(rect.y), 0, static_cast<int>(m_height));
-        int x2 = std::clamp(static_cast<int>(rect.x + rect.width), 0, static_cast<int>(m_width));
-        int y2 = std::clamp(static_cast<int>(rect.y + rect.height), 0, static_cast<int>(m_height));
+        int x1 = std::clamp(static_cast<int>(deviceRect.x), 0, static_cast<int>(m_width));
+        int y1 = std::clamp(static_cast<int>(deviceRect.y), 0, static_cast<int>(m_height));
+        int x2 = std::clamp(static_cast<int>(deviceRect.x + deviceRect.width), 0, static_cast<int>(m_width));
+        int y2 = std::clamp(static_cast<int>(deviceRect.y + deviceRect.height), 0, static_cast<int>(m_height));
         if (x1 >= x2 || y1 >= y2 || color.a == 0) return;
 
         std::vector<uint32_t> fill(static_cast<size_t>(x2 - x1) * static_cast<size_t>(y2 - y1), color.toARGB());
-        drawBuffer(x1, y1, x2 - x1, y2 - y1, fill.data(), x2 - x1, 1.0f);
+        drawBufferRaw(x1, y1, x2 - x1, y2 - y1, fill.data(), x2 - x1, 1.0f, 0.0f, 2.0f, false, 0, 0);
         return;
     }
 
     if (!m_targetPixels) return;
 
-    int x1 = std::clamp(static_cast<int>(rect.x), 0, static_cast<int>(m_width));
-    int y1 = std::clamp(static_cast<int>(rect.y), 0, static_cast<int>(m_height));
-    int x2 = std::clamp(static_cast<int>(rect.x + rect.width), 0, static_cast<int>(m_width));
-    int y2 = std::clamp(static_cast<int>(rect.y + rect.height), 0, static_cast<int>(m_height));
+    int x1 = std::clamp(static_cast<int>(deviceRect.x), 0, static_cast<int>(m_width));
+    int y1 = std::clamp(static_cast<int>(deviceRect.y), 0, static_cast<int>(m_height));
+    int x2 = std::clamp(static_cast<int>(deviceRect.x + deviceRect.width), 0, static_cast<int>(m_width));
+    int y2 = std::clamp(static_cast<int>(deviceRect.y + deviceRect.height), 0, static_cast<int>(m_height));
 
     if (x1 >= x2 || y1 >= y2) return;
 
@@ -927,15 +956,19 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
                                    float roundness) {
     if (!m_initialized) return;
 
+    const SkiaRect deviceRect = scaleRect(rect);
+    radius *= m_contentScale;
+    borderWidth *= m_contentScale;
+
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend && m_glRoundRectProgram > 0) {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
         glViewport(0, 0, m_width, m_height);
 
-        drawGpuRoundedRect(rect.x,
-                           rect.y,
-                           std::max(1.0f, rect.width),
-                           std::max(1.0f, rect.height),
+        drawGpuRoundedRect(deviceRect.x,
+                           deviceRect.y,
+                           std::max(1.0f, deviceRect.width),
+                           std::max(1.0f, deviceRect.height),
                            radius,
                            roundness,
                            borderWidth,
@@ -944,10 +977,10 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
         return;
     }
 
-    int w = std::max(1, static_cast<int>(std::lround(rect.width)));
-    int h = std::max(1, static_cast<int>(std::lround(rect.height)));
-    int dstX = static_cast<int>(std::lround(rect.x));
-    int dstY = static_cast<int>(std::lround(rect.y));
+    int w = std::max(1, static_cast<int>(std::lround(deviceRect.width)));
+    int h = std::max(1, static_cast<int>(std::lround(deviceRect.height)));
+    int dstX = static_cast<int>(std::lround(deviceRect.x));
+    int dstY = static_cast<int>(std::lround(deviceRect.y));
 
     float r = std::clamp(radius, 0.0f, std::min(static_cast<float>(w), static_cast<float>(h)) * 0.5f);
     float bw = std::max(0.0f, borderWidth);
@@ -1069,7 +1102,7 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
         }
     }
 
-    drawBuffer(dstX, dstY, w, h, pixels.data(), w, 1.0f);
+    drawBufferRaw(dstX, dstY, w, h, pixels.data(), w, 1.0f, 0.0f, 2.0f, false, 0, 0);
 }
 
 void SkiaRenderer::drawDropShadow(const SkiaRect& rect, float radius, float blur, const SkiaColor& shadowColor) {
@@ -1100,20 +1133,23 @@ void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, const SkiaCo
 void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fgColor) {
     if (!m_initialized || text.empty()) return;
     if (!m_fontRenderer.isInitialized()) {
-        m_fontRenderer.loadFont("/usr/share/fonts/inter/Inter-Regular.otf", 15.0f);
+        m_fontRenderer.loadFont("/usr/share/fonts/inter/Inter-Regular.otf", 15.0f * m_contentScale);
     }
+
+    const int deviceX = scaleCoord(x);
+    const int deviceY = scaleCoord(y);
 
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && m_fontRenderer.isInitialized()) {
         int textW = std::max(1, m_fontRenderer.getTextWidth(text));
         int textH = std::max(1, m_fontRenderer.getCellHeight() + 2);
         std::vector<uint32_t> glyphPixels(static_cast<size_t>(textW) * static_cast<size_t>(textH), 0x00000000);
         m_fontRenderer.renderString(glyphPixels.data(), textW, textH, 0, 1, text, fgColor);
-        drawBuffer(x, y, textW, textH, glyphPixels.data(), textW, 1.0f);
+        drawBufferRaw(deviceX, deviceY, textW, textH, glyphPixels.data(), textW, 1.0f, 0.0f, 2.0f, false, 0, 0);
         return;
     }
 
     if (m_fontRenderer.isInitialized() && m_targetPixels) {
-        m_fontRenderer.renderString(m_targetPixels, m_width, m_height, x, y, text, fgColor);
+        m_fontRenderer.renderString(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor);
     }
 }
 
@@ -1129,6 +1165,27 @@ void SkiaRenderer::drawBuffer(int dstX,
                               bool squareTopCorners,
                               int drawWidth,
                               int drawHeight) {
+    const int deviceX = scaleCoord(dstX);
+    const int deviceY = scaleCoord(dstY);
+    const int deviceW = (drawWidth > 0) ? scaleCoord(drawWidth) : 0;
+    const int deviceH = (drawHeight > 0) ? scaleCoord(drawHeight) : 0;
+    drawBufferRaw(deviceX, deviceY, srcW, srcH, pixelData, stridePixels, opacity,
+                  cornerRadius * m_contentScale, cornerRoundness, squareTopCorners,
+                  deviceW, deviceH);
+}
+
+void SkiaRenderer::drawBufferRaw(int dstX,
+                                 int dstY,
+                                 int srcW,
+                                 int srcH,
+                                 const uint32_t* pixelData,
+                                 int stridePixels,
+                                 float opacity,
+                                 float cornerRadius,
+                                 float cornerRoundness,
+                                 bool squareTopCorners,
+                                 int drawWidth,
+                                 int drawHeight) {
     if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0) return;
 
     if (stridePixels <= 0) stridePixels = srcW;

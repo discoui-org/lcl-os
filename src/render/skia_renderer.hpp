@@ -82,6 +82,13 @@ public:
     }
 
     /**
+     * Applies a logical-pixel to raster-pixel transform to client drawing calls.
+     * The compositor leaves this at 1.0; lcl-ui WindowApp sets it to its DPR.
+     */
+    void setContentScale(float scale);
+    float getContentScale() const { return m_contentScale; }
+
+    /**
      * @brief Shutdown Skia renderer.
      */
     void shutdown();
@@ -131,6 +138,20 @@ public:
 
 private:
     bool initGLShader();
+    SkiaRect scaleRect(const SkiaRect& rect) const;
+    int scaleCoord(int value) const;
+    void drawBufferRaw(int dstX,
+                       int dstY,
+                       int srcW,
+                       int srcH,
+                       const uint32_t* pixelData,
+                       int stridePixels,
+                       float opacity,
+                       float cornerRadius,
+                       float cornerRoundness,
+                       bool squareTopCorners,
+                       int drawWidth,
+                       int drawHeight);
 
     uint32_t m_width{0};
     uint32_t m_height{0};
@@ -140,6 +161,7 @@ private:
     std::vector<uint32_t> m_rasterPixels;
     uint32_t* m_targetPixels{nullptr};
     FontRenderer m_fontRenderer;
+    float m_contentScale{1.0f};
     bool m_initialized{false};
 
     uint32_t m_glTexture{0};

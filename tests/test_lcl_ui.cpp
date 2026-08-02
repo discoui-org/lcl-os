@@ -6,6 +6,9 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/button.hpp"
+#include "render/skia_renderer.hpp"
+
+#include <vector>
 
 using namespace lcl::ui;
 
@@ -119,4 +122,20 @@ TEST(LclUiTest, ButtonStateAndClick) {
     btn->onPointerUp(upEv);
     EXPECT_TRUE(clicked);
     EXPECT_EQ(btn->getState(), ButtonState::Hover);
+}
+
+TEST(LclUiTest, RendererMapsLogicalCoordinatesToFractionalBufferPixels) {
+    std::vector<uint32_t> pixels(6 * 6, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(6, 6, nullptr, pixels.data()));
+
+    renderer.setContentScale(1.5f);
+    renderer.drawRect({1.0f, 1.0f, 2.0f, 2.0f}, {255, 0, 0, 255});
+
+    // Logical [1, 3) maps to physical [1.5, 4.5), i.e. the 3x3 raster area
+    // bounded by integer pixels [1, 4). This is the same transform used by
+    // WindowApp's 1.5x shared-memory surface.
+    EXPECT_EQ(pixels[1 + 1 * 6], 0xFFFF0000u);
+    EXPECT_EQ(pixels[3 + 3 * 6], 0xFFFF0000u);
+    EXPECT_EQ(pixels[4 + 4 * 6], 0x00000000u);
 }

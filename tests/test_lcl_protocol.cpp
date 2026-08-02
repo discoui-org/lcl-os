@@ -29,6 +29,7 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     msg.y = 200;
     msg.width = 800;
     msg.height = 600;
+    msg.bufferScale = 1.5f;
     std::strncpy(msg.title, "Test Window Title", sizeof(msg.title) - 1);
 
     headerSend.payloadSize = sizeof(msg);
@@ -56,6 +57,7 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     EXPECT_EQ(msgRecv->y, 200);
     EXPECT_EQ(msgRecv->width, 800u);
     EXPECT_EQ(msgRecv->height, 600u);
+    EXPECT_FLOAT_EQ(msgRecv->bufferScale, 1.5f);
     EXPECT_STREQ(msgRecv->title, "Test Window Title");
 
     close(sv[0]);

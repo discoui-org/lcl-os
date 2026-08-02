@@ -38,6 +38,21 @@ uint8_t applyOpacityToAlpha(uint8_t alpha, float opacity) {
     return static_cast<uint8_t>(std::lround(scaled));
 }
 
+float sanitizeBufferScale(float scale) {
+    if (!std::isfinite(scale) || scale < 0.5f || scale > 4.0f) {
+        return 1.0f;
+    }
+    return scale;
+}
+
+int logicalToPhysical(int value, float scale) {
+    return static_cast<int>(std::lround(static_cast<float>(value) * scale));
+}
+
+uint32_t physicalToLogical(uint32_t value, float scale) {
+    return std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(value) / scale)));
+}
+
 std::string inferAppIdFromPid(pid_t pid) {
     if (pid <= 0) return "";
 
@@ -146,19 +161,22 @@ bool Compositor::initialize() {
                 for (const auto& [surfKey, entry] : m_surfaces) {
                     if (entry.windowId == win.id && entry.clientFd >= 0) {
                         int titleOffset = (win.decorationMode == render::DecorationMode::SSD) ? DisplayScale::titleBarHeight() : 0;
-                        uint32_t contentW = static_cast<uint32_t>(win.pendingWidth > 0 ? win.pendingWidth : win.width);
-                        uint32_t contentH = static_cast<uint32_t>(std::max(1, (win.pendingHeight > 0 ? win.pendingHeight : win.height) - titleOffset));
-                        if (contentW != entry.width || contentH != entry.height) {
+                        uint32_t physicalContentW = static_cast<uint32_t>(win.pendingWidth > 0 ? win.pendingWidth : win.width);
+                        uint32_t physicalContentH = static_cast<uint32_t>(std::max(1, (win.pendingHeight > 0 ? win.pendingHeight : win.height) - titleOffset));
+                        uint32_t contentW = physicalToLogical(physicalContentW, entry.bufferScale);
+                        uint32_t contentH = physicalToLogical(physicalContentH, entry.bufferScale);
+                        if (physicalContentW != entry.width || physicalContentH != entry.height) {
                             protocol::LCLHeader header{};
                             header.opcode = protocol::LCLOpcode::ConfigureBounds;
                             header.payloadSize = sizeof(protocol::LCLMsgConfigureBounds);
 
                             protocol::LCLMsgConfigureBounds cfgMsg{};
                             cfgMsg.surfaceId = static_cast<uint32_t>(surfKey & 0xFFFFFFFF);
-                            cfgMsg.x = win.x;
-                            cfgMsg.y = win.y;
+                            cfgMsg.x = logicalToPhysical(win.x, 1.0f / entry.bufferScale);
+                            cfgMsg.y = logicalToPhysical(win.y, 1.0f / entry.bufferScale);
                             cfgMsg.width = contentW;
                             cfgMsg.height = contentH;
+                            cfgMsg.bufferScale = entry.bufferScale;
                             cfgMsg.isFocused = win.isFocused ? 1 : 0;
 
                             protocol::sendMsgWithFd(entry.clientFd, header, &cfgMsg);
@@ -282,8 +300,9 @@ bool Compositor::initialize() {
                         if (entry.windowId == focusedWinId && entry.clientFd >= 0) {
                             int titleOffset = (targetWin->decorationMode == render::DecorationMode::SSD)
                                               ? DisplayScale::titleBarHeight() : 0;
-                            float localX = static_cast<float>(m_windowManager.getMouseX() - targetWin->x);
-                            float localY = static_cast<float>(m_windowManager.getMouseY() - targetWin->y - titleOffset);
+                            const float bufferScale = sanitizeBufferScale(entry.bufferScale);
+                            float localX = static_cast<float>(m_windowManager.getMouseX() - targetWin->x) / bufferScale;
+                            float localY = static_cast<float>(m_windowManager.getMouseY() - targetWin->y - titleOffset) / bufferScale;
 
                             protocol::LCLHeader header{};
                             header.opcode = protocol::LCLOpcode::InputEvent;
@@ -407,15 +426,17 @@ void Compositor::processIPC() {
             int winY = DisplayScale::px(60);
             int winW = DisplayScale::px(540);
             int winH = DisplayScale::px(360);
+            float bufferScale = 1.0f;
 
             if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
                 auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
                 surfId = sm->surfaceId;
                 if (sm->title[0]) title = sm->title;
-                winX = sm->x;
-                winY = sm->y;
-                winW = (sm->width > 0) ? sm->width : static_cast<int>(m_renderer.getWidth());
-                winH = (sm->height > 0) ? sm->height : static_cast<int>(m_renderer.getHeight());
+                bufferScale = sanitizeBufferScale(sm->bufferScale);
+                winX = logicalToPhysical(sm->x, bufferScale);
+                winY = logicalToPhysical(sm->y, bufferScale);
+                winW = (sm->width > 0) ? logicalToPhysical(static_cast<int>(sm->width), bufferScale) : static_cast<int>(m_renderer.getWidth());
+                winH = (sm->height > 0) ? logicalToPhysical(static_cast<int>(sm->height), bufferScale) : static_cast<int>(m_renderer.getHeight());
             }
 
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
@@ -430,6 +451,7 @@ void Compositor::processIPC() {
                 entry.width  = static_cast<uint32_t>(winW);
                 entry.height = static_cast<uint32_t>(winH);
                 entry.stride = entry.width * 4;
+                entry.bufferScale = bufferScale;
                 entry.appId = inferAppIdFromPid(msg.pid);
                 m_surfaces[surfaceKey] = entry;
                 std::cout << "[LCL Compositor] Created Window (ID: " << entry.windowId
@@ -447,10 +469,11 @@ void Compositor::processIPC() {
 
             protocol::LCLMsgConfigureBounds cfgMsg{};
             cfgMsg.surfaceId = surfId;
-            cfgMsg.x = winX;
-            cfgMsg.y = winY;
-            cfgMsg.width = static_cast<uint32_t>(winW);
-            cfgMsg.height = static_cast<uint32_t>(winH);
+            cfgMsg.x = logicalToPhysical(winX, 1.0f / bufferScale);
+            cfgMsg.y = logicalToPhysical(winY, 1.0f / bufferScale);
+            cfgMsg.width = physicalToLogical(static_cast<uint32_t>(winW), bufferScale);
+            cfgMsg.height = physicalToLogical(static_cast<uint32_t>(winH), bufferScale);
+            cfgMsg.bufferScale = bufferScale;
             cfgMsg.isFocused = 1;
 
             protocol::sendMsgWithFd(msg.clientFd, header, &cfgMsg);
@@ -485,6 +508,7 @@ void Compositor::processIPC() {
                 entry.width  = w;
                 entry.height = h;
                 entry.stride = stride;
+                entry.bufferScale = 1.0f;
                 entry.appId = inferAppIdFromPid(msg.pid);
                 m_surfaces[surfaceKey] = entry;
             }
@@ -600,8 +624,8 @@ void Compositor::processIPC() {
                     });
                     if (winIt != windows.end()) {
                         winIt->isDragging = true;
-                        winIt->dragOffsetX = static_cast<int>(std::lround(moveMsg->localX));
-                        winIt->dragOffsetY = static_cast<int>(std::lround(moveMsg->localY));
+                        winIt->dragOffsetX = logicalToPhysical(static_cast<int>(std::lround(moveMsg->localX)), it->second.bufferScale);
+                        winIt->dragOffsetY = logicalToPhysical(static_cast<int>(std::lround(moveMsg->localY)), it->second.bufferScale);
                         winIt->markDirty();
                         m_needsRedraw = true;
                     }
@@ -685,7 +709,7 @@ void Compositor::processIPC() {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | radiusMsg->surfaceId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
-                    m_windowManager.setWindowCornerRadius(it->second.windowId, radiusMsg->radiusPx);
+                    m_windowManager.setWindowCornerRadius(it->second.windowId, radiusMsg->radiusPx * it->second.bufferScale);
                     m_needsRedraw = true;
                 }
             }

@@ -37,6 +37,7 @@ add_library(lcl-ui STATIC
     ${CMAKE_SOURCE_DIR}/src/render/skia_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/render/font_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/core/display/egl_backend.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/display/display_scale.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ipc/lcl_protocol.cpp
 )
 

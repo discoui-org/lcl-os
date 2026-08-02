@@ -9,7 +9,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 1;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 2;
 
 enum class LCLRole : uint32_t {
     Unspecified = 0,
@@ -132,6 +132,8 @@ struct LCLMsgSurfaceCreate {
     int32_t y{0};
     uint32_t width{0};
     uint32_t height{0};
+    // Logical-to-buffer scale. 1.0 keeps the legacy raw-pixel protocol.
+    float bufferScale{1.0f};
     char title[128]{0};
     char appId[64]{0};
 };
@@ -146,6 +148,8 @@ struct LCLMsgConfigureBounds {
     int32_t y{0};
     uint32_t width{0};
     uint32_t height{0};
+    // Width/height and input coordinates are in logical pixels at this scale.
+    float bufferScale{1.0f};
     uint32_t headerColor{0};
     uint8_t isFocused{0};
     char title[128]{0};

@@ -75,6 +75,7 @@ public:
         uint32_t width{0};
         uint32_t height{0};
         uint32_t stride{0};     ///< Row stride in bytes
+        float    bufferScale{1.0f}; ///< Logical client px to physical buffer px
         size_t   shmSize{0};    ///< Total SHM buffer bytes
         std::string appId;
         std::vector<SurfaceEffectRegion> effectRegions;

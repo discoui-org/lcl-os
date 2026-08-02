@@ -1,4 +1,5 @@
 #include "lcl-ui/core/window_app.hpp"
+#include "core/display/display_scale.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include <iostream>
 #include <unistd.h>
@@ -36,6 +37,21 @@ static void setupAppSignalHandlers() {
     sigaction(SIGHUP, &sa, nullptr);
 }
 
+namespace {
+
+float sanitizeBufferScale(float scale) {
+    if (!std::isfinite(scale) || scale < 0.5f || scale > 4.0f) {
+        return 1.0f;
+    }
+    return scale;
+}
+
+uint32_t toBufferPixels(uint32_t logical, float scale) {
+    return std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(logical) * scale)));
+}
+
+} // namespace
+
 WindowApp::WindowApp(uint32_t width, uint32_t height, const std::string& title)
     : m_width(width), m_height(height), m_title(title) {
     setupAppSignalHandlers();
@@ -65,6 +81,14 @@ WindowApp::~WindowApp() {
     }
 }
 
+uint32_t WindowApp::getPixelWidth() const {
+    return toBufferPixels(m_width, m_bufferScale);
+}
+
+uint32_t WindowApp::getPixelHeight() const {
+    return toBufferPixels(m_height, m_bufferScale);
+}
+
 void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     if (!root) return;
     m_rootWidget = std::move(root);
@@ -82,8 +106,10 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
         m_shmFd = -1;
     }
 
-    m_shmSize = static_cast<size_t>(width) * height * 4;
-    m_pixelBuffer.resize(width * height, 0xFF14161D);
+    const uint32_t pixelWidth = toBufferPixels(width, m_bufferScale);
+    const uint32_t pixelHeight = toBufferPixels(height, m_bufferScale);
+    m_shmSize = static_cast<size_t>(pixelWidth) * pixelHeight * 4;
+    m_pixelBuffer.resize(static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF14161D);
 
     m_shmFd = memfd_create("lcl_ui_app_shm", MFD_CLOEXEC);
     if (m_shmFd >= 0) {
@@ -93,13 +119,13 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
         if (m_shmPixels == MAP_FAILED) {
             m_shmPixels = nullptr;
         } else {
-            std::fill_n(m_shmPixels, width * height, 0xFF14161D);
+            std::fill_n(m_shmPixels, static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF14161D);
         }
     }
 
     // Resize path: keep existing renderer instance and only retarget the backing pixels.
     // Re-initializing renderer every configure event causes heavy stalls while dragging.
-    m_renderer.setTargetPixels(m_pixelBuffer.data(), width, height);
+    m_renderer.setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
     m_shmNeedsAttach = true;
 }
 
@@ -123,6 +149,11 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         std::cerr << "[lcl-ui ERROR] Could not connect to compositor IPC socket: " << socketPath << "\n";
         return false;
     }
+
+    // WindowApp exposes CSS-like logical pixels. The process-local boot scale is
+    // its device pixel ratio; raw-pixel clients do not use this class and retain 1x.
+    m_bufferScale = sanitizeBufferScale(lcl::core::DisplayScale::factor());
+    m_renderer.setContentScale(m_bufferScale);
 
     // Set non-blocking socket reads
     int flags = fcntl(m_socketFd, F_GETFL, 0);
@@ -151,6 +182,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     surfMsg.y = 60;
     surfMsg.width = m_width;
     surfMsg.height = m_height;
+    surfMsg.bufferScale = m_bufferScale;
     std::strncpy(surfMsg.title, m_title.c_str(), sizeof(surfMsg.title) - 1);
     lcl::protocol::sendMsgWithFd(m_socketFd, surfHeader, &surfMsg);
 
@@ -195,6 +227,7 @@ void WindowApp::pollIPC() {
 
     uint32_t latestWidth = 0;
     uint32_t latestHeight = 0;
+    float latestScale = m_bufferScale;
     bool pendingResize = false;
 
     while (true) {
@@ -240,6 +273,7 @@ void WindowApp::pollIPC() {
                 if (cfg->width > 0 && cfg->height > 0) {
                     latestWidth = cfg->width;
                     latestHeight = cfg->height;
+                    latestScale = sanitizeBufferScale(cfg->bufferScale);
                     pendingResize = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
@@ -251,6 +285,15 @@ void WindowApp::pollIPC() {
     }
 
     if (pendingResize && (latestWidth > 0 && latestHeight > 0)) {
+        if (std::fabs(latestScale - m_bufferScale) > 0.0001f) {
+            m_bufferScale = latestScale;
+            m_renderer.setContentScale(m_bufferScale);
+            // A scale-only configure has identical logical bounds but needs a new buffer.
+            if (latestWidth == m_width && latestHeight == m_height && m_ipcConnected) {
+                allocateSHM(m_width, m_height);
+                m_firstFrame = true;
+            }
+        }
         m_pendingResizeWidth = latestWidth;
         m_pendingResizeHeight = latestHeight;
         m_hasPendingResize = true;
@@ -278,6 +321,10 @@ void WindowApp::pollIPC() {
             m_hasPendingResize = false;
             m_lastResizeApply = now;
         }
+    } else if (m_hasPendingResize) {
+        // The compositor often confirms the initial logical size verbatim.
+        // It requires no SHM reallocation, so do not retain it indefinitely.
+        m_hasPendingResize = false;
     }
 }
 
@@ -465,7 +512,7 @@ bool WindowApp::renderFrame() {
 
     m_renderer.beginFrame();
     if (auto* pixels = m_renderer.getRasterBuffer()) {
-        std::fill_n(pixels, static_cast<size_t>(m_width) * static_cast<size_t>(m_height), 0x00000000);
+        std::fill_n(pixels, static_cast<size_t>(getPixelWidth()) * static_cast<size_t>(getPixelHeight()), 0x00000000);
     }
     m_renderPass.begin(nullptr);
 
@@ -506,14 +553,14 @@ bool WindowApp::renderFrame() {
         for (const auto& effect : uiEffects) {
             if (effect.bounds.isEmpty() || effect.filters.empty()) continue;
 
-            int x = std::max(0, static_cast<int>(std::lround(effect.bounds.x)));
-            int y = std::max(0, static_cast<int>(std::lround(effect.bounds.y)));
-            int w = std::max(0, static_cast<int>(std::lround(effect.bounds.width)));
-            int h = std::max(0, static_cast<int>(std::lround(effect.bounds.height)));
+            int x = std::max(0, static_cast<int>(std::lround(effect.bounds.x * m_bufferScale)));
+            int y = std::max(0, static_cast<int>(std::lround(effect.bounds.y * m_bufferScale)));
+            int w = std::max(0, static_cast<int>(std::lround(effect.bounds.width * m_bufferScale)));
+            int h = std::max(0, static_cast<int>(std::lround(effect.bounds.height * m_bufferScale)));
 
-            if (x >= static_cast<int>(m_width) || y >= static_cast<int>(m_height)) continue;
-            w = std::min(w, static_cast<int>(m_width) - x);
-            h = std::min(h, static_cast<int>(m_height) - y);
+            if (x >= static_cast<int>(getPixelWidth()) || y >= static_cast<int>(getPixelHeight())) continue;
+            w = std::min(w, static_cast<int>(getPixelWidth()) - x);
+            h = std::min(h, static_cast<int>(getPixelHeight()) - y);
             if (w <= 0 || h <= 0) continue;
 
             lcl::protocol::EffectRegion region{};
@@ -521,17 +568,23 @@ bool WindowApp::renderFrame() {
             region.y = y;
             region.width = static_cast<uint32_t>(w);
             region.height = static_cast<uint32_t>(h);
-            region.cornerRadius = std::max(0.0f, effect.cornerRadius);
+            region.cornerRadius = std::max(0.0f, effect.cornerRadius * m_bufferScale);
             region.source = toProtoSource(effect.source);
             region.blendMode = toProtoBlend(effect.blend);
             region.opacity = std::clamp(effect.opacity, 0.0f, 1.0f);
             region.filterOffset = static_cast<uint32_t>(flatFilters.size());
             region.filterCount = static_cast<uint16_t>(std::min<size_t>(effect.filters.size(), 65535));
 
-            flatFilters.insert(
-                flatFilters.end(),
-                effect.filters.begin(),
-                effect.filters.begin() + region.filterCount);
+            for (uint16_t i = 0; i < region.filterCount; ++i) {
+                auto filter = effect.filters[i];
+                // These values are specified by widgets in logical px as well.
+                if (filter.type == lcl::protocol::FilterType::Blur) {
+                    filter.value *= m_bufferScale;
+                } else if (filter.type == lcl::protocol::FilterType::Glass) {
+                    filter.params[0] *= m_bufferScale; // thicknessPx
+                }
+                flatFilters.push_back(filter);
+            }
             protoRegions.push_back(region);
         }
 
@@ -591,9 +644,9 @@ bool WindowApp::renderFrame() {
 
         lcl::protocol::LCLMsgAttachBuffer attachMsg{};
         attachMsg.surfaceId = 1;
-        attachMsg.width = m_width;
-        attachMsg.height = m_height;
-        attachMsg.stride = m_width * 4;
+        attachMsg.width = getPixelWidth();
+        attachMsg.height = getPixelHeight();
+        attachMsg.stride = getPixelWidth() * 4;
         attachMsg.format = 1;
 
         int passFd = m_shmNeedsAttach ? m_shmFd : -1;
