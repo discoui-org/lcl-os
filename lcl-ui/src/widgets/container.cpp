@@ -35,6 +35,8 @@ void Container::draw(SkCanvas* canvas, const Rect& damageRect) {
                         renderer->drawRect(r, c);
                     }
                 }
+            } else if (m_topOnlyBorderRadius && hasBackground && !hasBorder) {
+                renderer->drawTopRoundedRect(r, m_borderRadius, c, m_borderRoundness);
             } else {
                 renderer->drawRoundedRect(r, m_borderRadius, c, bc,
                                           hasBorder ? m_borderWidth : 0.0f,

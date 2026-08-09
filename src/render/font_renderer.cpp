@@ -89,9 +89,9 @@ bool FontRenderer::loadFont(const std::string& fontPath, float fontSize) {
     m_glyphCache.clear();
 
     precacheASCII();
-
-    std::cout << "[LCL Font] TrueType Font loaded successfully: " << fontPath
-              << " (" << fontSize << "px, macOS-style antialiasing active).\n";
+    //comment out the following line if you don't want to see the font loading message
+    // std::cout << "[LCL Font] TrueType Font loaded successfully: " << fontPath
+    //           << " (" << fontSize << "px, macOS-style antialiasing active).\n";
     return true;
 }
 

@@ -6,6 +6,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/window_chrome.hpp"
 #include "render/skia_renderer.hpp"
 
 #include <vector>
@@ -172,4 +173,31 @@ TEST(LclUiTest, RendererMapsLogicalSubtreeToPhysicalOrigin) {
     EXPECT_EQ(pixels[3 + 2 * 12], 0xFF00FF00u);
     EXPECT_EQ(pixels[5 + 4 * 12], 0xFF00FF00u);
     EXPECT_EQ(pixels[6 + 5 * 12], 0x00000000u);
+}
+
+TEST(LclUiTest, TitlebarRadiusMatchesWindowMaskByDefault) {
+    const auto titleBar = lcl::ui::chrome::buildLibadwaitaTitleBar(
+        400.0f, 32.0f, 20.0f, "Window", 15.0f);
+    const auto& children = titleBar->getChildren();
+    ASSERT_GE(children.size(), 1u);
+
+    const auto* roundedBackground = dynamic_cast<const Container*>(children[0].get());
+    ASSERT_NE(roundedBackground, nullptr);
+    EXPECT_FLOAT_EQ(roundedBackground->getBorderRadius(), 20.0f);
+    EXPECT_TRUE(roundedBackground->hasTopOnlyBorderRadius());
+}
+
+TEST(LclUiTest, TopRoundedRectDoesNotLeakBelowItsCornerArc) {
+    std::vector<uint32_t> pixels(64 * 64, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(64, 64, nullptr, pixels.data()));
+
+    // 20px radius in a 32px-tall titlebar must keep its full outer radius.
+    // A normal rounded rect clamps to 16px, while a patched flat-bottom strip
+    // paints the pixel that should remain outside this top corner curve.
+    renderer.drawTopRoundedRect({0.0f, 0.0f, 50.0f, 32.0f}, 20.0f,
+                                {10, 20, 30, 255});
+
+    EXPECT_EQ(pixels[0 + 13 * 64], 0x00000000u);
+    EXPECT_EQ(pixels[0 + 21 * 64], 0xFF0A141Eu);
 }

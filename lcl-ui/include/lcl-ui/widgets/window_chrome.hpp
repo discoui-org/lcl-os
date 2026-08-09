@@ -19,7 +19,9 @@ struct HeaderControlsStyle {
     float titleGapAfterControls{12.0f};
     float titleMinLeft{14.0f};
     float titleRightPadding{10.0f};
-    float titleBarCornerRadiusAdjust{-1.0f};
+    // Must match the outer window mask exactly; a smaller top radius leaves
+    // titlebar pixels visible outside the window silhouette at HiDPI scales.
+    float titleBarCornerRadiusAdjust{0.0f};
     float titleBarRoundness{2.0f};
 
     Color buttonBackground{235, 241, 248, 40};
@@ -74,8 +76,9 @@ inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
     titleBar->getYogaNode().setWidth(width);
     titleBar->getYogaNode().setHeight(titleHeight);
 
-    // Compose titlebar background as rounded-top + flat strip to avoid
-    // showing an unmasked rectangle at top window corners.
+    // A title bar has only the window's upper arcs; its lower edge joins the
+    // client area without rounding. Do not emulate this with a rectangular
+    // strip: that spills outside the outer window curve when height < 2r.
     const float titleBarRadius = std::clamp(
         cornerRadius + style.titleBarCornerRadiusAdjust,
         0.0f,
@@ -84,6 +87,7 @@ inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
     auto bgRoundedTop = std::make_unique<Container>();
     bgRoundedTop->setBackgroundColor(style.titleBarBackground);
     bgRoundedTop->setBorderRadius(titleBarRadius);
+    bgRoundedTop->setTopOnlyBorderRadius(true);
     bgRoundedTop->setBorderRoundness(style.titleBarRoundness);
     bgRoundedTop->getYogaNode().setPositionType(YGPositionTypeAbsolute);
     bgRoundedTop->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
@@ -91,19 +95,6 @@ inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
     bgRoundedTop->getYogaNode().setWidth(width);
     bgRoundedTop->getYogaNode().setHeight(titleHeight);
 
-    if (titleBarRadius > 0.0f && titleHeight > 0.0f) {
-        auto bgFlatBottomStrip = std::make_unique<Container>();
-        bgFlatBottomStrip->setBackgroundColor(style.titleBarBackground);
-        bgFlatBottomStrip->setBorderRadius(0.0f);
-        bgFlatBottomStrip->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        bgFlatBottomStrip->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-        bgFlatBottomStrip->getYogaNode().setPosition(
-            YGEdgeTop,
-            std::max(0.0f, titleHeight - titleBarRadius));
-        bgFlatBottomStrip->getYogaNode().setWidth(width);
-        bgFlatBottomStrip->getYogaNode().setHeight(titleBarRadius);
-        titleBar->addChild(std::move(bgFlatBottomStrip));
-    }
     titleBar->addChild(std::move(bgRoundedTop));
 
     // Place controls so top and left insets are equal, with radius-centered anchor.

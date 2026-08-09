@@ -183,6 +183,7 @@ bool SkiaRenderer::initGLShader() {
         "uniform vec4 uCornerRadiiPx;\n"
         "uniform float uRoundnessExp;\n"
         "uniform float uOpacity;\n"
+        "uniform float uTopOnlyCorners;\n"
         "float sdBox(vec2 p, vec2 b) {\n"
         "    vec2 q = abs(p) - b;\n"
         "    vec2 oq = max(q, 0.0);\n"
@@ -208,12 +209,28 @@ bool SkiaRenderer::initGLShader() {
         "}\n"
         "void main() {\n"
         "    vec4 c = texture2D(uTexture, vTexCoord);\n"
-        "    vec4 clampedR = clamp(uCornerRadiiPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
+        // A top-only rounded rect can have a top radius taller than half the
+        // rect, provided its lower corners are square. The width remains the
+        // only universal radius limit.
+        "    vec4 clampedR = clamp(uCornerRadiiPx, 0.0, uSizePx.x * 0.5);\n"
         "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
         "    vec2 p = (vTexCoord - vec2(0.5)) * uSizePx;\n"
         "    vec2 halfSize = uSizePx * 0.5;\n"
-        "    float r = cornerRadiusForPoint(p, clampedR);\n"
-        "    float d = sdSuperRoundRect(p, halfSize, r, n);\n"
+        "    float d;\n"
+        "    if (uTopOnlyCorners > 0.5) {\n"
+        "        float r = (p.x < 0.0) ? clampedR.x : clampedR.y;\n"
+        "        bool inCorner = r > 0.001 && abs(p.x) > (halfSize.x - r) && p.y < (-halfSize.y + r);\n"
+        "        if (inCorner) {\n"
+        "            vec2 q = vec2(abs(p.x) - (halfSize.x - r), (-halfSize.y + r) - p.y);\n"
+        "            float k = pow(pow(q.x / r, n) + pow(q.y / r, n), 1.0 / n);\n"
+        "            d = (k - 1.0) * r;\n"
+        "        } else {\n"
+        "            d = -1.0;\n"
+        "        }\n"
+        "    } else {\n"
+        "        float r = cornerRadiusForPoint(p, clampedR);\n"
+        "        d = sdSuperRoundRect(p, halfSize, r, n);\n"
+        "    }\n"
         "    float edge = 1.0;\n"
         "    float mask = 1.0 - smoothstep(0.0, edge, d);\n"
         "    gl_FragColor = vec4(c.b, c.g, c.r, c.a * mask * uOpacity);\n"
@@ -235,6 +252,7 @@ bool SkiaRenderer::initGLShader() {
     m_uMaskBgraCornerRadiiLoc = glGetUniformLocation(m_glMaskBgraProgram, "uCornerRadiiPx");
     m_uMaskBgraRoundnessLoc = glGetUniformLocation(m_glMaskBgraProgram, "uRoundnessExp");
     m_uMaskBgraOpacityLoc = glGetUniformLocation(m_glMaskBgraProgram, "uOpacity");
+    m_uMaskBgraTopOnlyLoc = glGetUniformLocation(m_glMaskBgraProgram, "uTopOnlyCorners");
 
     // --- GLSL Rounded Rect Fill+Border Shader ---
     const char* vRoundRectSrc =
@@ -723,7 +741,8 @@ void SkiaRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
                                              float cornerRadius,
                                              float cornerRoundness,
                                              float opacity,
-                                             bool squareTopCorners) {
+                                             bool squareTopCorners,
+                                             bool squareBottomCorners) {
     if (textureId == 0 || m_glMaskBgraProgram == 0) return;
 
     float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
@@ -744,15 +763,20 @@ void SkiaRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
     glBindTexture(GL_TEXTURE_2D, textureId);
     glUniform1i(m_uMaskBgraTextureLoc, 0);
     glUniform2f(m_uMaskBgraSizeLoc, std::max(1.0f, w), std::max(1.0f, h));
-    float clampedRadius = std::clamp(cornerRadius, 0.0f, std::min(w, h) * 0.5f);
+    const float maxRadius = squareBottomCorners
+        ? std::min(w * 0.5f, h)
+        : std::min(w, h) * 0.5f;
+    const float clampedRadius = std::clamp(cornerRadius, 0.0f, maxRadius);
     float topRadius = squareTopCorners ? 0.0f : clampedRadius;
+    float bottomRadius = squareBottomCorners ? 0.0f : clampedRadius;
     glUniform4f(m_uMaskBgraCornerRadiiLoc,
                 topRadius,
                 topRadius,
-                clampedRadius,
-                clampedRadius);
+                bottomRadius,
+                bottomRadius);
     glUniform1f(m_uMaskBgraRoundnessLoc, std::clamp(cornerRoundness, 2.0f, 8.0f));
     glUniform1f(m_uMaskBgraOpacityLoc, std::clamp(opacity, 0.0f, 1.0f));
+    glUniform1f(m_uMaskBgraTopOnlyLoc, squareBottomCorners ? 1.0f : 0.0f);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glVertexAttribPointer(m_aMaskBgraPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
@@ -909,7 +933,7 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
         if (x1 >= x2 || y1 >= y2 || color.a == 0) return;
 
         std::vector<uint32_t> fill(static_cast<size_t>(x2 - x1) * static_cast<size_t>(y2 - y1), color.toARGB());
-        drawBufferRaw(x1, y1, x2 - x1, y2 - y1, fill.data(), x2 - x1, 1.0f, 0.0f, 2.0f, false, 0, 0);
+        drawBufferRaw(x1, y1, x2 - x1, y2 - y1, fill.data(), x2 - x1, 1.0f, 0.0f, 2.0f, false, false, 0, 0);
         return;
     }
 
@@ -1116,7 +1140,25 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
         }
     }
 
-    drawBufferRaw(dstX, dstY, w, h, pixels.data(), w, 1.0f, 0.0f, 2.0f, false, 0, 0);
+    drawBufferRaw(dstX, dstY, w, h, pixels.data(), w, 1.0f, 0.0f, 2.0f, false, false, 0, 0);
+}
+
+void SkiaRenderer::drawTopRoundedRect(const SkiaRect& rect,
+                                      float radius,
+                                      const SkiaColor& color,
+                                      float roundness) {
+    if (!m_initialized || color.a == 0) return;
+
+    const SkiaRect deviceRect = scaleRect(rect);
+    const int width = std::max(1, static_cast<int>(std::lround(deviceRect.width)));
+    const int height = std::max(1, static_cast<int>(std::lround(deviceRect.height)));
+    const int dstX = static_cast<int>(std::lround(deviceRect.x));
+    const int dstY = static_cast<int>(std::lround(deviceRect.y));
+    const uint32_t pixel = color.toARGB();
+
+    drawBufferRaw(dstX, dstY, 1, 1, &pixel, 1, 1.0f,
+                  radius * m_contentScale, roundness,
+                  false, true, width, height);
 }
 
 void SkiaRenderer::drawDropShadow(const SkiaRect& rect, float radius, float blur, const SkiaColor& shadowColor) {
@@ -1156,7 +1198,7 @@ void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fg
         int textH = std::max(1, m_fontRenderer.getCellHeight() + 2);
         std::vector<uint32_t> glyphPixels(static_cast<size_t>(textW) * static_cast<size_t>(textH), 0x00000000);
         m_fontRenderer.renderString(glyphPixels.data(), textW, textH, 0, 1, text, fgColor);
-        drawBufferRaw(deviceX, deviceY, textW, textH, glyphPixels.data(), textW, 1.0f, 0.0f, 2.0f, false, 0, 0);
+        drawBufferRaw(deviceX, deviceY, textW, textH, glyphPixels.data(), textW, 1.0f, 0.0f, 2.0f, false, false, 0, 0);
         return;
     }
 
@@ -1188,7 +1230,7 @@ void SkiaRenderer::drawBuffer(int dstX,
     const int deviceH = (drawHeight > 0) ? scaleLength(drawHeight) : 0;
     drawBufferRaw(deviceX, deviceY, srcW, srcH, pixelData, stridePixels, opacity,
                   cornerRadius * m_contentScale, cornerRoundness, squareTopCorners,
-                  deviceW, deviceH);
+                  false, deviceW, deviceH);
 }
 
 void SkiaRenderer::drawBufferRaw(int dstX,
@@ -1201,6 +1243,7 @@ void SkiaRenderer::drawBufferRaw(int dstX,
                                  float cornerRadius,
                                  float cornerRoundness,
                                  bool squareTopCorners,
+                                 bool squareBottomCorners,
                                  int drawWidth,
                                  int drawHeight) {
     if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0) return;
@@ -1252,7 +1295,8 @@ void SkiaRenderer::drawBufferRaw(int dstX,
                                       cornerRadius,
                                       cornerRoundness,
                                       opacity,
-                                      squareTopCorners);
+                                      squareTopCorners,
+                                      squareBottomCorners);
         } else {
             drawBgraTextureQuad(m_glClientTexture, dstX, dstY, outW, outH, opacity);
         }
@@ -1269,23 +1313,25 @@ void SkiaRenderer::drawBufferRaw(int dstX,
     if (clipX1 >= clipX2 || clipY1 >= clipY2) return;
 
     bool isOpaqueFast = (opacity >= 0.99f);
-    float rr = std::clamp(cornerRadius, 0.0f, std::min(static_cast<float>(outW), static_cast<float>(outH)) * 0.5f);
+    const float maxRadius = squareBottomCorners
+        ? std::min(static_cast<float>(outW) * 0.5f, static_cast<float>(outH))
+        : std::min(static_cast<float>(outW), static_cast<float>(outH)) * 0.5f;
+    float rr = std::clamp(cornerRadius, 0.0f, maxRadius);
     float n = std::clamp(cornerRoundness, 2.0f, 8.0f);
 
-    auto insideRoundedMask = [rr, n, outW, outH, squareTopCorners](float px, float py) {
+    auto insideRoundedMask = [rr, n, outW, outH, squareTopCorners, squareBottomCorners](float px, float py) {
         if (rr <= 0.001f) return true;
         if (px < 0.0f || py < 0.0f || px > static_cast<float>(outW) || py > static_cast<float>(outH)) return false;
 
         bool inLeft = px < rr;
         bool inRight = px > (static_cast<float>(outW) - rr);
         bool inTop = py < rr;
-        bool inBottom = py > (static_cast<float>(outH) - rr);
+        bool inBottom = !squareBottomCorners && py > (static_cast<float>(outH) - rr);
 
         if ((inLeft || inRight) && (inTop || inBottom)) {
             if (squareTopCorners && inTop) {
                 return true;
             }
-
             float cx = inLeft ? rr : (static_cast<float>(outW) - rr);
             float cy = inTop ? rr : (static_cast<float>(outH) - rr);
             float dx = std::abs(px - cx) / rr;

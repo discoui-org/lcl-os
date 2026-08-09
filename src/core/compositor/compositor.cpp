@@ -1128,7 +1128,7 @@ void Compositor::renderFrame() {
 
         lcl::ui::chrome::HeaderControlsStyle chromeStyle;
         chromeStyle.titleBarBackground = fadeUiColor(lcl::ui::Color{17, 19, 23, 255});
-        chromeStyle.titleBarCornerRadiusAdjust = -1.0f;
+        chromeStyle.titleBarCornerRadiusAdjust = 0.0f;
         chromeStyle.titleBarRoundness = kWindowCornerRoundness;
         chromeStyle.buttonRoundness = 2.0f;
         chromeStyle.buttonBackground = fadeUiColor(chromeStyle.buttonBackground);

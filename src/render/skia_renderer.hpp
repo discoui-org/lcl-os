@@ -117,6 +117,13 @@ public:
                          const SkiaColor& borderColor = {0,0,0,0},
                          float borderWidth = 0.0f,
                          float roundness = 2.0f);
+    // Filled shape with rounded upper corners and square lower corners.
+    // Title bars are shorter than twice their window radius, so a full rounded
+    // rect cannot represent the outer window silhouette without a leaky patch.
+    void drawTopRoundedRect(const SkiaRect& rect,
+                            float radius,
+                            const SkiaColor& color,
+                            float roundness = 2.0f);
     void drawDropShadow(const SkiaRect& rect, float radius, float blur, const SkiaColor& shadowColor);
     void drawCircle(float cx, float cy, float radius, const SkiaColor& color);
     void drawLine(float x1, float y1, float x2, float y2, const SkiaColor& color, float strokeWidth = 1.0f);
@@ -159,6 +166,7 @@ private:
                        float cornerRadius,
                        float cornerRoundness,
                        bool squareTopCorners,
+                       bool squareBottomCorners,
                        int drawWidth,
                        int drawHeight);
 
@@ -221,6 +229,7 @@ private:
     int32_t m_uMaskBgraCornerRadiiLoc{-1};
     int32_t m_uMaskBgraRoundnessLoc{-1};
     int32_t m_uMaskBgraOpacityLoc{-1};
+    int32_t m_uMaskBgraTopOnlyLoc{-1};
 
     uint32_t m_glRoundRectProgram{0};
     int32_t m_aRoundRectPosLoc{-1};
@@ -264,7 +273,8 @@ private:
                                    float cornerRadius,
                                    float cornerRoundness,
                                    float opacity,
-                                   bool squareTopCorners = false);
+                                   bool squareTopCorners = false,
+                                   bool squareBottomCorners = false);
     void drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
     void drawGpuRoundedRect(float x,
                             float y,
