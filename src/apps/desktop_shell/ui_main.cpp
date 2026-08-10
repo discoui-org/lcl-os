@@ -219,21 +219,25 @@ int main() {
     auto catalog = iconCatalog();
     auto createPanels = [&]() -> bool {
         dock.reset(); menu.reset(); clock = nullptr;
+
+        // Stage both shell surfaces completely before connecting either one.
+        // The reserved work area is published only after both panels have made
+        // their first real buffer commit, so menu setup cannot leave the shell
+        // in a half-created state with no dock.
         menu = std::make_unique<lcl::ui::WindowApp>(width, kMenuBarHeight, "LCL MenuBar");
         menu->setSurfaceId(2); menu->setRole(lcl::protocol::LCLRole::ShellPanel);
         menu->setInputEnabled(false);
         menu->setInitialBounds(0, 0, width, kMenuBarHeight);
         menu->setRootWidget(makeMenuRoot(width, clock));
-        if (!menu->connectCompositor()) return false;
         menu->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
-        menu->setWindowLayer(lcl::protocol::LCLWindowLayer::TopMost, true);
-        menu->setReservedZone(kMenuBarHeight, kDockHeight);
 
         dock = std::make_unique<lcl::ui::WindowApp>(width, kDockHeight, "LCL Dock");
         dock->setSurfaceId(3); dock->setRole(lcl::protocol::LCLRole::ShellPanel);
         dock->setInputEnabled(false);
         dock->setInitialBounds(0, static_cast<int32_t>(height > kDockHeight ? height - kDockHeight : 0), width, kDockHeight);
         dock->setRootWidget(makeDockRoot(width, kDockHeight, windows, catalog));
+        dock->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
+        dock->setWindowCornerRadius(26.0f);
         dock->setOnIpcMessage([&](const lcl::protocol::LCLHeader& message, const std::vector<uint8_t>& data) {
             if (message.opcode != lcl::protocol::LCLOpcode::WindowListUpdate || data.size() < sizeof(lcl::protocol::LCLMsgWindowListHeader)) return;
             const auto* list = reinterpret_cast<const lcl::protocol::LCLMsgWindowListHeader*>(data.data());
@@ -245,10 +249,13 @@ int main() {
             catalog = iconCatalog();
             dock->setRootWidget(makeDockRoot(width, kDockHeight, windows, catalog));
         });
+
         if (!dock->connectCompositor()) return false;
-        dock->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
+        if (!menu->connectCompositor()) return false;
+
+        menu->setWindowLayer(lcl::protocol::LCLWindowLayer::TopMost, true);
         dock->setWindowLayer(lcl::protocol::LCLWindowLayer::TopMost, true);
-        dock->setWindowCornerRadius(26.0f);
+        menu->setReservedZone(kMenuBarHeight, kDockHeight);
         return true;
     };
     if (!createPanels()) return 1;

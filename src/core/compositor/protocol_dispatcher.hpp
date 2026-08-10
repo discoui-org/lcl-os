@@ -21,7 +21,7 @@ public:
     /** Process every queued IPC message and report whether a frame is required. */
     bool process(IPCManager& ipcManager);
 
-    /** Publish the shell window list only when its observable content changed. */
+    /** Publish each shell client's window list when its observable content changed. */
     void publishWindowListToShellClients();
 
 private:
@@ -32,7 +32,10 @@ private:
     render::WindowManager& m_windowManager;
     SurfaceRegistry& m_surfaces;
     std::unordered_map<int, protocol::LCLRole> m_clientRoles;
-    uint64_t m_lastWindowListHash{0};
+    // Shell surfaces may be recreated during a display reconfigure.  Snapshot
+    // suppression is therefore per receiver: a fresh dock must receive the
+    // current list even when no application window changed in the meantime.
+    std::unordered_map<int, uint64_t> m_lastWindowListHashes;
 };
 
 } // namespace lcl::core

@@ -167,6 +167,38 @@ TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     EXPECT_EQ(recorded->rects.front().height, 48.0f);
 }
 
+TEST(LclUiTest, WindowAppRendersReplacementRootAfterInitialFrame) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    WindowApp app(std::move(canvas), 64, 48, "Replacement root test");
+
+    auto initialRoot = std::make_unique<Container>();
+    initialRoot->setBackgroundColor({1, 2, 3, 255});
+    initialRoot->getYogaNode().setWidth(64.0f);
+    initialRoot->getYogaNode().setHeight(48.0f);
+    app.setRootWidget(std::move(initialRoot));
+    ASSERT_TRUE(app.renderFrame());
+    ASSERT_FALSE(app.renderFrame());
+
+    recorded->rects.clear();
+    recorded->colors.clear();
+
+    auto replacementRoot = std::make_unique<Container>();
+    replacementRoot->setBackgroundColor({20, 40, 60, 255});
+    replacementRoot->getYogaNode().setWidth(64.0f);
+    replacementRoot->getYogaNode().setHeight(48.0f);
+    app.setRootWidget(std::move(replacementRoot));
+
+    ASSERT_TRUE(app.renderFrame());
+    ASSERT_EQ(recorded->rects.size(), 1u);
+    EXPECT_EQ(recorded->rects.front().width, 64.0f);
+    EXPECT_EQ(recorded->rects.front().height, 48.0f);
+    ASSERT_EQ(recorded->colors.size(), 1u);
+    EXPECT_EQ(recorded->colors.front().r, 20);
+    EXPECT_EQ(recorded->colors.front().g, 40);
+    EXPECT_EQ(recorded->colors.front().b, 60);
+}
+
 TEST(LclUiTest, WindowAppInvokesResizeLifecycleAfterLogicalResize) {
     auto canvas = std::make_unique<RecordingCanvas>();
     WindowApp app(std::move(canvas), 64, 48, "Resize callback test");

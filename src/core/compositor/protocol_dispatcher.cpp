@@ -146,12 +146,16 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgRegisterRole)) {
                 auto* reg = reinterpret_cast<const lcl::protocol::LCLMsgRegisterRole*>(msg.payload.data());
                 m_clientRoles[msg.clientFd] = reg->role;
+                // Treat a role registration as a new receiver, even if the
+                // descriptor number happened to be recycled by the kernel.
+                m_lastWindowListHashes.erase(msg.clientFd);
             }
             continue;
         }
 
         if (isDisconnect) {
             m_clientRoles.erase(msg.clientFd);
+            m_lastWindowListHashes.erase(msg.clientFd);
             std::vector<uint64_t> surfacesToRemove;
             for (auto& [surfKey, entry] : m_surfaces) {
                 if (entry.clientFd == msg.clientFd || (msg.pid > 0 && (surfKey >> 32) == static_cast<uint64_t>(msg.pid))) {
@@ -301,7 +305,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                         entry.width   = w;
                         entry.height  = h;
                         entry.stride  = stride;
-                        mapSurface(entry);
                     } else {
                         std::cerr << "[LCL Compositor ERROR] mmap failed for memfd " << fd
                                   << ": " << strerror(errno) << "\n";
@@ -314,7 +317,12 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.stride = stride;
             }
 
-            if (entry.windowId == 0) {
+            // Mapping is intentionally evaluated after every commit rather
+            // than only in the SCM_RIGHTS branch.  A client can retain a
+            // successfully mapped SHM buffer while retrying its first commit;
+            // the surface must then become visible as soon as that buffer is
+            // known to be valid.
+            if (entry.windowId == 0 && !mapSurface(entry)) {
                 // The first visible commit must include a real shared buffer.
                 continue;
             }
@@ -607,11 +615,6 @@ void ProtocolDispatcher::publishWindowListToShellClients() {
         entries.push_back(e);
     }
 
-    if (hash == m_lastWindowListHash) {
-        return;
-    }
-    m_lastWindowListHash = hash;
-
     protocol::LCLMsgWindowListHeader listHeader{};
     listHeader.windowCount = static_cast<uint32_t>(entries.size());
     std::vector<uint8_t> payload(sizeof(listHeader) + entries.size() * sizeof(protocol::LCLMsgWindowListEntry));
@@ -625,8 +628,13 @@ void ProtocolDispatcher::publishWindowListToShellClients() {
     header.payloadSize = static_cast<uint32_t>(payload.size());
 
     for (const auto& [fd, role] : m_clientRoles) {
-        if (role == protocol::LCLRole::DesktopWallpaper || role == protocol::LCLRole::ShellPanel) {
-            protocol::sendMsgWithFd(fd, header, payload.data());
+        if (role != protocol::LCLRole::DesktopWallpaper && role != protocol::LCLRole::ShellPanel) continue;
+
+        const auto last = m_lastWindowListHashes.find(fd);
+        if (last != m_lastWindowListHashes.end() && last->second == hash) continue;
+
+        if (protocol::sendMsgWithFd(fd, header, payload.data())) {
+            m_lastWindowListHashes[fd] = hash;
         }
     }
 }

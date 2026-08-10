@@ -101,6 +101,11 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     m_rootWidget = std::move(root);
     m_rootWidget->setRenderPass(&m_renderPass);
     m_rootWidget->markDirty();
+    // A newly mounted tree has not been through Yoga/syncLayout yet, so its
+    // absolute bounds are still empty and markDirty() cannot produce damage.
+    // Force one full frame after layout; runtime root replacement (the dock's
+    // WindowListUpdate path, for example) must not remain on the old pixels.
+    m_firstFrame = true;
 }
 
 void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
@@ -775,9 +780,17 @@ bool WindowApp::renderFrame() {
         attachMsg.stride = getPixelWidth() * 4;
         attachMsg.format = 1;
 
-        int passFd = m_shmNeedsAttach ? m_shmFd : -1;
-        lcl::protocol::sendMsgWithFd(m_socketFd, attachHeader, &attachMsg, passFd);
-        m_shmNeedsAttach = false;
+        const int passFd = m_shmNeedsAttach ? m_shmFd : -1;
+        if (lcl::protocol::sendMsgWithFd(m_socketFd, attachHeader, &attachMsg, passFd)) {
+            m_shmNeedsAttach = false;
+        } else if (m_shmNeedsAttach) {
+            // A lazy-mapped surface has no fallback window to keep it alive.
+            // Keep the first buffer eligible for another SCM_RIGHTS commit if
+            // a non-blocking socket briefly rejects this send.
+            m_firstFrame = true;
+            std::cerr << "[lcl-ui ERROR] Initial SHM attach failed for " << m_title
+                      << "; retrying\n";
+        }
     }
 
     return true;
