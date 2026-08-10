@@ -26,8 +26,9 @@ public:
     void drawTopRoundedRect(const lcl::ui::Rect& rect, float radius, lcl::ui::Color color,
                             float roundness) override;
     void drawText(float x, float y, const std::string& text, lcl::ui::Color color,
-                  float fontSize) override;
-    float measureText(const std::string& text, float fontSize) override;
+                  float fontSize, lcl::ui::FontFamily family) override;
+    float measureText(const std::string& text, float fontSize,
+                      lcl::ui::FontFamily family) override;
     void drawBuffer(int dstX, int dstY, int srcWidth, int srcHeight,
                     const uint32_t* pixels, int stridePixels, float opacity,
                     float cornerRadius, float cornerRoundness,

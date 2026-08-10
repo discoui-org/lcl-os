@@ -578,6 +578,7 @@ void SkiaRenderer::setContentScale(float scale) {
     // Glyph bitmaps are raster assets, so rebuilding the cache prevents a scaled
     // client surface from reusing 1x text.
     m_fontRenderer = FontRenderer{};
+    m_monospaceFontRenderer = FontRenderer{};
 }
 
 SkiaRect SkiaRenderer::scaleRect(const SkiaRect& rect) const {
@@ -605,6 +606,24 @@ bool SkiaRenderer::ensureFont(float logicalFontSize) {
         m_fontRenderer.loadFont("/usr/share/fonts/inter/Inter-Regular.otf", deviceFontSize);
     }
     return m_fontRenderer.isInitialized();
+}
+
+bool SkiaRenderer::ensureMonospaceFont(float logicalFontSize) {
+    const float deviceFontSize = std::max(1.0f, logicalFontSize * m_contentScale);
+    if (!m_monospaceFontRenderer.isInitialized() ||
+        std::fabs(m_monospaceFontRenderer.getFontSize() - deviceFontSize) > 0.01f) {
+        m_monospaceFontRenderer = FontRenderer{};
+        constexpr const char* kFontPaths[] = {
+            "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
+            "assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
+        };
+        for (const char* path : kFontPaths) {
+            if (m_monospaceFontRenderer.loadFont(path, deviceFontSize)) {
+                break;
+            }
+        }
+    }
+    return m_monospaceFontRenderer.isInitialized();
 }
 
 void SkiaRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity) {
@@ -1207,9 +1226,35 @@ void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fg
     }
 }
 
+void SkiaRenderer::drawMonospaceString(int x, int y, const std::string& text,
+                                       uint32_t fgColor, float fontSize) {
+    if (!m_initialized || text.empty() || !ensureMonospaceFont(fontSize)) return;
+
+    const int deviceX = scaleCoord(x);
+    const int deviceY = static_cast<int>(std::lround(static_cast<float>(y) * m_contentScale + m_contentOriginY));
+
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+        const int textW = std::max(1, m_monospaceFontRenderer.getTextWidth(text));
+        const int textH = std::max(1, m_monospaceFontRenderer.getCellHeight() + 2);
+        std::vector<uint32_t> glyphPixels(static_cast<size_t>(textW) * static_cast<size_t>(textH), 0x00000000);
+        m_monospaceFontRenderer.renderString(glyphPixels.data(), textW, textH, 0, 1, text, fgColor);
+        drawBufferRaw(deviceX, deviceY, textW, textH, glyphPixels.data(), textW, 1.0f, 0.0f, 2.0f, false, false, 0, 0);
+        return;
+    }
+
+    if (m_targetPixels) {
+        m_monospaceFontRenderer.renderString(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor);
+    }
+}
+
 float SkiaRenderer::measureString(const std::string& text, float fontSize) {
     if (text.empty() || !ensureFont(fontSize)) return 0.0f;
     return static_cast<float>(m_fontRenderer.getTextWidth(text)) / m_contentScale;
+}
+
+float SkiaRenderer::measureMonospaceString(const std::string& text, float fontSize) {
+    if (text.empty() || !ensureMonospaceFont(fontSize)) return 0.0f;
+    return static_cast<float>(m_monospaceFontRenderer.getTextWidth(text)) / m_contentScale;
 }
 
 void SkiaRenderer::drawBuffer(int dstX,

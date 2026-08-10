@@ -14,6 +14,12 @@ struct Color {
     uint8_t a{0}; // Default completely transparent (unstyled baseline)
 };
 
+/** Selects the text face without exposing a renderer implementation to widgets. */
+enum class FontFamily : uint8_t {
+    Interface,
+    Monospace,
+};
+
 /**
  * Backend-neutral drawing and frame-target contract used by lcl-ui widgets.
  * Coordinates are logical pixels; the selected Canvas owns any raster mapping.
@@ -35,8 +41,9 @@ public:
     virtual void drawTopRoundedRect(const Rect& rect, float radius, Color color,
                                     float roundness) = 0;
     virtual void drawText(float x, float y, const std::string& text, Color color,
-                          float fontSize) = 0;
-    virtual float measureText(const std::string& text, float fontSize) = 0;
+                          float fontSize, FontFamily family = FontFamily::Interface) = 0;
+    virtual float measureText(const std::string& text, float fontSize,
+                              FontFamily family = FontFamily::Interface) = 0;
     virtual void drawBuffer(int dstX, int dstY, int srcWidth, int srcHeight,
                             const uint32_t* pixels, int stridePixels, float opacity,
                             float cornerRadius, float cornerRoundness,

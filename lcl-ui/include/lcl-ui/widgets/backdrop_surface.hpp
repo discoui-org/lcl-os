@@ -22,6 +22,9 @@ public:
     void setOpacity(float opacity);
     float getOpacity() const { return m_opacity; }
 
+    /** Keep backdrop filtering while opting out of button-like pointer visuals. */
+    void setInteractive(bool interactive);
+    bool isInteractive() const { return m_interactive; }
     void setOnClick(std::function<void()> callback) { m_onClick = std::move(callback); }
 
     bool onPointerEnter(const PointerEvent& event) override;
@@ -44,6 +47,7 @@ private:
     bool m_hasBaseVisuals{false};
     Color m_baseBackground{0, 0, 0, 0};
     Color m_baseBorder{0, 0, 0, 0};
+    bool m_interactive{true};
 };
 
 } // namespace lcl::ui

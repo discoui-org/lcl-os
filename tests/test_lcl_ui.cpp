@@ -9,6 +9,7 @@
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/window_chrome.hpp"
+#include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "render/skia_renderer.hpp"
 
 #include <vector>
@@ -60,14 +61,15 @@ public:
     }
 
     void drawText(float x, float y, const std::string& text, Color color,
-                  float fontSize) override {
+                  float fontSize, FontFamily family) override {
         textPositions.push_back({x, y, 0.0f, 0.0f});
         texts.push_back(text);
         colors.push_back(color);
         fontSizes.push_back(fontSize);
+        fontFamilies.push_back(family);
     }
 
-    float measureText(const std::string& text, float fontSize) override {
+    float measureText(const std::string& text, float fontSize, FontFamily) override {
         return static_cast<float>(text.size()) * fontSize * 0.6f;
     }
 
@@ -92,6 +94,7 @@ public:
     std::vector<float> borderWidths;
     std::vector<float> roundnesses;
     std::vector<float> fontSizes;
+    std::vector<FontFamily> fontFamilies;
     std::vector<Color> colors;
     std::vector<Color> borders;
     std::vector<std::string> texts;
@@ -159,6 +162,75 @@ TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     ASSERT_EQ(recorded->rects.size(), 1u);
     EXPECT_EQ(recorded->rects.front().width, 64.0f);
     EXPECT_EQ(recorded->rects.front().height, 48.0f);
+}
+
+TEST(LclUiTest, WindowAppInvokesResizeLifecycleAfterLogicalResize) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 64, 48, "Resize callback test");
+
+    uint32_t callbackWidth = 0;
+    uint32_t callbackHeight = 0;
+    app.setOnResize([&](uint32_t width, uint32_t height) {
+        callbackWidth = width;
+        callbackHeight = height;
+    });
+
+    app.resize(120, 72);
+
+    EXPECT_EQ(app.getWidth(), 120u);
+    EXPECT_EQ(app.getHeight(), 72u);
+    EXPECT_EQ(callbackWidth, 120u);
+    EXPECT_EQ(callbackHeight, 72u);
+}
+
+TEST(LclUiTest, WindowAppStagesSurfaceChromeBeforeCompositorConnection) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 64, 48, "Staged chrome test");
+
+    EXPECT_TRUE(app.setDecorationMode(lcl::protocol::LCLDecorationMode::CSD));
+    EXPECT_TRUE(app.setWindowCornerRadius(14.0f));
+}
+
+TEST(LclUiTest, PassiveBackdropSurfaceKeepsItsVisualStateOnPointerEvents) {
+    BackdropSurface surface;
+    surface.setBackgroundColor({17, 19, 23, 184});
+    surface.setInteractive(false);
+
+    PointerEvent event{};
+    EXPECT_FALSE(surface.onPointerEnter(event));
+    EXPECT_FALSE(surface.onPointerDown(event));
+    EXPECT_EQ(surface.getBackgroundColor().r, 17);
+    EXPECT_EQ(surface.getBackgroundColor().a, 184);
+}
+
+TEST(LclUiTest, PassiveBackdropEffectDoesNotRequireAFullWindowRoundedRaster) {
+    RecordingCanvas canvas;
+    auto root = std::make_unique<Container>();
+    root->setBackgroundColor({17, 19, 23, 184});
+    root->getYogaNode().setWidth(540.0f);
+    root->getYogaNode().setHeight(360.0f);
+
+    auto effect = std::make_unique<BackdropSurface>();
+    effect->setInteractive(false);
+    effect->setBorderRadius(20.0f);
+    effect->addFilter(lcl::protocol::FilterType::Blur, 3.5f);
+    effect->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    effect->getYogaNode().setWidth(540.0f);
+    effect->getYogaNode().setHeight(360.0f);
+    root->addChild(std::move(effect));
+
+    root->getYogaNode().calculateLayout(540.0f, 360.0f);
+    root->syncLayout();
+    root->draw(canvas, {0.0f, 0.0f, 540.0f, 360.0f});
+
+    EXPECT_EQ(canvas.rects.size(), 1u);
+    EXPECT_TRUE(canvas.roundedRects.empty());
+
+    std::vector<EffectRegion> effects;
+    root->collectEffects(effects);
+    ASSERT_EQ(effects.size(), 1u);
+    EXPECT_EQ(effects.front().source, EffectSource::Backdrop);
+    EXPECT_EQ(effects.front().cornerRadius, 20.0f);
 }
 
 TEST(LclUiTest, WindowAppDefaultCanvasPreservesRasterOutput) {

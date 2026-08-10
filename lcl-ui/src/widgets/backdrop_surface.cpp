@@ -69,8 +69,19 @@ void BackdropSurface::setOpacity(float opacity) {
     markDirty();
 }
 
+void BackdropSurface::setInteractive(bool interactive) {
+    if (m_interactive == interactive) return;
+    m_interactive = interactive;
+    setFocusable(interactive);
+    if (!m_interactive) {
+        m_pressed = false;
+        restoreBaseVisuals();
+    }
+}
+
 bool BackdropSurface::onPointerEnter(const PointerEvent& event) {
     (void)event;
+    if (!m_interactive) return false;
     if (!m_hasBaseVisuals) {
         m_baseBackground = getBackgroundColor();
         m_baseBorder = getBorderColor();
@@ -84,6 +95,7 @@ bool BackdropSurface::onPointerEnter(const PointerEvent& event) {
 
 bool BackdropSurface::onPointerLeave(const PointerEvent& event) {
     (void)event;
+    if (!m_interactive) return false;
     m_pressed = false;
     restoreBaseVisuals();
     return true;
@@ -91,6 +103,7 @@ bool BackdropSurface::onPointerLeave(const PointerEvent& event) {
 
 bool BackdropSurface::onPointerDown(const PointerEvent& event) {
     (void)event;
+    if (!m_interactive) return false;
     if (!m_hasBaseVisuals) {
         m_baseBackground = getBackgroundColor();
         m_baseBorder = getBorderColor();
@@ -103,6 +116,7 @@ bool BackdropSurface::onPointerDown(const PointerEvent& event) {
 
 bool BackdropSurface::onPointerUp(const PointerEvent& event) {
     (void)event;
+    if (!m_interactive) return false;
     bool wasPressed = m_pressed;
     m_pressed = false;
     if (m_hasBaseVisuals) {

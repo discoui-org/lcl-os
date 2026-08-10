@@ -128,8 +128,11 @@ public:
     void drawCircle(float cx, float cy, float radius, const SkiaColor& color);
     void drawLine(float x1, float y1, float x2, float y2, const SkiaColor& color, float strokeWidth = 1.0f);
     void drawString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize = 15.0f);
+    /** Draw text with the packaged JetBrains Mono face. */
+    void drawMonospaceString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize = 15.0f);
     /** Returns the rendered text width in the caller's logical coordinate space. */
     float measureString(const std::string& text, float fontSize = 15.0f);
+    float measureMonospaceString(const std::string& text, float fontSize = 15.0f);
     void drawBuffer(int dstX,
                     int dstY,
                     int srcW,
@@ -156,6 +159,7 @@ private:
     int scaleCoord(int value) const;
     int scaleLength(int value) const;
     bool ensureFont(float logicalFontSize);
+    bool ensureMonospaceFont(float logicalFontSize);
     void drawBufferRaw(int dstX,
                        int dstY,
                        int srcW,
@@ -178,6 +182,7 @@ private:
     std::vector<uint32_t> m_rasterPixels;
     uint32_t* m_targetPixels{nullptr};
     FontRenderer m_fontRenderer;
+    FontRenderer m_monospaceFontRenderer;
     float m_contentScale{1.0f};
     float m_contentOriginX{0.0f};
     float m_contentOriginY{0.0f};

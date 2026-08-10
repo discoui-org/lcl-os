@@ -5,7 +5,6 @@
 #include <chrono>
 #include "core/terminal/pty_manager.hpp"
 #include "core/input/input_manager.hpp"
-#include "render/render_types.hpp"
 
 namespace lcl::apps {
 
@@ -36,6 +35,8 @@ public:
      */
     void handleInput(const core::InputEvent& ev);
     void handleKey(uint32_t keycode, bool pressed, uint8_t modifiers = 0, char32_t codepoint = 0);
+    /** Write UTF-8 text received from WindowApp's text-input lifecycle. */
+    void handleText(const std::string& text);
 
     /**
      * @brief Clear terminal line buffer (Ctrl+L / clear ANSI escape sequence).
@@ -52,16 +53,10 @@ public:
     bool isInitialized() const { return m_initialized; }
     int getWindowId() const { return m_windowId; }
     const std::vector<std::string>& getLines() const { return m_lines; }
+    int getCursorColumn() const { return m_writePos; }
+    bool shouldDrawSolidCursor() const;
 
     bool isAlive() const { return m_initialized && m_ptyManager.isAlive(); }
-
-    /**
-     * @brief Encapsulate active terminal rendering state for Compositor WindowManager.
-     */
-    render::WindowRenderContent getRenderContent() const;
-
-    void setAckClientFd(int fd) { m_ackClientFd = fd; }
-    int  getAckClientFd() const  { return m_ackClientFd; }
 
 private:
     int m_windowId{-1};
@@ -69,7 +64,6 @@ private:
     std::vector<std::string> m_lines;
     int m_writePos{0}; // Write-head byte offset in m_lines.back() (VT100 overwrite tracking)
     std::chrono::steady_clock::time_point m_lastInputTime;
-    int m_ackClientFd{-1}; ///< Client socket FD awaiting DONE ACK (-1 = none)
     bool m_initialized{false};
 };
 

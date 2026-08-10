@@ -11,6 +11,7 @@
 #include <vector>
 #include <functional>
 #include <chrono>
+#include <utility>
 
 namespace lcl::ui {
 
@@ -18,6 +19,9 @@ using RawKeyCallback = std::function<bool(const KeyEvent&)>;
 using RawPointerCallback = std::function<bool(const PointerEvent&)>;
 using RawTextInputCallback = std::function<bool(const TextInputEvent&)>;
 using IpcMessageCallback = std::function<void(const lcl::protocol::LCLHeader&, const std::vector<uint8_t>&)>;
+using ResizeCallback = std::function<void(uint32_t width, uint32_t height)>;
+using FrameCallback = std::function<void()>;
+using ResizeTransform = std::function<std::pair<uint32_t, uint32_t>(uint32_t width, uint32_t height)>;
 
 class WindowApp {
 public:
@@ -73,6 +77,13 @@ public:
     void setInputEnabled(bool enabled) { m_inputEnabled = enabled; }
     bool isInputEnabled() const { return m_inputEnabled; }
     void setOnIpcMessage(IpcMessageCallback callback) { m_onIpcMessage = std::move(callback); }
+    /** Runs after a logical configure has allocated its new SHM buffer. */
+    void setOnResize(ResizeCallback callback) { m_onResize = std::move(callback); }
+    /** Coalesces an incoming logical configure before WindowApp reallocates SHM. */
+    void setResizeTransform(ResizeTransform transform) { m_resizeTransform = std::move(transform); }
+    /** Runs once per WindowApp event-loop tick before damage is rendered. */
+    void setOnFrame(FrameCallback callback) { m_onFrame = std::move(callback); }
+    void requestQuit() { m_running = false; }
 
     bool requestWindowMove(float localX, float localY);
     bool requestWindowClose();
@@ -109,6 +120,9 @@ private:
     RawPointerCallback m_onRawPointer{nullptr};
     RawTextInputCallback m_onRawTextInput{nullptr};
     IpcMessageCallback m_onIpcMessage{nullptr};
+    ResizeCallback m_onResize{nullptr};
+    FrameCallback m_onFrame{nullptr};
+    ResizeTransform m_resizeTransform{nullptr};
 
     std::vector<uint32_t> m_pixelBuffer;
     int m_socketFd{-1};
@@ -139,6 +153,10 @@ private:
     float m_csdCloseLeft{10.0f};
     float m_csdCloseTop{8.0f};
     float m_csdCloseSize{16.0f};
+    lcl::protocol::LCLDecorationMode m_requestedDecorationMode{lcl::protocol::LCLDecorationMode::None};
+    bool m_hasRequestedDecorationMode{false};
+    float m_requestedCornerRadius{0.0f};
+    bool m_hasRequestedCornerRadius{false};
 };
 
 } // namespace lcl::ui

@@ -198,6 +198,15 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
 
     m_ipcConnected = true;
     m_ownsSocketFd = true;
+    // Decoration state belongs to the surface contract, not to a later frame.
+    // Send preconfigured values before the first effect graph/buffer attach so a
+    // CSD client never flashes the compositor's default title chrome.
+    if (m_hasRequestedDecorationMode) {
+        setDecorationMode(m_requestedDecorationMode);
+    }
+    if (m_hasRequestedCornerRadius) {
+        setWindowCornerRadius(m_requestedCornerRadius);
+    }
     if (m_rootWidget) {
         m_rootWidget->markDirty();
     }
@@ -226,6 +235,10 @@ void WindowApp::resize(uint32_t width, uint32_t height) {
         // Defer render+attach to the main loop's renderFrame() so each resize tick
         // produces at most one frame and one attach commit.
         m_firstFrame = true;
+    }
+
+    if (m_onResize) {
+        m_onResize(width, height);
     }
 }
 
@@ -320,6 +333,16 @@ void WindowApp::pollIPC() {
     }
 
     if (pendingResize && (latestWidth > 0 && latestHeight > 0)) {
+        if (m_resizeTransform) {
+            const auto [transformedWidth, transformedHeight] =
+                m_resizeTransform(latestWidth, latestHeight);
+            latestWidth = transformedWidth;
+            latestHeight = transformedHeight;
+            if (latestWidth == 0 || latestHeight == 0) {
+                pendingResize = false;
+            }
+        }
+
         if (std::fabs(latestScale - m_bufferScale) > 0.0001f) {
             m_bufferScale = latestScale;
             m_canvas->setContentScale(m_bufferScale);
@@ -393,6 +416,9 @@ void WindowApp::runEventLoop() {
 
 bool WindowApp::tick() {
     pollIPC();
+    if (m_onFrame) {
+        m_onFrame();
+    }
     return renderFrame();
 }
 
@@ -432,7 +458,9 @@ bool WindowApp::requestWindowClose() {
 }
 
 bool WindowApp::setDecorationMode(lcl::protocol::LCLDecorationMode mode) {
-    if (!m_ipcConnected || m_socketFd < 0) return false;
+    m_requestedDecorationMode = mode;
+    m_hasRequestedDecorationMode = true;
+    if (!m_ipcConnected || m_socketFd < 0) return true;
 
     lcl::protocol::LCLHeader header{};
     header.opcode = lcl::protocol::LCLOpcode::SetDecorationMode;
@@ -476,7 +504,9 @@ bool WindowApp::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, ui
 }
 
 bool WindowApp::setWindowCornerRadius(float radiusPx) {
-    if (!m_ipcConnected || m_socketFd < 0) return false;
+    m_requestedCornerRadius = std::max(0.0f, radiusPx);
+    m_hasRequestedCornerRadius = true;
+    if (!m_ipcConnected || m_socketFd < 0) return true;
 
     lcl::protocol::LCLHeader header{};
     header.opcode = lcl::protocol::LCLOpcode::SetWindowCornerRadius;
@@ -484,7 +514,7 @@ bool WindowApp::setWindowCornerRadius(float radiusPx) {
 
     lcl::protocol::LCLMsgSetWindowCornerRadius msg{};
     msg.surfaceId = m_surfaceId;
-    msg.radiusPx = std::max(0.0f, radiusPx);
+    msg.radiusPx = m_requestedCornerRadius;
 
     return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
 }

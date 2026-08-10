@@ -42,16 +42,24 @@ void SkiaCanvas::drawTopRoundedRect(const lcl::ui::Rect& rect, float radius,
 }
 
 void SkiaCanvas::drawText(float x, float y, const std::string& text,
-                          lcl::ui::Color color, float fontSize) {
+                          lcl::ui::Color color, float fontSize,
+                          lcl::ui::FontFamily family) {
     const uint32_t argb = (static_cast<uint32_t>(color.a) << 24) |
                           (static_cast<uint32_t>(color.r) << 16) |
                           (static_cast<uint32_t>(color.g) << 8) |
                           static_cast<uint32_t>(color.b);
-    renderer().drawString(static_cast<int>(x), static_cast<int>(y), text, argb, fontSize);
+    if (family == lcl::ui::FontFamily::Monospace) {
+        renderer().drawMonospaceString(static_cast<int>(x), static_cast<int>(y), text, argb, fontSize);
+    } else {
+        renderer().drawString(static_cast<int>(x), static_cast<int>(y), text, argb, fontSize);
+    }
 }
 
-float SkiaCanvas::measureText(const std::string& text, float fontSize) {
-    return renderer().measureString(text, fontSize);
+float SkiaCanvas::measureText(const std::string& text, float fontSize,
+                              lcl::ui::FontFamily family) {
+    return family == lcl::ui::FontFamily::Monospace
+        ? renderer().measureMonospaceString(text, fontSize)
+        : renderer().measureString(text, fontSize);
 }
 
 void SkiaCanvas::drawBuffer(int dstX, int dstY, int srcWidth, int srcHeight,

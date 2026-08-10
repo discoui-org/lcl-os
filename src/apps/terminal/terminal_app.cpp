@@ -1,5 +1,4 @@
 #include "apps/terminal/terminal_app.hpp"
-#include "core/display/display_scale.hpp"
 #include "core/input/key_mapper.hpp"
 #include <iostream>
 #include <linux/input-event-codes.h>
@@ -34,18 +33,11 @@ bool TerminalApp::initialize(int windowId) {
     return true;
 }
 
-render::WindowRenderContent TerminalApp::getRenderContent() const {
-    render::WindowRenderContent content;
-    content.windowId = static_cast<uint32_t>(m_windowId);
-    content.lines = m_lines;
-    content.suggestion = "";
-    content.cursorCol = m_writePos;
-
+bool TerminalApp::shouldDrawSolidCursor() const {
     auto now = std::chrono::steady_clock::now();
     auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastInputTime).count();
     // Solid cursor while actively typing (< 600ms), resumes 500ms blink when idle
-    content.forceCursorSolid = (elapsedMs < 600);
-    return content;
+    return elapsedMs < 600;
 }
 
 void TerminalApp::clearBuffer() {
@@ -202,9 +194,9 @@ bool TerminalApp::update() {
 }
 
 void TerminalApp::getSnappedDimensions(int reqW, int reqH, int& outW, int& outH) {
-    int cellW = core::DisplayScale::px(8);
-    int cellH = core::DisplayScale::px(16);
-    int pad = core::DisplayScale::windowPad();
+    constexpr int cellW = 8;
+    constexpr int cellH = 16;
+    constexpr int pad = 8;
 
     int cols = std::max(1, (reqW - pad * 2) / cellW);
     int rows = std::max(1, (reqH - pad * 2) / cellH);
@@ -216,9 +208,9 @@ void TerminalApp::getSnappedDimensions(int reqW, int reqH, int& outW, int& outH)
 void TerminalApp::resize(int width, int height) {
     if (!m_initialized) return;
 
-    int cellW = core::DisplayScale::px(8);
-    int cellH = core::DisplayScale::px(16);
-    int pad = core::DisplayScale::windowPad();
+    constexpr int cellW = 8;
+    constexpr int cellH = 16;
+    constexpr int pad = 8;
 
     int cols = std::max(1, (width - pad * 2) / cellW);
     int rows = std::max(1, (height - pad * 2) / cellH);
@@ -259,9 +251,7 @@ void TerminalApp::handleInput(const core::InputEvent& ev) {
             }
         }
 
-        if (!seq.empty()) {
-            m_ptyManager.writeInput(seq);
-        }
+        handleText(seq);
     }
 }
 
@@ -274,6 +264,12 @@ void TerminalApp::handleKey(uint32_t keycode, bool pressed, uint8_t modifiers, c
     ev.modifiers = modifiers;
     ev.codepoint = codepoint;
     handleInput(ev);
+}
+
+void TerminalApp::handleText(const std::string& text) {
+    if (!m_initialized || text.empty()) return;
+    m_lastInputTime = std::chrono::steady_clock::now();
+    m_ptyManager.writeInput(text);
 }
 
 
