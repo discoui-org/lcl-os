@@ -54,6 +54,11 @@ target_include_directories(lcl-protocol PUBLIC
 add_executable(lcl-core
     src/main.cpp
     src/core/compositor/compositor.cpp
+    src/core/compositor/compositor_renderer.cpp
+    src/core/compositor/frame_scheduler.cpp
+    src/core/compositor/input_router.cpp
+    src/core/compositor/protocol_dispatcher.cpp
+    src/core/compositor/surface_registry.cpp
     src/apps/terminal/terminal_app.cpp
     src/core/app/app_bundle_parser.cpp
     src/core/display/display_manager.cpp
@@ -217,10 +222,13 @@ if(BUILD_TESTS)
         tests/test_ipc_manager.cpp
         tests/test_input_manager.cpp
         tests/test_key_mapper.cpp
+        tests/test_compositor_components.cpp
         tests/test_lcl_ui.cpp
         tests/test_lcl_ui_events.cpp
         tests/test_js_runtime.cpp
         src/core/ipc/ipc_manager.cpp
+        src/core/compositor/frame_scheduler.cpp
+        src/core/compositor/surface_registry.cpp
         src/core/app/app_bundle_parser.cpp
         src/core/display/display_scale.cpp
         src/core/input/input_manager.cpp

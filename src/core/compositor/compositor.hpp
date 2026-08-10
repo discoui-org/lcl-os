@@ -12,6 +12,11 @@
 #include "core/input/input_manager.hpp"
 #include "core/ipc/ipc_manager.hpp"
 #include "core/session/startup_manager.hpp"
+#include "core/compositor/surface_registry.hpp"
+#include "core/compositor/input_router.hpp"
+#include "core/compositor/frame_scheduler.hpp"
+#include "core/compositor/protocol_dispatcher.hpp"
+#include "core/compositor/compositor_renderer.hpp"
 #include "render/renderer.hpp"
 #include "render/window_manager.hpp"
 
@@ -54,49 +59,8 @@ public:
 
     bool isRunning() const noexcept { return m_running.load(); }
 
-    /// Per-IPC-surface metadata tracked by the compositor.
-    struct SurfaceEffectRegion {
-        protocol::EffectRegion region{};
-        std::vector<protocol::FilterOp> filters;
-        bool followSurfaceBounds{false};
-    };
-
-    struct SurfaceEntry {
-        enum class TransitionPhase {
-            None,
-            Entering,
-            Closing,
-        };
-
-        uint32_t windowId{0};    ///< Corresponding WindowManager window id
-        int      clientFd{-1};   ///< Socket FD of client process
-        int      shmFd{-1};     ///< memfd descriptor received via SCM_RIGHTS
-        void*    pixels{nullptr};///< mmap'd pixel pointer into the SHM buffer
-        uint32_t width{0};
-        uint32_t height{0};
-        uint32_t stride{0};     ///< Row stride in bytes
-        float    bufferScale{1.0f}; ///< Logical client px to physical buffer px
-        size_t   shmSize{0};    ///< Total SHM buffer bytes
-        std::string appId;
-        std::vector<SurfaceEffectRegion> effectRegions;
-
-        // Last configure sent to client; used to dedupe high-frequency resize spam.
-        int      configuredX{0};
-        int      configuredY{0};
-        uint32_t configuredWidth{0};
-        uint32_t configuredHeight{0};
-        uint8_t  configuredFocused{0};
-        std::chrono::steady_clock::time_point lastConfigureSent{};
-
-        TransitionPhase transitionPhase{TransitionPhase::None};
-        float transitionElapsedSec{0.0f};
-        float transitionDurationSec{0.0f};
-        float transitionOpacity{1.0f};
-        float transitionScale{1.0f};
-        bool hasCommittedBuffer{false};
-        bool ignoreBufferCommits{false};
-        bool pendingDestroy{false};
-    };
+    using SurfaceEffectRegion = SurfaceRegistry::SurfaceEffectRegion;
+    using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
 
     void toggleFpsOverlay() noexcept { m_showFpsOverlay = !m_showFpsOverlay; }
     bool isFpsOverlayVisible() const noexcept { return m_showFpsOverlay; }
@@ -104,7 +68,6 @@ public:
 private:
     void processInput();
     void processIPC();
-    void tickCursorBlink();
     void renderFrame();
     void renderDiagnosticOverlay();
     void publishWindowListToShellClients();
@@ -118,16 +81,17 @@ private:
     render::WindowManager  m_windowManager;
 
     /// IPC surface registry: (clientFd << 32 | surfaceId) → SurfaceEntry
-    std::unordered_map<uint64_t, SurfaceEntry> m_surfaces;
-    std::unordered_map<int, protocol::LCLRole> m_clientRoles;
+    SurfaceRegistry m_surfaces;
+    std::unique_ptr<InputRouter> m_inputRouter;
+    FrameScheduler m_frameScheduler;
+    CompositorRenderer m_compositorRenderer;
+    std::unique_ptr<ProtocolDispatcher> m_protocolDispatcher;
 
     // Loop state
     std::atomic<bool>                    m_running{true};
     bool                                 m_initialized{false};
     bool                                 m_needsRedraw{true};
     uint64_t                             m_loopTicks{0};
-    std::chrono::microseconds            m_targetFrameDuration{std::chrono::microseconds(16667)};
-    std::chrono::steady_clock::time_point m_lastBlinkCheck;
 
     // Diagnostic Overlay & FPS metrics
     bool                                 m_showFpsOverlay{false};
@@ -135,8 +99,6 @@ private:
     float                                m_currentFps{0.0f};
     float                                m_currentFrameMs{0.0f};
     std::chrono::steady_clock::time_point m_lastFpsTime;
-    std::chrono::steady_clock::time_point m_lastTransitionTick;
-    uint64_t                              m_lastWindowListHash{0};
 };
 
 } // namespace lcl::core

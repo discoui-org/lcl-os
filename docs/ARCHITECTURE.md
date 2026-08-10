@@ -151,6 +151,24 @@ Guest display boot args (when `NATIVE=1`):
 2. **Window Manager (WM):** Pencere geometrisi, odak yönetimi, sürükleme/boyutlandırma durum makinelerinin (`WM Drag/Resize State`) tek sahibidir. Sürüklenen kenara (`ResizeEdge`) göre sabit kalacak anchor noktasını korur. Client'tan gelen gerçek tampon boyutunu (\(frameW, frameH\)) kabul eder, `commitSurfaceGeometry` metodu üzerinden offset hesabını yapar ve pencerenin nihai dünya koordinatlarını (\(X_{final}, Y_{final}\)) belirler. Uygulamaya özel kod barındıramaz.
 3. **Compositor (Presentation Engine):** "Kör Çizici" (Blind Renderer) olarak çalışır. Tamponların ekrana çizimi, z-index harmanlaması (blending) ve vSync eşzamanlamasını üstlenir. Pencere durum makinelerinden veya kenar hesaplarından bağımsızdır. WM'in onayladığı geometriyi ve Client'ın sunduğu tamponu vSync anında atomic olarak ekrana çeker.
 
+### Compositor içi sorumluluklar
+
+`Compositor`, alt sistemleri başlatır ve ana döngüyü sıralar; client kaynakları veya
+çizim ayrıntıları için ikinci bir sahip değildir.
+
+- `SurfaceRegistry`: `(client, surfaceId)` yüzey kaydı ile memfd/SHM eşlemesinin
+  tek sahibidir. Disconnect, kapatma geçişi ve shutdown aynı idempotent kaynak
+  serbest bırakma yolunu kullanır.
+- `ProtocolDispatcher`: IPC mesajlarını doğrular/dispatch eder; client rolü,
+  surface create/attach, effect graph ve shell window-list yayınını yönetir.
+- `InputRouter`: WindowManager'ın hit-test/focus/resize sonucunu client'a logical
+  koordinatlı input ve configure mesajlarına dönüştürür.
+- `FrameScheduler`: frame bütçesi, cursor blink ve surface enter/close
+  transition zamanlamasını yönetir.
+- `CompositorRenderer`: o frame için salt-okunur `SurfaceRegistry` snapshot'ını
+  çizer ve present eder. Snapshot entry'leri SHM pixel veya effect graph kopyası
+  içermez; yalnızca frame boyunca geçerli `const` görünüm taşır.
+
 ---
 
 ## 6. Z-Indexing & Hybrid Decoration Protocol (SSD/CSD Negotiation)
@@ -171,4 +189,4 @@ Guest display boot args (when `NATIVE=1`):
 
 1. **Secure Domain Socket Protocol:** Compositor IPC operates on `/tmp/lcl_compositor.sock` with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
 2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). `lcl::protocol::recvMsgWithFd()` explicitly sets `errno = ECONNRESET` to prevent stale `errno = EAGAIN` from `accept4()` from masking client disconnects.
-3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits `CLIENT_DISCONNECT` (`SurfaceDestroy`) upon socket EOF. `Compositor` unmaps SHM buffers and calls `WindowManager::removeWindow(windowId)` to immediately unregister and erase spatial window surfaces belonging to terminated client processes.
+3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits `CLIENT_DISCONNECT` (`SurfaceDestroy`) upon socket EOF. `ProtocolDispatcher` ilgili pencereyi `WindowManager`dan kaldırır; `SurfaceRegistry` SHM eşlemesini ve memfd'yi tek sahip olarak serbest bırakır.
