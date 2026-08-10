@@ -30,28 +30,6 @@ void CompositorRenderer::render(render::Renderer& renderer,
     // The snapshot contains only const entry pointers, so protocol/input work
     // cannot mutate the surface state while this frame is being composed.
 
-    std::vector<render::WindowRenderContent> contents;
-    for (const auto& win : windowManager.getWindows()) {
-        if (win.isMinimized) {
-            continue;
-        }
-        bool hasShmBuffer = false;
-        for (const auto& surface : surfaces) {
-            const auto* entry = surface.entry;
-            if (entry && entry->windowId == win.id && entry->pixels) {
-                hasShmBuffer = true;
-                break;
-            }
-        }
-        if (!hasShmBuffer) {
-            render::WindowRenderContent content;
-            content.windowId = win.id;
-            content.lines = {"LCL OS Desktop", "Waiting for client surface buffer..."};
-            content.cursorCol = 0;
-            contents.push_back(std::move(content));
-        }
-    }
-
     // --- Begin Skia frame ---
     auto* skia = renderer.getSkiaRenderer();
     skia->beginFrame();
@@ -322,23 +300,6 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 scaledOverlayWin.width = scaledWinW;
                 scaledOverlayWin.height = scaledWinH;
                 drawCsdHeaderControlsOverlay(scaledOverlayWin);
-            }
-        } else {
-            // Render text fallback content ONLY for standard SSD decorated application windows
-            if (win.decorationMode == render::DecorationMode::SSD) {
-                const render::WindowRenderContent* content = nullptr;
-                for (const auto& c : contents) {
-                    if (c.windowId == win.id) { content = &c; break; }
-                }
-                if (content) {
-                    int titleOffset = DisplayScale::titleBarHeight();
-                    int textX = win.x + DisplayScale::windowPad();
-                    int textY = win.y + titleOffset + DisplayScale::px(12);
-                    for (const auto& line : content->lines) {
-                        skia->drawString(textX, textY, line, lcl::theme::UI::TerminalText);
-                        textY += DisplayScale::px(18);
-                    }
-                }
             }
         }
 

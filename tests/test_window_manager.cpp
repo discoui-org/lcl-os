@@ -67,3 +67,21 @@ TEST(WindowManagerTest, WindowActionsPreserveRestoreGeometryAndFocus) {
     EXPECT_EQ(dragging->dragOffsetX, 24);
     EXPECT_EQ(dragging->dragOffsetY, 18);
 }
+
+TEST(WindowManagerTest, UnfocusableSystemWindowDoesNotStealApplicationFocus) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+
+    const uint32_t appWindow = manager.createWindow("App", 80, 80, 400, 300);
+    ASSERT_EQ(manager.getFocusedWindowId(), appWindow);
+
+    const uint32_t panel = manager.createWindow(
+        "Panel", 0, 0, 1000, 32, 0xFF38BDF8, false);
+    manager.setWindowLayer(panel, lcl::protocol::LCLWindowLayer::TopMost, true);
+
+    EXPECT_EQ(manager.getFocusedWindowId(), appWindow);
+    const auto* panelWindow = findWindow(manager, panel);
+    ASSERT_NE(panelWindow, nullptr);
+    EXPECT_TRUE(panelWindow->isUnfocusable);
+    EXPECT_FALSE(panelWindow->isFocused);
+}

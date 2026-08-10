@@ -141,7 +141,8 @@ public:
     /**
      * @brief Create a new window dynamically.
      */
-    uint32_t createWindow(const std::string& title, int x, int y, int width, int height, uint32_t headerColor = 0xFF38BDF8);
+    uint32_t createWindow(const std::string& title, int x, int y, int width, int height,
+                          uint32_t headerColor = 0xFF38BDF8, bool focus = true);
 
     /**
      * @brief Remove / close a window by ID.

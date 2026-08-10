@@ -42,6 +42,20 @@ public:
         uint32_t stride{0};
         float bufferScale{1.0f};
         size_t shmSize{0};
+        // A surface is registered before it is mapped.  Keep its window policy
+        // here until the first complete client buffer is ready to present.
+        std::string title;
+        int initialX{0};
+        int initialY{0};
+        uint32_t initialWidth{0};
+        uint32_t initialHeight{0};
+        protocol::LCLRole role{protocol::LCLRole::ClientApp};
+        protocol::LCLDecorationMode decorationMode{protocol::LCLDecorationMode::SSD};
+        protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
+        bool unfocusable{false};
+        bool insetBorderEnabled{true};
+        float cornerRadiusPx{-1.0f};
+        bool suppressInitialTransition{false};
         std::string appId;
         std::vector<SurfaceEffectRegion> effectRegions;
 

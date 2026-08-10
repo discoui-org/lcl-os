@@ -47,6 +47,50 @@ uint64_t fnv1aMix(uint64_t hash, uint8_t byte) {
 
 bool ProtocolDispatcher::process(IPCManager& ipcManager) {
     bool changed = false;
+    auto toRenderDecorationMode = [](protocol::LCLDecorationMode mode) {
+        switch (mode) {
+            case protocol::LCLDecorationMode::CSD: return render::DecorationMode::CSD;
+            case protocol::LCLDecorationMode::None: return render::DecorationMode::None;
+            case protocol::LCLDecorationMode::SSD:
+            default: return render::DecorationMode::SSD;
+        }
+    };
+    auto mapSurface = [&](SurfaceEntry& entry) {
+        if (entry.windowId != 0 || !entry.pixels || entry.width == 0 || entry.height == 0) {
+            return false;
+        }
+
+        const auto decorationMode = toRenderDecorationMode(entry.decorationMode);
+        const int titleOffset = decorationMode == render::DecorationMode::SSD
+            ? DisplayScale::titleBarHeight()
+            : 0;
+        entry.windowId = m_windowManager.createWindow(
+            entry.title, entry.initialX, entry.initialY,
+            static_cast<int>(entry.width), static_cast<int>(entry.height) + titleOffset,
+            ::lcl::theme::UI::WindowTitleFocused, !entry.unfocusable);
+        m_windowManager.setDecorationMode(entry.windowId, decorationMode);
+        m_windowManager.setWindowLayer(entry.windowId, entry.layer, entry.unfocusable);
+        m_windowManager.setInsetBorderEnabled(entry.windowId, entry.insetBorderEnabled);
+        if (entry.cornerRadiusPx >= 0.0f) {
+            m_windowManager.setWindowCornerRadius(entry.windowId, entry.cornerRadiusPx);
+        }
+
+        if (entry.suppressInitialTransition) {
+            entry.transitionPhase = SurfaceEntry::TransitionPhase::None;
+            entry.transitionOpacity = 1.0f;
+            entry.transitionScale = 1.0f;
+        } else {
+            entry.transitionPhase = SurfaceEntry::TransitionPhase::Entering;
+            entry.transitionElapsedSec = 0.0f;
+            entry.transitionDurationSec = 0.20f;
+            entry.transitionOpacity = 0.0f;
+            entry.transitionScale = 0.96f;
+        }
+        entry.hasCommittedBuffer = true;
+        std::cout << "[LCL Compositor] Mapped Window (ID: " << entry.windowId
+                  << ") after first client buffer commit\n";
+        return true;
+    };
     auto beginClosingTransition = [&](SurfaceEntry& entry) {
         entry.ignoreBufferCommits = true;
         if (entry.windowId > 0 && entry.pixels && entry.width > 0 && entry.height > 0) {
@@ -126,7 +170,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             changed = true;
         } else if (isSurfaceCreate) {
             uint32_t surfId = 1;
-            std::string title = "LCL Terminal";
+            std::string title = "LCL Application";
             int winX = DisplayScale::px(80);
             int winY = DisplayScale::px(60);
             int winW = DisplayScale::px(540);
@@ -140,8 +184,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             const auto roleIt = m_clientRoles.find(msg.clientFd);
             const protocol::LCLRole clientRole =
                 (roleIt != m_clientRoles.end()) ? roleIt->second : protocol::LCLRole::ClientApp;
-            const bool isWallpaper = clientRole == protocol::LCLRole::DesktopWallpaper;
-            const bool isShellPanel = clientRole == protocol::LCLRole::ShellPanel;
+            const bool isSystemSurface = clientRole == protocol::LCLRole::DesktopWallpaper ||
+                clientRole == protocol::LCLRole::ShellPanel;
 
             constexpr size_t kSurfaceCreateV1Size = offsetof(lcl::protocol::LCLMsgSurfaceCreate, bufferScale);
             if (msg.payload.size() >= kSurfaceCreateV1Size) {
@@ -160,30 +204,27 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             if (m_surfaces.find(surfaceKey) == m_surfaces.end()) {
                 SurfaceEntry entry{};
-                int frameW = winW;
-                int frameH = winH + DisplayScale::titleBarHeight();
-                entry.windowId = m_windowManager.createWindow(
-                    title, winX, winY, frameW, frameH,
-                    ::lcl::theme::UI::WindowTitleFocused);
-                if (isWallpaper || isShellPanel) {
-                    const auto layer = isWallpaper
+                entry.title = title;
+                entry.initialX = winX;
+                entry.initialY = winY;
+                entry.initialWidth = static_cast<uint32_t>(winW);
+                entry.initialHeight = static_cast<uint32_t>(winH);
+                entry.role = clientRole;
+                entry.suppressInitialTransition = isSystemSurface;
+                if (isSystemSurface) {
+                    entry.decorationMode = protocol::LCLDecorationMode::None;
+                    entry.layer = clientRole == protocol::LCLRole::DesktopWallpaper
                         ? protocol::LCLWindowLayer::Bottom
                         : protocol::LCLWindowLayer::TopMost;
-                    m_windowManager.setDecorationMode(entry.windowId, render::DecorationMode::None);
-                    m_windowManager.setWindowLayer(entry.windowId, layer, true);
-                    m_windowManager.setInsetBorderEnabled(entry.windowId, false);
+                    entry.unfocusable = true;
+                    entry.insetBorderEnabled = false;
                 }
                 entry.clientFd = msg.clientFd;
-                entry.width  = static_cast<uint32_t>(winW);
-                entry.height = static_cast<uint32_t>(winH);
-                entry.stride = entry.width * 4;
                 entry.bufferScale = bufferScale;
                 entry.appId = inferAppIdFromPid(msg.pid);
                 m_surfaces[surfaceKey] = entry;
-                std::cout << "[LCL Compositor] Created Window (ID: " << entry.windowId
-                          << ") for Surface " << surfId
+                std::cout << "[LCL Compositor] Registered unmapped Surface " << surfId
                           << " from client PID " << msg.pid << " (" << winW << "x" << winH << ")\n";
-                changed = true;
             } else {
                 m_surfaces[surfaceKey].clientFd = msg.clientFd;
             }
@@ -218,28 +259,17 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
 
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
-            if (m_surfaces.find(surfaceKey) == m_surfaces.end()) {
-                static int spawnIndex = 0;
-                int winX = DisplayScale::px(80 + (spawnIndex % 6) * 30);
-                int winY = DisplayScale::px(60 + (spawnIndex % 6) * 30);
-                spawnIndex++;
-
-                SurfaceEntry entry{};
-                int frameW = static_cast<int>(w);
-                int frameH = static_cast<int>(h) + DisplayScale::titleBarHeight();
-                entry.windowId = m_windowManager.createWindow(
-                    "LCL Terminal", winX, winY, frameW, frameH,
-                    ::lcl::theme::UI::WindowTitleFocused);
-                entry.clientFd = msg.clientFd;
-                entry.width  = w;
-                entry.height = h;
-                entry.stride = stride;
-                entry.bufferScale = 1.0f;
-                entry.appId = inferAppIdFromPid(msg.pid);
-                m_surfaces[surfaceKey] = entry;
+            auto surfaceIt = m_surfaces.find(surfaceKey);
+            if (surfaceIt == m_surfaces.end()) {
+                if (msg.passedFd >= 0) {
+                    close(msg.passedFd);
+                }
+                std::cerr << "[LCL Compositor ERROR] Ignoring AttachBuffer for unknown Surface "
+                          << surfId << " from client PID " << msg.pid << "\n";
+                continue;
             }
 
-            auto& entry = m_surfaces[surfaceKey];
+            auto& entry = surfaceIt->second;
             if (entry.ignoreBufferCommits || entry.transitionPhase == SurfaceEntry::TransitionPhase::Closing) {
                 if (msg.passedFd >= 0) {
                     close(msg.passedFd);
@@ -271,14 +301,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                         entry.width   = w;
                         entry.height  = h;
                         entry.stride  = stride;
-                        if (!entry.hasCommittedBuffer) {
-                            entry.hasCommittedBuffer = true;
-                            entry.transitionPhase = SurfaceEntry::TransitionPhase::Entering;
-                            entry.transitionElapsedSec = 0.0f;
-                            entry.transitionDurationSec = 0.20f;
-                            entry.transitionOpacity = 0.0f;
-                            entry.transitionScale = 0.96f;
-                        }
+                        mapSurface(entry);
                     } else {
                         std::cerr << "[LCL Compositor ERROR] mmap failed for memfd " << fd
                                   << ": " << strerror(errno) << "\n";
@@ -291,7 +314,12 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.stride = stride;
             }
 
-            // Calculate titleOffset based on window decoration mode
+            if (entry.windowId == 0) {
+                // The first visible commit must include a real shared buffer.
+                continue;
+            }
+
+            // Calculate titleOffset based on the mapped window decoration mode.
             int titleOffset = 0;
             for (const auto& win : m_windowManager.getWindows()) {
                 if (win.id == entry.windowId) {
@@ -324,14 +352,12 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             auto it = m_surfaces.find(surfaceKey);
             if (it != m_surfaces.end()) {
-                render::DecorationMode wmMode = render::DecorationMode::SSD;
-                if (mode == lcl::protocol::LCLDecorationMode::CSD) {
-                    wmMode = render::DecorationMode::CSD;
-                } else if (mode == lcl::protocol::LCLDecorationMode::None) {
-                    wmMode = render::DecorationMode::None;
+                it->second.decorationMode = mode;
+                const auto wmMode = toRenderDecorationMode(mode);
+                if (it->second.windowId != 0) {
+                    m_windowManager.setDecorationMode(it->second.windowId, wmMode);
                 }
-                m_windowManager.setDecorationMode(it->second.windowId, wmMode);
-                std::cout << "[LCL Compositor] Set decoration mode for Window " << it->second.windowId
+                std::cout << "[LCL Compositor] Set decoration mode for Surface " << surfId
                           << " to " << (wmMode == render::DecorationMode::None ? "None (Frameless)" : (wmMode == render::DecorationMode::CSD ? "CSD" : "SSD")) << "\n";
                 changed = true;
             }
@@ -407,15 +433,20 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
-                    m_windowManager.setWindowLayer(it->second.windowId, layerMsg->layer, layerMsg->unfocusable != 0);
+                    it->second.layer = layerMsg->layer;
+                    it->second.unfocusable = layerMsg->unfocusable != 0;
 
                     // Default policy: wallpaper and unfocusable top overlays (menu bar) do not get forced inset borders.
                     const bool disableInsetBorder =
                         (layerMsg->layer == lcl::protocol::LCLWindowLayer::Bottom) ||
                         (layerMsg->layer == lcl::protocol::LCLWindowLayer::TopMost && layerMsg->unfocusable != 0);
-                    m_windowManager.setInsetBorderEnabled(it->second.windowId, !disableInsetBorder);
+                    it->second.insetBorderEnabled = !disableInsetBorder;
+                    if (it->second.windowId != 0) {
+                        m_windowManager.setWindowLayer(it->second.windowId, it->second.layer, it->second.unfocusable);
+                        m_windowManager.setInsetBorderEnabled(it->second.windowId, it->second.insetBorderEnabled);
+                    }
 
-                    std::cout << "[LCL Compositor] Set window layer for Window " << it->second.windowId
+                    std::cout << "[LCL Compositor] Set window layer for Surface " << surfId
                               << " to " << static_cast<uint32_t>(layerMsg->layer)
                               << " (unfocusable=" << static_cast<int>(layerMsg->unfocusable) << ")\n";
                     changed = true;
@@ -428,7 +459,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | borderMsg->surfaceId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
-                    m_windowManager.setInsetBorderEnabled(it->second.windowId, borderMsg->enabled != 0);
+                    it->second.insetBorderEnabled = borderMsg->enabled != 0;
+                    if (it->second.windowId != 0) {
+                        m_windowManager.setInsetBorderEnabled(it->second.windowId, it->second.insetBorderEnabled);
+                    }
                     changed = true;
                 }
             }
@@ -439,7 +473,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | radiusMsg->surfaceId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
-                    m_windowManager.setWindowCornerRadius(it->second.windowId, radiusMsg->radiusPx * it->second.bufferScale);
+                    it->second.cornerRadiusPx = radiusMsg->radiusPx * it->second.bufferScale;
+                    if (it->second.windowId != 0) {
+                        m_windowManager.setWindowCornerRadius(it->second.windowId, it->second.cornerRadiusPx);
+                    }
                     changed = true;
                 }
             }

@@ -37,8 +37,11 @@ void WindowManager::unfocusAll() {
     }
 }
 
-uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int width, int height, uint32_t headerColor) {
-    unfocusAll();
+uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int width, int height,
+                                     uint32_t headerColor, bool focus) {
+    if (focus) {
+        unfocusAll();
+    }
 
     const int topInset = static_cast<int>(m_reservedZone.top);
     int clampedY = y;
@@ -58,7 +61,7 @@ uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int
     win.pendingWidth = width;
     win.pendingHeight = height;
     win.headerColor = headerColor;
-    win.isFocused = true;
+    win.isFocused = focus;
     win.markDirty();
 
     m_windows.push_back(win);
