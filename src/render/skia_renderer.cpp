@@ -289,7 +289,12 @@ bool SkiaRenderer::initGLShader() {
         "    vec2 p = vRectPx - (uSizePx * 0.5);\n"
         "    vec2 halfOuter = uSizePx * 0.5;\n"
         "    float sdOuter = sdSuperRoundRect(p, halfOuter, r, n);\n"
-        "    float outerMask = 1.0 - smoothstep(0.0, 1.0, sdOuter);\n"
+        // Center the one-device-pixel coverage ramp on the analytic edge.
+        // The previous [0, 1] ramp marked a pixel exactly on the boundary as
+        // fully opaque, which made 16px titlebar controls look stair-stepped.
+        // This matches the symmetric subpixel coverage used by the software
+        // Canvas path that renders CSD controls into client buffers.
+        "    float outerMask = 1.0 - smoothstep(-0.5, 0.5, sdOuter);\n"
         "\n"
         "    float bw = max(0.0, uBorderWidthPx);\n"
         "    float innerMask = 0.0;\n"
@@ -298,7 +303,7 @@ bool SkiaRenderer::initGLShader() {
         "        vec2 halfInner = innerSize * 0.5;\n"
         "        float innerR = max(0.0, r - bw);\n"
         "        float sdInner = sdSuperRoundRect(p, halfInner, innerR, n);\n"
-        "        innerMask = 1.0 - smoothstep(0.0, 1.0, sdInner);\n"
+        "        innerMask = 1.0 - smoothstep(-0.5, 0.5, sdInner);\n"
         "    }\n"
         "\n"
         "    float borderMask = (bw > 0.001) ? max(0.0, outerMask - innerMask) : 0.0;\n"
