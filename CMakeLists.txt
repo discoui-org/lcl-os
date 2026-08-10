@@ -27,12 +27,28 @@ set(BUILD_QJS_LIBC OFF CACHE BOOL "" FORCE)
 set(BUILD_CLI OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(quickjs)
 
-if(TARGET qjs)
-    target_compile_options(qjs PRIVATE -Wno-error -Wno-unused-parameter -Wno-format)
-endif()
+# QuickJS owns a directory-wide -Werror policy.  Keep LCL targets strict, but
+# do not let new host compiler diagnostics in vendored QuickJS tools fail the
+# product build.
+foreach(quickjs_target IN ITEMS qjs qjsc qjs_exe run-test262 function_source test_conv)
+    if(TARGET ${quickjs_target})
+        target_compile_options(${quickjs_target} PRIVATE -Wno-error)
+    endif()
+endforeach()
 
 # Compiler flags for LCL OS core
 add_compile_options(-Wall -Wextra -Wpedantic)
+
+# Shared IPC wire-format implementation.  Keeping it separate lets clients
+# and compositor use one protocol binary without changing the existing v2
+# message contract.
+add_library(lcl-protocol STATIC
+    src/core/ipc/lcl_protocol.cpp
+)
+
+target_include_directories(lcl-protocol PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 
 # Main Compositor Executable Target
 add_executable(lcl-core
@@ -46,7 +62,6 @@ add_executable(lcl-core
     src/core/input/input_manager.cpp
     src/core/input/key_mapper.cpp
     src/core/ipc/ipc_manager.cpp
-    src/core/ipc/lcl_protocol.cpp
     src/core/session/startup_manager.cpp
     src/core/terminal/pty_manager.cpp
     src/render/font_renderer.cpp
@@ -68,6 +83,7 @@ target_include_directories(lcl-core PRIVATE
 
 target_link_libraries(lcl-core PRIVATE
     lcl-ui
+    lcl-protocol
     ${DRM_LIBRARIES}
     ${GBM_LIBRARIES}
     ${EGL_LIBRARIES}
@@ -91,18 +107,20 @@ add_executable(lcl-open
     src/tools/open_main.cpp
     src/core/app/app_bundle_parser.cpp
     src/core/ipc/ipc_manager.cpp
-    src/core/ipc/lcl_protocol.cpp
 )
 
 target_include_directories(lcl-open PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+target_link_libraries(lcl-open PRIVATE
+    lcl-protocol
+)
+
 # Standalone Window Manager Daemon Target (lcl-desktop-wm)
 add_executable(lcl-desktop-wm
     src/tools/desktop_wm_main.cpp
     src/core/ipc/ipc_manager.cpp
-    src/core/ipc/lcl_protocol.cpp
 )
 
 target_include_directories(lcl-desktop-wm PRIVATE
@@ -110,6 +128,7 @@ target_include_directories(lcl-desktop-wm PRIVATE
 )
 
 target_link_libraries(lcl-desktop-wm PRIVATE
+    lcl-protocol
     Threads::Threads
 )
 
@@ -117,7 +136,6 @@ target_link_libraries(lcl-desktop-wm PRIVATE
 add_executable(lcl-desktop-shell
     src/apps/desktop_shell/ui_main.cpp
     src/core/ipc/ipc_manager.cpp
-    src/core/ipc/lcl_protocol.cpp
     src/core/app/app_bundle_parser.cpp
     src/core/display/display_scale.cpp
     src/render/font_renderer.cpp
@@ -130,6 +148,7 @@ target_include_directories(lcl-desktop-shell PRIVATE
 
 target_link_libraries(lcl-desktop-shell PRIVATE
     lcl-ui
+    lcl-protocol
     Threads::Threads
 )
 
@@ -141,7 +160,6 @@ add_executable(lcl-terminal
     src/core/terminal/pty_manager.cpp
     src/core/display/display_scale.cpp
     src/core/ipc/ipc_manager.cpp
-    src/core/ipc/lcl_protocol.cpp
     src/render/font_renderer.cpp
 )
 
@@ -152,6 +170,7 @@ target_include_directories(lcl-terminal PRIVATE
 
 target_link_libraries(lcl-terminal PRIVATE
     lcl-ui
+    lcl-protocol
     Threads::Threads
 )
 
@@ -201,7 +220,6 @@ if(BUILD_TESTS)
         tests/test_lcl_ui.cpp
         tests/test_lcl_ui_events.cpp
         tests/test_js_runtime.cpp
-        src/core/ipc/lcl_protocol.cpp
         src/core/ipc/ipc_manager.cpp
         src/core/app/app_bundle_parser.cpp
         src/core/display/display_scale.cpp
@@ -227,6 +245,7 @@ if(BUILD_TESTS)
         gtest
         Threads::Threads
         lcl-ui
+        lcl-protocol
         qjs
         ${LIBINPUT_LIBRARIES}
         ${UDEV_LIBRARIES}
@@ -235,4 +254,3 @@ if(BUILD_TESTS)
     include(GoogleTest)
     gtest_discover_tests(lcl_unit_tests)
 endif()
-

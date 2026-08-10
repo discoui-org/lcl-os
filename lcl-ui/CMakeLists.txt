@@ -38,7 +38,6 @@ add_library(lcl-ui STATIC
     ${CMAKE_SOURCE_DIR}/src/render/font_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/core/display/egl_backend.cpp
     ${CMAKE_SOURCE_DIR}/src/core/display/display_scale.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ipc/lcl_protocol.cpp
 )
 
 target_include_directories(lcl-ui PUBLIC
@@ -52,6 +51,7 @@ target_include_directories(lcl-ui PUBLIC
 )
 
 target_link_libraries(lcl-ui PUBLIC
+    lcl-protocol
     yogacore
     Threads::Threads
     ${DRM_LIBRARIES}
