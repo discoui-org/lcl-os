@@ -35,8 +35,15 @@ bool InputRouter::route(const InputEvent& event) {
     return stateChanged;
 }
 
+void InputRouter::syncWindowState() {
+    sendPendingConfigures();
+}
+
 void InputRouter::sendPendingConfigures() {
     for (const auto& window : m_windowManager.getWindows()) {
+        if (window.isMinimized) {
+            continue;
+        }
         for (const auto& [surfaceKey, entry] : m_surfaces) {
             if (entry.windowId != window.id || entry.clientFd < 0) {
                 continue;

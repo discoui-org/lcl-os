@@ -480,6 +480,9 @@ void Renderer::renderDesktop(const WindowManager& windowManager,
 
     // 1. Render registered client surfaces/windows (with text-based fallback content)
     for (const auto& win : windowManager.getWindows()) {
+        if (win.isMinimized) {
+            continue;
+        }
         const WindowRenderContent* content = nullptr;
         for (const auto& c : windowContents) {
             if (c.windowId == win.id) { content = &c; break; }

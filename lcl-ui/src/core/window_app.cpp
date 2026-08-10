@@ -429,32 +429,45 @@ void WindowApp::setExternalIpcSocket(int socketFd) {
     m_ownsSocketFd = false;
 }
 
-bool WindowApp::requestWindowMove(float localX, float localY) {
+bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
+                                    float localX, float localY) {
     if (!m_ipcConnected || m_socketFd < 0) return false;
 
     lcl::protocol::LCLHeader header{};
-    header.opcode = lcl::protocol::LCLOpcode::BeginWindowMove;
-    header.payloadSize = sizeof(lcl::protocol::LCLMsgBeginWindowMove);
+    header.opcode = lcl::protocol::LCLOpcode::RequestWindowAction;
+    header.payloadSize = sizeof(lcl::protocol::LCLMsgRequestWindowAction);
 
-    lcl::protocol::LCLMsgBeginWindowMove msg{};
+    lcl::protocol::LCLMsgRequestWindowAction msg{};
     msg.surfaceId = m_surfaceId;
+    msg.action = action;
     msg.localX = localX;
     msg.localY = localY;
 
     return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
 }
 
+bool WindowApp::requestWindowDrag(float localX, float localY) {
+    return requestWindowAction(lcl::protocol::LCLWindowAction::BeginDrag, localX, localY);
+}
+
+bool WindowApp::requestWindowMinimize() {
+    return requestWindowAction(lcl::protocol::LCLWindowAction::Minimize);
+}
+
+bool WindowApp::requestWindowMaximize() {
+    return requestWindowAction(lcl::protocol::LCLWindowAction::Maximize);
+}
+
+bool WindowApp::requestWindowRestore() {
+    return requestWindowAction(lcl::protocol::LCLWindowAction::Restore);
+}
+
+bool WindowApp::requestWindowToggleMaximize() {
+    return requestWindowAction(lcl::protocol::LCLWindowAction::ToggleMaximize);
+}
+
 bool WindowApp::requestWindowClose() {
-    if (!m_ipcConnected || m_socketFd < 0) return false;
-
-    lcl::protocol::LCLHeader header{};
-    header.opcode = lcl::protocol::LCLOpcode::RequestSurfaceClose;
-    header.payloadSize = sizeof(lcl::protocol::LCLMsgRequestSurfaceClose);
-
-    lcl::protocol::LCLMsgRequestSurfaceClose msg{};
-    msg.surfaceId = m_surfaceId;
-
-    return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
+    return requestWindowAction(lcl::protocol::LCLWindowAction::Close);
 }
 
 bool WindowApp::setDecorationMode(lcl::protocol::LCLDecorationMode mode) {
@@ -519,11 +532,13 @@ bool WindowApp::setWindowCornerRadius(float radiusPx) {
     return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
 }
 
-void WindowApp::configureCsdTitlebar(float height, float closeLeft, float closeTop, float closeSize) {
+void WindowApp::configureCsdTitlebar(float height, float controlLeft, float controlTop,
+                                     float controlSize, float controlGap) {
     m_csdTitlebarHeight = std::max(0.0f, height);
-    m_csdCloseLeft = closeLeft;
-    m_csdCloseTop = closeTop;
-    m_csdCloseSize = std::max(0.0f, closeSize);
+    m_csdControlLeft = controlLeft;
+    m_csdControlTop = controlTop;
+    m_csdControlSize = std::max(0.0f, controlSize);
+    m_csdControlGap = std::max(0.0f, controlGap);
 }
 
 bool WindowApp::sendPointerMove(float x, float y) {
@@ -536,13 +551,25 @@ bool WindowApp::sendPointerMove(float x, float y) {
 
 bool WindowApp::sendPointerDown(float x, float y, int button) {
     if (m_csdTitlebarEnabled && button == 0 && y >= 0.0f && y <= m_csdTitlebarHeight) {
-        const bool inCloseX = x >= m_csdCloseLeft && x <= (m_csdCloseLeft + m_csdCloseSize);
-        const bool inCloseY = y >= m_csdCloseTop && y <= (m_csdCloseTop + m_csdCloseSize);
-        if (inCloseX && inCloseY) {
+        const bool inControlY = y >= m_csdControlTop && y <= (m_csdControlTop + m_csdControlSize);
+        const auto isControl = [&](int index) {
+            const float left = m_csdControlLeft +
+                static_cast<float>(index) * (m_csdControlSize + m_csdControlGap);
+            return inControlY && x >= left && x <= (left + m_csdControlSize);
+        };
+        if (isControl(0)) {
             requestWindowClose();
             return true;
         }
-        requestWindowMove(x, y);
+        if (isControl(1)) {
+            requestWindowMinimize();
+            return true;
+        }
+        if (isControl(2)) {
+            requestWindowToggleMaximize();
+            return true;
+        }
+        requestWindowDrag(x, y);
         return true;
     }
 

@@ -1,6 +1,7 @@
 #include "render/window_manager.hpp"
 #include "core/display/display_scale.hpp"
 #include "theme/palette.hpp"
+#include "lcl-ui/widgets/window_chrome.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cmath>
@@ -78,7 +79,7 @@ bool WindowManager::removeWindow(uint32_t windowId) {
 
         if (!m_windows.empty()) {
             for (auto revIt = m_windows.rbegin(); revIt != m_windows.rend(); ++revIt) {
-                if (!revIt->isUnfocusable) {
+                if (!revIt->isUnfocusable && !revIt->isMinimized) {
                     revIt->isFocused = true;
                     revIt->headerColor = lcl::theme::UI::WindowTitleFocused;
                     break;
@@ -109,6 +110,36 @@ namespace {
         if (nearBottom) return ResizeEdge::Bottom;
 
         return ResizeEdge::None;
+    }
+
+    int hitWindowChromeControl(const Window& win, int mouseX, int mouseY) {
+        if (win.decorationMode != DecorationMode::SSD) return -1;
+
+        const float scale = core::DisplayScale::factor();
+        const lcl::ui::chrome::WindowChromeStyle style;
+        const float cornerRadius = win.cornerRadiusPx >= 0.0f
+            ? win.cornerRadiusPx / scale
+            : 20.0f;
+        const auto layout = lcl::ui::chrome::calculateWindowTitlebarLayout(
+            static_cast<float>(win.width) / scale,
+            static_cast<float>(core::DisplayScale::kTitleBarHeight),
+            cornerRadius,
+            static_cast<float>(core::DisplayScale::kBaseFontPx),
+            style);
+
+        const int controlTop = win.y + static_cast<int>(std::lround(layout.controlTop * scale));
+        const int controlSize = std::max(1, static_cast<int>(std::lround(style.controlSize * scale)));
+        if (mouseY < controlTop || mouseY > controlTop + controlSize) return -1;
+
+        for (int index = 0; index < 3; ++index) {
+            const float left = layout.controlLeft +
+                static_cast<float>(index) * (style.controlSize + style.controlGap);
+            const int controlLeft = win.x + static_cast<int>(std::lround(left * scale));
+            if (mouseX >= controlLeft && mouseX <= controlLeft + controlSize) {
+                return index;
+            }
+        }
+        return -1;
     }
 }
 
@@ -270,7 +301,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
 
             for (int i = static_cast<int>(m_windows.size()) - 1; i >= 0; --i) {
                 const auto& win = m_windows[i];
-                if (win.isUnfocusable || win.layer == protocol::LCLWindowLayer::Bottom) {
+                if (win.isUnfocusable || win.isMinimized || win.layer == protocol::LCLWindowLayer::Bottom) {
                     continue; // Skip unfocusable background surfaces (e.g. Wallpaper)
                 }
                 if (m_mouseX >= win.x - border && m_mouseX < win.x + win.width + border &&
@@ -292,21 +323,22 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                 if (targetIt != m_windows.end()) {
                     auto& targetWin = *targetIt;
                     const int titleH = (targetWin.decorationMode == DecorationMode::SSD) ? core::DisplayScale::titleBarHeight() : 0;
-                    const int btn = core::DisplayScale::trafficBtn();
-                    const int btnPad = core::DisplayScale::px(10);
+                    const int chromeControl = hitWindowChromeControl(targetWin, m_mouseX, m_mouseY);
 
-                    // Close button check (only when explicitly clicked or Super shortcut used)
+                    // Controls share the exact WindowChrome layout used to draw SSD.
                     if (event.superPressed && event.button == BTN_MIDDLE) {
                         targetWin.closeRequested = true;
                         targetWin.markDirty();
                         stateChanged = true;
-                    } else if (!event.superPressed && targetWin.decorationMode == DecorationMode::SSD &&
-                               m_mouseX >= targetWin.x + btnPad && m_mouseX <= targetWin.x + btnPad + btn &&
-                               m_mouseY >= targetWin.y + btnPad && m_mouseY <= targetWin.y + btnPad + btn) {
+                    } else if (!event.superPressed && chromeControl == 0) {
                         std::cout << "[LCL WM] Close button clicked on window ID: " << targetWin.id << "\n";
                         targetWin.closeRequested = true;
                         targetWin.markDirty();
                         stateChanged = true;
+                    } else if (!event.superPressed && chromeControl == 1) {
+                        stateChanged = minimizeWindow(targetWin.id) || stateChanged;
+                    } else if (!event.superPressed && chromeControl == 2) {
+                        stateChanged = toggleMaximizeWindow(targetWin.id) || stateChanged;
                     } else if (event.superPressed) {
                         // GNOME / KDE Style Super Shortcuts
                         if (event.button == BTN_LEFT) {
@@ -645,12 +677,119 @@ void WindowManager::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left
     std::cout << "[LCL WindowManager] Reserved Zone set to top=" << top << " bottom=" << bottom << " left=" << left << " right=" << right << "\n";
 }
 
+bool WindowManager::beginWindowDrag(uint32_t windowId, int localX, int localY) {
+    focusWindow(windowId);
+    auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
+        return w.id == windowId;
+    });
+    if (it == m_windows.end() || it->isUnfocusable || it->isMinimized) return false;
+
+    it->isDragging = true;
+    it->isResizing = false;
+    it->snapBackActive = false;
+    it->snapVelX = 0.0f;
+    it->snapVelY = 0.0f;
+    it->dragOffsetX = std::clamp(localX, 0, std::max(0, it->width - 1));
+    it->dragOffsetY = std::clamp(localY, 0, std::max(0, it->height - 1));
+    it->markDirty();
+    m_mouseDirty = true;
+    return true;
+}
+
+bool WindowManager::minimizeWindow(uint32_t windowId) {
+    auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
+        return w.id == windowId;
+    });
+    if (it == m_windows.end() || it->isUnfocusable || it->isMinimized) return false;
+
+    const bool wasFocused = it->isFocused;
+    it->isMinimized = true;
+    it->isDragging = false;
+    it->isResizing = false;
+    it->snapBackActive = false;
+    it->markDirty();
+    if (wasFocused) {
+        unfocusAll();
+        focusTopmostVisibleWindow();
+    }
+    m_mouseDirty = true;
+    return true;
+}
+
+bool WindowManager::maximizeWindow(uint32_t windowId) {
+    auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
+        return w.id == windowId;
+    });
+    if (it == m_windows.end() || it->isUnfocusable || it->isMaximized) return false;
+
+    it->isMinimized = false;
+    it->restoreX = it->x;
+    it->restoreY = it->y;
+    it->restoreWidth = it->width;
+    it->restoreHeight = it->height;
+    it->x = static_cast<int>(m_reservedZone.left);
+    it->y = static_cast<int>(m_reservedZone.top);
+    it->width = std::max(1, static_cast<int>(m_screenWidth) - static_cast<int>(m_reservedZone.left) - static_cast<int>(m_reservedZone.right));
+    it->height = std::max(1, static_cast<int>(m_screenHeight) - static_cast<int>(m_reservedZone.top) - static_cast<int>(m_reservedZone.bottom));
+    it->pendingX = it->x;
+    it->pendingY = it->y;
+    it->pendingWidth = it->width;
+    it->pendingHeight = it->height;
+    it->isMaximized = true;
+    it->isDragging = false;
+    it->isResizing = false;
+    it->activeResizeEdge = ResizeEdge::None;
+    it->markDirty();
+    focusWindow(windowId);
+    m_mouseDirty = true;
+    return true;
+}
+
+bool WindowManager::restoreWindow(uint32_t windowId) {
+    auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
+        return w.id == windowId;
+    });
+    if (it == m_windows.end() || it->isUnfocusable) return false;
+
+    const bool wasMinimized = it->isMinimized;
+    const bool wasMaximized = it->isMaximized;
+    if (!wasMinimized && !wasMaximized) return false;
+
+    it->isMinimized = false;
+    // Restoring a minimized maximized window returns it to its still-maximized
+    // work-area geometry. Only an explicit restore from visible maximized state
+    // returns to the saved pre-maximize bounds.
+    if (wasMaximized && !wasMinimized) {
+        it->x = it->restoreX;
+        it->y = it->restoreY;
+        it->width = std::max(1, it->restoreWidth);
+        it->height = std::max(1, it->restoreHeight);
+        it->pendingX = it->x;
+        it->pendingY = it->y;
+        it->pendingWidth = it->width;
+        it->pendingHeight = it->height;
+        it->isMaximized = false;
+    }
+    it->markDirty();
+    focusWindow(windowId);
+    m_mouseDirty = true;
+    return true;
+}
+
+bool WindowManager::toggleMaximizeWindow(uint32_t windowId) {
+    const auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
+        return w.id == windowId;
+    });
+    if (it == m_windows.end()) return false;
+    return it->isMaximized ? restoreWindow(windowId) : maximizeWindow(windowId);
+}
+
 void WindowManager::focusWindow(uint32_t windowId) {
     auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
         return w.id == windowId;
     });
 
-    if (it != m_windows.end()) {
+    if (it != m_windows.end() && !it->isMinimized) {
         Window target = *it;
         m_windows.erase(it);
 
@@ -664,6 +803,17 @@ void WindowManager::focusWindow(uint32_t windowId) {
         m_windows.push_back(target);
         sortWindowsByLayer();
         m_mouseDirty = true;
+    }
+}
+
+void WindowManager::focusTopmostVisibleWindow() {
+    for (auto it = m_windows.rbegin(); it != m_windows.rend(); ++it) {
+        if (!it->isMinimized && !it->isUnfocusable) {
+            it->isFocused = true;
+            it->headerColor = lcl::theme::UI::WindowTitleFocused;
+            it->markDirty();
+            break;
+        }
     }
 }
 

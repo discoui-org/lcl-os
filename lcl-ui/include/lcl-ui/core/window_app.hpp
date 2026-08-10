@@ -85,7 +85,16 @@ public:
     void setOnFrame(FrameCallback callback) { m_onFrame = std::move(callback); }
     void requestQuit() { m_running = false; }
 
-    bool requestWindowMove(float localX, float localY);
+    /** Ask the compositor to begin moving this window from a client-local point. */
+    bool requestWindowDrag(float localX, float localY);
+    /** Hide this window while keeping its client process and surface alive. */
+    bool requestWindowMinimize();
+    /** Expand this window to the compositor work area. */
+    bool requestWindowMaximize();
+    /** Restore this window from maximized or minimized state. */
+    bool requestWindowRestore();
+    /** Toggle between maximized and restored geometry. */
+    bool requestWindowToggleMaximize();
     bool requestWindowClose();
     bool setDecorationMode(lcl::protocol::LCLDecorationMode mode);
     bool setWindowLayer(lcl::protocol::LCLWindowLayer layer, bool unfocusable = false);
@@ -93,7 +102,13 @@ public:
     bool setWindowCornerRadius(float radiusPx);
     void setExternalIpcSocket(int socketFd);
     void setCsdTitlebarEnabled(bool enabled) { m_csdTitlebarEnabled = enabled; }
-    void configureCsdTitlebar(float height, float closeLeft, float closeTop, float closeSize);
+    /**
+     * Enable default CSD chrome behavior for the shared three-control layout.
+     * Custom CSD controls can leave this disabled and call the request methods
+     * above directly from any widget or user-area gesture.
+     */
+    void configureCsdTitlebar(float height, float controlLeft, float controlTop,
+                              float controlSize, float controlGap = 6.0f);
 
     // Frame Execution & Render Loop Pipeline
     void updateLayout();
@@ -104,6 +119,8 @@ public:
 private:
     void pollIPC();
     void allocateSHM(uint32_t width, uint32_t height);
+    bool requestWindowAction(lcl::protocol::LCLWindowAction action,
+                             float localX = 0.0f, float localY = 0.0f);
 
     uint32_t m_width;
     uint32_t m_height;
@@ -150,9 +167,10 @@ private:
 
     bool m_csdTitlebarEnabled{false};
     float m_csdTitlebarHeight{32.0f};
-    float m_csdCloseLeft{10.0f};
-    float m_csdCloseTop{8.0f};
-    float m_csdCloseSize{16.0f};
+    float m_csdControlLeft{10.0f};
+    float m_csdControlTop{8.0f};
+    float m_csdControlSize{16.0f};
+    float m_csdControlGap{6.0f};
     lcl::protocol::LCLDecorationMode m_requestedDecorationMode{lcl::protocol::LCLDecorationMode::None};
     bool m_hasRequestedDecorationMode{false};
     float m_requestedCornerRadius{0.0f};

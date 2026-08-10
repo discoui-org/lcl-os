@@ -10,7 +10,7 @@
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
-#include "lcl-ui/widgets/text.hpp"
+#include "lcl-ui/widgets/window_chrome.hpp"
 
 namespace {
 
@@ -18,10 +18,7 @@ constexpr uint32_t kSurfaceWidth = 540;
 constexpr uint32_t kSurfaceHeight = 360;
 constexpr float kTitlebarHeight = 34.0f;
 constexpr float kCornerRadius = 20.0f;
-constexpr float kControlSize = 16.0f;
-constexpr float kControlGap = 6.0f;
-constexpr float kControlLeft = 12.0f;
-constexpr float kControlTop = 8.0f;
+constexpr float kTitleFontSize = 14.0f;
 
 bool isTerminalControlKey(int keyCode, uint8_t modifiers) {
     if ((modifiers & lcl::core::LCL_MOD_CTRL) != 0) {
@@ -50,56 +47,6 @@ bool isTerminalControlKey(int keyCode, uint8_t modifiers) {
     }
 }
 
-std::unique_ptr<lcl::ui::Container> makeTitlebar(float width) {
-    auto titlebar = std::make_unique<lcl::ui::Container>();
-    titlebar->setBackgroundColor({255, 255, 255, 0});
-    titlebar->setBorderRadius(0.0f);
-    titlebar->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    titlebar->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-    titlebar->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-    titlebar->getYogaNode().setWidth(width);
-    titlebar->getYogaNode().setHeight(kTitlebarHeight);
-
-    const float titleLeft = kControlLeft + (kControlSize * 3.0f) +
-                            (kControlGap * 2.0f) + 12.0f;
-    const auto makeControl = [](float left, const char* glyph) {
-        auto control = std::make_unique<lcl::ui::Container>();
-        control->setBackgroundColor({235, 241, 248, 56});
-        control->setBorderColor({230, 238, 248, 120});
-        control->setBorderWidth(1.0f);
-        control->setBorderRadius(kControlSize * 0.5f);
-        control->setBorderRoundness(2.0f);
-        control->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        control->getYogaNode().setPosition(YGEdgeLeft, left);
-        control->getYogaNode().setPosition(YGEdgeTop, kControlTop);
-        control->getYogaNode().setWidth(kControlSize);
-        control->getYogaNode().setHeight(kControlSize);
-
-        auto icon = std::make_unique<lcl::ui::Text>(glyph);
-        icon->setTextColor({236, 244, 252, 224});
-        icon->setFontSize(11.0f);
-        icon->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        icon->getYogaNode().setPosition(YGEdgeLeft, kControlSize * 0.32f);
-        icon->getYogaNode().setPosition(YGEdgeTop, kControlSize * 0.16f);
-        control->addChild(std::move(icon));
-        return control;
-    };
-
-    titlebar->addChild(makeControl(kControlLeft, "x"));
-    titlebar->addChild(makeControl(kControlLeft + kControlSize + kControlGap, "-"));
-    titlebar->addChild(makeControl(kControlLeft + (kControlSize + kControlGap) * 2.0f, "+"));
-
-    auto title = std::make_unique<lcl::ui::Text>("LCL Terminal");
-    title->setTextColor({240, 248, 255, 245});
-    title->setFontSize(14.0f);
-    title->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    title->getYogaNode().setPosition(YGEdgeLeft, titleLeft);
-    title->getYogaNode().setPosition(YGEdgeTop, 9.0f);
-    titlebar->addChild(std::move(title));
-
-    return titlebar;
-}
-
 } // namespace
 
 int main() {
@@ -118,7 +65,19 @@ int main() {
     window.setDecorationMode(lcl::protocol::LCLDecorationMode::CSD);
     window.setWindowCornerRadius(kCornerRadius);
     window.setCsdTitlebarEnabled(true);
-    window.configureCsdTitlebar(kTitlebarHeight, kControlLeft, kControlTop, kControlSize);
+
+    // CSD uses the same chrome geometry as compositor-owned titlebars.  The
+    // WindowApp close hit target is derived from that shared first control.
+    const lcl::ui::chrome::WindowChromeStyle chromeStyle;
+    const auto titlebarLayout = lcl::ui::chrome::calculateWindowTitlebarLayout(
+        static_cast<float>(kSurfaceWidth), kTitlebarHeight, kCornerRadius,
+        kTitleFontSize, chromeStyle);
+    window.configureCsdTitlebar(
+        kTitlebarHeight,
+        titlebarLayout.controlLeft,
+        titlebarLayout.controlTop,
+        chromeStyle.controlSize,
+        chromeStyle.controlGap);
 
     // Keep the terminal's alpha background on the inexpensive rectangular
     // raster path.  The compositor owns the final rounded window mask.
@@ -161,7 +120,13 @@ int main() {
     terminalView->getYogaNode().setWidth(static_cast<float>(kSurfaceWidth));
     terminalView->getYogaNode().setHeight(static_cast<float>(kSurfaceHeight));
 
-    auto titlebar = makeTitlebar(static_cast<float>(kSurfaceWidth));
+    auto titlebar = lcl::ui::chrome::buildWindowTitlebar(
+        static_cast<float>(kSurfaceWidth),
+        kTitlebarHeight,
+        kCornerRadius,
+        "LCL Terminal",
+        kTitleFontSize,
+        chromeStyle);
     lcl::ui::Container* titlebarPtr = titlebar.get();
 
     root->addChild(std::move(backdrop));

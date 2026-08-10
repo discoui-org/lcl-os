@@ -81,6 +81,12 @@ struct Window {
     int anchorBottom{0};
 
     bool closeRequested{false};
+    bool isMinimized{false};
+    bool isMaximized{false};
+    int restoreX{0};
+    int restoreY{0};
+    int restoreWidth{0};
+    int restoreHeight{0};
     bool drawInsetBorder{true};
     float cornerRadiusPx{-1.0f}; // < 0 means use compositor default policy
 
@@ -187,6 +193,13 @@ public:
      */
     void setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right);
 
+    /** Start a compositor-owned drag from a client-local pointer position. */
+    bool beginWindowDrag(uint32_t windowId, int localX, int localY);
+    bool minimizeWindow(uint32_t windowId);
+    bool maximizeWindow(uint32_t windowId);
+    bool restoreWindow(uint32_t windowId);
+    bool toggleMaximizeWindow(uint32_t windowId);
+
     const ReservedZone& getReservedZone() const { return m_reservedZone; }
 
     /**
@@ -216,7 +229,7 @@ public:
 
     uint32_t getFocusedWindowId() const {
         for (auto it = m_windows.rbegin(); it != m_windows.rend(); ++it) {
-            if (it->isFocused) return it->id;
+            if (it->isFocused && !it->isMinimized) return it->id;
         }
         return 0;
     }
@@ -228,6 +241,7 @@ public:
 
 private:
     void unfocusAll(); ///< Clear focus + reset header color on all windows
+    void focusTopmostVisibleWindow();
     void updateWindowZOrders();
 
     uint32_t m_screenWidth{1024};
@@ -245,4 +259,3 @@ private:
 };
 
 } // namespace lcl::render
-

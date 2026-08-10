@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <memory>
 #include <string>
 
@@ -10,7 +9,7 @@
 
 namespace lcl::ui::chrome {
 
-struct HeaderControlsStyle {
+struct WindowChromeStyle {
     float controlSize{16.0f};
     float controlGap{6.0f};
     float controlLeftRadiusOffset{8.0f};
@@ -24,10 +23,12 @@ struct HeaderControlsStyle {
     float titleBarCornerRadiusAdjust{0.0f};
     float titleBarRoundness{2.0f};
 
-    Color buttonBackground{235, 241, 248, 40};
-    Color buttonBorder{230, 238, 248, 92};
-    Color buttonGlyph{232, 240, 248, 210};
-    Color titleColor{230, 245, 255, 220};
+    // Controls are the same widgets in CSD and SSD. The renderer selects the
+    // antialiasing backend; style values stay independent of that backend.
+    Color buttonBackground{235, 241, 248, 56};
+    Color buttonBorder{230, 238, 248, 120};
+    Color buttonGlyph{236, 244, 252, 224};
+    Color titleColor{240, 248, 255, 245};
     Color titleBarBackground{0, 0, 0, 0};
 
     float buttonBorderWidth{1.0f};
@@ -36,6 +37,40 @@ struct HeaderControlsStyle {
     float glyphLeftFactor{0.32f};
     float glyphTopFactor{0.16f};
 };
+
+struct WindowTitlebarLayout {
+    float controlLeft{0.0f};
+    float controlTop{0.0f};
+    float titleLeft{0.0f};
+    float titleTop{0.0f};
+    float titleWidth{0.0f};
+};
+
+inline WindowTitlebarLayout calculateWindowTitlebarLayout(float width,
+                                                           float titleHeight,
+                                                           float cornerRadius,
+                                                           float titleFontSize,
+                                                           const WindowChromeStyle& style = WindowChromeStyle{}) {
+    const float radiusCenterInset = std::max(
+        style.minControlLeft,
+        cornerRadius - style.controlLeftRadiusOffset);
+    const float controlInset = std::max(radiusCenterInset, style.minControlTop);
+    const float titleLeft = std::max(
+        style.titleMinLeft,
+        controlInset + (style.controlSize * 3.0f) +
+            (style.controlGap * 2.0f) + style.titleGapAfterControls);
+
+    return {
+        controlInset,
+        controlInset,
+        titleLeft,
+        std::clamp(
+            controlInset + (style.controlSize - titleFontSize) * 0.5f,
+            0.0f,
+            std::max(0.0f, titleHeight - titleFontSize)),
+        std::max(0.0f, width - titleLeft - style.titleRightPadding),
+    };
+}
 
 inline std::string truncateTitleToWidth(const std::string& title, float widthPx, float fontSizePx) {
     std::string out = title;
@@ -61,12 +96,12 @@ inline std::string truncateTitleToWidth(const std::string& title, float widthPx,
     return out;
 }
 
-inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
-                                                           float titleHeight,
-                                                           float cornerRadius,
-                                                           const std::string& title,
-                                                           float titleFontSize,
-                                                           const HeaderControlsStyle& style = HeaderControlsStyle{}) {
+inline std::unique_ptr<Container> buildWindowTitlebar(float width,
+                                                       float titleHeight,
+                                                       float cornerRadius,
+                                                       const std::string& title,
+                                                       float titleFontSize,
+                                                       const WindowChromeStyle& style = WindowChromeStyle{}) {
     auto titleBar = std::make_unique<Container>();
     titleBar->setBackgroundColor(Color{0, 0, 0, 0});
     titleBar->setBorderRadius(0.0f);
@@ -97,18 +132,8 @@ inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
 
     titleBar->addChild(std::move(bgRoundedTop));
 
-    // Place controls so top and left insets are equal, with radius-centered anchor.
-    // This keeps the close button visually centered against the window corner arc.
-    const float radiusCenterInset = std::max(
-        style.minControlLeft,
-        cornerRadius - style.controlLeftRadiusOffset);
-    const float ctrlInset = std::max(radiusCenterInset, style.minControlTop);
-    const float ctrlLeft = ctrlInset;
-    const float ctrlTop = ctrlInset;
-    const float titleStartX = std::max(
-        style.titleMinLeft,
-        ctrlLeft + (style.controlSize * 3.0f) + (style.controlGap * 2.0f) + style.titleGapAfterControls);
-    const float titleAvailW = std::max(0.0f, width - titleStartX - style.titleRightPadding);
+    const WindowTitlebarLayout layout = calculateWindowTitlebarLayout(
+        width, titleHeight, cornerRadius, titleFontSize, style);
 
     auto mkHeaderControl = [&](float left, const char* glyph) {
         auto button = std::make_unique<Container>();
@@ -120,7 +145,7 @@ inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
         button->setBorderRoundness(2.0f);
         button->getYogaNode().setPositionType(YGPositionTypeAbsolute);
         button->getYogaNode().setPosition(YGEdgeLeft, left);
-        button->getYogaNode().setPosition(YGEdgeTop, ctrlTop);
+        button->getYogaNode().setPosition(YGEdgeTop, layout.controlTop);
         button->getYogaNode().setWidth(style.controlSize);
         button->getYogaNode().setHeight(style.controlSize);
 
@@ -135,23 +160,19 @@ inline std::unique_ptr<Container> buildLibadwaitaTitleBar(float width,
         return button;
     };
 
-    titleBar->addChild(mkHeaderControl(ctrlLeft, "x"));
-    titleBar->addChild(mkHeaderControl(ctrlLeft + style.controlSize + style.controlGap, "-"));
-    titleBar->addChild(mkHeaderControl(ctrlLeft + (style.controlSize + style.controlGap) * 2.0f, "+"));
+    titleBar->addChild(mkHeaderControl(layout.controlLeft, "x"));
+    titleBar->addChild(mkHeaderControl(layout.controlLeft + style.controlSize + style.controlGap, "-"));
+    titleBar->addChild(mkHeaderControl(layout.controlLeft + (style.controlSize + style.controlGap) * 2.0f, "+"));
 
-    std::string titleLabel = truncateTitleToWidth(title, titleAvailW, titleFontSize);
-    const float titleTop = std::clamp(
-        ctrlTop + (style.controlSize - titleFontSize) * 0.5f,
-        0.0f,
-        std::max(0.0f, titleHeight - titleFontSize));
+    std::string titleLabel = truncateTitleToWidth(title, layout.titleWidth, titleFontSize);
 
     auto titleText = std::make_unique<Text>(titleLabel);
     titleText->setTextColor(style.titleColor);
     titleText->setFontSize(titleFontSize);
     titleText->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    titleText->getYogaNode().setPosition(YGEdgeLeft, titleStartX);
-    titleText->getYogaNode().setPosition(YGEdgeTop, titleTop);
-    titleText->getYogaNode().setWidth(titleAvailW);
+    titleText->getYogaNode().setPosition(YGEdgeLeft, layout.titleLeft);
+    titleText->getYogaNode().setPosition(YGEdgeTop, layout.titleTop);
+    titleText->getYogaNode().setWidth(layout.titleWidth);
     titleBar->addChild(std::move(titleText));
 
     return titleBar;

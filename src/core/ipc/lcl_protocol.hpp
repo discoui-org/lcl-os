@@ -36,7 +36,18 @@ enum class LCLOpcode : uint32_t {
     RequestSurfaceClose = 14,
     SetInsetBorder = 15,
     SetWindowCornerRadius = 16,
-    WindowListUpdate = 17
+    WindowListUpdate = 17,
+    RequestWindowAction = 18
+};
+
+/** Client-originated requests for compositor-owned window state. */
+enum class LCLWindowAction : uint32_t {
+    BeginDrag = 1,
+    Minimize = 2,
+    Maximize = 3,
+    Restore = 4,
+    ToggleMaximize = 5,
+    Close = 6
 };
 
 enum class LCLDecorationMode : uint32_t {
@@ -216,6 +227,14 @@ struct LCLMsgBeginWindowMove {
 
 struct LCLMsgRequestSurfaceClose {
     uint32_t surfaceId{0};
+};
+
+struct LCLMsgRequestWindowAction {
+    uint32_t surfaceId{0};
+    LCLWindowAction action{LCLWindowAction::BeginDrag};
+    // Used by BeginDrag only. Coordinates are client-local logical pixels.
+    float localX{0.0f};
+    float localY{0.0f};
 };
 
 struct LCLMsgSetInsetBorder {

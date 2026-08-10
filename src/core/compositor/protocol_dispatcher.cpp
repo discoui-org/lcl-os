@@ -64,6 +64,30 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         return true;
     };
 
+    auto requestSurfaceClose = [&](uint64_t surfaceKey, uint32_t surfaceId) {
+        auto it = m_surfaces.find(surfaceKey);
+        if (it == m_surfaces.end()) return;
+
+        // Ask the client to stop its loop while compositor animates its frozen
+        // last frame.  All close entry points use this same transition path.
+        if (it->second.clientFd >= 0) {
+            lcl::protocol::LCLHeader destroyHeader{};
+            destroyHeader.opcode = lcl::protocol::LCLOpcode::SurfaceDestroy;
+            destroyHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSurfaceDestroy);
+            lcl::protocol::LCLMsgSurfaceDestroy destroyMsg{};
+            destroyMsg.surfaceId = surfaceId;
+            lcl::protocol::sendMsgWithFd(it->second.clientFd, destroyHeader, &destroyMsg);
+        }
+
+        if (beginClosingTransition(it->second)) {
+            if (it->second.windowId > 0) {
+                m_windowManager.removeWindow(it->second.windowId);
+            }
+            m_surfaces.erase(it);
+            changed = true;
+        }
+    };
+
     for (const auto& msg : ipcManager.pollMessages()) {
         // --- SURFACE_CREATE: register a window on the compositor canvas ---
         bool isSurfaceCreate = (msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceCreate) ||
@@ -312,25 +336,56 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 changed = true;
             }
 
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::RequestWindowAction) {
+            if (msg.payload.size() < sizeof(lcl::protocol::LCLMsgRequestWindowAction)) {
+                continue;
+            }
+
+            const auto* request = reinterpret_cast<const lcl::protocol::LCLMsgRequestWindowAction*>(msg.payload.data());
+            const uint64_t surfaceKey =
+                (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | request->surfaceId;
+            const auto surfaceIt = m_surfaces.find(surfaceKey);
+            if (surfaceIt == m_surfaces.end()) {
+                continue;
+            }
+
+            const uint32_t windowId = surfaceIt->second.windowId;
+            switch (request->action) {
+                case lcl::protocol::LCLWindowAction::BeginDrag:
+                    changed = m_windowManager.beginWindowDrag(
+                        windowId,
+                        logicalToPhysical(static_cast<int>(std::lround(request->localX)), surfaceIt->second.bufferScale),
+                        logicalToPhysical(static_cast<int>(std::lround(request->localY)), surfaceIt->second.bufferScale)) || changed;
+                    break;
+                case lcl::protocol::LCLWindowAction::Minimize:
+                    changed = m_windowManager.minimizeWindow(windowId) || changed;
+                    break;
+                case lcl::protocol::LCLWindowAction::Maximize:
+                    changed = m_windowManager.maximizeWindow(windowId) || changed;
+                    break;
+                case lcl::protocol::LCLWindowAction::Restore:
+                    changed = m_windowManager.restoreWindow(windowId) || changed;
+                    break;
+                case lcl::protocol::LCLWindowAction::ToggleMaximize:
+                    changed = m_windowManager.toggleMaximizeWindow(windowId) || changed;
+                    break;
+                case lcl::protocol::LCLWindowAction::Close:
+                    requestSurfaceClose(surfaceKey, request->surfaceId);
+                    break;
+                default:
+                    break;
+            }
+
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::BeginWindowMove) {
             if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgBeginWindowMove)) {
                 auto* moveMsg = reinterpret_cast<const lcl::protocol::LCLMsgBeginWindowMove*>(msg.payload.data());
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | moveMsg->surfaceId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end() && it->second.windowId > 0) {
-                    const uint32_t targetWinId = it->second.windowId;
-                    m_windowManager.focusWindow(targetWinId);
-                    auto& windows = m_windowManager.getWindowsMutable();
-                    auto winIt = std::find_if(windows.begin(), windows.end(), [targetWinId](const render::Window& w) {
-                        return w.id == targetWinId;
-                    });
-                    if (winIt != windows.end()) {
-                        winIt->isDragging = true;
-                        winIt->dragOffsetX = logicalToPhysical(static_cast<int>(std::lround(moveMsg->localX)), it->second.bufferScale);
-                        winIt->dragOffsetY = logicalToPhysical(static_cast<int>(std::lround(moveMsg->localY)), it->second.bufferScale);
-                        winIt->markDirty();
-                        changed = true;
-                    }
+                    changed = m_windowManager.beginWindowDrag(
+                        it->second.windowId,
+                        logicalToPhysical(static_cast<int>(std::lround(moveMsg->localX)), it->second.bufferScale),
+                        logicalToPhysical(static_cast<int>(std::lround(moveMsg->localY)), it->second.bufferScale)) || changed;
                 }
             }
 
@@ -342,26 +397,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
 
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
-            auto it = m_surfaces.find(surfaceKey);
-            if (it != m_surfaces.end()) {
-                // Ask client to stop its loop while compositor animates frozen last frame.
-                if (it->second.clientFd >= 0) {
-                    lcl::protocol::LCLHeader destroyHeader{};
-                    destroyHeader.opcode = lcl::protocol::LCLOpcode::SurfaceDestroy;
-                    destroyHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSurfaceDestroy);
-                    lcl::protocol::LCLMsgSurfaceDestroy destroyMsg{};
-                    destroyMsg.surfaceId = surfId;
-                    lcl::protocol::sendMsgWithFd(it->second.clientFd, destroyHeader, &destroyMsg);
-                }
-
-                if (beginClosingTransition(it->second)) {
-                    if (it->second.windowId > 0) {
-                        m_windowManager.removeWindow(it->second.windowId);
-                    }
-                    m_surfaces.erase(it);
-                    changed = true;
-                }
-            }
+            requestSurfaceClose(surfaceKey, surfId);
 
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetWindowLayer) {
             uint32_t surfId = 1;

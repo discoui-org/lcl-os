@@ -296,7 +296,7 @@ JSValue js_window_app_sendPointerUp(JSContext* ctx, JSValueConst this_val, int a
     return JS_NewBool(ctx, handled);
 }
 
-JSValue js_window_app_requestWindowMove(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+JSValue js_window_app_requestWindowDrag(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
     if (!appWrap || !appWrap->app) return JS_EXCEPTION;
 
@@ -305,8 +305,40 @@ JSValue js_window_app_requestWindowMove(JSContext* ctx, JSValueConst this_val, i
     if (argc >= 1) JS_ToFloat64(ctx, &x, argv[0]);
     if (argc >= 2) JS_ToFloat64(ctx, &y, argv[1]);
 
-    bool ok = appWrap->app->requestWindowMove(static_cast<float>(x), static_cast<float>(y));
+    bool ok = appWrap->app->requestWindowDrag(static_cast<float>(x), static_cast<float>(y));
     return JS_NewBool(ctx, ok);
+}
+
+JSValue js_window_app_requestWindowMinimize(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)argc;
+    (void)argv;
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+    return JS_NewBool(ctx, appWrap->app->requestWindowMinimize());
+}
+
+JSValue js_window_app_requestWindowMaximize(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)argc;
+    (void)argv;
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+    return JS_NewBool(ctx, appWrap->app->requestWindowMaximize());
+}
+
+JSValue js_window_app_requestWindowRestore(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)argc;
+    (void)argv;
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+    return JS_NewBool(ctx, appWrap->app->requestWindowRestore());
+}
+
+JSValue js_window_app_requestWindowToggleMaximize(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)argc;
+    (void)argv;
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+    return JS_NewBool(ctx, appWrap->app->requestWindowToggleMaximize());
 }
 
 JSValue js_window_app_requestWindowClose(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -336,20 +368,23 @@ JSValue js_window_app_configureCsdTitlebar(JSContext* ctx, JSValueConst this_val
     if (!appWrap || !appWrap->app) return JS_EXCEPTION;
 
     double height = 32.0;
-    double closeLeft = 10.0;
-    double closeTop = 8.0;
-    double closeSize = 16.0;
+    double controlLeft = 10.0;
+    double controlTop = 8.0;
+    double controlSize = 16.0;
+    double controlGap = 6.0;
 
     if (argc >= 1) JS_ToFloat64(ctx, &height, argv[0]);
-    if (argc >= 2) JS_ToFloat64(ctx, &closeLeft, argv[1]);
-    if (argc >= 3) JS_ToFloat64(ctx, &closeTop, argv[2]);
-    if (argc >= 4) JS_ToFloat64(ctx, &closeSize, argv[3]);
+    if (argc >= 2) JS_ToFloat64(ctx, &controlLeft, argv[1]);
+    if (argc >= 3) JS_ToFloat64(ctx, &controlTop, argv[2]);
+    if (argc >= 4) JS_ToFloat64(ctx, &controlSize, argv[3]);
+    if (argc >= 5) JS_ToFloat64(ctx, &controlGap, argv[4]);
 
     appWrap->app->configureCsdTitlebar(
         static_cast<float>(height),
-        static_cast<float>(closeLeft),
-        static_cast<float>(closeTop),
-        static_cast<float>(closeSize));
+        static_cast<float>(controlLeft),
+        static_cast<float>(controlTop),
+        static_cast<float>(controlSize),
+        static_cast<float>(controlGap));
     return JS_UNDEFINED;
 }
 
@@ -1231,10 +1266,14 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerMove", JS_NewCFunction(m_ctx, js_window_app_sendPointerMove, "sendPointerMove", 2));
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerDown", JS_NewCFunction(m_ctx, js_window_app_sendPointerDown, "sendPointerDown", 3));
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerUp", JS_NewCFunction(m_ctx, js_window_app_sendPointerUp, "sendPointerUp", 3));
-    JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowMove", JS_NewCFunction(m_ctx, js_window_app_requestWindowMove, "requestWindowMove", 2));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowDrag", JS_NewCFunction(m_ctx, js_window_app_requestWindowDrag, "requestWindowDrag", 2));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowMinimize", JS_NewCFunction(m_ctx, js_window_app_requestWindowMinimize, "requestWindowMinimize", 0));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowMaximize", JS_NewCFunction(m_ctx, js_window_app_requestWindowMaximize, "requestWindowMaximize", 0));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowRestore", JS_NewCFunction(m_ctx, js_window_app_requestWindowRestore, "requestWindowRestore", 0));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowToggleMaximize", JS_NewCFunction(m_ctx, js_window_app_requestWindowToggleMaximize, "requestWindowToggleMaximize", 0));
     JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowClose", JS_NewCFunction(m_ctx, js_window_app_requestWindowClose, "requestWindowClose", 0));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setCsdTitlebarEnabled", JS_NewCFunction(m_ctx, js_window_app_setCsdTitlebarEnabled, "setCsdTitlebarEnabled", 1));
-    JS_SetPropertyStr(m_ctx, windowAppProto, "configureCsdTitlebar", JS_NewCFunction(m_ctx, js_window_app_configureCsdTitlebar, "configureCsdTitlebar", 4));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "configureCsdTitlebar", JS_NewCFunction(m_ctx, js_window_app_configureCsdTitlebar, "configureCsdTitlebar", 5));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setDecorationMode", JS_NewCFunction(m_ctx, js_window_app_setDecorationMode, "setDecorationMode", 1));
     JS_SetClassProto(m_ctx, g_window_app_class_id, windowAppProto);
 

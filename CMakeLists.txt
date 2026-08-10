@@ -221,6 +221,7 @@ if(BUILD_TESTS)
         tests/test_input_manager.cpp
         tests/test_key_mapper.cpp
         tests/test_compositor_components.cpp
+        tests/test_window_manager.cpp
         tests/test_lcl_ui.cpp
         tests/test_lcl_ui_events.cpp
         tests/test_js_runtime.cpp
@@ -231,6 +232,7 @@ if(BUILD_TESTS)
         src/core/display/display_scale.cpp
         src/core/input/input_manager.cpp
         src/core/input/key_mapper.cpp
+        src/render/window_manager.cpp
         src/binding/js_runtime.cpp
     )
 

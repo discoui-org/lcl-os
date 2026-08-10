@@ -19,6 +19,9 @@ public:
      */
     bool route(const InputEvent& event);
 
+    /** Send configure events after a compositor-originated window action. */
+    void syncWindowState();
+
 private:
     void sendPendingConfigures();
     void processCloseRequests();

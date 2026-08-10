@@ -12,6 +12,9 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "render/skia_renderer.hpp"
 
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <vector>
 
 using namespace lcl::ui;
@@ -189,6 +192,56 @@ TEST(LclUiTest, WindowAppStagesSurfaceChromeBeforeCompositorConnection) {
 
     EXPECT_TRUE(app.setDecorationMode(lcl::protocol::LCLDecorationMode::CSD));
     EXPECT_TRUE(app.setWindowCornerRadius(14.0f));
+}
+
+TEST(LclUiTest, WindowAppCsdControlsAndCustomRequestsUseWindowActions) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 540, 360, "Window action test");
+    app.setSurfaceId(9);
+    app.setExternalIpcSocket(sockets[0]);
+
+    const lcl::ui::chrome::WindowChromeStyle style;
+    const auto layout = lcl::ui::chrome::calculateWindowTitlebarLayout(
+        540.0f, 34.0f, 20.0f, 14.0f, style);
+    app.setCsdTitlebarEnabled(true);
+    app.configureCsdTitlebar(34.0f, layout.controlLeft, layout.controlTop,
+                             style.controlSize, style.controlGap);
+
+    const auto expectAction = [&](lcl::protocol::LCLWindowAction expected) {
+        lcl::protocol::LCLHeader header{};
+        std::vector<uint8_t> payload;
+        int receivedFd = -1;
+        ASSERT_TRUE(lcl::protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+        EXPECT_EQ(header.opcode, lcl::protocol::LCLOpcode::RequestWindowAction);
+        ASSERT_EQ(payload.size(), sizeof(lcl::protocol::LCLMsgRequestWindowAction));
+        const auto* message = reinterpret_cast<const lcl::protocol::LCLMsgRequestWindowAction*>(payload.data());
+        EXPECT_EQ(message->surfaceId, 9u);
+        EXPECT_EQ(message->action, expected);
+    };
+
+    EXPECT_TRUE(app.sendPointerDown(layout.controlLeft + 1.0f, layout.controlTop + 1.0f));
+    expectAction(lcl::protocol::LCLWindowAction::Close);
+
+    EXPECT_TRUE(app.sendPointerDown(layout.controlLeft + style.controlSize + style.controlGap + 1.0f,
+                                    layout.controlTop + 1.0f));
+    expectAction(lcl::protocol::LCLWindowAction::Minimize);
+
+    EXPECT_TRUE(app.sendPointerDown(layout.controlLeft +
+                                        2.0f * (style.controlSize + style.controlGap) + 1.0f,
+                                    layout.controlTop + 1.0f));
+    expectAction(lcl::protocol::LCLWindowAction::ToggleMaximize);
+
+    EXPECT_TRUE(app.sendPointerDown(300.0f, 8.0f));
+    expectAction(lcl::protocol::LCLWindowAction::BeginDrag);
+
+    EXPECT_TRUE(app.requestWindowRestore());
+    expectAction(lcl::protocol::LCLWindowAction::Restore);
+
+    close(sockets[0]);
+    close(sockets[1]);
 }
 
 TEST(LclUiTest, PassiveBackdropSurfaceKeepsItsVisualStateOnPointerEvents) {
@@ -388,7 +441,7 @@ TEST(LclUiTest, RendererMapsLogicalSubtreeToPhysicalOrigin) {
 }
 
 TEST(LclUiTest, TitlebarRadiusMatchesWindowMaskByDefault) {
-    const auto titleBar = lcl::ui::chrome::buildLibadwaitaTitleBar(
+    const auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
         400.0f, 32.0f, 20.0f, "Window", 15.0f);
     const auto& children = titleBar->getChildren();
     ASSERT_GE(children.size(), 1u);
@@ -397,6 +450,29 @@ TEST(LclUiTest, TitlebarRadiusMatchesWindowMaskByDefault) {
     ASSERT_NE(roundedBackground, nullptr);
     EXPECT_FLOAT_EQ(roundedBackground->getBorderRadius(), 20.0f);
     EXPECT_TRUE(roundedBackground->hasTopOnlyBorderRadius());
+}
+
+TEST(LclUiTest, TitlebarLayoutIsSharedByCsdCloseHitGeometry) {
+    const lcl::ui::chrome::WindowChromeStyle style;
+    const auto layout = lcl::ui::chrome::calculateWindowTitlebarLayout(
+        540.0f, 34.0f, 20.0f, 14.0f, style);
+
+    // The caller gives these same values to WindowApp for its CSD close hit
+    // target, while SSD draws the first control through this builder.
+    EXPECT_FLOAT_EQ(layout.controlLeft, 12.0f);
+    EXPECT_FLOAT_EQ(layout.controlTop, 12.0f);
+
+    auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
+        540.0f, 34.0f, 20.0f, "LCL Terminal", 14.0f, style);
+    titleBar->getYogaNode().calculateLayout(540.0f, 34.0f);
+    titleBar->syncLayout();
+
+    const auto& children = titleBar->getChildren();
+    ASSERT_GE(children.size(), 4u);
+    EXPECT_FLOAT_EQ(children[1]->getBounds().x, layout.controlLeft);
+    EXPECT_FLOAT_EQ(children[1]->getBounds().y, layout.controlTop);
+    EXPECT_FLOAT_EQ(children[1]->getBounds().width, style.controlSize);
+    EXPECT_FLOAT_EQ(children[1]->getBounds().height, style.controlSize);
 }
 
 TEST(LclUiTest, TopRoundedRectDoesNotLeakBelowItsCornerArc) {

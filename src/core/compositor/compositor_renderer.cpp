@@ -32,6 +32,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
     std::vector<render::WindowRenderContent> contents;
     for (const auto& win : windowManager.getWindows()) {
+        if (win.isMinimized) {
+            continue;
+        }
         bool hasShmBuffer = false;
         for (const auto& surface : surfaces) {
             const auto* entry = surface.entry;
@@ -106,7 +109,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
         root->getYogaNode().setWidth(logicalWidth);
         root->getYogaNode().setHeight(logicalHeight);
 
-        lcl::ui::chrome::HeaderControlsStyle chromeStyle;
+        lcl::ui::chrome::WindowChromeStyle chromeStyle;
         chromeStyle.titleBarBackground = fadeUiColor(lcl::ui::Color{17, 19, 23, 255});
         chromeStyle.titleBarCornerRadiusAdjust = 0.0f;
         chromeStyle.titleBarRoundness = kWindowCornerRoundness;
@@ -118,7 +121,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
         const float titleH = static_cast<float>(DisplayScale::kTitleBarHeight);
 
-        auto titleBar = lcl::ui::chrome::buildLibadwaitaTitleBar(
+        auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
             logicalWidth,
             titleH,
             kWindowCornerRadiusLogical,
@@ -146,41 +149,20 @@ void CompositorRenderer::render(render::Renderer& renderer,
         root->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
 
         const float titleH = static_cast<float>(DisplayScale::titleBarHeight());
-        const float ctrlSize = 16.0f;
-        const float ctrlGap = 6.0f;
-        const float ctrlLeft = std::max(8.0f, DisplayScale::pxF(kWindowCornerRadiusLogical) - 8.0f);
-        const float ctrlTop = std::max(4.0f, (titleH - ctrlSize) * 0.5f);
-
         root->getYogaNode().setWidth(static_cast<float>(win.width));
         root->getYogaNode().setHeight(static_cast<float>(win.height));
 
-        auto mkHeaderControl = [&](float left, const char* glyph) {
-            auto button = std::make_unique<lcl::ui::Container>();
-            button->setBackgroundColor(lcl::ui::Color{235, 241, 248, 40});
-            button->setBorderColor(lcl::ui::Color{230, 238, 248, 92});
-            button->setBorderWidth(1.0f);
-            button->setBorderRadius(ctrlSize * 0.5f);
-            button->setBorderRoundness(2.0f);
-            button->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-            button->getYogaNode().setPosition(YGEdgeLeft, left);
-            button->getYogaNode().setPosition(YGEdgeTop, ctrlTop);
-            button->getYogaNode().setWidth(ctrlSize);
-            button->getYogaNode().setHeight(ctrlSize);
-
-            auto icon = std::make_unique<lcl::ui::Text>(glyph);
-            icon->setTextColor(lcl::ui::Color{232, 240, 248, 210});
-            icon->setFontSize(11.0f);
-            icon->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-            icon->getYogaNode().setPosition(YGEdgeLeft, ctrlSize * 0.32f);
-            icon->getYogaNode().setPosition(YGEdgeTop, ctrlSize * 0.16f);
-            button->addChild(std::move(icon));
-
-            return button;
-        };
-
-        root->addChild(mkHeaderControl(ctrlLeft, "x"));
-        root->addChild(mkHeaderControl(ctrlLeft + ctrlSize + ctrlGap, "-"));
-        root->addChild(mkHeaderControl(ctrlLeft + (ctrlSize + ctrlGap) * 2.0f, "+"));
+        // This compatibility overlay has no title strip of its own, but its
+        // controls are the exact same lcl-ui widgets as SSD and CSD clients.
+        lcl::ui::chrome::WindowChromeStyle chromeStyle;
+        chromeStyle.titleBarBackground = {0, 0, 0, 0};
+        root->addChild(lcl::ui::chrome::buildWindowTitlebar(
+            static_cast<float>(win.width),
+            titleH,
+            DisplayScale::pxF(kWindowCornerRadiusLogical),
+            "",
+            static_cast<float>(DisplayScale::kBaseFontPx),
+            chromeStyle));
 
         root->getYogaNode().calculateLayout(static_cast<float>(win.width), static_cast<float>(win.height));
         root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
@@ -255,6 +237,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
     };
 
     for (const auto& win : windowManager.getWindows()) {
+        if (win.isMinimized) {
+            continue;
+        }
         // A. Find matching client SHM surface buffer for this window
         const SurfaceEntry* matchingSurface = nullptr;
         for (const auto& surface : surfaces) {
@@ -382,4 +367,3 @@ void CompositorRenderer::render(render::Renderer& renderer,
 }
 
 } // namespace lcl::core
-

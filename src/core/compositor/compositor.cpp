@@ -116,6 +116,9 @@ void Compositor::processInput() {
 
 void Compositor::processIPC() {
     if (m_protocolDispatcher && m_protocolDispatcher->process(m_ipcManager)) {
+        if (m_inputRouter) {
+            m_inputRouter->syncWindowState();
+        }
         m_needsRedraw = true;
     }
 }

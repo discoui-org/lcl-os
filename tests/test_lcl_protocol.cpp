@@ -132,6 +132,39 @@ TEST(LCLProtocolTest, SendAndReceiveSetReservedZoneMsg) {
     close(sv[1]);
 }
 
+TEST(LCLProtocolTest, SendAndReceiveWindowActionMsg) {
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+
+    LCLHeader headerSend{};
+    headerSend.opcode = LCLOpcode::RequestWindowAction;
+    headerSend.payloadSize = sizeof(LCLMsgRequestWindowAction);
+
+    LCLMsgRequestWindowAction msg{};
+    msg.surfaceId = 7;
+    msg.action = LCLWindowAction::BeginDrag;
+    msg.localX = 42.5f;
+    msg.localY = 13.0f;
+
+    ASSERT_TRUE(sendMsgWithFd(sv[0], headerSend, &msg, -1));
+
+    LCLHeader headerRecv{};
+    std::vector<uint8_t> payloadRecv;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sv[1], headerRecv, payloadRecv, receivedFd));
+
+    EXPECT_EQ(headerRecv.opcode, LCLOpcode::RequestWindowAction);
+    ASSERT_EQ(payloadRecv.size(), sizeof(LCLMsgRequestWindowAction));
+    const auto* received = reinterpret_cast<const LCLMsgRequestWindowAction*>(payloadRecv.data());
+    EXPECT_EQ(received->surfaceId, 7u);
+    EXPECT_EQ(received->action, LCLWindowAction::BeginDrag);
+    EXPECT_FLOAT_EQ(received->localX, 42.5f);
+    EXPECT_FLOAT_EQ(received->localY, 13.0f);
+
+    close(sv[0]);
+    close(sv[1]);
+}
+
 TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     int sv[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);

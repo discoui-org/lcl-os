@@ -1,0 +1,69 @@
+#include <gtest/gtest.h>
+
+#include <algorithm>
+
+#include "render/window_manager.hpp"
+
+namespace {
+
+const lcl::render::Window* findWindow(const lcl::render::WindowManager& manager,
+                                      uint32_t windowId) {
+    const auto& windows = manager.getWindows();
+    const auto it = std::find_if(windows.begin(), windows.end(), [windowId](const lcl::render::Window& window) {
+        return window.id == windowId;
+    });
+    return it == windows.end() ? nullptr : &*it;
+}
+
+} // namespace
+
+TEST(WindowManagerTest, WindowActionsPreserveRestoreGeometryAndFocus) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    manager.setReservedZone(32, 60, 0, 0);
+
+    const uint32_t first = manager.createWindow("First", 80, 80, 400, 300);
+    const uint32_t second = manager.createWindow("Second", 160, 120, 320, 240);
+    ASSERT_EQ(manager.getFocusedWindowId(), second);
+
+    ASSERT_TRUE(manager.maximizeWindow(first));
+    const auto* maximized = findWindow(manager, first);
+    ASSERT_NE(maximized, nullptr);
+    EXPECT_TRUE(maximized->isMaximized);
+    EXPECT_FALSE(maximized->isMinimized);
+    EXPECT_EQ(maximized->x, 0);
+    EXPECT_EQ(maximized->y, 32);
+    EXPECT_EQ(maximized->width, 1000);
+    EXPECT_EQ(maximized->height, 608);
+    EXPECT_EQ(manager.getFocusedWindowId(), first);
+
+    ASSERT_TRUE(manager.minimizeWindow(first));
+    const auto* minimized = findWindow(manager, first);
+    ASSERT_NE(minimized, nullptr);
+    EXPECT_TRUE(minimized->isMinimized);
+    EXPECT_TRUE(minimized->isMaximized);
+    EXPECT_EQ(manager.getFocusedWindowId(), second);
+
+    ASSERT_TRUE(manager.restoreWindow(first));
+    const auto* restoredMaximized = findWindow(manager, first);
+    ASSERT_NE(restoredMaximized, nullptr);
+    EXPECT_FALSE(restoredMaximized->isMinimized);
+    EXPECT_TRUE(restoredMaximized->isMaximized);
+    EXPECT_EQ(manager.getFocusedWindowId(), first);
+
+    ASSERT_TRUE(manager.toggleMaximizeWindow(first));
+    const auto* restored = findWindow(manager, first);
+    ASSERT_NE(restored, nullptr);
+    EXPECT_FALSE(restored->isMaximized);
+    EXPECT_EQ(restored->x, 80);
+    EXPECT_EQ(restored->y, 80);
+    EXPECT_EQ(restored->width, 400);
+    EXPECT_EQ(restored->height, 300);
+
+    ASSERT_TRUE(manager.beginWindowDrag(first, 24, 18));
+    const auto* dragging = findWindow(manager, first);
+    ASSERT_NE(dragging, nullptr);
+    EXPECT_TRUE(dragging->isDragging);
+    EXPECT_EQ(dragging->dragOffsetX, 24);
+    EXPECT_EQ(dragging->dragOffsetY, 18);
+}

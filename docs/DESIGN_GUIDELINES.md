@@ -2,7 +2,7 @@
 
 ## Direction
 
-Blend libadwaita clarity with macOS glassmorphism depth.
+Blend clear hierarchy with glassmorphism depth.
 
 - Typography and spacing should stay calm, neutral, and practical.
 - Surfaces should feel layered, not flat.
