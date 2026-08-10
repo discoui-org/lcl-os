@@ -36,7 +36,7 @@ public:
     void setOpacity(float opacity);
     float getOpacity() const { return m_opacity; }
 
-    void draw(SkCanvas* canvas, const Rect& damageRect) override;
+    void draw(Canvas& canvas, const Rect& damageRect) override;
 
 private:
     std::string m_sourcePath;

@@ -1,11 +1,11 @@
 #pragma once
 
 #include "lcl-ui/core/rect.hpp"
+#include "lcl-ui/core/canvas.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/event_dispatcher.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-ui/widgets/container.hpp"
-#include "render/skia_renderer.hpp"
 #include <memory>
 #include <string>
 #include <vector>
@@ -22,6 +22,8 @@ using IpcMessageCallback = std::function<void(const lcl::protocol::LCLHeader&, c
 class WindowApp {
 public:
     WindowApp(uint32_t width, uint32_t height, const std::string& title = "lcl-ui Application");
+    WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height,
+              const std::string& title = "lcl-ui Application");
     ~WindowApp();
 
     WindowApp(const WindowApp&) = delete;
@@ -40,7 +42,7 @@ public:
 
     EventDispatcher& getDispatcher() { return m_dispatcher; }
     RenderPass& getRenderPass() { return m_renderPass; }
-    lcl::render::SkiaRenderer& getRenderer() { return m_renderer; }
+    Canvas& getCanvas() { return *m_canvas; }
 
     // Direct Window Raw Event Callbacks (bypasses/intercepts Widget tree if handled)
     void setOnRawKeyEvent(RawKeyCallback callback) { m_onRawKey = callback; }
@@ -101,7 +103,7 @@ private:
     std::unique_ptr<Widget> m_rootWidget;
     RenderPass m_renderPass;
     EventDispatcher m_dispatcher;
-    lcl::render::SkiaRenderer m_renderer;
+    std::unique_ptr<Canvas> m_canvas;
 
     RawKeyCallback m_onRawKey{nullptr};
     RawPointerCallback m_onRawPointer{nullptr};

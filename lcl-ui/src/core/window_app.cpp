@@ -1,6 +1,7 @@
 #include "lcl-ui/core/window_app.hpp"
 #include "core/display/display_scale.hpp"
 #include "core/ipc/lcl_protocol.hpp"
+#include "render/skia_canvas.hpp"
 #include <iostream>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -54,10 +55,15 @@ uint32_t toBufferPixels(uint32_t logical, float scale) {
 } // namespace
 
 WindowApp::WindowApp(uint32_t width, uint32_t height, const std::string& title)
-    : m_width(width), m_height(height), m_title(title) {
+    : WindowApp(lcl::render::makeSkiaCanvas(), width, height, title) {}
+
+WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height,
+                     const std::string& title)
+    : m_width(width), m_height(height), m_title(title), m_canvas(std::move(canvas)) {
     setupAppSignalHandlers();
+    if (!m_canvas) return;
     m_pixelBuffer.resize(width * height, 0xFF000000);
-    m_initialized = m_renderer.initialize(width, height, nullptr, m_pixelBuffer.data());
+    m_initialized = m_canvas->initialize(width, height, m_pixelBuffer.data());
 
     auto defaultRoot = std::make_unique<Container>();
     defaultRoot->getYogaNode().setWidth(static_cast<float>(width));
@@ -126,7 +132,7 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
 
     // Resize path: keep existing renderer instance and only retarget the backing pixels.
     // Re-initializing renderer every configure event causes heavy stalls while dragging.
-    m_renderer.setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
+    m_canvas->setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
     m_shmNeedsAttach = true;
 }
 
@@ -154,7 +160,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // WindowApp exposes CSS-like logical pixels. The process-local boot scale is
     // its device pixel ratio; raw-pixel clients do not use this class and retain 1x.
     m_bufferScale = sanitizeBufferScale(lcl::core::DisplayScale::factor());
-    m_renderer.setContentScale(m_bufferScale);
+    m_canvas->setContentScale(m_bufferScale);
 
     // Set non-blocking socket reads
     int flags = fcntl(m_socketFd, F_GETFL, 0);
@@ -231,7 +237,7 @@ void WindowApp::setInitialBounds(int32_t x, int32_t y, uint32_t width, uint32_t 
     m_width = width;
     m_height = height;
     m_pixelBuffer.resize(static_cast<size_t>(width) * height, 0xFF000000);
-    m_renderer.setTargetPixels(m_pixelBuffer.data(), width, height);
+    m_canvas->setTargetPixels(m_pixelBuffer.data(), width, height);
     if (m_rootWidget) {
         m_rootWidget->getYogaNode().setWidth(static_cast<float>(width));
         m_rootWidget->getYogaNode().setHeight(static_cast<float>(height));
@@ -316,7 +322,7 @@ void WindowApp::pollIPC() {
     if (pendingResize && (latestWidth > 0 && latestHeight > 0)) {
         if (std::fabs(latestScale - m_bufferScale) > 0.0001f) {
             m_bufferScale = latestScale;
-            m_renderer.setContentScale(m_bufferScale);
+            m_canvas->setContentScale(m_bufferScale);
             // A scale-only configure has identical logical bounds but needs a new buffer.
             if (latestWidth == m_width && latestHeight == m_height && m_ipcConnected) {
                 allocateSHM(m_width, m_height);
@@ -573,14 +579,14 @@ bool WindowApp::renderFrame() {
     Rect damageRect = m_renderPass.getDamageRect();
     m_renderPass.clear();
 
-    m_renderer.beginFrame();
-    if (auto* pixels = m_renderer.getRasterBuffer()) {
+    m_canvas->beginFrame();
+    if (auto* pixels = m_canvas->rasterBuffer()) {
         std::fill_n(pixels, static_cast<size_t>(getPixelWidth()) * static_cast<size_t>(getPixelHeight()), 0x00000000);
     }
-    m_renderPass.begin(nullptr);
+    m_renderPass.begin(*m_canvas);
 
     if (m_rootWidget && m_rootWidget->isVisible()) {
-        m_rootWidget->draw(reinterpret_cast<SkCanvas*>(&m_renderer), damageRect);
+        m_rootWidget->draw(*m_canvas, damageRect);
     }
 
     std::vector<EffectRegion> uiEffects;
@@ -588,8 +594,8 @@ bool WindowApp::renderFrame() {
         m_rootWidget->collectEffects(uiEffects);
     }
 
-    m_renderPass.end(nullptr);
-    m_renderer.endFrame();
+    m_renderPass.end(*m_canvas);
+    m_canvas->endFrame();
 
     if (m_ipcConnected && m_socketFd >= 0) {
         auto toProtoSource = [](EffectSource source) {

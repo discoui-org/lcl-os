@@ -3,9 +3,9 @@
 #include "lcl-ui/core/rect.hpp"
 #include <vector>
 
-class SkCanvas;
-
 namespace lcl::ui {
+
+class Canvas;
 
 class RenderPass {
 public:
@@ -20,8 +20,8 @@ public:
 
     bool hasDamage() const { return !getDamageRect().isEmpty(); }
 
-    void begin(SkCanvas* canvas);
-    void end(SkCanvas* canvas);
+    void begin(Canvas& canvas);
+    void end(Canvas& canvas);
 
 private:
     std::vector<Rect> m_dirtyRects;

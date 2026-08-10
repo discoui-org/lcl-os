@@ -6,6 +6,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/window_chrome.hpp"
+#include "render/skia_canvas.hpp"
 
 #include <iostream>
 #include <algorithm>
@@ -1152,7 +1153,8 @@ void Compositor::renderFrame() {
         root->syncLayout(0.0f, 0.0f);
 
         lcl::ui::Rect damage{0.0f, 0.0f, logicalWidth, logicalHeight};
-        root->draw(reinterpret_cast<SkCanvas*>(skia), damage);
+        lcl::render::SkiaCanvas canvas(*skia);
+        root->draw(canvas, damage);
 
         skia->setContentOrigin(previousOriginX, previousOriginY);
         skia->setContentScale(previousScale);
@@ -1205,7 +1207,8 @@ void Compositor::renderFrame() {
         root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
 
         lcl::ui::Rect damage{static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), static_cast<float>(win.height)};
-        root->draw(reinterpret_cast<SkCanvas*>(skia), damage);
+        lcl::render::SkiaCanvas canvas(*skia);
+        root->draw(canvas, damage);
     };
 
     auto drawForcedInsetBorder = [&](const render::Window& win, float opacity, float scale) {

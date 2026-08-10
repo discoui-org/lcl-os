@@ -24,12 +24,12 @@ Rect RenderPass::getDamageRect() const {
     return damage;
 }
 
-void RenderPass::begin(SkCanvas* canvas) {
+void RenderPass::begin(Canvas& canvas) {
     (void)canvas;
     m_inPass = true;
 }
 
-void RenderPass::end(SkCanvas* canvas) {
+void RenderPass::end(Canvas& canvas) {
     (void)canvas;
     m_inPass = false;
 }

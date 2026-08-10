@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
+#include "lcl-ui/core/canvas.hpp"
 #include "lcl-ui/core/rect.hpp"
 #include "lcl-ui/core/render_pass.hpp"
+#include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/layout/yoga_node.hpp"
 #include "lcl-ui/widgets/widget.hpp"
 #include "lcl-ui/widgets/container.hpp"
@@ -12,6 +14,90 @@
 #include <vector>
 
 using namespace lcl::ui;
+
+namespace {
+
+class RecordingCanvas final : public Canvas {
+public:
+    bool initialize(uint32_t width, uint32_t height, uint32_t* targetPixels) override {
+        initialized = true;
+        setTargetPixels(targetPixels, width, height);
+        return true;
+    }
+
+    void setTargetPixels(uint32_t* targetPixels, uint32_t width, uint32_t height) override {
+        pixels = targetPixels;
+        pixelWidth = width;
+        pixelHeight = height;
+    }
+
+    void setContentScale(float value) override { contentScale = value; }
+    void beginFrame() override { ++beginCount; }
+    void endFrame() override { ++endCount; }
+    uint32_t* rasterBuffer() override { return pixels; }
+
+    void drawRect(const Rect& rect, Color color) override {
+        rects.push_back(rect);
+        colors.push_back(color);
+    }
+
+    void drawRoundedRect(const Rect& rect, float radius, Color color,
+                         Color border, float borderWidth, float roundness) override {
+        roundedRects.push_back(rect);
+        roundedRadii.push_back(radius);
+        colors.push_back(color);
+        borders.push_back(border);
+        borderWidths.push_back(borderWidth);
+        roundnesses.push_back(roundness);
+    }
+
+    void drawTopRoundedRect(const Rect& rect, float radius, Color color,
+                            float roundness) override {
+        topRoundedRects.push_back(rect);
+        roundedRadii.push_back(radius);
+        colors.push_back(color);
+        roundnesses.push_back(roundness);
+    }
+
+    void drawText(float x, float y, const std::string& text, Color color,
+                  float fontSize) override {
+        textPositions.push_back({x, y, 0.0f, 0.0f});
+        texts.push_back(text);
+        colors.push_back(color);
+        fontSizes.push_back(fontSize);
+    }
+
+    float measureText(const std::string& text, float fontSize) override {
+        return static_cast<float>(text.size()) * fontSize * 0.6f;
+    }
+
+    void drawBuffer(int, int, int, int, const uint32_t*, int, float,
+                    float, float, bool, int, int) override {
+        ++bufferDrawCount;
+    }
+
+    bool initialized{false};
+    uint32_t* pixels{nullptr};
+    uint32_t pixelWidth{0};
+    uint32_t pixelHeight{0};
+    float contentScale{1.0f};
+    int beginCount{0};
+    int endCount{0};
+    int bufferDrawCount{0};
+    std::vector<Rect> rects;
+    std::vector<Rect> roundedRects;
+    std::vector<Rect> topRoundedRects;
+    std::vector<Rect> textPositions;
+    std::vector<float> roundedRadii;
+    std::vector<float> borderWidths;
+    std::vector<float> roundnesses;
+    std::vector<float> fontSizes;
+    std::vector<Color> colors;
+    std::vector<Color> borders;
+    std::vector<std::string> texts;
+};
+
+} // namespace
 
 TEST(LclUiTest, RectMath) {
     Rect r1{10.0f, 10.0f, 50.0f, 50.0f};
@@ -32,6 +118,60 @@ TEST(LclUiTest, RectMath) {
     EXPECT_EQ(unionRect.y, 10.0f);
     EXPECT_EQ(unionRect.width, 70.0f);
     EXPECT_EQ(unionRect.height, 70.0f);
+}
+
+TEST(LclUiTest, WidgetsUseBackendNeutralCanvas) {
+    RecordingCanvas canvas;
+    auto root = std::make_unique<Container>();
+    root->setBackgroundColor({10, 20, 30, 255});
+    root->getYogaNode().setWidth(120.0f);
+    root->getYogaNode().setHeight(80.0f);
+
+    auto label = std::make_unique<Text>("Canvas");
+    label->setTextColor({230, 231, 232, 255});
+    root->addChild(std::move(label));
+
+    root->getYogaNode().calculateLayout(120.0f, 80.0f);
+    root->syncLayout();
+    root->draw(canvas, {0.0f, 0.0f, 120.0f, 80.0f});
+
+    ASSERT_EQ(canvas.rects.size(), 1u);
+    EXPECT_EQ(canvas.colors.front().r, 10);
+    ASSERT_EQ(canvas.texts.size(), 1u);
+    EXPECT_EQ(canvas.texts.front(), "Canvas");
+}
+
+TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    WindowApp app(std::move(canvas), 64, 48, "Injected Canvas Test");
+    ASSERT_TRUE(recorded->initialized);
+
+    auto root = std::make_unique<Container>();
+    root->setBackgroundColor({1, 2, 3, 255});
+    root->getYogaNode().setWidth(64.0f);
+    root->getYogaNode().setHeight(48.0f);
+    app.setRootWidget(std::move(root));
+
+    EXPECT_TRUE(app.renderFrame());
+    EXPECT_EQ(recorded->beginCount, 1);
+    EXPECT_EQ(recorded->endCount, 1);
+    ASSERT_EQ(recorded->rects.size(), 1u);
+    EXPECT_EQ(recorded->rects.front().width, 64.0f);
+    EXPECT_EQ(recorded->rects.front().height, 48.0f);
+}
+
+TEST(LclUiTest, WindowAppDefaultCanvasPreservesRasterOutput) {
+    WindowApp app(8, 8, "Default Canvas Test");
+    auto root = std::make_unique<Container>();
+    root->setBackgroundColor({11, 22, 33, 255});
+    root->getYogaNode().setWidth(8.0f);
+    root->getYogaNode().setHeight(8.0f);
+    app.setRootWidget(std::move(root));
+
+    ASSERT_TRUE(app.renderFrame());
+    ASSERT_NE(app.getPixelBuffer(), nullptr);
+    EXPECT_EQ(app.getPixelBuffer()[0], 0xFF0B1621u);
 }
 
 TEST(LclUiTest, RenderPassDamageRect) {

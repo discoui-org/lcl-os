@@ -62,7 +62,7 @@ void Widget::syncLayout(float parentAbsX, float parentAbsY) {
     }
 }
 
-void Widget::draw(SkCanvas* canvas, const Rect& damageRect) {
+void Widget::draw(Canvas& canvas, const Rect& damageRect) {
     if (!m_visible) return;
 
     for (auto& child : m_children) {

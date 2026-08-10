@@ -2,16 +2,10 @@
 
 #include <algorithm>
 
+#include "lcl-ui/core/canvas.hpp"
 #include "lcl-ui/widgets/widget.hpp"
 
 namespace lcl::ui {
-
-struct Color {
-    uint8_t r{0};
-    uint8_t g{0};
-    uint8_t b{0};
-    uint8_t a{0}; // Default completely transparent (unstyled baseline)
-};
 
 class Container : public Widget {
 public:
@@ -40,7 +34,7 @@ public:
     }
     float getBorderRoundness() const { return m_borderRoundness; }
 
-    void draw(SkCanvas* canvas, const Rect& damageRect) override;
+    void draw(Canvas& canvas, const Rect& damageRect) override;
 
 private:
     Color m_backgroundColor{0, 0, 0, 0};

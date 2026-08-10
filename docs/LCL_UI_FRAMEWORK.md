@@ -65,7 +65,7 @@ Base polymorphic class for all UI components.
 - `const std::vector<std::unique_ptr<Widget>>& getChildren() const`: Returns list of children.
 - `void markDirty()`: Registers dirty damage bounds with `RenderPass` to schedule a frame redraw.
 - `void setVisible(bool visible)`: Controls widget visibility.
-- `virtual void draw(SkCanvas* canvas, const Rect& damageRect)`: Virtual render method called during damage passes. `canvas` is safely castable to `lcl::render::SkiaRenderer*`.
+- `virtual void draw(Canvas& canvas, const Rect& damageRect)`: Virtual render method called during damage passes through the backend-neutral Canvas contract.
 
 ---
 
@@ -93,17 +93,18 @@ label->setTextColor(0xFF38BDF8); // Sky Cyan
 
 ---
 
-### `lcl::render::SkiaRenderer`
-*Header:* [`src/render/skia_renderer.hpp`](file:///home/superb/Projects/lcl-os/src/render/skia_renderer.hpp)
+### `lcl::ui::Canvas`
+*Header:* [`lcl-ui/include/lcl-ui/core/canvas.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/core/canvas.hpp)
 
-The 2D vector drawing canvas available inside `Widget::draw(...)`:
-- `drawBackgroundGradient(topColor, bottomColor)`
+The backend-neutral 2D drawing contract available inside `Widget::draw(...)`:
 - `drawRect(rect, color)`
-- `drawRoundedRect(rect, radius, fillColor, borderColor, borderWidth)`
-- `drawDropShadow(rect, radius, blur, shadowColor)`
-- `drawCircle(cx, cy, radius, color)`
-- `drawLine(x1, y1, x2, y2, color, strokeWidth)`
-- `drawString(x, y, text, fgColor)`
+- `drawRoundedRect(rect, radius, fillColor, borderColor, borderWidth, roundness)`
+- `drawTopRoundedRect(rect, radius, color, roundness)`
+- `drawText(x, y, text, color, fontSize)`
+- `drawBuffer(...)`
+
+`SkiaCanvas` is the default adapter and delegates these calls to the existing
+`SkiaRenderer`; application widgets do not depend on it directly.
 
 ---
 
@@ -167,8 +168,8 @@ int main() {
 
 For continuous procedural 2D canvas drawing or custom animations:
 
-1. Inherit from `Widget` and override `draw(SkCanvas* canvas, const Rect& damageRect)`.
-2. Cast `canvas` to `lcl::render::SkiaRenderer*`.
+1. Inherit from `Widget` and override `draw(Canvas& canvas, const Rect& damageRect)`.
+2. Use Canvas primitives such as `drawRect`, `drawRoundedRect`, `drawText`, and `drawBuffer`.
 3. Call `markDirty()` **inside** `draw(...)` to continuously request damage recalculation for the next 144Hz frame.
 4. Launch the application using `app.runEventLoop()`.
 
@@ -179,17 +180,15 @@ public:
         m_startTime = std::chrono::steady_clock::now();
     }
 
-    void draw(SkCanvas* canvas, const Rect& damageRect) override {
+    void draw(Canvas& canvas, const Rect& damageRect) override {
         (void)damageRect;
-        auto* skia = reinterpret_cast<lcl::render::SkiaRenderer*>(canvas);
-        if (!skia) return;
 
+        // Draw an animated pulse through the portable Canvas contract.
         auto now = std::chrono::steady_clock::now();
         float t = std::chrono::duration<float>(now - m_startTime).count();
-
-        // Draw animated pulsing circle
-        float radius = 30.0f + std::sin(t * 4.0f) * 10.0f;
-        skia->drawCircle(150.0f, 150.0f, radius, SkiaColor{56, 189, 248, 255});
+        float side = 60.0f + std::sin(t * 4.0f) * 20.0f;
+        canvas.drawRect({150.0f - side * 0.5f, 150.0f - side * 0.5f, side, side},
+                        {56, 189, 248, 255});
 
         // Request next frame for continuous 144Hz animation
         markDirty();

@@ -35,6 +35,7 @@ add_library(lcl-ui STATIC
     src/widgets/backdrop_surface.cpp
     src/widgets/filter_group.cpp
     ${CMAKE_SOURCE_DIR}/src/render/skia_renderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/render/skia_canvas.cpp
     ${CMAKE_SOURCE_DIR}/src/render/font_renderer.cpp
     ${CMAKE_SOURCE_DIR}/src/core/display/egl_backend.cpp
     ${CMAKE_SOURCE_DIR}/src/core/display/display_scale.cpp

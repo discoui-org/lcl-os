@@ -29,7 +29,7 @@ public:
     void setTextAlign(TextAlign align) { m_textAlign = align; markDirty(); }
     TextAlign getTextAlign() const { return m_textAlign; }
 
-    void draw(SkCanvas* canvas, const Rect& damageRect) override;
+    void draw(Canvas& canvas, const Rect& damageRect) override;
 
 private:
     void updateMeasureFunc();

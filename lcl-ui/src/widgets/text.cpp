@@ -1,5 +1,4 @@
 #include "lcl-ui/widgets/text.hpp"
-#include "render/skia_renderer.hpp"
 
 namespace lcl::ui {
 
@@ -29,27 +28,19 @@ void Text::updateMeasureFunc() {
     });
 }
 
-void Text::draw(SkCanvas* canvas, const Rect& damageRect) {
+void Text::draw(Canvas& canvas, const Rect& damageRect) {
     if (!m_visible || !m_absoluteBounds.intersects(damageRect) || m_text.empty()) return;
 
-    auto* renderer = reinterpret_cast<::lcl::render::SkiaRenderer*>(canvas);
-    if (renderer) {
-        // Keep text alignment in logical coordinates; SkiaRenderer performs the
-        // one-and-only logical-to-buffer transform afterwards.
-        const float textWidth = renderer->measureString(m_text, m_fontSize);
-        float textX = m_absoluteBounds.x;
-        if (m_textAlign == TextAlign::Center) {
-            textX += std::max(0.0f, (m_absoluteBounds.width - textWidth) * 0.5f);
-        } else if (m_textAlign == TextAlign::End) {
-            textX += std::max(0.0f, m_absoluteBounds.width - textWidth);
-        }
-        int textY = static_cast<int>(m_absoluteBounds.y);
-        uint32_t argbColor = (static_cast<uint32_t>(m_textColor.a) << 24) |
-                             (static_cast<uint32_t>(m_textColor.r) << 16) |
-                             (static_cast<uint32_t>(m_textColor.g) << 8)  |
-                             static_cast<uint32_t>(m_textColor.b);
-        renderer->drawString(static_cast<int>(textX), textY, m_text, argbColor, m_fontSize);
+    // Keep text alignment in logical coordinates; Canvas applies the selected
+    // backend's logical-to-buffer transform afterwards.
+    const float textWidth = canvas.measureText(m_text, m_fontSize);
+    float textX = m_absoluteBounds.x;
+    if (m_textAlign == TextAlign::Center) {
+        textX += std::max(0.0f, (m_absoluteBounds.width - textWidth) * 0.5f);
+    } else if (m_textAlign == TextAlign::End) {
+        textX += std::max(0.0f, m_absoluteBounds.width - textWidth);
     }
+    canvas.drawText(textX, m_absoluteBounds.y, m_text, m_textColor, m_fontSize);
 }
 
 } // namespace lcl::ui

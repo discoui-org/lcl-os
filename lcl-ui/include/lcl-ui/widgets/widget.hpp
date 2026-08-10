@@ -9,9 +9,9 @@
 #include <memory>
 #include <string>
 
-class SkCanvas;
-
 namespace lcl::ui {
+
+class Canvas;
 
 class Widget {
 public:
@@ -47,7 +47,7 @@ public:
     const GcMarkCallback& getGcMarkCallback() const { return m_gcMarkCallback; }
 
     virtual void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f);
-    virtual void draw(SkCanvas* canvas, const Rect& damageRect);
+    virtual void draw(Canvas& canvas, const Rect& damageRect);
     virtual void collectEffects(std::vector<EffectRegion>& outEffects) const;
 
     // Polymorphic Event Handlers (Return true if handled, false to bubble to parent)

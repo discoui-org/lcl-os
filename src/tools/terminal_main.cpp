@@ -382,10 +382,10 @@ int main() {
   std::vector<uint32_t> localPixels(curW * curH, 0xB8111317);
 
   auto drawTitlebarWidgets = [&](int frameW, int frameH) {
-    auto &titlebarRenderer = titlebarApp.getRenderer();
-    titlebarRenderer.setTargetPixels(localPixels.data(),
-                                     static_cast<uint32_t>(frameW),
-                                     static_cast<uint32_t>(frameH));
+    auto &titlebarCanvas = titlebarApp.getCanvas();
+    titlebarCanvas.setTargetPixels(localPixels.data(),
+                                   static_cast<uint32_t>(frameW),
+                                   static_cast<uint32_t>(frameH));
     if (auto *root = titlebarApp.getRootWidget()) {
       root->getYogaNode().setWidth(static_cast<float>(frameW));
       root->getYogaNode().setHeight(static_cast<float>(frameH));
@@ -399,7 +399,7 @@ int main() {
       root->syncLayout(0.0f, 0.0f);
       lcl::ui::Rect damage{0.0f, 0.0f, static_cast<float>(frameW),
                            static_cast<float>(kClientTitleBarH)};
-      root->draw(reinterpret_cast<SkCanvas*>(&titlebarRenderer), damage);
+      root->draw(titlebarCanvas, damage);
     }
   };
 

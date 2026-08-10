@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "render/skia_renderer.hpp"
+#include "lcl-ui/core/canvas.hpp"
 
 namespace lcl::ui {
 
@@ -69,13 +69,8 @@ void Image::setOpacity(float opacity) {
     markDirty();
 }
 
-void Image::draw(SkCanvas* canvas, const Rect& damageRect) {
+void Image::draw(Canvas& canvas, const Rect& damageRect) {
     if (!m_visible || !m_absoluteBounds.intersects(damageRect) || !m_sourceImage || !m_sourceImage->isValid()) {
-        return;
-    }
-
-    auto* renderer = reinterpret_cast<::lcl::render::SkiaRenderer*>(canvas);
-    if (!renderer) {
         return;
     }
 
@@ -114,18 +109,8 @@ void Image::draw(SkCanvas* canvas, const Rect& damageRect) {
         drawY = boxY + (boxH - drawH) / 2;
     }
 
-    renderer->drawBuffer(drawX,
-                         drawY,
-                         srcW,
-                         srcH,
-                         m_sourceImage->pixels.data(),
-                         srcW,
-                         m_opacity,
-                         m_cornerRadius,
-                         m_cornerRoundness,
-                         false,
-                         drawW,
-                         drawH);
+    canvas.drawBuffer(drawX, drawY, srcW, srcH, m_sourceImage->pixels.data(), srcW,
+                      m_opacity, m_cornerRadius, m_cornerRoundness, false, drawW, drawH);
 
     Widget::draw(canvas, damageRect);
 }

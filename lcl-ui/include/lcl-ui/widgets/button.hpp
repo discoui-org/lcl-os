@@ -33,7 +33,7 @@ public:
     bool onPointerDown(const PointerEvent& event) override;
     bool onPointerUp(const PointerEvent& event) override;
 
-    void draw(SkCanvas* canvas, const Rect& damageRect) override;
+    void draw(Canvas& canvas, const Rect& damageRect) override;
 
 private:
     void setState(ButtonState newState);
