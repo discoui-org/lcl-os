@@ -289,7 +289,7 @@ int main() {
         ? "/usr/share/wallpapers/wallpaper.jpg" : "/usr/share/wallpaper.jpg";
     auto wallpaper = std::make_unique<lcl::ui::WindowApp>(
         lcl::render::makeSkiaCanvas(), width, height, "LCL Wallpaper");
-    wallpaper->setSurfaceId(1); wallpaper->setRole(lcl::protocol::LCLRole::DesktopWallpaper);
+    wallpaper->setSurfaceId(1); wallpaper->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::Wallpaper);
     wallpaper->setInputEnabled(false);
     wallpaper->setInitialBounds(0, 0, width, height);
     auto wallpaperImage = std::make_unique<lcl::ui::Image>(wallpaperPath);
@@ -299,7 +299,6 @@ int main() {
     wallpaper->setRootWidget(std::move(wallpaperImage));
     if (!wallpaper->connectCompositor()) return 1;
     wallpaper->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
-    wallpaper->setWindowLayer(lcl::protocol::LCLWindowLayer::Bottom, true);
 
     std::unique_ptr<lcl::ui::WindowApp> menu;
     std::unique_ptr<lcl::ui::WindowApp> dock;
@@ -341,7 +340,7 @@ int main() {
         // in a half-created state with no dock.
         menu = std::make_unique<lcl::ui::WindowApp>(
             lcl::render::makeSkiaCanvas(), width, kMenuBarHeight, "LCL MenuBar");
-        menu->setSurfaceId(2); menu->setRole(lcl::protocol::LCLRole::ShellPanel);
+        menu->setSurfaceId(2); menu->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::MenuBar);
         menu->setInputEnabled(false);
         menu->setInitialBounds(0, 0, width, kMenuBarHeight);
         menu->setRootWidget(makeMenuRoot(width, clock));
@@ -349,7 +348,7 @@ int main() {
 
         dock = std::make_unique<lcl::ui::WindowApp>(
             lcl::render::makeSkiaCanvas(), width, kDockHeight, "LCL Dock");
-        dock->setSurfaceId(3); dock->setRole(lcl::protocol::LCLRole::ShellPanel);
+        dock->setSurfaceId(3); dock->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::Dock);
         dock->setInputEnabled(false);
         dock->setInitialBounds(0, static_cast<int32_t>(height > kDockHeight ? height - kDockHeight : 0), width, kDockHeight);
         auto dockRoot = makeDockView(dockView, width, kDockHeight);
@@ -361,9 +360,6 @@ int main() {
         if (!dock->connectCompositor()) return false;
         if (!menu->connectCompositor()) return false;
 
-        menu->setWindowLayer(lcl::protocol::LCLWindowLayer::TopMost, true);
-        dock->setWindowLayer(lcl::protocol::LCLWindowLayer::TopMost, true);
-        menu->setReservedZone(kMenuBarHeight, kDockHeight);
         return true;
     };
     if (!createPanels()) return 1;

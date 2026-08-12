@@ -50,6 +50,7 @@ public:
         uint32_t initialWidth{0};
         uint32_t initialHeight{0};
         protocol::LCLRole role{protocol::LCLRole::ClientApp};
+        protocol::LCLSystemSurfaceKind systemSurfaceKind{protocol::LCLSystemSurfaceKind::None};
         protocol::LCLDecorationMode decorationMode{protocol::LCLDecorationMode::SSD};
         protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
         bool unfocusable{false};

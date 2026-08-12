@@ -250,3 +250,23 @@ a typed, revision-aware client without changing Dock/menu visual treatment:
 - `WindowApp` sends a declared canonical app ID in `SurfaceCreate`; Terminal
   and native UI Demo now use their manifest IDs. PID/executable inference stays
   only as compatibility for clients not yet migrated to declaration.
+
+## Step 7 implementation record
+
+Step 7 makes Menu Bar and Dock compositor-recognised system surfaces while
+preserving their visual and non-interactive baseline:
+
+- `SetSystemSurfaceKind` declares `Wallpaper`, `MenuBar`, or `Dock` before a
+  surface is created. The compositor verifies the declaring peer is the
+  desktop-shell executable, then applies one `SystemSurfacePolicy` for role,
+  layer, focusability, decoration, inset border, and transition behavior.
+- Normal clients cannot self-promote to `ShellPanel`/`DesktopWallpaper`; those
+  privileged registrations are accepted only from the trusted shell peer.
+  Typed shell-state subscription retains its trusted `ShellPanel` capability.
+- Menu and Dock no longer send `SetWindowLayer` or `SetReservedZone`. Once a
+  real buffer maps, compositor derives the top/bottom reserved work area from
+  their system-surface kind and committed dimensions. A system client cannot
+  override that policy with later layer/reserved-zone commands.
+- System surfaces stay outside `SceneRegistry`, remain unfocusable, and retain
+  their no-enter-transition behavior. Dock still does not receive pointer
+  input; application activation UI is deliberately a later product step.

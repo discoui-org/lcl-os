@@ -8,6 +8,7 @@
 
 #include "core/compositor/frame_scheduler.hpp"
 #include "core/compositor/surface_registry.hpp"
+#include "core/compositor/system_surface_policy.hpp"
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
 #include "core/scene/shell_state_broker.hpp"
@@ -186,6 +187,26 @@ TEST(SceneStateTest, BrokerProducesMonotonicDeltasAndSnapshotFallback) {
     EXPECT_EQ(afterClosing.deltas.front().kind, ShellStateDelta::Kind::SceneRemoved);
     EXPECT_EQ(afterClosing.deltas.front().scene.id, sceneId);
     EXPECT_TRUE(broker.deltasSince(broker.revision() + 1).requiresSnapshot);
+}
+
+TEST(SystemSurfacePolicyTest, MenuAndDockAreCompositorOwnedUnfocusablePanels) {
+    const auto menu = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::MenuBar);
+    const auto dock = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::Dock);
+    const auto wallpaper = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::Wallpaper);
+
+    EXPECT_TRUE(menu.isSystemSurface);
+    EXPECT_EQ(menu.role, protocol::LCLRole::ShellPanel);
+    EXPECT_EQ(menu.layer, protocol::LCLWindowLayer::TopMost);
+    EXPECT_TRUE(menu.unfocusable);
+    EXPECT_TRUE(menu.reservesWorkArea);
+    EXPECT_FALSE(menu.insetBorderEnabled);
+
+    EXPECT_TRUE(dock.isSystemSurface);
+    EXPECT_TRUE(dock.reservesWorkArea);
+    EXPECT_TRUE(wallpaper.isSystemSurface);
+    EXPECT_EQ(wallpaper.layer, protocol::LCLWindowLayer::Bottom);
+    EXPECT_FALSE(wallpaper.reservesWorkArea);
+    EXPECT_FALSE(SystemSurfacePolicyRegistry::isValidKind(protocol::LCLSystemSurfaceKind::None));
 }
 
 } // namespace lcl::core

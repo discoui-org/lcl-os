@@ -216,6 +216,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
     for (const auto& msg : ipcManager.pollMessages()) {
         if (msg.disconnected) {
             m_clientRoles.erase(msg.clientFd);
+            m_pendingSystemSurfaceKinds.erase(msg.clientFd);
             m_shellSubscriptions.erase(msg.clientFd);
             std::vector<uint64_t> surfacesToRemove;
             for (auto& [surfKey, entry] : m_surfaces) {
@@ -248,8 +249,29 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         if (msg.header.opcode == lcl::protocol::LCLOpcode::RegisterRole) {
             if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgRegisterRole)) {
                 auto* reg = reinterpret_cast<const lcl::protocol::LCLMsgRegisterRole*>(msg.payload.data());
+                if ((reg->role == protocol::LCLRole::ShellPanel ||
+                     reg->role == protocol::LCLRole::DesktopWallpaper) &&
+                    !SystemSurfacePolicyRegistry::isTrustedShellPeer(msg.pid)) {
+                    requestAck.error(5, "privileged shell role denied");
+                    continue;
+                }
                 m_clientRoles[msg.clientFd] = reg->role;
             }
+            continue;
+        }
+
+        if (msg.header.opcode == lcl::protocol::LCLOpcode::SetSystemSurfaceKind) {
+            if (msg.payload.size() != sizeof(lcl::protocol::LCLMsgSetSystemSurfaceKind)) {
+                requestAck.error(3, "invalid system-surface declaration");
+                continue;
+            }
+            const auto* declaration = reinterpret_cast<const lcl::protocol::LCLMsgSetSystemSurfaceKind*>(msg.payload.data());
+            if (!SystemSurfacePolicyRegistry::isValidKind(declaration->kind) ||
+                !SystemSurfacePolicyRegistry::isTrustedShellPeer(msg.pid)) {
+                requestAck.error(5, "system-surface declaration denied");
+                continue;
+            }
+            m_pendingSystemSurfaceKinds[msg.clientFd] = declaration->kind;
             continue;
         }
 
@@ -283,10 +305,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             // briefly creating panels as ordinary decorated windows and waiting
             // for a later SetDecorationMode/SetWindowLayer pair.
             const auto roleIt = m_clientRoles.find(msg.clientFd);
-            const protocol::LCLRole clientRole =
+            protocol::LCLRole clientRole =
                 (roleIt != m_clientRoles.end()) ? roleIt->second : protocol::LCLRole::ClientApp;
-            const bool isSystemSurface = clientRole == protocol::LCLRole::DesktopWallpaper ||
-                clientRole == protocol::LCLRole::ShellPanel;
 
             if (msg.payload.size() == sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
                 auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
@@ -299,6 +319,14 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 winH = (sm->height > 0) ? logicalToPhysical(static_cast<int>(sm->height), bufferScale) : static_cast<int>(m_renderer.getHeight());
             }
 
+            auto kindIt = m_pendingSystemSurfaceKinds.find(msg.clientFd);
+            const protocol::LCLSystemSurfaceKind requestedSystemKind =
+                kindIt != m_pendingSystemSurfaceKinds.end()
+                    ? kindIt->second
+                    : SystemSurfacePolicyRegistry::inferLegacyKind(clientRole, title.c_str());
+            const auto systemPolicy = SystemSurfacePolicyRegistry::policyFor(requestedSystemKind);
+            if (systemPolicy.isSystemSurface) clientRole = systemPolicy.role;
+
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             if (m_surfaces.find(surfaceKey) == m_surfaces.end()) {
                 SurfaceEntry entry{};
@@ -308,14 +336,13 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.initialWidth = static_cast<uint32_t>(winW);
                 entry.initialHeight = static_cast<uint32_t>(winH);
                 entry.role = clientRole;
-                entry.suppressInitialTransition = isSystemSurface;
-                if (isSystemSurface) {
+                entry.systemSurfaceKind = requestedSystemKind;
+                entry.suppressInitialTransition = systemPolicy.suppressInitialTransition;
+                if (systemPolicy.isSystemSurface) {
                     entry.decorationMode = protocol::LCLDecorationMode::None;
-                    entry.layer = clientRole == protocol::LCLRole::DesktopWallpaper
-                        ? protocol::LCLWindowLayer::Bottom
-                        : protocol::LCLWindowLayer::TopMost;
-                    entry.unfocusable = true;
-                    entry.insetBorderEnabled = false;
+                    entry.layer = systemPolicy.layer;
+                    entry.unfocusable = systemPolicy.unfocusable;
+                    entry.insetBorderEnabled = systemPolicy.insetBorderEnabled;
                 }
                 entry.clientFd = msg.clientFd;
                 entry.bufferScale = bufferScale;
@@ -329,6 +356,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             } else {
                 m_surfaces[surfaceKey].clientFd = msg.clientFd;
             }
+            m_pendingSystemSurfaceKinds.erase(msg.clientFd);
 
             // Immediately send ConfigureBounds back to client so client knows assigned window dimensions
             protocol::LCLHeader header{};
@@ -533,6 +561,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
+                    if (it->second.systemSurfaceKind != protocol::LCLSystemSurfaceKind::None) {
+                        requestAck.error(6, "system surface policy is compositor-owned");
+                        continue;
+                    }
                     it->second.layer = layerMsg->layer;
                     it->second.unfocusable = layerMsg->unfocusable != 0;
 
@@ -584,6 +616,14 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetReservedZone) {
             if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetReservedZone)) {
                 auto* resMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetReservedZone*>(msg.payload.data());
+                const uint64_t surfaceKey =
+                    (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | resMsg->surfaceId;
+                const auto surface = m_surfaces.find(surfaceKey);
+                if (surface != m_surfaces.end() &&
+                    surface->second.systemSurfaceKind != protocol::LCLSystemSurfaceKind::None) {
+                    requestAck.error(6, "system reserved zone is compositor-owned");
+                    continue;
+                }
                 m_windowManager.setReservedZone(resMsg->top, resMsg->bottom, resMsg->left, resMsg->right);
                 changed = true;
             }
@@ -654,7 +694,22 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         }
     }
 
+    if (changed) recomputeSystemReservedZone();
     return changed;
+}
+
+void ProtocolDispatcher::recomputeSystemReservedZone() {
+    uint32_t top = 0;
+    uint32_t bottom = 0;
+    for (const auto& [_, surface] : m_surfaces) {
+        if (surface.windowId == 0) continue;
+        if (surface.systemSurfaceKind == protocol::LCLSystemSurfaceKind::MenuBar) {
+            top = std::max(top, surface.height);
+        } else if (surface.systemSurfaceKind == protocol::LCLSystemSurfaceKind::Dock) {
+            bottom = std::max(bottom, surface.height);
+        }
+    }
+    m_windowManager.setReservedZone(top, bottom, 0, 0);
 }
 
 void ProtocolDispatcher::publishShellStateToSubscribers() {

@@ -8,6 +8,7 @@
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
 #include "core/scene/shell_state_broker.hpp"
+#include "core/compositor/system_surface_policy.hpp"
 #include "render/renderer.hpp"
 #include "render/window_manager.hpp"
 
@@ -34,6 +35,7 @@ public:
 private:
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     using SurfaceEffectRegion = SurfaceRegistry::SurfaceEffectRegion;
+    void recomputeSystemReservedZone();
 
     render::Renderer& m_renderer;
     render::WindowManager& m_windowManager;
@@ -42,6 +44,7 @@ private:
     FocusController& m_focus;
     ShellStateBroker& m_shellState;
     std::unordered_map<int, protocol::LCLRole> m_clientRoles;
+    std::unordered_map<int, protocol::LCLSystemSurfaceKind> m_pendingSystemSurfaceKinds;
     struct ShellSubscription {
         uint64_t revision{0};
         bool hasDeliveredState{false};

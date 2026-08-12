@@ -43,7 +43,15 @@ enum class LCLOpcode : uint32_t {
     RequestWindowAction = 18,
     SubscribeShellState = 19,
     ShellStateSnapshot = 20,
-    ShellStateDelta = 21
+    ShellStateDelta = 21,
+    SetSystemSurfaceKind = 22
+};
+
+enum class LCLSystemSurfaceKind : uint32_t {
+    None = 0,
+    Wallpaper = 1,
+    MenuBar = 2,
+    Dock = 3,
 };
 
 enum class LCLSceneVisibility : uint8_t {
@@ -280,6 +288,11 @@ struct LCLMsgWindowListEntry {
 /** Subscribe to compositor-owned scene/focus state from a known revision. */
 struct LCLMsgSubscribeShellState {
     uint64_t lastKnownRevision{0};
+};
+
+/** Declared once before SurfaceCreate by the trusted desktop/mobile shell. */
+struct LCLMsgSetSystemSurfaceKind {
+    LCLSystemSurfaceKind kind{LCLSystemSurfaceKind::None};
 };
 
 /** One shell-visible scene. No renderer or SHM ownership crosses this boundary. */

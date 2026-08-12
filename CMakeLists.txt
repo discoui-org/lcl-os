@@ -173,6 +173,7 @@ add_executable(lcl-core
     src/core/compositor/input_router.cpp
     src/core/compositor/protocol_dispatcher.cpp
     src/core/compositor/surface_registry.cpp
+    src/core/compositor/system_surface_policy.cpp
     src/core/scene/focus_controller.cpp
     src/core/scene/scene_registry.cpp
     src/core/scene/shell_state_broker.cpp
@@ -343,6 +344,7 @@ if(BUILD_TESTS)
         src/core/ipc/ipc_manager.cpp
         src/core/compositor/frame_scheduler.cpp
         src/core/compositor/surface_registry.cpp
+        src/core/compositor/system_surface_policy.cpp
         src/core/scene/focus_controller.cpp
         src/core/scene/scene_registry.cpp
         src/core/scene/shell_state_broker.cpp

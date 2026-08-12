@@ -525,3 +525,25 @@ TEST(LCLProtocolTest, ShellStateSnapshotAndDeltaRoundTripWithExplicitRevision) {
     EXPECT_EQ(decodedDelta->kind, LCLShellStateDeltaKind::FocusChanged);
     EXPECT_EQ(decodedDelta->activeSceneId, 42u);
 }
+
+TEST(LCLProtocolTest, SystemSurfaceDeclarationRoundTripsAndRejectsNone) {
+    LCLMsgSetSystemSurfaceKind request{};
+    request.kind = LCLSystemSurfaceKind::Dock;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::SetSystemSurfaceKind;
+    header.requestId = 63;
+    header.payloadSize = sizeof(request);
+    std::vector<uint8_t> packet;
+    ASSERT_TRUE(encodePacket(header, &request, packet));
+
+    LCLHeader decodedHeader{};
+    std::vector<uint8_t> payload;
+    ASSERT_TRUE(decodePacket(packet.data(), packet.size(), decodedHeader, payload));
+    ASSERT_EQ(decodedHeader.opcode, LCLOpcode::SetSystemSurfaceKind);
+    ASSERT_EQ(payload.size(), sizeof(request));
+    EXPECT_EQ(reinterpret_cast<const LCLMsgSetSystemSurfaceKind*>(payload.data())->kind,
+              LCLSystemSurfaceKind::Dock);
+
+    request.kind = LCLSystemSurfaceKind::None;
+    EXPECT_FALSE(encodePacket(header, &request, packet));
+}

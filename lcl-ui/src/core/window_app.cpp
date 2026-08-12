@@ -170,13 +170,24 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         fcntl(m_socketFd, F_SETFL, flags | O_NONBLOCK);
     }
 
-    // 1. Register role as CLIENT_APP
+    // 1. Register client role. System-surface policy is declared separately;
+    // compositor verifies that declaration against the trusted shell peer.
     lcl::protocol::LCLMsgRegisterRole regMsg{};
     regMsg.role = m_role;
     std::strncpy(regMsg.clientName, m_title.c_str(), sizeof(regMsg.clientName) - 1);
     if (!sendProtocolMessage(lcl::protocol::LCLOpcode::RegisterRole, &regMsg, sizeof(regMsg))) {
         std::cerr << "[lcl-ui ERROR] Failed to register v3 client role\n";
         return false;
+    }
+
+    if (m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::None) {
+        lcl::protocol::LCLMsgSetSystemSurfaceKind systemSurface{};
+        systemSurface.kind = m_systemSurfaceKind;
+        if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SetSystemSurfaceKind,
+                                 &systemSurface, sizeof(systemSurface))) {
+            std::cerr << "[lcl-ui ERROR] Failed to declare system-surface policy\n";
+            return false;
+        }
     }
 
     // 2. Request Surface Creation

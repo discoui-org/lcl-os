@@ -154,6 +154,9 @@ bool validShellDeltaKind(LCLShellStateDeltaKind value) {
     return value >= LCLShellStateDeltaKind::SceneAdded &&
            value <= LCLShellStateDeltaKind::FocusChanged;
 }
+bool validSystemSurfaceKind(LCLSystemSurfaceKind value) {
+    return value >= LCLSystemSurfaceKind::None && value <= LCLSystemSurfaceKind::Dock;
+}
 bool validFilter(FilterType value) {
     return value >= FilterType::None && value <= FilterType::Glass;
 }
@@ -169,7 +172,7 @@ bool validBlend(EffectBlendMode value) {
 }
 bool validOpcode(LCLOpcode value) {
     return value >= LCLOpcode::RegisterRole &&
-           value <= LCLOpcode::ShellStateDelta;
+           value <= LCLOpcode::SetSystemSurfaceKind;
 }
 
 bool validShellScene(const LCLMsgShellScene& scene) {
@@ -526,6 +529,11 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         encodeShellScene(out, delta.scene);
         return true;
     }
+    case LCLOpcode::SetSystemSurfaceKind: {
+        LOAD_ONE(LCLMsgSetSystemSurfaceKind, msg);
+        out.u32(static_cast<uint32_t>(msg.kind));
+        return validSystemSurfaceKind(msg.kind) && msg.kind != LCLSystemSurfaceKind::None;
+    }
     }
     return false;
 #undef LOAD_ONE
@@ -773,6 +781,16 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
                 delta.kind != LCLShellStateDeltaKind::FocusChanged))
             return false;
         appendNative(payload, delta);
+        break;
+    }
+    case LCLOpcode::SetSystemSurfaceKind: {
+        LCLMsgSetSystemSurfaceKind msg{};
+        uint32_t kind = 0;
+        if (!in.u32(kind)) return false;
+        msg.kind = static_cast<LCLSystemSurfaceKind>(kind);
+        if (!validSystemSurfaceKind(msg.kind) || msg.kind == LCLSystemSurfaceKind::None)
+            return false;
+        appendNative(payload, msg);
         break;
     }
     }

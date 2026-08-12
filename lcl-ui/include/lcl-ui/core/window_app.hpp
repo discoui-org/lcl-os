@@ -73,6 +73,10 @@ public:
     uint32_t getSurfaceId() const { return m_surfaceId; }
     /** Canonical session/catalog application identity, supplied before connection. */
     void setAppId(std::string appId) { if (!m_ipcConnected) m_appId = std::move(appId); }
+    /** Request compositor-owned policy for a trusted system surface. */
+    void setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind kind) {
+        if (!m_ipcConnected) m_systemSurfaceKind = kind;
+    }
     void setRole(lcl::protocol::LCLRole role) { if (!m_ipcConnected) m_role = role; }
     /** Disable widget-event dispatch for visual-only surfaces such as shell panels. */
     void setInputEnabled(bool enabled) { m_inputEnabled = enabled; }
@@ -153,6 +157,7 @@ private:
     bool m_ownsSocketFd{true};
     uint32_t m_surfaceId{1};
     std::string m_appId;
+    lcl::protocol::LCLSystemSurfaceKind m_systemSurfaceKind{lcl::protocol::LCLSystemSurfaceKind::None};
     uint32_t m_nextRequestId{1};
     lcl::protocol::LCLRole m_role{lcl::protocol::LCLRole::ClientApp};
     bool m_inputEnabled{true};
