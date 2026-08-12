@@ -5,7 +5,7 @@ description: Complete technical reference, API contracts, and usage patterns for
 
 # LCL-UI Application Development Framework Guide
 
-`lcl-ui` is the backend-neutral C++20 user-space GUI framework for **LCL Core Linux (LCL OS)**. It runs in client processes over Unix Domain Socket IPC (`/tmp/lcl_compositor.sock`) and shared memory (`memfd`). Applications explicitly inject a Canvas backend; the standard client backend is the software-only `lcl-canvas-skia` target.
+`lcl-ui` is the backend-neutral C++20 user-space GUI framework for **LCL Core Linux (LCL OS)**. It runs in client processes over protocol-v3 Unix Domain `SOCK_SEQPACKET` IPC (`/run/user/1000/lcl-compositor.sock`) and shared memory (`memfd`). Applications explicitly inject a Canvas backend; the standard client backend is the software-only `lcl-canvas-skia` target.
 
 ---
 
@@ -33,7 +33,7 @@ Manages application initialization, window surface creation, SHM allocation, IPC
 
 - `WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height, const std::string& title)`: Constructor with an explicit backend.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Mounts the top-level widget container.
-- `bool connectCompositor(const std::string& socketPath = "/tmp/lcl_compositor.sock")`: Connects to compositor IPC and registers surface.
+- `bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock")`: Connects to compositor IPC and registers a v3 surface.
 - `void runEventLoop()`: Runs the main non-blocking event loop at **144 Hz target frame pacing** (~6.9ms period).
 
 ### `lcl::ui::Widget` ([`widget.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/widgets/widget.hpp))

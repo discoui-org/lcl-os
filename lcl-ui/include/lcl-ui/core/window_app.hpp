@@ -61,7 +61,7 @@ public:
     bool sendTextInput(const std::string& text);
 
     // Compositor IPC Client Connection & Loop
-    bool connectCompositor(const std::string& socketPath = "/tmp/lcl_compositor.sock");
+    bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock");
     void runEventLoop();
     /** Process compositor messages and render at most one frame; useful for multi-surface shells. */
     bool tick();
@@ -120,6 +120,8 @@ private:
     void allocateSHM(uint32_t width, uint32_t height);
     bool requestWindowAction(lcl::protocol::LCLWindowAction action,
                              float localX = 0.0f, float localY = 0.0f);
+    bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
+                             uint32_t payloadSize, int passedFd = -1);
 
     uint32_t m_width;
     uint32_t m_height;
@@ -148,6 +150,7 @@ private:
     bool m_ipcConnected{false};
     bool m_ownsSocketFd{true};
     uint32_t m_surfaceId{1};
+    uint32_t m_nextRequestId{1};
     lcl::protocol::LCLRole m_role{lcl::protocol::LCLRole::ClientApp};
     bool m_inputEnabled{true};
     int32_t m_initialX{80};

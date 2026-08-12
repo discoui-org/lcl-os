@@ -3,6 +3,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <cstring>
+#include <array>
+#include <bit>
+#include <cerrno>
+#include <fcntl.h>
+#include <limits>
 
 using namespace lcl::protocol;
 
@@ -11,17 +16,19 @@ TEST(LCLProtocolTest, HeaderMagicAndDefaults) {
     EXPECT_EQ(header.magic, LCL_PROTOCOL_MAGIC);
     EXPECT_EQ(header.version, LCL_PROTOCOL_VERSION);
     EXPECT_EQ(header.opcode, LCLOpcode::AckResponse);
+    EXPECT_EQ(header.flags, 0u);
+    EXPECT_EQ(header.requestId, 0u);
     EXPECT_EQ(header.payloadSize, 0u);
 }
-
 TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     int sv[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
 
     LCLHeader headerSend;
     headerSend.magic = LCL_PROTOCOL_MAGIC;
     headerSend.version = LCL_PROTOCOL_VERSION;
     headerSend.opcode = LCLOpcode::SurfaceCreate;
+    headerSend.requestId = 77;
     
     LCLMsgSurfaceCreate msg{};
     msg.surfaceId = 42;
@@ -48,6 +55,7 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     EXPECT_EQ(headerRecv.magic, LCL_PROTOCOL_MAGIC);
     EXPECT_EQ(headerRecv.version, LCL_PROTOCOL_VERSION);
     EXPECT_EQ(headerRecv.opcode, LCLOpcode::SurfaceCreate);
+    EXPECT_EQ(headerRecv.requestId, 77u);
     EXPECT_EQ(headerRecv.payloadSize, sizeof(LCLMsgSurfaceCreate));
     ASSERT_EQ(payloadRecv.size(), sizeof(LCLMsgSurfaceCreate));
 
@@ -64,9 +72,209 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     close(sv[1]);
 }
 
+namespace {
+
+void appendLe32(std::vector<uint8_t>& bytes, uint32_t value) {
+    bytes.push_back(static_cast<uint8_t>(value));
+    bytes.push_back(static_cast<uint8_t>(value >> 8));
+    bytes.push_back(static_cast<uint8_t>(value >> 16));
+    bytes.push_back(static_cast<uint8_t>(value >> 24));
+}
+
+std::vector<uint8_t> surfaceCreatePacket(float scale) {
+    LCLHeader header{};
+    header.opcode = LCLOpcode::SurfaceCreate;
+    header.requestId = 91;
+    header.payloadSize = sizeof(LCLMsgSurfaceCreate);
+    LCLMsgSurfaceCreate create{};
+    create.surfaceId = 4;
+    create.width = 640;
+    create.height = 480;
+    create.bufferScale = scale;
+    std::strncpy(create.title, "Codec Test", sizeof(create.title) - 1);
+    std::vector<uint8_t> packet;
+    if (!encodePacket(header, &create, packet))
+        return {};
+    return packet;
+}
+
+} // namespace
+
+TEST(LCLProtocolTest, WireHeaderIsExplicitLittleEndian) {
+    LCLHeader header{};
+    header.opcode = LCLOpcode::SurfaceDestroy;
+    header.flags = 0;
+    header.requestId = 0x11223344u;
+    header.payloadSize = sizeof(LCLMsgSurfaceDestroy);
+    LCLMsgSurfaceDestroy destroy{};
+    destroy.surfaceId = 0xA1B2C3D4u;
+
+    std::vector<uint8_t> packet;
+    ASSERT_TRUE(encodePacket(header, &destroy, packet));
+    ASSERT_EQ(packet.size(), LCL_PROTOCOL_WIRE_HEADER_SIZE + sizeof(destroy));
+    EXPECT_EQ(packet[16], 0x44);
+    EXPECT_EQ(packet[17], 0x33);
+    EXPECT_EQ(packet[18], 0x22);
+    EXPECT_EQ(packet[19], 0x11);
+    EXPECT_EQ(packet[24], 0xD4);
+    EXPECT_EQ(packet[25], 0xC3);
+    EXPECT_EQ(packet[26], 0xB2);
+    EXPECT_EQ(packet[27], 0xA1);
+}
+
+TEST(LCLProtocolTest, RejectsProtocolV2Packet) {
+    std::vector<uint8_t> packet;
+    appendLe32(packet, LCL_PROTOCOL_MAGIC);
+    appendLe32(packet, 2);
+    appendLe32(packet, static_cast<uint32_t>(LCLOpcode::SurfaceDestroy));
+    appendLe32(packet, 0);
+    appendLe32(packet, 1);
+    appendLe32(packet, sizeof(LCLMsgSurfaceDestroy));
+    appendLe32(packet, 1);
+
+    LCLHeader header{};
+    std::vector<uint8_t> payload;
+    EXPECT_FALSE(decodePacket(packet.data(), packet.size(), header, payload));
+}
+
+TEST(LCLProtocolTest, RejectsMissingAndInvalidBufferScale) {
+    auto packet = surfaceCreatePacket(1.5f);
+    ASSERT_FALSE(packet.empty());
+
+    // A v3 SurfaceCreate must contain the final float bufferScale field.
+    packet.resize(packet.size() - sizeof(float));
+    const uint32_t shortened = sizeof(LCLMsgSurfaceCreate) - sizeof(float);
+    packet[20] = static_cast<uint8_t>(shortened);
+    packet[21] = static_cast<uint8_t>(shortened >> 8);
+    packet[22] = static_cast<uint8_t>(shortened >> 16);
+    packet[23] = static_cast<uint8_t>(shortened >> 24);
+    LCLHeader header{};
+    std::vector<uint8_t> payload;
+    EXPECT_FALSE(decodePacket(packet.data(), packet.size(), header, payload));
+
+    packet = surfaceCreatePacket(1.5f);
+    const uint32_t nanBits =
+        std::bit_cast<uint32_t>(std::numeric_limits<float>::quiet_NaN());
+    const size_t scaleOffset = packet.size() - sizeof(float);
+    packet[scaleOffset] = static_cast<uint8_t>(nanBits);
+    packet[scaleOffset + 1] = static_cast<uint8_t>(nanBits >> 8);
+    packet[scaleOffset + 2] = static_cast<uint8_t>(nanBits >> 16);
+    packet[scaleOffset + 3] = static_cast<uint8_t>(nanBits >> 24);
+    EXPECT_FALSE(decodePacket(packet.data(), packet.size(), header, payload));
+
+    EXPECT_TRUE(surfaceCreatePacket(0.49f).empty());
+    EXPECT_TRUE(surfaceCreatePacket(4.01f).empty());
+}
+
+TEST(LCLProtocolTest, QueuedPacketsPreserveRequestOrder) {
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
+
+    int sendBufferSize = 4096;
+    ASSERT_EQ(setsockopt(sv[0], SOL_SOCKET, SO_SNDBUF, &sendBufferSize,
+                         sizeof(sendBufferSize)), 0);
+
+    std::array<uint8_t, 512> filler{};
+    while (send(sv[0], filler.data(), filler.size(), MSG_DONTWAIT) >= 0) {
+    }
+    ASSERT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
+
+    LCLMsgSurfaceDestroy destroy{};
+    destroy.surfaceId = 8;
+    LCLHeader first{};
+    first.opcode = LCLOpcode::SurfaceDestroy;
+    first.requestId = 101;
+    first.payloadSize = sizeof(destroy);
+    LCLHeader second = first;
+    second.requestId = 102;
+
+    ASSERT_TRUE(sendMsgWithFd(sv[0], first, &destroy));
+    ASSERT_TRUE(sendMsgWithFd(sv[0], second, &destroy));
+
+    while (recv(sv[1], filler.data(), filler.size(), MSG_DONTWAIT) >= 0) {
+    }
+    ASSERT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
+    ASSERT_TRUE(flushPendingWrites(sv[0]));
+
+    for (uint32_t expected : {101u, 102u}) {
+        LCLHeader received{};
+        std::vector<uint8_t> payload;
+        int receivedFd = -1;
+        ASSERT_EQ(recvPacketWithFd(sv[1], received, payload, receivedFd),
+                  ReceiveStatus::Received);
+        EXPECT_EQ(received.requestId, expected);
+    }
+
+    discardPendingWrites(sv[0]);
+    close(sv[0]);
+    close(sv[1]);
+}
+
+TEST(LCLProtocolTest, SeqpacketRejectsTruncatedPayload) {
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
+    auto packet = surfaceCreatePacket(1.0f);
+    ASSERT_GT(packet.size(), LCL_PROTOCOL_WIRE_HEADER_SIZE);
+    iovec iov{packet.data(), packet.size() - 1};
+    msghdr rawMessage{};
+    rawMessage.msg_iov = &iov;
+    rawMessage.msg_iovlen = 1;
+    ASSERT_EQ(sendmsg(sv[0], &rawMessage, 0),
+              static_cast<ssize_t>(packet.size() - 1));
+
+    LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    EXPECT_EQ(recvPacketWithFd(sv[1], header, payload, receivedFd),
+              ReceiveStatus::Invalid);
+    EXPECT_EQ(receivedFd, -1);
+    close(sv[0]);
+    close(sv[1]);
+}
+
+TEST(LCLProtocolTest, FileDescriptorIsAcceptedOnlyForAttachBuffer) {
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
+    int descriptor = dup(STDIN_FILENO);
+    ASSERT_GE(descriptor, 0);
+
+    LCLMsgAttachBuffer attach{};
+    attach.surfaceId = 3;
+    attach.width = 16;
+    attach.height = 16;
+    attach.stride = 64;
+    attach.format = 1;
+    LCLHeader attachHeader{};
+    attachHeader.opcode = LCLOpcode::AttachBuffer;
+    attachHeader.requestId = 5;
+    attachHeader.payloadSize = sizeof(attach);
+    ASSERT_TRUE(sendMsgWithFd(sv[0], attachHeader, &attach, descriptor));
+
+    LCLHeader receivedHeader{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_EQ(recvPacketWithFd(sv[1], receivedHeader, payload, receivedFd),
+              ReceiveStatus::Received);
+    EXPECT_GE(receivedFd, 0);
+    EXPECT_EQ(receivedHeader.requestId, 5u);
+    if (receivedFd >= 0)
+        close(receivedFd);
+
+    LCLMsgSurfaceDestroy destroy{};
+    destroy.surfaceId = 3;
+    LCLHeader destroyHeader{};
+    destroyHeader.opcode = LCLOpcode::SurfaceDestroy;
+    destroyHeader.payloadSize = sizeof(destroy);
+    EXPECT_FALSE(sendMsgWithFd(sv[0], destroyHeader, &destroy, descriptor));
+
+    close(descriptor);
+    close(sv[0]);
+    close(sv[1]);
+}
+
 TEST(LCLProtocolTest, SendAndReceiveSetWindowLayerMsg) {
     int sv[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
 
     LCLHeader headerSend{};
     headerSend.opcode = LCLOpcode::SetWindowLayer;
@@ -99,7 +307,7 @@ TEST(LCLProtocolTest, SendAndReceiveSetWindowLayerMsg) {
 
 TEST(LCLProtocolTest, SendAndReceiveSetReservedZoneMsg) {
     int sv[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
 
     LCLHeader headerSend{};
     headerSend.opcode = LCLOpcode::SetReservedZone;
@@ -134,7 +342,7 @@ TEST(LCLProtocolTest, SendAndReceiveSetReservedZoneMsg) {
 
 TEST(LCLProtocolTest, SendAndReceiveWindowActionMsg) {
     int sv[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
 
     LCLHeader headerSend{};
     headerSend.opcode = LCLOpcode::RequestWindowAction;
@@ -167,7 +375,7 @@ TEST(LCLProtocolTest, SendAndReceiveWindowActionMsg) {
 
 TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     int sv[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
 
     std::vector<FilterOp> filters = {
         { FilterType::Blur, 15.0f },

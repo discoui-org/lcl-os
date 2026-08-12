@@ -43,7 +43,8 @@ The following behavior is part of the baseline and must remain:
 These parts are temporary compatibility bridges and must be removed only after
 the revisioned app/scene state pipeline has equivalent tests:
 
-- Protocol v2 and its legacy payload-size compatibility branches.
+- Protocol v2 and its legacy payload-size compatibility branches. Removed in
+  Step 3 after the v3 codec and rejection tests became the only accepted path.
 - PID/executable-path based `appId` inference.
 - Full `WindowListUpdate` snapshots and per-client snapshot hashes.
 - Dock-side application-directory rescans.
@@ -146,3 +147,30 @@ The Step 2 automated gate must include archive/link inspection proving that
 `liblcl-ui.a`, Terminal, desktop shell, and JS runtime have no EGL/DRM/GBM/GLES
 symbols or link dependencies. The compositor must continue to link those
 libraries through `lcl-render`.
+
+## Step 3 implementation record
+
+Step 3 replaces the compositor/client transport without changing shell-state
+ownership or widget/render behavior:
+
+- Protocol v3 is the only accepted wire version. Every header and payload field
+  is encoded and decoded explicitly in little-endian order.
+- The compositor socket is an owner-only Unix `SOCK_SEQPACKET` endpoint at
+  `/run/user/1000/lcl-compositor.sock`; stream and text-command fallbacks are
+  removed.
+- Client requests carry non-zero monotonic request IDs. The compositor returns
+  typed `AckResponse` packets using the corresponding request ID.
+- Non-blocking sends retain packet order in a bounded per-socket queue. Queued
+  `SCM_RIGHTS` descriptors are duplicated and released when sent or discarded.
+- `bufferScale` is mandatory, finite, and restricted to `0.5..4.0`; logical
+  bounds/input remain separate from physical SHM dimensions.
+- Packet length, opcode, enum, string, float, effect-graph, ancillary-data, and
+  FD/opcode combinations are validated before dispatch. Only `AttachBuffer`
+  may carry one descriptor.
+- `WindowApp`, compositor dispatch, desktop shell, JS runtime users, and the
+  temporary desktop-WM client use the same v3 transport in this step.
+
+The Step 3 automated gate is the full default build plus all CTest tests,
+including explicit little-endian encoding, v2 rejection, required scale,
+truncated packet, FD attachment, request-ID, and queued-order cases. The QEMU
+check remains the behavioral acceptance gate before Step 4.

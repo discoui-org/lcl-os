@@ -126,7 +126,6 @@ TEST(LclUiTest, RectMath) {
     EXPECT_EQ(unionRect.width, 70.0f);
     EXPECT_EQ(unionRect.height, 70.0f);
 }
-
 TEST(LclUiTest, WidgetsUseBackendNeutralCanvas) {
     RecordingCanvas canvas;
     auto root = std::make_unique<Container>();
@@ -229,7 +228,7 @@ TEST(LclUiTest, WindowAppStagesSurfaceChromeBeforeCompositorConnection) {
 
 TEST(LclUiTest, WindowAppCsdControlsAndCustomRequestsUseWindowActions) {
     int sockets[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
 
     auto canvas = std::make_unique<RecordingCanvas>();
     WindowApp app(std::move(canvas), 540, 360, "Window action test");

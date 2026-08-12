@@ -86,7 +86,6 @@ TEST(LclUiEventsTest, DepthFirstHitTesting) {
     Widget* rootHit = dispatcher.hitTest(root.get(), 10.0f, 10.0f);
     EXPECT_EQ(rootHit, root.get());
 }
-
 TEST(LclUiEventsTest, HoverTransitionEvents) {
     EventDispatcher dispatcher;
 
@@ -226,7 +225,7 @@ TEST(LclUiEventsTest, WindowAppDirectEventCallbacks) {
 
 TEST(LclUiEventsTest, VisualOnlyWindowIgnoresCompositorPointerEvents) {
     int sockets[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
     ASSERT_NE(fcntl(sockets[1], F_SETFL, fcntl(sockets[1], F_GETFL) | O_NONBLOCK), -1);
 
     {

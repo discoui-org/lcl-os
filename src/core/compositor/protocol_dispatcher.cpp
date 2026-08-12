@@ -15,9 +15,6 @@
 
 namespace lcl::core {
 namespace {
-float sanitizeBufferScale(float scale) {
-    return (std::isfinite(scale) && scale >= 0.5f && scale <= 4.0f) ? scale : 1.0f;
-}
 int logicalToPhysical(int value, float scale) {
     return static_cast<int>(std::lround(static_cast<float>(value) * scale));
 }
@@ -43,6 +40,32 @@ uint64_t fnv1aMix(uint64_t hash, uint8_t byte) {
     hash ^= static_cast<uint64_t>(byte);
     return hash * 1099511628211ull;
 }
+
+class RequestAck {
+public:
+    RequestAck(int clientFd, uint32_t requestId)
+        : m_clientFd(clientFd), m_requestId(requestId) {}
+    ~RequestAck() {
+        if (m_clientFd < 0 || m_requestId == 0) return;
+        protocol::LCLMsgAckResponse response{};
+        response.status = m_status;
+        std::strncpy(response.message, m_message.c_str(), sizeof(response.message) - 1);
+        protocol::LCLHeader header{};
+        header.opcode = protocol::LCLOpcode::AckResponse;
+        header.requestId = m_requestId;
+        header.payloadSize = sizeof(response);
+        protocol::sendMsgWithFd(m_clientFd, header, &response);
+    }
+    void error(uint32_t status, const char* message) {
+        m_status = status;
+        m_message = message;
+    }
+private:
+    int m_clientFd{-1};
+    uint32_t m_requestId{0};
+    uint32_t m_status{0};
+    std::string m_message{"ok"};
+};
 } // namespace
 
 bool ProtocolDispatcher::process(IPCManager& ipcManager) {
@@ -133,14 +156,31 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
     };
 
     for (const auto& msg : ipcManager.pollMessages()) {
-        // --- SURFACE_CREATE: register a window on the compositor canvas ---
-        bool isSurfaceCreate = (msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceCreate) ||
-                               (msg.command.rfind("SURFACE_CREATE:", 0) == 0);
-        bool isAttachBuffer  = (msg.header.opcode == lcl::protocol::LCLOpcode::AttachBuffer) ||
-                               (msg.command.rfind("ATTACH_BUFFER:", 0) == 0);
+        if (msg.disconnected) {
+            m_clientRoles.erase(msg.clientFd);
+            m_lastWindowListHashes.erase(msg.clientFd);
+            std::vector<uint64_t> surfacesToRemove;
+            for (auto& [surfKey, entry] : m_surfaces) {
+                if (entry.clientFd == msg.clientFd ||
+                    (msg.pid > 0 && (surfKey >> 32) == static_cast<uint64_t>(msg.pid))) {
+                    entry.clientFd = -1;
+                    if (beginClosingTransition(entry)) {
+                        if (entry.windowId > 0) m_windowManager.removeWindow(entry.windowId);
+                        surfacesToRemove.push_back(surfKey);
+                    }
+                }
+            }
+            for (uint64_t key : surfacesToRemove) m_surfaces.erase(key);
+            changed = true;
+            continue;
+        }
 
-        bool isDisconnect   = (msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) ||
-                               (msg.command.rfind("CLIENT_DISCONNECT", 0) == 0);
+        if (msg.header.opcode == lcl::protocol::LCLOpcode::AckResponse) continue;
+        RequestAck requestAck(msg.clientFd, msg.header.requestId);
+
+        // --- SURFACE_CREATE: register a window on the compositor canvas ---
+        const bool isSurfaceCreate = msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceCreate;
+        const bool isAttachBuffer = msg.header.opcode == lcl::protocol::LCLOpcode::AttachBuffer;
 
         if (msg.header.opcode == lcl::protocol::LCLOpcode::RegisterRole) {
             if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgRegisterRole)) {
@@ -153,26 +193,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             continue;
         }
 
-        if (isDisconnect) {
-            m_clientRoles.erase(msg.clientFd);
-            m_lastWindowListHashes.erase(msg.clientFd);
-            std::vector<uint64_t> surfacesToRemove;
-            for (auto& [surfKey, entry] : m_surfaces) {
-                if (entry.clientFd == msg.clientFd || (msg.pid > 0 && (surfKey >> 32) == static_cast<uint64_t>(msg.pid))) {
-                    entry.clientFd = -1;
-                    if (beginClosingTransition(entry)) {
-                        if (entry.windowId > 0) {
-                            m_windowManager.removeWindow(entry.windowId);
-                        }
-                        surfacesToRemove.push_back(surfKey);
-                    }
-                }
-            }
-            for (uint64_t key : surfacesToRemove) {
-                m_surfaces.erase(key);
-            }
-            changed = true;
-        } else if (isSurfaceCreate) {
+        if (isSurfaceCreate) {
             uint32_t surfId = 1;
             std::string title = "LCL Application";
             int winX = DisplayScale::px(80);
@@ -191,14 +212,11 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             const bool isSystemSurface = clientRole == protocol::LCLRole::DesktopWallpaper ||
                 clientRole == protocol::LCLRole::ShellPanel;
 
-            constexpr size_t kSurfaceCreateV1Size = offsetof(lcl::protocol::LCLMsgSurfaceCreate, bufferScale);
-            if (msg.payload.size() >= kSurfaceCreateV1Size) {
+            if (msg.payload.size() == sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
                 auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
                 surfId = sm->surfaceId;
                 if (sm->title[0]) title = sm->title;
-                if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
-                    bufferScale = sanitizeBufferScale(sm->bufferScale);
-                }
+                bufferScale = sm->bufferScale;
                 winX = logicalToPhysical(sm->x, bufferScale);
                 winY = logicalToPhysical(sm->y, bufferScale);
                 winW = (sm->width > 0) ? logicalToPhysical(static_cast<int>(sm->width), bufferScale) : static_cast<int>(m_renderer.getWidth());
@@ -344,18 +362,13 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH);
             changed = true;
 
-        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetDecorationMode ||
-                   msg.command.rfind("SET_DECORATION_MODE", 0) == 0) {
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetDecorationMode) {
             uint32_t surfId = 1;
             lcl::protocol::LCLDecorationMode mode = lcl::protocol::LCLDecorationMode::SSD;
             if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetDecorationMode)) {
                 auto* decMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetDecorationMode*>(msg.payload.data());
                 surfId = decMsg->surfaceId;
                 mode = decMsg->mode;
-            } else if (msg.command.find("CSD") != std::string::npos) {
-                mode = lcl::protocol::LCLDecorationMode::CSD;
-            } else if (msg.command.find("NONE") != std::string::npos || msg.command.find("FRAMELESS") != std::string::npos) {
-                mode = lcl::protocol::LCLDecorationMode::None;
             }
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             auto it = m_surfaces.find(surfaceKey);
@@ -557,19 +570,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 changed = true;
             }
 
-        } else if (msg.command == "SPAWN_TERMINAL" || msg.command.rfind("SPAWN_TERMINAL", 0) == 0) {
-            pid_t pid = fork();
-            if (pid == 0) {
-                // Child process: execute lcl-terminal binary
-                execl("/home/user/Applications/Terminal.app/bin/lcl-terminal", "lcl-terminal", nullptr);
-                execl("/bin/lcl-terminal", "lcl-terminal", nullptr);
-                execl("/usr/bin/lcl-terminal", "lcl-terminal", nullptr);
-                _exit(1);
-            } else if (pid > 0) {
-                std::cout << "[LCL Compositor] Spawned new LCL Terminal process (PID: " << pid << ")\n";
-            } else {
-                std::cerr << "[LCL Compositor ERROR] Failed to fork process for SPAWN_TERMINAL.\n";
-            }
+        } else {
+            requestAck.error(2, "opcode not accepted from client");
         }
     }
 

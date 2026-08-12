@@ -79,6 +79,7 @@ WindowApp::~WindowApp() {
         m_shmFd = -1;
     }
     if (m_socketFd >= 0 && m_ownsSocketFd) {
+        lcl::protocol::discardPendingWrites(m_socketFd);
         close(m_socketFd);
         m_socketFd = -1;
     }
@@ -139,7 +140,7 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
 
 bool WindowApp::connectCompositor(const std::string& socketPath) {
     for (int i = 0; i < 50; ++i) {
-        m_socketFd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        m_socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
         if (m_socketFd >= 0) {
             struct sockaddr_un addr{};
             addr.sun_family = AF_UNIX;
@@ -170,20 +171,15 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     }
 
     // 1. Register role as CLIENT_APP
-    lcl::protocol::LCLHeader regHeader{};
-    regHeader.opcode = lcl::protocol::LCLOpcode::RegisterRole;
-    regHeader.payloadSize = sizeof(lcl::protocol::LCLMsgRegisterRole);
-
     lcl::protocol::LCLMsgRegisterRole regMsg{};
     regMsg.role = m_role;
     std::strncpy(regMsg.clientName, m_title.c_str(), sizeof(regMsg.clientName) - 1);
-    lcl::protocol::sendMsgWithFd(m_socketFd, regHeader, &regMsg);
+    if (!sendProtocolMessage(lcl::protocol::LCLOpcode::RegisterRole, &regMsg, sizeof(regMsg))) {
+        std::cerr << "[lcl-ui ERROR] Failed to register v3 client role\n";
+        return false;
+    }
 
     // 2. Request Surface Creation
-    lcl::protocol::LCLHeader surfHeader{};
-    surfHeader.opcode = lcl::protocol::LCLOpcode::SurfaceCreate;
-    surfHeader.payloadSize = sizeof(lcl::protocol::LCLMsgSurfaceCreate);
-
     lcl::protocol::LCLMsgSurfaceCreate surfMsg{};
     surfMsg.surfaceId = m_surfaceId;
     surfMsg.x = m_initialX;
@@ -192,7 +188,10 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     surfMsg.height = m_height;
     surfMsg.bufferScale = m_bufferScale;
     std::strncpy(surfMsg.title, m_title.c_str(), sizeof(surfMsg.title) - 1);
-    lcl::protocol::sendMsgWithFd(m_socketFd, surfHeader, &surfMsg);
+    if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate, &surfMsg, sizeof(surfMsg))) {
+        std::cerr << "[lcl-ui ERROR] Failed to create v3 surface\n";
+        return false;
+    }
 
     // 3. Allocate SHM memory buffer and attach to compositor
     allocateSHM(m_width, m_height);
@@ -271,7 +270,13 @@ void WindowApp::pollIPC() {
         lcl::protocol::LCLHeader header{};
         std::vector<uint8_t> payload;
         int receivedFd = -1;
-        if (lcl::protocol::recvMsgWithFd(m_socketFd, header, payload, receivedFd)) {
+        const auto receiveStatus =
+            lcl::protocol::recvPacketWithFd(m_socketFd, header, payload, receivedFd);
+        if (receiveStatus == lcl::protocol::ReceiveStatus::Received) {
+            if (receivedFd >= 0) {
+                close(receivedFd);
+                receivedFd = -1;
+            }
             if (header.opcode == lcl::protocol::LCLOpcode::InputEvent &&
                 payload.size() >= sizeof(lcl::protocol::LCLMsgInputEvent)) {
                 auto* inputMsg = reinterpret_cast<const lcl::protocol::LCLMsgInputEvent*>(payload.data());
@@ -310,15 +315,13 @@ void WindowApp::pollIPC() {
                     }
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::ConfigureBounds &&
-                       payload.size() >= offsetof(lcl::protocol::LCLMsgConfigureBounds, bufferScale)) {
+                       payload.size() == sizeof(lcl::protocol::LCLMsgConfigureBounds)) {
                 auto* cfg = reinterpret_cast<const lcl::protocol::LCLMsgConfigureBounds*>(payload.data());
                 if (cfg->surfaceId != m_surfaceId) continue;
                 if (cfg->width > 0 && cfg->height > 0) {
                     latestWidth = cfg->width;
                     latestHeight = cfg->height;
-                    latestScale = (payload.size() >= sizeof(lcl::protocol::LCLMsgConfigureBounds))
-                        ? sanitizeBufferScale(cfg->bufferScale)
-                        : 1.0f;
+                    latestScale = cfg->bufferScale;
                     pendingResize = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
@@ -328,7 +331,12 @@ void WindowApp::pollIPC() {
                 }
             }
             if (m_onIpcMessage) m_onIpcMessage(header, payload);
+        } else if (receiveStatus == lcl::protocol::ReceiveStatus::WouldBlock) {
+            break;
         } else {
+            std::cerr << "[lcl-ui ERROR] Compositor v3 connection closed or rejected\n";
+            m_ipcConnected = false;
+            m_running = false;
             break;
         }
     }
@@ -410,6 +418,7 @@ void WindowApp::runEventLoop() {
     }
     m_running = false;
     if (m_socketFd >= 0 && m_ownsSocketFd) {
+        lcl::protocol::discardPendingWrites(m_socketFd);
         close(m_socketFd);
         m_socketFd = -1;
     }
@@ -434,17 +443,25 @@ bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
                                     float localX, float localY) {
     if (!m_ipcConnected || m_socketFd < 0) return false;
 
-    lcl::protocol::LCLHeader header{};
-    header.opcode = lcl::protocol::LCLOpcode::RequestWindowAction;
-    header.payloadSize = sizeof(lcl::protocol::LCLMsgRequestWindowAction);
-
     lcl::protocol::LCLMsgRequestWindowAction msg{};
     msg.surfaceId = m_surfaceId;
     msg.action = action;
     msg.localX = localX;
     msg.localY = localY;
 
-    return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
+    return sendProtocolMessage(lcl::protocol::LCLOpcode::RequestWindowAction,
+                               &msg, sizeof(msg));
+}
+
+bool WindowApp::sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
+                                    uint32_t payloadSize, int passedFd) {
+    if (m_socketFd < 0) return false;
+    lcl::protocol::LCLHeader header{};
+    header.opcode = opcode;
+    header.requestId = m_nextRequestId++;
+    if (m_nextRequestId == 0) m_nextRequestId = 1;
+    header.payloadSize = payloadSize;
+    return lcl::protocol::sendMsgWithFd(m_socketFd, header, payload, passedFd);
 }
 
 bool WindowApp::requestWindowDrag(float localX, float localY) {
@@ -476,37 +493,27 @@ bool WindowApp::setDecorationMode(lcl::protocol::LCLDecorationMode mode) {
     m_hasRequestedDecorationMode = true;
     if (!m_ipcConnected || m_socketFd < 0) return true;
 
-    lcl::protocol::LCLHeader header{};
-    header.opcode = lcl::protocol::LCLOpcode::SetDecorationMode;
-    header.payloadSize = sizeof(lcl::protocol::LCLMsgSetDecorationMode);
-
     lcl::protocol::LCLMsgSetDecorationMode msg{};
     msg.surfaceId = m_surfaceId;
     msg.mode = mode;
 
-    return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
+    return sendProtocolMessage(lcl::protocol::LCLOpcode::SetDecorationMode,
+                               &msg, sizeof(msg));
 }
 
 bool WindowApp::setWindowLayer(lcl::protocol::LCLWindowLayer layer, bool unfocusable) {
     if (!m_ipcConnected || m_socketFd < 0) return false;
 
-    lcl::protocol::LCLHeader header{};
-    header.opcode = lcl::protocol::LCLOpcode::SetWindowLayer;
-    header.payloadSize = sizeof(lcl::protocol::LCLMsgSetWindowLayer);
-
     lcl::protocol::LCLMsgSetWindowLayer msg{};
     msg.surfaceId = m_surfaceId;
     msg.layer = layer;
     msg.unfocusable = unfocusable ? 1 : 0;
-    return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
+    return sendProtocolMessage(lcl::protocol::LCLOpcode::SetWindowLayer,
+                               &msg, sizeof(msg));
 }
 
 bool WindowApp::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right) {
     if (!m_ipcConnected || m_socketFd < 0) return false;
-
-    lcl::protocol::LCLHeader header{};
-    header.opcode = lcl::protocol::LCLOpcode::SetReservedZone;
-    header.payloadSize = sizeof(lcl::protocol::LCLMsgSetReservedZone);
 
     lcl::protocol::LCLMsgSetReservedZone msg{};
     msg.surfaceId = m_surfaceId;
@@ -514,7 +521,8 @@ bool WindowApp::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, ui
     msg.bottom = static_cast<uint32_t>(std::lround(static_cast<float>(bottom) * m_bufferScale));
     msg.left = static_cast<uint32_t>(std::lround(static_cast<float>(left) * m_bufferScale));
     msg.right = static_cast<uint32_t>(std::lround(static_cast<float>(right) * m_bufferScale));
-    return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
+    return sendProtocolMessage(lcl::protocol::LCLOpcode::SetReservedZone,
+                               &msg, sizeof(msg));
 }
 
 bool WindowApp::setWindowCornerRadius(float radiusPx) {
@@ -522,15 +530,12 @@ bool WindowApp::setWindowCornerRadius(float radiusPx) {
     m_hasRequestedCornerRadius = true;
     if (!m_ipcConnected || m_socketFd < 0) return true;
 
-    lcl::protocol::LCLHeader header{};
-    header.opcode = lcl::protocol::LCLOpcode::SetWindowCornerRadius;
-    header.payloadSize = sizeof(lcl::protocol::LCLMsgSetWindowCornerRadius);
-
     lcl::protocol::LCLMsgSetWindowCornerRadius msg{};
     msg.surfaceId = m_surfaceId;
     msg.radiusPx = m_requestedCornerRadius;
 
-    return lcl::protocol::sendMsgWithFd(m_socketFd, header, &msg);
+    return sendProtocolMessage(lcl::protocol::LCLOpcode::SetWindowCornerRadius,
+                               &msg, sizeof(msg));
 }
 
 void WindowApp::configureCsdTitlebar(float height, float controlLeft, float controlTop,
@@ -737,10 +742,8 @@ bool WindowApp::renderFrame() {
             }
 
             if (payload != m_lastEffectGraphPayload) {
-                lcl::protocol::LCLHeader graphHeader{};
-                graphHeader.opcode = lcl::protocol::LCLOpcode::SetEffectGraph;
-                graphHeader.payloadSize = static_cast<uint32_t>(payload.size());
-                lcl::protocol::sendMsgWithFd(m_socketFd, graphHeader, payload.data());
+                sendProtocolMessage(lcl::protocol::LCLOpcode::SetEffectGraph,
+                                    payload.data(), static_cast<uint32_t>(payload.size()));
                 m_lastEffectGraphPayload = std::move(payload);
             }
             m_effectGraphActive = true;
@@ -748,10 +751,8 @@ bool WindowApp::renderFrame() {
             lcl::protocol::LCLMsgClearEffectGraph clearMsg{};
             clearMsg.surfaceId = m_surfaceId;
 
-            lcl::protocol::LCLHeader clearHeader{};
-            clearHeader.opcode = lcl::protocol::LCLOpcode::ClearEffectGraph;
-            clearHeader.payloadSize = sizeof(clearMsg);
-            lcl::protocol::sendMsgWithFd(m_socketFd, clearHeader, &clearMsg);
+            sendProtocolMessage(lcl::protocol::LCLOpcode::ClearEffectGraph,
+                                &clearMsg, sizeof(clearMsg));
             m_effectGraphActive = false;
             m_lastEffectGraphPayload.clear();
         }
@@ -765,10 +766,6 @@ bool WindowApp::renderFrame() {
 
     // If connected over IPC, notify compositor of buffer commit
     if (m_ipcConnected && m_socketFd >= 0 && m_shmFd >= 0) {
-        lcl::protocol::LCLHeader attachHeader{};
-        attachHeader.opcode = lcl::protocol::LCLOpcode::AttachBuffer;
-        attachHeader.payloadSize = sizeof(lcl::protocol::LCLMsgAttachBuffer);
-
         lcl::protocol::LCLMsgAttachBuffer attachMsg{};
         attachMsg.surfaceId = m_surfaceId;
         attachMsg.width = getPixelWidth();
@@ -777,7 +774,8 @@ bool WindowApp::renderFrame() {
         attachMsg.format = 1;
 
         const int passFd = m_shmNeedsAttach ? m_shmFd : -1;
-        if (lcl::protocol::sendMsgWithFd(m_socketFd, attachHeader, &attachMsg, passFd)) {
+        if (sendProtocolMessage(lcl::protocol::LCLOpcode::AttachBuffer,
+                                &attachMsg, sizeof(attachMsg), passFd)) {
             m_shmNeedsAttach = false;
         } else if (m_shmNeedsAttach) {
             // A lazy-mapped surface has no fallback window to keep it alive.

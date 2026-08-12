@@ -274,7 +274,7 @@ int main() {
     uint32_t requestedWidth = width, requestedHeight = height;
     wallpaper->setOnIpcMessage([&](const lcl::protocol::LCLHeader& message, const std::vector<uint8_t>& data) {
         if (message.opcode != lcl::protocol::LCLOpcode::ConfigureBounds ||
-            data.size() < offsetof(lcl::protocol::LCLMsgConfigureBounds, bufferScale)) return;
+            data.size() != sizeof(lcl::protocol::LCLMsgConfigureBounds)) return;
         const auto* cfg = reinterpret_cast<const lcl::protocol::LCLMsgConfigureBounds*>(data.data());
         if (cfg->surfaceId == 1 && cfg->width > 0 && cfg->height > 0) { requestedWidth = cfg->width; requestedHeight = cfg->height; }
     });

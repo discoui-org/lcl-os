@@ -41,7 +41,7 @@ The LCL architecture consists of 4 main decoupled layers:
 
 ### III. IPC & Application Bundle Subsystem
 * **Location:** `src/core/ipc/`, `src/tools/`
-* **Secure Unix Domain Socket IPC:** Compositor IPC operating over Unix Domain Sockets (`/tmp/lcl_compositor.sock`) bound with strict `0600` permissions. Validates client requests using kernel peer authentication (`SO_PEERCRED` via `getsockopt`) to verify `PID`, `UID`, and `GID`.
+* **Secure Unix Domain Socket IPC:** Compositor protocol v3 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`.
 * **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`.
 * **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ CLI tool linking against `AppBundleParser`. Supports background launch (`open App.app`) and blocking wait mode (`open -w App.app`) with signal handling (`SIGINT`/`SIGTERM`) and automatic window surface reclamation (`DESTROY_LAST_WINDOW`).
 
@@ -187,6 +187,6 @@ Guest display boot args (when `NATIVE=1`):
 
 ## 7. Unix Domain Socket IPC & Disconnect Detection
 
-1. **Secure Domain Socket Protocol:** Compositor IPC operates on `/tmp/lcl_compositor.sock` with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
-2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). `lcl::protocol::recvMsgWithFd()` explicitly sets `errno = ECONNRESET` to prevent stale `errno = EAGAIN` from `accept4()` from masking client disconnects.
-3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits `CLIENT_DISCONNECT` (`SurfaceDestroy`) upon socket EOF. `ProtocolDispatcher` ilgili pencereyi `WindowManager`dan kaldırır; `SurfaceRegistry` SHM eşlemesini ve memfd'yi tek sahip olarak serbest bırakır.
+1. **Secure Domain Socket Protocol:** Compositor IPC v3 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
+2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v3 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
+3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits a typed disconnect event upon socket EOF. `ProtocolDispatcher` ilgili pencereyi `WindowManager`dan kaldırır; `SurfaceRegistry` SHM eşlemesini ve memfd'yi tek sahip olarak serbest bırakır.

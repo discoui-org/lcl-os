@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 #include <vector>
 #include <sys/types.h>
@@ -9,7 +10,9 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 2;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 3;
+constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
+constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 
 enum class LCLRole : uint32_t {
     Unspecified = 0,
@@ -129,6 +132,8 @@ struct LCLHeader {
     uint32_t magic{LCL_PROTOCOL_MAGIC};
     uint32_t version{LCL_PROTOCOL_VERSION};
     LCLOpcode opcode{LCLOpcode::AckResponse};
+    uint32_t flags{0};
+    uint32_t requestId{0};
     uint32_t payloadSize{0};
 };
 
@@ -145,8 +150,7 @@ struct LCLMsgSurfaceCreate {
     uint32_t height{0};
     char title[128]{0};
     char appId[64]{0};
-    // Appended for wire compatibility with protocol-v1 clients/compositors.
-    float bufferScale{1.0f}; // Logical-to-buffer scale; 1.0 is legacy raw pixels.
+    float bufferScale{1.0f}; // Required v3 logical-to-buffer scale.
 };
 
 struct LCLMsgSurfaceDestroy {
@@ -162,8 +166,7 @@ struct LCLMsgConfigureBounds {
     uint32_t headerColor{0};
     uint8_t isFocused{0};
     char title[128]{0};
-    // Appended for wire compatibility with protocol-v1 clients/compositors.
-    float bufferScale{1.0f}; // Width/height and input are logical at this scale.
+    float bufferScale{1.0f}; // Required v3 scale; bounds and input are logical.
 };
 
 struct LCLMsgAttachBuffer {
@@ -265,9 +268,33 @@ struct LCLMsgWindowListEntry {
  */
 bool sendMsgWithFd(int socketFd, const LCLHeader& header, const void* payload, int passedFd = -1);
 
+/** Flush packets previously queued because a non-blocking socket returned EAGAIN. */
+bool flushPendingWrites(int socketFd);
+
+/** Release queued packets and duplicated descriptors owned for a disconnected socket. */
+void discardPendingWrites(int socketFd);
+
+enum class ReceiveStatus {
+    Received,
+    WouldBlock,
+    Closed,
+    Invalid,
+    IoError
+};
+
+/** Receive and validate one complete SOCK_SEQPACKET protocol packet. */
+ReceiveStatus recvPacketWithFd(int socketFd, LCLHeader& header,
+                               std::vector<uint8_t>& payload, int& receivedFd);
+
 /**
  * @brief Receive an IPC packet with optional shared memory file descriptor (SCM_RIGHTS).
  */
 bool recvMsgWithFd(int socketFd, LCLHeader& header, std::vector<uint8_t>& payload, int& receivedFd);
+
+/** Explicit v3 little-endian codec entry points used by transport and tests. */
+bool encodePacket(const LCLHeader& header, const void* nativePayload,
+                  std::vector<uint8_t>& packet);
+bool decodePacket(const uint8_t* packet, size_t packetSize, LCLHeader& header,
+                  std::vector<uint8_t>& nativePayload);
 
 } // namespace lcl::protocol

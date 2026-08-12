@@ -20,7 +20,7 @@ int main() {
     // 1. Connect to Compositor Unix Domain Socket
     int socketFd = -1;
     for (int i = 0; i < 50; ++i) {
-        socketFd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
         if (socketFd >= 0) {
             struct sockaddr_un addr{};
             addr.sun_family = AF_UNIX;
@@ -44,6 +44,7 @@ int main() {
     // 2. Register role as WINDOW_MANAGER
     lcl::protocol::LCLHeader regHeader{};
     regHeader.opcode = lcl::protocol::LCLOpcode::RegisterRole;
+    regHeader.requestId = 1;
     regHeader.payloadSize = sizeof(lcl::protocol::LCLMsgRegisterRole);
 
     lcl::protocol::LCLMsgRegisterRole regMsg{};

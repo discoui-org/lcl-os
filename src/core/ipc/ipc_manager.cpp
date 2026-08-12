@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cerrno>
 #include <algorithm>
+#include <filesystem>
 
 namespace lcl::core {
 
@@ -19,11 +20,22 @@ bool IPCManager::initialize(const std::string& socketPath) {
     if (m_initialized) return true;
     m_socketPath = socketPath;
 
+    const std::filesystem::path parent = std::filesystem::path(m_socketPath).parent_path();
+    if (!parent.empty() && !std::filesystem::exists(parent)) {
+        std::error_code error;
+        if (!std::filesystem::create_directories(parent, error)) {
+            std::cerr << "[LCL IPC ERROR] runtime directory creation failed for "
+                      << parent << ": " << error.message() << "\n";
+            return false;
+        }
+        chmod(parent.c_str(), 0700);
+    }
+
     // Remove existing socket file if any
     unlink(m_socketPath.c_str());
 
     // Create Unix Domain Socket
-    m_serverFd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    m_serverFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (m_serverFd < 0) {
         std::cerr << "[LCL IPC ERROR] socket creation failed: " << std::strerror(errno) << "\n";
         return false;
@@ -58,11 +70,13 @@ bool IPCManager::initialize(const std::string& socketPath) {
 
 std::vector<IPCClientMessage> IPCManager::pollMessages() {
     std::vector<IPCClientMessage> messages;
-    if (m_serverFd < 0) return messages;
+    if (m_serverFd < 0)
+        return messages;
 
     // 1. Accept new incoming client connections non-blockingly
     while (true) {
-        int clientFd = accept4(m_serverFd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        int clientFd =
+            accept4(m_serverFd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (clientFd >= 0) {
             m_clientFds.push_back(clientFd);
         } else {
@@ -71,7 +85,7 @@ std::vector<IPCClientMessage> IPCManager::pollMessages() {
     }
 
     // 2. Poll messages from active connected client sockets
-    for (auto it = m_clientFds.begin(); it != m_clientFds.end(); ) {
+    for (auto it = m_clientFds.begin(); it != m_clientFds.end();) {
         int fd = *it;
         bool fdAlive = true;
 
@@ -81,10 +95,29 @@ std::vector<IPCClientMessage> IPCManager::pollMessages() {
             std::vector<uint8_t> payload;
             int rFd = -1;
 
-            if (protocol::recvMsgWithFd(fd, header, payload, rFd)) {
+            const auto receiveStatus =
+                protocol::recvPacketWithFd(fd, header, payload, rFd);
+            if (receiveStatus == protocol::ReceiveStatus::Received) {
                 struct ucred cred{};
                 socklen_t len = sizeof(cred);
                 getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len);
+
+                if (header.requestId == 0 ||
+                    header.opcode == protocol::LCLOpcode::AckResponse) {
+                    if (rFd >= 0)
+                        close(rFd);
+                    protocol::discardPendingWrites(fd);
+                    close(fd);
+                    fdAlive = false;
+                    IPCClientMessage discMsg{};
+                    discMsg.clientFd = fd;
+                    discMsg.pid = cred.pid;
+                    discMsg.uid = cred.uid;
+                    discMsg.gid = cred.gid;
+                    discMsg.disconnected = true;
+                    messages.push_back(discMsg);
+                    break;
+                }
 
                 IPCClientMessage msg;
                 msg.clientFd = fd;
@@ -95,51 +128,50 @@ std::vector<IPCClientMessage> IPCManager::pollMessages() {
                 msg.header = header;
                 msg.payload = payload;
 
-                if (header.opcode == protocol::LCLOpcode::RegisterRole && payload.size() >= sizeof(protocol::LCLMsgRegisterRole)) {
-                    auto* reg = reinterpret_cast<const protocol::LCLMsgRegisterRole*>(payload.data());
-                    msg.command = "REGISTER_ROLE:" + std::string(reg->clientName);
-                } else if (header.opcode == protocol::LCLOpcode::SurfaceCreate &&
-                           payload.size() >= offsetof(protocol::LCLMsgSurfaceCreate, bufferScale)) {
-                    auto* surf = reinterpret_cast<const protocol::LCLMsgSurfaceCreate*>(payload.data());
-                    msg.command = "SURFACE_CREATE:" + std::to_string(surf->surfaceId);
-                } else if (header.opcode == protocol::LCLOpcode::AttachBuffer && payload.size() >= sizeof(protocol::LCLMsgAttachBuffer)) {
-                    auto* buf = reinterpret_cast<const protocol::LCLMsgAttachBuffer*>(payload.data());
-                    msg.command = "ATTACH_BUFFER:" + std::to_string(buf->surfaceId);
-                } else {
-                    msg.command = "PROTOCOL_OPCODE_" + std::to_string(static_cast<uint32_t>(header.opcode));
-                }
-
                 messages.push_back(msg);
                 // Continue draining more messages from this fd
                 continue;
             }
 
-            // recvMsgWithFd returned false: check why
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (receiveStatus == protocol::ReceiveStatus::WouldBlock) {
                 // No more data — fd is still alive, stop draining
                 break;
             }
 
-            // Real error or EOF — fd is dead
-            close(fd);
-            fdAlive = false;
-            break;
-        }
+            if (receiveStatus == protocol::ReceiveStatus::Invalid &&
+                header.magic == protocol::LCL_PROTOCOL_MAGIC &&
+                header.version == protocol::LCL_PROTOCOL_VERSION &&
+                header.requestId != 0) {
+                protocol::LCLMsgAckResponse error{};
+                error.status = 1;
+                std::strncpy(error.message, "invalid v3 packet",
+                             sizeof(error.message) - 1);
+                protocol::LCLHeader response{};
+                response.opcode = protocol::LCLOpcode::AckResponse;
+                response.requestId = header.requestId;
+                response.payloadSize = sizeof(error);
+                protocol::sendMsgWithFd(fd, response, &error);
+            }
 
-        if (!fdAlive) {
+            // Real error or EOF — fd is dead
             struct ucred cred{};
             socklen_t len = sizeof(cred);
             getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len);
+            protocol::discardPendingWrites(fd);
+            close(fd);
+            fdAlive = false;
 
             IPCClientMessage discMsg{};
             discMsg.clientFd = fd;
             discMsg.pid = cred.pid;
             discMsg.uid = cred.uid;
             discMsg.gid = cred.gid;
-            discMsg.command = "CLIENT_DISCONNECT";
-            discMsg.header.opcode = protocol::LCLOpcode::SurfaceDestroy;
+            discMsg.disconnected = true;
             messages.push_back(discMsg);
+            break;
+        }
 
+        if (!fdAlive) {
             it = m_clientFds.erase(it);
             continue;
         }
@@ -150,54 +182,16 @@ std::vector<IPCClientMessage> IPCManager::pollMessages() {
     return messages;
 }
 
-bool IPCManager::sendResponse(int clientFd, const std::string& response) {
-    if (clientFd < 0) return false;
-    std::string msg = response + "\n";
-    ssize_t n = write(clientFd, msg.data(), msg.size());
-    return n > 0;
-}
-
-std::string IPCManager::sendClientRequest(const std::string& request, const std::string& socketPath, bool waitResponse) {
-    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) return "";
-
-    struct sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
-
-    if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        close(fd);
-        return "";
-    }
-
-    std::string msg = request + "\n";
-    if (write(fd, msg.data(), msg.size()) <= 0) {
-        close(fd);
-        return "";
-    }
-
-    std::string response;
-    if (waitResponse) {
-        char buf[512];
-        ssize_t n = read(fd, buf, sizeof(buf) - 1);
-        if (n > 0) {
-            buf[n] = '\0';
-            response = std::string(buf, n);
-            // Trim newline
-            if (!response.empty() && response.back() == '\n') response.pop_back();
-        }
-    }
-
-    close(fd);
-    return response;
-}
 
 void IPCManager::shutdown() {
     if (!m_initialized) return;
     std::cout << "[LCL IPC] Shutting down Secure Unix Domain Socket server...\n";
 
     for (int fd : m_clientFds) {
-        if (fd >= 0) close(fd);
+        if (fd >= 0) {
+            protocol::discardPendingWrites(fd);
+            close(fd);
+        }
     }
     m_clientFds.clear();
 

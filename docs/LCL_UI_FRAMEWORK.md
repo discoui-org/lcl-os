@@ -19,7 +19,7 @@
 
 ## 1. Architecture Overview
 
-`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via Unix Domain Socket IPC (`/tmp/lcl_compositor.sock`) and Zero-Copy Shared Memory (`memfd`).
+`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v3 Unix Domain `SOCK_SEQPACKET` IPC (`/run/user/1000/lcl-compositor.sock`) and shared memory (`memfd`).
 
 ```text
 +-----------------------------------------------------------+
@@ -47,7 +47,7 @@
 - `WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height, const std::string& title = "lcl-ui Application")`: Constructs a window with an explicitly selected drawing backend.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Binds the top-level Flexbox widget container.
 - `Widget* getRootWidget() const`: Returns the root widget pointer.
-- `bool connectCompositor(const std::string& socketPath = "/tmp/lcl_compositor.sock")`: Connects to `lcl-core` IPC socket and creates a window surface.
+- `bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a v3 window surface.
 - `void runEventLoop()`: Executes the non-blocking main event loop at **144 Hz target frame pacing** (~6.9ms target period).
 - `uint32_t* getPixelBuffer()`: Returns raw pointer to the SHM pixel buffer (`uint32_t` ARGB format).
 

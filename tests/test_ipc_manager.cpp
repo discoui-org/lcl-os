@@ -40,13 +40,12 @@ TEST_F(IPCManagerTest, InitializeSocketServerAndPermissions) {
     manager.shutdown();
     EXPECT_FALSE(manager.isInitialized());
 }
-
 TEST_F(IPCManagerTest, ClientConnectionAndPeerCreds) {
     IPCManager manager;
     ASSERT_TRUE(manager.initialize(testSocketPath));
 
     // Connect a client socket
-    int clientFd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int clientFd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
     ASSERT_GE(clientFd, 0);
 
     struct sockaddr_un addr{};
@@ -60,6 +59,7 @@ TEST_F(IPCManagerTest, ClientConnectionAndPeerCreds) {
     header.magic = LCL_PROTOCOL_MAGIC;
     header.version = LCL_PROTOCOL_VERSION;
     header.opcode = LCLOpcode::RegisterRole;
+    header.requestId = 1;
 
     LCLMsgRegisterRole reg{};
     reg.role = LCLRole::ClientApp;
@@ -74,7 +74,40 @@ TEST_F(IPCManagerTest, ClientConnectionAndPeerCreds) {
     EXPECT_EQ(msgs[0].pid, getpid());
     EXPECT_EQ(msgs[0].uid, getuid());
     EXPECT_EQ(msgs[0].gid, getgid());
-    EXPECT_EQ(msgs[0].command, "REGISTER_ROLE:UnitTestClient");
+    EXPECT_FALSE(msgs[0].disconnected);
+    EXPECT_EQ(msgs[0].header.opcode, LCLOpcode::RegisterRole);
+    ASSERT_EQ(msgs[0].payload.size(), sizeof(LCLMsgRegisterRole));
+    LCLMsgRegisterRole received{};
+    std::memcpy(&received, msgs[0].payload.data(), sizeof(received));
+    EXPECT_STREQ(received.clientName, "UnitTestClient");
+
+    close(clientFd);
+    manager.shutdown();
+}
+
+TEST_F(IPCManagerTest, RejectsClientRequestWithoutRequestId) {
+    IPCManager manager;
+    ASSERT_TRUE(manager.initialize(testSocketPath));
+
+    int clientFd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
+    ASSERT_GE(clientFd, 0);
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, testSocketPath.c_str(), sizeof(addr.sun_path) - 1);
+    ASSERT_EQ(connect(clientFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
+
+    LCLMsgRegisterRole registration{};
+    registration.role = LCLRole::ClientApp;
+    std::strncpy(registration.clientName, "MissingRequestId",
+                 sizeof(registration.clientName) - 1);
+    LCLHeader header{};
+    header.opcode = LCLOpcode::RegisterRole;
+    header.payloadSize = sizeof(registration);
+    ASSERT_TRUE(sendMsgWithFd(clientFd, header, &registration));
+
+    const auto messages = manager.pollMessages();
+    ASSERT_EQ(messages.size(), 1u);
+    EXPECT_TRUE(messages.front().disconnected);
 
     close(clientFd);
     manager.shutdown();
