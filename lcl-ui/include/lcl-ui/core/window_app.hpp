@@ -71,6 +71,8 @@ public:
 
     void setSurfaceId(uint32_t surfaceId) { if (!m_ipcConnected && surfaceId > 0) m_surfaceId = surfaceId; }
     uint32_t getSurfaceId() const { return m_surfaceId; }
+    /** Canonical session/catalog application identity, supplied before connection. */
+    void setAppId(std::string appId) { if (!m_ipcConnected) m_appId = std::move(appId); }
     void setRole(lcl::protocol::LCLRole role) { if (!m_ipcConnected) m_role = role; }
     /** Disable widget-event dispatch for visual-only surfaces such as shell panels. */
     void setInputEnabled(bool enabled) { m_inputEnabled = enabled; }
@@ -150,6 +152,7 @@ private:
     bool m_ipcConnected{false};
     bool m_ownsSocketFd{true};
     uint32_t m_surfaceId{1};
+    std::string m_appId;
     uint32_t m_nextRequestId{1};
     lcl::protocol::LCLRole m_role{lcl::protocol::LCLRole::ClientApp};
     bool m_inputEnabled{true};

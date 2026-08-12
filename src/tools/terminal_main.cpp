@@ -63,6 +63,7 @@ int main() {
 
     lcl::ui::WindowApp window(
         lcl::render::makeSkiaCanvas(), kSurfaceWidth, kSurfaceHeight, "LCL Terminal");
+    window.setAppId("org.lcl.terminal");
     window.setInitialBounds(80, 60, kSurfaceWidth, kSurfaceHeight);
     window.setDecorationMode(lcl::protocol::LCLDecorationMode::CSD);
     window.setWindowCornerRadius(kCornerRadius);

@@ -40,7 +40,23 @@ enum class LCLOpcode : uint32_t {
     SetInsetBorder = 15,
     SetWindowCornerRadius = 16,
     WindowListUpdate = 17,
-    RequestWindowAction = 18
+    RequestWindowAction = 18,
+    SubscribeShellState = 19,
+    ShellStateSnapshot = 20,
+    ShellStateDelta = 21
+};
+
+enum class LCLSceneVisibility : uint8_t {
+    Visible = 0,
+    Minimized = 1,
+    Closing = 2,
+};
+
+enum class LCLShellStateDeltaKind : uint32_t {
+    SceneAdded = 1,
+    SceneUpdated = 2,
+    SceneRemoved = 3,
+    FocusChanged = 4,
 };
 
 /** Client-originated requests for compositor-owned window state. */
@@ -259,6 +275,49 @@ struct LCLMsgWindowListEntry {
     uint8_t isFocused{0};
     char title[128]{0};
     char appId[64]{0};
+};
+
+/** Subscribe to compositor-owned scene/focus state from a known revision. */
+struct LCLMsgSubscribeShellState {
+    uint64_t lastKnownRevision{0};
+};
+
+/** One shell-visible scene. No renderer or SHM ownership crosses this boundary. */
+struct LCLMsgShellScene {
+    uint64_t sceneId{0};
+    uint64_t appInstanceId{0};
+    uint32_t windowId{0};
+    int32_t clientPid{0};
+    uint32_t displayId{0};
+    uint32_t workspaceId{0};
+    int32_t x{0};
+    int32_t y{0};
+    int32_t width{0};
+    int32_t height{0};
+    LCLSceneVisibility visibility{LCLSceneVisibility::Visible};
+    char appId[64]{0};
+    char title[128]{0};
+};
+
+/** Followed by sceneCount LCLMsgShellScene records. */
+struct LCLMsgShellStateSnapshot {
+    uint64_t revision{0};
+    uint32_t sceneCount{0};
+    uint32_t seatId{0};
+    uint32_t displayId{0};
+    uint32_t workspaceId{0};
+    uint64_t activeSceneId{0};
+};
+
+/** A scene record is populated for scene changes; focus changes carry focus only. */
+struct LCLMsgShellStateDelta {
+    uint64_t revision{0};
+    LCLShellStateDeltaKind kind{LCLShellStateDeltaKind::SceneUpdated};
+    uint32_t seatId{0};
+    uint32_t displayId{0};
+    uint32_t workspaceId{0};
+    uint64_t activeSceneId{0};
+    LCLMsgShellScene scene{};
 };
 
 #pragma pack(pop)

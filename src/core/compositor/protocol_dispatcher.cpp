@@ -36,9 +36,61 @@ std::string inferAppIdFromPid(pid_t pid) {
     }
     return executable.stem().string();
 }
-uint64_t fnv1aMix(uint64_t hash, uint8_t byte) {
-    hash ^= static_cast<uint64_t>(byte);
-    return hash * 1099511628211ull;
+protocol::LCLMsgShellScene toWireScene(const SceneRecord& scene) {
+    protocol::LCLMsgShellScene wire{};
+    wire.sceneId = scene.id;
+    wire.appInstanceId = scene.appInstanceId;
+    wire.windowId = scene.windowId;
+    wire.clientPid = static_cast<int32_t>(scene.clientPid);
+    wire.displayId = scene.displayId;
+    wire.workspaceId = scene.workspaceId;
+    wire.x = scene.x;
+    wire.y = scene.y;
+    wire.width = scene.width;
+    wire.height = scene.height;
+    switch (scene.visibility) {
+        case SceneVisibility::Minimized:
+            wire.visibility = protocol::LCLSceneVisibility::Minimized;
+            break;
+        case SceneVisibility::Closing:
+            wire.visibility = protocol::LCLSceneVisibility::Closing;
+            break;
+        case SceneVisibility::Visible:
+        default:
+            wire.visibility = protocol::LCLSceneVisibility::Visible;
+            break;
+    }
+    std::strncpy(wire.appId, scene.appId.c_str(), sizeof(wire.appId) - 1);
+    std::strncpy(wire.title, scene.title.c_str(), sizeof(wire.title) - 1);
+    return wire;
+}
+
+protocol::LCLMsgShellStateDelta toWireDelta(const ShellStateDelta& delta) {
+    protocol::LCLMsgShellStateDelta wire{};
+    wire.revision = delta.revision;
+    switch (delta.kind) {
+        case ShellStateDelta::Kind::SceneAdded:
+            wire.kind = protocol::LCLShellStateDeltaKind::SceneAdded;
+            break;
+        case ShellStateDelta::Kind::SceneRemoved:
+            wire.kind = protocol::LCLShellStateDeltaKind::SceneRemoved;
+            break;
+        case ShellStateDelta::Kind::FocusChanged:
+            wire.kind = protocol::LCLShellStateDeltaKind::FocusChanged;
+            break;
+        case ShellStateDelta::Kind::SceneUpdated:
+        default:
+            wire.kind = protocol::LCLShellStateDeltaKind::SceneUpdated;
+            break;
+    }
+    wire.seatId = delta.focus.seatId;
+    wire.displayId = delta.focus.displayId;
+    wire.workspaceId = delta.focus.workspaceId;
+    wire.activeSceneId = delta.focus.activeSceneId;
+    if (delta.kind != ShellStateDelta::Kind::FocusChanged) {
+        wire.scene = toWireScene(delta.scene);
+    }
+    return wire;
 }
 
 class RequestAck {
@@ -164,7 +216,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
     for (const auto& msg : ipcManager.pollMessages()) {
         if (msg.disconnected) {
             m_clientRoles.erase(msg.clientFd);
-            m_lastWindowListHashes.erase(msg.clientFd);
+            m_shellSubscriptions.erase(msg.clientFd);
             std::vector<uint64_t> surfacesToRemove;
             for (auto& [surfKey, entry] : m_surfaces) {
                 if (entry.clientFd == msg.clientFd ||
@@ -197,10 +249,23 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgRegisterRole)) {
                 auto* reg = reinterpret_cast<const lcl::protocol::LCLMsgRegisterRole*>(msg.payload.data());
                 m_clientRoles[msg.clientFd] = reg->role;
-                // Treat a role registration as a new receiver, even if the
-                // descriptor number happened to be recycled by the kernel.
-                m_lastWindowListHashes.erase(msg.clientFd);
             }
+            continue;
+        }
+
+        if (msg.header.opcode == lcl::protocol::LCLOpcode::SubscribeShellState) {
+            if (msg.payload.size() != sizeof(lcl::protocol::LCLMsgSubscribeShellState)) {
+                requestAck.error(3, "invalid shell-state subscription");
+                continue;
+            }
+            const auto role = m_clientRoles.find(msg.clientFd);
+            if (role == m_clientRoles.end() || role->second != protocol::LCLRole::ShellPanel) {
+                requestAck.error(4, "shell-state subscription requires ShellPanel role");
+                continue;
+            }
+            const auto* request = reinterpret_cast<const lcl::protocol::LCLMsgSubscribeShellState*>(msg.payload.data());
+            m_shellSubscriptions[msg.clientFd] = ShellSubscription{request->lastKnownRevision, false};
+            changed = true;
             continue;
         }
 
@@ -254,7 +319,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 }
                 entry.clientFd = msg.clientFd;
                 entry.bufferScale = bufferScale;
-                entry.appId = inferAppIdFromPid(msg.pid);
+                entry.appId = (msg.payload.size() == sizeof(lcl::protocol::LCLMsgSurfaceCreate) &&
+                               reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data())->appId[0] != '\0')
+                    ? reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data())->appId
+                    : inferAppIdFromPid(msg.pid);
                 m_surfaces[surfaceKey] = entry;
                 std::cout << "[LCL Compositor] Registered unmapped Surface " << surfId
                           << " from client PID " << msg.pid << " (" << winW << "x" << winH << ")\n";
@@ -586,68 +654,53 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         }
     }
 
-    publishWindowListToShellClients();
     return changed;
 }
 
-void ProtocolDispatcher::publishWindowListToShellClients() {
-    std::vector<protocol::LCLMsgWindowListEntry> entries;
-    entries.reserve(m_windowManager.getWindows().size());
+void ProtocolDispatcher::publishShellStateToSubscribers() {
+    const auto snapshot = m_shellState.snapshot(m_scenes, m_focus);
+    for (auto& [fd, subscription] : m_shellSubscriptions) {
+        if (!subscription.hasDeliveredState || subscription.revision > snapshot.revision) {
+            protocol::LCLMsgShellStateSnapshot headerPayload{};
+            headerPayload.revision = snapshot.revision;
+            headerPayload.sceneCount = static_cast<uint32_t>(snapshot.scenes.size());
+            headerPayload.seatId = snapshot.focus.seatId;
+            headerPayload.displayId = snapshot.focus.displayId;
+            headerPayload.workspaceId = snapshot.focus.workspaceId;
+            headerPayload.activeSceneId = snapshot.focus.activeSceneId;
+            std::vector<uint8_t> payload(sizeof(headerPayload) +
+                snapshot.scenes.size() * sizeof(protocol::LCLMsgShellScene));
+            std::memcpy(payload.data(), &headerPayload, sizeof(headerPayload));
+            size_t offset = sizeof(headerPayload);
+            for (const auto& scene : snapshot.scenes) {
+                const auto wire = toWireScene(scene);
+                std::memcpy(payload.data() + offset, &wire, sizeof(wire));
+                offset += sizeof(wire);
+            }
+            protocol::LCLHeader header{};
+            header.opcode = protocol::LCLOpcode::ShellStateSnapshot;
+            header.payloadSize = static_cast<uint32_t>(payload.size());
+            if (protocol::sendMsgWithFd(fd, header, payload.data())) {
+                subscription.revision = snapshot.revision;
+                subscription.hasDeliveredState = true;
+            }
+            continue;
+        }
 
-    uint64_t hash = 1469598103934665603ull;
-    for (const auto& win : m_windowManager.getWindows()) {
-        if (win.layer == protocol::LCLWindowLayer::Bottom) continue;
-        if (win.layer == protocol::LCLWindowLayer::TopMost && win.isUnfocusable) continue;
-
-        protocol::LCLMsgWindowListEntry e{};
-        e.windowId = win.id;
-        e.isFocused = win.isFocused ? 1 : 0;
-        std::strncpy(e.title, win.title.c_str(), sizeof(e.title) - 1);
-
-        for (const auto& [_, surf] : m_surfaces) {
-            if (surf.windowId == win.id && !surf.appId.empty()) {
-                std::strncpy(e.appId, surf.appId.c_str(), sizeof(e.appId) - 1);
+        const auto batch = m_shellState.deltasSince(subscription.revision);
+        if (batch.requiresSnapshot) {
+            subscription.hasDeliveredState = false;
+            continue;
+        }
+        for (const auto& delta : batch.deltas) {
+            const auto payload = toWireDelta(delta);
+            protocol::LCLHeader header{};
+            header.opcode = protocol::LCLOpcode::ShellStateDelta;
+            header.payloadSize = sizeof(payload);
+            if (!protocol::sendMsgWithFd(fd, header, &payload)) {
                 break;
             }
-        }
-
-        hash = fnv1aMix(hash, static_cast<uint8_t>(e.windowId & 0xFF));
-        hash = fnv1aMix(hash, static_cast<uint8_t>((e.windowId >> 8) & 0xFF));
-        hash = fnv1aMix(hash, static_cast<uint8_t>((e.windowId >> 16) & 0xFF));
-        hash = fnv1aMix(hash, static_cast<uint8_t>((e.windowId >> 24) & 0xFF));
-        hash = fnv1aMix(hash, e.isFocused);
-        for (char c : e.title) {
-            if (c == '\0') break;
-            hash = fnv1aMix(hash, static_cast<uint8_t>(c));
-        }
-        hash = fnv1aMix(hash, 0xFF);
-        for (char c : e.appId) {
-            if (c == '\0') break;
-            hash = fnv1aMix(hash, static_cast<uint8_t>(c));
-        }
-        entries.push_back(e);
-    }
-
-    protocol::LCLMsgWindowListHeader listHeader{};
-    listHeader.windowCount = static_cast<uint32_t>(entries.size());
-    std::vector<uint8_t> payload(sizeof(listHeader) + entries.size() * sizeof(protocol::LCLMsgWindowListEntry));
-    std::memcpy(payload.data(), &listHeader, sizeof(listHeader));
-    if (!entries.empty()) {
-        std::memcpy(payload.data() + sizeof(listHeader), entries.data(), entries.size() * sizeof(protocol::LCLMsgWindowListEntry));
-    }
-
-    protocol::LCLHeader header{};
-    header.opcode = protocol::LCLOpcode::WindowListUpdate;
-    header.payloadSize = static_cast<uint32_t>(payload.size());
-
-    for (const auto& [fd, role] : m_clientRoles) {
-        if (role != protocol::LCLRole::DesktopWallpaper && role != protocol::LCLRole::ShellPanel) continue;
-
-        const auto last = m_lastWindowListHashes.find(fd);
-        if (last != m_lastWindowListHashes.end() && last->second == hash) continue;
-
-        if (protocol::sendMsgWithFd(fd, header, payload.data())) {
-            m_lastWindowListHashes[fd] = hash;
+            subscription.revision = delta.revision;
         }
     }
 }

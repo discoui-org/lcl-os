@@ -221,6 +221,32 @@ transport:
   compositor input/resize/minimize/focus changes all reconcile into the same
   scene/focus stream. `SurfaceRegistry` remains SHM/FD owner and
   `WindowManager` remains geometry/focus executor.
-- The current Dock/menu are intentionally unchanged. Their legacy window-list
-  input remains a read-only compatibility path until Step 6 consumes the
-  broker through a typed client.
+- At the end of Step 5, the current Dock/menu were intentionally unchanged and
+  their legacy window-list input remained a read-only compatibility path. Step
+  6 replaces that active consumer with the typed broker client below.
+
+## Step 6 implementation record
+
+Step 6 replaces the desktop shell's active window-list compatibility path with
+a typed, revision-aware client without changing Dock/menu visual treatment:
+
+- Protocol v3 adds `SubscribeShellState`, `ShellStateSnapshot`, and
+  `ShellStateDelta`. Snapshot and delta payloads are explicitly little-endian,
+  carry `revision`, `seatId`, `displayId`, `workspaceId`, and stable scene IDs,
+  and encode no compositor renderer or SHM resources.
+- `ProtocolDispatcher` sends an initial snapshot to each subscribed shell
+  receiver and then replays bounded broker deltas. A revision older than
+  retained history (or ahead of current authority) receives a fresh snapshot.
+- `lcl-shell-state` is a widget-independent typed client. It detects a delta
+  gap and requests a snapshot rather than applying guessed state. This is the
+  same client boundary a future mobile shell can use.
+- Desktop Dock now projects scenes by canonical `appId` into one running entry
+  per application, derives its active indicator from `FocusChanged`, and keeps
+  the clean-profile Terminal pin. It no longer reads `WindowListUpdate`, scans
+  application directories, or replaces its root widget for every update.
+- Icon metadata comes from the cached sessiond catalog. Sessiond resolves a
+  manifest-relative icon once before publishing catalog data; shell UI never
+  rescans `.app` bundles.
+- `WindowApp` sends a declared canonical app ID in `SurfaceCreate`; Terminal
+  and native UI Demo now use their manifest IDs. PID/executable inference stays
+  only as compatibility for clients not yet migrated to declaration.

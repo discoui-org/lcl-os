@@ -32,6 +32,10 @@ class Writer {
             u8(static_cast<uint8_t>(value >> shift));
         }
     }
+    void u64(uint64_t value) {
+        u32(static_cast<uint32_t>(value));
+        u32(static_cast<uint32_t>(value >> 32));
+    }
     void i32(int32_t value) { u32(std::bit_cast<uint32_t>(value)); }
     void f32(float value) { u32(std::bit_cast<uint32_t>(value)); }
     void fixed(const char* value, size_t size) {
@@ -66,6 +70,13 @@ class Reader {
         value = static_cast<uint32_t>(b[0]) | (static_cast<uint32_t>(b[1]) << 8) |
                 (static_cast<uint32_t>(b[2]) << 16) |
                 (static_cast<uint32_t>(b[3]) << 24);
+        return true;
+    }
+    bool u64(uint64_t& value) {
+        uint32_t low = 0, high = 0;
+        if (!u32(low) || !u32(high))
+            return false;
+        value = static_cast<uint64_t>(low) | (static_cast<uint64_t>(high) << 32);
         return true;
     }
     bool i32(int32_t& value) {
@@ -136,6 +147,13 @@ bool validLayer(LCLWindowLayer value) {
 bool validAction(LCLWindowAction value) {
     return value >= LCLWindowAction::BeginDrag && value <= LCLWindowAction::Close;
 }
+bool validSceneVisibility(LCLSceneVisibility value) {
+    return value >= LCLSceneVisibility::Visible && value <= LCLSceneVisibility::Closing;
+}
+bool validShellDeltaKind(LCLShellStateDeltaKind value) {
+    return value >= LCLShellStateDeltaKind::SceneAdded &&
+           value <= LCLShellStateDeltaKind::FocusChanged;
+}
 bool validFilter(FilterType value) {
     return value >= FilterType::None && value <= FilterType::Glass;
 }
@@ -151,7 +169,47 @@ bool validBlend(EffectBlendMode value) {
 }
 bool validOpcode(LCLOpcode value) {
     return value >= LCLOpcode::RegisterRole &&
-           value <= LCLOpcode::RequestWindowAction;
+           value <= LCLOpcode::ShellStateDelta;
+}
+
+bool validShellScene(const LCLMsgShellScene& scene) {
+    return scene.sceneId != 0 && validSceneVisibility(scene.visibility) &&
+           validString(scene.appId, sizeof(scene.appId)) &&
+           validString(scene.title, sizeof(scene.title));
+}
+
+void encodeShellScene(Writer& out, const LCLMsgShellScene& scene) {
+    out.u64(scene.sceneId);
+    out.u64(scene.appInstanceId);
+    out.u32(scene.windowId);
+    out.i32(scene.clientPid);
+    out.u32(scene.displayId);
+    out.u32(scene.workspaceId);
+    out.i32(scene.x);
+    out.i32(scene.y);
+    out.i32(scene.width);
+    out.i32(scene.height);
+    out.u8(static_cast<uint8_t>(scene.visibility));
+    out.fixed(scene.appId, sizeof(scene.appId));
+    out.fixed(scene.title, sizeof(scene.title));
+}
+
+bool decodeShellScene(Reader& in, LCLMsgShellScene& scene, bool requireIdentity = true) {
+    uint8_t visibility = 0;
+    if (!in.u64(scene.sceneId) || !in.u64(scene.appInstanceId) ||
+        !in.u32(scene.windowId) || !in.i32(scene.clientPid) ||
+        !in.u32(scene.displayId) || !in.u32(scene.workspaceId) ||
+        !in.i32(scene.x) || !in.i32(scene.y) || !in.i32(scene.width) ||
+        !in.i32(scene.height) || !in.u8(visibility) ||
+        !in.fixed(scene.appId, sizeof(scene.appId)) ||
+        !in.fixed(scene.title, sizeof(scene.title)))
+        return false;
+    scene.visibility = static_cast<LCLSceneVisibility>(visibility);
+    if (!validSceneVisibility(scene.visibility) ||
+        !validString(scene.appId, sizeof(scene.appId)) ||
+        !validString(scene.title, sizeof(scene.title)))
+        return false;
+    return !requireIdentity || scene.sceneId != 0;
 }
 
 void encodeFilter(Writer& out, const FilterOp& op) {
@@ -423,6 +481,51 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         return msg.surfaceId > 0 && validAction(msg.action) &&
                validFloat(msg.localX) && validFloat(msg.localY);
     }
+    case LCLOpcode::SubscribeShellState: {
+        LOAD_ONE(LCLMsgSubscribeShellState, msg);
+        out.u64(msg.lastKnownRevision);
+        return true;
+    }
+    case LCLOpcode::ShellStateSnapshot: {
+        LCLMsgShellStateSnapshot snapshot{};
+        if (!loadNative(payload, size, 0, snapshot))
+            return false;
+        const size_t expected = sizeof(snapshot) +
+            static_cast<size_t>(snapshot.sceneCount) * sizeof(LCLMsgShellScene);
+        if (snapshot.sceneCount > 4096 || size != expected)
+            return false;
+        out.u64(snapshot.revision);
+        out.u32(snapshot.sceneCount);
+        out.u32(snapshot.seatId);
+        out.u32(snapshot.displayId);
+        out.u32(snapshot.workspaceId);
+        out.u64(snapshot.activeSceneId);
+        size_t offset = sizeof(snapshot);
+        for (uint32_t index = 0; index < snapshot.sceneCount;
+             ++index, offset += sizeof(LCLMsgShellScene)) {
+            LCLMsgShellScene scene{};
+            if (!loadNative(payload, size, offset, scene) || !validShellScene(scene))
+                return false;
+            encodeShellScene(out, scene);
+        }
+        return true;
+    }
+    case LCLOpcode::ShellStateDelta: {
+        LOAD_ONE(LCLMsgShellStateDelta, delta);
+        if (!validShellDeltaKind(delta.kind))
+            return false;
+        const bool sceneChange = delta.kind != LCLShellStateDeltaKind::FocusChanged;
+        if (sceneChange && !validShellScene(delta.scene))
+            return false;
+        out.u64(delta.revision);
+        out.u32(static_cast<uint32_t>(delta.kind));
+        out.u32(delta.seatId);
+        out.u32(delta.displayId);
+        out.u32(delta.workspaceId);
+        out.u64(delta.activeSceneId);
+        encodeShellScene(out, delta.scene);
+        return true;
+    }
     }
     return false;
 #undef LOAD_ONE
@@ -632,6 +735,44 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !validFloat(m.localY))
             return false;
         appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::SubscribeShellState: {
+        LCLMsgSubscribeShellState m{};
+        if (!in.u64(m.lastKnownRevision))
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::ShellStateSnapshot: {
+        LCLMsgShellStateSnapshot snapshot{};
+        if (!in.u64(snapshot.revision) || !in.u32(snapshot.sceneCount) ||
+            !in.u32(snapshot.seatId) || !in.u32(snapshot.displayId) ||
+            !in.u32(snapshot.workspaceId) || !in.u64(snapshot.activeSceneId) ||
+            snapshot.sceneCount > 4096)
+            return false;
+        appendNative(payload, snapshot);
+        for (uint32_t index = 0; index < snapshot.sceneCount; ++index) {
+            LCLMsgShellScene scene{};
+            if (!decodeShellScene(in, scene))
+                return false;
+            appendNative(payload, scene);
+        }
+        break;
+    }
+    case LCLOpcode::ShellStateDelta: {
+        LCLMsgShellStateDelta delta{};
+        uint32_t kind = 0;
+        if (!in.u64(delta.revision) || !in.u32(kind) || !in.u32(delta.seatId) ||
+            !in.u32(delta.displayId) || !in.u32(delta.workspaceId) ||
+            !in.u64(delta.activeSceneId))
+            return false;
+        delta.kind = static_cast<LCLShellStateDeltaKind>(kind);
+        if (!validShellDeltaKind(delta.kind) ||
+            !decodeShellScene(in, delta.scene,
+                delta.kind != LCLShellStateDeltaKind::FocusChanged))
+            return false;
+        appendNative(payload, delta);
         break;
     }
     }

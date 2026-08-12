@@ -461,3 +461,67 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     close(sv[0]);
     close(sv[1]);
 }
+
+TEST(LCLProtocolTest, ShellStateSnapshotAndDeltaRoundTripWithExplicitRevision) {
+    LCLMsgShellStateSnapshot snapshot{};
+    snapshot.revision = 0x0102030405060708ull;
+    snapshot.sceneCount = 1;
+    snapshot.seatId = 2;
+    snapshot.displayId = 3;
+    snapshot.workspaceId = 4;
+    snapshot.activeSceneId = 42;
+    LCLMsgShellScene scene{};
+    scene.sceneId = 42;
+    scene.appInstanceId = 77;
+    scene.windowId = 9;
+    scene.clientPid = 1234;
+    scene.displayId = 3;
+    scene.workspaceId = 4;
+    scene.x = 80;
+    scene.y = 60;
+    scene.width = 540;
+    scene.height = 360;
+    scene.visibility = LCLSceneVisibility::Visible;
+    std::strncpy(scene.appId, "org.lcl.terminal", sizeof(scene.appId) - 1);
+    std::strncpy(scene.title, "LCL Terminal", sizeof(scene.title) - 1);
+
+    std::vector<uint8_t> native(sizeof(snapshot) + sizeof(scene));
+    std::memcpy(native.data(), &snapshot, sizeof(snapshot));
+    std::memcpy(native.data() + sizeof(snapshot), &scene, sizeof(scene));
+    LCLHeader header{};
+    header.opcode = LCLOpcode::ShellStateSnapshot;
+    header.requestId = 41;
+    header.payloadSize = static_cast<uint32_t>(native.size());
+    std::vector<uint8_t> packet;
+    ASSERT_TRUE(encodePacket(header, native.data(), packet));
+    EXPECT_EQ(packet[24], 0x08); // revision is always little-endian on the wire.
+
+    LCLHeader decodedHeader{};
+    std::vector<uint8_t> decoded;
+    ASSERT_TRUE(decodePacket(packet.data(), packet.size(), decodedHeader, decoded));
+    ASSERT_EQ(decodedHeader.opcode, LCLOpcode::ShellStateSnapshot);
+    ASSERT_EQ(decoded.size(), native.size());
+    const auto* decodedSnapshot = reinterpret_cast<const LCLMsgShellStateSnapshot*>(decoded.data());
+    const auto* decodedScene = reinterpret_cast<const LCLMsgShellScene*>(decoded.data() + sizeof(*decodedSnapshot));
+    EXPECT_EQ(decodedSnapshot->revision, snapshot.revision);
+    EXPECT_EQ(decodedSnapshot->activeSceneId, 42u);
+    EXPECT_EQ(decodedScene->sceneId, 42u);
+    EXPECT_STREQ(decodedScene->appId, "org.lcl.terminal");
+
+    LCLMsgShellStateDelta delta{};
+    delta.revision = snapshot.revision + 1;
+    delta.kind = LCLShellStateDeltaKind::FocusChanged;
+    delta.seatId = 2;
+    delta.displayId = 3;
+    delta.workspaceId = 4;
+    delta.activeSceneId = 42;
+    header.opcode = LCLOpcode::ShellStateDelta;
+    header.requestId = 42;
+    header.payloadSize = sizeof(delta);
+    ASSERT_TRUE(encodePacket(header, &delta, packet));
+    ASSERT_TRUE(decodePacket(packet.data(), packet.size(), decodedHeader, decoded));
+    ASSERT_EQ(decoded.size(), sizeof(delta));
+    const auto* decodedDelta = reinterpret_cast<const LCLMsgShellStateDelta*>(decoded.data());
+    EXPECT_EQ(decodedDelta->kind, LCLShellStateDeltaKind::FocusChanged);
+    EXPECT_EQ(decodedDelta->activeSceneId, 42u);
+}

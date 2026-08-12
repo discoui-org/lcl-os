@@ -258,6 +258,21 @@ JSValue js_window_app_setSurfaceId(JSContext* ctx, JSValueConst this_val, int ar
     return JS_NewBool(ctx, appWrap->app->getSurfaceId() == static_cast<uint32_t>(surfaceId));
 }
 
+JSValue js_window_app_setAppId(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+    if (argc < 1) return JS_ThrowTypeError(ctx, "appId is required");
+    const char* value = JS_ToCString(ctx, argv[0]);
+    if (!value) return JS_EXCEPTION;
+    std::string appId(value);
+    JS_FreeCString(ctx, value);
+    if (appId.empty() || appId.size() >= 64) {
+        return JS_ThrowRangeError(ctx, "appId must contain 1..63 bytes");
+    }
+    appWrap->app->setAppId(std::move(appId));
+    return JS_UNDEFINED;
+}
+
 JSValue js_window_app_sendPointerMove(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
     if (!appWrap || !appWrap->app) return JS_EXCEPTION;
@@ -1265,6 +1280,7 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, windowAppProto, "tick", JS_NewCFunction(m_ctx, js_window_app_tick, "tick", 0));
     JS_SetPropertyStr(m_ctx, windowAppProto, "renderFrame", JS_NewCFunction(m_ctx, js_window_app_renderFrame, "renderFrame", 0));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setSurfaceId", JS_NewCFunction(m_ctx, js_window_app_setSurfaceId, "setSurfaceId", 1));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "setAppId", JS_NewCFunction(m_ctx, js_window_app_setAppId, "setAppId", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerMove", JS_NewCFunction(m_ctx, js_window_app_sendPointerMove, "sendPointerMove", 2));
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerDown", JS_NewCFunction(m_ctx, js_window_app_sendPointerDown, "sendPointerDown", 3));
     JS_SetPropertyStr(m_ctx, windowAppProto, "sendPointerUp", JS_NewCFunction(m_ctx, js_window_app_sendPointerUp, "sendPointerUp", 3));

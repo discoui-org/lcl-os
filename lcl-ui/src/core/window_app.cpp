@@ -188,6 +188,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     surfMsg.height = m_height;
     surfMsg.bufferScale = m_bufferScale;
     std::strncpy(surfMsg.title, m_title.c_str(), sizeof(surfMsg.title) - 1);
+    std::strncpy(surfMsg.appId, m_appId.c_str(), sizeof(surfMsg.appId) - 1);
     if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate, &surfMsg, sizeof(surfMsg))) {
         std::cerr << "[lcl-ui ERROR] Failed to create v3 surface\n";
         return false;

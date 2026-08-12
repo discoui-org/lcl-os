@@ -5,7 +5,9 @@
 
 #include "core/compositor/surface_registry.hpp"
 #include "core/ipc/ipc_manager.hpp"
+#include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
+#include "core/scene/shell_state_broker.hpp"
 #include "render/renderer.hpp"
 #include "render/window_manager.hpp"
 
@@ -17,14 +19,17 @@ public:
     ProtocolDispatcher(render::Renderer& renderer,
                        render::WindowManager& windowManager,
                        SurfaceRegistry& surfaces,
-                       SceneRegistry& scenes)
-        : m_renderer(renderer), m_windowManager(windowManager), m_surfaces(surfaces), m_scenes(scenes) {}
+                       SceneRegistry& scenes,
+                       FocusController& focus,
+                       ShellStateBroker& shellState)
+        : m_renderer(renderer), m_windowManager(windowManager), m_surfaces(surfaces),
+          m_scenes(scenes), m_focus(focus), m_shellState(shellState) {}
 
     /** Process every queued IPC message and report whether a frame is required. */
     bool process(IPCManager& ipcManager);
 
-    /** Publish each shell client's window list when its observable content changed. */
-    void publishWindowListToShellClients();
+    /** Publish revisioned scene/focus state to typed shell subscribers. */
+    void publishShellStateToSubscribers();
 
 private:
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
@@ -34,11 +39,14 @@ private:
     render::WindowManager& m_windowManager;
     SurfaceRegistry& m_surfaces;
     SceneRegistry& m_scenes;
+    FocusController& m_focus;
+    ShellStateBroker& m_shellState;
     std::unordered_map<int, protocol::LCLRole> m_clientRoles;
-    // Shell surfaces may be recreated during a display reconfigure.  Snapshot
-    // suppression is therefore per receiver: a fresh dock must receive the
-    // current list even when no application window changed in the meantime.
-    std::unordered_map<int, uint64_t> m_lastWindowListHashes;
+    struct ShellSubscription {
+        uint64_t revision{0};
+        bool hasDeliveredState{false};
+    };
+    std::unordered_map<int, ShellSubscription> m_shellSubscriptions;
 };
 
 } // namespace lcl::core

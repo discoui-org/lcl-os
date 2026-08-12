@@ -27,6 +27,15 @@ std::vector<std::string> executableArgs(const core::AppBundleMetadata& app) {
     return {app.executablePath};
 }
 
+std::string resolvedIconPath(const core::AppBundleMetadata& app) {
+    if (app.icon.empty()) return {};
+    std::filesystem::path icon(app.icon);
+    if (icon.is_relative()) icon = std::filesystem::path(app.bundlePath) / icon;
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(icon, error) || error) return {};
+    return icon.string();
+}
+
 } // namespace
 
 SessionService::SessionService(std::vector<std::string> appSearchPaths)
@@ -217,7 +226,7 @@ void SessionService::serviceClient(int fd) {
             std::vector<CatalogEntry> entries;
             entries.reserve(m_registry.entries().size());
             for (const auto& app : m_registry.entries()) {
-                entries.push_back({app.appId, app.name, app.version, app.icon, app.type});
+                entries.push_back({app.appId, app.name, app.version, resolvedIconPath(app), app.type});
             }
             std::vector<uint8_t> payload;
             encodeCatalogSnapshot(entries, payload);

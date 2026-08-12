@@ -95,6 +95,7 @@ int main() {
     WindowApp app(
         lcl::render::makeSkiaCanvas(), 800, 600,
         "LCL-UI Phase 1.6 Interactive Demo App");
+    app.setAppId("org.lcl.uidemo");
 
     // 2. Build Centered Flexbox Layout Tree in User-Space App
     auto rootContainer = std::make_unique<Container>();

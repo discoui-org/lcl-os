@@ -20,10 +20,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#include "core/app/app_bundle_parser.hpp"
 #include "core/display/display_scale.hpp"
-#include "core/ipc/ipc_manager.hpp"
 #include "core/ipc/lcl_protocol.hpp"
+#include "core/session/session_client.hpp"
+#include "core/shell/shell_state_client.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
@@ -40,8 +40,75 @@ constexpr int kIconSize = 60;
 constexpr int kIconGap = 12;
 constexpr int kIconPadX = 14;
 
-struct DockWindow { uint32_t id{}; std::string title; std::string appId; bool focused{}; };
+struct DockWindow { uint64_t sceneId{}; std::string title; std::string appId; bool focused{}; };
 struct DockLayout { int x{}, y{}, width{}, height{}, first{}, count{}; };
+
+struct DockView {
+    lcl::ui::Container* root{nullptr};
+    lcl::ui::Container* panel{nullptr};
+    lcl::ui::BackdropSurface* backdrop{nullptr};
+    lcl::ui::Container* innerBorder{nullptr};
+    std::vector<lcl::ui::Widget*> dynamicChildren;
+    uint32_t width{0};
+    uint32_t height{0};
+};
+
+/** Shell-local projection: Dock groups scenes by application, never by raw window ID. */
+class DockStateModel {
+public:
+    bool applySnapshot(const lcl::shell::ShellStateSnapshot& snapshot) {
+        m_scenes = snapshot.scenes;
+        m_activeSceneId = snapshot.activeSceneId;
+        return true;
+    }
+
+    bool applyDelta(const lcl::shell::ShellStateDelta& delta) {
+        m_activeSceneId = delta.activeSceneId;
+        if (delta.kind == lcl::protocol::LCLShellStateDeltaKind::FocusChanged) return true;
+        const auto found = std::find_if(m_scenes.begin(), m_scenes.end(), [&](const auto& scene) {
+            return scene.sceneId == delta.scene.sceneId;
+        });
+        if (delta.kind == lcl::protocol::LCLShellStateDeltaKind::SceneRemoved) {
+            if (found != m_scenes.end()) m_scenes.erase(found);
+            return true;
+        }
+        if (found == m_scenes.end()) {
+            m_scenes.push_back(delta.scene);
+        } else {
+            *found = delta.scene;
+        }
+        return true;
+    }
+
+    std::vector<DockWindow> items() const {
+        std::vector<DockWindow> result;
+        std::unordered_map<std::string, size_t> byAppId;
+        // The clean profile pins Terminal. It becomes the running entry once
+        // its first scene arrives, rather than being a parallel ad-hoc list.
+        result.push_back({0, "LCL Terminal", "org.lcl.terminal", false});
+        byAppId.emplace("org.lcl.terminal", 0);
+        for (const auto& scene : m_scenes) {
+            if (scene.visibility == lcl::protocol::LCLSceneVisibility::Closing) continue;
+            const std::string appId = scene.appId.empty() ? "unknown" : scene.appId;
+            const bool focused = scene.sceneId == m_activeSceneId;
+            const auto existing = byAppId.find(appId);
+            if (existing == byAppId.end()) {
+                byAppId.emplace(appId, result.size());
+                result.push_back({scene.sceneId, scene.title, appId, focused});
+            } else {
+                auto& item = result[existing->second];
+                item.sceneId = scene.sceneId;
+                item.title = scene.title;
+                item.focused = item.focused || focused;
+            }
+        }
+        return result;
+    }
+
+private:
+    std::vector<lcl::shell::ShellScene> m_scenes;
+    uint64_t m_activeSceneId{0};
+};
 
 std::string normalize(std::string value) {
     std::string out;
@@ -49,23 +116,18 @@ std::string normalize(std::string value) {
     return out;
 }
 
-std::unordered_map<std::string, std::string> iconCatalog() {
+std::unordered_map<std::string, std::string> iconCatalog(const std::vector<lcl::session::CatalogEntry>& entries) {
     std::unordered_map<std::string, std::string> result;
-    for (const auto& dir : {"/home/user/Applications", "/Applications"}) {
-        for (const auto& app : lcl::core::AppBundleParser::scanDirectory(dir)) {
-            if (!app.valid || app.icon.empty()) continue;
-            std::filesystem::path path(app.icon);
-            if (path.is_relative()) path = std::filesystem::path(app.bundlePath) / path;
-            if (!std::filesystem::exists(path)) continue;
-            result[normalize(app.name)] = path.string();
-            result[normalize(std::filesystem::path(app.bundlePath).stem().string())] = path.string();
-        }
+    for (const auto& app : entries) {
+        if (app.appId.empty() || app.icon.empty()) continue;
+        result[app.appId] = app.icon;
+        result[normalize(app.name)] = app.icon;
     }
     return result;
 }
 
 std::string iconFor(const DockWindow& window, const std::unordered_map<std::string, std::string>& catalog) {
-    for (const auto& key : {normalize(window.appId), normalize(window.title)}) {
+    for (const auto& key : {window.appId, normalize(window.title)}) {
         if (auto it = catalog.find(key); it != catalog.end()) return it->second;
     }
     return {};
@@ -133,34 +195,51 @@ std::unique_ptr<lcl::ui::Container> makeMenuRoot(uint32_t width, lcl::ui::Text*&
     return root;
 }
 
-std::unique_ptr<lcl::ui::Container> makeDockRoot(uint32_t width, uint32_t height,
-                                                   const std::vector<DockWindow>& windows,
-                                                   const std::unordered_map<std::string, std::string>& catalog) {
+std::unique_ptr<lcl::ui::Container> makeDockView(DockView& view, uint32_t width, uint32_t height) {
+    view = {};
+    view.width = width;
+    view.height = height;
     auto root = std::make_unique<lcl::ui::Container>();
+    view.root = root.get();
     root->getYogaNode().setWidth(width); root->getYogaNode().setHeight(height);
-    const DockLayout layout = layoutDock(width, height, windows.size());
-    if (layout.count == 0) return root;
 
     auto panel = std::make_unique<lcl::ui::Container>();
+    view.panel = panel.get();
     panel->setBackgroundColor({17, 19, 23, 184});
     panel->setBorderColor({255, 255, 255, 68}); panel->setBorderWidth(1.0f);
     panel->setBorderRadius(26.0f); panel->setBorderRoundness(2.0f);
-    absolute(*panel, layout.x, layout.y, layout.width, layout.height);
 
     // Match the terminal's translucent composition: paint the alpha tint on
     // the panel, while a separate transparent surface owns the glass effect.
     auto backdrop = std::make_unique<lcl::ui::BackdropSurface>();
+    view.backdrop = backdrop.get();
     backdrop->setInteractive(false);
     backdrop->setBorderRadius(26.0f);
     backdrop->setGlass(30.0f, 3.0f, 12.0f);
-    absolute(*backdrop, 0, 0, layout.width, layout.height);
     panel->addChild(std::move(backdrop));
 
     auto innerBorder = std::make_unique<lcl::ui::Container>();
+    view.innerBorder = innerBorder.get();
     innerBorder->setBorderColor({0, 0, 0, 34}); innerBorder->setBorderWidth(1.0f);
     innerBorder->setBorderRadius(24.0f); innerBorder->setBorderRoundness(2.0f);
-    absolute(*innerBorder, 2, 2, layout.width - 4, layout.height - 4);
     panel->addChild(std::move(innerBorder));
+
+    root->addChild(std::move(panel));
+    return root;
+}
+
+void updateDockView(DockView& view, const std::vector<DockWindow>& windows,
+                    const std::unordered_map<std::string, std::string>& catalog) {
+    if (!view.root || !view.panel || !view.backdrop || !view.innerBorder) return;
+    for (auto* child : view.dynamicChildren) view.panel->removeChild(child);
+    view.dynamicChildren.clear();
+
+    const DockLayout layout = layoutDock(view.width, view.height, windows.size());
+    absolute(*view.panel, layout.x, layout.y, layout.width, layout.height);
+    absolute(*view.backdrop, 0, 0, layout.width, layout.height);
+    absolute(*view.innerBorder, 2, 2, std::max(0, layout.width - 4), std::max(0, layout.height - 4));
+    view.panel->setVisible(layout.count > 0);
+    if (layout.count == 0) return;
 
     int iconX = kIconPadX;
     const int iconY = std::max(0, (layout.height - kIconSize) / 2);
@@ -171,18 +250,19 @@ std::unique_ptr<lcl::ui::Container> makeDockRoot(uint32_t width, uint32_t height
             auto image = std::make_unique<lcl::ui::Image>(path);
             image->setFit(lcl::ui::ImageFit::Contain); image->setCornerRadius(14.0f);
             absolute(*image, iconX, iconY, kIconSize, kIconSize);
-            panel->addChild(std::move(image));
+            view.dynamicChildren.push_back(image.get());
+            view.panel->addChild(std::move(image));
         }
         if (window.focused) {
             auto indicator = std::make_unique<lcl::ui::Container>();
             indicator->setBackgroundColor({246, 248, 252, 238}); indicator->setBorderRadius(1.5f);
             absolute(*indicator, iconX + kIconSize / 2 - 10, iconY + kIconSize + 4, 20, 3);
-            panel->addChild(std::move(indicator));
+            view.dynamicChildren.push_back(indicator.get());
+            view.panel->addChild(std::move(indicator));
         }
         iconX += kIconSize + kIconGap;
     }
-    root->addChild(std::move(panel));
-    return root;
+    view.panel->markDirty();
 }
 
 std::pair<uint32_t, uint32_t> displayPixelsFromCmdline() {
@@ -224,10 +304,36 @@ int main() {
     std::unique_ptr<lcl::ui::WindowApp> menu;
     std::unique_ptr<lcl::ui::WindowApp> dock;
     lcl::ui::Text* clock = nullptr;
-    std::vector<DockWindow> windows;
-    auto catalog = iconCatalog();
+    DockStateModel dockState;
+    DockView dockView;
+    std::vector<lcl::session::CatalogEntry> catalogEntries;
+    std::string catalogError;
+    lcl::session::SessionClient session;
+    if (session.connect() && !session.requestCatalog(catalogEntries, catalogError)) {
+        std::cerr << "[LCL Shell] Could not read session catalog: " << catalogError << "\n";
+    }
+    auto catalog = iconCatalog(catalogEntries);
+
+    auto refreshDock = [&]() {
+        if (!dock || !dockView.root) return;
+        updateDockView(dockView, dockState.items(), catalog);
+    };
+
+    lcl::shell::ShellStateClient shellState;
+    shellState.setOnSnapshot([&](const lcl::shell::ShellStateSnapshot& snapshot) {
+        dockState.applySnapshot(snapshot);
+        refreshDock();
+    });
+    shellState.setOnDelta([&](const lcl::shell::ShellStateDelta& delta) {
+        dockState.applyDelta(delta);
+        refreshDock();
+    });
+    if (!shellState.connect()) {
+        std::cerr << "[LCL Shell] Could not subscribe to compositor shell state\n";
+    }
+
     auto createPanels = [&]() -> bool {
-        dock.reset(); menu.reset(); clock = nullptr;
+        dock.reset(); menu.reset(); clock = nullptr; dockView = {};
 
         // Stage both shell surfaces completely before connecting either one.
         // The reserved work area is published only after both panels have made
@@ -246,20 +352,11 @@ int main() {
         dock->setSurfaceId(3); dock->setRole(lcl::protocol::LCLRole::ShellPanel);
         dock->setInputEnabled(false);
         dock->setInitialBounds(0, static_cast<int32_t>(height > kDockHeight ? height - kDockHeight : 0), width, kDockHeight);
-        dock->setRootWidget(makeDockRoot(width, kDockHeight, windows, catalog));
+        auto dockRoot = makeDockView(dockView, width, kDockHeight);
+        updateDockView(dockView, dockState.items(), catalog);
+        dock->setRootWidget(std::move(dockRoot));
         dock->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
         dock->setWindowCornerRadius(26.0f);
-        dock->setOnIpcMessage([&](const lcl::protocol::LCLHeader& message, const std::vector<uint8_t>& data) {
-            if (message.opcode != lcl::protocol::LCLOpcode::WindowListUpdate || data.size() < sizeof(lcl::protocol::LCLMsgWindowListHeader)) return;
-            const auto* list = reinterpret_cast<const lcl::protocol::LCLMsgWindowListHeader*>(data.data());
-            const size_t need = sizeof(*list) + static_cast<size_t>(list->windowCount) * sizeof(lcl::protocol::LCLMsgWindowListEntry);
-            if (data.size() < need) return;
-            const auto* entries = reinterpret_cast<const lcl::protocol::LCLMsgWindowListEntry*>(data.data() + sizeof(*list));
-            windows.clear(); windows.reserve(list->windowCount);
-            for (uint32_t i = 0; i < list->windowCount; ++i) windows.push_back({entries[i].windowId, entries[i].title, entries[i].appId, entries[i].isFocused != 0});
-            catalog = iconCatalog();
-            dock->setRootWidget(makeDockRoot(width, kDockHeight, windows, catalog));
-        });
 
         if (!dock->connectCompositor()) return false;
         if (!menu->connectCompositor()) return false;
@@ -280,6 +377,7 @@ int main() {
     });
 
     std::string lastTime;
+    auto nextShellReconnect = std::chrono::steady_clock::now();
     while (true) {
         const std::string now = timeText();
         if (clock && now != lastTime) { lastTime = now; clock->setText(now); }
@@ -289,6 +387,11 @@ int main() {
             if (!createPanels()) return 1;
             continue;
         }
+        if (!shellState.isConnected() && std::chrono::steady_clock::now() >= nextShellReconnect) {
+            shellState.connect();
+            nextShellReconnect = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        }
+        shellState.poll();
         menu->tick();
         dock->tick();
         std::this_thread::sleep_for(std::chrono::milliseconds(16));

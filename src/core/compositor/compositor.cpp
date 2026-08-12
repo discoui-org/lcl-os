@@ -70,7 +70,8 @@ bool Compositor::initialize() {
     // --- Window Manager Canvas ---
     m_windowManager.initialize(m_renderer.getWidth(), m_renderer.getHeight());
     m_protocolDispatcher = std::make_unique<ProtocolDispatcher>(
-        m_renderer, m_windowManager, m_surfaces, m_sceneRegistry);
+        m_renderer, m_windowManager, m_surfaces, m_sceneRegistry,
+        m_focusController, m_shellStateBroker);
 
     // --- IPC (Unix Domain Socket, SO_PEERCRED auth, 0600 perms) ---
     m_ipcManager.initialize(kCompositorSocket);
@@ -131,13 +132,10 @@ void Compositor::synchronizeShellState() {
     if (const auto focus = m_focusController.reconcile(m_sceneRegistry, m_windowManager)) {
         m_shellStateBroker.publish(*focus);
     }
-    m_shellStateDirty = false;
-}
-
-void Compositor::publishWindowListToShellClients() {
     if (m_protocolDispatcher) {
-        m_protocolDispatcher->publishWindowListToShellClients();
+        m_protocolDispatcher->publishShellStateToSubscribers();
     }
+    m_shellStateDirty = false;
 }
 
 void Compositor::run() {
@@ -254,7 +252,6 @@ void Compositor::renderDiagnosticOverlay() {
 void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
 
-    publishWindowListToShellClients();
     const bool hasActiveTransitions = m_frameScheduler.advanceTransitions(m_surfaces);
     const auto surfaces = m_surfaces.snapshot();
     m_compositorRenderer.render(m_renderer, m_displayManager, m_windowManager, surfaces);

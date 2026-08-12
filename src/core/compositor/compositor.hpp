@@ -72,7 +72,6 @@ private:
     void processIPC();
     void renderFrame();
     void renderDiagnosticOverlay();
-    void publishWindowListToShellClients();
     void synchronizeShellState();
 
     // Subsystems — declared in init order, destructed in reverse

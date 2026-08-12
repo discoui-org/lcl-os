@@ -82,6 +82,20 @@ target_link_libraries(lcl-session PUBLIC
     Threads::Threads
 )
 
+# Typed revision-aware consumer for compositor-owned scene/focus state.  It has
+# no widget dependency, so desktop and future mobile shells share one client.
+add_library(lcl-shell-state STATIC
+    src/core/shell/shell_state_client.cpp
+)
+
+target_include_directories(lcl-shell-state PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(lcl-shell-state PUBLIC
+    lcl-protocol
+)
+
 target_include_directories(lcl-display-scale PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -238,7 +252,6 @@ target_link_libraries(lcl-desktop-wm PRIVATE
 add_executable(lcl-desktop-shell
     src/apps/desktop_shell/ui_main.cpp
     src/core/ipc/ipc_manager.cpp
-    src/core/app/app_bundle_parser.cpp
 )
 
 target_include_directories(lcl-desktop-shell PRIVATE
@@ -250,6 +263,8 @@ target_link_libraries(lcl-desktop-shell PRIVATE
     lcl-ui
     lcl-canvas-skia
     lcl-protocol
+    lcl-shell-state
+    lcl-session
     Threads::Threads
 )
 
@@ -320,6 +335,7 @@ if(BUILD_TESTS)
         tests/test_input_manager.cpp
         tests/test_key_mapper.cpp
         tests/test_compositor_components.cpp
+        src/core/shell/shell_state_client.cpp
         tests/test_window_manager.cpp
         tests/test_lcl_ui.cpp
         tests/test_lcl_ui_events.cpp
