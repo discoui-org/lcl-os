@@ -15,5 +15,6 @@ target_include_directories(lcl_ui_demo PRIVATE
 
 target_link_libraries(lcl_ui_demo PRIVATE
     lcl-ui
+    lcl-canvas-skia
     Threads::Threads
 )

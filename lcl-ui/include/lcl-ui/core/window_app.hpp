@@ -25,7 +25,6 @@ using ResizeTransform = std::function<std::pair<uint32_t, uint32_t>(uint32_t wid
 
 class WindowApp {
 public:
-    WindowApp(uint32_t width, uint32_t height, const std::string& title = "lcl-ui Application");
     WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height,
               const std::string& title = "lcl-ui Application");
     ~WindowApp();

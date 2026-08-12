@@ -11,6 +11,7 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/window_chrome.hpp"
+#include "render/skia_canvas.hpp"
 
 namespace {
 
@@ -60,7 +61,8 @@ int main() {
         return 1;
     }
 
-    lcl::ui::WindowApp window(kSurfaceWidth, kSurfaceHeight, "LCL Terminal");
+    lcl::ui::WindowApp window(
+        lcl::render::makeSkiaCanvas(), kSurfaceWidth, kSurfaceHeight, "LCL Terminal");
     window.setInitialBounds(80, 60, kSurfaceWidth, kSurfaceHeight);
     window.setDecorationMode(lcl::protocol::LCLDecorationMode::CSD);
     window.setWindowCornerRadius(kCornerRadius);

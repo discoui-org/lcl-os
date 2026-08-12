@@ -86,11 +86,12 @@ Create `apps/my_custom_app/` containing `CMakeLists.txt` and `main.cpp`.
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "render/skia_canvas.hpp"
 
 using namespace lcl::ui;
 
 int main() {
-    WindowApp app(600, 400, "My Custom App");
+    WindowApp app(lcl::render::makeSkiaCanvas(), 600, 400, "My Custom App");
 
     auto root = std::make_unique<Container>();
     root->getYogaNode().setWidth(600.0f);
@@ -121,7 +122,11 @@ target_include_directories(lcl_my_custom_app PRIVATE
     ${CMAKE_SOURCE_DIR}/lcl-ui/include
 )
 
-target_link_libraries(lcl_my_custom_app PRIVATE lcl-ui Threads::Threads)
+target_link_libraries(lcl_my_custom_app PRIVATE
+    lcl-ui
+    lcl-canvas-skia
+    Threads::Threads
+)
 ```
 
 Add `add_subdirectory(apps/my_custom_app)` to `apps/CMakeLists.txt`.

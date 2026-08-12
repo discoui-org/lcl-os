@@ -1,7 +1,6 @@
 #include "lcl-ui/core/window_app.hpp"
 #include "core/display/display_scale.hpp"
 #include "core/ipc/lcl_protocol.hpp"
-#include "render/skia_canvas.hpp"
 #include <iostream>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -53,9 +52,6 @@ uint32_t toBufferPixels(uint32_t logical, float scale) {
 }
 
 } // namespace
-
-WindowApp::WindowApp(uint32_t width, uint32_t height, const std::string& title)
-    : WindowApp(lcl::render::makeSkiaCanvas(), width, height, title) {}
 
 WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height,
                      const std::string& title)

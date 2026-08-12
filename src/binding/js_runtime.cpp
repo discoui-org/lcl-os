@@ -13,6 +13,7 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/image.hpp"
+#include "render/skia_canvas.hpp"
 
 namespace lcl::binding {
 
@@ -188,7 +189,8 @@ JSValue js_window_app_constructor(JSContext* ctx, JSValueConst new_target, int a
     if (JS_IsException(obj)) return obj;
 
     auto* wrapper = new JsWindowAppWrapper();
-    wrapper->app = new lcl::ui::WindowApp(width, height, title);
+    wrapper->app = new lcl::ui::WindowApp(
+        lcl::render::makeSkiaCanvas(), width, height, title);
     JS_SetOpaque(obj, wrapper);
     return obj;
 }

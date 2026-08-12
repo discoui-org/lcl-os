@@ -5,7 +5,7 @@ description: Complete technical reference, API contracts, and usage patterns for
 
 # LCL-UI Application Development Framework Guide
 
-`lcl-ui` is the official C++20 user-space GUI framework for **LCL Core Linux (LCL OS)**. It is decoupled from the compositor, running on client processes over Unix Domain Socket IPC (`/tmp/lcl_compositor.sock`) and Zero-Copy Shared Memory (`memfd`).
+`lcl-ui` is the backend-neutral C++20 user-space GUI framework for **LCL Core Linux (LCL OS)**. It runs in client processes over Unix Domain Socket IPC (`/tmp/lcl_compositor.sock`) and shared memory (`memfd`). Applications explicitly inject a Canvas backend; the standard client backend is the software-only `lcl-canvas-skia` target.
 
 ---
 
@@ -14,7 +14,7 @@ description: Complete technical reference, API contracts, and usage patterns for
 ```
 +-----------------------------------------------------------+
 |                      lcl-ui Application                   |
-|  (WindowApp -> Widget Hierarchy -> Yoga Flexbox Layout)   |
+|  (WindowApp -> Widget Tree -> Yoga -> injected Canvas)    |
 +-----------------------------+-----------------------------+
                               | SHM (memfd) + Unix Domain Socket
                               v
@@ -31,7 +31,7 @@ description: Complete technical reference, API contracts, and usage patterns for
 ### `lcl::ui::WindowApp` ([`window_app.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/core/window_app.hpp))
 Manages application initialization, window surface creation, SHM allocation, IPC event processing, and frame loop execution.
 
-- `WindowApp(uint32_t width, uint32_t height, const std::string& title)`: Constructor.
+- `WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height, const std::string& title)`: Constructor with an explicit backend.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Mounts the top-level widget container.
 - `bool connectCompositor(const std::string& socketPath = "/tmp/lcl_compositor.sock")`: Connects to compositor IPC and registers surface.
 - `void runEventLoop()`: Runs the main non-blocking event loop at **144 Hz target frame pacing** (~6.9ms period).
@@ -42,7 +42,7 @@ Base class for all UI elements.
 - `YogaNode& getYogaNode()`: Accesses the C++ Yoga Flexbox layout node.
 - `void addChild(std::unique_ptr<Widget> child)`: Appends a child widget.
 - `void markDirty()`: Registers dirty damage bounds with `RenderPass` to trigger a frame redraw.
-- `virtual void draw(SkCanvas* canvas, const Rect& damageRect)`: Virtual render callback. `canvas` is safely castable to `lcl::render::SkiaRenderer*`.
+- `virtual void draw(Canvas& canvas, const Rect& damageRect)`: Backend-neutral render callback. Widgets must not cast the Canvas to a renderer implementation.
 - **Event Callbacks:**
   - `virtual bool onPointerEnter(const PointerEvent& event)`
   - `virtual bool onPointerLeave(const PointerEvent& event)`
@@ -68,12 +68,13 @@ Base class for all UI elements.
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "render/skia_canvas.hpp"
 
 using namespace lcl::ui;
 
 int main() {
     // 1. Create 800x600 Window App instance
-    WindowApp app(800, 600, "My LCL Application");
+    WindowApp app(lcl::render::makeSkiaCanvas(), 800, 600, "My LCL Application");
 
     // 2. Build Flexbox layout hierarchy
     auto root = std::make_unique<Container>();
@@ -111,32 +112,26 @@ int main() {
 
 ## 4. Custom Widget & Procedural Animation Protocol
 
-For custom 2D canvas drawing or continuous procedural animations:
+For custom 2D Canvas drawing or continuous procedural animations:
 
-1. Subclass `Widget` and override `draw(SkCanvas* canvas, const Rect& damageRect)`.
-2. Cast `canvas` to `lcl::render::SkiaRenderer*`.
-3. Use Skia primitives:
-   - `skia->drawBackgroundGradient(topColor, bottomColor)`
-   - `skia->drawRect(rect, color)`
-   - `skia->drawRoundedRect(rect, radius, fillColor, borderColor, borderWidth)`
-   - `skia->drawDropShadow(rect, radius, blur, shadowColor)`
-   - `skia->drawCircle(cx, cy, radius, color)`
-   - `skia->drawString(x, y, text, fgColor)`
-4. **Continuous 144Hz Animation Rule:** Call `markDirty()` **inside** `draw(...)` to request damage calculation for the next frame continuously!
+1. Subclass `Widget` and override `draw(Canvas& canvas, const Rect& damageRect)`.
+2. Use only Canvas primitives such as `drawRect`, `drawRoundedRect`,
+   `drawTopRoundedRect`, `drawText`, and `drawBuffer`.
+3. Call `markDirty()` when another frame is required; do not depend on a fixed
+   refresh rate or cast Canvas to `SkiaRenderer`.
 
 ```cpp
 class MyAnimatedWidget : public Widget {
 public:
-    void draw(SkCanvas* canvas, const Rect& damageRect) override {
+    void draw(Canvas& canvas, const Rect& damageRect) override {
         (void)damageRect;
-        auto* skia = reinterpret_cast<lcl::render::SkiaRenderer*>(canvas);
-        if (!skia) return;
-
-        // Custom drawing
-        skia->drawCircle(100.0f, 100.0f, 40.0f, SkiaColor{255, 100, 50, 255});
-
-        // Request next frame for continuous 144Hz animation
+        canvas.drawRoundedRect(
+            {60.0f, 60.0f, 80.0f, 80.0f}, 40.0f,
+            {255, 100, 50, 255}, {}, 0.0f, 2.0f);
         markDirty();
     }
 };
 ```
+
+Client applications link both `lcl-ui` and `lcl-canvas-skia`. Compositor code
+links `lcl-render`; EGL/DRM/GBM/GLES must never be added back to `lcl-ui`.

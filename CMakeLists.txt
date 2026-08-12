@@ -22,6 +22,7 @@ include(FetchContent)
 FetchContent_Declare(
     quickjs
     URL https://github.com/quickjs-ng/quickjs/archive/refs/tags/v0.7.0.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 set(BUILD_QJS_LIBC OFF CACHE BOOL "" FORCE)
 set(BUILD_CLI OFF CACHE BOOL "" FORCE)
@@ -50,29 +51,97 @@ target_include_directories(lcl-protocol PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# Display scale is shared policy with no renderer or platform-GPU dependency.
+# Keeping it independent lets lcl-ui consume logical-pixel configuration
+# without pulling compositor display code into application binaries.
+add_library(lcl-display-scale STATIC
+    src/core/display/display_scale.cpp
+)
+
+target_include_directories(lcl-display-scale PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# Backend-neutral widgets, layout, events and WindowApp lifecycle.
+add_subdirectory(lcl-ui)
+
+# Client SHM raster backend. The same raster implementation remains in use,
+# but its OpenGL/EGL branches are compiled out so applications do not acquire
+# compositor GPU or DRM dependencies.
+add_library(lcl-canvas-skia STATIC
+    src/render/skia_canvas.cpp
+    src/render/skia_renderer.cpp
+    src/render/font_renderer.cpp
+)
+
+target_compile_definitions(lcl-canvas-skia PRIVATE LCL_SOFTWARE_ONLY=1)
+
+target_include_directories(lcl-canvas-skia PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+)
+
+target_link_libraries(lcl-canvas-skia PUBLIC
+    lcl-ui
+    lcl-protocol
+    Threads::Threads
+)
+
+# Compositor-owned render/present layer. EGL/DRM/GBM/GLES stay here and never
+# flow through lcl-ui or the client Canvas target.
+add_library(lcl-render STATIC
+    src/core/compositor/compositor_renderer.cpp
+    src/core/display/display_manager.cpp
+    src/core/display/egl_backend.cpp
+    src/render/font_renderer.cpp
+    src/render/renderer.cpp
+    src/render/skia_canvas.cpp
+    src/render/skia_renderer.cpp
+    src/render/window_manager.cpp
+)
+
+target_include_directories(lcl-render PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    ${DRM_INCLUDE_DIRS}
+    ${GBM_INCLUDE_DIRS}
+    ${EGL_INCLUDE_DIRS}
+    ${GLES2_INCLUDE_DIRS}
+)
+
+target_link_libraries(lcl-render PUBLIC
+    lcl-ui
+    lcl-protocol
+    lcl-display-scale
+    ${DRM_LIBRARIES}
+    ${GBM_LIBRARIES}
+    ${EGL_LIBRARIES}
+    ${GLES2_LIBRARIES}
+    Threads::Threads
+)
+
+target_compile_options(lcl-render PRIVATE
+    ${DRM_CFLAGS_OTHER}
+    ${GBM_CFLAGS_OTHER}
+    ${EGL_CFLAGS_OTHER}
+    ${GLES2_CFLAGS_OTHER}
+)
+
 # Main Compositor Executable Target
 add_executable(lcl-core
     src/main.cpp
     src/core/compositor/compositor.cpp
-    src/core/compositor/compositor_renderer.cpp
     src/core/compositor/frame_scheduler.cpp
     src/core/compositor/input_router.cpp
     src/core/compositor/protocol_dispatcher.cpp
     src/core/compositor/surface_registry.cpp
     src/apps/terminal/terminal_app.cpp
     src/core/app/app_bundle_parser.cpp
-    src/core/display/display_manager.cpp
-    src/core/display/display_scale.cpp
-    src/core/display/egl_backend.cpp
     src/core/input/input_manager.cpp
     src/core/input/key_mapper.cpp
     src/core/ipc/ipc_manager.cpp
     src/core/session/startup_manager.cpp
     src/core/terminal/pty_manager.cpp
-    src/render/font_renderer.cpp
-    src/render/renderer.cpp
-    src/render/skia_renderer.cpp
-    src/render/window_manager.cpp
 )
 
 target_include_directories(lcl-core PRIVATE
@@ -87,22 +156,14 @@ target_include_directories(lcl-core PRIVATE
 )
 
 target_link_libraries(lcl-core PRIVATE
-    lcl-ui
+    lcl-render
     lcl-protocol
-    ${DRM_LIBRARIES}
-    ${GBM_LIBRARIES}
-    ${EGL_LIBRARIES}
-    ${GLES2_LIBRARIES}
     ${LIBINPUT_LIBRARIES}
     ${UDEV_LIBRARIES}
     Threads::Threads
 )
 
 target_compile_options(lcl-core PRIVATE
-    ${DRM_CFLAGS_OTHER}
-    ${GBM_CFLAGS_OTHER}
-    ${EGL_CFLAGS_OTHER}
-    ${GLES2_CFLAGS_OTHER}
     ${LIBINPUT_CFLAGS_OTHER}
     ${UDEV_CFLAGS_OTHER}
 )
@@ -142,8 +203,6 @@ add_executable(lcl-desktop-shell
     src/apps/desktop_shell/ui_main.cpp
     src/core/ipc/ipc_manager.cpp
     src/core/app/app_bundle_parser.cpp
-    src/core/display/display_scale.cpp
-    src/render/font_renderer.cpp
 )
 
 target_include_directories(lcl-desktop-shell PRIVATE
@@ -153,6 +212,7 @@ target_include_directories(lcl-desktop-shell PRIVATE
 
 target_link_libraries(lcl-desktop-shell PRIVATE
     lcl-ui
+    lcl-canvas-skia
     lcl-protocol
     Threads::Threads
 )
@@ -173,6 +233,7 @@ target_include_directories(lcl-terminal PRIVATE
 
 target_link_libraries(lcl-terminal PRIVATE
     lcl-ui
+    lcl-canvas-skia
     lcl-protocol
     Threads::Threads
 )
@@ -191,12 +252,12 @@ target_include_directories(lcl-js PRIVATE
 
 target_link_libraries(lcl-js PRIVATE
     lcl-ui
+    lcl-canvas-skia
     qjs
     Threads::Threads
 )
 
 # Subdirectories
-add_subdirectory(lcl-ui)
 add_subdirectory(apps/ui_demo)
 add_subdirectory(apps/ui_demo_js)
 
@@ -209,6 +270,7 @@ if(BUILD_TESTS)
     FetchContent_Declare(
         googletest
         URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
@@ -236,6 +298,23 @@ if(BUILD_TESTS)
         src/binding/js_runtime.cpp
     )
 
+    # This executable deliberately links only lcl-ui. It exercises WindowApp
+    # with an injected mock Canvas so any accidental renderer/EGL/DRM
+    # dependency added to the UI target fails at link time.
+    add_executable(lcl_ui_boundary_smoke
+        tests/lcl_ui_boundary_smoke.cpp
+    )
+
+    target_include_directories(lcl_ui_boundary_smoke PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+
+    target_link_libraries(lcl_ui_boundary_smoke PRIVATE
+        lcl-ui
+        Threads::Threads
+    )
+
     target_compile_options(lcl_unit_tests PRIVATE -frtti)
     target_compile_options(gtest PRIVATE -frtti)
     target_compile_options(gtest_main PRIVATE -frtti)
@@ -253,6 +332,7 @@ if(BUILD_TESTS)
         gtest
         Threads::Threads
         lcl-ui
+        lcl-canvas-skia
         lcl-protocol
         qjs
         ${LIBINPUT_LIBRARIES}
@@ -261,4 +341,5 @@ if(BUILD_TESTS)
 
     include(GoogleTest)
     gtest_discover_tests(lcl_unit_tests)
+    add_test(NAME LclUiBoundarySmoke COMMAND lcl_ui_boundary_smoke)
 endif()

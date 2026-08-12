@@ -1,13 +1,16 @@
 #include "render/skia_renderer.hpp"
+#ifndef LCL_SOFTWARE_ONLY
 #include "core/display/egl_backend.hpp"
+#include <GLES2/gl2.h>
+#endif
 #include <iostream>
 #include <cmath>
 #include <algorithm>
 #include <cstring>
-#include <GLES2/gl2.h>
 
 namespace lcl::render {
 
+#ifndef LCL_SOFTWARE_ONLY
 static GLuint compileShader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
@@ -467,6 +470,11 @@ bool SkiaRenderer::initGLShader() {
 
     return true;
 }
+#else
+bool SkiaRenderer::initGLShader() {
+    return false;
+}
+#endif
 
 SkiaRenderer::~SkiaRenderer() {
     shutdown();
@@ -481,8 +489,11 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height, lcl::core::EGLBac
 
     if (m_initialized) return true;
 
+#ifdef LCL_SOFTWARE_ONLY
+    (void)eglBackend;
+    m_eglBackend = nullptr;
+#else
     m_eglBackend = eglBackend;
-
     if (m_eglBackend && m_eglBackend->isInitialized()) {
         m_backendType = SkiaBackendType::OpenGL_EGL;
         m_eglBackend->makeCurrent();
@@ -495,7 +506,9 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height, lcl::core::EGLBac
 
         std::cout << "[LCL Skia] Skia OpenGL/EGL Hardware Accelerated Backend Active ("
                   << m_width << "x" << m_height << ")!\n";
-    } else {
+    } else
+#endif
+    {
         m_backendType = SkiaBackendType::SoftwareRaster;
         if (!m_targetPixels) {
             m_rasterPixels.resize(m_width * m_height, 0xFF14161D); // Dark theme default
@@ -510,6 +523,7 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height, lcl::core::EGLBac
 }
 
 void SkiaRenderer::shutdown() {
+#ifndef LCL_SOFTWARE_ONLY
     if (m_glClientTexture > 0) {
         glDeleteTextures(1, &m_glClientTexture);
         m_glClientTexture = 0;
@@ -565,6 +579,7 @@ void SkiaRenderer::shutdown() {
         glDeleteProgram(m_glProgram);
         m_glProgram = 0;
     }
+#endif
     m_rasterPixels.clear();
     m_rasterPixels.shrink_to_fit();
     m_targetPixels = nullptr;
@@ -631,6 +646,7 @@ bool SkiaRenderer::ensureMonospaceFont(float logicalFontSize) {
     return m_monospaceFontRenderer.isInitialized();
 }
 
+#ifndef LCL_SOFTWARE_ONLY
 void SkiaRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity) {
     if (textureId == 0 || m_glProgram == 0) return;
 
@@ -870,10 +886,12 @@ void SkiaRenderer::drawGpuRoundedRect(float x,
     glDisableVertexAttribArray(m_aRoundRectPosLoc);
     glDisableVertexAttribArray(m_aRoundRectTexLoc);
 }
+#endif
 
 void SkiaRenderer::beginFrame() {
     if (!m_initialized) return;
 
+#ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && m_glSceneFBO > 0) {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
@@ -881,6 +899,7 @@ void SkiaRenderer::beginFrame() {
         glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
     }
+#endif
 
     if (m_targetPixels) {
         // GPU path uses m_targetPixels as a temporary CPU staging surface that can
@@ -896,6 +915,7 @@ void SkiaRenderer::beginFrame() {
 void SkiaRenderer::endFrame() {
     if (!m_initialized) return;
 
+#ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
         m_eglBackend->makeCurrent();
 
@@ -908,6 +928,7 @@ void SkiaRenderer::endFrame() {
         glFlush();
         m_eglBackend->swapBuffers();
     }
+#endif
 }
 
 void SkiaRenderer::drawBackgroundGradient(const SkiaColor& topColor, const SkiaColor& bottomColor) {
@@ -949,6 +970,7 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
 
     const SkiaRect deviceRect = scaleRect(rect);
 
+#ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
         int x1 = std::clamp(static_cast<int>(deviceRect.x), 0, static_cast<int>(m_width));
         int y1 = std::clamp(static_cast<int>(deviceRect.y), 0, static_cast<int>(m_height));
@@ -960,6 +982,7 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
         drawBufferRaw(x1, y1, x2 - x1, y2 - y1, fill.data(), x2 - x1, 1.0f, 0.0f, 2.0f, false, false, 0, 0);
         return;
     }
+#endif
 
     if (!m_targetPixels) return;
 
@@ -1022,6 +1045,7 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
     radius *= m_contentScale;
     borderWidth *= m_contentScale;
 
+#ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend && m_glRoundRectProgram > 0) {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
@@ -1038,6 +1062,7 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
                            borderColor);
         return;
     }
+#endif
 
     int w = std::max(1, static_cast<int>(std::lround(deviceRect.width)));
     int h = std::max(1, static_cast<int>(std::lround(deviceRect.height)));
@@ -1217,6 +1242,7 @@ void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fg
     const int deviceX = scaleCoord(x);
     const int deviceY = static_cast<int>(std::lround(static_cast<float>(y) * m_contentScale + m_contentOriginY));
 
+#ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && m_fontRenderer.isInitialized()) {
         int textW = std::max(1, m_fontRenderer.getTextWidth(text));
         int textH = std::max(1, m_fontRenderer.getCellHeight() + 2);
@@ -1225,6 +1251,7 @@ void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fg
         drawBufferRaw(deviceX, deviceY, textW, textH, glyphPixels.data(), textW, 1.0f, 0.0f, 2.0f, false, false, 0, 0);
         return;
     }
+#endif
 
     if (m_fontRenderer.isInitialized() && m_targetPixels) {
         m_fontRenderer.renderString(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor);
@@ -1238,6 +1265,7 @@ void SkiaRenderer::drawMonospaceString(int x, int y, const std::string& text,
     const int deviceX = scaleCoord(x);
     const int deviceY = static_cast<int>(std::lround(static_cast<float>(y) * m_contentScale + m_contentOriginY));
 
+#ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
         const int textW = std::max(1, m_monospaceFontRenderer.getTextWidth(text));
         const int textH = std::max(1, m_monospaceFontRenderer.getCellHeight() + 2);
@@ -1246,6 +1274,7 @@ void SkiaRenderer::drawMonospaceString(int x, int y, const std::string& text,
         drawBufferRaw(deviceX, deviceY, textW, textH, glyphPixels.data(), textW, 1.0f, 0.0f, 2.0f, false, false, 0, 0);
         return;
     }
+#endif
 
     if (m_targetPixels) {
         m_monospaceFontRenderer.renderString(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor);
@@ -1304,6 +1333,7 @@ void SkiaRenderer::drawBufferRaw(int dstX,
     const int outH = (drawHeight > 0) ? drawHeight : srcH;
     if (outW <= 0 || outH <= 0) return;
 
+#ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
         m_eglBackend->makeCurrent();
 
@@ -1352,6 +1382,7 @@ void SkiaRenderer::drawBufferRaw(int dstX,
         }
         return;
     }
+#endif
 
     if (!m_targetPixels) return;
 
@@ -1421,15 +1452,37 @@ void SkiaRenderer::drawBufferRaw(int dstX,
             if (rawA == 255 && isOpaqueFast) {
                 dstRow[x] = pixel;
             } else {
-                float a = (rawA / 255.0f) * opacity;
-                float invA = 1.0f - a;
+                const float srcA = (static_cast<float>(rawA) / 255.0f) * opacity;
+                const float invSrcA = 1.0f - srcA;
 
-                uint32_t bg = dstRow[x];
-                uint8_t r = static_cast<uint8_t>(((pixel >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * invA);
-                uint8_t g = static_cast<uint8_t>(((pixel >> 8) & 0xFF) * a + ((bg >> 8) & 0xFF) * invA);
-                uint8_t b = static_cast<uint8_t>((pixel & 0xFF) * a + (bg & 0xFF) * invA);
+                const uint32_t bg = dstRow[x];
+                const float dstA = static_cast<float>((bg >> 24) & 0xFF) / 255.0f;
+                const float outA = srcA + dstA * invSrcA;
+                if (outA <= 0.0001f) {
+                    dstRow[x] = 0x00000000u;
+                    continue;
+                }
 
-                dstRow[x] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
+                const float r =
+                    (static_cast<float>((pixel >> 16) & 0xFF) * srcA +
+                     static_cast<float>((bg >> 16) & 0xFF) * dstA * invSrcA) / outA;
+                const float g =
+                    (static_cast<float>((pixel >> 8) & 0xFF) * srcA +
+                     static_cast<float>((bg >> 8) & 0xFF) * dstA * invSrcA) / outA;
+                const float b =
+                    (static_cast<float>(pixel & 0xFF) * srcA +
+                     static_cast<float>(bg & 0xFF) * dstA * invSrcA) / outA;
+
+                const uint32_t outAlpha = static_cast<uint32_t>(
+                    std::clamp(std::lround(outA * 255.0f), 0l, 255l));
+                const uint32_t outRed = static_cast<uint32_t>(
+                    std::clamp(std::lround(r), 0l, 255l));
+                const uint32_t outGreen = static_cast<uint32_t>(
+                    std::clamp(std::lround(g), 0l, 255l));
+                const uint32_t outBlue = static_cast<uint32_t>(
+                    std::clamp(std::lround(b), 0l, 255l));
+
+                dstRow[x] = (outAlpha << 24) | (outRed << 16) | (outGreen << 8) | outBlue;
             }
         }
     }
@@ -1664,6 +1717,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
         outDispersionGain = (op.params[2] > 0.0f) ? op.params[2] : 7.0f;
     };
 
+#ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
         m_eglBackend->makeCurrent();
 
@@ -1905,6 +1959,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
                       opacity);
         return;
     }
+#endif
 
     // CPU Software Fallback Path (only when OpenGL ES is unavailable)
     if (!m_targetPixels) return;

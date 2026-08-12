@@ -7,6 +7,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "render/skia_canvas.hpp"
 
 using namespace lcl::ui;
 
@@ -91,7 +92,9 @@ int main() {
     std::cout << "========================================\n";
 
     // 1. Initialize WindowApp Application Pipeline (800x600)
-    WindowApp app(800, 600, "LCL-UI Phase 1.6 Interactive Demo App");
+    WindowApp app(
+        lcl::render::makeSkiaCanvas(), 800, 600,
+        "LCL-UI Phase 1.6 Interactive Demo App");
 
     // 2. Build Centered Flexbox Layout Tree in User-Space App
     auto rootContainer = std::make_unique<Container>();

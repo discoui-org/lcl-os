@@ -11,6 +11,7 @@
 #include "lcl-ui/widgets/window_chrome.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "render/skia_renderer.hpp"
+#include "render/skia_canvas.hpp"
 
 #include <sys/socket.h>
 #include <unistd.h>
@@ -318,8 +319,8 @@ TEST(LclUiTest, PassiveBackdropEffectDoesNotRequireAFullWindowRoundedRaster) {
     EXPECT_EQ(effects.front().cornerRadius, 20.0f);
 }
 
-TEST(LclUiTest, WindowAppDefaultCanvasPreservesRasterOutput) {
-    WindowApp app(8, 8, "Default Canvas Test");
+TEST(LclUiTest, SkiaCanvasInjectionPreservesRasterOutput) {
+    WindowApp app(lcl::render::makeSkiaCanvas(), 8, 8, "Skia Canvas Test");
     auto root = std::make_unique<Container>();
     root->setBackgroundColor({11, 22, 33, 255});
     root->getYogaNode().setWidth(8.0f);
@@ -520,4 +521,15 @@ TEST(LclUiTest, TopRoundedRectDoesNotLeakBelowItsCornerArc) {
 
     EXPECT_EQ(pixels[0 + 13 * 64], 0x00000000u);
     EXPECT_EQ(pixels[0 + 21 * 64], 0xFF0A141Eu);
+}
+
+TEST(LclUiTest, RoundedRectPreservesTranslucentAlphaOnTransparentCanvas) {
+    std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
+
+    renderer.drawRoundedRect({0.0f, 0.0f, 32.0f, 32.0f}, 8.0f,
+                             {17, 19, 23, 184}, {}, 0.0f);
+
+    EXPECT_EQ(pixels[16 + 16 * 32], 0xB8111317u);
 }

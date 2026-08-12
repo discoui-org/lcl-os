@@ -6,6 +6,7 @@
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "core/ipc/lcl_protocol.hpp"
+#include "render/skia_canvas.hpp"
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -196,7 +197,7 @@ TEST(LclUiEventsTest, KeyboardEventRouting) {
 }
 
 TEST(LclUiEventsTest, WindowAppDirectEventCallbacks) {
-    WindowApp app(400, 300, "Test Window");
+    WindowApp app(lcl::render::makeSkiaCanvas(), 400, 300, "Test Window");
 
     int rawKeyCount = 0;
     int lastRawKey = 0;
@@ -229,7 +230,7 @@ TEST(LclUiEventsTest, VisualOnlyWindowIgnoresCompositorPointerEvents) {
     ASSERT_NE(fcntl(sockets[1], F_SETFL, fcntl(sockets[1], F_GETFL) | O_NONBLOCK), -1);
 
     {
-        WindowApp panel(320, 32, "Visual Panel");
+        WindowApp panel(lcl::render::makeSkiaCanvas(), 320, 32, "Visual Panel");
         panel.setSurfaceId(9);
         panel.setInputEnabled(false);
         panel.setExternalIpcSocket(sockets[1]);

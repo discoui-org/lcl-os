@@ -123,7 +123,26 @@ wallpaper area. Those images are the visual references for all later steps.
 
 No subsequent refactor step may proceed until:
 
-- the automated build and 58-test suite still pass;
+- the automated build and full CTest suite still pass;
 - the fixed-resolution QEMU checklist above is accepted;
 - typing and continuous resize show no regression;
 - any intentional visual difference is approved before its implementation.
+
+## Step 2 implementation record
+
+Step 2 separates build ownership without changing protocol or shell behavior:
+
+- `lcl-ui` now contains only widgets, Yoga layout, event/render-pass logic,
+  `WindowApp`, image loading, and IPC/SHM client lifecycle.
+- `lcl-display-scale` owns the shared logical-pixel policy.
+- `lcl-canvas-skia` owns the client software raster Canvas and font renderer;
+  it is compiled with all EGL/OpenGL branches disabled.
+- `lcl-render` owns compositor rendering, window management, EGL, DRM, GBM,
+  GLES, and presentation.
+- `WindowApp` requires an injected Canvas. Native clients and the JS binding
+  explicitly inject `makeSkiaCanvas()`.
+
+The Step 2 automated gate must include archive/link inspection proving that
+`liblcl-ui.a`, Terminal, desktop shell, and JS runtime have no EGL/DRM/GBM/GLES
+symbols or link dependencies. The compositor must continue to link those
+libraries through `lcl-render`.

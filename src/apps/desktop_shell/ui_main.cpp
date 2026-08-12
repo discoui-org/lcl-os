@@ -29,6 +29,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/image.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "render/skia_canvas.hpp"
 
 namespace {
 
@@ -140,17 +141,24 @@ std::unique_ptr<lcl::ui::Container> makeDockRoot(uint32_t width, uint32_t height
     const DockLayout layout = layoutDock(width, height, windows.size());
     if (layout.count == 0) return root;
 
-    auto panel = std::make_unique<lcl::ui::BackdropSurface>();
-    panel->setBackgroundColor({18, 24, 34, 80});
+    auto panel = std::make_unique<lcl::ui::Container>();
+    panel->setBackgroundColor({17, 19, 23, 184});
     panel->setBorderColor({255, 255, 255, 68}); panel->setBorderWidth(1.0f);
-    panel->setBorderRadius(26.0f); panel->setGlass(30.0f, 3.0f, 12.0f);
-    panel->addFilter(lcl::protocol::FilterType::Blur, 3.5f);
-    panel->addFilter(lcl::protocol::FilterType::Saturation, 1.5f);
-    panel->addFilter(lcl::protocol::FilterType::Contrast, 0.9f);
+    panel->setBorderRadius(26.0f); panel->setBorderRoundness(2.0f);
     absolute(*panel, layout.x, layout.y, layout.width, layout.height);
 
+    // Match the terminal's translucent composition: paint the alpha tint on
+    // the panel, while a separate transparent surface owns the glass effect.
+    auto backdrop = std::make_unique<lcl::ui::BackdropSurface>();
+    backdrop->setInteractive(false);
+    backdrop->setBorderRadius(26.0f);
+    backdrop->setGlass(30.0f, 3.0f, 12.0f);
+    absolute(*backdrop, 0, 0, layout.width, layout.height);
+    panel->addChild(std::move(backdrop));
+
     auto innerBorder = std::make_unique<lcl::ui::Container>();
-    innerBorder->setBorderColor({0, 0, 0, 34}); innerBorder->setBorderWidth(1.0f); innerBorder->setBorderRadius(24.0f);
+    innerBorder->setBorderColor({0, 0, 0, 34}); innerBorder->setBorderWidth(1.0f);
+    innerBorder->setBorderRadius(24.0f); innerBorder->setBorderRoundness(2.0f);
     absolute(*innerBorder, 2, 2, layout.width - 4, layout.height - 4);
     panel->addChild(std::move(innerBorder));
 
@@ -199,7 +207,8 @@ int main() {
 
     const std::string wallpaperPath = std::filesystem::exists("/usr/share/wallpapers/wallpaper.jpg")
         ? "/usr/share/wallpapers/wallpaper.jpg" : "/usr/share/wallpaper.jpg";
-    auto wallpaper = std::make_unique<lcl::ui::WindowApp>(width, height, "LCL Wallpaper");
+    auto wallpaper = std::make_unique<lcl::ui::WindowApp>(
+        lcl::render::makeSkiaCanvas(), width, height, "LCL Wallpaper");
     wallpaper->setSurfaceId(1); wallpaper->setRole(lcl::protocol::LCLRole::DesktopWallpaper);
     wallpaper->setInputEnabled(false);
     wallpaper->setInitialBounds(0, 0, width, height);
@@ -224,14 +233,16 @@ int main() {
         // The reserved work area is published only after both panels have made
         // their first real buffer commit, so menu setup cannot leave the shell
         // in a half-created state with no dock.
-        menu = std::make_unique<lcl::ui::WindowApp>(width, kMenuBarHeight, "LCL MenuBar");
+        menu = std::make_unique<lcl::ui::WindowApp>(
+            lcl::render::makeSkiaCanvas(), width, kMenuBarHeight, "LCL MenuBar");
         menu->setSurfaceId(2); menu->setRole(lcl::protocol::LCLRole::ShellPanel);
         menu->setInputEnabled(false);
         menu->setInitialBounds(0, 0, width, kMenuBarHeight);
         menu->setRootWidget(makeMenuRoot(width, clock));
         menu->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 
-        dock = std::make_unique<lcl::ui::WindowApp>(width, kDockHeight, "LCL Dock");
+        dock = std::make_unique<lcl::ui::WindowApp>(
+            lcl::render::makeSkiaCanvas(), width, kDockHeight, "LCL Dock");
         dock->setSurfaceId(3); dock->setRole(lcl::protocol::LCLRole::ShellPanel);
         dock->setInputEnabled(false);
         dock->setInitialBounds(0, static_cast<int32_t>(height > kDockHeight ? height - kDockHeight : 0), width, kDockHeight);
