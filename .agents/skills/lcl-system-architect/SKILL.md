@@ -1,4 +1,9 @@
-# Skill: LCL System Architect
+---
+name: lcl-system-architect
+description: Provides domain-specific guidance for LCL Core Linux architecture and implementation, including DRM/KMS buffer management, Skia and EGL rendering, evdev input dispatch, and JavaScript engine C bindings. Use when designing, reviewing, or changing these LCL OS subsystems.
+---
+
+# LCL System Architect
 
 ## Description
 Provides domain-specific expertise for building LCL Core Linux components including DRM/KMS buffer management, Skia canvas context initialization, and JS engine C-bindings.
