@@ -19,6 +19,8 @@ bool WindowManager::initialize(uint32_t screenWidth, uint32_t screenHeight) {
     m_subpixelX = static_cast<double>(m_mouseX);
     m_subpixelY = static_cast<double>(m_mouseY);
     m_windows.clear();
+    m_motionEngine.clearAll();
+    m_chromeMotionEngine.clearAll();
     m_initialized = true;
     m_lastAnimTick = std::chrono::steady_clock::now();
 
@@ -84,6 +86,7 @@ bool WindowManager::removeWindow(uint32_t windowId) {
         std::cout << "[LCL WindowManager] Removing window ID: " << windowId << " ('" << it->title << "').\n";
         m_windows.erase(it);
         m_motionEngine.clearObjectChannels(windowId);
+        m_chromeMotionEngine.clearObjectChannels(windowId);
 
         if (!m_windows.empty()) {
             for (auto revIt = m_windows.rbegin(); revIt != m_windows.rend(); ++revIt) {
@@ -148,6 +151,65 @@ namespace {
     }
 }
 
+void WindowManager::setChromeControlState(Window& window, int hoveredControl,
+                                          int pressedControl) {
+    hoveredControl = std::clamp(hoveredControl, -1, 2);
+    pressedControl = std::clamp(pressedControl, -1, 2);
+    const int oldHovered = window.hoveredChromeControl;
+    const int oldPressed = window.pressedChromeControl;
+    if (oldHovered == hoveredControl && oldPressed == pressedControl) return;
+
+    window.hoveredChromeControl = hoveredControl;
+    window.pressedChromeControl = pressedControl;
+    for (int index = 0; index < 3; ++index) {
+        const float oldEmphasis = index == oldPressed ? 2.0f : (index == oldHovered ? 1.0f : 0.0f);
+        const float targetEmphasis = index == pressedControl ? 2.0f : (index == hoveredControl ? 1.0f : 0.0f);
+        if (oldEmphasis == targetEmphasis) continue;
+
+        const float targetScale = targetEmphasis >= 2.0f
+            ? 0.965f
+            : (targetEmphasis >= 1.0f ? 1.015f : 1.0f);
+        const lcl::motion::Motion motion = targetEmphasis >= 2.0f
+            ? lcl::motion::tokens::pressed()
+            : (targetEmphasis >= 1.0f ? lcl::motion::tokens::hover()
+                                      : lcl::motion::tokens::release());
+        const uint32_t propertyBase = 100u + static_cast<uint32_t>(index) * 2u;
+        const auto scaleChannel = m_chromeMotionEngine.ensureChannel(
+            {window.id, propertyBase}, window.chromeControlScale[index]);
+        const auto emphasisChannel = m_chromeMotionEngine.ensureChannel(
+            {window.id, propertyBase + 1u}, window.chromeControlEmphasis[index]);
+        m_chromeMotionEngine.animateTo(scaleChannel, targetScale, motion);
+        m_chromeMotionEngine.animateTo(emphasisChannel, targetEmphasis, motion);
+    }
+    window.markDirty();
+}
+
+void WindowManager::refreshChromeHoverState() {
+    uint32_t hoveredWindowId = 0;
+    int hoveredControl = -1;
+    for (auto it = m_windows.rbegin(); it != m_windows.rend(); ++it) {
+        const auto& window = *it;
+        if (window.isMinimized || window.isUnfocusable ||
+            window.layer == protocol::LCLWindowLayer::Bottom) {
+            continue;
+        }
+        if (m_mouseX < window.x || m_mouseX >= window.x + window.width ||
+            m_mouseY < window.y || m_mouseY >= window.y + window.height) {
+            continue;
+        }
+        if (!window.geometryTransitionActive) {
+            hoveredControl = hitWindowChromeControl(window, m_mouseX, m_mouseY);
+            if (hoveredControl >= 0) hoveredWindowId = window.id;
+        }
+        break;
+    }
+
+    for (auto& window : m_windows) {
+        const int nextHover = window.id == hoveredWindowId ? hoveredControl : -1;
+        setChromeControlState(window, nextHover, window.pressedChromeControl);
+    }
+}
+
 bool WindowManager::processInputEvent(const core::InputEvent& event) {
     bool stateChanged = false;
 
@@ -188,6 +250,7 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
         if (m_mouseX != oldX || m_mouseY != oldY || event.dx != 0.0 || event.dy != 0.0 || event.absoluteX >= 0.0) {
             m_mouseDirty = true;
             stateChanged = true;
+            refreshChromeHoverState();
         }
 
         const int topInset = static_cast<int>(m_reservedZone.top);
@@ -345,6 +408,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                     auto& targetWin = *targetIt;
                     const int titleH = (targetWin.decorationMode == DecorationMode::SSD) ? core::DisplayScale::titleBarHeight() : 0;
                     const int chromeControl = hitWindowChromeControl(targetWin, m_mouseX, m_mouseY);
+                    if (chromeControl >= 0 && !event.superPressed) {
+                        setChromeControlState(targetWin, chromeControl, chromeControl);
+                    }
 
                     // Controls share the exact WindowChrome layout used to draw SSD.
                     if (event.superPressed && event.button == BTN_MIDDLE) {
@@ -464,6 +530,10 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
             const int safeBottom = static_cast<int>(m_screenHeight) - static_cast<int>(m_reservedZone.bottom);
 
             for (auto& win : m_windows) {
+                if (win.pressedChromeControl >= 0) {
+                    setChromeControlState(win, win.hoveredChromeControl, -1);
+                    stateChanged = true;
+                }
                 if (win.isDragging || win.isResizing) {
                     const bool wasResizing = win.isResizing;
                     const bool wasDragging = win.isDragging;
@@ -527,8 +597,24 @@ bool WindowManager::updateAnimations(float dt) {
     bool changed = false;
     const auto changedChannels = m_motionEngine.tick(dt);
     (void)changedChannels;
+    m_chromeMotionEngine.tick(dt);
 
     for (auto& win : m_windows) {
+        for (int index = 0; index < 3; ++index) {
+            const uint32_t propertyBase = 100u + static_cast<uint32_t>(index) * 2u;
+            const auto scaleChannel = m_chromeMotionEngine.findChannel({win.id, propertyBase});
+            const auto emphasisChannel = m_chromeMotionEngine.findChannel({win.id, propertyBase + 1u});
+            if (!scaleChannel || !emphasisChannel) continue;
+            const float scale = m_chromeMotionEngine.sample(*scaleChannel).value;
+            const float emphasis = m_chromeMotionEngine.sample(*emphasisChannel).value;
+            if (std::fabs(scale - win.chromeControlScale[index]) > 0.0001f ||
+                std::fabs(emphasis - win.chromeControlEmphasis[index]) > 0.0001f) {
+                win.chromeControlScale[index] = scale;
+                win.chromeControlEmphasis[index] = emphasis;
+                win.markDirty();
+                changed = true;
+            }
+        }
         if (win.geometryTransitionActive) {
             const Rect before{static_cast<int>(std::lround(win.presentationX)),
                               static_cast<int>(std::lround(win.presentationY)),

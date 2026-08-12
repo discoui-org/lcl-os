@@ -101,22 +101,34 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 kWindowCornerRoundness);
         }
 
-        const char* glyphs[] = {"x", "-", "+"};
         for (int index = 0; index < 3; ++index) {
-            const float left = static_cast<float>(group.x) + layout.controlLeft +
-                               static_cast<float>(index) * (controlSize + controlGap);
-            const float top = static_cast<float>(group.y) + layout.controlTop;
+            const float interactionScale = std::clamp(win.chromeControlScale[index], 0.90f, 1.08f);
+            const float emphasis = std::clamp(win.chromeControlEmphasis[index], 0.0f, 2.0f);
+            const float stateMix = std::min(1.0f, emphasis);
+            const float pressedMix = std::max(0.0f, emphasis - 1.0f);
+            const auto mix = [](float from, float to, float amount) {
+                return from + (to - from) * amount;
+            };
+            const auto mixedByte = [&](uint8_t normal, uint8_t hover, uint8_t pressed) {
+                const float hoverValue = mix(static_cast<float>(normal), static_cast<float>(hover), stateMix);
+                return static_cast<uint8_t>(std::clamp(std::lround(
+                    mix(hoverValue, static_cast<float>(pressed), pressedMix)), 0l, 255l));
+            };
+            const float baseLeft = static_cast<float>(group.x) + layout.controlLeft +
+                                   static_cast<float>(index) * (controlSize + controlGap);
+            const float baseTop = static_cast<float>(group.y) + layout.controlTop;
+            const float drawSize = controlSize * interactionScale;
+            const float left = baseLeft + (controlSize - drawSize) * 0.5f;
+            const float top = baseTop + (controlSize - drawSize) * 0.5f;
             skia->drawRoundedRect(
-                {left, top, controlSize, controlSize}, controlSize * 0.5f,
-                {235, 241, 248, applyOpacityToAlpha(56, chromeOpacity)},
-                {230, 238, 248, applyOpacityToAlpha(120, chromeOpacity)},
+                {left, top, drawSize, drawSize}, drawSize * 0.5f,
+                {mixedByte(235, 245, 218), mixedByte(241, 249, 226),
+                 mixedByte(248, 255, 238),
+                 applyOpacityToAlpha(mixedByte(56, 84, 112), chromeOpacity)},
+                {mixedByte(230, 242, 250), mixedByte(238, 248, 252),
+                 mixedByte(248, 255, 255),
+                 applyOpacityToAlpha(mixedByte(120, 168, 208), chromeOpacity)},
                 std::max(1.0f, group.scale), 2.0f);
-            skia->drawString(
-                static_cast<int>(std::lround(left + controlSize * 0.32f)),
-                static_cast<int>(std::lround(top + controlSize * 0.16f)),
-                glyphs[index],
-                (static_cast<uint32_t>(applyOpacityToAlpha(224, chromeOpacity)) << 24) | 0x00ECF4FCu,
-                11.0f * scale);
         }
 
         if (drawTitlebar) {

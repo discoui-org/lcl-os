@@ -51,6 +51,19 @@ uint32_t toBufferPixels(uint32_t logical, float scale) {
     return std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(logical) * scale)));
 }
 
+uint32_t crossfadePixel(uint32_t oldPixel, uint32_t newPixel, float progress) {
+    const uint32_t newWeight = static_cast<uint32_t>(
+        std::clamp(std::lround(progress * 256.0f), 0l, 256l));
+    const uint32_t oldWeight = 256u - newWeight;
+    const auto blendChannel = [oldWeight, newWeight](uint32_t oldValue, uint32_t newValue) {
+        return (oldValue * oldWeight + newValue * newWeight + 128u) >> 8u;
+    };
+    return (blendChannel((oldPixel >> 24u) & 0xFFu, (newPixel >> 24u) & 0xFFu) << 24u) |
+           (blendChannel((oldPixel >> 16u) & 0xFFu, (newPixel >> 16u) & 0xFFu) << 16u) |
+           (blendChannel((oldPixel >> 8u) & 0xFFu, (newPixel >> 8u) & 0xFFu) << 8u) |
+           blendChannel(oldPixel & 0xFFu, newPixel & 0xFFu);
+}
+
 } // namespace
 
 WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height,
@@ -240,6 +253,7 @@ void WindowApp::resize(uint32_t width, uint32_t height) {
 
     m_width = width;
     m_height = height;
+    clearMorphCrossfade();
 
     if (m_rootWidget) {
         m_rootWidget->getYogaNode().setWidth(static_cast<float>(width));
@@ -477,25 +491,29 @@ void startMorphs(Widget* widget, const std::unordered_map<uint64_t, Rect>& oldBo
             (std::fabs(before.x - after.x) > 0.01f || std::fabs(before.y - after.y) > 0.01f ||
              std::fabs(before.width - after.width) > 0.01f || std::fabs(before.height - after.height) > 0.01f)) {
             anyMorph = true;
-            const float startX = before.x - after.x;
-            const float startY = before.y - after.y;
-            const float startScaleX = before.width / std::max(0.001f, after.width);
-            const float startScaleY = before.height / std::max(0.001f, after.height);
+            const PresentationState finalPresentation = widget->getPresentationState();
+            const float startX = finalPresentation.translationX + before.x - after.x;
+            const float startY = finalPresentation.translationY + before.y - after.y;
+            const float startScaleX = finalPresentation.scaleX *
+                before.width / std::max(0.001f, after.width);
+            const float startScaleY = finalPresentation.scaleY *
+                before.height / std::max(0.001f, after.height);
             widget->applyPresentationValue(AnimatableProperty::TranslationX, startX);
             widget->applyPresentationValue(AnimatableProperty::TranslationY, startY);
             widget->applyPresentationValue(AnimatableProperty::ScaleX, startScaleX);
             widget->applyPresentationValue(AnimatableProperty::ScaleY, startScaleY);
-            widget->applyPresentationValue(AnimatableProperty::Opacity, 0.92f);
-            coordinator.animateFloat(*widget, AnimatableProperty::TranslationX, startX, 0.0f, motion,
+            coordinator.animateFloat(*widget, AnimatableProperty::TranslationX, startX,
+                finalPresentation.translationX, motion,
                 [widget](float value) { widget->applyPresentationValue(AnimatableProperty::TranslationX, value); });
-            coordinator.animateFloat(*widget, AnimatableProperty::TranslationY, startY, 0.0f, motion,
+            coordinator.animateFloat(*widget, AnimatableProperty::TranslationY, startY,
+                finalPresentation.translationY, motion,
                 [widget](float value) { widget->applyPresentationValue(AnimatableProperty::TranslationY, value); });
-            coordinator.animateFloat(*widget, AnimatableProperty::ScaleX, startScaleX, 1.0f, motion,
+            coordinator.animateFloat(*widget, AnimatableProperty::ScaleX, startScaleX,
+                finalPresentation.scaleX, motion,
                 [widget](float value) { widget->applyPresentationValue(AnimatableProperty::ScaleX, value); });
-            coordinator.animateFloat(*widget, AnimatableProperty::ScaleY, startScaleY, 1.0f, motion,
+            coordinator.animateFloat(*widget, AnimatableProperty::ScaleY, startScaleY,
+                finalPresentation.scaleY, motion,
                 [widget](float value) { widget->applyPresentationValue(AnimatableProperty::ScaleY, value); });
-            coordinator.animateFloat(*widget, AnimatableProperty::Opacity, 0.92f, 1.0f, motion,
-                [widget](float value) { widget->applyPresentationValue(AnimatableProperty::Opacity, value); });
         }
     }
     for (const auto& child : widget->getChildren()) startMorphs(child.get(), oldBounds, coordinator, motion, anyMorph);
@@ -507,8 +525,19 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
                         const std::function<void()>& changes) {
     if (!changes) return;
     std::unordered_map<uint64_t, Rect> oldBounds;
+    std::vector<uint32_t> oldPixels;
+    uint32_t snapshotWidth = 0;
+    uint32_t snapshotHeight = 0;
     if (options.layout == LayoutMode::Morph) {
-        updateLayout();
+        // Flush pending old-state damage before copying the backing raster. The
+        // snapshot owns its pixels, so later SHM reuse and resize cannot mutate it.
+        renderFrame();
+        snapshotWidth = getPixelWidth();
+        snapshotHeight = getPixelHeight();
+        if (const auto* pixels = m_canvas->rasterBuffer()) {
+            const size_t pixelCount = static_cast<size_t>(snapshotWidth) * snapshotHeight;
+            oldPixels.assign(pixels, pixels + pixelCount);
+        }
         collectWidgetBounds(m_rootWidget.get(), oldBounds);
     }
     m_motionCoordinator.beginTransaction(motion, options);
@@ -523,18 +552,88 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
         updateLayout();
         bool anyMorph = false;
         startMorphs(m_rootWidget.get(), oldBounds, m_motionCoordinator, motion, anyMorph);
-        m_morphInputFrozen = anyMorph;
+        startMorphCrossfade(std::move(oldPixels), snapshotWidth, snapshotHeight, motion);
+        m_morphInputFrozen = anyMorph || m_morphBlendEngine.hasActiveAnimations();
     }
 }
 
 bool WindowApp::advanceAnimations(float dtSec) {
     const bool motionActive = m_motionCoordinator.tick(dtSec);
-    if (m_morphInputFrozen && !motionActive) m_morphInputFrozen = false;
-    return motionActive;
+    const bool morphBlendActive = advanceMorphCrossfade(dtSec);
+    if (m_morphInputFrozen && !motionActive && !morphBlendActive) m_morphInputFrozen = false;
+    return motionActive || morphBlendActive;
 }
 
 bool WindowApp::hasActiveAnimations() const noexcept {
-    return m_motionCoordinator.hasActiveAnimations();
+    return m_motionCoordinator.hasActiveAnimations() || m_morphBlendEngine.hasActiveAnimations();
+}
+
+void WindowApp::startMorphCrossfade(std::vector<uint32_t> snapshot,
+                                    uint32_t pixelWidth, uint32_t pixelHeight,
+                                    const lcl::motion::Motion& motion) {
+    clearMorphCrossfade();
+    const size_t expectedPixels = static_cast<size_t>(pixelWidth) * pixelHeight;
+    if (snapshot.size() != expectedPixels || pixelWidth != getPixelWidth() ||
+        pixelHeight != getPixelHeight()) {
+        return;
+    }
+
+    m_morphSnapshotPixels = std::move(snapshot);
+    m_morphSnapshotWidth = pixelWidth;
+    m_morphSnapshotHeight = pixelHeight;
+    m_morphBlendProgress = 0.0f;
+    m_morphBlendChannel = m_morphBlendEngine.createChannel({1u, 1u}, 0.0f);
+    m_morphBlendEngine.animateTo(m_morphBlendChannel, 1.0f, motion);
+    const auto sample = m_morphBlendEngine.sample(m_morphBlendChannel);
+    m_morphBlendProgress = std::clamp(sample.value, 0.0f, 1.0f);
+    if (!sample.active) {
+        clearMorphCrossfade();
+        return;
+    }
+    m_renderPass.addDirtyRect({0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height)});
+}
+
+bool WindowApp::advanceMorphCrossfade(float dtSec) {
+    if (m_morphBlendChannel == 0) return false;
+    const auto changed = m_morphBlendEngine.tick(dtSec);
+    const auto sample = m_morphBlendEngine.sample(m_morphBlendChannel);
+    m_morphBlendProgress = std::clamp(sample.value, 0.0f, 1.0f);
+    if (!changed.empty() || sample.active) {
+        m_renderPass.addDirtyRect({0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height)});
+    }
+    if (!sample.active) {
+        clearMorphCrossfade();
+        m_renderPass.addDirtyRect({0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height)});
+        return false;
+    }
+    return true;
+}
+
+void WindowApp::blendMorphSnapshot() {
+    if (m_morphSnapshotPixels.empty() || m_morphBlendChannel == 0) return;
+    if (m_morphSnapshotWidth != getPixelWidth() || m_morphSnapshotHeight != getPixelHeight()) {
+        clearMorphCrossfade();
+        return;
+    }
+    auto* newPixels = m_canvas->rasterBuffer();
+    if (!newPixels) {
+        clearMorphCrossfade();
+        return;
+    }
+    const size_t pixelCount = static_cast<size_t>(m_morphSnapshotWidth) * m_morphSnapshotHeight;
+    for (size_t index = 0; index < pixelCount; ++index) {
+        newPixels[index] = crossfadePixel(m_morphSnapshotPixels[index], newPixels[index],
+                                         m_morphBlendProgress);
+    }
+}
+
+void WindowApp::clearMorphCrossfade() {
+    m_morphBlendEngine.clearAll();
+    m_morphBlendChannel = 0;
+    m_morphSnapshotPixels.clear();
+    m_morphSnapshotWidth = 0;
+    m_morphSnapshotHeight = 0;
+    m_morphBlendProgress = 1.0f;
 }
 
 void WindowApp::setExternalIpcSocket(int socketFd) {
@@ -671,14 +770,20 @@ bool WindowApp::sendPointerDown(float x, float y, int button) {
             return inControlY && x >= left && x <= (left + m_csdControlSize);
         };
         if (isControl(0)) {
+            m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
+                PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down});
             requestWindowClose();
             return true;
         }
         if (isControl(1)) {
+            m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
+                PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down});
             requestWindowMinimize();
             return true;
         }
         if (isControl(2)) {
+            m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
+                PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down});
             requestWindowToggleMaximize();
             return true;
         }
@@ -767,6 +872,7 @@ bool WindowApp::renderFrame() {
 
     m_renderPass.end(*m_canvas);
     m_canvas->endFrame();
+    blendMorphSnapshot();
 
     if (m_ipcConnected && m_socketFd >= 0) {
         auto toProtoSource = [](EffectSource source) {

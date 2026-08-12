@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
@@ -27,15 +28,84 @@ struct WindowChromeStyle {
     // antialiasing backend; style values stay independent of that backend.
     Color buttonBackground{235, 241, 248, 56};
     Color buttonBorder{230, 238, 248, 120};
-    Color buttonGlyph{236, 244, 252, 224};
+    Color buttonHoverBackground{245, 249, 255, 84};
+    Color buttonHoverBorder{242, 248, 255, 168};
+    Color buttonPressedBackground{218, 226, 238, 112};
+    Color buttonPressedBorder{250, 252, 255, 208};
     Color titleColor{240, 248, 255, 245};
     Color titleBarBackground{0, 0, 0, 0};
 
     float buttonBorderWidth{1.0f};
     float buttonRoundness{2.0f};
-    float glyphFontSize{11.0f};
-    float glyphLeftFactor{0.32f};
-    float glyphTopFactor{0.16f};
+};
+
+/** Glyph-free window control with the standard hover/press motion tokens. */
+class WindowControl final : public Container {
+public:
+    explicit WindowControl(WindowChromeStyle style) : m_style(std::move(style)) {
+        setBackgroundColor(m_style.buttonBackground);
+        setBorderColor(m_style.buttonBorder);
+        setBorderWidth(m_style.buttonBorderWidth);
+        setBorderRadius(m_style.controlSize * 0.5f);
+        setBorderRoundness(m_style.buttonRoundness);
+    }
+
+    bool onPointerEnter(const PointerEvent&) override {
+        m_hovered = true;
+        if (!m_pressed) applyVisual(m_style.buttonHoverBackground, m_style.buttonHoverBorder,
+                                    interactionMotionTheme().hoverScale,
+                                    interactionMotionTheme().hover);
+        return true;
+    }
+
+    bool onPointerLeave(const PointerEvent&) override {
+        m_hovered = false;
+        m_pressed = false;
+        applyVisual(m_style.buttonBackground, m_style.buttonBorder, 1.0f,
+                    interactionMotionTheme().release);
+        return true;
+    }
+
+    bool onPointerDown(const PointerEvent&) override {
+        m_pressed = true;
+        applyVisual(m_style.buttonPressedBackground, m_style.buttonPressedBorder,
+                    interactionMotionTheme().pressedScale,
+                    interactionMotionTheme().pressed);
+        return true;
+    }
+
+    bool onPointerUp(const PointerEvent&) override {
+        m_pressed = false;
+        applyVisual(m_hovered ? m_style.buttonHoverBackground : m_style.buttonBackground,
+                    m_hovered ? m_style.buttonHoverBorder : m_style.buttonBorder,
+                    m_hovered ? interactionMotionTheme().hoverScale : 1.0f,
+                    interactionMotionTheme().release);
+        return true;
+    }
+
+private:
+    void applyVisual(Color background, Color border, float scale,
+                     const lcl::motion::Motion& scaleMotion) {
+        const auto& theme = interactionMotionTheme();
+        if (!theme.enabled || !m_motionCoordinator) {
+            setBackgroundColor(background);
+            setBorderColor(border);
+            setScale(scale);
+            return;
+        }
+        animateBackgroundColor(background, theme.focusTransition);
+        animateBorderColor(border, theme.focusTransition);
+        m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleX,
+            m_presentation.scaleX, scale, scaleMotion,
+            [this](float value) { applyPresentationValue(AnimatableProperty::ScaleX, value); });
+        m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleY,
+            m_presentation.scaleY, scale, scaleMotion,
+            [this](float value) { applyPresentationValue(AnimatableProperty::ScaleY, value); });
+    }
+
+    WindowChromeStyle m_style;
+    bool m_hovered{false};
+    bool m_pressed{false};
 };
 
 struct WindowTitlebarLayout {
@@ -135,34 +205,19 @@ inline std::unique_ptr<Container> buildWindowTitlebar(float width,
     const WindowTitlebarLayout layout = calculateWindowTitlebarLayout(
         width, titleHeight, cornerRadius, titleFontSize, style);
 
-    auto mkHeaderControl = [&](float left, const char* glyph) {
-        auto button = std::make_unique<Container>();
-        button->setBackgroundColor(style.buttonBackground);
-        button->setBorderColor(style.buttonBorder);
-        button->setBorderWidth(style.buttonBorderWidth);
-        button->setBorderRadius(style.controlSize * 0.5f);
-        // n=2.0 is true circle mode for the superellipse border path.
-        button->setBorderRoundness(2.0f);
+    auto mkHeaderControl = [&](float left) {
+        auto button = std::make_unique<WindowControl>(style);
         button->getYogaNode().setPositionType(YGPositionTypeAbsolute);
         button->getYogaNode().setPosition(YGEdgeLeft, left);
         button->getYogaNode().setPosition(YGEdgeTop, layout.controlTop);
         button->getYogaNode().setWidth(style.controlSize);
         button->getYogaNode().setHeight(style.controlSize);
-
-        auto icon = std::make_unique<Text>(glyph);
-        icon->setTextColor(style.buttonGlyph);
-        icon->setFontSize(style.glyphFontSize);
-        icon->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        icon->getYogaNode().setPosition(YGEdgeLeft, style.controlSize * style.glyphLeftFactor);
-        icon->getYogaNode().setPosition(YGEdgeTop, style.controlSize * style.glyphTopFactor);
-        button->addChild(std::move(icon));
-
         return button;
     };
 
-    titleBar->addChild(mkHeaderControl(layout.controlLeft, "x"));
-    titleBar->addChild(mkHeaderControl(layout.controlLeft + style.controlSize + style.controlGap, "-"));
-    titleBar->addChild(mkHeaderControl(layout.controlLeft + (style.controlSize + style.controlGap) * 2.0f, "+"));
+    titleBar->addChild(mkHeaderControl(layout.controlLeft));
+    titleBar->addChild(mkHeaderControl(layout.controlLeft + style.controlSize + style.controlGap));
+    titleBar->addChild(mkHeaderControl(layout.controlLeft + (style.controlSize + style.controlGap) * 2.0f));
 
     std::string titleLabel = truncateTitleToWidth(title, layout.titleWidth, titleFontSize);
 

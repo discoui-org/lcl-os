@@ -29,12 +29,20 @@ void MotionCoordinator::setFloat(Widget& widget, AnimatableProperty property,
     if (!m_transactionActive && !overrideMotion) {
         if (const auto channel = m_engine.findChannel(
                 {widget.getObjectId(), static_cast<uint32_t>(property)})) {
-            m_engine.stop(*channel, false);
+            m_engine.setValue(*channel, targetValue);
         }
         applyPresentation(targetValue);
         return;
     }
-    if (m_transactionActive && m_options.layout == LayoutMode::Morph && affectsLayout) {
+    // Morph renders the final presentation tree immediately and crossfades it
+    // against a frozen pre-transaction raster snapshot. Animating an individual
+    // style channel here would make the "new" side of that crossfade another
+    // intermediate state instead of the committed final UI.
+    if (m_transactionActive && m_options.layout == LayoutMode::Morph) {
+        if (const auto channel = m_engine.findChannel(
+                {widget.getObjectId(), static_cast<uint32_t>(property)})) {
+            m_engine.setValue(*channel, targetValue);
+        }
         applyPresentation(targetValue);
         return;
     }
@@ -49,6 +57,7 @@ void MotionCoordinator::animateFloat(Widget& widget, AnimatableProperty property
                                      ApplyFloat applyPresentation, bool affectsLayout) {
     const lcl::motion::ChannelKey key{widget.getObjectId(), static_cast<uint32_t>(property)};
     const auto channel = m_engine.ensureChannel(key, presentationValue);
+    if (!m_engine.isActive(channel)) m_engine.setValue(channel, presentationValue);
     m_bindings[channel] = Binding{widget.getObjectId(), &widget, std::move(applyPresentation), affectsLayout};
     m_engine.animateTo(channel, targetValue, motion);
 }

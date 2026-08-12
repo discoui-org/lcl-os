@@ -218,6 +218,64 @@ TEST(LclUiTest, MorphUsesFinalLayoutAndFreezesWindowInputUntilSettled) {
     EXPECT_TRUE(app.sendPointerDown(20.0f, 20.0f));
 }
 
+TEST(LclUiTest, MorphCrossfadesFrozenOldRasterIntoFinalUi) {
+    WindowApp app(lcl::render::makeSkiaCanvas(), 4, 4, "Morph raster crossfade");
+    auto root = std::make_unique<Container>();
+    Container* pointer = root.get();
+    root->setWidth(4.0f);
+    root->setHeight(4.0f);
+    root->setBackgroundColor({255, 0, 0, 255});
+    app.setRootWidget(std::move(root));
+
+    ASSERT_TRUE(app.renderFrame());
+    ASSERT_EQ(app.getPixelBuffer()[0], 0xFFFF0000u);
+
+    app.animate(Motion::tween(1.0f, Easing::linear()), {LayoutMode::Morph}, [&] {
+        pointer->setBackgroundColor({0, 0, 255, 255});
+    });
+
+    // The final presentation tree is ready immediately, but progress zero must
+    // still display the independently owned old raster.
+    EXPECT_EQ(pointer->getPresentationBackgroundColor().b, 255);
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_EQ(app.getPixelBuffer()[0], 0xFFFF0000u);
+
+    EXPECT_TRUE(app.advanceAnimations(0.5f));
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_EQ(app.getPixelBuffer()[0], 0xFF800080u);
+
+    EXPECT_FALSE(app.advanceAnimations(0.5f));
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_EQ(app.getPixelBuffer()[0], 0xFF0000FFu);
+}
+
+TEST(LclUiTest, MorphFinalUiStopsAnExistingPropertyTrack) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 40, 40, "Morph property interruption");
+    auto root = std::make_unique<Container>();
+    Container* pointer = root.get();
+    root->setWidth(40.0f);
+    root->setHeight(40.0f);
+    root->setBackgroundColor({255, 0, 0, 255});
+    app.setRootWidget(std::move(root));
+    ASSERT_TRUE(app.renderFrame());
+
+    app.animate(Motion::tween(1.0f, Easing::linear()), [&] {
+        pointer->setBackgroundColor({0, 255, 0, 255});
+    });
+    ASSERT_TRUE(app.advanceAnimations(0.25f));
+
+    app.animate(Motion::tween(1.0f, Easing::linear()), {LayoutMode::Morph}, [&] {
+        pointer->setBackgroundColor({0, 0, 255, 255});
+    });
+    EXPECT_EQ(pointer->getPresentationBackgroundColor().b, 255);
+
+    ASSERT_TRUE(app.advanceAnimations(0.25f));
+    EXPECT_EQ(pointer->getPresentationBackgroundColor().r, 0);
+    EXPECT_EQ(pointer->getPresentationBackgroundColor().g, 0);
+    EXPECT_EQ(pointer->getPresentationBackgroundColor().b, 255);
+}
+
 TEST(LclUiTest, ExplicitKeyframesArePresentationOnlyUntilCommittedAndSurviveCleanup) {
     auto canvas = std::make_unique<RecordingCanvas>();
     WindowApp app(std::move(canvas), 160, 100, "Keyframes");
@@ -623,6 +681,39 @@ TEST(LclUiTest, TitlebarLayoutIsSharedByCsdCloseHitGeometry) {
     EXPECT_FLOAT_EQ(children[1]->getBounds().y, layout.controlTop);
     EXPECT_FLOAT_EQ(children[1]->getBounds().width, style.controlSize);
     EXPECT_FLOAT_EQ(children[1]->getBounds().height, style.controlSize);
+}
+
+TEST(LclUiTest, WindowControlsAreGlyphFreeAndAnimateHoverPress) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 240, 40, "Window controls");
+    const lcl::ui::chrome::WindowChromeStyle style;
+    const auto layout = lcl::ui::chrome::calculateWindowTitlebarLayout(
+        240.0f, 40.0f, 20.0f, 14.0f, style);
+    auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
+        240.0f, 40.0f, 20.0f, "Window", 14.0f, style);
+    auto* closeControl = dynamic_cast<lcl::ui::chrome::WindowControl*>(
+        titleBar->getChildren()[1].get());
+    ASSERT_NE(closeControl, nullptr);
+    EXPECT_TRUE(closeControl->getChildren().empty());
+
+    app.setRootWidget(std::move(titleBar));
+    app.configureCsdTitlebar(40.0f, layout.controlLeft, layout.controlTop,
+                            style.controlSize, style.controlGap);
+    ASSERT_TRUE(app.renderFrame());
+
+    const float controlX = layout.controlLeft + style.controlSize * 0.5f;
+    const float controlY = layout.controlTop + style.controlSize * 0.5f;
+    app.sendPointerMove(controlX, controlY);
+    for (int index = 0; index < 60; ++index) app.advanceAnimations(1.0f / 240.0f);
+    EXPECT_GT(closeControl->getPresentationState().scaleX, 1.0f);
+
+    EXPECT_TRUE(app.sendPointerDown(controlX, controlY));
+    for (int index = 0; index < 60; ++index) app.advanceAnimations(1.0f / 240.0f);
+    EXPECT_LT(closeControl->getPresentationState().scaleX, 1.0f);
+
+    EXPECT_TRUE(app.sendPointerUp(controlX, controlY));
+    for (int index = 0; index < 90; ++index) app.advanceAnimations(1.0f / 240.0f);
+    EXPECT_GT(closeControl->getPresentationState().scaleX, 1.0f);
 }
 
 TEST(LclUiTest, TopRoundedRectDoesNotLeakBelowItsCornerArc) {

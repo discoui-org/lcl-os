@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <array>
 #include <cstdint>
 #include <chrono>
 #include "core/input/input_manager.hpp"
@@ -98,6 +99,13 @@ struct Window {
     float cornerRadiusPx{-1.0f}; // < 0 means use compositor default policy
 
     uint32_t headerColor{0xFF38BDF8};
+
+    // Compositor-owned SSD control presentation. CSD controls keep the same
+    // contract in lcl-ui and never require client/compositor state sharing.
+    int hoveredChromeControl{-1};
+    int pressedChromeControl{-1};
+    std::array<float, 3> chromeControlScale{1.0f, 1.0f, 1.0f};
+    std::array<float, 3> chromeControlEmphasis{0.0f, 0.0f, 0.0f};
 
     // Damage Tracking & Occlusion Culling
     bool isDirty{true};
@@ -257,6 +265,8 @@ private:
     void updateWindowZOrders();
     void startGeometryTransition(Window& window, int targetX, int targetY,
                                  int targetWidth, int targetHeight);
+    void setChromeControlState(Window& window, int hoveredControl, int pressedControl);
+    void refreshChromeHoverState();
 
     uint32_t m_screenWidth{1024};
     uint32_t m_screenHeight{768};
@@ -271,6 +281,7 @@ private:
     bool m_mouseDirty{true};
     std::chrono::steady_clock::time_point m_lastAnimTick{};
     lcl::motion::AnimationEngine m_motionEngine;
+    lcl::motion::AnimationEngine m_chromeMotionEngine;
 };
 
 } // namespace lcl::render

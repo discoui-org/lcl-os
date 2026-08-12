@@ -18,9 +18,10 @@ app.animate(
 ```
 
 `Reflow` samples Yoga-facing values every frame, so painting and hit testing
-share the presentation geometry. `Morph` computes final Yoga layout first,
-then animates the old layout snapshot into the final bounds. Input for that
-window is frozen until the morph settles.
+share the presentation geometry. `Morph` freezes the pre-transaction raster,
+computes and renders the final UI immediately, then crossfades the old pixels
+into the new presentation while its layout transforms settle. Input for that
+window is frozen until both the crossfade and geometry morph finish.
 
 JavaScript uses the same transaction and scheduler:
 

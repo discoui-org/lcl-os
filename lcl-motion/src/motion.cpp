@@ -301,6 +301,19 @@ bool AnimationEngine::setSpec(ChannelId id, const Motion& motion, bool keepVeloc
     return true;
 }
 
+bool AnimationEngine::setValue(ChannelId id, float value) {
+    auto found = m_channels.find(id);
+    if (found == m_channels.end() || !std::isfinite(value)) return false;
+    auto& channel = found->second;
+    channel.current = value;
+    channel.target = value;
+    channel.startValue = value;
+    channel.velocity = 0.0f;
+    channel.elapsedSec = 0.0f;
+    channel.active = false;
+    return true;
+}
+
 bool AnimationEngine::stop(ChannelId id, bool snapToTarget) {
     auto found = m_channels.find(id);
     if (found == m_channels.end()) return false;

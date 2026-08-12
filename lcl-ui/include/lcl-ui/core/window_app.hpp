@@ -140,6 +140,12 @@ public:
 private:
     void pollIPC();
     void allocateSHM(uint32_t width, uint32_t height);
+    void startMorphCrossfade(std::vector<uint32_t> snapshot,
+                             uint32_t pixelWidth, uint32_t pixelHeight,
+                             const lcl::motion::Motion& motion);
+    bool advanceMorphCrossfade(float dtSec);
+    void blendMorphSnapshot();
+    void clearMorphCrossfade();
     bool requestWindowAction(lcl::protocol::LCLWindowAction action,
                              float localX = 0.0f, float localY = 0.0f);
     bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
@@ -193,6 +199,12 @@ private:
     std::chrono::steady_clock::time_point m_lastResizeApply{};
     bool m_running{false};
     bool m_morphInputFrozen{false};
+    lcl::motion::AnimationEngine m_morphBlendEngine;
+    lcl::motion::ChannelId m_morphBlendChannel{0};
+    std::vector<uint32_t> m_morphSnapshotPixels;
+    uint32_t m_morphSnapshotWidth{0};
+    uint32_t m_morphSnapshotHeight{0};
+    float m_morphBlendProgress{1.0f};
     std::chrono::steady_clock::time_point m_lastAnimationTick{};
 
     bool m_csdTitlebarEnabled{false};

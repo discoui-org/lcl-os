@@ -65,6 +65,21 @@ TEST(MotionTest, TweenRetargetStartsAtPresentationValue) {
     EXPECT_NEAR(engine.sample(channel).value, 6.0f, 0.001f);
 }
 
+TEST(MotionTest, SetValueSynchronizesAnExistingChannelWithoutLeavingVelocity) {
+    AnimationEngine engine;
+    const auto channel = engine.createChannel({4, 8}, 0.0f);
+    engine.animateTo(channel, 10.0f, Motion::spring(0.4f, 0.08f));
+    engine.tick(0.1f);
+    ASSERT_TRUE(engine.isActive(channel));
+    ASSERT_NE(engine.sample(channel).velocity, 0.0f);
+
+    ASSERT_TRUE(engine.setValue(channel, 7.0f));
+    const auto sample = engine.sample(channel);
+    EXPECT_FLOAT_EQ(sample.value, 7.0f);
+    EXPECT_FLOAT_EQ(sample.velocity, 0.0f);
+    EXPECT_FALSE(sample.active);
+}
+
 TEST(MotionTest, TimelineControlsRepeatAlternateFillAndCommit) {
     Timeline timeline;
     float presentation = -1.0f;
