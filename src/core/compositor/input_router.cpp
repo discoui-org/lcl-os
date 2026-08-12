@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <linux/input-event-codes.h>
 #include <vector>
 
 namespace lcl::core {
@@ -20,6 +21,15 @@ int logicalToPhysical(int value, float scale) {
 
 uint32_t physicalToLogical(uint32_t value, float scale) {
     return std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(value) / scale)));
+}
+
+uint32_t toClientPointerButton(uint32_t linuxButton) {
+    switch (linuxButton) {
+        case BTN_LEFT: return 0;
+        case BTN_MIDDLE: return 1;
+        case BTN_RIGHT: return 2;
+        default: return linuxButton;
+    }
 }
 
 } // namespace
@@ -183,7 +193,9 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
     input.type = event.type == InputEventType::PointerMotion ? 3 : 4;
     input.x = static_cast<float>(m_windowManager.getMouseX() - windowIt->x) / scale;
     input.y = static_cast<float>(m_windowManager.getMouseY() - windowIt->y - titleOffset) / scale;
-    input.key = event.button;
+    // lcl-ui's backend-independent pointer contract uses 0 for primary.
+    // The compositor continues to use raw BTN_* codes for its own shortcuts.
+    input.key = toClientPointerButton(event.button);
     input.pressed = event.pressed ? 1 : 0;
     protocol::sendMsgWithFd(entry.clientFd, header, &input);
 }

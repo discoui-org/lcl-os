@@ -9,6 +9,7 @@
 #include "core/compositor/frame_scheduler.hpp"
 #include "core/compositor/surface_registry.hpp"
 #include "core/compositor/system_surface_policy.hpp"
+#include "core/compositor/window_group_transform.hpp"
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
 #include "core/scene/shell_state_broker.hpp"
@@ -78,6 +79,22 @@ TEST(SystemSurfacePolicyTest, WallpaperPlacementAlwaysUsesCompositorOutputBounds
     EXPECT_EQ(y, 33);
     EXPECT_EQ(width, 444);
     EXPECT_EQ(height, 55);
+}
+
+TEST(WindowGroupTransformTest, ChromeAndClientShareOneQuantizedAnimatedFrame) {
+    render::Window window{};
+    window.x = 81;
+    window.y = 63;
+    window.width = 541;
+    window.height = 367;
+
+    const auto group = makeWindowGroupTransform(window, 32, 0.963f);
+    EXPECT_EQ(group.titleHeight, static_cast<int>(std::lround(32.0f * group.scale)));
+    EXPECT_EQ(group.y + group.titleHeight + (group.height - group.titleHeight),
+              group.y + group.height);
+    EXPECT_EQ(group.x + group.width,
+              static_cast<int>(std::lround(static_cast<float>(window.x) +
+                  (static_cast<float>(window.width) + group.width) * 0.5f)));
 }
 
 TEST(FrameSchedulerTest, AdvancesEnteringAndClosingTransitionsAtBoundedDelta) {

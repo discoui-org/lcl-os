@@ -1,4 +1,5 @@
 #include "core/compositor/compositor_renderer.hpp"
+#include "core/compositor/window_group_transform.hpp"
 #include "core/display/display_scale.hpp"
 #include "theme/palette.hpp"
 #include "lcl-ui/core/rect.hpp"
@@ -55,30 +56,25 @@ void CompositorRenderer::render(render::Renderer& renderer,
     };
 
     auto drawSsdChromeWithLclUi = [&](const render::Window& win,
-                                      float chromeOpacity,
-                                      float chromeScale) {
+                                      const WindowGroupTransform& group,
+                                      float chromeOpacity) {
         auto fadeUiColor = [&](const lcl::ui::Color& c) {
             return lcl::ui::Color{c.r, c.g, c.b, applyOpacityToAlpha(c.a, chromeOpacity)};
         };
 
         // Chrome is an lcl-ui subtree: all of its style and Yoga dimensions stay
-        // logical.  Only the renderer knows how to map it into the physical
-        // compositor framebuffer (including the per-window entrance scale).
+        // logical. The whole titlebar shares the already-quantized window
+        // group transform with the client buffer, so their seam cannot drift
+        // by a pixel during entrance/exit animation.
         const float dpr = DisplayScale::factor();
         const float logicalWidth = static_cast<float>(win.width) / dpr;
         const float logicalHeight = static_cast<float>(win.height) / dpr;
-        const float physicalWidth = static_cast<float>(win.width) * chromeScale;
-        const float physicalHeight = static_cast<float>(win.height) * chromeScale;
-        const float physicalX = static_cast<float>(win.x) +
-            (static_cast<float>(win.width) - physicalWidth) * 0.5f;
-        const float physicalY = static_cast<float>(win.y) +
-            (static_cast<float>(win.height) - physicalHeight) * 0.5f;
 
         const float previousScale = skia->getContentScale();
         const float previousOriginX = skia->getContentOriginX();
         const float previousOriginY = skia->getContentOriginY();
-        skia->setContentScale(dpr * chromeScale);
-        skia->setContentOrigin(physicalX, physicalY);
+        skia->setContentScale(dpr * group.scale);
+        skia->setContentOrigin(static_cast<float>(group.x), static_cast<float>(group.y));
 
         lcl::ui::RenderPass pass;
         auto root = std::make_unique<lcl::ui::Container>();
@@ -239,13 +235,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
             windowScale = std::clamp(matchingSurface->transitionScale, 0.80f, 1.20f);
         }
 
-        const float winCenterX = static_cast<float>(win.x) + static_cast<float>(win.width) * 0.5f;
-        const float winCenterY = static_cast<float>(win.y) + static_cast<float>(win.height) * 0.5f;
-        const int scaledWinW = std::max(1, static_cast<int>(std::lround(static_cast<float>(win.width) * windowScale)));
-        const int scaledWinH = std::max(1, static_cast<int>(std::lround(static_cast<float>(win.height) * windowScale)));
-        const int scaledWinX = static_cast<int>(std::lround(winCenterX - static_cast<float>(scaledWinW) * 0.5f));
-        const int scaledWinY = static_cast<int>(std::lround(winCenterY - static_cast<float>(scaledWinH) * 0.5f));
-        const int scaledTitleOffset = static_cast<int>(std::lround(static_cast<float>(titleOffset) * windowScale));
+        const WindowGroupTransform group = makeWindowGroupTransform(win, titleOffset, windowScale);
 
         // B. Apply effect-graph backdrop regions (new pipeline only)
         if (matchingSurface && !matchingSurface->effectRegions.empty()) {
@@ -253,23 +243,19 @@ void CompositorRenderer::render(render::Renderer& renderer,
         }
 
         if (matchingSurface) {
-            int dstX = win.x;
-            int dstY = win.y + titleOffset;
             int srcW = static_cast<int>(matchingSurface->width);
             int srcH = static_cast<int>(matchingSurface->height);
             int stridePixels = static_cast<int>(matchingSurface->stride / 4);
-            int drawW = std::max(1, static_cast<int>(std::lround(static_cast<float>(srcW) * windowScale)));
-            int drawH = std::max(1, static_cast<int>(std::lround(static_cast<float>(srcH) * windowScale)));
-            int drawX = static_cast<int>(std::lround(winCenterX + (static_cast<float>(dstX) - winCenterX) * windowScale));
-            int drawY = static_cast<int>(std::lround(winCenterY + (static_cast<float>(dstY) - winCenterY) * windowScale));
+            int drawX = group.x;
+            int drawY = group.y;
+            int drawW = group.width;
+            int drawH = group.height;
 
             if (win.decorationMode == render::DecorationMode::SSD) {
-                // Keep a strict non-overlapping partition between SSD titlebar and client content
-                // under scaling to avoid double-alpha where layers touch.
-                drawX = scaledWinX;
-                drawY = scaledWinY + scaledTitleOffset;
-                drawW = std::max(1, scaledWinW);
-                drawH = std::max(1, scaledWinH - scaledTitleOffset);
+                // The client buffer occupies the remaining exact pixels of
+                // the same transformed group rect used by the titlebar.
+                drawY += group.titleHeight;
+                drawH = std::max(1, group.height - group.titleHeight);
             }
 
             const float windowCornerRadiusPx = resolveWindowCornerRadiusPx(win);
@@ -295,26 +281,26 @@ void CompositorRenderer::render(render::Renderer& renderer,
             if (win.decorationMode == render::DecorationMode::None &&
                 win.title.find("Terminal") != std::string::npos) {
                 render::Window scaledOverlayWin = win;
-                scaledOverlayWin.x = scaledWinX;
-                scaledOverlayWin.y = scaledWinY;
-                scaledOverlayWin.width = scaledWinW;
-                scaledOverlayWin.height = scaledWinH;
+                scaledOverlayWin.x = group.x;
+                scaledOverlayWin.y = group.y;
+                scaledOverlayWin.width = group.width;
+                scaledOverlayWin.height = group.height;
                 drawCsdHeaderControlsOverlay(scaledOverlayWin);
             }
         }
 
         // C. Render Server-Side Window Frame (Titlebar & Inset Border) on top of content.
         if (win.decorationMode == render::DecorationMode::SSD) {
-            drawSsdChromeWithLclUi(win, windowOpacity, windowScale);
+            drawSsdChromeWithLclUi(win, group, windowOpacity);
         }
 
         // Forced compositor-owned inset border for every window, independent from app UI.
         if (win.drawInsetBorder) {
             render::Window borderWin = win;
-            borderWin.x = scaledWinX;
-            borderWin.y = scaledWinY;
-            borderWin.width = scaledWinW;
-            borderWin.height = scaledWinH;
+            borderWin.x = group.x;
+            borderWin.y = group.y;
+            borderWin.width = group.width;
+            borderWin.height = group.height;
             drawForcedInsetBorder(borderWin, windowOpacity, windowScale);
         }
     }
