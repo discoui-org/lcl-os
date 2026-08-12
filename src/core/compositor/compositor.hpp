@@ -16,6 +16,9 @@
 #include "core/compositor/frame_scheduler.hpp"
 #include "core/compositor/protocol_dispatcher.hpp"
 #include "core/compositor/compositor_renderer.hpp"
+#include "core/scene/focus_controller.hpp"
+#include "core/scene/scene_registry.hpp"
+#include "core/scene/shell_state_broker.hpp"
 #include "render/renderer.hpp"
 #include "render/window_manager.hpp"
 
@@ -70,6 +73,7 @@ private:
     void renderFrame();
     void renderDiagnosticOverlay();
     void publishWindowListToShellClients();
+    void synchronizeShellState();
 
     // Subsystems — declared in init order, destructed in reverse
     DisplayManager         m_displayManager;
@@ -80,6 +84,11 @@ private:
 
     /// IPC surface registry: (clientFd << 32 | surfaceId) → SurfaceEntry
     SurfaceRegistry m_surfaces;
+    // Scene/focus are compositor-owned authority.  The broker is intentionally
+    // transport-free until the typed shell subscription layer is introduced.
+    SceneRegistry m_sceneRegistry;
+    FocusController m_focusController;
+    ShellStateBroker m_shellStateBroker;
     std::unique_ptr<InputRouter> m_inputRouter;
     FrameScheduler m_frameScheduler;
     CompositorRenderer m_compositorRenderer;
@@ -89,6 +98,7 @@ private:
     std::atomic<bool>                    m_running{true};
     bool                                 m_initialized{false};
     bool                                 m_needsRedraw{true};
+    bool                                 m_shellStateDirty{true};
     uint64_t                             m_loopTicks{0};
 
     // Diagnostic Overlay & FPS metrics

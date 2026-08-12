@@ -199,3 +199,28 @@ The desktop shell's icon lookup and its legacy `WindowListUpdate` consumer are
 deliberately retained until Steps 5 and 6 provide the revisioned scene/focus
 broker and typed shell client. They are read-only compatibility paths, not
 application launch authority.
+
+## Step 5 implementation record
+
+Step 5 introduces compositor-owned scene and focus authority without changing
+desktop-shell presentation or the existing `WindowListUpdate` compatibility
+transport:
+
+- `SceneRegistry` creates a stable `SceneId` only when a client application
+  surface first maps from a valid buffer. It records surface/window identity,
+  app ID, client PID, title, geometry, display/workspace placeholders, and
+  visible/minimized/closing lifecycle state. Wallpaper and shell-panel
+  surfaces never become scenes.
+- `FocusController` derives the active scene for seat 0 from the
+  `WindowManager` focus result. It performs no hit testing, z-ordering, or
+  window mutation.
+- `ShellStateBroker` owns a monotonic revision and bounded replayable deltas,
+  with snapshot fallback when a consumer is behind retained history. It owns
+  no socket or UI; the typed subscription and shell client belong to Step 6.
+- Mapping, client EOF, explicit close, close-animation completion, and
+  compositor input/resize/minimize/focus changes all reconcile into the same
+  scene/focus stream. `SurfaceRegistry` remains SHM/FD owner and
+  `WindowManager` remains geometry/focus executor.
+- The current Dock/menu are intentionally unchanged. Their legacy window-list
+  input remains a read-only compatibility path until Step 6 consumes the
+  broker through a typed client.

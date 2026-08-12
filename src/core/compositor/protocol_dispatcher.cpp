@@ -78,7 +78,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             default: return render::DecorationMode::SSD;
         }
     };
-    auto mapSurface = [&](SurfaceEntry& entry) {
+    auto mapSurface = [&](SurfaceRegistry::Key surfaceKey, SurfaceEntry& entry, pid_t clientPid) {
         if (entry.windowId != 0 || !entry.pixels || entry.width == 0 || entry.height == 0) {
             return false;
         }
@@ -110,6 +110,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             entry.transitionScale = 0.96f;
         }
         entry.hasCommittedBuffer = true;
+        if (entry.role == protocol::LCLRole::ClientApp) {
+            m_scenes.mapClientSurface(surfaceKey, clientPid, entry.windowId, entry.appId, entry.title);
+        }
         std::cout << "[LCL Compositor] Mapped Window (ID: " << entry.windowId
                   << ") after first client buffer commit\n";
         return true;
@@ -150,8 +153,11 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             if (it->second.windowId > 0) {
                 m_windowManager.removeWindow(it->second.windowId);
             }
+            m_scenes.removeSurface(surfaceKey);
             m_surfaces.erase(it);
             changed = true;
+        } else {
+            m_scenes.markClosing(surfaceKey);
         }
     };
 
@@ -167,10 +173,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     if (beginClosingTransition(entry)) {
                         if (entry.windowId > 0) m_windowManager.removeWindow(entry.windowId);
                         surfacesToRemove.push_back(surfKey);
+                    } else {
+                        m_scenes.markClosing(surfKey);
                     }
                 }
             }
-            for (uint64_t key : surfacesToRemove) m_surfaces.erase(key);
+            for (uint64_t key : surfacesToRemove) {
+                m_scenes.removeSurface(key);
+                m_surfaces.erase(key);
+            }
             changed = true;
             continue;
         }
@@ -340,7 +351,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             // successfully mapped SHM buffer while retrying its first commit;
             // the surface must then become visible as soon as that buffer is
             // known to be valid.
-            if (entry.windowId == 0 && !mapSurface(entry)) {
+            if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) {
                 // The first visible commit must include a real shared buffer.
                 continue;
             }

@@ -2,6 +2,7 @@
 
 #include "core/compositor/surface_registry.hpp"
 #include "core/input/input_manager.hpp"
+#include "core/scene/scene_registry.hpp"
 #include "render/window_manager.hpp"
 
 namespace lcl::core {
@@ -9,8 +10,10 @@ namespace lcl::core {
 /** Routes physical input through the window manager and into the focused client surface. */
 class InputRouter {
 public:
-    InputRouter(render::WindowManager& windowManager, SurfaceRegistry& surfaces)
-        : m_windowManager(windowManager), m_surfaces(surfaces) {}
+    InputRouter(render::WindowManager& windowManager,
+                SurfaceRegistry& surfaces,
+                SceneRegistry& scenes)
+        : m_windowManager(windowManager), m_surfaces(surfaces), m_scenes(scenes) {}
 
     /**
      * Applies compositor interaction (hit test/focus/resize) then sends a
@@ -30,6 +33,7 @@ private:
 
     render::WindowManager& m_windowManager;
     SurfaceRegistry& m_surfaces;
+    SceneRegistry& m_scenes;
 };
 
 } // namespace lcl::core

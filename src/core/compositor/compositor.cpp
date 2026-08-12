@@ -70,16 +70,17 @@ bool Compositor::initialize() {
     // --- Window Manager Canvas ---
     m_windowManager.initialize(m_renderer.getWidth(), m_renderer.getHeight());
     m_protocolDispatcher = std::make_unique<ProtocolDispatcher>(
-        m_renderer, m_windowManager, m_surfaces);
+        m_renderer, m_windowManager, m_surfaces, m_sceneRegistry);
 
     // --- IPC (Unix Domain Socket, SO_PEERCRED auth, 0600 perms) ---
     m_ipcManager.initialize(kCompositorSocket);
 
     // --- Route input through the dedicated focus/hit-test bridge ---
-    m_inputRouter = std::make_unique<InputRouter>(m_windowManager, m_surfaces);
+    m_inputRouter = std::make_unique<InputRouter>(m_windowManager, m_surfaces, m_sceneRegistry);
     m_inputManager.setEventCallback([this](const InputEvent& event) {
         if (m_inputRouter && m_inputRouter->route(event)) {
             m_needsRedraw = true;
+            m_shellStateDirty = true;
         }
     });
 
@@ -117,7 +118,20 @@ void Compositor::processIPC() {
             m_inputRouter->syncWindowState();
         }
         m_needsRedraw = true;
+        m_shellStateDirty = true;
     }
+}
+
+void Compositor::synchronizeShellState() {
+    if (!m_shellStateDirty) return;
+    m_sceneRegistry.reconcileWindowState(m_windowManager);
+    for (const auto& change : m_sceneRegistry.takePendingChanges()) {
+        m_shellStateBroker.publish(change);
+    }
+    if (const auto focus = m_focusController.reconcile(m_sceneRegistry, m_windowManager)) {
+        m_shellStateBroker.publish(*focus);
+    }
+    m_shellStateDirty = false;
 }
 
 void Compositor::publishWindowListToShellClients() {
@@ -151,8 +165,10 @@ void Compositor::run() {
         processInput();
         if (m_windowManager.updateAnimations()) {
             m_needsRedraw = true;
+            m_shellStateDirty = true;
         }
         processIPC();
+        synchronizeShellState();
         if (m_frameScheduler.cursorBlinkDue()) {
             m_needsRedraw = true;
         }
@@ -254,8 +270,12 @@ void Compositor::renderFrame() {
         if (found != m_surfaces.end() && found->second.windowId > 0) {
             m_windowManager.removeWindow(found->second.windowId);
         }
+        m_sceneRegistry.removeSurface(surfaceKey);
         m_surfaces.erase(surfaceKey);
+        m_shellStateDirty = true;
     }
+
+    synchronizeShellState();
 
     m_windowManager.clearAllDirty();
     m_needsRedraw = hasActiveTransitions || !surfacesToRemove.empty();

@@ -97,6 +97,7 @@ void InputRouter::processCloseRequests() {
         });
         if (surfaceIt == m_surfaces.end()) {
             m_windowManager.removeWindow(windowId);
+            m_scenes.removeWindow(windowId);
             continue;
         }
 
@@ -113,7 +114,10 @@ void InputRouter::processCloseRequests() {
 
         if (!startClosingTransition(entry)) {
             m_windowManager.removeWindow(windowId);
+            m_scenes.removeSurface(surfaceIt->first);
             m_surfaces.erase(surfaceIt);
+        } else {
+            m_scenes.markClosing(surfaceIt->first);
         }
     }
 }
