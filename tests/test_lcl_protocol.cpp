@@ -74,6 +74,32 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     close(sv[1]);
 }
 
+TEST(LCLProtocolTest, ConfigureAndAttachRoundTripTheSameSerial) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+    LCLMsgConfigureBounds configure{};
+    configure.surfaceId = 4;
+    configure.configureSerial = 0x0102030405060708ull;
+    configure.width = 640;
+    configure.height = 480;
+    configure.bufferScale = 1.0f;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::ConfigureBounds;
+    header.payloadSize = sizeof(configure);
+    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &configure));
+
+    LCLHeader received{};
+    std::vector<uint8_t> payload;
+    int fd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sockets[1], received, payload, fd));
+    ASSERT_EQ(payload.size(), sizeof(LCLMsgConfigureBounds));
+    const auto* decoded = reinterpret_cast<const LCLMsgConfigureBounds*>(payload.data());
+    EXPECT_EQ(decoded->configureSerial, configure.configureSerial);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 namespace {
 
 void appendLe32(std::vector<uint8_t>& bytes, uint32_t value) {
@@ -243,6 +269,7 @@ TEST(LCLProtocolTest, FileDescriptorIsAcceptedOnlyForAttachBuffer) {
 
     LCLMsgAttachBuffer attach{};
     attach.surfaceId = 3;
+    attach.configureSerial = 7;
     attach.width = 16;
     attach.height = 16;
     attach.stride = 64;

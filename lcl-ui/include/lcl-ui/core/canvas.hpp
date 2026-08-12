@@ -14,6 +14,15 @@ struct Color {
     uint8_t a{0}; // Default completely transparent (unstyled baseline)
 };
 
+struct AffineTransform {
+    float a{1.0f};
+    float b{0.0f};
+    float c{0.0f};
+    float d{1.0f};
+    float tx{0.0f};
+    float ty{0.0f};
+};
+
 /** Selects the text face without exposing a renderer implementation to widgets. */
 enum class FontFamily : uint8_t {
     Interface,
@@ -34,6 +43,15 @@ public:
     virtual void beginFrame() = 0;
     virtual void endFrame() = 0;
     virtual uint32_t* rasterBuffer() = 0;
+
+    // Backend-neutral presentation-layer primitives. Default implementations
+    // preserve compatibility for minimal/test canvases that do not transform.
+    virtual void saveState() {}
+    virtual void restoreState() {}
+    virtual void clipRect(const Rect&) {}
+    virtual void concatTransform(const AffineTransform&) {}
+    virtual void beginLayer(float) {}
+    virtual void endLayer() {}
 
     virtual void drawRect(const Rect& rect, Color color) = 0;
     virtual void drawRoundedRect(const Rect& rect, float radius, Color color,

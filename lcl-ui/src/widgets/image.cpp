@@ -70,21 +70,25 @@ void Image::setOpacity(float opacity) {
 }
 
 void Image::draw(Canvas& canvas, const Rect& damageRect) {
-    if (!m_visible || !m_absoluteBounds.intersects(damageRect) || !m_sourceImage || !m_sourceImage->isValid()) {
+    if (!m_visible || !getPresentationBounds().intersects(damageRect) || !m_sourceImage || !m_sourceImage->isValid()) {
         return;
     }
+
+    beginPresentation(canvas);
 
     const int boxX = static_cast<int>(std::round(m_absoluteBounds.x));
     const int boxY = static_cast<int>(std::round(m_absoluteBounds.y));
     const int boxW = std::max(0, static_cast<int>(std::round(m_absoluteBounds.width)));
     const int boxH = std::max(0, static_cast<int>(std::round(m_absoluteBounds.height)));
     if (boxW <= 0 || boxH <= 0) {
+        endPresentation(canvas);
         return;
     }
 
     const int srcW = static_cast<int>(m_sourceImage->width);
     const int srcH = static_cast<int>(m_sourceImage->height);
     if (srcW <= 0 || srcH <= 0) {
+        endPresentation(canvas);
         return;
     }
 
@@ -112,7 +116,8 @@ void Image::draw(Canvas& canvas, const Rect& damageRect) {
     canvas.drawBuffer(drawX, drawY, srcW, srcH, m_sourceImage->pixels.data(), srcW,
                       m_opacity, m_cornerRadius, m_cornerRoundness, false, drawW, drawH);
 
-    Widget::draw(canvas, damageRect);
+    drawChildren(canvas, damageRect);
+    endPresentation(canvas);
 }
 
 } // namespace lcl::ui

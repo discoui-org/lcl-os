@@ -167,6 +167,124 @@ TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     EXPECT_EQ(recorded->rects.front().height, 48.0f);
 }
 
+TEST(LclUiTest, ImplicitTransactionInterpolatesTransformOpacityAndReflowLayout) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 320, 200, "Motion transaction");
+    auto root = std::make_unique<Container>();
+    root->setWidth(320.0f);
+    root->setHeight(200.0f);
+    auto child = std::make_unique<Button>("Animated");
+    Button* pointer = child.get();
+    child->setWidth(100.0f);
+    child->setHeight(40.0f);
+    root->addChild(std::move(child));
+    app.setRootWidget(std::move(root));
+    ASSERT_TRUE(app.renderFrame());
+
+    app.animate(Motion::tween(1.0f, Easing::linear()), {LayoutMode::Reflow}, [&] {
+        pointer->setWidth(200.0f);
+        pointer->setOpacity(0.0f);
+        pointer->setTranslationX(20.0f);
+    });
+    EXPECT_TRUE(app.advanceAnimations(0.5f));
+    EXPECT_NEAR(pointer->getAbsoluteBounds().width, 150.0f, 0.01f);
+    EXPECT_NEAR(pointer->getPresentationState().opacity, 0.5f, 0.01f);
+    EXPECT_NEAR(pointer->getPresentationState().translationX, 10.0f, 0.01f);
+    EXPECT_EQ(app.getDispatcher().hitTest(app.getRootWidget(), 140.0f, 20.0f), pointer);
+}
+
+TEST(LclUiTest, MorphUsesFinalLayoutAndFreezesWindowInputUntilSettled) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 320, 200, "Morph transaction");
+    auto root = std::make_unique<Container>();
+    root->setWidth(320.0f);
+    root->setHeight(200.0f);
+    auto child = std::make_unique<Button>("Morph");
+    Button* pointer = child.get();
+    child->setWidth(100.0f);
+    child->setHeight(40.0f);
+    root->addChild(std::move(child));
+    app.setRootWidget(std::move(root));
+    ASSERT_TRUE(app.renderFrame());
+
+    app.animate(Motion::spring(0.32f, 0.06f), {LayoutMode::Morph}, [&] {
+        pointer->setWidth(240.0f);
+    });
+    EXPECT_NEAR(pointer->getAbsoluteBounds().width, 240.0f, 0.01f);
+    EXPECT_FALSE(app.sendPointerDown(20.0f, 20.0f));
+    for (int index = 0; index < 240 && app.hasActiveAnimations(); ++index)
+        app.advanceAnimations(1.0f / 240.0f);
+    EXPECT_FALSE(app.hasActiveAnimations());
+    EXPECT_TRUE(app.sendPointerDown(20.0f, 20.0f));
+}
+
+TEST(LclUiTest, ExplicitKeyframesArePresentationOnlyUntilCommittedAndSurviveCleanup) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 160, 100, "Keyframes");
+    auto root = std::make_unique<Container>();
+    root->setWidth(160.0f);
+    root->setHeight(100.0f);
+    Container* pointer = root.get();
+    app.setRootWidget(std::move(root));
+    ASSERT_TRUE(app.renderFrame());
+
+    AnimationOptions options;
+    options.durationSec = 1.0f;
+    options.fill = FillMode::Forwards;
+    auto handle = pointer->animate(AnimatableProperty::Opacity,
+        {{0.0f, 1.0f}, {1.0f, 0.0f}}, options);
+    app.advanceAnimations(0.5f);
+    EXPECT_NEAR(pointer->getPresentationState().opacity, 0.5f, 0.01f);
+    EXPECT_FLOAT_EQ(pointer->getOpacity(), 1.0f);
+    handle.finish();
+    handle.commitFinalStyles();
+    EXPECT_FLOAT_EQ(pointer->getOpacity(), 0.0f);
+
+    auto replacement = std::make_unique<Container>();
+    replacement->setWidth(160.0f);
+    replacement->setHeight(100.0f);
+    app.setRootWidget(std::move(replacement));
+    EXPECT_NO_THROW(app.advanceAnimations(0.1f));
+}
+
+TEST(LclUiTest, ButtonInteractionMotionComposesHoverPressFocusDisabledAndThemeOverride) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 240, 120, "Interaction motion");
+    InteractionMotionTheme theme;
+    theme.hoverScale = 1.10f;
+    app.setInteractionMotionTheme(theme);
+    auto root = std::make_unique<Container>();
+    root->setWidth(240.0f); root->setHeight(120.0f);
+    auto button = std::make_unique<Button>("Motion");
+    Button* pointer = button.get();
+    button->setWidth(100.0f); button->setHeight(40.0f);
+    root->addChild(std::move(button));
+    app.setRootWidget(std::move(root));
+    ASSERT_TRUE(app.renderFrame());
+
+    EXPECT_FALSE(app.sendPointerMove(20.0f, 20.0f));
+    for (int index = 0; index < 100; ++index) app.advanceAnimations(1.0f / 240.0f);
+    EXPECT_EQ(pointer->getState(), ButtonState::Hover);
+    EXPECT_NEAR(pointer->getPresentationState().scaleX, 1.10f, 0.01f);
+
+    EXPECT_TRUE(app.sendPointerDown(20.0f, 20.0f));
+    EXPECT_EQ(pointer->getState(), ButtonState::Active);
+    EXPECT_TRUE(app.sendPointerUp(20.0f, 20.0f));
+    EXPECT_EQ(pointer->getState(), ButtonState::Hover);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), pointer);
+
+    pointer->setEnabled(false);
+    EXPECT_EQ(pointer->getState(), ButtonState::Disabled);
+    pointer->setEnabled(true);
+    EXPECT_EQ(pointer->getState(), ButtonState::Focused);
+
+    theme.enabled = false;
+    pointer->setInteractionMotionTheme(theme);
+    pointer->setEnabled(false);
+    pointer->setEnabled(true);
+    EXPECT_FLOAT_EQ(pointer->getPresentationState().scaleX, 1.0f);
+}
+
 TEST(LclUiTest, WindowAppRendersReplacementRootAfterInitialFrame) {
     auto canvas = std::make_unique<RecordingCanvas>();
     RecordingCanvas* recorded = canvas.get();

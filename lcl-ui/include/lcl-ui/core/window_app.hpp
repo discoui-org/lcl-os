@@ -4,6 +4,7 @@
 #include "lcl-ui/core/canvas.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/event_dispatcher.hpp"
+#include "lcl-ui/core/motion.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include <memory>
@@ -46,6 +47,22 @@ public:
     EventDispatcher& getDispatcher() { return m_dispatcher; }
     RenderPass& getRenderPass() { return m_renderPass; }
     Canvas& getCanvas() { return *m_canvas; }
+    MotionCoordinator& getMotionCoordinator() { return m_motionCoordinator; }
+    void setInteractionMotionTheme(InteractionMotionTheme theme) {
+        m_motionCoordinator.setInteractionTheme(std::move(theme));
+    }
+
+    /** Capture model mutations and animate their presentation through one transaction. */
+    void animate(const lcl::motion::Motion& motion,
+                 AnimationTransactionOptions options,
+                 const std::function<void()>& changes);
+    void animate(const lcl::motion::Motion& motion,
+                 const std::function<void()>& changes) {
+        animate(motion, {}, changes);
+    }
+    /** Deterministic clock hook used by embedders and tests. */
+    bool advanceAnimations(float dtSec);
+    bool hasActiveAnimations() const noexcept;
 
     // Direct Window Raw Event Callbacks (bypasses/intercepts Widget tree if handled)
     void setOnRawKeyEvent(RawKeyCallback callback) { m_onRawKey = callback; }
@@ -137,6 +154,7 @@ private:
     std::unique_ptr<Widget> m_rootWidget;
     RenderPass m_renderPass;
     EventDispatcher m_dispatcher;
+    MotionCoordinator m_motionCoordinator;
     std::unique_ptr<Canvas> m_canvas;
 
     RawKeyCallback m_onRawKey{nullptr};
@@ -158,6 +176,8 @@ private:
     std::string m_appId;
     lcl::protocol::LCLSystemSurfaceKind m_systemSurfaceKind{lcl::protocol::LCLSystemSurfaceKind::None};
     uint32_t m_nextRequestId{1};
+    uint64_t m_configureSerial{1};
+    uint64_t m_pendingConfigureSerial{1};
     bool m_inputEnabled{true};
     int32_t m_initialX{80};
     int32_t m_initialY{60};
@@ -172,6 +192,8 @@ private:
     bool m_hasPendingResize{false};
     std::chrono::steady_clock::time_point m_lastResizeApply{};
     bool m_running{false};
+    bool m_morphInputFrozen{false};
+    std::chrono::steady_clock::time_point m_lastAnimationTick{};
 
     bool m_csdTitlebarEnabled{false};
     float m_csdTitlebarHeight{32.0f};

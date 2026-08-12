@@ -1,67 +1,32 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
-#include <functional>
+#include <algorithm>
 #include <limits>
-#include <optional>
-#include <unordered_map>
-#include <vector>
+
+// Compatibility facade for the original low-level lcl-ui channel API. New
+// code should use lcl-motion directly; existing callers keep omega/zeta specs.
+#include "lcl-motion/motion.hpp"
 
 namespace lcl::ui {
 
-enum class EasingName {
-    Linear,
-    EaseInSine,
-    EaseOutSine,
-    EaseInOutSine,
-    EaseInQuad,
-    EaseOutQuad,
-    EaseInOutQuad,
-    EaseInCubic,
-    EaseOutCubic,
-    EaseInOutCubic,
-    EaseInQuart,
-    EaseOutQuart,
-    EaseInOutQuart,
-    EaseInQuint,
-    EaseOutQuint,
-    EaseInOutQuint,
-    EaseInExpo,
-    EaseOutExpo,
-    EaseInOutExpo,
-    EaseInCirc,
-    EaseOutCirc,
-    EaseInOutCirc,
-    EaseInBack,
-    EaseOutBack,
-    EaseInOutBack,
-    EaseInElastic,
-    EaseOutElastic,
-    EaseInOutElastic,
-    EaseInBounce,
-    EaseOutBounce,
-    EaseInOutBounce,
-};
-
-float evaluateEasing(EasingName easing, float x);
-
-enum class MotionMode {
-    Spring,
-    Tween,
-};
-
-enum class DampingMode {
-    UnderDamped,
-    Critical,
-    OverDamped,
-};
-
-enum class InterruptBehavior {
-    PreserveVelocityAndRetarget,
-    PreserveVelocityAndBlendToNewSpec,
-    HardSnap,
-};
+using EasingName = lcl::motion::EasingName;
+using Easing = lcl::motion::Easing;
+using StepPosition = lcl::motion::StepPosition;
+using MotionMode = lcl::motion::MotionMode;
+using DampingMode = lcl::motion::DampingMode;
+using InterruptBehavior = lcl::motion::InterruptBehavior;
+using Motion = lcl::motion::Motion;
+using ChannelKey = lcl::motion::ChannelKey;
+using ChannelKeyHasher = lcl::motion::ChannelKeyHasher;
+using ChannelId = lcl::motion::ChannelId;
+using AnimatedSample = lcl::motion::AnimatedSample;
+using Keyframe = lcl::motion::Keyframe;
+using AnimationOptions = lcl::motion::AnimationOptions;
+using AnimationHandle = lcl::motion::AnimationHandle;
+using Timeline = lcl::motion::Timeline;
+using PlaybackDirection = lcl::motion::PlaybackDirection;
+using FillMode = lcl::motion::FillMode;
+using PlayState = lcl::motion::PlayState;
 
 struct SpringParams {
     float mass{1.0f};
@@ -83,79 +48,52 @@ struct MotionSpec {
     SpringParams spring{};
     TweenParams tween{};
     InterruptBehavior interruptBehavior{InterruptBehavior::PreserveVelocityAndRetarget};
-};
 
-struct ChannelKey {
-    uint64_t objectId{0};
-    uint32_t propertyId{0};
-
-    bool operator==(const ChannelKey& other) const {
-        return objectId == other.objectId && propertyId == other.propertyId;
+    lcl::motion::Motion toMotion() const {
+        lcl::motion::Motion result;
+        result.mode = mode;
+        result.interruptBehavior = interruptBehavior;
+        result.springParams.mass = std::max(0.0001f, spring.mass);
+        result.springParams.stiffness = result.springParams.mass * spring.omega * spring.omega;
+        result.springParams.damping = 2.0f * result.springParams.mass * spring.zeta * spring.omega;
+        result.springParams.maxVelocity = spring.maxVelocity;
+        result.springParams.settlePosEpsilon = spring.settlePosEpsilon;
+        result.springParams.settleVelEpsilon = spring.settleVelEpsilon;
+        result.tweenParams.durationSec = tween.durationSec;
+        result.tweenParams.delaySec = tween.delaySec;
+        result.tweenParams.easing = Easing(tween.easing);
+        return result;
     }
 };
 
-struct ChannelKeyHasher {
-    size_t operator()(const ChannelKey& key) const noexcept {
-        const size_t h1 = std::hash<uint64_t>{}(key.objectId);
-        const size_t h2 = std::hash<uint32_t>{}(key.propertyId);
-        return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6) + (h1 >> 2));
-    }
-};
-
-using ChannelId = uint64_t;
-
-struct AnimatedSample {
-    float value{0.0f};
-    float velocity{0.0f};
-    bool active{false};
-};
-
-class AnimationEngine {
+class AnimationEngine : public lcl::motion::AnimationEngine {
 public:
-    using OnComplete = std::function<void(ChannelId)>;
+    using lcl::motion::AnimationEngine::animateTo;
+    using lcl::motion::AnimationEngine::setSpec;
 
-    ChannelId createChannel(const ChannelKey& key, float initialValue);
-    ChannelId ensureChannel(const ChannelKey& key, float initialValue);
-
-    bool animateTo(ChannelId channelId, float target, const MotionSpec& spec);
-    bool retarget(ChannelId channelId, float target);
-    bool setSpec(ChannelId channelId, const MotionSpec& spec, bool keepVelocity = true);
-    bool stop(ChannelId channelId, bool snapToTarget = true);
-
-    AnimatedSample sample(ChannelId channelId) const;
-    bool isActive(ChannelId channelId) const;
-    std::optional<ChannelId> findChannel(const ChannelKey& key) const;
-    const ChannelKey* getChannelKey(ChannelId channelId) const;
-
-    void setOnComplete(ChannelId channelId, OnComplete callback);
-
-    std::vector<ChannelId> tick(float dtSec);
-
-    size_t clearObjectChannels(uint64_t objectId);
-    void clearAll();
-
-private:
-    struct ChannelState {
-        ChannelKey key{};
-        float current{0.0f};
-        float target{0.0f};
-        float velocity{0.0f};
-        float startValue{0.0f};
-        float elapsedSec{0.0f};
-        bool active{false};
-        MotionSpec spec{};
-        OnComplete onComplete{};
-    };
-
-    bool applySpringStep(ChannelState& ch, float dtSec);
-    bool applyTweenStep(ChannelState& ch, float dtSec);
-
-    ChannelId m_nextChannelId{1};
-    std::unordered_map<ChannelId, ChannelState> m_channels;
-    std::unordered_map<ChannelKey, ChannelId, ChannelKeyHasher> m_index;
+    bool animateTo(ChannelId channel, float target, const MotionSpec& spec) {
+        return lcl::motion::AnimationEngine::animateTo(channel, target, spec.toMotion());
+    }
+    bool setSpec(ChannelId channel, const MotionSpec& spec, bool keepVelocity = true) {
+        return lcl::motion::AnimationEngine::setSpec(channel, spec.toMotion(), keepVelocity);
+    }
 };
 
-SpringParams springFromSettling(float settleSec, float zeta = 1.0f, float mass = 1.0f);
-float estimateSettlingTime(const SpringParams& spring);
+inline float evaluateEasing(EasingName easing, float progress) {
+    return lcl::motion::evaluateEasing(easing, progress);
+}
+
+inline SpringParams springFromSettling(float settleSec, float zeta = 1.0f,
+                                       float mass = 1.0f) {
+    SpringParams result;
+    result.mass = std::max(0.0001f, mass);
+    result.zeta = std::max(0.01f, zeta);
+    result.omega = 6.0f / (result.zeta * std::max(0.01f, settleSec));
+    return result;
+}
+
+inline float estimateSettlingTime(const SpringParams& spring) {
+    return 6.0f / std::max(0.0001f, spring.zeta * spring.omega);
+}
 
 } // namespace lcl::ui

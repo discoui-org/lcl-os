@@ -332,6 +332,10 @@ int main() {
         menu->setInputEnabled(false);
         menu->setInitialBounds(0, 0, width, kMenuBarHeight);
         menu->setRootWidget(makeMenuRoot(width, clock));
+        menu->setOnResize([&](uint32_t resizedWidth, uint32_t) {
+            width = resizedWidth;
+            menu->setRootWidget(makeMenuRoot(resizedWidth, clock));
+        });
         menu->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 
         dock = std::make_unique<lcl::ui::WindowApp>(
@@ -343,6 +347,12 @@ int main() {
         auto dockRoot = makeDockView(dockView, width, kDockHeight);
         updateDockView(dockView, dockState.items(), catalog);
         dock->setRootWidget(std::move(dockRoot));
+        dock->setOnResize([&](uint32_t resizedWidth, uint32_t resizedHeight) {
+            width = resizedWidth;
+            auto resizedRoot = makeDockView(dockView, resizedWidth, resizedHeight);
+            updateDockView(dockView, dockState.items(), catalog);
+            dock->setRootWidget(std::move(resizedRoot));
+        });
         dock->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
         dock->setWindowCornerRadius(26.0f);
 
@@ -353,25 +363,12 @@ int main() {
     };
     if (!createPanels()) return 1;
 
-    uint32_t requestedWidth = width, requestedHeight = height;
-    wallpaper->setOnIpcMessage([&](const lcl::protocol::LCLHeader& message, const std::vector<uint8_t>& data) {
-        if (message.opcode != lcl::protocol::LCLOpcode::ConfigureBounds ||
-            data.size() != sizeof(lcl::protocol::LCLMsgConfigureBounds)) return;
-        const auto* cfg = reinterpret_cast<const lcl::protocol::LCLMsgConfigureBounds*>(data.data());
-        if (cfg->surfaceId == 1 && cfg->width > 0 && cfg->height > 0) { requestedWidth = cfg->width; requestedHeight = cfg->height; }
-    });
-
     std::string lastTime;
     auto nextShellReconnect = std::chrono::steady_clock::now();
     while (true) {
         const std::string now = timeText();
         if (clock && now != lastTime) { lastTime = now; clock->setText(now); }
         wallpaper->tick();
-        if (requestedWidth != width || requestedHeight != height) {
-            width = requestedWidth; height = requestedHeight;
-            if (!createPanels()) return 1;
-            continue;
-        }
         if (!shellState.isConnected() && std::chrono::steady_clock::now() >= nextShellReconnect) {
             shellState.connect();
             nextShellReconnect = std::chrono::steady_clock::now() + std::chrono::seconds(1);

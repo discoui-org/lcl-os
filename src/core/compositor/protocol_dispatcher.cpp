@@ -1,4 +1,5 @@
 #include "core/compositor/protocol_dispatcher.hpp"
+#include "lcl-motion/motion.hpp"
 #include "core/display/display_scale.hpp"
 #include "theme/palette.hpp"
 
@@ -140,7 +141,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         } else {
             entry.transitionPhase = SurfaceEntry::TransitionPhase::Entering;
             entry.transitionElapsedSec = 0.0f;
-            entry.transitionDurationSec = 0.20f;
+            entry.transitionDurationSec = lcl::motion::tokens::windowOpen().tweenParams.durationSec;
             entry.transitionOpacity = 0.0f;
             entry.transitionScale = 0.96f;
         }
@@ -154,10 +155,16 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
     };
     auto beginClosingTransition = [&](SurfaceEntry& entry) {
         entry.ignoreBufferCommits = true;
+        // System surfaces opt out of presentation transitions in both
+        // directions. This keeps wallpaper/panels input-safe during teardown
+        // just as suppressInitialTransition keeps their startup direct.
+        if (entry.suppressInitialTransition) {
+            return true;
+        }
         if (entry.windowId > 0 && entry.pixels && entry.width > 0 && entry.height > 0) {
             entry.transitionPhase = SurfaceEntry::TransitionPhase::Closing;
             entry.transitionElapsedSec = 0.0f;
-            entry.transitionDurationSec = 0.14f;
+            entry.transitionDurationSec = lcl::motion::tokens::windowClose().tweenParams.durationSec;
             entry.transitionOpacity = 1.0f;
             entry.transitionScale = 1.0f;
             entry.pendingDestroy = false;
@@ -202,8 +209,11 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             m_shellSubscriptions.erase(msg.clientFd);
             std::vector<uint64_t> surfacesToRemove;
             for (auto& [surfKey, entry] : m_surfaces) {
-                if (entry.clientFd == msg.clientFd ||
-                    (msg.pid > 0 && (surfKey >> 32) == static_cast<uint64_t>(msg.pid))) {
+                // One process can own wallpaper, menu and Dock over separate
+                // sockets. Closing one WindowApp must not tear down every
+                // surface sharing that PID; process exit closes each socket
+                // and therefore still cleans all of them deterministically.
+                if (SurfaceRegistry::isOwnedByClientConnection(entry, msg.clientFd)) {
                     entry.clientFd = -1;
                     if (beginClosingTransition(entry)) {
                         if (entry.windowId > 0) m_windowManager.removeWindow(entry.windowId);
@@ -322,12 +332,21 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 
             protocol::LCLMsgConfigureBounds cfgMsg{};
             cfgMsg.surfaceId = surfId;
+            auto& configuredEntry = m_surfaces[surfaceKey];
+            cfgMsg.configureSerial = configuredEntry.nextConfigureSerial++;
+            configuredEntry.pendingConfigureSerial = cfgMsg.configureSerial;
             cfgMsg.x = logicalToPhysical(winX, 1.0f / bufferScale);
             cfgMsg.y = logicalToPhysical(winY, 1.0f / bufferScale);
             cfgMsg.width = physicalToLogical(static_cast<uint32_t>(winW), bufferScale);
             cfgMsg.height = physicalToLogical(static_cast<uint32_t>(winH), bufferScale);
             cfgMsg.bufferScale = bufferScale;
             cfgMsg.isFocused = 1;
+
+            configuredEntry.configuredX = winX;
+            configuredEntry.configuredY = winY;
+            configuredEntry.configuredWidth = static_cast<uint32_t>(winW);
+            configuredEntry.configuredHeight = static_cast<uint32_t>(winH);
+            configuredEntry.configuredFocused = cfgMsg.isFocused;
 
             protocol::sendMsgWithFd(msg.clientFd, header, &cfgMsg);
 
@@ -363,23 +382,48 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 continue;
             }
 
+            const auto* bufferMessage = reinterpret_cast<const lcl::protocol::LCLMsgAttachBuffer*>(msg.payload.data());
+            if (!SurfaceRegistry::acceptsBufferCommit(
+                    entry, bufferMessage->configureSerial)) {
+                if (msg.passedFd >= 0) close(msg.passedFd);
+                std::cerr << "[LCL Compositor] Rejected stale buffer serial "
+                          << bufferMessage->configureSerial << " (expected "
+                          << entry.pendingConfigureSerial << ") for Surface " << surfId
+                          << "; buffer=" << w << 'x' << h
+                          << ", configured=" << entry.configuredWidth << 'x'
+                          << entry.configuredHeight << "\n";
+                continue;
+            }
+
             entry.clientFd = msg.clientFd;
 
             int fd = msg.passedFd;
+            bool bufferCommitAccepted = false;
             if (fd >= 0) {
                 size_t shmSize = static_cast<size_t>(stride) * h;
                 if (entry.pixels && entry.shmSize == shmSize && entry.width == w && entry.height == h) {
                     // Buffer is ALREADY mapped in compositor address space with identical size & dimensions!
                     // Do NOT unmap/remap memory on every frame to avoid rendering race conditions.
                     close(fd);
+                    bufferCommitAccepted = true;
                 } else {
                     void* pixels = mmap(nullptr, shmSize, PROT_READ, MAP_SHARED, fd, 0);
                     if (pixels != MAP_FAILED) {
-                        if (entry.pixels && entry.shmSize > 0) {
-                            munmap(entry.pixels, entry.shmSize);
-                        }
-                        if (entry.shmFd >= 0 && entry.shmFd != fd) {
-                            close(entry.shmFd);
+                        if (entry.resizeTransitionPhase == SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer &&
+                            entry.pixels && entry.shmSize > 0) {
+                            SurfaceRegistry::releasePreviousBuffer(entry);
+                            entry.previousPixels = entry.pixels;
+                            entry.previousShmSize = entry.shmSize;
+                            entry.previousShmFd = entry.shmFd;
+                            entry.previousWidth = entry.width;
+                            entry.previousHeight = entry.height;
+                            entry.previousStride = entry.stride;
+                            entry.pixels = nullptr;
+                            entry.shmSize = 0;
+                            entry.shmFd = -1;
+                        } else {
+                            if (entry.pixels && entry.shmSize > 0) munmap(entry.pixels, entry.shmSize);
+                            if (entry.shmFd >= 0 && entry.shmFd != fd) close(entry.shmFd);
                         }
                         entry.pixels  = pixels;
                         entry.shmSize = shmSize;
@@ -387,6 +431,12 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                         entry.width   = w;
                         entry.height  = h;
                         entry.stride  = stride;
+                        bufferCommitAccepted = true;
+                        if (entry.resizeTransitionPhase == SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer) {
+                            entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::Crossfading;
+                            entry.resizeCrossfadeElapsedSec = 0.0f;
+                            entry.resizeCrossfadeProgress = 0.0f;
+                        }
                     } else {
                         std::cerr << "[LCL Compositor ERROR] mmap failed for memfd " << fd
                                   << ": " << strerror(errno) << "\n";
@@ -394,10 +444,24 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     }
                 }
             } else {
+                // A configure that resolves to the currently mapped size (for
+                // example Terminal cell-grid snapping) needs no replacement
+                // memfd. It still acknowledges the serial and releases
+                // configure backpressure.
+                if (!entry.pixels || entry.width != w || entry.height != h || entry.stride != stride) {
+                    std::cerr << "[LCL Compositor] Rejected buffer commit without matching memfd for Surface "
+                              << surfId << "; buffer=" << w << 'x' << h
+                              << ", mapped=" << entry.width << 'x' << entry.height << "\n";
+                    continue;
+                }
                 entry.width  = w;
                 entry.height = h;
                 entry.stride = stride;
+                bufferCommitAccepted = true;
             }
+
+            if (!bufferCommitAccepted) continue;
+            entry.acceptedConfigureSerial = bufferMessage->configureSerial;
 
             // Mapping is intentionally evaluated after every commit rather
             // than only in the SCM_RIGHTS branch.  A client can retain a
@@ -423,7 +487,19 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             // Notify WindowManager of client surface buffer commit
             int frameW = static_cast<int>(w);
             int frameH = static_cast<int>(h) + titleOffset;
-            m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH);
+            bool preserveNewerTarget = false;
+            const auto configuredWindow = std::find_if(
+                m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
+                [&entry](const auto& window) { return window.id == entry.windowId; });
+            if (configuredWindow != m_windowManager.getWindows().end()) {
+                const int configuredFrameHeight =
+                    static_cast<int>(entry.configuredHeight) + titleOffset;
+                preserveNewerTarget =
+                    configuredWindow->pendingWidth != static_cast<int>(entry.configuredWidth) ||
+                    configuredWindow->pendingHeight != configuredFrameHeight;
+            }
+            m_windowManager.commitSurfaceGeometry(
+                entry.windowId, frameW, frameH, preserveNewerTarget);
             changed = true;
 
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetDecorationMode) {
@@ -461,6 +537,34 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
 
             const uint32_t windowId = surfaceIt->second.windowId;
+            const auto currentWindow = std::find_if(
+                m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
+                [windowId](const auto& window) { return window.id == windowId; });
+            const bool hasCurrentWindow = currentWindow != m_windowManager.getWindows().end();
+            const int rollbackX = hasCurrentWindow ? currentWindow->x : 0;
+            const int rollbackY = hasCurrentWindow ? currentWindow->y : 0;
+            const int rollbackWidth = hasCurrentWindow ? currentWindow->width : 0;
+            const int rollbackHeight = hasCurrentWindow ? currentWindow->height : 0;
+            const bool rollbackWasMaximized = hasCurrentWindow && currentWindow->isMaximized;
+            const bool rollbackWasMinimized = hasCurrentWindow && currentWindow->isMinimized;
+            const auto beginResizeTransition = [&] {
+                if (!hasCurrentWindow) return;
+                auto& entry = surfaceIt->second;
+                if (!entry.resizeInputFrozen) {
+                    entry.rollbackX = rollbackX;
+                    entry.rollbackY = rollbackY;
+                    entry.rollbackWidth = rollbackWidth;
+                    entry.rollbackHeight = rollbackHeight;
+                    entry.rollbackWasMaximized = rollbackWasMaximized;
+                    entry.rollbackWasMinimized = rollbackWasMinimized;
+                }
+                entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
+                entry.resizeDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
+                entry.resizeCrossfadeProgress = 0.0f;
+                entry.resizeInputFrozen = true;
+                entry.resizeBufferReady = false;
+                entry.rollbackRequested = false;
+            };
             switch (request->action) {
                 case lcl::protocol::LCLWindowAction::BeginDrag:
                     changed = m_windowManager.beginWindowDrag(
@@ -469,16 +573,34 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                         logicalToPhysical(static_cast<int>(std::lround(request->localY)), surfaceIt->second.bufferScale)) || changed;
                     break;
                 case lcl::protocol::LCLWindowAction::Minimize:
-                    changed = m_windowManager.minimizeWindow(windowId) || changed;
+                    if (windowId != 0 && surfaceIt->second.transitionPhase == SurfaceEntry::TransitionPhase::None) {
+                        surfaceIt->second.transitionPhase = SurfaceEntry::TransitionPhase::Minimizing;
+                        surfaceIt->second.transitionElapsedSec = 0.0f;
+                        surfaceIt->second.transitionDurationSec = 0.18f;
+                        surfaceIt->second.transitionOpacity = 1.0f;
+                        surfaceIt->second.transitionScale = 1.0f;
+                        surfaceIt->second.resizeInputFrozen = true;
+                        changed = true;
+                    }
                     break;
                 case lcl::protocol::LCLWindowAction::Maximize:
-                    changed = m_windowManager.maximizeWindow(windowId) || changed;
+                    if (m_windowManager.maximizeWindow(windowId)) { beginResizeTransition(); changed = true; }
                     break;
                 case lcl::protocol::LCLWindowAction::Restore:
-                    changed = m_windowManager.restoreWindow(windowId) || changed;
+                    if (hasCurrentWindow && currentWindow->isMinimized) {
+                        if (m_windowManager.restoreWindow(windowId)) {
+                            surfaceIt->second.transitionPhase = SurfaceEntry::TransitionPhase::Restoring;
+                            surfaceIt->second.transitionElapsedSec = 0.0f;
+                            surfaceIt->second.transitionDurationSec = 0.22f;
+                            surfaceIt->second.transitionOpacity = 0.0f;
+                            surfaceIt->second.transitionScale = 0.92f;
+                            surfaceIt->second.resizeInputFrozen = true;
+                            changed = true;
+                        }
+                    } else if (m_windowManager.restoreWindow(windowId)) { beginResizeTransition(); changed = true; }
                     break;
                 case lcl::protocol::LCLWindowAction::ToggleMaximize:
-                    changed = m_windowManager.toggleMaximizeWindow(windowId) || changed;
+                    if (m_windowManager.toggleMaximizeWindow(windowId)) { beginResizeTransition(); changed = true; }
                     break;
                 case lcl::protocol::LCLWindowAction::Close:
                     requestSurfaceClose(surfaceKey, request->surfaceId);

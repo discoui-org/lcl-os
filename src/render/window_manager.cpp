@@ -1,7 +1,6 @@
 #include "render/window_manager.hpp"
 #include "core/display/display_scale.hpp"
 #include "theme/palette.hpp"
-#include "lcl-ui/widgets/window_chrome.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cmath>
@@ -60,6 +59,11 @@ uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int
     win.height = height;
     win.pendingWidth = width;
     win.pendingHeight = height;
+    win.presentationX = static_cast<float>(x);
+    win.presentationY = static_cast<float>(clampedY);
+    win.presentationWidth = static_cast<float>(width);
+    win.presentationHeight = static_cast<float>(height);
+    win.presentationInitialized = true;
     win.headerColor = headerColor;
     win.isFocused = focus;
     win.markDirty();
@@ -79,6 +83,7 @@ bool WindowManager::removeWindow(uint32_t windowId) {
     if (it != m_windows.end()) {
         std::cout << "[LCL WindowManager] Removing window ID: " << windowId << " ('" << it->title << "').\n";
         m_windows.erase(it);
+        m_motionEngine.clearObjectChannels(windowId);
 
         if (!m_windows.empty()) {
             for (auto revIt = m_windows.rbegin(); revIt != m_windows.rend(); ++revIt) {
@@ -119,25 +124,22 @@ namespace {
         if (win.decorationMode != DecorationMode::SSD) return -1;
 
         const float scale = core::DisplayScale::factor();
-        const lcl::ui::chrome::WindowChromeStyle style;
         const float cornerRadius = win.cornerRadiusPx >= 0.0f
-            ? win.cornerRadiusPx / scale
-            : 20.0f;
-        const auto layout = lcl::ui::chrome::calculateWindowTitlebarLayout(
-            static_cast<float>(win.width) / scale,
-            static_cast<float>(core::DisplayScale::kTitleBarHeight),
-            cornerRadius,
-            static_cast<float>(core::DisplayScale::kBaseFontPx),
-            style);
-
-        const int controlTop = win.y + static_cast<int>(std::lround(layout.controlTop * scale));
-        const int controlSize = std::max(1, static_cast<int>(std::lround(style.controlSize * scale)));
+            ? win.cornerRadiusPx
+            : 20.0f * scale;
+        const float controlLeftInset = std::max({8.0f * scale,
+                                                 cornerRadius - 8.0f * scale,
+                                                 4.0f * scale});
+        const float controlSizeF = 16.0f * scale;
+        const float controlGap = 6.0f * scale;
+        const int controlTop = win.y + static_cast<int>(std::lround(controlLeftInset));
+        const int controlSize = std::max(1, static_cast<int>(std::lround(controlSizeF)));
         if (mouseY < controlTop || mouseY > controlTop + controlSize) return -1;
 
         for (int index = 0; index < 3; ++index) {
-            const float left = layout.controlLeft +
-                static_cast<float>(index) * (style.controlSize + style.controlGap);
-            const int controlLeft = win.x + static_cast<int>(std::lround(left * scale));
+            const float left = controlLeftInset +
+                static_cast<float>(index) * (controlSizeF + controlGap);
+            const int controlLeft = win.x + static_cast<int>(std::lround(left));
             if (mouseX >= controlLeft && mouseX <= controlLeft + controlSize) {
                 return index;
             }
@@ -288,6 +290,8 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                 if (newX != win.x || newY != win.y) {
                     win.x = newX;
                     win.y = newY;
+                    win.presentationX = static_cast<float>(newX);
+                    win.presentationY = static_cast<float>(newY);
                     win.pendingX = newX;
                     win.pendingY = newY;
                     win.markDirty();
@@ -300,11 +304,23 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
             // Strict Top-to-Bottom Z-Order Hit-Testing Bug Fix:
             // Find top-most interactable window under cursor FIRST without mutating array structure mid-loop!
             uint32_t targetWinId = 0;
+            bool blockedByTransition = false;
             const int border = core::DisplayScale::px(8);
 
             for (int i = static_cast<int>(m_windows.size()) - 1; i >= 0; --i) {
                 const auto& win = m_windows[i];
-                if (win.isUnfocusable || win.isMinimized || win.layer == protocol::LCLWindowLayer::Bottom) {
+                if (win.geometryTransitionActive) {
+                    if (m_mouseX >= win.presentationX &&
+                        m_mouseX < win.presentationX + win.presentationWidth &&
+                        m_mouseY >= win.presentationY &&
+                        m_mouseY < win.presentationY + win.presentationHeight) {
+                        blockedByTransition = true;
+                        break;
+                    }
+                    continue;
+                }
+                if (win.isUnfocusable || win.isMinimized ||
+                    win.layer == protocol::LCLWindowLayer::Bottom) {
                     continue; // Skip unfocusable background surfaces (e.g. Wallpaper)
                 }
                 if (m_mouseX >= win.x - border && m_mouseX < win.x + win.width + border &&
@@ -314,7 +330,9 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                 }
             }
 
-            if (targetWinId > 0) {
+            if (blockedByTransition) {
+                return stateChanged;
+            } else if (targetWinId > 0) {
                 // Focus target window and bring to top z-order within its layer
                 focusWindow(targetWinId);
 
@@ -471,6 +489,14 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                                 win.snapVelX = 0.0f;
                                 win.snapVelY = 0.0f;
                             }
+                            m_motionEngine.clearObjectChannels(win.id);
+                            auto motion = lcl::motion::tokens::dragSnapBack();
+                            motion.springParams.initialVelocity = win.snapVelX;
+                            const auto xChannel = m_motionEngine.createChannel({win.id, 1}, win.snapX);
+                            m_motionEngine.animateTo(xChannel, win.snapTargetX, motion);
+                            motion.springParams.initialVelocity = win.snapVelY;
+                            const auto yChannel = m_motionEngine.createChannel({win.id, 2}, win.snapY);
+                            m_motionEngine.animateTo(yChannel, win.snapTargetY, motion);
                         }
                     }
 
@@ -492,32 +518,65 @@ bool WindowManager::updateAnimations() {
     const auto now = std::chrono::steady_clock::now();
     float dt = std::chrono::duration<float>(now - m_lastAnimTick).count();
     m_lastAnimTick = now;
-    dt = std::clamp(dt, 1.0f / 240.0f, 1.0f / 30.0f);
+    return updateAnimations(dt);
+}
 
+bool WindowManager::updateAnimations(float dt) {
+    if (!m_initialized) return false;
+    if (dt <= 0.0f) return false;
     bool changed = false;
-    constexpr float kSpring = 180.0f;
-    constexpr float kDamping = 24.0f;
+    const auto changedChannels = m_motionEngine.tick(dt);
+    (void)changedChannels;
 
     for (auto& win : m_windows) {
+        if (win.geometryTransitionActive) {
+            const Rect before{static_cast<int>(std::lround(win.presentationX)),
+                              static_cast<int>(std::lround(win.presentationY)),
+                              static_cast<int>(std::lround(win.presentationWidth)),
+                              static_cast<int>(std::lround(win.presentationHeight))};
+            const auto x = m_motionEngine.findChannel({win.id, 10});
+            const auto y = m_motionEngine.findChannel({win.id, 11});
+            const auto width = m_motionEngine.findChannel({win.id, 12});
+            const auto height = m_motionEngine.findChannel({win.id, 13});
+            if (x && y && width && height) {
+                const auto sx = m_motionEngine.sample(*x);
+                const auto sy = m_motionEngine.sample(*y);
+                const auto sw = m_motionEngine.sample(*width);
+                const auto sh = m_motionEngine.sample(*height);
+                win.presentationX = sx.value;
+                win.presentationY = sy.value;
+                win.presentationWidth = sw.value;
+                win.presentationHeight = sh.value;
+                win.geometryTransitionActive = sx.active || sy.active || sw.active || sh.active;
+                const Rect after{static_cast<int>(std::lround(win.presentationX)),
+                                 static_cast<int>(std::lround(win.presentationY)),
+                                 static_cast<int>(std::lround(win.presentationWidth)),
+                                 static_cast<int>(std::lround(win.presentationHeight))};
+                win.markDirty(Rect::Union(before, after));
+                changed = true;
+            } else {
+                win.geometryTransitionActive = false;
+            }
+        }
         if (!win.snapBackActive) continue;
 
         if (win.isDragging || win.isResizing) {
             win.snapBackActive = false;
+            m_motionEngine.clearObjectChannels(win.id);
             win.snapVelX = 0.0f;
             win.snapVelY = 0.0f;
             continue;
         }
 
-        const float dx = win.snapTargetX - win.snapX;
-        const float dy = win.snapTargetY - win.snapY;
-
-        const float ax = (kSpring * dx) - (kDamping * win.snapVelX);
-        const float ay = (kSpring * dy) - (kDamping * win.snapVelY);
-
-        win.snapVelX += ax * dt;
-        win.snapVelY += ay * dt;
-        win.snapX += win.snapVelX * dt;
-        win.snapY += win.snapVelY * dt;
+        const auto xChannel = m_motionEngine.findChannel({win.id, 1});
+        const auto yChannel = m_motionEngine.findChannel({win.id, 2});
+        if (!xChannel || !yChannel) { win.snapBackActive = false; continue; }
+        const auto xSample = m_motionEngine.sample(*xChannel);
+        const auto ySample = m_motionEngine.sample(*yChannel);
+        win.snapX = xSample.value;
+        win.snapY = ySample.value;
+        win.snapVelX = xSample.velocity;
+        win.snapVelY = ySample.velocity;
 
         const int newX = static_cast<int>(std::lround(win.snapX));
         const int newY = static_cast<int>(std::lround(win.snapY));
@@ -527,23 +586,25 @@ bool WindowManager::updateAnimations() {
             win.y = newY;
             win.pendingX = newX;
             win.pendingY = newY;
+            win.presentationX = win.snapX;
+            win.presentationY = win.snapY;
             win.markDirty();
             changed = true;
         }
 
-        const bool donePos = std::abs(win.snapTargetX - win.snapX) < 0.5f &&
-                             std::abs(win.snapTargetY - win.snapY) < 0.5f;
-        const bool doneVel = std::abs(win.snapVelX) < 2.5f && std::abs(win.snapVelY) < 2.5f;
-        if (donePos && doneVel) {
+        if (!xSample.active && !ySample.active) {
             win.snapX = win.snapTargetX;
             win.snapY = win.snapTargetY;
             win.x = static_cast<int>(std::lround(win.snapTargetX));
             win.y = static_cast<int>(std::lround(win.snapTargetY));
             win.pendingX = win.x;
             win.pendingY = win.y;
+            win.presentationX = win.snapX;
+            win.presentationY = win.snapY;
             win.snapVelX = 0.0f;
             win.snapVelY = 0.0f;
             win.snapBackActive = false;
+            m_motionEngine.clearObjectChannels(win.id);
             win.markDirty();
             changed = true;
         }
@@ -556,7 +617,8 @@ bool WindowManager::updateAnimations() {
     return changed;
 }
 
-void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH) {
+void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH,
+                                          bool preservePendingTarget) {
     auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
         return w.id == windowId;
     });
@@ -591,8 +653,10 @@ void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int fra
             finalY = win.pendingY;
         }
 
-        // activeResizeEdge sıfırlanma kuralı: Mouse bırakıldıysa VE gelen tampon hedefe ulaştıysa (veya son karedir)
-        if (!win.isResizing && (frameW == win.pendingWidth || frameH == win.pendingHeight)) {
+        // A commit can acknowledge the only in-flight configure while pointer
+        // motion has already advanced pending geometry. Keep the resize anchor
+        // and newest target until the follow-up configure is committed.
+        if (!win.isResizing && !preservePendingTarget) {
             win.activeResizeEdge = ResizeEdge::None;
             win.anchorRight = 0;
             win.anchorBottom = 0;
@@ -604,9 +668,15 @@ void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int fra
         win.height = frameH;
         win.x = finalX;
         win.y = finalY;
+        if (!win.geometryTransitionActive) {
+            win.presentationX = static_cast<float>(finalX);
+            win.presentationY = static_cast<float>(finalY);
+            win.presentationWidth = static_cast<float>(frameW);
+            win.presentationHeight = static_cast<float>(frameH);
+        }
         win.pendingX = finalX;
         win.pendingY = finalY;
-        if (!win.isResizing) {
+        if (!win.isResizing && !preservePendingTarget) {
             win.pendingWidth = frameW;
             win.pendingHeight = frameH;
         }
@@ -690,6 +760,7 @@ bool WindowManager::beginWindowDrag(uint32_t windowId, int localX, int localY) {
     it->isDragging = true;
     it->isResizing = false;
     it->snapBackActive = false;
+    m_motionEngine.clearObjectChannels(it->id);
     it->snapVelX = 0.0f;
     it->snapVelY = 0.0f;
     it->dragOffsetX = std::clamp(localX, 0, std::max(0, it->width - 1));
@@ -730,14 +801,11 @@ bool WindowManager::maximizeWindow(uint32_t windowId) {
     it->restoreY = it->y;
     it->restoreWidth = it->width;
     it->restoreHeight = it->height;
-    it->x = static_cast<int>(m_reservedZone.left);
-    it->y = static_cast<int>(m_reservedZone.top);
-    it->width = std::max(1, static_cast<int>(m_screenWidth) - static_cast<int>(m_reservedZone.left) - static_cast<int>(m_reservedZone.right));
-    it->height = std::max(1, static_cast<int>(m_screenHeight) - static_cast<int>(m_reservedZone.top) - static_cast<int>(m_reservedZone.bottom));
-    it->pendingX = it->x;
-    it->pendingY = it->y;
-    it->pendingWidth = it->width;
-    it->pendingHeight = it->height;
+    startGeometryTransition(*it,
+        static_cast<int>(m_reservedZone.left),
+        static_cast<int>(m_reservedZone.top),
+        std::max(1, static_cast<int>(m_screenWidth) - static_cast<int>(m_reservedZone.left) - static_cast<int>(m_reservedZone.right)),
+        std::max(1, static_cast<int>(m_screenHeight) - static_cast<int>(m_reservedZone.top) - static_cast<int>(m_reservedZone.bottom)));
     it->isMaximized = true;
     it->isDragging = false;
     it->isResizing = false;
@@ -763,14 +831,9 @@ bool WindowManager::restoreWindow(uint32_t windowId) {
     // work-area geometry. Only an explicit restore from visible maximized state
     // returns to the saved pre-maximize bounds.
     if (wasMaximized && !wasMinimized) {
-        it->x = it->restoreX;
-        it->y = it->restoreY;
-        it->width = std::max(1, it->restoreWidth);
-        it->height = std::max(1, it->restoreHeight);
-        it->pendingX = it->x;
-        it->pendingY = it->y;
-        it->pendingWidth = it->width;
-        it->pendingHeight = it->height;
+        startGeometryTransition(*it, it->restoreX, it->restoreY,
+                                std::max(1, it->restoreWidth),
+                                std::max(1, it->restoreHeight));
         it->isMaximized = false;
     }
     it->markDirty();
@@ -785,6 +848,48 @@ bool WindowManager::toggleMaximizeWindow(uint32_t windowId) {
     });
     if (it == m_windows.end()) return false;
     return it->isMaximized ? restoreWindow(windowId) : maximizeWindow(windowId);
+}
+
+void WindowManager::startGeometryTransition(Window& window, int targetX, int targetY,
+                                            int targetWidth, int targetHeight) {
+    const auto motion = lcl::motion::tokens::windowMorph();
+    const auto animate = [&](uint32_t property, float current, float target) {
+        const auto channel = m_motionEngine.ensureChannel({window.id, property}, current);
+        m_motionEngine.animateTo(channel, target, motion);
+    };
+    animate(10, window.presentationX, static_cast<float>(targetX));
+    animate(11, window.presentationY, static_cast<float>(targetY));
+    animate(12, window.presentationWidth, static_cast<float>(targetWidth));
+    animate(13, window.presentationHeight, static_cast<float>(targetHeight));
+    window.x = window.pendingX = targetX;
+    window.y = window.pendingY = targetY;
+    window.width = window.pendingWidth = targetWidth;
+    window.height = window.pendingHeight = targetHeight;
+    window.geometryTransitionActive = true;
+    window.markDirty();
+}
+
+bool WindowManager::rollbackWindowGeometry(uint32_t windowId, const Rect& geometry,
+                                           bool wasMaximized, bool wasMinimized) {
+    auto found = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& window) {
+        return window.id == windowId;
+    });
+    if (found == m_windows.end()) return false;
+    m_motionEngine.clearObjectChannels(windowId);
+    found->x = found->pendingX = geometry.x;
+    found->y = found->pendingY = geometry.y;
+    found->width = found->pendingWidth = std::max(1, geometry.width);
+    found->height = found->pendingHeight = std::max(1, geometry.height);
+    found->presentationX = static_cast<float>(found->x);
+    found->presentationY = static_cast<float>(found->y);
+    found->presentationWidth = static_cast<float>(found->width);
+    found->presentationHeight = static_cast<float>(found->height);
+    found->presentationInitialized = true;
+    found->geometryTransitionActive = false;
+    found->isMaximized = wasMaximized;
+    found->isMinimized = wasMinimized;
+    found->markDirty();
+    return true;
 }
 
 void WindowManager::focusWindow(uint32_t windowId) {

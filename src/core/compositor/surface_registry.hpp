@@ -31,7 +31,11 @@ public:
             None,
             Entering,
             Closing,
+            Minimizing,
+            Restoring,
         };
+
+        enum class ResizeTransitionPhase { None, AwaitingBuffer, Crossfading };
 
         uint32_t windowId{0};
         int clientFd{-1};
@@ -64,6 +68,10 @@ public:
         uint32_t configuredWidth{0};
         uint32_t configuredHeight{0};
         uint8_t configuredFocused{0};
+        uint64_t nextConfigureSerial{1};
+        uint64_t pendingConfigureSerial{0};
+        uint64_t acceptedConfigureSerial{0};
+        bool forceConfigure{false};
         std::chrono::steady_clock::time_point lastConfigureSent{};
 
         TransitionPhase transitionPhase{TransitionPhase::None};
@@ -74,6 +82,29 @@ public:
         bool hasCommittedBuffer{false};
         bool ignoreBufferCommits{false};
         bool pendingDestroy{false};
+        bool pendingMinimize{false};
+
+        // During compositor geometry morphs the last accepted client frame is
+        // retained until the matching configure serial arrives.
+        int previousShmFd{-1};
+        void* previousPixels{nullptr};
+        uint32_t previousWidth{0};
+        uint32_t previousHeight{0};
+        uint32_t previousStride{0};
+        size_t previousShmSize{0};
+        ResizeTransitionPhase resizeTransitionPhase{ResizeTransitionPhase::None};
+        std::chrono::steady_clock::time_point resizeDeadline{};
+        float resizeCrossfadeElapsedSec{0.0f};
+        float resizeCrossfadeProgress{1.0f};
+        bool resizeInputFrozen{false};
+        bool resizeBufferReady{true};
+        bool rollbackRequested{false};
+        int rollbackX{0};
+        int rollbackY{0};
+        int rollbackWidth{0};
+        int rollbackHeight{0};
+        bool rollbackWasMaximized{false};
+        bool rollbackWasMinimized{false};
     };
 
     using Key = uint64_t;
@@ -119,6 +150,13 @@ public:
 
     /** Release an entry's mapped SHM and memfd without erasing its metadata. */
     static void releaseBuffer(SurfaceEntry& entry) noexcept;
+    static void releasePreviousBuffer(SurfaceEntry& entry) noexcept;
+    static bool acceptsBufferCommit(const SurfaceEntry& entry,
+                                    uint64_t configureSerial) noexcept;
+    static bool hasOutstandingConfigure(const SurfaceEntry& entry) noexcept;
+    /** A process may own several independent surface sockets; disconnect is per socket. */
+    static bool isOwnedByClientConnection(const SurfaceEntry& entry,
+                                          int clientFd) noexcept;
 
 private:
     Entries m_entries;

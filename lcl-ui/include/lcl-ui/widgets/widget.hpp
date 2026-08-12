@@ -4,9 +4,14 @@
 #include "lcl-ui/core/effects.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/events.hpp"
+#include "lcl-ui/core/motion.hpp"
 #include "lcl-ui/layout/yoga_node.hpp"
+#include <array>
+#include <atomic>
+#include <cmath>
 #include <vector>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace lcl::ui {
@@ -16,7 +21,7 @@ class Canvas;
 class Widget {
 public:
     Widget();
-    virtual ~Widget() = default;
+    virtual ~Widget();
 
     Widget(const Widget&) = delete;
     Widget& operator=(const Widget&) = delete;
@@ -32,6 +37,37 @@ public:
 
     Rect getBounds() const { return m_bounds; }
     Rect getAbsoluteBounds() const { return m_absoluteBounds; }
+    Rect getPresentationBounds() const;
+    bool containsPresentationPoint(float x, float y) const;
+    uint64_t getObjectId() const noexcept { return m_objectId; }
+    const PresentationState& getPresentationState() const noexcept { return m_presentation; }
+    std::weak_ptr<uint8_t> getLifetimeToken() const noexcept { return m_lifetimeToken; }
+    virtual float getPresentationValue(AnimatableProperty property) const;
+    virtual void applyPresentationValue(AnimatableProperty property, float value);
+    virtual void commitModelValue(AnimatableProperty property, float value);
+    lcl::motion::AnimationHandle animate(
+        AnimatableProperty property,
+        std::vector<lcl::motion::Keyframe> keyframes,
+        const lcl::motion::AnimationOptions& options = {});
+
+    void setOpacity(float opacity);
+    float getOpacity() const noexcept { return m_opacity; }
+    const PresentationState& getModelTransform() const noexcept { return m_modelTransform; }
+    void setTranslation(float x, float y);
+    void setTranslationX(float x);
+    void setTranslationY(float y);
+    void setScale(float scale);
+    void setScale(float x, float y);
+    void setRotation(float radians);
+    void setTransformOrigin(float normalizedX, float normalizedY);
+    void setClipsToBounds(bool enabled) { m_clipsToBounds = enabled; markDirty(); }
+    bool clipsToBounds() const noexcept { return m_clipsToBounds; }
+
+    void setWidth(float width);
+    void setHeight(float height);
+    void setPadding(YGEdge edge, float value);
+    void setGap(YGGutter gutter, float value);
+    void setPosition(YGEdge edge, float value);
 
     void setVisible(bool visible) { m_visible = visible; markDirty(); }
     bool isVisible() const { return m_visible; }
@@ -41,10 +77,18 @@ public:
 
     void markDirty();
     void setRenderPass(RenderPass* pass);
+    void setMotionCoordinator(MotionCoordinator* coordinator);
+    MotionCoordinator* getMotionCoordinator() const noexcept { return m_motionCoordinator; }
+    void setInteractionMotionTheme(InteractionMotionTheme theme) { m_interactionTheme = std::move(theme); }
+    void clearInteractionMotionTheme() { m_interactionTheme.reset(); }
+    const InteractionMotionTheme& interactionMotionTheme() const;
 
     using GcMarkCallback = std::function<void(void* rt, void* mark_func)>;
     void setGcMarkCallback(GcMarkCallback cb) { m_gcMarkCallback = std::move(cb); }
     const GcMarkCallback& getGcMarkCallback() const { return m_gcMarkCallback; }
+    void setDestructionCallback(std::function<void()> callback) {
+        m_destructionCallback = std::move(callback);
+    }
 
     virtual void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f);
     virtual void draw(Canvas& canvas, const Rect& damageRect);
@@ -64,6 +108,10 @@ public:
     virtual bool onFocusLost(const FocusEvent& event) { (void)event; return false; }
 
 protected:
+    void beginPresentation(Canvas& canvas) const;
+    void endPresentation(Canvas& canvas) const;
+    void drawChildren(Canvas& canvas, const Rect& damageRect);
+
     YogaNode m_yogaNode;
     Widget* m_parent{nullptr};
     std::vector<std::unique_ptr<Widget>> m_children;
@@ -72,8 +120,33 @@ protected:
     Rect m_absoluteBounds{0.0f, 0.0f, 0.0f, 0.0f};
     bool m_visible{true};
     bool m_focusable{false};
+    bool m_clipsToBounds{false};
     RenderPass* m_renderPass{nullptr};
+    MotionCoordinator* m_motionCoordinator{nullptr};
     GcMarkCallback m_gcMarkCallback{nullptr};
+    std::function<void()> m_destructionCallback{nullptr};
+
+    uint64_t m_objectId{0};
+    float m_opacity{1.0f};
+    PresentationState m_presentation{};
+    PresentationState m_modelTransform{};
+    float m_modelWidth{0.0f};
+    float m_modelHeight{0.0f};
+    float m_presentWidth{0.0f};
+    float m_presentHeight{0.0f};
+    bool m_hasWidth{false};
+    bool m_hasHeight{false};
+    std::array<float, 4> m_modelPadding{};
+    std::array<float, 4> m_presentPadding{};
+    std::array<float, 2> m_modelGap{};
+    std::array<float, 2> m_presentGap{};
+    std::array<float, 4> m_modelPosition{};
+    std::array<float, 4> m_presentPosition{};
+    std::shared_ptr<uint8_t> m_lifetimeToken{std::make_shared<uint8_t>(0)};
+    std::optional<InteractionMotionTheme> m_interactionTheme;
+
+private:
+    static std::atomic<uint64_t> s_nextObjectId;
 };
 
 } // namespace lcl::ui

@@ -17,8 +17,8 @@ set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(yoga)
 
 add_library(lcl-ui STATIC
-    src/core/animation.cpp
     src/core/image_loader.cpp
+    src/core/motion.cpp
     src/core/rect.cpp
     src/core/render_pass.cpp
     src/core/event_dispatcher.cpp
@@ -40,6 +40,7 @@ target_include_directories(lcl-ui PUBLIC
 )
 
 target_link_libraries(lcl-ui PUBLIC
+    lcl-motion
     lcl-protocol
     lcl-display-scale
     yogacore

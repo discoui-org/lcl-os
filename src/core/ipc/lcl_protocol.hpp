@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 3;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 4;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 
@@ -168,6 +168,7 @@ struct LCLMsgSurfaceDestroy {
 
 struct LCLMsgConfigureBounds {
     uint32_t surfaceId{0};
+    uint64_t configureSerial{0};
     int32_t x{0};
     int32_t y{0};
     uint32_t width{0};
@@ -180,6 +181,7 @@ struct LCLMsgConfigureBounds {
 
 struct LCLMsgAttachBuffer {
     uint32_t surfaceId{0};
+    uint64_t configureSerial{0};
     uint32_t width{0};
     uint32_t height{0};
     uint32_t stride{0};

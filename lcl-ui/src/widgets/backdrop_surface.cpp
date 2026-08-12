@@ -75,6 +75,7 @@ void BackdropSurface::setInteractive(bool interactive) {
     setFocusable(interactive);
     if (!m_interactive) {
         m_pressed = false;
+        m_hovered = false;
         restoreBaseVisuals();
     }
 }
@@ -88,6 +89,7 @@ bool BackdropSurface::onPointerEnter(const PointerEvent& event) {
         m_hasBaseVisuals = true;
     }
     if (!m_pressed) {
+        m_hovered = true;
         applyHoverVisuals();
     }
     return true;
@@ -97,6 +99,7 @@ bool BackdropSurface::onPointerLeave(const PointerEvent& event) {
     (void)event;
     if (!m_interactive) return false;
     m_pressed = false;
+    m_hovered = false;
     restoreBaseVisuals();
     return true;
 }
@@ -119,6 +122,7 @@ bool BackdropSurface::onPointerUp(const PointerEvent& event) {
     if (!m_interactive) return false;
     bool wasPressed = m_pressed;
     m_pressed = false;
+    m_hovered = true;
     if (m_hasBaseVisuals) {
         applyHoverVisuals();
     }
@@ -129,19 +133,61 @@ bool BackdropSurface::onPointerUp(const PointerEvent& event) {
 }
 
 void BackdropSurface::applyHoverVisuals() {
-    setBackgroundColor(adjustColor(m_baseBackground, 8, 8, 9));
-    setBorderColor(adjustColor(m_baseBorder, 24, 27, 31));
+    const auto& theme = interactionMotionTheme();
+    const Color background = adjustColor(m_baseBackground, 8, 8, 9);
+    const Color border = adjustColor(m_baseBorder, 24, 27, 31);
+    if (!theme.enabled || !m_motionCoordinator) {
+        setBackgroundColor(background); setBorderColor(border); setScale(theme.hoverScale); return;
+    }
+    animateBackgroundColor(background, theme.focusTransition);
+    animateBorderColor(border, theme.focusTransition);
+    m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleX, m_presentation.scaleX,
+        theme.hoverScale, theme.hover, [this](float value) { applyPresentationValue(AnimatableProperty::ScaleX, value); });
+    m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleY, m_presentation.scaleY,
+        theme.hoverScale, theme.hover, [this](float value) { applyPresentationValue(AnimatableProperty::ScaleY, value); });
 }
 
 void BackdropSurface::applyPressedVisuals() {
-    setBackgroundColor(adjustColor(m_baseBackground, 16, 16, 20));
-    setBorderColor(adjustColor(m_baseBorder, 50, 53, 60));
+    const auto& theme = interactionMotionTheme();
+    const Color background = adjustColor(m_baseBackground, 16, 16, 20);
+    const Color border = adjustColor(m_baseBorder, 50, 53, 60);
+    if (!theme.enabled || !m_motionCoordinator) {
+        setBackgroundColor(background); setBorderColor(border); setScale(theme.pressedScale); return;
+    }
+    animateBackgroundColor(background, theme.focusTransition);
+    animateBorderColor(border, theme.focusTransition);
+    m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleX, m_presentation.scaleX,
+        theme.pressedScale, theme.pressed, [this](float value) { applyPresentationValue(AnimatableProperty::ScaleX, value); });
+    m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleY, m_presentation.scaleY,
+        theme.pressedScale, theme.pressed, [this](float value) { applyPresentationValue(AnimatableProperty::ScaleY, value); });
 }
 
 void BackdropSurface::restoreBaseVisuals() {
     if (!m_hasBaseVisuals) return;
-    setBackgroundColor(m_baseBackground);
-    setBorderColor(m_baseBorder);
+    const auto& theme = interactionMotionTheme();
+    if (!theme.enabled || !m_motionCoordinator) {
+        setBackgroundColor(m_baseBackground); setBorderColor(m_baseBorder); setScale(1.0f); return;
+    }
+    animateBackgroundColor(m_baseBackground, theme.focusTransition);
+    animateBorderColor(m_baseBorder, theme.focusTransition);
+    m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleX, m_presentation.scaleX,
+        1.0f, theme.release, [this](float value) { applyPresentationValue(AnimatableProperty::ScaleX, value); });
+    m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleY, m_presentation.scaleY,
+        1.0f, theme.release, [this](float value) { applyPresentationValue(AnimatableProperty::ScaleY, value); });
+}
+
+bool BackdropSurface::onFocusGained(const FocusEvent& event) {
+    (void)event;
+    m_focused = true;
+    if (m_interactive && !m_hovered && !m_pressed) applyHoverVisuals();
+    return false;
+}
+
+bool BackdropSurface::onFocusLost(const FocusEvent& event) {
+    (void)event;
+    m_focused = false;
+    if (m_interactive && !m_hovered && !m_pressed) restoreBaseVisuals();
+    return false;
 }
 
 void BackdropSurface::collectEffects(std::vector<EffectRegion>& outEffects) const {

@@ -4,9 +4,11 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/eventfd.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include "core/compositor/frame_scheduler.hpp"
+#include "core/compositor/input_router.hpp"
 #include "core/compositor/surface_registry.hpp"
 #include "core/compositor/system_surface_policy.hpp"
 #include "core/compositor/window_group_transform.hpp"
@@ -37,9 +39,98 @@ TEST(SurfaceRegistryTest, SnapshotProvidesReadOnlyViewsWithoutCopyingEntries) {
     EXPECT_EQ(found->entry->windowId, 11u);
 }
 
+TEST(SurfaceRegistryTest, RejectsStaleSerialButAcceptsClientConstrainedDimensions) {
+    SurfaceRegistry::SurfaceEntry entry;
+    entry.initialWidth = 320;
+    entry.initialHeight = 200;
+    entry.configuredWidth = 640;
+    entry.configuredHeight = 480;
+    entry.pendingConfigureSerial = 12;
+
+    EXPECT_FALSE(SurfaceRegistry::acceptsBufferCommit(entry, 0));
+    EXPECT_FALSE(SurfaceRegistry::acceptsBufferCommit(entry, 11));
+    EXPECT_TRUE(SurfaceRegistry::acceptsBufferCommit(entry, 12));
+    EXPECT_TRUE(SurfaceRegistry::hasOutstandingConfigure(entry));
+    entry.acceptedConfigureSerial = 12;
+    EXPECT_FALSE(SurfaceRegistry::hasOutstandingConfigure(entry));
+}
+
 TEST(SurfaceRegistryTest, SurfaceKeyUsesPidWhenAvailableAndClientFdOtherwise) {
     EXPECT_EQ(SurfaceRegistry::makeKey(7, 19, 3), (static_cast<uint64_t>(19) << 32) | 3u);
     EXPECT_EQ(SurfaceRegistry::makeKey(7, 0, 3), (static_cast<uint64_t>(7) << 32) | 3u);
+}
+
+TEST(SurfaceRegistryTest, DisconnectOwnershipIsPerSocketEvenWithinOneProcess) {
+    SurfaceRegistry::SurfaceEntry wallpaper;
+    wallpaper.clientFd = 10;
+    SurfaceRegistry::SurfaceEntry menu;
+    menu.clientFd = 11;
+    SurfaceRegistry::SurfaceEntry dock;
+    dock.clientFd = 12;
+
+    EXPECT_TRUE(SurfaceRegistry::isOwnedByClientConnection(menu, 11));
+    EXPECT_FALSE(SurfaceRegistry::isOwnedByClientConnection(wallpaper, 11));
+    EXPECT_FALSE(SurfaceRegistry::isOwnedByClientConnection(dock, 11));
+}
+
+TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t windowId = manager.createWindow("Resize", 80, 90, 320, 200);
+    manager.setDecorationMode(windowId, lcl::render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    const auto surfaceKey = SurfaceRegistry::makeKey(sockets[0], 101, 1);
+    auto& surface = registry[surfaceKey];
+    surface.windowId = windowId;
+    surface.clientFd = sockets[0];
+    surface.width = 320;
+    surface.height = 200;
+    surface.stride = 320 * 4;
+    surface.pendingConfigureSerial = 5;
+    surface.acceptedConfigureSerial = 5;
+    surface.nextConfigureSerial = 6;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    auto& window = manager.getWindowsMutable().back();
+    window.pendingWidth = 360;
+    window.pendingHeight = 240;
+    router.syncWindowState();
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::ConfigureBounds);
+    const auto* first = reinterpret_cast<const protocol::LCLMsgConfigureBounds*>(payload.data());
+    ASSERT_EQ(first->configureSerial, 6u);
+    EXPECT_EQ(first->width, 360u);
+    EXPECT_EQ(first->height, 240u);
+
+    window.pendingWidth = 400;
+    window.pendingHeight = 280;
+    router.syncWindowState();
+    const int flags = fcntl(sockets[1], F_GETFL, 0);
+    ASSERT_GE(flags, 0);
+    ASSERT_EQ(fcntl(sockets[1], F_SETFL, flags | O_NONBLOCK), 0);
+    EXPECT_EQ(protocol::recvPacketWithFd(sockets[1], header, payload, receivedFd),
+              protocol::ReceiveStatus::WouldBlock);
+
+    surface.acceptedConfigureSerial = surface.pendingConfigureSerial;
+    router.syncWindowState();
+    ASSERT_EQ(protocol::recvPacketWithFd(sockets[1], header, payload, receivedFd),
+              protocol::ReceiveStatus::Received);
+    const auto* coalesced = reinterpret_cast<const protocol::LCLMsgConfigureBounds*>(payload.data());
+    EXPECT_EQ(coalesced->configureSerial, 7u);
+    EXPECT_EQ(coalesced->width, 400u);
+    EXPECT_EQ(coalesced->height, 280u);
+
+    close(sockets[0]);
+    close(sockets[1]);
 }
 
 TEST(SurfaceRegistryTest, ErasingAnEntryClosesItsOwnedDescriptor) {
@@ -75,10 +166,21 @@ TEST(SystemSurfacePolicyTest, WallpaperPlacementAlwaysUsesCompositorOutputBounds
     width = 444;
     height = 55;
     SystemSurfacePolicyRegistry::applyInitialPlacement(dock, 1920, 1080, x, y, width, height);
-    EXPECT_EQ(x, 22);
-    EXPECT_EQ(y, 33);
-    EXPECT_EQ(width, 444);
+    EXPECT_EQ(x, 0);
+    EXPECT_EQ(y, 1025);
+    EXPECT_EQ(width, 1920);
     EXPECT_EQ(height, 55);
+
+    const auto menu = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::MenuBar);
+    x = 22;
+    y = 33;
+    width = 444;
+    height = 32;
+    SystemSurfacePolicyRegistry::applyInitialPlacement(menu, 1920, 1080, x, y, width, height);
+    EXPECT_EQ(x, 0);
+    EXPECT_EQ(y, 0);
+    EXPECT_EQ(width, 1920);
+    EXPECT_EQ(height, 32);
 }
 
 TEST(WindowGroupTransformTest, ChromeAndClientShareOneQuantizedAnimatedFrame) {
@@ -131,6 +233,37 @@ TEST(FrameSchedulerTest, AdvancesEnteringAndClosingTransitionsAtBoundedDelta) {
     scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(150));
     scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(200));
     EXPECT_TRUE(closing.pendingDestroy);
+}
+
+TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {
+    SurfaceRegistry registry;
+    auto& crossfade = registry[1];
+    crossfade.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::Crossfading;
+    crossfade.resizeCrossfadeProgress = 0.0f;
+    crossfade.resizeInputFrozen = true;
+    crossfade.resizeBufferReady = false;
+
+    FrameScheduler scheduler;
+    const auto start = std::chrono::steady_clock::now();
+    scheduler.reset(start);
+    EXPECT_TRUE(scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(50)));
+    EXPECT_GT(crossfade.resizeCrossfadeProgress, 0.0f);
+    EXPECT_LT(crossfade.resizeCrossfadeProgress, 1.0f);
+    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(100));
+    EXPECT_EQ(crossfade.resizeTransitionPhase, SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None);
+    EXPECT_TRUE(crossfade.resizeBufferReady);
+    EXPECT_TRUE(crossfade.resizeInputFrozen);
+
+    auto& timeout = registry[2];
+    timeout.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
+    timeout.resizeDeadline = start + std::chrono::milliseconds(750);
+    timeout.pendingConfigureSerial = 9;
+    timeout.acceptedConfigureSerial = 7;
+    timeout.resizeInputFrozen = true;
+    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(751));
+    EXPECT_TRUE(timeout.rollbackRequested);
+    EXPECT_EQ(timeout.pendingConfigureSerial, 7u);
+    EXPECT_TRUE(timeout.resizeBufferReady);
 }
 
 TEST(FrameSchedulerTest, CursorBlinkAndFrameBudgetUseTheExistingCadence) {

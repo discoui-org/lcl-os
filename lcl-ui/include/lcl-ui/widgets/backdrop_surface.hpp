@@ -31,6 +31,8 @@ public:
     bool onPointerLeave(const PointerEvent& event) override;
     bool onPointerDown(const PointerEvent& event) override;
     bool onPointerUp(const PointerEvent& event) override;
+    bool onFocusGained(const FocusEvent& event) override;
+    bool onFocusLost(const FocusEvent& event) override;
 
     void collectEffects(std::vector<EffectRegion>& outEffects) const override;
 
@@ -44,6 +46,8 @@ private:
     float m_opacity{1.0f};
     std::function<void()> m_onClick{nullptr};
     bool m_pressed{false};
+    bool m_hovered{false};
+    bool m_focused{false};
     bool m_hasBaseVisuals{false};
     Color m_baseBackground{0, 0, 0, 0};
     Color m_baseBorder{0, 0, 0, 0};

@@ -2,16 +2,9 @@
 #include "core/compositor/window_group_transform.hpp"
 #include "core/display/display_scale.hpp"
 #include "theme/palette.hpp"
-#include "lcl-ui/core/rect.hpp"
-#include "lcl-ui/core/render_pass.hpp"
-#include "lcl-ui/widgets/container.hpp"
-#include "lcl-ui/widgets/text.hpp"
-#include "lcl-ui/widgets/window_chrome.hpp"
-#include "render/skia_canvas.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -20,6 +13,39 @@ namespace {
 uint8_t applyOpacityToAlpha(uint8_t alpha, float opacity) {
     const float scaled = std::clamp(static_cast<float>(alpha) * std::clamp(opacity, 0.0f, 1.0f), 0.0f, 255.0f);
     return static_cast<uint8_t>(std::lround(scaled));
+}
+
+struct ChromeLayout {
+    float controlLeft{0.0f};
+    float controlTop{0.0f};
+    float titleLeft{0.0f};
+    float titleTop{0.0f};
+    float titleWidth{0.0f};
+};
+
+ChromeLayout calculateChromeLayout(float width, float titleHeight, float cornerRadius,
+                                   float fontSize, float scale) {
+    const float controlSize = 16.0f * scale;
+    const float controlGap = 6.0f * scale;
+    const float inset = std::max({8.0f * scale, cornerRadius - 8.0f * scale, 4.0f * scale});
+    const float titleLeft = std::max(14.0f * scale,
+        inset + controlSize * 3.0f + controlGap * 2.0f + 12.0f * scale);
+    return {
+        inset,
+        inset,
+        titleLeft,
+        std::clamp(inset + (controlSize - fontSize) * 0.5f, 0.0f,
+                   std::max(0.0f, titleHeight - fontSize)),
+        std::max(0.0f, width - titleLeft - 10.0f * scale),
+    };
+}
+
+std::string truncateTitle(const std::string& title, float width, float fontSize) {
+    const int count = static_cast<int>(width / std::max(1.0f, fontSize * 0.6f));
+    if (count <= 0) return {};
+    if (static_cast<int>(title.size()) <= count) return title;
+    return count <= 3 ? title.substr(0, static_cast<size_t>(count))
+                      : title.substr(0, static_cast<size_t>(count - 3)) + "...";
 }
 } // namespace
 
@@ -55,95 +81,53 @@ void CompositorRenderer::render(render::Renderer& renderer,
         return 0.0f;
     };
 
-    auto drawSsdChromeWithLclUi = [&](const render::Window& win,
-                                      const WindowGroupTransform& group,
-                                      float chromeOpacity) {
-        auto fadeUiColor = [&](const lcl::ui::Color& c) {
-            return lcl::ui::Color{c.r, c.g, c.b, applyOpacityToAlpha(c.a, chromeOpacity)};
-        };
+    auto drawChrome = [&](const render::Window& win, const WindowGroupTransform& group,
+                          float chromeOpacity, bool drawTitlebar) {
+        const float scale = DisplayScale::factor() * group.scale;
+        const float titleHeight = static_cast<float>(group.titleHeight);
+        const float radius = DisplayScale::pxF(kWindowCornerRadiusLogical) * group.scale;
+        const float controlSize = 16.0f * scale;
+        const float controlGap = 6.0f * scale;
+        const float fontSize = static_cast<float>(DisplayScale::kBaseFontPx) * scale;
+        const ChromeLayout layout = calculateChromeLayout(
+            static_cast<float>(group.width), titleHeight, radius, fontSize, scale);
 
-        // Chrome is an lcl-ui subtree: all of its style and Yoga dimensions stay
-        // logical. The whole titlebar shares the already-quantized window
-        // group transform with the client buffer, so their seam cannot drift
-        // by a pixel during entrance/exit animation.
-        const float dpr = DisplayScale::factor();
-        const float logicalWidth = static_cast<float>(win.width) / dpr;
-        const float logicalHeight = static_cast<float>(win.height) / dpr;
+        if (drawTitlebar) {
+            skia->drawTopRoundedRect(
+                {static_cast<float>(group.x), static_cast<float>(group.y),
+                 static_cast<float>(group.width), titleHeight},
+                std::min(radius, titleHeight),
+                {17, 19, 23, applyOpacityToAlpha(255, chromeOpacity)},
+                kWindowCornerRoundness);
+        }
 
-        const float previousScale = skia->getContentScale();
-        const float previousOriginX = skia->getContentOriginX();
-        const float previousOriginY = skia->getContentOriginY();
-        skia->setContentScale(dpr * group.scale);
-        skia->setContentOrigin(static_cast<float>(group.x), static_cast<float>(group.y));
+        const char* glyphs[] = {"x", "-", "+"};
+        for (int index = 0; index < 3; ++index) {
+            const float left = static_cast<float>(group.x) + layout.controlLeft +
+                               static_cast<float>(index) * (controlSize + controlGap);
+            const float top = static_cast<float>(group.y) + layout.controlTop;
+            skia->drawRoundedRect(
+                {left, top, controlSize, controlSize}, controlSize * 0.5f,
+                {235, 241, 248, applyOpacityToAlpha(56, chromeOpacity)},
+                {230, 238, 248, applyOpacityToAlpha(120, chromeOpacity)},
+                std::max(1.0f, group.scale), 2.0f);
+            skia->drawString(
+                static_cast<int>(std::lround(left + controlSize * 0.32f)),
+                static_cast<int>(std::lround(top + controlSize * 0.16f)),
+                glyphs[index],
+                (static_cast<uint32_t>(applyOpacityToAlpha(224, chromeOpacity)) << 24) | 0x00ECF4FCu,
+                11.0f * scale);
+        }
 
-        lcl::ui::RenderPass pass;
-        auto root = std::make_unique<lcl::ui::Container>();
-        root->setRenderPass(&pass);
-        root->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-        root->getYogaNode().setWidth(logicalWidth);
-        root->getYogaNode().setHeight(logicalHeight);
-
-        lcl::ui::chrome::WindowChromeStyle chromeStyle;
-        chromeStyle.titleBarBackground = fadeUiColor(lcl::ui::Color{17, 19, 23, 255});
-        chromeStyle.titleBarCornerRadiusAdjust = 0.0f;
-        chromeStyle.titleBarRoundness = kWindowCornerRoundness;
-        chromeStyle.buttonRoundness = 2.0f;
-        chromeStyle.buttonBackground = fadeUiColor(chromeStyle.buttonBackground);
-        chromeStyle.buttonBorder = fadeUiColor(chromeStyle.buttonBorder);
-        chromeStyle.buttonGlyph = fadeUiColor(chromeStyle.buttonGlyph);
-        chromeStyle.titleColor = fadeUiColor(chromeStyle.titleColor);
-
-        const float titleH = static_cast<float>(DisplayScale::kTitleBarHeight);
-
-        auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
-            logicalWidth,
-            titleH,
-            kWindowCornerRadiusLogical,
-            win.title,
-            static_cast<float>(DisplayScale::kBaseFontPx),
-            chromeStyle);
-
-        root->addChild(std::move(titleBar));
-
-        root->getYogaNode().calculateLayout(logicalWidth, logicalHeight);
-        root->syncLayout(0.0f, 0.0f);
-
-        lcl::ui::Rect damage{0.0f, 0.0f, logicalWidth, logicalHeight};
-        lcl::render::SkiaCanvas canvas(*skia);
-        root->draw(canvas, damage);
-
-        skia->setContentOrigin(previousOriginX, previousOriginY);
-        skia->setContentScale(previousScale);
-    };
-
-    auto drawCsdHeaderControlsOverlay = [&](const render::Window& win) {
-        lcl::ui::RenderPass pass;
-        auto root = std::make_unique<lcl::ui::Container>();
-        root->setRenderPass(&pass);
-        root->setBackgroundColor(lcl::ui::Color{0, 0, 0, 0});
-
-        const float titleH = static_cast<float>(DisplayScale::titleBarHeight());
-        root->getYogaNode().setWidth(static_cast<float>(win.width));
-        root->getYogaNode().setHeight(static_cast<float>(win.height));
-
-        // This compatibility overlay has no title strip of its own, but its
-        // controls are the exact same lcl-ui widgets as SSD and CSD clients.
-        lcl::ui::chrome::WindowChromeStyle chromeStyle;
-        chromeStyle.titleBarBackground = {0, 0, 0, 0};
-        root->addChild(lcl::ui::chrome::buildWindowTitlebar(
-            static_cast<float>(win.width),
-            titleH,
-            DisplayScale::pxF(kWindowCornerRadiusLogical),
-            "",
-            static_cast<float>(DisplayScale::kBaseFontPx),
-            chromeStyle));
-
-        root->getYogaNode().calculateLayout(static_cast<float>(win.width), static_cast<float>(win.height));
-        root->syncLayout(static_cast<float>(win.x), static_cast<float>(win.y));
-
-        lcl::ui::Rect damage{static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), static_cast<float>(win.height)};
-        lcl::render::SkiaCanvas canvas(*skia);
-        root->draw(canvas, damage);
+        if (drawTitlebar) {
+            const std::string title = truncateTitle(win.title, layout.titleWidth, fontSize);
+            skia->drawString(
+                static_cast<int>(std::lround(static_cast<float>(group.x) + layout.titleLeft)),
+                static_cast<int>(std::lround(static_cast<float>(group.y) + layout.titleTop)),
+                title,
+                (static_cast<uint32_t>(applyOpacityToAlpha(245, chromeOpacity)) << 24) | 0x00F0F8FFu,
+                fontSize);
+        }
     };
 
     auto drawForcedInsetBorder = [&](const render::Window& win, float opacity, float scale) {
@@ -261,11 +245,27 @@ void CompositorRenderer::render(render::Renderer& renderer,
             const float windowCornerRadiusPx = resolveWindowCornerRadiusPx(win);
             const bool maskToWindowShape = windowCornerRadiusPx > 0.001f;
 
+            if (matchingSurface->previousPixels) {
+                renderer.getSkiaRenderer()->drawBuffer(
+                    drawX, drawY,
+                    static_cast<int>(matchingSurface->previousWidth),
+                    static_cast<int>(matchingSurface->previousHeight),
+                    reinterpret_cast<const uint32_t*>(matchingSurface->previousPixels),
+                    static_cast<int>(matchingSurface->previousStride / 4),
+                    windowOpacity * (1.0f - matchingSurface->resizeCrossfadeProgress),
+                    maskToWindowShape ? windowCornerRadiusPx : 0.0f,
+                    kWindowCornerRoundness,
+                    win.decorationMode == render::DecorationMode::SSD,
+                    drawW,
+                    drawH);
+            }
+
             renderer.getSkiaRenderer()->drawBuffer(
                 drawX, drawY, srcW, srcH,
                 reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
                 stridePixels,
-                windowOpacity,
+                windowOpacity * (matchingSurface->previousPixels
+                    ? matchingSurface->resizeCrossfadeProgress : 1.0f),
                 maskToWindowShape ? windowCornerRadiusPx : 0.0f,
                 kWindowCornerRoundness,
                 win.decorationMode == render::DecorationMode::SSD,
@@ -280,18 +280,13 @@ void CompositorRenderer::render(render::Renderer& renderer,
             // so buttons match SSD quality (AA/blend pipeline) exactly.
             if (win.decorationMode == render::DecorationMode::None &&
                 win.title.find("Terminal") != std::string::npos) {
-                render::Window scaledOverlayWin = win;
-                scaledOverlayWin.x = group.x;
-                scaledOverlayWin.y = group.y;
-                scaledOverlayWin.width = group.width;
-                scaledOverlayWin.height = group.height;
-                drawCsdHeaderControlsOverlay(scaledOverlayWin);
+                drawChrome(win, group, windowOpacity, false);
             }
         }
 
         // C. Render Server-Side Window Frame (Titlebar & Inset Border) on top of content.
         if (win.decorationMode == render::DecorationMode::SSD) {
-            drawSsdChromeWithLclUi(win, group, windowOpacity);
+            drawChrome(win, group, windowOpacity, true);
         }
 
         // Forced compositor-owned inset border for every window, independent from app UI.

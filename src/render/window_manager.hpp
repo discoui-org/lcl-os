@@ -7,6 +7,7 @@
 #include "core/input/input_manager.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "render/damage_tracker.hpp"
+#include "lcl-motion/motion.hpp"
 
 namespace lcl::render {
 
@@ -46,6 +47,12 @@ struct Window {
     int height{300};
     int pendingWidth{400};
     int pendingHeight{300};
+    float presentationX{0.0f};
+    float presentationY{0.0f};
+    float presentationWidth{400.0f};
+    float presentationHeight{300.0f};
+    bool presentationInitialized{false};
+    bool geometryTransitionActive{false};
     int zIndex{0};
     bool isFocused{false};
     bool isUnfocusable{false};
@@ -160,6 +167,7 @@ public:
      * @return True if any window geometry changed.
      */
     bool updateAnimations();
+    bool updateAnimations(float dtSec);
 
     /**
      * @brief Commit attached client surface geometry and calculate position shift for anchor preservation.
@@ -167,7 +175,8 @@ public:
      * @param frameW Total attached surface frame width.
      * @param frameH Total attached surface frame height (including titlebar).
      */
-    void commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH);
+    void commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH,
+                               bool preservePendingTarget = false);
 
     /**
      * @brief Set decoration mode (SSD/CSD/None) for a window.
@@ -200,6 +209,8 @@ public:
     bool maximizeWindow(uint32_t windowId);
     bool restoreWindow(uint32_t windowId);
     bool toggleMaximizeWindow(uint32_t windowId);
+    bool rollbackWindowGeometry(uint32_t windowId, const Rect& geometry,
+                                bool wasMaximized, bool wasMinimized);
 
     const ReservedZone& getReservedZone() const { return m_reservedZone; }
 
@@ -244,6 +255,8 @@ private:
     void unfocusAll(); ///< Clear focus + reset header color on all windows
     void focusTopmostVisibleWindow();
     void updateWindowZOrders();
+    void startGeometryTransition(Window& window, int targetX, int targetY,
+                                 int targetWidth, int targetHeight);
 
     uint32_t m_screenWidth{1024};
     uint32_t m_screenHeight{768};
@@ -257,6 +270,7 @@ private:
     bool m_initialized{false};
     bool m_mouseDirty{true};
     std::chrono::steady_clock::time_point m_lastAnimTick{};
+    lcl::motion::AnimationEngine m_motionEngine;
 };
 
 } // namespace lcl::render

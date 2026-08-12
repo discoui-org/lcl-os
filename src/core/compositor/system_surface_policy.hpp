@@ -10,6 +10,8 @@ namespace lcl::core {
 enum class SystemSurfacePlacement : uint8_t {
     ClientBounds,
     OutputBounds,
+    OutputTopEdge,
+    OutputBottomEdge,
 };
 
 /** Compositor-enforced policy for one trusted system surface. */

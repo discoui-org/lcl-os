@@ -1,5 +1,8 @@
 #include "render/skia_canvas.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 namespace lcl::render {
 
 SkiaCanvas::SkiaCanvas()
@@ -24,34 +27,111 @@ void SkiaCanvas::beginFrame() { renderer().beginFrame(); }
 void SkiaCanvas::endFrame() { renderer().endFrame(); }
 uint32_t* SkiaCanvas::rasterBuffer() { return renderer().getRasterBuffer(); }
 
+void SkiaCanvas::saveState() { m_stack.push_back(m_state); }
+
+void SkiaCanvas::restoreState() {
+    if (m_stack.empty()) return;
+    m_state = m_stack.back();
+    m_stack.pop_back();
+}
+
+void SkiaCanvas::clipRect(const lcl::ui::Rect& rect) {
+    lcl::ui::Rect mapped = mapRect(rect);
+    m_state.clip = m_state.clip ? m_state.clip->intersection(mapped) : mapped;
+}
+
+void SkiaCanvas::concatTransform(const lcl::ui::AffineTransform& value) {
+    const auto old = m_state.transform;
+    m_state.transform = {
+        old.a * value.a + old.c * value.b,
+        old.b * value.a + old.d * value.b,
+        old.a * value.c + old.c * value.d,
+        old.b * value.c + old.d * value.d,
+        old.a * value.tx + old.c * value.ty + old.tx,
+        old.b * value.tx + old.d * value.ty + old.ty,
+    };
+}
+
+void SkiaCanvas::beginLayer(float opacity) {
+    m_layerOpacityStack.push_back(m_state.opacity);
+    m_state.opacity *= std::clamp(opacity, 0.0f, 1.0f);
+}
+
+void SkiaCanvas::endLayer() {
+    if (m_layerOpacityStack.empty()) return;
+    m_state.opacity = m_layerOpacityStack.back();
+    m_layerOpacityStack.pop_back();
+}
+
+std::pair<float, float> SkiaCanvas::mapPoint(float x, float y) const {
+    const auto& t = m_state.transform;
+    return {t.a * x + t.c * y + t.tx, t.b * x + t.d * y + t.ty};
+}
+
+lcl::ui::Rect SkiaCanvas::mapRect(const lcl::ui::Rect& rect) const {
+    const auto p0 = mapPoint(rect.x, rect.y);
+    const auto p1 = mapPoint(rect.x + rect.width, rect.y);
+    const auto p2 = mapPoint(rect.x, rect.y + rect.height);
+    const auto p3 = mapPoint(rect.x + rect.width, rect.y + rect.height);
+    const float left = std::min({p0.first, p1.first, p2.first, p3.first});
+    const float right = std::max({p0.first, p1.first, p2.first, p3.first});
+    const float top = std::min({p0.second, p1.second, p2.second, p3.second});
+    const float bottom = std::max({p0.second, p1.second, p2.second, p3.second});
+    return {left, top, right - left, bottom - top};
+}
+
+lcl::ui::Color SkiaCanvas::mapColor(lcl::ui::Color color) const {
+    color.a = static_cast<uint8_t>(std::clamp(std::lround(static_cast<float>(color.a) * m_state.opacity), 0l, 255l));
+    return color;
+}
+
+bool SkiaCanvas::applyClip(lcl::ui::Rect& rect) const {
+    if (!m_state.clip) return !rect.isEmpty();
+    rect = rect.intersection(*m_state.clip);
+    return !rect.isEmpty();
+}
+
 void SkiaCanvas::drawRect(const lcl::ui::Rect& rect, lcl::ui::Color color) {
-    renderer().drawRect({rect.x, rect.y, rect.width, rect.height}, toSkia(color));
+    lcl::ui::Rect mapped = mapRect(rect);
+    if (!applyClip(mapped)) return;
+    renderer().drawRect({mapped.x, mapped.y, mapped.width, mapped.height}, toSkia(mapColor(color)));
 }
 
 void SkiaCanvas::drawRoundedRect(const lcl::ui::Rect& rect, float radius,
                                  lcl::ui::Color color, lcl::ui::Color border,
                                  float borderWidth, float roundness) {
-    renderer().drawRoundedRect({rect.x, rect.y, rect.width, rect.height}, radius,
-                               toSkia(color), toSkia(border), borderWidth, roundness);
+    lcl::ui::Rect mapped = mapRect(rect);
+    if (!applyClip(mapped)) return;
+    const float scale = std::sqrt(std::fabs(m_state.transform.a * m_state.transform.d -
+                                            m_state.transform.b * m_state.transform.c));
+    renderer().drawRoundedRect({mapped.x, mapped.y, mapped.width, mapped.height}, radius * scale,
+                               toSkia(mapColor(color)), toSkia(mapColor(border)), borderWidth * scale, roundness);
 }
 
 void SkiaCanvas::drawTopRoundedRect(const lcl::ui::Rect& rect, float radius,
                                     lcl::ui::Color color, float roundness) {
-    renderer().drawTopRoundedRect({rect.x, rect.y, rect.width, rect.height}, radius,
-                                  toSkia(color), roundness);
+    lcl::ui::Rect mapped = mapRect(rect);
+    if (!applyClip(mapped)) return;
+    renderer().drawTopRoundedRect({mapped.x, mapped.y, mapped.width, mapped.height}, radius,
+                                  toSkia(mapColor(color)), roundness);
 }
 
 void SkiaCanvas::drawText(float x, float y, const std::string& text,
                           lcl::ui::Color color, float fontSize,
                           lcl::ui::FontFamily family) {
+    color = mapColor(color);
+    const auto point = mapPoint(x, y);
+    const float scale = std::sqrt(std::fabs(m_state.transform.a * m_state.transform.d -
+                                            m_state.transform.b * m_state.transform.c));
+    fontSize *= scale;
     const uint32_t argb = (static_cast<uint32_t>(color.a) << 24) |
                           (static_cast<uint32_t>(color.r) << 16) |
                           (static_cast<uint32_t>(color.g) << 8) |
                           static_cast<uint32_t>(color.b);
     if (family == lcl::ui::FontFamily::Monospace) {
-        renderer().drawMonospaceString(static_cast<int>(x), static_cast<int>(y), text, argb, fontSize);
+        renderer().drawMonospaceString(static_cast<int>(point.first), static_cast<int>(point.second), text, argb, fontSize);
     } else {
-        renderer().drawString(static_cast<int>(x), static_cast<int>(y), text, argb, fontSize);
+        renderer().drawString(static_cast<int>(point.first), static_cast<int>(point.second), text, argb, fontSize);
     }
 }
 
@@ -66,8 +146,13 @@ void SkiaCanvas::drawBuffer(int dstX, int dstY, int srcWidth, int srcHeight,
                             const uint32_t* pixels, int stridePixels, float opacity,
                             float cornerRadius, float cornerRoundness,
                             bool squareTopCorners, int drawWidth, int drawHeight) {
-    renderer().drawBuffer(dstX, dstY, srcWidth, srcHeight, pixels, stridePixels, opacity,
-                          cornerRadius, cornerRoundness, squareTopCorners, drawWidth, drawHeight);
+    lcl::ui::Rect mapped = mapRect({static_cast<float>(dstX), static_cast<float>(dstY),
+                                    static_cast<float>(drawWidth), static_cast<float>(drawHeight)});
+    if (!applyClip(mapped)) return;
+    renderer().drawBuffer(static_cast<int>(std::lround(mapped.x)), static_cast<int>(std::lround(mapped.y)),
+                          srcWidth, srcHeight, pixels, stridePixels, opacity * m_state.opacity,
+                          cornerRadius, cornerRoundness, squareTopCorners,
+                          static_cast<int>(std::lround(mapped.width)), static_cast<int>(std::lround(mapped.height)));
 }
 
 std::unique_ptr<lcl::ui::Canvas> makeSkiaCanvas() {

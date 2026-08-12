@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include "lcl-ui/core/canvas.hpp"
 #include "render/skia_renderer.hpp"
@@ -20,6 +22,13 @@ public:
     void endFrame() override;
     uint32_t* rasterBuffer() override;
 
+    void saveState() override;
+    void restoreState() override;
+    void clipRect(const lcl::ui::Rect& rect) override;
+    void concatTransform(const lcl::ui::AffineTransform& transform) override;
+    void beginLayer(float opacity) override;
+    void endLayer() override;
+
     void drawRect(const lcl::ui::Rect& rect, lcl::ui::Color color) override;
     void drawRoundedRect(const lcl::ui::Rect& rect, float radius, lcl::ui::Color color,
                          lcl::ui::Color border, float borderWidth, float roundness) override;
@@ -35,11 +44,24 @@ public:
                     bool squareTopCorners, int drawWidth, int drawHeight) override;
 
 private:
+    struct CanvasState {
+        lcl::ui::AffineTransform transform{};
+        float opacity{1.0f};
+        std::optional<lcl::ui::Rect> clip{};
+    };
+
     static SkiaColor toSkia(lcl::ui::Color color);
+    lcl::ui::Rect mapRect(const lcl::ui::Rect& rect) const;
+    std::pair<float, float> mapPoint(float x, float y) const;
+    lcl::ui::Color mapColor(lcl::ui::Color color) const;
+    bool applyClip(lcl::ui::Rect& rect) const;
     SkiaRenderer& renderer() { return *m_renderer; }
 
     std::unique_ptr<SkiaRenderer> m_ownedRenderer;
     SkiaRenderer* m_renderer{nullptr};
+    CanvasState m_state{};
+    std::vector<CanvasState> m_stack;
+    std::vector<float> m_layerOpacityStack;
 };
 
 std::unique_ptr<lcl::ui::Canvas> makeSkiaCanvas();

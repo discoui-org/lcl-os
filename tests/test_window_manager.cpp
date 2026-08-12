@@ -85,3 +85,54 @@ TEST(WindowManagerTest, UnfocusableSystemWindowDoesNotStealApplicationFocus) {
     EXPECT_TRUE(panelWindow->isUnfocusable);
     EXPECT_FALSE(panelWindow->isFocused);
 }
+
+TEST(WindowManagerTest, MaximizeRestoreMorphRetargetsFromPresentationGeometry) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    manager.setReservedZone(32, 60, 0, 0);
+    const uint32_t id = manager.createWindow("Morph", 80, 90, 400, 300);
+
+    ASSERT_TRUE(manager.maximizeWindow(id));
+    const auto* logical = findWindow(manager, id);
+    ASSERT_NE(logical, nullptr);
+    EXPECT_EQ(logical->x, 0);
+    EXPECT_FLOAT_EQ(logical->presentationX, 80.0f);
+    manager.updateAnimations(0.10f);
+    const float midWidth = findWindow(manager, id)->presentationWidth;
+    EXPECT_GT(midWidth, 400.0f);
+    EXPECT_LT(midWidth, 1000.0f);
+
+    ASSERT_TRUE(manager.restoreWindow(id));
+    EXPECT_NEAR(findWindow(manager, id)->presentationWidth, midWidth, 0.001f);
+    for (int index = 0; index < 240; ++index) manager.updateAnimations(1.0f / 240.0f);
+    const auto* restored = findWindow(manager, id);
+    EXPECT_FALSE(restored->geometryTransitionActive);
+    EXPECT_NEAR(restored->presentationX, 80.0f, 0.01f);
+    EXPECT_NEAR(restored->presentationY, 90.0f, 0.01f);
+    EXPECT_NEAR(restored->presentationWidth, 400.0f, 0.01f);
+    EXPECT_NEAR(restored->presentationHeight, 300.0f, 0.01f);
+}
+
+TEST(WindowManagerTest, IntermediateResizeCommitPreservesNewerPointerTarget) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t id = manager.createWindow("Resize", 80, 90, 400, 300);
+    auto& window = manager.getWindowsMutable().back();
+    window.pendingWidth = 560;
+    window.pendingHeight = 520;
+    window.activeResizeEdge = lcl::render::ResizeEdge::Bottom;
+    window.anchorBottom = window.y + window.pendingHeight;
+
+    manager.commitSurfaceGeometry(id, 560, 420, true);
+    const auto* intermediate = findWindow(manager, id);
+    ASSERT_NE(intermediate, nullptr);
+    EXPECT_EQ(intermediate->height, 420);
+    EXPECT_EQ(intermediate->pendingHeight, 520);
+    EXPECT_EQ(intermediate->activeResizeEdge, lcl::render::ResizeEdge::Bottom);
+
+    manager.commitSurfaceGeometry(id, 560, 520, false);
+    const auto* final = findWindow(manager, id);
+    ASSERT_NE(final, nullptr);
+    EXPECT_EQ(final->pendingHeight, 520);
+    EXPECT_EQ(final->activeResizeEdge, lcl::render::ResizeEdge::None);
+}

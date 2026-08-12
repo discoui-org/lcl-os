@@ -3,22 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <thread>
+#include "lcl-motion/motion.hpp"
 
 namespace lcl::core {
-
-namespace {
-
-float easeOutCubic(float value) {
-    value = std::clamp(value, 0.0f, 1.0f);
-    return 1.0f - std::pow(1.0f - value, 3.0f);
-}
-
-float easeInCubic(float value) {
-    value = std::clamp(value, 0.0f, 1.0f);
-    return value * value * value;
-}
-
-} // namespace
 
 void FrameScheduler::reset(std::chrono::steady_clock::time_point now) noexcept {
     m_lastBlinkCheck = now;
@@ -42,6 +29,28 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
 
     bool active = false;
     for (auto& [_, entry] : surfaces) {
+        if (entry.resizeTransitionPhase == SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer) {
+            active = true;
+            if (now >= entry.resizeDeadline) {
+                entry.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None;
+                entry.pendingConfigureSerial = entry.acceptedConfigureSerial;
+                entry.forceConfigure = true;
+                entry.resizeBufferReady = true;
+                entry.rollbackRequested = true;
+                SurfaceRegistry::releasePreviousBuffer(entry);
+            }
+        } else if (entry.resizeTransitionPhase == SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::Crossfading) {
+            active = true;
+            entry.resizeCrossfadeElapsedSec += elapsed;
+            const float progress = std::clamp(entry.resizeCrossfadeElapsedSec / 0.10f, 0.0f, 1.0f);
+            entry.resizeCrossfadeProgress = lcl::motion::Easing(lcl::motion::EasingName::EaseOutCubic).evaluate(progress);
+            if (progress >= 1.0f) {
+                entry.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None;
+                entry.resizeCrossfadeProgress = 1.0f;
+                entry.resizeBufferReady = true;
+                SurfaceRegistry::releasePreviousBuffer(entry);
+            }
+        }
         if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::None) {
             continue;
         }
@@ -52,7 +61,7 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
         const float progress = std::clamp(entry.transitionElapsedSec / duration, 0.0f, 1.0f);
 
         if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Entering) {
-            const float eased = easeOutCubic(progress);
+            const float eased = lcl::motion::tokens::windowOpen().tweenParams.easing.evaluate(progress);
             entry.transitionOpacity = eased;
             entry.transitionScale = 0.96f + (0.04f * eased);
             if (progress >= 1.0f) {
@@ -61,13 +70,31 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
                 entry.transitionScale = 1.0f;
             }
         } else if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing) {
-            const float eased = easeInCubic(progress);
+            const float eased = lcl::motion::tokens::windowClose().tweenParams.easing.evaluate(progress);
             entry.transitionOpacity = 1.0f - eased;
             entry.transitionScale = 1.0f - (0.04f * eased);
             if (progress >= 1.0f) {
                 entry.transitionOpacity = 0.0f;
                 entry.transitionScale = 0.96f;
                 entry.pendingDestroy = true;
+            }
+        } else if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing) {
+            const float eased = lcl::motion::tokens::minimize().tweenParams.easing.evaluate(progress);
+            entry.transitionOpacity = 1.0f - eased;
+            entry.transitionScale = 1.0f - 0.08f * eased;
+            if (progress >= 1.0f) {
+                entry.pendingMinimize = true;
+                entry.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::None;
+            }
+        } else if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring) {
+            const float eased = lcl::motion::tokens::restore().tweenParams.easing.evaluate(progress);
+            entry.transitionOpacity = eased;
+            entry.transitionScale = 0.92f + 0.08f * eased;
+            if (progress >= 1.0f) {
+                entry.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::None;
+                entry.transitionOpacity = 1.0f;
+                entry.transitionScale = 1.0f;
+                entry.resizeInputFrozen = false;
             }
         }
     }

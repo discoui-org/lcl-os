@@ -47,6 +47,7 @@ void SurfaceRegistry::clear() noexcept {
 }
 
 void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
+    releasePreviousBuffer(entry);
     if (entry.pixels && entry.shmSize > 0) {
         munmap(entry.pixels, entry.shmSize);
     }
@@ -57,6 +58,37 @@ void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
         close(entry.shmFd);
     }
     entry.shmFd = -1;
+}
+
+void SurfaceRegistry::releasePreviousBuffer(SurfaceEntry& entry) noexcept {
+    if (entry.previousPixels && entry.previousShmSize > 0) {
+        munmap(entry.previousPixels, entry.previousShmSize);
+    }
+    entry.previousPixels = nullptr;
+    entry.previousShmSize = 0;
+    if (entry.previousShmFd >= 0) close(entry.previousShmFd);
+    entry.previousShmFd = -1;
+    entry.previousWidth = entry.previousHeight = entry.previousStride = 0;
+}
+
+bool SurfaceRegistry::acceptsBufferCommit(const SurfaceEntry& entry,
+                                          uint64_t configureSerial) noexcept {
+    // The serial identifies the configure generation. Buffer dimensions are
+    // deliberately not part of freshness validation: clients such as Terminal
+    // may constrain a requested resize to their cell grid and reply with the
+    // closest valid size for that same configure. WindowManager reconciles the
+    // accepted dimensions through commitSurfaceGeometry().
+    return configureSerial != 0 && configureSerial == entry.pendingConfigureSerial;
+}
+
+bool SurfaceRegistry::hasOutstandingConfigure(const SurfaceEntry& entry) noexcept {
+    return entry.pendingConfigureSerial != 0 &&
+           entry.pendingConfigureSerial != entry.acceptedConfigureSerial;
+}
+
+bool SurfaceRegistry::isOwnedByClientConnection(const SurfaceEntry& entry,
+                                                int clientFd) noexcept {
+    return clientFd >= 0 && entry.clientFd == clientFd;
 }
 
 } // namespace lcl::core

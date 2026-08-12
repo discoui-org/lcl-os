@@ -4,41 +4,153 @@ namespace lcl::ui {
 
 Container::Container() = default;
 
+void Container::setBackgroundColor(const Color& color) {
+    m_backgroundColor = color;
+    if (m_motionCoordinator) {
+        m_motionCoordinator->setColor(*this, AnimatableProperty::BackgroundRed,
+            m_presentationBackgroundColor, color,
+            [this](Color next) { m_presentationBackgroundColor = next; markDirty(); });
+    } else { m_presentationBackgroundColor = color; markDirty(); }
+}
+
+void Container::animateBackgroundColor(const Color& color, const lcl::motion::Motion& motion) {
+    m_backgroundColor = color;
+    if (!m_motionCoordinator) { m_presentationBackgroundColor = color; markDirty(); return; }
+    m_motionCoordinator->setColor(*this, AnimatableProperty::BackgroundRed,
+        m_presentationBackgroundColor, color,
+        [this](Color next) { m_presentationBackgroundColor = next; markDirty(); }, &motion);
+}
+
+void Container::setBorderColor(const Color& color) {
+    m_borderColor = color;
+    if (m_motionCoordinator) {
+        m_motionCoordinator->setColor(*this, AnimatableProperty::BorderRed,
+            m_presentationBorderColor, color,
+            [this](Color next) { m_presentationBorderColor = next; markDirty(); });
+    } else { m_presentationBorderColor = color; markDirty(); }
+}
+
+void Container::animateBorderColor(const Color& color, const lcl::motion::Motion& motion) {
+    m_borderColor = color;
+    if (!m_motionCoordinator) { m_presentationBorderColor = color; markDirty(); return; }
+    m_motionCoordinator->setColor(*this, AnimatableProperty::BorderRed,
+        m_presentationBorderColor, color,
+        [this](Color next) { m_presentationBorderColor = next; markDirty(); }, &motion);
+}
+
+void Container::setBorderWidth(float width) {
+    m_borderWidth = std::max(0.0f, width);
+    const auto apply = [this](float next) { m_presentationBorderWidth = next; markDirty(); };
+    if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::BorderWidth,
+        m_presentationBorderWidth, m_borderWidth, apply);
+    else apply(m_borderWidth);
+}
+
+void Container::setBorderRadius(float radius) {
+    m_borderRadius = std::max(0.0f, radius);
+    const auto apply = [this](float next) { m_presentationBorderRadius = next; markDirty(); };
+    if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::BorderRadius,
+        m_presentationBorderRadius, m_borderRadius, apply);
+    else apply(m_borderRadius);
+}
+
+float Container::getPresentationValue(AnimatableProperty property) const {
+    switch (property) {
+        case AnimatableProperty::BackgroundRed: return m_presentationBackgroundColor.r;
+        case AnimatableProperty::BackgroundGreen: return m_presentationBackgroundColor.g;
+        case AnimatableProperty::BackgroundBlue: return m_presentationBackgroundColor.b;
+        case AnimatableProperty::BackgroundAlpha: return m_presentationBackgroundColor.a;
+        case AnimatableProperty::BorderRed: return m_presentationBorderColor.r;
+        case AnimatableProperty::BorderGreen: return m_presentationBorderColor.g;
+        case AnimatableProperty::BorderBlue: return m_presentationBorderColor.b;
+        case AnimatableProperty::BorderAlpha: return m_presentationBorderColor.a;
+        case AnimatableProperty::BorderWidth: return m_presentationBorderWidth;
+        case AnimatableProperty::BorderRadius: return m_presentationBorderRadius;
+        default: return Widget::getPresentationValue(property);
+    }
+}
+
+void Container::applyPresentationValue(AnimatableProperty property, float value) {
+    const auto byte = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
+    switch (property) {
+        case AnimatableProperty::BackgroundRed: m_presentationBackgroundColor.r = byte; break;
+        case AnimatableProperty::BackgroundGreen: m_presentationBackgroundColor.g = byte; break;
+        case AnimatableProperty::BackgroundBlue: m_presentationBackgroundColor.b = byte; break;
+        case AnimatableProperty::BackgroundAlpha: m_presentationBackgroundColor.a = byte; break;
+        case AnimatableProperty::BorderRed: m_presentationBorderColor.r = byte; break;
+        case AnimatableProperty::BorderGreen: m_presentationBorderColor.g = byte; break;
+        case AnimatableProperty::BorderBlue: m_presentationBorderColor.b = byte; break;
+        case AnimatableProperty::BorderAlpha: m_presentationBorderColor.a = byte; break;
+        case AnimatableProperty::BorderWidth: m_presentationBorderWidth = std::max(0.0f, value); break;
+        case AnimatableProperty::BorderRadius: m_presentationBorderRadius = std::max(0.0f, value); break;
+        default: Widget::applyPresentationValue(property, value); return;
+    }
+    markDirty();
+}
+
+void Container::commitModelValue(AnimatableProperty property, float value) {
+    Color color;
+    switch (property) {
+        case AnimatableProperty::BackgroundRed: case AnimatableProperty::BackgroundGreen:
+        case AnimatableProperty::BackgroundBlue: case AnimatableProperty::BackgroundAlpha:
+            color = m_backgroundColor;
+            if (property == AnimatableProperty::BackgroundRed) color.r = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
+            if (property == AnimatableProperty::BackgroundGreen) color.g = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
+            if (property == AnimatableProperty::BackgroundBlue) color.b = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
+            if (property == AnimatableProperty::BackgroundAlpha) color.a = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
+            setBackgroundColor(color); return;
+        case AnimatableProperty::BorderRed: case AnimatableProperty::BorderGreen:
+        case AnimatableProperty::BorderBlue: case AnimatableProperty::BorderAlpha:
+            color = m_borderColor;
+            if (property == AnimatableProperty::BorderRed) color.r = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
+            if (property == AnimatableProperty::BorderGreen) color.g = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
+            if (property == AnimatableProperty::BorderBlue) color.b = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
+            if (property == AnimatableProperty::BorderAlpha) color.a = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
+            setBorderColor(color); return;
+        case AnimatableProperty::BorderWidth: setBorderWidth(value); return;
+        case AnimatableProperty::BorderRadius: setBorderRadius(value); return;
+        default: Widget::commitModelValue(property, value); return;
+    }
+}
+
 void Container::draw(Canvas& canvas, const Rect& damageRect) {
-    if (!m_visible || !m_absoluteBounds.intersects(damageRect)) return;
+    if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
+
+    beginPresentation(canvas);
 
     const Rect rect{m_absoluteBounds.x, m_absoluteBounds.y, m_absoluteBounds.width, m_absoluteBounds.height};
-    const bool hasBackground = (m_backgroundColor.a > 0);
-    const bool hasBorder = (m_borderWidth > 0.0f && m_borderColor.a > 0);
+    const bool hasBackground = (m_presentationBackgroundColor.a > 0);
+    const bool hasBorder = (m_presentationBorderWidth > 0.0f && m_presentationBorderColor.a > 0);
     if (hasBackground || hasBorder) {
 
         // Fast path for rectangular boxes: avoid expensive rounded-rect AA sampling.
-        if (m_borderRadius <= 0.0f) {
+        if (m_presentationBorderRadius <= 0.0f) {
             if (hasBorder) {
-                canvas.drawRect(rect, m_borderColor);
+                canvas.drawRect(rect, m_presentationBorderColor);
             }
 
             if (hasBackground) {
-                if (hasBorder && m_borderWidth > 0.0f) {
-                    const float inset = m_borderWidth;
+                if (hasBorder && m_presentationBorderWidth > 0.0f) {
+                    const float inset = m_presentationBorderWidth;
                     const float innerW = std::max(0.0f, rect.width - inset * 2.0f);
                     const float innerH = std::max(0.0f, rect.height - inset * 2.0f);
                     if (innerW > 0.0f && innerH > 0.0f) {
-                        canvas.drawRect({rect.x + inset, rect.y + inset, innerW, innerH}, m_backgroundColor);
+                        canvas.drawRect({rect.x + inset, rect.y + inset, innerW, innerH}, m_presentationBackgroundColor);
                     }
                 } else {
-                    canvas.drawRect(rect, m_backgroundColor);
+                    canvas.drawRect(rect, m_presentationBackgroundColor);
                 }
             }
         } else if (m_topOnlyBorderRadius && hasBackground && !hasBorder) {
-            canvas.drawTopRoundedRect(rect, m_borderRadius, m_backgroundColor, m_borderRoundness);
+            canvas.drawTopRoundedRect(rect, m_presentationBorderRadius, m_presentationBackgroundColor, m_borderRoundness);
         } else {
-            canvas.drawRoundedRect(rect, m_borderRadius, m_backgroundColor, m_borderColor,
-                                   hasBorder ? m_borderWidth : 0.0f, m_borderRoundness);
+            canvas.drawRoundedRect(rect, m_presentationBorderRadius, m_presentationBackgroundColor, m_presentationBorderColor,
+                                   hasBorder ? m_presentationBorderWidth : 0.0f, m_borderRoundness);
         }
     }
 
-    Widget::draw(canvas, damageRect);
+    drawChildren(canvas, damageRect);
+    endPresentation(canvas);
 }
 
 } // namespace lcl::ui

@@ -60,16 +60,23 @@ WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t he
     if (!m_canvas) return;
     m_pixelBuffer.resize(width * height, 0xFF000000);
     m_initialized = m_canvas->initialize(width, height, m_pixelBuffer.data());
+    m_motionCoordinator.setCallbacks(
+        [this] { updateLayout(); },
+        [this](const Rect& rect) { if (!rect.isEmpty()) m_renderPass.addDirtyRect(rect); });
 
     auto defaultRoot = std::make_unique<Container>();
     defaultRoot->getYogaNode().setWidth(static_cast<float>(width));
     defaultRoot->getYogaNode().setHeight(static_cast<float>(height));
     setRootWidget(std::move(defaultRoot));
     m_lastResizeApply = std::chrono::steady_clock::now();
+    m_lastAnimationTick = std::chrono::steady_clock::now();
 }
 
 WindowApp::~WindowApp() {
     m_running = false;
+    // Widgets unregister their channels on destruction. Detach while the
+    // coordinator member is still alive (member teardown runs in reverse).
+    if (m_rootWidget) m_rootWidget->setMotionCoordinator(nullptr);
     if (m_shmPixels) {
         munmap(m_shmPixels, m_shmSize);
         m_shmPixels = nullptr;
@@ -97,6 +104,7 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     if (!root) return;
     m_rootWidget = std::move(root);
     m_rootWidget->setRenderPass(&m_renderPass);
+    m_rootWidget->setMotionCoordinator(&m_motionCoordinator);
     m_rootWidget->markDirty();
     // A newly mounted tree has not been through Yoga/syncLayout yet, so its
     // absolute bounds are still empty and markDirty() cannot produce damage.
@@ -331,6 +339,7 @@ void WindowApp::pollIPC() {
                     latestWidth = cfg->width;
                     latestHeight = cfg->height;
                     latestScale = cfg->bufferScale;
+                    m_pendingConfigureSerial = cfg->configureSerial;
                     pendingResize = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
@@ -343,7 +352,7 @@ void WindowApp::pollIPC() {
         } else if (receiveStatus == lcl::protocol::ReceiveStatus::WouldBlock) {
             break;
         } else {
-            std::cerr << "[lcl-ui ERROR] Compositor v3 connection closed or rejected\n";
+            std::cerr << "[lcl-ui ERROR] Compositor v4 connection closed or rejected\n";
             m_ipcConnected = false;
             m_running = false;
             break;
@@ -393,14 +402,18 @@ void WindowApp::pollIPC() {
         const bool intervalElapsed = (now - m_lastResizeApply) >= kMinResizeInterval;
 
         if (largeJump || intervalElapsed) {
+            m_configureSerial = m_pendingConfigureSerial;
             resize(m_pendingResizeWidth, m_pendingResizeHeight);
             m_hasPendingResize = false;
             m_lastResizeApply = now;
         }
     } else if (m_hasPendingResize) {
         // The compositor often confirms the initial logical size verbatim.
-        // It requires no SHM reallocation, so do not retain it indefinitely.
+        // It requires no SHM reallocation, but it still needs one commit to
+        // acknowledge the configure serial and release compositor backpressure.
         m_hasPendingResize = false;
+        m_configureSerial = m_pendingConfigureSerial;
+        m_firstFrame = true;
     }
 }
 
@@ -438,7 +451,90 @@ bool WindowApp::tick() {
     if (m_onFrame) {
         m_onFrame();
     }
+    const auto now = std::chrono::steady_clock::now();
+    const float dtSec = std::chrono::duration<float>(now - m_lastAnimationTick).count();
+    m_lastAnimationTick = now;
+    advanceAnimations(dtSec);
     return renderFrame();
+}
+
+namespace {
+void collectWidgetBounds(Widget* widget, std::unordered_map<uint64_t, Rect>& bounds) {
+    if (!widget) return;
+    bounds[widget->getObjectId()] = widget->getAbsoluteBounds();
+    for (const auto& child : widget->getChildren()) collectWidgetBounds(child.get(), bounds);
+}
+
+void startMorphs(Widget* widget, const std::unordered_map<uint64_t, Rect>& oldBounds,
+                 MotionCoordinator& coordinator, const lcl::motion::Motion& motion,
+                 bool& anyMorph) {
+    if (!widget) return;
+    const auto found = oldBounds.find(widget->getObjectId());
+    if (found != oldBounds.end()) {
+        const Rect before = found->second;
+        const Rect after = widget->getAbsoluteBounds();
+        if (!before.isEmpty() && !after.isEmpty() &&
+            (std::fabs(before.x - after.x) > 0.01f || std::fabs(before.y - after.y) > 0.01f ||
+             std::fabs(before.width - after.width) > 0.01f || std::fabs(before.height - after.height) > 0.01f)) {
+            anyMorph = true;
+            const float startX = before.x - after.x;
+            const float startY = before.y - after.y;
+            const float startScaleX = before.width / std::max(0.001f, after.width);
+            const float startScaleY = before.height / std::max(0.001f, after.height);
+            widget->applyPresentationValue(AnimatableProperty::TranslationX, startX);
+            widget->applyPresentationValue(AnimatableProperty::TranslationY, startY);
+            widget->applyPresentationValue(AnimatableProperty::ScaleX, startScaleX);
+            widget->applyPresentationValue(AnimatableProperty::ScaleY, startScaleY);
+            widget->applyPresentationValue(AnimatableProperty::Opacity, 0.92f);
+            coordinator.animateFloat(*widget, AnimatableProperty::TranslationX, startX, 0.0f, motion,
+                [widget](float value) { widget->applyPresentationValue(AnimatableProperty::TranslationX, value); });
+            coordinator.animateFloat(*widget, AnimatableProperty::TranslationY, startY, 0.0f, motion,
+                [widget](float value) { widget->applyPresentationValue(AnimatableProperty::TranslationY, value); });
+            coordinator.animateFloat(*widget, AnimatableProperty::ScaleX, startScaleX, 1.0f, motion,
+                [widget](float value) { widget->applyPresentationValue(AnimatableProperty::ScaleX, value); });
+            coordinator.animateFloat(*widget, AnimatableProperty::ScaleY, startScaleY, 1.0f, motion,
+                [widget](float value) { widget->applyPresentationValue(AnimatableProperty::ScaleY, value); });
+            coordinator.animateFloat(*widget, AnimatableProperty::Opacity, 0.92f, 1.0f, motion,
+                [widget](float value) { widget->applyPresentationValue(AnimatableProperty::Opacity, value); });
+        }
+    }
+    for (const auto& child : widget->getChildren()) startMorphs(child.get(), oldBounds, coordinator, motion, anyMorph);
+}
+} // namespace
+
+void WindowApp::animate(const lcl::motion::Motion& motion,
+                        AnimationTransactionOptions options,
+                        const std::function<void()>& changes) {
+    if (!changes) return;
+    std::unordered_map<uint64_t, Rect> oldBounds;
+    if (options.layout == LayoutMode::Morph) {
+        updateLayout();
+        collectWidgetBounds(m_rootWidget.get(), oldBounds);
+    }
+    m_motionCoordinator.beginTransaction(motion, options);
+    try {
+        changes();
+    } catch (...) {
+        m_motionCoordinator.endTransaction();
+        throw;
+    }
+    m_motionCoordinator.endTransaction();
+    if (options.layout == LayoutMode::Morph) {
+        updateLayout();
+        bool anyMorph = false;
+        startMorphs(m_rootWidget.get(), oldBounds, m_motionCoordinator, motion, anyMorph);
+        m_morphInputFrozen = anyMorph;
+    }
+}
+
+bool WindowApp::advanceAnimations(float dtSec) {
+    const bool motionActive = m_motionCoordinator.tick(dtSec);
+    if (m_morphInputFrozen && !motionActive) m_morphInputFrozen = false;
+    return motionActive;
+}
+
+bool WindowApp::hasActiveAnimations() const noexcept {
+    return m_motionCoordinator.hasActiveAnimations();
 }
 
 void WindowApp::setExternalIpcSocket(int socketFd) {
@@ -557,6 +653,7 @@ void WindowApp::configureCsdTitlebar(float height, float controlLeft, float cont
 }
 
 bool WindowApp::sendPointerMove(float x, float y) {
+    if (m_morphInputFrozen) return false;
     PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Move};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
@@ -565,6 +662,7 @@ bool WindowApp::sendPointerMove(float x, float y) {
 }
 
 bool WindowApp::sendPointerDown(float x, float y, int button) {
+    if (m_morphInputFrozen) return false;
     if (m_csdTitlebarEnabled && button == 0 && y >= 0.0f && y <= m_csdTitlebarHeight) {
         const bool inControlY = y >= m_csdControlTop && y <= (m_csdControlTop + m_csdControlSize);
         const auto isControl = [&](int index) {
@@ -596,6 +694,7 @@ bool WindowApp::sendPointerDown(float x, float y, int button) {
 }
 
 bool WindowApp::sendPointerUp(float x, float y, int button) {
+    if (m_morphInputFrozen) return false;
     PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Up};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
@@ -777,6 +876,7 @@ bool WindowApp::renderFrame() {
     if (m_ipcConnected && m_socketFd >= 0 && m_shmFd >= 0) {
         lcl::protocol::LCLMsgAttachBuffer attachMsg{};
         attachMsg.surfaceId = m_surfaceId;
+        attachMsg.configureSerial = m_configureSerial;
         attachMsg.width = getPixelWidth();
         attachMsg.height = getPixelHeight();
         attachMsg.stride = getPixelWidth() * 4;

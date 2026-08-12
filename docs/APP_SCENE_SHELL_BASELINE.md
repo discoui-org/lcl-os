@@ -150,7 +150,7 @@ libraries through `lcl-render`.
 Step 3 replaces the compositor/client transport without changing shell-state
 ownership or widget/render behavior:
 
-- Protocol v3 is the only accepted wire version. Every header and payload field
+- Protocol v4 is the only accepted wire version. Every header and payload field
   is encoded and decoded explicitly in little-endian order.
 - The compositor socket is an owner-only Unix `SOCK_SEQPACKET` endpoint at
   `/run/user/1000/lcl-compositor.sock`; stream and text-command fallbacks are
@@ -161,11 +161,13 @@ ownership or widget/render behavior:
   `SCM_RIGHTS` descriptors are duplicated and released when sent or discarded.
 - `bufferScale` is mandatory, finite, and restricted to `0.5..4.0`; logical
   bounds/input remain separate from physical SHM dimensions.
+- Protocol v4 adds a monotonic `configureSerial` to `ConfigureBounds` and
+  `AttachBuffer`; stale or dimension-mismatched resize buffers are rejected.
 - Packet length, opcode, enum, string, float, effect-graph, ancillary-data, and
   FD/opcode combinations are validated before dispatch. Only `AttachBuffer`
   may carry one descriptor.
 - `WindowApp`, compositor dispatch, desktop shell, JS runtime users, and the
-  temporary desktop-WM client use the same v3 transport in this step.
+  temporary desktop-WM client use the same v4 transport in this step.
 
 The Step 3 automated gate is the full default build plus all CTest tests,
 including explicit little-endian encoding, v2 rejection, required scale,
@@ -226,7 +228,7 @@ transport:
 Step 6 replaces the desktop shell's active window-list compatibility path with
 a typed, revision-aware client without changing Dock/menu visual treatment:
 
-- Protocol v3 adds `SubscribeShellState`, `ShellStateSnapshot`, and
+- Protocol v3 added `SubscribeShellState`, `ShellStateSnapshot`, and
   `ShellStateDelta`. Snapshot and delta payloads are explicitly little-endian,
   carry `revision`, `seatId`, `displayId`, `workspaceId`, and stable scene IDs,
   and encode no compositor renderer or SHM resources.

@@ -315,10 +315,11 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
     case LCLOpcode::ConfigureBounds: {
         LOAD_ONE(LCLMsgConfigureBounds, msg);
         if (msg.surfaceId == 0 || msg.width == 0 || msg.height == 0 ||
-            msg.isFocused > 1 || !validScale(msg.bufferScale) ||
+            msg.configureSerial == 0 || msg.isFocused > 1 || !validScale(msg.bufferScale) ||
             !validString(msg.title, sizeof(msg.title)))
             return false;
         out.u32(msg.surfaceId);
+        out.u64(msg.configureSerial);
         out.i32(msg.x);
         out.i32(msg.y);
         out.u32(msg.width);
@@ -331,12 +332,13 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
     }
     case LCLOpcode::AttachBuffer: {
         LOAD_ONE(LCLMsgAttachBuffer, msg);
-        if (msg.surfaceId == 0 || msg.width == 0 || msg.height == 0 ||
+        if (msg.surfaceId == 0 || msg.configureSerial == 0 || msg.width == 0 || msg.height == 0 ||
             msg.format != 1 ||
             msg.width > std::numeric_limits<uint32_t>::max() / 4 ||
             msg.stride < msg.width * 4)
             return false;
         out.u32(msg.surfaceId);
+        out.u64(msg.configureSerial);
         out.u32(msg.width);
         out.u32(msg.height);
         out.u32(msg.stride);
@@ -551,12 +553,13 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
     }
     case LCLOpcode::ConfigureBounds: {
         LCLMsgConfigureBounds m{};
-        if (!in.u32(m.surfaceId) || !in.i32(m.x) || !in.i32(m.y) ||
+        if (!in.u32(m.surfaceId) || !in.u64(m.configureSerial) ||
+            !in.i32(m.x) || !in.i32(m.y) ||
             !in.u32(m.width) || !in.u32(m.height) || !in.u32(m.headerColor) ||
             !in.u8(m.isFocused) || !in.fixed(m.title, sizeof(m.title)) ||
             !in.f32(m.bufferScale))
             return false;
-        if (m.surfaceId == 0 || m.width == 0 || m.height == 0 || m.isFocused > 1 ||
+        if (m.surfaceId == 0 || m.configureSerial == 0 || m.width == 0 || m.height == 0 || m.isFocused > 1 ||
             !validScale(m.bufferScale) || !validString(m.title, sizeof(m.title)))
             return false;
         appendNative(payload, m);
@@ -564,10 +567,10 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
     }
     case LCLOpcode::AttachBuffer: {
         LCLMsgAttachBuffer m{};
-        if (!in.u32(m.surfaceId) || !in.u32(m.width) || !in.u32(m.height) ||
+        if (!in.u32(m.surfaceId) || !in.u64(m.configureSerial) || !in.u32(m.width) || !in.u32(m.height) ||
             !in.u32(m.stride) || !in.u32(m.format))
             return false;
-        if (m.surfaceId == 0 || m.width == 0 || m.height == 0 || m.format != 1 ||
+        if (m.surfaceId == 0 || m.configureSerial == 0 || m.width == 0 || m.height == 0 || m.format != 1 ||
             m.width > std::numeric_limits<uint32_t>::max() / 4 ||
             m.stride < m.width * 4)
             return false;

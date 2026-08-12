@@ -22,12 +22,16 @@ inline WindowGroupTransform makeWindowGroupTransform(const render::Window& windo
                                                      float requestedScale) noexcept {
     WindowGroupTransform group{};
     group.scale = std::clamp(requestedScale, 0.80f, 1.20f);
-    group.width = std::max(1, static_cast<int>(std::lround(static_cast<float>(window.width) * group.scale)));
-    group.height = std::max(1, static_cast<int>(std::lround(static_cast<float>(window.height) * group.scale)));
+    const float presentationX = window.presentationInitialized ? window.presentationX : static_cast<float>(window.x);
+    const float presentationY = window.presentationInitialized ? window.presentationY : static_cast<float>(window.y);
+    const float presentationWidth = window.presentationInitialized ? window.presentationWidth : static_cast<float>(window.width);
+    const float presentationHeight = window.presentationInitialized ? window.presentationHeight : static_cast<float>(window.height);
+    group.width = std::max(1, static_cast<int>(std::lround(presentationWidth * group.scale)));
+    group.height = std::max(1, static_cast<int>(std::lround(presentationHeight * group.scale)));
     group.x = static_cast<int>(std::lround(
-        static_cast<float>(window.x) + (static_cast<float>(window.width) - group.width) * 0.5f));
+        presentationX + (presentationWidth - group.width) * 0.5f));
     group.y = static_cast<int>(std::lround(
-        static_cast<float>(window.y) + (static_cast<float>(window.height) - group.height) * 0.5f));
+        presentationY + (presentationHeight - group.height) * 0.5f));
     group.titleHeight = std::clamp(
         static_cast<int>(std::lround(static_cast<float>(std::max(0, unscaledTitleHeight)) * group.scale)),
         0, group.height);

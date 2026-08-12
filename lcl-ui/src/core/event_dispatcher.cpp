@@ -3,7 +3,7 @@
 namespace lcl::ui {
 
 Widget* EventDispatcher::hitTest(Widget* root, float x, float y) {
-    if (!root || !root->isVisible() || !root->getAbsoluteBounds().containsPoint(x, y)) {
+    if (!root || !root->isVisible() || !root->containsPresentationPoint(x, y)) {
         return nullptr;
     }
 

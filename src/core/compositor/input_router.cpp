@@ -1,4 +1,5 @@
 #include "core/compositor/input_router.hpp"
+#include "lcl-motion/motion.hpp"
 
 #include "core/display/display_scale.hpp"
 
@@ -54,9 +55,19 @@ void InputRouter::sendPendingConfigures() {
         if (window.isMinimized) {
             continue;
         }
-        for (const auto& [surfaceKey, entry] : m_surfaces) {
+        for (auto& [surfaceKey, entry] : m_surfaces) {
             if (entry.windowId != window.id || entry.clientFd < 0) {
                 continue;
+            }
+
+            // ConfigureBounds is a one-in-flight transaction. Pointer motion
+            // may continue updating Window::pending* while the client renders,
+            // but issuing another serial here would make the expected reply
+            // stale before it can reach the compositor. Once that commit is
+            // accepted, processIPC() calls syncWindowState() again and sends
+            // the newest coalesced geometry.
+            if (SurfaceRegistry::hasOutstandingConfigure(entry)) {
+                break;
             }
 
             const int titleOffset = (window.decorationMode == render::DecorationMode::SSD)
@@ -64,23 +75,33 @@ void InputRouter::sendPendingConfigures() {
                 : 0;
             const uint32_t physicalContentW = static_cast<uint32_t>(window.pendingWidth > 0 ? window.pendingWidth : window.width);
             const uint32_t physicalContentH = static_cast<uint32_t>(std::max(1, (window.pendingHeight > 0 ? window.pendingHeight : window.height) - titleOffset));
-            if (physicalContentW == entry.width && physicalContentH == entry.height) {
+            if (physicalContentW == entry.width && physicalContentH == entry.height &&
+                entry.pendingConfigureSerial == entry.acceptedConfigureSerial && !entry.forceConfigure) {
                 break;
             }
-
             protocol::LCLHeader header{};
             header.opcode = protocol::LCLOpcode::ConfigureBounds;
             header.payloadSize = sizeof(protocol::LCLMsgConfigureBounds);
 
             protocol::LCLMsgConfigureBounds configure{};
             configure.surfaceId = static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu);
+            configure.configureSerial = entry.nextConfigureSerial++;
             configure.x = logicalToPhysical(window.x, 1.0f / entry.bufferScale);
             configure.y = logicalToPhysical(window.y, 1.0f / entry.bufferScale);
             configure.width = physicalToLogical(physicalContentW, entry.bufferScale);
             configure.height = physicalToLogical(physicalContentH, entry.bufferScale);
             configure.bufferScale = entry.bufferScale;
             configure.isFocused = window.isFocused ? 1 : 0;
-            protocol::sendMsgWithFd(entry.clientFd, header, &configure);
+            if (protocol::sendMsgWithFd(entry.clientFd, header, &configure)) {
+                entry.pendingConfigureSerial = configure.configureSerial;
+                entry.configuredX = window.x;
+                entry.configuredY = window.y;
+                entry.configuredWidth = physicalContentW;
+                entry.configuredHeight = physicalContentH;
+                entry.configuredFocused = configure.isFocused;
+                entry.lastConfigureSent = std::chrono::steady_clock::now();
+                entry.forceConfigure = false;
+            }
             break;
         }
     }
@@ -149,7 +170,7 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
     const auto& entry = surfaceIt->second;
     // System panels and surfaces that have not committed a complete frame are
     // never normal client input targets, even if focus state was stale.
-    if (entry.unfocusable || !entry.hasCommittedBuffer) {
+    if (entry.unfocusable || !entry.hasCommittedBuffer || entry.resizeInputFrozen) {
         return;
     }
     protocol::LCLHeader header{};
@@ -208,7 +229,7 @@ bool InputRouter::startClosingTransition(SurfaceRegistry::SurfaceEntry& entry) n
 
     entry.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing;
     entry.transitionElapsedSec = 0.0f;
-    entry.transitionDurationSec = 0.14f;
+    entry.transitionDurationSec = lcl::motion::tokens::windowClose().tweenParams.durationSec;
     entry.transitionOpacity = 1.0f;
     entry.transitionScale = 1.0f;
     entry.pendingDestroy = false;

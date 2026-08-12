@@ -101,6 +101,9 @@ target_include_directories(lcl-display-scale PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# Renderer/UI-independent motion primitives shared by clients and compositor.
+add_subdirectory(lcl-motion)
+
 # Backend-neutral widgets, layout, events and WindowApp lifecycle.
 add_subdirectory(lcl-ui)
 
@@ -134,14 +137,12 @@ add_library(lcl-render STATIC
     src/core/display/egl_backend.cpp
     src/render/font_renderer.cpp
     src/render/renderer.cpp
-    src/render/skia_canvas.cpp
     src/render/skia_renderer.cpp
     src/render/window_manager.cpp
 )
 
 target_include_directories(lcl-render PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
     ${DRM_INCLUDE_DIRS}
     ${GBM_INCLUDE_DIRS}
     ${EGL_INCLUDE_DIRS}
@@ -149,7 +150,7 @@ target_include_directories(lcl-render PUBLIC
 )
 
 target_link_libraries(lcl-render PUBLIC
-    lcl-ui
+    lcl-motion
     lcl-protocol
     lcl-display-scale
     ${DRM_LIBRARIES}
@@ -185,7 +186,6 @@ add_executable(lcl-core
 
 target_include_directories(lcl-core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
     ${DRM_INCLUDE_DIRS}
     ${GBM_INCLUDE_DIRS}
     ${EGL_INCLUDE_DIRS}
@@ -314,6 +314,7 @@ if(BUILD_TESTS)
     FetchContent_MakeAvailable(googletest)
 
     add_executable(lcl_unit_tests
+        tests/test_motion.cpp
         tests/test_lcl_protocol.cpp
         tests/test_app_bundle_parser.cpp
         tests/test_session_service.cpp
@@ -331,6 +332,7 @@ if(BUILD_TESTS)
         tests/test_js_runtime.cpp
         src/core/ipc/ipc_manager.cpp
         src/core/compositor/frame_scheduler.cpp
+        src/core/compositor/input_router.cpp
         src/core/compositor/surface_registry.cpp
         src/core/compositor/system_surface_policy.cpp
         src/core/scene/focus_controller.cpp

@@ -66,3 +66,31 @@ TEST(JsRuntimeTest, MultipleWindowsCanUseDistinctSurfaceIdsAndTicks) {
 
     js.shutdown();
 }
+
+TEST(JsRuntimeTest, ImplicitAndKeyframeMotionShareNativeScheduler) {
+    JsRuntime js;
+    ASSERT_TRUE(js.initialize());
+    EXPECT_TRUE(js.evalCode(R"(
+        globalThis.motionApp = new LCL.WindowApp(240, 120, "JS Motion");
+        globalThis.motionRoot = new LCL.Container();
+        motionRoot.setWidth(240); motionRoot.setHeight(120);
+        globalThis.motionButton = new LCL.Button("Move");
+        motionButton.setWidth(80); motionButton.setHeight(32);
+        motionRoot.addChild(motionButton); motionApp.setRootWidget(motionRoot);
+        motionApp.renderFrame();
+        motionApp.animate({type: "spring", duration: 240, bounce: 0.08, layout: "reflow"}, () => {
+            motionButton.setWidth(160);
+            motionButton.setOpacity(0.5);
+        });
+        globalThis.motionHandle = motionButton.animate(
+            [{opacity: 0.5, offset: 0}, {opacity: 1, offset: 1}],
+            {duration: 200, fill: "forwards"});
+        motionHandle.pause();
+        motionHandle.seek(0.5);
+        if (Math.abs(motionHandle.progress() - 0.5) > 0.001) throw new Error("seek parity failed");
+        motionHandle.reverse();
+        motionHandle.finish();
+        motionHandle.commitFinalStyles();
+    )"));
+    js.shutdown();
+}

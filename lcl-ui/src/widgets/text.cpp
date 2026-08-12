@@ -29,7 +29,9 @@ void Text::updateMeasureFunc() {
 }
 
 void Text::draw(Canvas& canvas, const Rect& damageRect) {
-    if (!m_visible || !m_absoluteBounds.intersects(damageRect) || m_text.empty()) return;
+    if (!m_visible || !getPresentationBounds().intersects(damageRect) || m_text.empty()) return;
+
+    beginPresentation(canvas);
 
     // Keep text alignment in logical coordinates; Canvas applies the selected
     // backend's logical-to-buffer transform afterwards.
@@ -41,6 +43,8 @@ void Text::draw(Canvas& canvas, const Rect& damageRect) {
         textX += std::max(0.0f, m_absoluteBounds.width - textWidth);
     }
     canvas.drawText(textX, m_absoluteBounds.y, m_text, m_textColor, m_fontSize);
+    drawChildren(canvas, damageRect);
+    endPresentation(canvas);
 }
 
 } // namespace lcl::ui
