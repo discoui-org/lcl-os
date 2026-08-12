@@ -58,15 +58,14 @@ TEST_F(IPCManagerTest, ClientConnectionAndPeerCreds) {
     LCLHeader header{};
     header.magic = LCL_PROTOCOL_MAGIC;
     header.version = LCL_PROTOCOL_VERSION;
-    header.opcode = LCLOpcode::RegisterRole;
+    header.opcode = LCLOpcode::SurfaceDestroy;
     header.requestId = 1;
 
-    LCLMsgRegisterRole reg{};
-    reg.role = LCLRole::ClientApp;
-    std::strncpy(reg.clientName, "UnitTestClient", sizeof(reg.clientName) - 1);
-    header.payloadSize = sizeof(reg);
+    LCLMsgSurfaceDestroy destroy{};
+    destroy.surfaceId = 71;
+    header.payloadSize = sizeof(destroy);
 
-    ASSERT_TRUE(sendMsgWithFd(clientFd, header, &reg, -1));
+    ASSERT_TRUE(sendMsgWithFd(clientFd, header, &destroy, -1));
 
     // Poll messages on server
     auto msgs = manager.pollMessages();
@@ -75,11 +74,11 @@ TEST_F(IPCManagerTest, ClientConnectionAndPeerCreds) {
     EXPECT_EQ(msgs[0].uid, getuid());
     EXPECT_EQ(msgs[0].gid, getgid());
     EXPECT_FALSE(msgs[0].disconnected);
-    EXPECT_EQ(msgs[0].header.opcode, LCLOpcode::RegisterRole);
-    ASSERT_EQ(msgs[0].payload.size(), sizeof(LCLMsgRegisterRole));
-    LCLMsgRegisterRole received{};
+    EXPECT_EQ(msgs[0].header.opcode, LCLOpcode::SurfaceDestroy);
+    ASSERT_EQ(msgs[0].payload.size(), sizeof(LCLMsgSurfaceDestroy));
+    LCLMsgSurfaceDestroy received{};
     std::memcpy(&received, msgs[0].payload.data(), sizeof(received));
-    EXPECT_STREQ(received.clientName, "UnitTestClient");
+    EXPECT_EQ(received.surfaceId, 71u);
 
     close(clientFd);
     manager.shutdown();
@@ -96,14 +95,12 @@ TEST_F(IPCManagerTest, RejectsClientRequestWithoutRequestId) {
     std::strncpy(addr.sun_path, testSocketPath.c_str(), sizeof(addr.sun_path) - 1);
     ASSERT_EQ(connect(clientFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
 
-    LCLMsgRegisterRole registration{};
-    registration.role = LCLRole::ClientApp;
-    std::strncpy(registration.clientName, "MissingRequestId",
-                 sizeof(registration.clientName) - 1);
+    LCLMsgSurfaceDestroy destroy{};
+    destroy.surfaceId = 72;
     LCLHeader header{};
-    header.opcode = LCLOpcode::RegisterRole;
-    header.payloadSize = sizeof(registration);
-    ASSERT_TRUE(sendMsgWithFd(clientFd, header, &registration));
+    header.opcode = LCLOpcode::SurfaceDestroy;
+    header.payloadSize = sizeof(destroy);
+    ASSERT_TRUE(sendMsgWithFd(clientFd, header, &destroy));
 
     const auto messages = manager.pollMessages();
     ASSERT_EQ(messages.size(), 1u);

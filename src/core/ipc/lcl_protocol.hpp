@@ -14,16 +14,7 @@ constexpr uint32_t LCL_PROTOCOL_VERSION = 3;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 
-enum class LCLRole : uint32_t {
-    Unspecified = 0,
-    WindowManager = 1,
-    ShellPanel = 2,
-    DesktopWallpaper = 3,
-    ClientApp = 4
-};
-
 enum class LCLOpcode : uint32_t {
-    RegisterRole = 1,
     SurfaceCreate = 2,
     SurfaceDestroy = 3,
     ConfigureBounds = 4,
@@ -39,7 +30,6 @@ enum class LCLOpcode : uint32_t {
     RequestSurfaceClose = 14,
     SetInsetBorder = 15,
     SetWindowCornerRadius = 16,
-    WindowListUpdate = 17,
     RequestWindowAction = 18,
     SubscribeShellState = 19,
     ShellStateSnapshot = 20,
@@ -161,11 +151,6 @@ struct LCLHeader {
     uint32_t payloadSize{0};
 };
 
-struct LCLMsgRegisterRole {
-    LCLRole role{LCLRole::ClientApp};
-    char clientName[64]{0};
-};
-
 struct LCLMsgSurfaceCreate {
     uint32_t surfaceId{0};
     int32_t x{0};
@@ -272,17 +257,6 @@ struct LCLMsgSetInsetBorder {
 struct LCLMsgSetWindowCornerRadius {
     uint32_t surfaceId{0};
     float radiusPx{0.0f};
-};
-
-struct LCLMsgWindowListHeader {
-    uint32_t windowCount{0};
-};
-
-struct LCLMsgWindowListEntry {
-    uint32_t windowId{0};
-    uint8_t isFocused{0};
-    char title[128]{0};
-    char appId[64]{0};
 };
 
 /** Subscribe to compositor-owned scene/focus state from a known revision. */

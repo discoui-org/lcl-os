@@ -47,6 +47,7 @@
 - `WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height, const std::string& title = "lcl-ui Application")`: Constructs a window with an explicitly selected drawing backend.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Binds the top-level Flexbox widget container.
 - `Widget* getRootWidget() const`: Returns the root widget pointer.
+- `void setAppId(std::string appId)`: Sets the required canonical application identity before connecting.
 - `bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a v3 window surface.
 - `void runEventLoop()`: Executes the non-blocking main event loop at **144 Hz target frame pacing** (~6.9ms target period).
 - `uint32_t* getPixelBuffer()`: Returns raw pointer to the SHM pixel buffer (`uint32_t` ARGB format).

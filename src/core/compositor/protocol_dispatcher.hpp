@@ -14,7 +14,7 @@
 
 namespace lcl::core {
 
-/** Validates and dispatches compositor IPC commands; it owns client roles. */
+/** Validates and dispatches compositor IPC commands and trusted shell capabilities. */
 class ProtocolDispatcher {
 public:
     ProtocolDispatcher(render::Renderer& renderer,
@@ -43,7 +43,6 @@ private:
     SceneRegistry& m_scenes;
     FocusController& m_focus;
     ShellStateBroker& m_shellState;
-    std::unordered_map<int, protocol::LCLRole> m_clientRoles;
     std::unordered_map<int, protocol::LCLSystemSurfaceKind> m_pendingSystemSurfaceKinds;
     struct ShellSubscription {
         uint64_t revision{0};

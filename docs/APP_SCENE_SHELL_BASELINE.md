@@ -40,19 +40,15 @@ The following behavior is part of the baseline and must remain:
 - Widgets draw through the backend-neutral `Canvas` contract.
 - CSD and SSD use the shared window-chrome geometry and window-action contract.
 
-These parts are temporary compatibility bridges and must be removed only after
-the revisioned app/scene state pipeline has equivalent tests:
+The following compatibility bridges have been removed after their replacement
+paths received equivalent revisioned-state coverage:
 
-- Protocol v2 and its legacy payload-size compatibility branches. Removed in
-  Step 3 after the v3 codec and rejection tests became the only accepted path.
-- PID/executable-path based `appId` inference.
-- Full `WindowListUpdate` snapshots and per-client snapshot hashes.
-- Dock-side application-directory rescans.
-- Rebuilding the complete Dock root with `setRootWidget()` for every window
-  list update.
-- Client-declared privileged shell roles.
-- Process launch paths split between `lcl-open`, compositor, and
-  `lcl-desktop-wm`. Removed in Step 4; `lcl-sessiond` is the only application
+- Protocol v2 and its legacy payload-size compatibility branches in Step 3.
+- PID/executable-path based `appId` inference, full `WindowListUpdate`
+  snapshots, Dock-side rescans/root replacement, and client-declared roles in
+  Step 9.
+- Process launch paths split between `lcl-open`, compositor, and the obsolete
+  `lcl-desktop-wm` helper in Step 4/9; `lcl-sessiond` is the only application
   process owner.
 - EGL/DRM/GBM/GLES and renderer sources compiled directly into `lcl-ui`.
 - The old `Renderer`/VGA path and the current combined client/compositor
@@ -285,3 +281,19 @@ its asset or visual treatment:
 - Menu and Dock retain their existing client-requested geometry in this step.
   Their layer, focusability, transitions, and reserved-work-area policy remain
   the Step 7 compositor-owned behavior.
+
+## Step 9 implementation record
+
+Step 9 removes the last active shell-state compatibility paths and freezes the
+desktop/mobile consumption boundary without adding a mobile UI:
+
+- `WindowListUpdate`, protocol role registration, and the unused
+  `lcl-desktop-wm` target are removed. Trusted shell-state subscriptions and
+  system-surface declarations are authorised directly by the compositor's
+  trusted-shell peer check.
+- Every `SurfaceCreate` now carries a non-empty canonical `appId`; compositor
+  no longer derives identity from PID or executable paths. Shell system
+  surfaces use the desktop-shell identity but remain outside `SceneRegistry`.
+- `ShellStateModel` materialises one revisioned snapshot/delta stream without
+  widgets. Desktop Dock continues to apply its app grouping above that model;
+  `recents()` exposes one non-closing scene per item for a future mobile shell.

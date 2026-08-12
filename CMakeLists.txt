@@ -86,6 +86,7 @@ target_link_libraries(lcl-session PUBLIC
 # no widget dependency, so desktop and future mobile shells share one client.
 add_library(lcl-shell-state STATIC
     src/core/shell/shell_state_client.cpp
+    src/core/shell/shell_state_model.cpp
 )
 
 target_include_directories(lcl-shell-state PUBLIC
@@ -234,21 +235,6 @@ target_link_libraries(lcl-open PRIVATE
     lcl-session
 )
 
-# Standalone Window Manager Daemon Target (lcl-desktop-wm)
-add_executable(lcl-desktop-wm
-    src/tools/desktop_wm_main.cpp
-    src/core/ipc/ipc_manager.cpp
-)
-
-target_include_directories(lcl-desktop-wm PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-target_link_libraries(lcl-desktop-wm PRIVATE
-    lcl-protocol
-    Threads::Threads
-)
-
 # Standalone Desktop Shell Daemon Target (lcl-desktop-shell)
 add_executable(lcl-desktop-shell
     src/apps/desktop_shell/ui_main.cpp
@@ -337,6 +323,8 @@ if(BUILD_TESTS)
         tests/test_key_mapper.cpp
         tests/test_compositor_components.cpp
         src/core/shell/shell_state_client.cpp
+        src/core/shell/shell_state_model.cpp
+        tests/test_shell_state_model.cpp
         tests/test_window_manager.cpp
         tests/test_lcl_ui.cpp
         tests/test_lcl_ui_events.cpp

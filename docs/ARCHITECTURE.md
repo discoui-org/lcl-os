@@ -191,8 +191,8 @@ Guest display boot args (when `NATIVE=1`):
 
 2. **Common Decoration Negotiation Protocol (`lcl_protocol`):**
    - `LCLOpcode::SetDecorationMode` IPC mesajı ile istemciler `SSD` (Server-Side Decoration) veya `CSD` (Client-Side Decoration) modlarını talep eder.
-   - **Masaüstü WM (`lcl-desktop-wm`):** Varsayılan olarak `SSD` modunda pencere başlık çubuğunu çizer. İstemci `CSD` talep ederse başlık çubuğu çizimini devre dışı bırakarak tüm render alanını istemciye devreder.
-   - **Mobil WM (`lcl-mobile-wm`):** Mobil deneyiminde `SSD` çizimini reddederek uygulamalara tam ekran (fullscreen) uygulama alanı sağlar.
+   - **Compositor WindowManager:** Varsayılan olarak `SSD` modunda pencere başlık çubuğunu çizer. İstemci `CSD` talep ederse başlık çubuğu çizimini devre dışı bırakarak tüm render alanını istemciye devreder.
+   - Mobil shell gelecekte aynı compositor ve revisioned shell-state sözleşmesini tüketir; ayrı bir `lcl-mobile-wm` veya paralel pencere otoritesi yoktur.
 
 ---
 

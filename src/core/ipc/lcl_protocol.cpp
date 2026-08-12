@@ -135,9 +135,6 @@ bool validFloat(float value) { return std::isfinite(value); }
 bool validUnit(float value) {
     return validFloat(value) && value >= 0.0f && value <= 1.0f;
 }
-bool validRole(LCLRole value) {
-    return value >= LCLRole::Unspecified && value <= LCLRole::ClientApp;
-}
 bool validDecoration(LCLDecorationMode value) {
     return value >= LCLDecorationMode::SSD && value <= LCLDecorationMode::None;
 }
@@ -171,8 +168,30 @@ bool validBlend(EffectBlendMode value) {
     return value >= EffectBlendMode::Normal && value <= EffectBlendMode::Plus;
 }
 bool validOpcode(LCLOpcode value) {
-    return value >= LCLOpcode::RegisterRole &&
-           value <= LCLOpcode::SetSystemSurfaceKind;
+    switch (value) {
+    case LCLOpcode::SurfaceCreate:
+    case LCLOpcode::SurfaceDestroy:
+    case LCLOpcode::ConfigureBounds:
+    case LCLOpcode::AttachBuffer:
+    case LCLOpcode::InputEvent:
+    case LCLOpcode::AckResponse:
+    case LCLOpcode::SetDecorationMode:
+    case LCLOpcode::SetWindowLayer:
+    case LCLOpcode::SetReservedZone:
+    case LCLOpcode::SetEffectGraph:
+    case LCLOpcode::ClearEffectGraph:
+    case LCLOpcode::BeginWindowMove:
+    case LCLOpcode::RequestSurfaceClose:
+    case LCLOpcode::SetInsetBorder:
+    case LCLOpcode::SetWindowCornerRadius:
+    case LCLOpcode::RequestWindowAction:
+    case LCLOpcode::SubscribeShellState:
+    case LCLOpcode::ShellStateSnapshot:
+    case LCLOpcode::ShellStateDelta:
+    case LCLOpcode::SetSystemSurfaceKind:
+        return true;
+    }
+    return false;
 }
 
 bool validShellScene(const LCLMsgShellScene& scene) {
@@ -271,21 +290,12 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
     if (!loadNative(payload, size, 0, name) || size != sizeof(Type)) \
     return false
     switch (opcode) {
-    case LCLOpcode::RegisterRole: {
-        LOAD_ONE(LCLMsgRegisterRole, msg);
-        if (!validRole(msg.role) ||
-            !validString(msg.clientName, sizeof(msg.clientName)))
-            return false;
-        out.u32(static_cast<uint32_t>(msg.role));
-        out.fixed(msg.clientName, sizeof(msg.clientName));
-        return true;
-    }
     case LCLOpcode::SurfaceCreate: {
         LOAD_ONE(LCLMsgSurfaceCreate, msg);
         if (msg.surfaceId == 0 || msg.width == 0 || msg.height == 0 ||
             !validScale(msg.bufferScale) ||
             !validString(msg.title, sizeof(msg.title)) ||
-            !validString(msg.appId, sizeof(msg.appId)))
+            !validString(msg.appId, sizeof(msg.appId)) || msg.appId[0] == '\0')
             return false;
         out.u32(msg.surfaceId);
         out.i32(msg.x);
@@ -450,31 +460,6 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         return msg.surfaceId > 0 && validFloat(msg.radiusPx) &&
                msg.radiusPx >= 0.0f;
     }
-    case LCLOpcode::WindowListUpdate: {
-        LCLMsgWindowListHeader list{};
-        if (!loadNative(payload, size, 0, list))
-            return false;
-        const size_t expected =
-            sizeof(list) +
-            static_cast<size_t>(list.windowCount) * sizeof(LCLMsgWindowListEntry);
-        if (size != expected || expected > LCL_PROTOCOL_MAX_PAYLOAD)
-            return false;
-        out.u32(list.windowCount);
-        size_t offset = sizeof(list);
-        for (uint32_t i = 0; i < list.windowCount;
-             ++i, offset += sizeof(LCLMsgWindowListEntry)) {
-            LCLMsgWindowListEntry entry{};
-            if (!loadNative(payload, size, offset, entry) || entry.isFocused > 1 ||
-                !validString(entry.title, sizeof(entry.title)) ||
-                !validString(entry.appId, sizeof(entry.appId)))
-                return false;
-            out.u32(entry.windowId);
-            out.u8(entry.isFocused);
-            out.fixed(entry.title, sizeof(entry.title));
-            out.fixed(entry.appId, sizeof(entry.appId));
-        }
-        return true;
-    }
     case LCLOpcode::RequestWindowAction: {
         LOAD_ONE(LCLMsgRequestWindowAction, msg);
         out.u32(msg.surfaceId);
@@ -543,17 +528,6 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
                    std::vector<uint8_t>& payload) {
     payload.clear();
     switch (opcode) {
-    case LCLOpcode::RegisterRole: {
-        LCLMsgRegisterRole m{};
-        uint32_t role = 0;
-        if (!in.u32(role) || !in.fixed(m.clientName, sizeof(m.clientName)))
-            return false;
-        m.role = static_cast<LCLRole>(role);
-        if (!validRole(m.role) || !validString(m.clientName, sizeof(m.clientName)))
-            return false;
-        appendNative(payload, m);
-        break;
-    }
     case LCLOpcode::SurfaceCreate: {
         LCLMsgSurfaceCreate m{};
         if (!in.u32(m.surfaceId) || !in.i32(m.x) || !in.i32(m.y) ||
@@ -563,7 +537,7 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             return false;
         if (m.surfaceId == 0 || m.width == 0 || m.height == 0 ||
             !validScale(m.bufferScale) || !validString(m.title, sizeof(m.title)) ||
-            !validString(m.appId, sizeof(m.appId)))
+            !validString(m.appId, sizeof(m.appId)) || m.appId[0] == '\0')
             return false;
         appendNative(payload, m);
         break;
@@ -710,26 +684,6 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !validFloat(m.radiusPx) || m.radiusPx < 0.0f)
             return false;
         appendNative(payload, m);
-        break;
-    }
-    case LCLOpcode::WindowListUpdate: {
-        LCLMsgWindowListHeader h{};
-        if (!in.u32(h.windowCount))
-            return false;
-        if (static_cast<uint64_t>(h.windowCount) * sizeof(LCLMsgWindowListEntry) >
-            LCL_PROTOCOL_MAX_PAYLOAD)
-            return false;
-        appendNative(payload, h);
-        for (uint32_t i = 0; i < h.windowCount; ++i) {
-            LCLMsgWindowListEntry e{};
-            if (!in.u32(e.windowId) || !in.u8(e.isFocused) ||
-                !in.fixed(e.title, sizeof(e.title)) ||
-                !in.fixed(e.appId, sizeof(e.appId)) || e.isFocused > 1 ||
-                !validString(e.title, sizeof(e.title)) ||
-                !validString(e.appId, sizeof(e.appId)))
-                return false;
-            appendNative(payload, e);
-        }
         break;
     }
     case LCLOpcode::RequestWindowAction: {

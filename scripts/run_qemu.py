@@ -21,7 +21,6 @@ BUILD_DIR = ROOT_DIR / "build"
 BINARY = BUILD_DIR / "lcl-core"
 OPEN_BIN = BUILD_DIR / "lcl-open"
 SESSIOND_BIN = BUILD_DIR / "lcl-sessiond"
-WM_BIN = BUILD_DIR / "lcl-desktop-wm"
 SHELL_BIN = BUILD_DIR / "lcl-desktop-shell"
 TERM_BIN = BUILD_DIR / "lcl-terminal"
 DEMO_BIN = BUILD_DIR / "apps" / "ui_demo" / "lcl_ui_demo"
@@ -516,9 +515,6 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
     if SESSIOND_BIN.is_file():
         shutil.copy2(SESSIOND_BIN, dest_bin / "lcl-sessiond")
 
-    if WM_BIN.is_file():
-        shutil.copy2(WM_BIN, dest_bin / "lcl-desktop-wm")
-
     if SHELL_BIN.is_file():
         shutil.copy2(SHELL_BIN, dest_bin / "lcl-desktop-shell")
 
@@ -649,7 +645,7 @@ echo "===================================================="
     )
 
     log("Resolving dynamic library dependencies...")
-    bins = [BINARY, OPEN_BIN, SESSIOND_BIN, WM_BIN, SHELL_BIN, TERM_BIN, DEMO_BIN, JS_BIN] + [p for p in host_bins.values() if p.is_file()]
+    bins = [BINARY, OPEN_BIN, SESSIOND_BIN, SHELL_BIN, TERM_BIN, DEMO_BIN, JS_BIN] + [p for p in host_bins.values() if p.is_file()]
     for bin_path in bins:
         copy_ldd_deps(bin_path, dest_lib)
 

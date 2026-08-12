@@ -92,6 +92,7 @@ using namespace lcl::ui;
 
 int main() {
     WindowApp app(lcl::render::makeSkiaCanvas(), 600, 400, "My Custom App");
+    app.setAppId("org.example.my-custom-app");
 
     auto root = std::make_unique<Container>();
     root->getYogaNode().setWidth(600.0f);

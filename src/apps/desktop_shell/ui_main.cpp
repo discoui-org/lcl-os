@@ -24,6 +24,7 @@
 #include "core/ipc/lcl_protocol.hpp"
 #include "core/session/session_client.hpp"
 #include "core/shell/shell_state_client.hpp"
+#include "core/shell/shell_state_model.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
@@ -57,27 +58,11 @@ struct DockView {
 class DockStateModel {
 public:
     bool applySnapshot(const lcl::shell::ShellStateSnapshot& snapshot) {
-        m_scenes = snapshot.scenes;
-        m_activeSceneId = snapshot.activeSceneId;
-        return true;
+        return m_state.applySnapshot(snapshot);
     }
 
     bool applyDelta(const lcl::shell::ShellStateDelta& delta) {
-        m_activeSceneId = delta.activeSceneId;
-        if (delta.kind == lcl::protocol::LCLShellStateDeltaKind::FocusChanged) return true;
-        const auto found = std::find_if(m_scenes.begin(), m_scenes.end(), [&](const auto& scene) {
-            return scene.sceneId == delta.scene.sceneId;
-        });
-        if (delta.kind == lcl::protocol::LCLShellStateDeltaKind::SceneRemoved) {
-            if (found != m_scenes.end()) m_scenes.erase(found);
-            return true;
-        }
-        if (found == m_scenes.end()) {
-            m_scenes.push_back(delta.scene);
-        } else {
-            *found = delta.scene;
-        }
-        return true;
+        return m_state.applyDelta(delta);
     }
 
     std::vector<DockWindow> items() const {
@@ -87,10 +72,10 @@ public:
         // its first scene arrives, rather than being a parallel ad-hoc list.
         result.push_back({0, "LCL Terminal", "org.lcl.terminal", false});
         byAppId.emplace("org.lcl.terminal", 0);
-        for (const auto& scene : m_scenes) {
+        for (const auto& scene : m_state.snapshot().scenes) {
             if (scene.visibility == lcl::protocol::LCLSceneVisibility::Closing) continue;
             const std::string appId = scene.appId.empty() ? "unknown" : scene.appId;
-            const bool focused = scene.sceneId == m_activeSceneId;
+            const bool focused = scene.sceneId == m_state.snapshot().activeSceneId;
             const auto existing = byAppId.find(appId);
             if (existing == byAppId.end()) {
                 byAppId.emplace(appId, result.size());
@@ -106,8 +91,7 @@ public:
     }
 
 private:
-    std::vector<lcl::shell::ShellScene> m_scenes;
-    uint64_t m_activeSceneId{0};
+    lcl::shell::ShellStateModel m_state;
 };
 
 std::string normalize(std::string value) {
@@ -290,6 +274,7 @@ int main() {
     auto wallpaper = std::make_unique<lcl::ui::WindowApp>(
         lcl::render::makeSkiaCanvas(), width, height, "LCL Wallpaper");
     wallpaper->setSurfaceId(1); wallpaper->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::Wallpaper);
+    wallpaper->setAppId("org.lcl.desktop-shell");
     wallpaper->setInputEnabled(false);
     // This is a bootstrap buffer size only. The compositor's Wallpaper policy
     // assigns the surface to the actual output bounds before it is mapped.
@@ -343,6 +328,7 @@ int main() {
         menu = std::make_unique<lcl::ui::WindowApp>(
             lcl::render::makeSkiaCanvas(), width, kMenuBarHeight, "LCL MenuBar");
         menu->setSurfaceId(2); menu->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::MenuBar);
+        menu->setAppId("org.lcl.desktop-shell");
         menu->setInputEnabled(false);
         menu->setInitialBounds(0, 0, width, kMenuBarHeight);
         menu->setRootWidget(makeMenuRoot(width, clock));
@@ -351,6 +337,7 @@ int main() {
         dock = std::make_unique<lcl::ui::WindowApp>(
             lcl::render::makeSkiaCanvas(), width, kDockHeight, "LCL Dock");
         dock->setSurfaceId(3); dock->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::Dock);
+        dock->setAppId("org.lcl.desktop-shell");
         dock->setInputEnabled(false);
         dock->setInitialBounds(0, static_cast<int32_t>(height > kDockHeight ? height - kDockHeight : 0), width, kDockHeight);
         auto dockRoot = makeDockView(dockView, width, kDockHeight);

@@ -77,7 +77,6 @@ public:
     void setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind kind) {
         if (!m_ipcConnected) m_systemSurfaceKind = kind;
     }
-    void setRole(lcl::protocol::LCLRole role) { if (!m_ipcConnected) m_role = role; }
     /** Disable widget-event dispatch for visual-only surfaces such as shell panels. */
     void setInputEnabled(bool enabled) { m_inputEnabled = enabled; }
     bool isInputEnabled() const { return m_inputEnabled; }
@@ -159,7 +158,6 @@ private:
     std::string m_appId;
     lcl::protocol::LCLSystemSurfaceKind m_systemSurfaceKind{lcl::protocol::LCLSystemSurfaceKind::None};
     uint32_t m_nextRequestId{1};
-    lcl::protocol::LCLRole m_role{lcl::protocol::LCLRole::ClientApp};
     bool m_inputEnabled{true};
     int32_t m_initialX{80};
     int32_t m_initialY{60};

@@ -221,7 +221,6 @@ TEST(SystemSurfacePolicyTest, MenuAndDockAreCompositorOwnedUnfocusablePanels) {
     const auto wallpaper = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::Wallpaper);
 
     EXPECT_TRUE(menu.isSystemSurface);
-    EXPECT_EQ(menu.role, protocol::LCLRole::ShellPanel);
     EXPECT_EQ(menu.layer, protocol::LCLWindowLayer::TopMost);
     EXPECT_TRUE(menu.unfocusable);
     EXPECT_TRUE(menu.reservesWorkArea);

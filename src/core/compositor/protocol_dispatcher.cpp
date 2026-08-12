@@ -3,12 +3,10 @@
 #include "theme/palette.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cerrno>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
-#include <filesystem>
 #include <iostream>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -20,21 +18,6 @@ int logicalToPhysical(int value, float scale) {
 }
 uint32_t physicalToLogical(uint32_t value, float scale) {
     return std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(value) / scale)));
-}
-std::string inferAppIdFromPid(pid_t pid) {
-    if (pid <= 0) return "";
-    std::array<char, 64> procPath{};
-    std::snprintf(procPath.data(), procPath.size(), "/proc/%d/exe", static_cast<int>(pid));
-    std::array<char, 4096> resolved{};
-    const ssize_t count = readlink(procPath.data(), resolved.data(), resolved.size() - 1);
-    if (count <= 0) return "";
-    resolved[static_cast<size_t>(count)] = '\0';
-    std::filesystem::path executable(resolved.data());
-    for (auto current = executable; !current.empty(); current = current.parent_path()) {
-        if (current.extension() == ".app") return current.stem().string();
-        if (current == current.root_path()) break;
-    }
-    return executable.stem().string();
 }
 protocol::LCLMsgShellScene toWireScene(const SceneRecord& scene) {
     protocol::LCLMsgShellScene wire{};
@@ -162,7 +145,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             entry.transitionScale = 0.96f;
         }
         entry.hasCommittedBuffer = true;
-        if (entry.role == protocol::LCLRole::ClientApp) {
+        if (entry.systemSurfaceKind == protocol::LCLSystemSurfaceKind::None) {
             m_scenes.mapClientSurface(surfaceKey, clientPid, entry.windowId, entry.appId, entry.title);
         }
         std::cout << "[LCL Compositor] Mapped Window (ID: " << entry.windowId
@@ -215,7 +198,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 
     for (const auto& msg : ipcManager.pollMessages()) {
         if (msg.disconnected) {
-            m_clientRoles.erase(msg.clientFd);
             m_pendingSystemSurfaceKinds.erase(msg.clientFd);
             m_shellSubscriptions.erase(msg.clientFd);
             std::vector<uint64_t> surfacesToRemove;
@@ -246,20 +228,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         const bool isSurfaceCreate = msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceCreate;
         const bool isAttachBuffer = msg.header.opcode == lcl::protocol::LCLOpcode::AttachBuffer;
 
-        if (msg.header.opcode == lcl::protocol::LCLOpcode::RegisterRole) {
-            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgRegisterRole)) {
-                auto* reg = reinterpret_cast<const lcl::protocol::LCLMsgRegisterRole*>(msg.payload.data());
-                if ((reg->role == protocol::LCLRole::ShellPanel ||
-                     reg->role == protocol::LCLRole::DesktopWallpaper) &&
-                    !SystemSurfacePolicyRegistry::isTrustedShellPeer(msg.pid)) {
-                    requestAck.error(5, "privileged shell role denied");
-                    continue;
-                }
-                m_clientRoles[msg.clientFd] = reg->role;
-            }
-            continue;
-        }
-
         if (msg.header.opcode == lcl::protocol::LCLOpcode::SetSystemSurfaceKind) {
             if (msg.payload.size() != sizeof(lcl::protocol::LCLMsgSetSystemSurfaceKind)) {
                 requestAck.error(3, "invalid system-surface declaration");
@@ -280,9 +248,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 requestAck.error(3, "invalid shell-state subscription");
                 continue;
             }
-            const auto role = m_clientRoles.find(msg.clientFd);
-            if (role == m_clientRoles.end() || role->second != protocol::LCLRole::ShellPanel) {
-                requestAck.error(4, "shell-state subscription requires ShellPanel role");
+            if (!SystemSurfacePolicyRegistry::isTrustedShellPeer(msg.pid)) {
+                requestAck.error(4, "shell-state subscription requires a trusted shell peer");
                 continue;
             }
             const auto* request = reinterpret_cast<const lcl::protocol::LCLMsgSubscribeShellState*>(msg.payload.data());
@@ -300,14 +267,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             int winH = DisplayScale::px(360);
             float bufferScale = 1.0f;
 
-            // RegisterRole is delivered on the same ordered stream before
-            // SurfaceCreate.  Apply shell roles at creation time, rather than
-            // briefly creating panels as ordinary decorated windows and waiting
-            // for a later SetDecorationMode/SetWindowLayer pair.
-            const auto roleIt = m_clientRoles.find(msg.clientFd);
-            protocol::LCLRole clientRole =
-                (roleIt != m_clientRoles.end()) ? roleIt->second : protocol::LCLRole::ClientApp;
-
             if (msg.payload.size() == sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
                 auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
                 surfId = sm->surfaceId;
@@ -323,9 +282,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             const protocol::LCLSystemSurfaceKind requestedSystemKind =
                 kindIt != m_pendingSystemSurfaceKinds.end()
                     ? kindIt->second
-                    : SystemSurfacePolicyRegistry::inferLegacyKind(clientRole, title.c_str());
+                    : protocol::LCLSystemSurfaceKind::None;
             const auto systemPolicy = SystemSurfacePolicyRegistry::policyFor(requestedSystemKind);
-            if (systemPolicy.isSystemSurface) clientRole = systemPolicy.role;
             SystemSurfacePolicyRegistry::applyInitialPlacement(
                 systemPolicy, m_renderer.getWidth(), m_renderer.getHeight(),
                 winX, winY, winW, winH);
@@ -338,7 +296,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.initialY = winY;
                 entry.initialWidth = static_cast<uint32_t>(winW);
                 entry.initialHeight = static_cast<uint32_t>(winH);
-                entry.role = clientRole;
                 entry.systemSurfaceKind = requestedSystemKind;
                 entry.suppressInitialTransition = systemPolicy.suppressInitialTransition;
                 if (systemPolicy.isSystemSurface) {
@@ -349,10 +306,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 }
                 entry.clientFd = msg.clientFd;
                 entry.bufferScale = bufferScale;
-                entry.appId = (msg.payload.size() == sizeof(lcl::protocol::LCLMsgSurfaceCreate) &&
-                               reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data())->appId[0] != '\0')
-                    ? reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data())->appId
-                    : inferAppIdFromPid(msg.pid);
+                entry.appId = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data())->appId;
                 m_surfaces[surfaceKey] = entry;
                 std::cout << "[LCL Compositor] Registered unmapped Surface " << surfId
                           << " from client PID " << msg.pid << " (" << winW << "x" << winH << ")\n";

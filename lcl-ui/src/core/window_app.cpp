@@ -100,8 +100,8 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     m_rootWidget->markDirty();
     // A newly mounted tree has not been through Yoga/syncLayout yet, so its
     // absolute bounds are still empty and markDirty() cannot produce damage.
-    // Force one full frame after layout; runtime root replacement (the dock's
-    // WindowListUpdate path, for example) must not remain on the old pixels.
+    // Force one full frame after layout; runtime root replacement must not
+    // leave old pixels in the client buffer.
     m_firstFrame = true;
 }
 
@@ -139,6 +139,10 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
 }
 
 bool WindowApp::connectCompositor(const std::string& socketPath) {
+    if (m_appId.empty()) {
+        std::cerr << "[lcl-ui ERROR] WindowApp requires a canonical app ID before connection\n";
+        return false;
+    }
     for (int i = 0; i < 50; ++i) {
         m_socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
         if (m_socketFd >= 0) {
@@ -170,16 +174,9 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         fcntl(m_socketFd, F_SETFL, flags | O_NONBLOCK);
     }
 
-    // 1. Register client role. System-surface policy is declared separately;
-    // compositor verifies that declaration against the trusted shell peer.
-    lcl::protocol::LCLMsgRegisterRole regMsg{};
-    regMsg.role = m_role;
-    std::strncpy(regMsg.clientName, m_title.c_str(), sizeof(regMsg.clientName) - 1);
-    if (!sendProtocolMessage(lcl::protocol::LCLOpcode::RegisterRole, &regMsg, sizeof(regMsg))) {
-        std::cerr << "[lcl-ui ERROR] Failed to register v3 client role\n";
-        return false;
-    }
-
+    // 1. System-surface policy is declared separately. The compositor verifies
+    // the declaration against the trusted shell peer; normal clients have no
+    // role-selection protocol.
     if (m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::None) {
         lcl::protocol::LCLMsgSetSystemSurfaceKind systemSurface{};
         systemSurface.kind = m_systemSurfaceKind;

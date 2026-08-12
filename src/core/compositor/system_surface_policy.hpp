@@ -14,7 +14,6 @@ enum class SystemSurfacePlacement : uint8_t {
 
 /** Compositor-enforced policy for one trusted system surface. */
 struct SystemSurfacePolicy {
-    protocol::LCLRole role{protocol::LCLRole::ClientApp};
     protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
     bool unfocusable{false};
     bool insetBorderEnabled{true};
@@ -37,8 +36,6 @@ public:
     static void applyInitialPlacement(const SystemSurfacePolicy& policy,
                                       uint32_t outputWidth, uint32_t outputHeight,
                                       int& x, int& y, int& width, int& height) noexcept;
-    static protocol::LCLSystemSurfaceKind inferLegacyKind(protocol::LCLRole role,
-                                                           const char* title) noexcept;
     static bool isTrustedShellPeer(pid_t pid) noexcept;
 };
 

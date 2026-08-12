@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
 #include <unistd.h>
 
@@ -17,7 +16,6 @@ SystemSurfacePolicy SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSu
     SystemSurfacePolicy policy{};
     switch (kind) {
         case protocol::LCLSystemSurfaceKind::Wallpaper:
-            policy.role = protocol::LCLRole::DesktopWallpaper;
             policy.layer = protocol::LCLWindowLayer::Bottom;
             policy.unfocusable = true;
             policy.insetBorderEnabled = false;
@@ -27,7 +25,6 @@ SystemSurfacePolicy SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSu
             return policy;
         case protocol::LCLSystemSurfaceKind::MenuBar:
         case protocol::LCLSystemSurfaceKind::Dock:
-            policy.role = protocol::LCLRole::ShellPanel;
             policy.layer = protocol::LCLWindowLayer::TopMost;
             policy.unfocusable = true;
             policy.insetBorderEnabled = false;
@@ -52,15 +49,6 @@ void SystemSurfacePolicyRegistry::applyInitialPlacement(const SystemSurfacePolic
     height = static_cast<int>(outputHeight);
 }
 
-protocol::LCLSystemSurfaceKind SystemSurfacePolicyRegistry::inferLegacyKind(
-    protocol::LCLRole role, const char* title) noexcept {
-    if (role == protocol::LCLRole::DesktopWallpaper) return protocol::LCLSystemSurfaceKind::Wallpaper;
-    if (role != protocol::LCLRole::ShellPanel || title == nullptr) return protocol::LCLSystemSurfaceKind::None;
-    if (std::strcmp(title, "LCL MenuBar") == 0) return protocol::LCLSystemSurfaceKind::MenuBar;
-    if (std::strcmp(title, "LCL Dock") == 0) return protocol::LCLSystemSurfaceKind::Dock;
-    return protocol::LCLSystemSurfaceKind::None;
-}
-
 bool SystemSurfacePolicyRegistry::isTrustedShellPeer(pid_t pid) noexcept {
     if (pid <= 0) return false;
     std::array<char, 64> procPath{};
@@ -69,7 +57,8 @@ bool SystemSurfacePolicyRegistry::isTrustedShellPeer(pid_t pid) noexcept {
     const ssize_t count = readlink(procPath.data(), resolved.data(), resolved.size() - 1);
     if (count <= 0) return false;
     resolved[static_cast<size_t>(count)] = '\0';
-    return std::filesystem::path(resolved.data()).filename() == "lcl-desktop-shell";
+    const auto executable = std::filesystem::path(resolved.data()).filename();
+    return executable == "lcl-desktop-shell" || executable == "lcl-mobile-shell";
 }
 
 } // namespace lcl::core

@@ -10,7 +10,7 @@ lcl-os/
 ├── src/                      # Core OS Engine & Compositor
 │   ├── core/                 # DRM/KMS, EGL, Evdev Input, Hotplug, IPC, Session
 │   ├── render/               # Skia Renderer, FontRenderer, WindowManager
-│   └── tools/                # Core System Daemons & Binaries (lcl-core, lcl-desktop-wm, lcl-terminal, lcl-open)
+│   └── tools/                # Core System Daemons & Binaries (lcl-core, lcl-terminal, lcl-open)
 ├── lcl-ui/                   # Decoupled UI Application Framework (Yoga Flexbox, Widget Tree)
 ├── apps/                     # User-Space Desktop Applications
 │   ├── ui_demo/              # Flexbox Interactive Widget Demo App (UIDemo.app)

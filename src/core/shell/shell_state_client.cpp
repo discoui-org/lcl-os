@@ -58,10 +58,7 @@ bool ShellStateClient::connect(const std::string& socketPath) {
     const int flags = fcntl(m_socketFd, F_GETFL, 0);
     if (flags >= 0) fcntl(m_socketFd, F_SETFL, flags | O_NONBLOCK);
 
-    protocol::LCLMsgRegisterRole role{};
-    role.role = protocol::LCLRole::ShellPanel;
-    std::strncpy(role.clientName, "lcl-shell-state", sizeof(role.clientName) - 1);
-    if (!send(protocol::LCLOpcode::RegisterRole, &role, sizeof(role)) || !subscribe(0)) {
+    if (!subscribe(0)) {
         close(m_socketFd);
         m_socketFd = -1;
         return false;

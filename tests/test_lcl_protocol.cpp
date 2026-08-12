@@ -38,6 +38,7 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     msg.height = 600;
     msg.bufferScale = 1.5f;
     std::strncpy(msg.title, "Test Window Title", sizeof(msg.title) - 1);
+    std::strncpy(msg.appId, "org.lcl.test", sizeof(msg.appId) - 1);
 
     headerSend.payloadSize = sizeof(msg);
 
@@ -67,6 +68,7 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     EXPECT_EQ(msgRecv->height, 600u);
     EXPECT_FLOAT_EQ(msgRecv->bufferScale, 1.5f);
     EXPECT_STREQ(msgRecv->title, "Test Window Title");
+    EXPECT_STREQ(msgRecv->appId, "org.lcl.test");
 
     close(sv[0]);
     close(sv[1]);
@@ -92,6 +94,7 @@ std::vector<uint8_t> surfaceCreatePacket(float scale) {
     create.height = 480;
     create.bufferScale = scale;
     std::strncpy(create.title, "Codec Test", sizeof(create.title) - 1);
+    std::strncpy(create.appId, "org.lcl.codec-test", sizeof(create.appId) - 1);
     std::vector<uint8_t> packet;
     if (!encodePacket(header, &create, packet))
         return {};
@@ -546,4 +549,23 @@ TEST(LCLProtocolTest, SystemSurfaceDeclarationRoundTripsAndRejectsNone) {
 
     request.kind = LCLSystemSurfaceKind::None;
     EXPECT_FALSE(encodePacket(header, &request, packet));
+}
+
+TEST(LCLProtocolTest, SurfaceCreateRequiresCanonicalAppId) {
+    LCLMsgSurfaceCreate request{};
+    request.surfaceId = 7;
+    request.width = 640;
+    request.height = 480;
+    request.bufferScale = 1.0f;
+    std::strncpy(request.title, "No identity", sizeof(request.title) - 1);
+
+    LCLHeader header{};
+    header.opcode = LCLOpcode::SurfaceCreate;
+    header.requestId = 64;
+    header.payloadSize = sizeof(request);
+    std::vector<uint8_t> packet;
+    EXPECT_FALSE(encodePacket(header, &request, packet));
+
+    std::strncpy(request.appId, "org.lcl.test", sizeof(request.appId) - 1);
+    EXPECT_TRUE(encodePacket(header, &request, packet));
 }
