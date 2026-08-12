@@ -40,9 +40,7 @@ endforeach()
 # Compiler flags for LCL OS core
 add_compile_options(-Wall -Wextra -Wpedantic)
 
-# Shared IPC wire-format implementation.  Keeping it separate lets clients
-# and compositor use one protocol binary without changing the existing v2
-# message contract.
+# Shared compositor/client IPC wire-format implementation.
 add_library(lcl-protocol STATIC
     src/core/ipc/lcl_protocol.cpp
 )
@@ -56,6 +54,32 @@ target_include_directories(lcl-protocol PUBLIC
 # without pulling compositor display code into application binaries.
 add_library(lcl-display-scale STATIC
     src/core/display/display_scale.cpp
+)
+
+# Session lifecycle transport and authority stay independent from compositor
+# surface IPC.  This is the durable boundary between app processes and scenes.
+add_library(lcl-session-protocol STATIC
+    src/core/session/session_protocol.cpp
+)
+
+target_include_directories(lcl-session-protocol PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+add_library(lcl-session STATIC
+    src/core/app/app_bundle_parser.cpp
+    src/core/session/app_registry.cpp
+    src/core/session/session_service.cpp
+    src/core/session/session_client.cpp
+)
+
+target_include_directories(lcl-session PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(lcl-session PUBLIC
+    lcl-session-protocol
+    Threads::Threads
 )
 
 target_include_directories(lcl-display-scale PUBLIC
@@ -135,13 +159,9 @@ add_executable(lcl-core
     src/core/compositor/input_router.cpp
     src/core/compositor/protocol_dispatcher.cpp
     src/core/compositor/surface_registry.cpp
-    src/apps/terminal/terminal_app.cpp
-    src/core/app/app_bundle_parser.cpp
     src/core/input/input_manager.cpp
     src/core/input/key_mapper.cpp
     src/core/ipc/ipc_manager.cpp
-    src/core/session/startup_manager.cpp
-    src/core/terminal/pty_manager.cpp
 )
 
 target_include_directories(lcl-core PRIVATE
@@ -168,11 +188,24 @@ target_compile_options(lcl-core PRIVATE
     ${UDEV_CFLAGS_OTHER}
 )
 
-# Native CLI App Launcher Target (lcl-open)
+# Session authority: app catalog, launch, and process lifecycle.
+add_executable(lcl-sessiond
+    src/tools/sessiond_main.cpp
+)
+
+target_include_directories(lcl-sessiond PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(lcl-sessiond PRIVATE
+    lcl-session
+    Threads::Threads
+)
+
+# Native CLI App Launcher Target (lcl-open). It never forks applications;
+# all process lifecycle is delegated to lcl-sessiond.
 add_executable(lcl-open
     src/tools/open_main.cpp
-    src/core/app/app_bundle_parser.cpp
-    src/core/ipc/ipc_manager.cpp
 )
 
 target_include_directories(lcl-open PRIVATE
@@ -180,7 +213,7 @@ target_include_directories(lcl-open PRIVATE
 )
 
 target_link_libraries(lcl-open PRIVATE
-    lcl-protocol
+    lcl-session
 )
 
 # Standalone Window Manager Daemon Target (lcl-desktop-wm)
@@ -278,6 +311,7 @@ if(BUILD_TESTS)
     add_executable(lcl_unit_tests
         tests/test_lcl_protocol.cpp
         tests/test_app_bundle_parser.cpp
+        tests/test_session_service.cpp
         tests/test_display_scale.cpp
         tests/test_ipc_manager.cpp
         tests/test_input_manager.cpp
@@ -334,6 +368,7 @@ if(BUILD_TESTS)
         lcl-ui
         lcl-canvas-skia
         lcl-protocol
+        lcl-session
         qjs
         ${LIBINPUT_LIBRARIES}
         ${UDEV_LIBRARIES}

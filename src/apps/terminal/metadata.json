@@ -1,4 +1,5 @@
 {
+    "id": "org.lcl.terminal",
     "name": "LCL Terminal",
     "executable": "/bin/lcl-terminal",
     "version": "1.0.0",

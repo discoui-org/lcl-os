@@ -20,6 +20,7 @@ ROOT_DIR = SCRIPT_DIR.parent
 BUILD_DIR = ROOT_DIR / "build"
 BINARY = BUILD_DIR / "lcl-core"
 OPEN_BIN = BUILD_DIR / "lcl-open"
+SESSIOND_BIN = BUILD_DIR / "lcl-sessiond"
 WM_BIN = BUILD_DIR / "lcl-desktop-wm"
 SHELL_BIN = BUILD_DIR / "lcl-desktop-shell"
 TERM_BIN = BUILD_DIR / "lcl-terminal"
@@ -512,6 +513,9 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
             executable=True,
         )
 
+    if SESSIOND_BIN.is_file():
+        shutil.copy2(SESSIOND_BIN, dest_bin / "lcl-sessiond")
+
     if WM_BIN.is_file():
         shutil.copy2(WM_BIN, dest_bin / "lcl-desktop-wm")
 
@@ -560,6 +564,7 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
             uidemo_app / "metadata.json",
             """{
     "name": "LCL UI Demo",
+    "id": "org.lcl.uidemo",
     "executable": "bin/ui_demo",
     "version": "1.0.0",
     "icon": "assets/icon.png"
@@ -583,6 +588,7 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
             term_app / "metadata.json",
             """{
     "name": "LCL Terminal",
+    "id": "org.lcl.terminal",
     "executable": "/bin/lcl-terminal",
     "version": "1.0.0",
     "icon": "assets/icon.png"
@@ -596,6 +602,7 @@ bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
     write_text(
         sysmon_app / "metadata.json",
         """{
+    "id": "org.lcl.system-monitor",
     "name": "System Monitor",
     "executable": "bin/sysmon",
     "version": "1.0.0",
@@ -625,6 +632,7 @@ echo "===================================================="
             uidemo_js_app / "metadata.json",
             """{
     "name": "LCL UI Demo JS",
+    "id": "org.lcl.uidemo-js",
     "executable": "bin/ui_demo_js",
     "version": "1.0.0",
     "icon": "assets/icon.png"
@@ -641,7 +649,7 @@ echo "===================================================="
     )
 
     log("Resolving dynamic library dependencies...")
-    bins = [BINARY, OPEN_BIN, WM_BIN, SHELL_BIN, TERM_BIN, DEMO_BIN, JS_BIN] + [p for p in host_bins.values() if p.is_file()]
+    bins = [BINARY, OPEN_BIN, SESSIOND_BIN, WM_BIN, SHELL_BIN, TERM_BIN, DEMO_BIN, JS_BIN] + [p for p in host_bins.values() if p.is_file()]
     for bin_path in bins:
         copy_ldd_deps(bin_path, dest_lib)
 
@@ -802,13 +810,14 @@ fi
 
 /bin/lcl-core 2>&1 | tee /var/log/lcl_compositor.log &
 sleep 0.2
+if [ -x /usr/bin/lcl-sessiond ]; then
+    echo "[init] Starting lcl-sessiond..."
+    /usr/bin/lcl-sessiond 2>&1 | tee /var/log/lcl_sessiond.log &
+    sleep 0.1
+fi
 if [ -x /usr/bin/lcl-desktop-shell ]; then
     echo "[init] Starting lcl-desktop-shell..."
     /usr/bin/lcl-desktop-shell 2>&1 | tee /var/log/lcl_desktop_shell.log &
-fi
-if [ -x /usr/bin/lcl-desktop-wm ]; then
-    echo "[init] Starting lcl-desktop-wm daemon..."
-    /usr/bin/lcl-desktop-wm 2>&1 | tee /var/log/lcl_wm.log &
 fi
 wait
 """,

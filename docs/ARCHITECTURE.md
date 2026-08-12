@@ -8,13 +8,15 @@ LCL is a modular, layered graphics operating system architecture running directl
 
 ## 1. Architectural Layers & Vertical Slice
 
-The LCL architecture consists of 4 main decoupled layers:
+The LCL architecture consists of 5 main decoupled layers:
 
 ```text
 +-----------------------------------------------------------------------+
 |  Top Layer / Apps & Shell (JS Shell, LCL Terminal, System Monitor)     |
 +-----------------------------------------------------------------------+
-|  Application & IPC Layer (AppBundleParser, lcl-open, AF_UNIX IPC)     |
+|  Session Layer (lcl-sessiond, app catalog, launch, process lifecycle) |
++-----------------------------------------------------------------------+
+|  Application & IPC Layer (lcl-ui clients, compositor AF_UNIX IPC)    |
 +-----------------------------------------------------------------------+
 |  Graphics & Window Manager (Skia/stb_truetype, FontRenderer, PTY)     |
 +-----------------------------------------------------------------------+
@@ -39,11 +41,19 @@ The LCL architecture consists of 4 main decoupled layers:
 * **Window Manager:** Decoupled spatial window layout engine tracking z-index, spatial coordinates (`x, y, width, height`), focus, and window frame rendering.
 * **Terminal Engine (`TerminalApp` & `PTYManager`):** Pseudo-terminal (`/dev/pts/`) controller spawning interactive GNU Bash shells. Features font-agnostic canvas layout, `TIOCSWINSZ` PTY window size synchronization, VT100 write-head overwrite state tracking, and typing-aware 500ms blinking inverted block cursor rendering.
 
-### III. IPC & Application Bundle Subsystem
-* **Location:** `src/core/ipc/`, `src/tools/`
+### III. Session, IPC & Application Bundle Subsystem
+* **Location:** `src/core/session/`, `src/core/ipc/`, `src/tools/`
+* **Session Authority (`lcl-sessiond`):** Owns the cached `.app` catalog,
+  manifest-backed canonical application IDs, default-profile launch, process
+  instance IDs, child reaping, and blocking launch completion. It has no
+  compositor, surface, scene, renderer, or focus dependency.
+* **Session RPC:** `lcl-sessiond` exposes an owner-only `SOCK_SEQPACKET`
+  endpoint at `/run/user/1000/lcl-sessiond.sock`. Its explicit little-endian
+  requests cover catalog snapshots and launch/process-exit lifecycle; this is
+  distinct from compositor protocol v3 surface IPC.
 * **Secure Unix Domain Socket IPC:** Compositor protocol v3 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`.
-* **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`.
-* **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ CLI tool linking against `AppBundleParser`. Supports background launch (`open App.app`) and blocking wait mode (`open -w App.app`) with signal handling (`SIGINT`/`SIGTERM`) and automatic window surface reclamation (`DESTROY_LAST_WINDOW`).
+* **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`. Manifests declare a stable `id`; older bundles receive a deterministic `bundle.<name>` compatibility ID.
+* **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ session client. It sends `LaunchRequest` to sessiond and optionally waits for `ProcessExited`; it never forks or execs applications itself.
 
 ### IV. Storage & Asynchronous File System
 * **Location:** `src/fs/`
@@ -113,10 +123,11 @@ lcl-os/
     │   ├── display/                # DRM/KMS & OpenGL/Vulkan display backend
     │   ├── input/                  # evdev & libinput event listeners
     │   ├── ipc/                    # Secure Unix Domain Socket IPC server
+    │   ├── session/                # App registry, session RPC, lifecycle authority
     │   └── terminal/               # PTY master/slave manager
     ├── render/                     # Renderer engine & stb_truetype FontRenderer
     ├── fs/                         # io_uring & POSIX async file system
-    └── tools/                      # Native CLI utilities (lcl-open)
+    └── tools/                      # Native CLI utilities (lcl-open, lcl-sessiond)
 ```
 
 ### Build & QEMU (dev hosts)

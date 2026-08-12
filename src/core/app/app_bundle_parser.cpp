@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <algorithm>
+#include <cctype>
 
 namespace {
 
@@ -25,6 +26,20 @@ std::string extractJsonString(const std::string& json, const std::string& key) {
     if (endQuote == std::string::npos) return "";
 
     return json.substr(startQuote + 1, endQuote - startQuote - 1);
+}
+
+std::string fallbackAppId(const std::string& bundlePath) {
+    std::string name = bundlePath;
+    const auto slash = name.find_last_of('/');
+    if (slash != std::string::npos) name.erase(0, slash + 1);
+    if (name.size() > 4 && name.substr(name.size() - 4) == ".app") {
+        name.resize(name.size() - 4);
+    }
+    std::string id = "bundle.";
+    for (unsigned char c : name) {
+        id.push_back(std::isalnum(c) ? static_cast<char>(std::tolower(c)) : '-');
+    }
+    return id;
 }
 
 } // namespace
@@ -52,6 +67,10 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
 
     AppBundleMetadata meta{};
     meta.bundlePath = bundlePath;
+    meta.appId = extractJsonString(content, "id");
+    if (meta.appId.empty()) meta.appId = extractJsonString(content, "appId");
+    if (meta.appId.empty()) meta.appId = extractJsonString(content, "bundleId");
+    if (meta.appId.empty()) meta.appId = fallbackAppId(bundlePath);
     meta.name = extractJsonString(content, "name");
     meta.version = extractJsonString(content, "version");
     meta.icon = extractJsonString(content, "icon");

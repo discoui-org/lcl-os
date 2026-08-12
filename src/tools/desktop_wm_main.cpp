@@ -54,14 +54,10 @@ int main() {
     lcl::protocol::sendMsgWithFd(socketFd, regHeader, &regMsg);
     std::cout << "[LCL WM] Registered as WINDOW_MANAGER role on lcl-core compositor.\n";
 
-    // 3. Spawn initial test client process (/usr/bin/lcl-terminal)
-    std::cout << "[LCL WM] Spawning standalone client process (/usr/bin/lcl-terminal)...\n";
-    if (::fork() == 0) {
-        ::execl("/usr/bin/lcl-terminal", "/usr/bin/lcl-terminal", nullptr);
-        ::_exit(1);
-    }
-
-    // 4. Main Window Manager event loop
+    // Application process ownership belongs to lcl-sessiond. This legacy
+    // compatibility client no longer launches applications directly.
+    //
+    // 3. Main Window Manager event loop
     std::cout << "[LCL WM] Window Manager active. Managing layouts, focus, and Server-Side Decorations (SSD).\n";
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(1));

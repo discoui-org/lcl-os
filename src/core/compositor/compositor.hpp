@@ -11,7 +11,6 @@
 #include "core/display/display_manager.hpp"
 #include "core/input/input_manager.hpp"
 #include "core/ipc/ipc_manager.hpp"
-#include "core/session/startup_manager.hpp"
 #include "core/compositor/surface_registry.hpp"
 #include "core/compositor/input_router.hpp"
 #include "core/compositor/frame_scheduler.hpp"
@@ -76,7 +75,6 @@ private:
     DisplayManager         m_displayManager;
     InputManager           m_inputManager;
     IPCManager             m_ipcManager;
-    StartupManager         m_startupManager;
     render::Renderer       m_renderer;
     render::WindowManager  m_windowManager;
 

@@ -8,6 +8,7 @@ namespace lcl::core {
 
 struct AppBundleMetadata {
     std::string bundlePath;      // e.g. "/home/user/Applications/SystemMonitor.app"
+    std::string appId;           // Canonical manifest identity, e.g. "org.lcl.terminal"
     std::string name;            // e.g. "System Monitor"
     std::string executablePath;  // e.g. "/home/user/Applications/SystemMonitor.app/bin/sysmon"
     std::string version;         // e.g. "1.0.0"

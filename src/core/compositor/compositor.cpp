@@ -83,9 +83,6 @@ bool Compositor::initialize() {
         }
     });
 
-    // --- Launch primary desktop session ---
-    m_startupManager.launchDefaultSession(m_windowManager);
-
     // --- Frame pacing from DRM refresh rate ---
     uint32_t hz = (m_displayManager.isInitialized()
                    ? m_displayManager.getActiveDisplayMode().refreshRate : 60);

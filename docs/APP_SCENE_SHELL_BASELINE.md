@@ -52,7 +52,8 @@ the revisioned app/scene state pipeline has equivalent tests:
   list update.
 - Client-declared privileged shell roles.
 - Process launch paths split between `lcl-open`, compositor, and
-  `lcl-desktop-wm`.
+  `lcl-desktop-wm`. Removed in Step 4; `lcl-sessiond` is the only application
+  process owner.
 - EGL/DRM/GBM/GLES and renderer sources compiled directly into `lcl-ui`.
 - The old `Renderer`/VGA path and the current combined client/compositor
   `SkiaRenderer` implementation.
@@ -174,3 +175,27 @@ The Step 3 automated gate is the full default build plus all CTest tests,
 including explicit little-endian encoding, v2 rejection, required scale,
 truncated packet, FD attachment, request-ID, and queued-order cases. The QEMU
 check remains the behavioral acceptance gate before Step 4.
+
+## Step 4 implementation record
+
+Step 4 separates application lifecycle authority from the compositor without
+changing compositor surface, focus, or shell-state ownership:
+
+- `lcl-sessiond` owns the cached `.app` registry, manifest-backed canonical
+  `id`, default Terminal profile, process instance ID, child reaping, and
+  process-exit notification.
+- Session RPC is a distinct owner-only Unix `SOCK_SEQPACKET` protocol at
+  `/run/user/1000/lcl-sessiond.sock`; it supports typed catalog snapshot,
+  launch response, and wait-for-exit flow with explicit little-endian fields.
+- `lcl-open` is now a session client and no longer parses bundles, forks, or
+  execs applications. `--wait` waits for the session-owned process exit event.
+- The compositor no longer links `StartupManager`, app-bundle parsing, terminal
+  app, or PTY launch code. The temporary desktop-WM compatibility client also
+  no longer spawns a Terminal.
+- QEMU init starts compositor, then sessiond, then the desktop shell. Sessiond
+  launches the default Terminal once.
+
+The desktop shell's icon lookup and its legacy `WindowListUpdate` consumer are
+deliberately retained until Steps 5 and 6 provide the revisioned scene/focus
+broker and typed shell client. They are read-only compatibility paths, not
+application launch authority.

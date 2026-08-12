@@ -10,7 +10,8 @@
 namespace lcl::core {
 
 /// Canonical path for the Compositor Unix Domain Socket.
-/// Used by the Compositor server and all IPC clients (lcl-open, lcl-close, etc.)
+/// Used only by the compositor and client surface connections. Application
+/// catalog and launch lifecycle use the separate lcl-sessiond socket.
 inline constexpr const char* kCompositorSocket = "/run/user/1000/lcl-compositor.sock";
 
 struct IPCClientMessage {

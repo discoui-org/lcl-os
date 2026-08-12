@@ -1,4 +1,5 @@
 {
+    "id": "org.lcl.uidemo-js",
     "name": "LCL UI Demo JS",
     "executable": "bin/main.js",
     "version": "1.0.0",
