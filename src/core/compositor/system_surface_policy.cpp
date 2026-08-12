@@ -23,6 +23,7 @@ SystemSurfacePolicy SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSu
             policy.insetBorderEnabled = false;
             policy.suppressInitialTransition = true;
             policy.isSystemSurface = true;
+            policy.placement = SystemSurfacePlacement::OutputBounds;
             return policy;
         case protocol::LCLSystemSurfaceKind::MenuBar:
         case protocol::LCLSystemSurfaceKind::Dock:
@@ -38,6 +39,17 @@ SystemSurfacePolicy SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSu
         default:
             return policy;
     }
+}
+
+void SystemSurfacePolicyRegistry::applyInitialPlacement(const SystemSurfacePolicy& policy,
+                                                        uint32_t outputWidth, uint32_t outputHeight,
+                                                        int& x, int& y, int& width, int& height) noexcept {
+    if (policy.placement != SystemSurfacePlacement::OutputBounds) return;
+
+    x = 0;
+    y = 0;
+    width = static_cast<int>(outputWidth);
+    height = static_cast<int>(outputHeight);
 }
 
 protocol::LCLSystemSurfaceKind SystemSurfacePolicyRegistry::inferLegacyKind(

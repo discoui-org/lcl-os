@@ -54,6 +54,32 @@ TEST(SurfaceRegistryTest, ErasingAnEntryClosesItsOwnedDescriptor) {
     EXPECT_EQ(errno, EBADF);
 }
 
+TEST(SystemSurfacePolicyTest, WallpaperPlacementAlwaysUsesCompositorOutputBounds) {
+    const auto wallpaper = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::Wallpaper);
+    ASSERT_EQ(wallpaper.placement, SystemSurfacePlacement::OutputBounds);
+
+    int x = 40;
+    int y = 50;
+    int width = 800;
+    int height = 600;
+    SystemSurfacePolicyRegistry::applyInitialPlacement(wallpaper, 1920, 1080, x, y, width, height);
+    EXPECT_EQ(x, 0);
+    EXPECT_EQ(y, 0);
+    EXPECT_EQ(width, 1920);
+    EXPECT_EQ(height, 1080);
+
+    const auto dock = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::Dock);
+    x = 22;
+    y = 33;
+    width = 444;
+    height = 55;
+    SystemSurfacePolicyRegistry::applyInitialPlacement(dock, 1920, 1080, x, y, width, height);
+    EXPECT_EQ(x, 22);
+    EXPECT_EQ(y, 33);
+    EXPECT_EQ(width, 444);
+    EXPECT_EQ(height, 55);
+}
+
 TEST(FrameSchedulerTest, AdvancesEnteringAndClosingTransitionsAtBoundedDelta) {
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::time_point{};

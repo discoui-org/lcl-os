@@ -291,6 +291,8 @@ int main() {
         lcl::render::makeSkiaCanvas(), width, height, "LCL Wallpaper");
     wallpaper->setSurfaceId(1); wallpaper->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::Wallpaper);
     wallpaper->setInputEnabled(false);
+    // This is a bootstrap buffer size only. The compositor's Wallpaper policy
+    // assigns the surface to the actual output bounds before it is mapped.
     wallpaper->setInitialBounds(0, 0, width, height);
     auto wallpaperImage = std::make_unique<lcl::ui::Image>(wallpaperPath);
     wallpaperImage->setFit(lcl::ui::ImageFit::Fill);

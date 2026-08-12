@@ -270,3 +270,18 @@ preserving their visual and non-interactive baseline:
 - System surfaces stay outside `SceneRegistry`, remain unfocusable, and retain
   their no-enter-transition behavior. Dock still does not receive pointer
   input; application activation UI is deliberately a later product step.
+
+## Step 8 implementation record
+
+Step 8 makes the wallpaper's output geometry compositor-owned without changing
+its asset or visual treatment:
+
+- Wallpaper's system-surface policy now carries `OutputBounds` placement. At
+  `SurfaceCreate`, compositor replaces client-requested x/y/width/height with
+  its active output bounds before the first valid buffer can map the surface.
+- The desktop shell still supplies a boot-time buffer size from the kernel
+  display configuration, but that value is now only a bootstrap allocation;
+  it does not establish wallpaper placement authority.
+- Menu and Dock retain their existing client-requested geometry in this step.
+  Their layer, focusability, transitions, and reserved-work-area policy remain
+  the Step 7 compositor-owned behavior.

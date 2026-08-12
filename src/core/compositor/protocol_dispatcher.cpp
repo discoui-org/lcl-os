@@ -326,6 +326,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     : SystemSurfacePolicyRegistry::inferLegacyKind(clientRole, title.c_str());
             const auto systemPolicy = SystemSurfacePolicyRegistry::policyFor(requestedSystemKind);
             if (systemPolicy.isSystemSurface) clientRole = systemPolicy.role;
+            SystemSurfacePolicyRegistry::applyInitialPlacement(
+                systemPolicy, m_renderer.getWidth(), m_renderer.getHeight(),
+                winX, winY, winW, winH);
 
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             if (m_surfaces.find(surfaceKey) == m_surfaces.end()) {

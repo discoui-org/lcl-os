@@ -7,6 +7,11 @@
 
 namespace lcl::core {
 
+enum class SystemSurfacePlacement : uint8_t {
+    ClientBounds,
+    OutputBounds,
+};
+
 /** Compositor-enforced policy for one trusted system surface. */
 struct SystemSurfacePolicy {
     protocol::LCLRole role{protocol::LCLRole::ClientApp};
@@ -16,6 +21,7 @@ struct SystemSurfacePolicy {
     bool suppressInitialTransition{false};
     bool reservesWorkArea{false};
     bool isSystemSurface{false};
+    SystemSurfacePlacement placement{SystemSurfacePlacement::ClientBounds};
 };
 
 /**
@@ -27,6 +33,10 @@ class SystemSurfacePolicyRegistry {
 public:
     static bool isValidKind(protocol::LCLSystemSurfaceKind kind) noexcept;
     static SystemSurfacePolicy policyFor(protocol::LCLSystemSurfaceKind kind) noexcept;
+    /** Apply compositor-owned initial placement for system surfaces. */
+    static void applyInitialPlacement(const SystemSurfacePolicy& policy,
+                                      uint32_t outputWidth, uint32_t outputHeight,
+                                      int& x, int& y, int& width, int& height) noexcept;
     static protocol::LCLSystemSurfaceKind inferLegacyKind(protocol::LCLRole role,
                                                            const char* title) noexcept;
     static bool isTrustedShellPeer(pid_t pid) noexcept;
