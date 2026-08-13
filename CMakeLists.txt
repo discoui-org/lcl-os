@@ -138,6 +138,7 @@ add_library(lcl-render STATIC
     src/render/font_renderer.cpp
     src/render/renderer.cpp
     src/render/skia_renderer.cpp
+    src/render/window_chrome_widget.cpp
     src/render/window_manager.cpp
 )
 
@@ -342,6 +343,7 @@ if(BUILD_TESTS)
         src/core/display/display_scale.cpp
         src/core/input/input_manager.cpp
         src/core/input/key_mapper.cpp
+        src/render/window_chrome_widget.cpp
         src/render/window_manager.cpp
         src/binding/js_runtime.cpp
     )

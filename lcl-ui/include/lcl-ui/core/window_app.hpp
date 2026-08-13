@@ -122,7 +122,10 @@ public:
     bool setReservedZone(uint32_t top, uint32_t bottom, uint32_t left = 0, uint32_t right = 0);
     bool setWindowCornerRadius(float radiusPx);
     void setExternalIpcSocket(int socketFd);
-    void setCsdTitlebarEnabled(bool enabled) { m_csdTitlebarEnabled = enabled; }
+    void setCsdTitlebarEnabled(bool enabled) {
+        m_csdTitlebarEnabled = enabled;
+        if (!enabled) m_csdPressedControl = -1;
+    }
     /**
      * Enable default CSD chrome behavior for the shared three-control layout.
      * Custom CSD controls can leave this disabled and call the request methods
@@ -148,6 +151,7 @@ private:
     void clearMorphCrossfade();
     bool requestWindowAction(lcl::protocol::LCLWindowAction action,
                              float localX = 0.0f, float localY = 0.0f);
+    int hitCsdControl(float x, float y) const noexcept;
     bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
                              uint32_t payloadSize, int passedFd = -1);
 
@@ -213,6 +217,7 @@ private:
     float m_csdControlTop{8.0f};
     float m_csdControlSize{16.0f};
     float m_csdControlGap{6.0f};
+    int m_csdPressedControl{-1};
     lcl::protocol::LCLDecorationMode m_requestedDecorationMode{lcl::protocol::LCLDecorationMode::None};
     bool m_hasRequestedDecorationMode{false};
     float m_requestedCornerRadius{0.0f};

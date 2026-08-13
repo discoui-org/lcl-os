@@ -16,6 +16,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <vector>
 
 using namespace lcl::ui;
@@ -430,17 +431,37 @@ TEST(LclUiTest, WindowAppCsdControlsAndCustomRequestsUseWindowActions) {
         EXPECT_EQ(message->action, expected);
     };
 
+    const auto expectNoAction = [&] {
+        char byte = 0;
+        errno = 0;
+        EXPECT_EQ(recv(sockets[1], &byte, sizeof(byte), MSG_PEEK | MSG_DONTWAIT), -1);
+        EXPECT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
+    };
+
     EXPECT_TRUE(app.sendPointerDown(layout.controlLeft + 1.0f, layout.controlTop + 1.0f));
+    expectNoAction();
+    EXPECT_TRUE(app.sendPointerUp(layout.controlLeft + 1.0f, layout.controlTop + 1.0f));
     expectAction(lcl::protocol::LCLWindowAction::Close);
 
     EXPECT_TRUE(app.sendPointerDown(layout.controlLeft + style.controlSize + style.controlGap + 1.0f,
                                     layout.controlTop + 1.0f));
+    expectNoAction();
+    EXPECT_TRUE(app.sendPointerUp(layout.controlLeft + style.controlSize + style.controlGap + 1.0f,
+                                  layout.controlTop + 1.0f));
     expectAction(lcl::protocol::LCLWindowAction::Minimize);
 
     EXPECT_TRUE(app.sendPointerDown(layout.controlLeft +
                                         2.0f * (style.controlSize + style.controlGap) + 1.0f,
                                     layout.controlTop + 1.0f));
+    expectNoAction();
+    EXPECT_TRUE(app.sendPointerUp(layout.controlLeft +
+                                      2.0f * (style.controlSize + style.controlGap) + 1.0f,
+                                  layout.controlTop + 1.0f));
     expectAction(lcl::protocol::LCLWindowAction::ToggleMaximize);
+
+    EXPECT_TRUE(app.sendPointerDown(layout.controlLeft + 1.0f, layout.controlTop + 1.0f));
+    EXPECT_TRUE(app.sendPointerUp(300.0f, 100.0f));
+    expectNoAction();
 
     EXPECT_TRUE(app.sendPointerDown(300.0f, 8.0f));
     expectAction(lcl::protocol::LCLWindowAction::BeginDrag);

@@ -252,7 +252,7 @@ TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {
     scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(100));
     EXPECT_EQ(crossfade.resizeTransitionPhase, SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None);
     EXPECT_TRUE(crossfade.resizeBufferReady);
-    EXPECT_TRUE(crossfade.resizeInputFrozen);
+    EXPECT_FALSE(crossfade.resizeInputFrozen);
 
     auto& timeout = registry[2];
     timeout.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
@@ -264,6 +264,7 @@ TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {
     EXPECT_TRUE(timeout.rollbackRequested);
     EXPECT_EQ(timeout.pendingConfigureSerial, 7u);
     EXPECT_TRUE(timeout.resizeBufferReady);
+    EXPECT_FALSE(timeout.resizeInputFrozen);
 }
 
 TEST(FrameSchedulerTest, CursorBlinkAndFrameBudgetUseTheExistingCadence) {

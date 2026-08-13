@@ -147,23 +147,24 @@ TEST(WindowManagerTest, ServerChromeControlsAnimateHoverPressWithoutGlyphState) 
     move.absoluteX = 100.0;
     move.absoluteY = 80.0;
     EXPECT_TRUE(manager.processInputEvent(move));
-    ASSERT_EQ(findWindow(manager, id)->hoveredChromeControl, 0);
+    ASSERT_EQ(findWindow(manager, id)->chrome.hoveredControl(), 0);
     for (int index = 0; index < 60; ++index) manager.updateAnimations(1.0f / 240.0f);
-    EXPECT_GT(findWindow(manager, id)->chromeControlScale[0], 1.0f);
+    EXPECT_GT(findWindow(manager, id)->chrome.control(0).scale, 1.0f);
 
     lcl::core::InputEvent down{};
     down.type = lcl::core::InputEventType::PointerButton;
     down.pressed = true;
     EXPECT_TRUE(manager.processInputEvent(down));
-    ASSERT_EQ(findWindow(manager, id)->pressedChromeControl, 0);
+    ASSERT_EQ(findWindow(manager, id)->chrome.pressedControl(), 0);
+    EXPECT_FALSE(findWindow(manager, id)->closeRequested);
     for (int index = 0; index < 60; ++index) manager.updateAnimations(1.0f / 240.0f);
-    EXPECT_LT(findWindow(manager, id)->chromeControlScale[0], 1.0f);
+    EXPECT_LT(findWindow(manager, id)->chrome.control(0).scale, 1.0f);
 
     lcl::core::InputEvent up{};
     up.type = lcl::core::InputEventType::PointerButton;
     up.pressed = false;
     EXPECT_TRUE(manager.processInputEvent(up));
-    ASSERT_EQ(findWindow(manager, id)->pressedChromeControl, -1);
+    ASSERT_EQ(findWindow(manager, id)->chrome.pressedControl(), -1);
     for (int index = 0; index < 90; ++index) manager.updateAnimations(1.0f / 240.0f);
-    EXPECT_GT(findWindow(manager, id)->chromeControlScale[0], 1.0f);
+    EXPECT_GT(findWindow(manager, id)->chrome.control(0).scale, 1.0f);
 }

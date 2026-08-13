@@ -69,8 +69,6 @@ int main() {
     window.setWindowCornerRadius(kCornerRadius);
     window.setCsdTitlebarEnabled(true);
 
-    // CSD uses the same chrome geometry as compositor-owned titlebars.  The
-    // WindowApp close hit target is derived from that shared first control.
     const lcl::ui::chrome::WindowChromeStyle chromeStyle;
     const auto titlebarLayout = lcl::ui::chrome::calculateWindowTitlebarLayout(
         static_cast<float>(kSurfaceWidth), kTitlebarHeight, kCornerRadius,

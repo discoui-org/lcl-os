@@ -751,6 +751,19 @@ void WindowApp::configureCsdTitlebar(float height, float controlLeft, float cont
     m_csdControlGap = std::max(0.0f, controlGap);
 }
 
+int WindowApp::hitCsdControl(float x, float y) const noexcept {
+    if (!m_csdTitlebarEnabled || y < m_csdControlTop ||
+        y > (m_csdControlTop + m_csdControlSize)) {
+        return -1;
+    }
+    for (int index = 0; index < 3; ++index) {
+        const float left = m_csdControlLeft +
+            static_cast<float>(index) * (m_csdControlSize + m_csdControlGap);
+        if (x >= left && x <= (left + m_csdControlSize)) return index;
+    }
+    return -1;
+}
+
 bool WindowApp::sendPointerMove(float x, float y) {
     if (m_morphInputFrozen) return false;
     PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Move};
@@ -763,33 +776,18 @@ bool WindowApp::sendPointerMove(float x, float y) {
 bool WindowApp::sendPointerDown(float x, float y, int button) {
     if (m_morphInputFrozen) return false;
     if (m_csdTitlebarEnabled && button == 0 && y >= 0.0f && y <= m_csdTitlebarHeight) {
-        const bool inControlY = y >= m_csdControlTop && y <= (m_csdControlTop + m_csdControlSize);
-        const auto isControl = [&](int index) {
-            const float left = m_csdControlLeft +
-                static_cast<float>(index) * (m_csdControlSize + m_csdControlGap);
-            return inControlY && x >= left && x <= (left + m_csdControlSize);
-        };
-        if (isControl(0)) {
+        m_csdPressedControl = hitCsdControl(x, y);
+        if (m_csdPressedControl >= 0) {
             m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
                 PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down});
-            requestWindowClose();
             return true;
         }
-        if (isControl(1)) {
-            m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
-                PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down});
-            requestWindowMinimize();
-            return true;
-        }
-        if (isControl(2)) {
-            m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
-                PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down});
-            requestWindowToggleMaximize();
-            return true;
-        }
+        m_csdPressedControl = -1;
         requestWindowDrag(x, y);
         return true;
     }
+
+    m_csdPressedControl = -1;
 
     PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Down};
     if (m_onRawPointer && m_onRawPointer(ev)) {
@@ -800,6 +798,18 @@ bool WindowApp::sendPointerDown(float x, float y, int button) {
 
 bool WindowApp::sendPointerUp(float x, float y, int button) {
     if (m_morphInputFrozen) return false;
+    if (button == 0 && m_csdPressedControl >= 0) {
+        const int pressedControl = m_csdPressedControl;
+        m_csdPressedControl = -1;
+        m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
+            PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Up});
+        if (hitCsdControl(x, y) == pressedControl) {
+            if (pressedControl == 0) return requestWindowClose();
+            if (pressedControl == 1) return requestWindowMinimize();
+            if (pressedControl == 2) return requestWindowToggleMaximize();
+        }
+        return true;
+    }
     PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Up};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;

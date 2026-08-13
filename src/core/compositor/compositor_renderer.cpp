@@ -15,31 +15,6 @@ uint8_t applyOpacityToAlpha(uint8_t alpha, float opacity) {
     return static_cast<uint8_t>(std::lround(scaled));
 }
 
-struct ChromeLayout {
-    float controlLeft{0.0f};
-    float controlTop{0.0f};
-    float titleLeft{0.0f};
-    float titleTop{0.0f};
-    float titleWidth{0.0f};
-};
-
-ChromeLayout calculateChromeLayout(float width, float titleHeight, float cornerRadius,
-                                   float fontSize, float scale) {
-    const float controlSize = 16.0f * scale;
-    const float controlGap = 6.0f * scale;
-    const float inset = std::max({8.0f * scale, cornerRadius - 8.0f * scale, 4.0f * scale});
-    const float titleLeft = std::max(14.0f * scale,
-        inset + controlSize * 3.0f + controlGap * 2.0f + 12.0f * scale);
-    return {
-        inset,
-        inset,
-        titleLeft,
-        std::clamp(inset + (controlSize - fontSize) * 0.5f, 0.0f,
-                   std::max(0.0f, titleHeight - fontSize)),
-        std::max(0.0f, width - titleLeft - 10.0f * scale),
-    };
-}
-
 std::string truncateTitle(const std::string& title, float width, float fontSize) {
     const int count = static_cast<int>(width / std::max(1.0f, fontSize * 0.6f));
     if (count <= 0) return {};
@@ -86,10 +61,11 @@ void CompositorRenderer::render(render::Renderer& renderer,
         const float scale = DisplayScale::factor() * group.scale;
         const float titleHeight = static_cast<float>(group.titleHeight);
         const float radius = DisplayScale::pxF(kWindowCornerRadiusLogical) * group.scale;
-        const float controlSize = 16.0f * scale;
-        const float controlGap = 6.0f * scale;
+        const auto& chromeStyle = win.chrome.style();
+        const float controlSize = chromeStyle.controlSize * scale;
+        const float controlGap = chromeStyle.controlGap * scale;
         const float fontSize = static_cast<float>(DisplayScale::kBaseFontPx) * scale;
-        const ChromeLayout layout = calculateChromeLayout(
+        const render::WindowChromeLayout layout = win.chrome.layout(
             static_cast<float>(group.width), titleHeight, radius, fontSize, scale);
 
         if (drawTitlebar) {
@@ -102,8 +78,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
         }
 
         for (int index = 0; index < 3; ++index) {
-            const float interactionScale = std::clamp(win.chromeControlScale[index], 0.90f, 1.08f);
-            const float emphasis = std::clamp(win.chromeControlEmphasis[index], 0.0f, 2.0f);
+            const auto& control = win.chrome.control(static_cast<size_t>(index));
+            const float interactionScale = std::clamp(control.scale, 0.90f, 1.08f);
+            const float emphasis = std::clamp(control.emphasis, 0.0f, 2.0f);
             const float stateMix = std::min(1.0f, emphasis);
             const float pressedMix = std::max(0.0f, emphasis - 1.0f);
             const auto mix = [](float from, float to, float amount) {
@@ -120,19 +97,27 @@ void CompositorRenderer::render(render::Renderer& renderer,
             const float drawSize = controlSize * interactionScale;
             const float left = baseLeft + (controlSize - drawSize) * 0.5f;
             const float top = baseTop + (controlSize - drawSize) * 0.5f;
+            const auto mixedColor = [&](const render::WindowChromeColor& normal,
+                                        const render::WindowChromeColor& hover,
+                                        const render::WindowChromeColor& pressed) {
+                return render::SkiaColor{
+                    mixedByte(normal.r, hover.r, pressed.r),
+                    mixedByte(normal.g, hover.g, pressed.g),
+                    mixedByte(normal.b, hover.b, pressed.b),
+                    applyOpacityToAlpha(mixedByte(normal.a, hover.a, pressed.a), chromeOpacity),
+                };
+            };
             skia->drawRoundedRect(
                 {left, top, drawSize, drawSize}, drawSize * 0.5f,
-                {mixedByte(235, 245, 218), mixedByte(241, 249, 226),
-                 mixedByte(248, 255, 238),
-                 applyOpacityToAlpha(mixedByte(56, 84, 112), chromeOpacity)},
-                {mixedByte(230, 242, 250), mixedByte(238, 248, 252),
-                 mixedByte(248, 255, 255),
-                 applyOpacityToAlpha(mixedByte(120, 168, 208), chromeOpacity)},
-                std::max(1.0f, group.scale), 2.0f);
+                mixedColor(chromeStyle.normalBackground, chromeStyle.hoverBackground,
+                           chromeStyle.pressedBackground),
+                mixedColor(chromeStyle.normalBorder, chromeStyle.hoverBorder,
+                           chromeStyle.pressedBorder),
+                std::max(chromeStyle.borderWidth, group.scale), chromeStyle.roundness);
         }
 
         if (drawTitlebar) {
-            const std::string title = truncateTitle(win.title, layout.titleWidth, fontSize);
+            const std::string title = truncateTitle(win.chrome.title(), layout.titleWidth, fontSize);
             skia->drawString(
                 static_cast<int>(std::lround(static_cast<float>(group.x) + layout.titleLeft)),
                 static_cast<int>(std::lround(static_cast<float>(group.y) + layout.titleTop)),
@@ -288,12 +273,6 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground, windowOpacity);
             }
 
-            // Keep CSD for terminal content while rendering controls through compositor
-            // so buttons match SSD quality (AA/blend pipeline) exactly.
-            if (win.decorationMode == render::DecorationMode::None &&
-                win.title.find("Terminal") != std::string::npos) {
-                drawChrome(win, group, windowOpacity, false);
-            }
         }
 
         // C. Render Server-Side Window Frame (Titlebar & Inset Border) on top of content.

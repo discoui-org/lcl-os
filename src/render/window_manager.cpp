@@ -20,7 +20,6 @@ bool WindowManager::initialize(uint32_t screenWidth, uint32_t screenHeight) {
     m_subpixelY = static_cast<double>(m_mouseY);
     m_windows.clear();
     m_motionEngine.clearAll();
-    m_chromeMotionEngine.clearAll();
     m_initialized = true;
     m_lastAnimTick = std::chrono::steady_clock::now();
 
@@ -66,6 +65,7 @@ uint32_t WindowManager::createWindow(const std::string& title, int x, int y, int
     win.presentationWidth = static_cast<float>(width);
     win.presentationHeight = static_cast<float>(height);
     win.presentationInitialized = true;
+    win.chrome.setTitle(title);
     win.headerColor = headerColor;
     win.isFocused = focus;
     win.markDirty();
@@ -86,7 +86,6 @@ bool WindowManager::removeWindow(uint32_t windowId) {
         std::cout << "[LCL WindowManager] Removing window ID: " << windowId << " ('" << it->title << "').\n";
         m_windows.erase(it);
         m_motionEngine.clearObjectChannels(windowId);
-        m_chromeMotionEngine.clearObjectChannels(windowId);
 
         if (!m_windows.empty()) {
             for (auto revIt = m_windows.rbegin(); revIt != m_windows.rend(); ++revIt) {
@@ -125,63 +124,15 @@ namespace {
 
     int hitWindowChromeControl(const Window& win, int mouseX, int mouseY) {
         if (win.decorationMode != DecorationMode::SSD) return -1;
-
         const float scale = core::DisplayScale::factor();
         const float cornerRadius = win.cornerRadiusPx >= 0.0f
             ? win.cornerRadiusPx
             : 20.0f * scale;
-        const float controlLeftInset = std::max({8.0f * scale,
-                                                 cornerRadius - 8.0f * scale,
-                                                 4.0f * scale});
-        const float controlSizeF = 16.0f * scale;
-        const float controlGap = 6.0f * scale;
-        const int controlTop = win.y + static_cast<int>(std::lround(controlLeftInset));
-        const int controlSize = std::max(1, static_cast<int>(std::lround(controlSizeF)));
-        if (mouseY < controlTop || mouseY > controlTop + controlSize) return -1;
-
-        for (int index = 0; index < 3; ++index) {
-            const float left = controlLeftInset +
-                static_cast<float>(index) * (controlSizeF + controlGap);
-            const int controlLeft = win.x + static_cast<int>(std::lround(left));
-            if (mouseX >= controlLeft && mouseX <= controlLeft + controlSize) {
-                return index;
-            }
-        }
-        return -1;
+        return win.chrome.hitTest(
+            static_cast<float>(mouseX - win.x), static_cast<float>(mouseY - win.y),
+            static_cast<float>(win.width), static_cast<float>(core::DisplayScale::titleBarHeight()),
+            cornerRadius, scale);
     }
-}
-
-void WindowManager::setChromeControlState(Window& window, int hoveredControl,
-                                          int pressedControl) {
-    hoveredControl = std::clamp(hoveredControl, -1, 2);
-    pressedControl = std::clamp(pressedControl, -1, 2);
-    const int oldHovered = window.hoveredChromeControl;
-    const int oldPressed = window.pressedChromeControl;
-    if (oldHovered == hoveredControl && oldPressed == pressedControl) return;
-
-    window.hoveredChromeControl = hoveredControl;
-    window.pressedChromeControl = pressedControl;
-    for (int index = 0; index < 3; ++index) {
-        const float oldEmphasis = index == oldPressed ? 2.0f : (index == oldHovered ? 1.0f : 0.0f);
-        const float targetEmphasis = index == pressedControl ? 2.0f : (index == hoveredControl ? 1.0f : 0.0f);
-        if (oldEmphasis == targetEmphasis) continue;
-
-        const float targetScale = targetEmphasis >= 2.0f
-            ? 0.965f
-            : (targetEmphasis >= 1.0f ? 1.015f : 1.0f);
-        const lcl::motion::Motion motion = targetEmphasis >= 2.0f
-            ? lcl::motion::tokens::pressed()
-            : (targetEmphasis >= 1.0f ? lcl::motion::tokens::hover()
-                                      : lcl::motion::tokens::release());
-        const uint32_t propertyBase = 100u + static_cast<uint32_t>(index) * 2u;
-        const auto scaleChannel = m_chromeMotionEngine.ensureChannel(
-            {window.id, propertyBase}, window.chromeControlScale[index]);
-        const auto emphasisChannel = m_chromeMotionEngine.ensureChannel(
-            {window.id, propertyBase + 1u}, window.chromeControlEmphasis[index]);
-        m_chromeMotionEngine.animateTo(scaleChannel, targetScale, motion);
-        m_chromeMotionEngine.animateTo(emphasisChannel, targetEmphasis, motion);
-    }
-    window.markDirty();
 }
 
 void WindowManager::refreshChromeHoverState() {
@@ -206,7 +157,7 @@ void WindowManager::refreshChromeHoverState() {
 
     for (auto& window : m_windows) {
         const int nextHover = window.id == hoveredWindowId ? hoveredControl : -1;
-        setChromeControlState(window, nextHover, window.pressedChromeControl);
+        if (window.chrome.pointerMove(nextHover)) window.markDirty();
     }
 }
 
@@ -409,7 +360,10 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                     const int titleH = (targetWin.decorationMode == DecorationMode::SSD) ? core::DisplayScale::titleBarHeight() : 0;
                     const int chromeControl = hitWindowChromeControl(targetWin, m_mouseX, m_mouseY);
                     if (chromeControl >= 0 && !event.superPressed) {
-                        setChromeControlState(targetWin, chromeControl, chromeControl);
+                        if (targetWin.chrome.pointerDown(chromeControl)) {
+                            targetWin.markDirty();
+                            stateChanged = true;
+                        }
                     }
 
                     // Controls share the exact WindowChrome layout used to draw SSD.
@@ -417,15 +371,10 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                         targetWin.closeRequested = true;
                         targetWin.markDirty();
                         stateChanged = true;
-                    } else if (!event.superPressed && chromeControl == 0) {
-                        std::cout << "[LCL WM] Close button clicked on window ID: " << targetWin.id << "\n";
-                        targetWin.closeRequested = true;
-                        targetWin.markDirty();
+                    } else if (!event.superPressed && chromeControl >= 0) {
+                        // Standard controls activate on release so their pressed
+                        // presentation is visible and drag-out cancels the action.
                         stateChanged = true;
-                    } else if (!event.superPressed && chromeControl == 1) {
-                        stateChanged = minimizeWindow(targetWin.id) || stateChanged;
-                    } else if (!event.superPressed && chromeControl == 2) {
-                        stateChanged = toggleMaximizeWindow(targetWin.id) || stateChanged;
                     } else if (event.superPressed) {
                         // GNOME / KDE Style Super Shortcuts
                         if (event.button == BTN_LEFT) {
@@ -529,9 +478,17 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
             const int safeRight = static_cast<int>(m_screenWidth) - static_cast<int>(m_reservedZone.right);
             const int safeBottom = static_cast<int>(m_screenHeight) - static_cast<int>(m_reservedZone.bottom);
 
+            uint32_t activatedWindowId = 0;
+            int activatedControl = -1;
             for (auto& win : m_windows) {
-                if (win.pressedChromeControl >= 0) {
-                    setChromeControlState(win, win.hoveredChromeControl, -1);
+                const int hoveredControl = hitWindowChromeControl(win, m_mouseX, m_mouseY);
+                const int control = win.chrome.pointerUp(hoveredControl);
+                if (control >= 0) {
+                    activatedWindowId = win.id;
+                    activatedControl = control;
+                }
+                if (control >= 0 || win.chrome.hoveredControl() == hoveredControl) {
+                    win.markDirty();
                     stateChanged = true;
                 }
                 if (win.isDragging || win.isResizing) {
@@ -577,6 +534,21 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                     stateChanged = true;
                 }
             }
+            if (activatedWindowId > 0) {
+                if (activatedControl == 0) {
+                    auto found = std::find_if(m_windows.begin(), m_windows.end(),
+                        [activatedWindowId](const Window& window) { return window.id == activatedWindowId; });
+                    if (found != m_windows.end()) {
+                        std::cout << "[LCL WM] Close button clicked on window ID: " << found->id << "\n";
+                        found->closeRequested = true;
+                        found->markDirty();
+                    }
+                } else if (activatedControl == 1) {
+                    stateChanged = minimizeWindow(activatedWindowId) || stateChanged;
+                } else if (activatedControl == 2) {
+                    stateChanged = toggleMaximizeWindow(activatedWindowId) || stateChanged;
+                }
+            }
         }
     }
     return stateChanged;
@@ -597,23 +569,11 @@ bool WindowManager::updateAnimations(float dt) {
     bool changed = false;
     const auto changedChannels = m_motionEngine.tick(dt);
     (void)changedChannels;
-    m_chromeMotionEngine.tick(dt);
 
     for (auto& win : m_windows) {
-        for (int index = 0; index < 3; ++index) {
-            const uint32_t propertyBase = 100u + static_cast<uint32_t>(index) * 2u;
-            const auto scaleChannel = m_chromeMotionEngine.findChannel({win.id, propertyBase});
-            const auto emphasisChannel = m_chromeMotionEngine.findChannel({win.id, propertyBase + 1u});
-            if (!scaleChannel || !emphasisChannel) continue;
-            const float scale = m_chromeMotionEngine.sample(*scaleChannel).value;
-            const float emphasis = m_chromeMotionEngine.sample(*emphasisChannel).value;
-            if (std::fabs(scale - win.chromeControlScale[index]) > 0.0001f ||
-                std::fabs(emphasis - win.chromeControlEmphasis[index]) > 0.0001f) {
-                win.chromeControlScale[index] = scale;
-                win.chromeControlEmphasis[index] = emphasis;
-                win.markDirty();
-                changed = true;
-            }
+        if (win.chrome.tick(dt)) {
+            win.markDirty();
+            changed = true;
         }
         if (win.geometryTransitionActive) {
             const Rect before{static_cast<int>(std::lround(win.presentationX)),
@@ -780,6 +740,7 @@ void WindowManager::setDecorationMode(uint32_t windowId, DecorationMode mode) {
     for (auto& win : m_windows) {
         if (win.id == windowId) {
             win.decorationMode = mode;
+            if (mode != DecorationMode::SSD) win.chrome.cancelPointer();
             win.markDirty();
             m_mouseDirty = true;
             break;
