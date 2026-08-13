@@ -83,6 +83,16 @@ public:
     void setInteractionMotionTheme(InteractionMotionTheme theme) { m_interactionTheme = std::move(theme); }
     void clearInteractionMotionTheme() { m_interactionTheme.reset(); }
     const InteractionMotionTheme& interactionMotionTheme() const;
+    void setInteractionStyle(InteractionState state, InteractionStyle style);
+    void clearInteractionStyle(InteractionState state);
+    void setInteractionEnabled(bool enabled);
+    bool isInteractionEnabled() const noexcept { return m_interactionEnabled; }
+    virtual void setOnClick(std::function<void()> callback) {
+        m_onClick = std::move(callback);
+        if (m_onClick) {
+            setFocusable(true);
+        }
+    }
 
     using GcMarkCallback = std::function<void(void* rt, void* mark_func)>;
     void setGcMarkCallback(GcMarkCallback cb) { m_gcMarkCallback = std::move(cb); }
@@ -96,17 +106,17 @@ public:
     virtual void collectEffects(std::vector<EffectRegion>& outEffects) const;
 
     // Polymorphic Event Handlers (Return true if handled, false to bubble to parent)
-    virtual bool onPointerEnter(const PointerEvent& event) { (void)event; return false; }
-    virtual bool onPointerLeave(const PointerEvent& event) { (void)event; return false; }
-    virtual bool onPointerDown(const PointerEvent& event) { (void)event; return false; }
-    virtual bool onPointerUp(const PointerEvent& event) { (void)event; return false; }
+    virtual bool onPointerEnter(const PointerEvent& event);
+    virtual bool onPointerLeave(const PointerEvent& event);
+    virtual bool onPointerDown(const PointerEvent& event);
+    virtual bool onPointerUp(const PointerEvent& event);
     virtual bool onPointerMove(const PointerEvent& event) { (void)event; return false; }
     virtual bool onScroll(const PointerEvent& event) { (void)event; return false; }
     virtual bool onKeyDown(const KeyEvent& event) { (void)event; return false; }
     virtual bool onKeyUp(const KeyEvent& event) { (void)event; return false; }
     virtual bool onTextInput(const TextInputEvent& event) { (void)event; return false; }
-    virtual bool onFocusGained(const FocusEvent& event) { (void)event; return false; }
-    virtual bool onFocusLost(const FocusEvent& event) { (void)event; return false; }
+    virtual bool onFocusGained(const FocusEvent& event);
+    virtual bool onFocusLost(const FocusEvent& event);
 
 protected:
     void beginPresentation(Canvas& canvas) const;
@@ -145,8 +155,16 @@ protected:
     std::array<float, 4> m_presentPosition{};
     std::shared_ptr<uint8_t> m_lifetimeToken{std::make_shared<uint8_t>(0)};
     std::optional<InteractionMotionTheme> m_interactionTheme;
+    std::array<std::optional<InteractionStyle>, 5> m_interactionStyles;
+    std::function<void()> m_onClick{nullptr};
+    bool m_interactionEnabled{true};
+    bool m_declarativeHovered{false};
+    bool m_declarativePressed{false};
+    bool m_declarativeFocused{false};
 
 private:
+    bool hasDeclarativeInteraction() const;
+    void applyDeclarativeInteractionState();
     static std::atomic<uint64_t> s_nextObjectId;
 };
 

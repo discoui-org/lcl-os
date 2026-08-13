@@ -44,6 +44,129 @@ const InteractionMotionTheme& Widget::interactionMotionTheme() const {
     return m_motionCoordinator ? m_motionCoordinator->interactionTheme() : fallback;
 }
 
+void Widget::setInteractionStyle(InteractionState state, InteractionStyle style) {
+    if (style.scale) *style.scale = std::max(0.0f, *style.scale);
+    if (style.opacity) *style.opacity = std::clamp(*style.opacity, 0.0f, 1.0f);
+    m_interactionStyles[static_cast<size_t>(state)] = std::move(style);
+    applyDeclarativeInteractionState();
+}
+
+void Widget::clearInteractionStyle(InteractionState state) {
+    m_interactionStyles[static_cast<size_t>(state)].reset();
+    applyDeclarativeInteractionState();
+}
+
+void Widget::setInteractionEnabled(bool enabled) {
+    if (m_interactionEnabled == enabled) return;
+    m_interactionEnabled = enabled;
+    if (!enabled) {
+        m_declarativeHovered = false;
+        m_declarativePressed = false;
+    }
+    applyDeclarativeInteractionState();
+}
+
+bool Widget::hasDeclarativeInteraction() const {
+    if (m_onClick) return true;
+    return std::any_of(m_interactionStyles.begin(), m_interactionStyles.end(),
+                       [](const auto& style) { return style.has_value(); });
+}
+
+void Widget::applyDeclarativeInteractionState() {
+    if (!hasDeclarativeInteraction()) return;
+    InteractionState state = InteractionState::Normal;
+    if (!m_interactionEnabled) state = InteractionState::Disabled;
+    else if (m_declarativePressed) state = InteractionState::Pressed;
+    else if (m_declarativeHovered) state = InteractionState::Hover;
+    else if (m_declarativeFocused) state = InteractionState::Focused;
+
+    const auto& selected = m_interactionStyles[static_cast<size_t>(state)];
+    const auto& normal = m_interactionStyles[static_cast<size_t>(InteractionState::Normal)];
+    const auto resolve = [&](auto member, float fallback) {
+        if (selected && ((*selected).*member)) return *((*selected).*member);
+        if (normal && ((*normal).*member)) return *((*normal).*member);
+        return fallback;
+    };
+    const float scale = resolve(&InteractionStyle::scale, m_modelTransform.scaleX);
+    const float opacity = resolve(&InteractionStyle::opacity, m_opacity);
+
+    lcl::motion::Motion motion = interactionMotionTheme().hover;
+    if (state == InteractionState::Pressed) motion = interactionMotionTheme().pressed;
+    else if (state == InteractionState::Normal) motion = interactionMotionTheme().release;
+    else if (state == InteractionState::Focused || state == InteractionState::Disabled)
+        motion = interactionMotionTheme().focusTransition;
+    if (selected && selected->motion) motion = *selected->motion;
+
+    if (!interactionMotionTheme().enabled || !m_motionCoordinator) {
+        applyPresentationValue(AnimatableProperty::ScaleX, scale);
+        applyPresentationValue(AnimatableProperty::ScaleY, scale);
+        applyPresentationValue(AnimatableProperty::Opacity, opacity);
+        return;
+    }
+    m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleX,
+        m_presentation.scaleX, scale, motion,
+        [this](float value) { applyPresentationValue(AnimatableProperty::ScaleX, value); });
+    m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleY,
+        m_presentation.scaleY, scale, motion,
+        [this](float value) { applyPresentationValue(AnimatableProperty::ScaleY, value); });
+    m_motionCoordinator->animateFloat(*this, AnimatableProperty::Opacity,
+        m_presentation.opacity, opacity, motion,
+        [this](float value) { applyPresentationValue(AnimatableProperty::Opacity, value); });
+}
+
+bool Widget::onPointerEnter(const PointerEvent& event) {
+    (void)event;
+    if (!m_interactionEnabled || !hasDeclarativeInteraction()) return false;
+    m_declarativeHovered = true;
+    applyDeclarativeInteractionState();
+    return true;
+}
+
+bool Widget::onPointerLeave(const PointerEvent& event) {
+    (void)event;
+    if (!hasDeclarativeInteraction()) return false;
+    m_declarativeHovered = false;
+    m_declarativePressed = false;
+    applyDeclarativeInteractionState();
+    return true;
+}
+
+bool Widget::onPointerDown(const PointerEvent& event) {
+    (void)event;
+    if (!m_interactionEnabled || !hasDeclarativeInteraction()) return false;
+    m_declarativePressed = true;
+    applyDeclarativeInteractionState();
+    return true;
+}
+
+bool Widget::onPointerUp(const PointerEvent& event) {
+    (void)event;
+    if (!m_interactionEnabled || !hasDeclarativeInteraction()) return false;
+    const bool activate = m_declarativePressed;
+    m_declarativePressed = false;
+    m_declarativeHovered = true;
+    applyDeclarativeInteractionState();
+    if (activate && m_onClick) m_onClick();
+    return true;
+}
+
+bool Widget::onFocusGained(const FocusEvent& event) {
+    (void)event;
+    if (!hasDeclarativeInteraction()) return false;
+    m_declarativeFocused = true;
+    applyDeclarativeInteractionState();
+    return false;
+}
+
+bool Widget::onFocusLost(const FocusEvent& event) {
+    (void)event;
+    if (!hasDeclarativeInteraction()) return false;
+    m_declarativeFocused = false;
+    m_declarativePressed = false;
+    applyDeclarativeInteractionState();
+    return false;
+}
+
 void Widget::removeChild(Widget* child) {
     if (!child) return;
     auto it = std::find_if(m_children.begin(), m_children.end(),

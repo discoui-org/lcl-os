@@ -59,14 +59,14 @@ TEST(JsRuntimeTest, MultipleWindowsCanUseDistinctSurfaceIdsAndTicks) {
     JsRuntime js;
     ASSERT_TRUE(js.initialize());
 
-    EXPECT_TRUE(js.evalCode(R"(
+    EXPECT_TRUE(js.evalCode(R"JS(
         globalThis.firstWindow = new LCL.WindowApp(200, 120, "First");
         globalThis.secondWindow = new LCL.WindowApp(200, 120, "Second");
         if (!firstWindow.setSurfaceId(1)) throw new Error('first surface id rejected');
         if (!secondWindow.setSurfaceId(2)) throw new Error('second surface id rejected');
         firstWindow.tick();
         secondWindow.tick();
-    )"));
+    )JS"));
 
     js.shutdown();
 }
@@ -96,5 +96,38 @@ TEST(JsRuntimeTest, ImplicitAndKeyframeMotionShareNativeScheduler) {
         motionHandle.finish();
         motionHandle.commitFinalStyles();
     )"));
+    js.shutdown();
+}
+
+TEST(JsRuntimeTest, GenericContainerSupportsDeclarativeInteractionStylesAndClick) {
+    JsRuntime js;
+    ASSERT_TRUE(js.initialize());
+    EXPECT_TRUE(js.evalCode(R"JS(
+        globalThis.interactionApp = new LCL.WindowApp(120, 80, "JS interaction");
+        globalThis.interactionControl = new LCL.Container();
+        interactionControl.setWidth(120); interactionControl.setHeight(80);
+        interactionControl.setInteractionStyle("normal", {scale: 1, opacity: 1});
+        interactionControl.setInteractionStyle("hover", {
+            scale: 1.05,
+            opacity: 0.9,
+            motion: {type: "spring", duration: 180, bounce: 0.05}
+        });
+        interactionControl.setInteractionStyle("pressed", {
+            scale: 0.96,
+            motion: {type: "tween", duration: 100, easing: "cubic-bezier(0.2,0,0,1)"}
+        });
+        globalThis.interactionClicks = 0;
+        interactionControl.setOnClick(() => { interactionClicks++; });
+        interactionApp.setRootWidget(interactionControl);
+        interactionApp.renderFrame();
+        interactionApp.sendPointerMove(20, 20);
+        interactionApp.sendPointerDown(20, 20, 0);
+        interactionApp.sendPointerUp(20, 20, 0);
+        if (interactionClicks !== 1) throw new Error("generic click did not fire");
+        interactionControl.setInteractionEnabled(false);
+        interactionApp.sendPointerDown(20, 20, 0);
+        interactionApp.sendPointerUp(20, 20, 0);
+        if (interactionClicks !== 1) throw new Error("disabled interaction fired");
+    )JS"));
     js.shutdown();
 }

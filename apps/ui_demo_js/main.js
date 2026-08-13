@@ -33,7 +33,7 @@ cardContainer.setBorderRadius(0);
 let clickCounter = 0;
 
 // Interactive demo button
-const clickButton = new LCL.BackdropSurface();
+const clickButton = new LCL.Container();
 clickButton.setWidth(180);
 clickButton.setHeight(46);
 clickButton.setDirection("row");
@@ -45,6 +45,16 @@ clickButton.setBorderColor(86, 95, 112, 255);
 clickButton.setBorderWidth(1);
 clickButton.setBorderRadius(14);
 clickButton.setOpacity(1.0);
+clickButton.setInteractionStyle("normal", {scale: 1, opacity: 1});
+clickButton.setInteractionStyle("hover", {
+    scale: 1.015,
+    motion: {type: "spring", duration: 180, bounce: 0}
+});
+clickButton.setInteractionStyle("pressed", {
+    scale: 0.965,
+    opacity: 0.92,
+    motion: {type: "spring", duration: 100, bounce: 0}
+});
 
 const buttonLabel = new LCL.Text("Tıkla: 0");
 buttonLabel.setFontSize(16);

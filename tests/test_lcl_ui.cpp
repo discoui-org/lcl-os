@@ -355,6 +355,52 @@ TEST(LclUiTest, ButtonInteractionMotionComposesHoverPressFocusDisabledAndThemeOv
     EXPECT_FLOAT_EQ(pointer->getPresentationState().scaleX, 1.0f);
 }
 
+TEST(LclUiTest, CustomContainerUsesDeclarativeHoverPressedAndClickStates) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 200, 100, "Declarative interaction");
+    auto root = std::make_unique<Container>();
+    root->setWidth(200.0f);
+    root->setHeight(100.0f);
+    auto control = std::make_unique<Container>();
+    Container* pointer = control.get();
+    control->setWidth(100.0f);
+    control->setHeight(40.0f);
+    control->setInteractionStyle(InteractionState::Normal,
+        InteractionStyle{.scale = 1.0f, .opacity = 1.0f,
+                         .motion = Motion::tween(0.01f, Easing::linear())});
+    control->setInteractionStyle(InteractionState::Hover,
+        InteractionStyle{.scale = 1.10f, .opacity = 0.90f,
+                         .motion = Motion::tween(0.01f, Easing::linear())});
+    control->setInteractionStyle(InteractionState::Pressed,
+        InteractionStyle{.scale = 0.92f, .opacity = 0.80f,
+                         .motion = Motion::tween(0.01f, Easing::linear())});
+    int clicks = 0;
+    control->setOnClick([&] { ++clicks; });
+    root->addChild(std::move(control));
+    app.setRootWidget(std::move(root));
+    ASSERT_TRUE(app.renderFrame());
+
+    app.sendPointerMove(20.0f, 20.0f);
+    app.advanceAnimations(0.02f);
+    EXPECT_NEAR(pointer->getPresentationState().scaleX, 1.10f, 0.001f);
+    EXPECT_NEAR(pointer->getPresentationState().opacity, 0.90f, 0.001f);
+
+    EXPECT_TRUE(app.sendPointerDown(20.0f, 20.0f));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), pointer);
+    app.advanceAnimations(0.02f);
+    EXPECT_NEAR(pointer->getPresentationState().scaleX, 0.92f, 0.001f);
+    EXPECT_NEAR(pointer->getPresentationState().opacity, 0.80f, 0.001f);
+
+    EXPECT_TRUE(app.sendPointerUp(20.0f, 20.0f));
+    EXPECT_EQ(clicks, 1);
+    app.advanceAnimations(0.02f);
+    EXPECT_NEAR(pointer->getPresentationState().scaleX, 1.10f, 0.001f);
+
+    pointer->setInteractionEnabled(false);
+    EXPECT_FALSE(app.sendPointerDown(20.0f, 20.0f));
+    EXPECT_EQ(clicks, 1);
+}
+
 TEST(LclUiTest, TextUsesStableRasterLayerOnlyWhileAncestorAnimationIsActive) {
     auto canvas = std::make_unique<RecordingCanvas>();
     RecordingCanvas* recorded = canvas.get();

@@ -25,7 +25,7 @@ public:
 
     Text* getTextWidget() const { return m_textWidget; }
 
-    void setOnClick(std::function<void()> callback) { m_onClick = callback; }
+    void setOnClick(std::function<void()> callback) override { m_onClick = std::move(callback); }
 
     ButtonState getState() const { return m_state; }
     void setEnabled(bool enabled);

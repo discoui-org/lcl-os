@@ -1,7 +1,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <cassert>
 
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
@@ -13,9 +12,9 @@ using namespace lcl::ui;
 
 namespace {
 
-class BlurButton : public BackdropSurface {
+class DemoButton : public Container {
 public:
-    explicit BlurButton(const std::string& label) {
+    explicit DemoButton(const std::string& label) {
         setFocusable(true);
         getYogaNode().setDirection(YGFlexDirectionRow);
         getYogaNode().setJustifyContent(YGJustifyCenter);
@@ -23,65 +22,31 @@ public:
         getYogaNode().setPadding(YGEdgeHorizontal, 16.0f);
         getYogaNode().setPadding(YGEdgeVertical, 10.0f);
 
-        m_label = std::make_unique<Text>(label);
-        m_label->setFontSize(16.0f);
-        m_label->setTextColor(Color{236, 239, 244, 255});
-        m_labelPtr = m_label.get();
-        addChild(std::move(m_label));
+        auto labelWidget = std::make_unique<Text>(label);
+        labelWidget->setFontSize(16.0f);
+        labelWidget->setTextColor(Color{236, 239, 244, 255});
+        m_label = labelWidget.get();
+        addChild(std::move(labelWidget));
 
         setBackgroundColor(Color{36, 42, 52, 255});
         setBorderColor(Color{86, 95, 112, 255});
         setBorderWidth(1.0f);
         setBorderRadius(14.0f);
         setOpacity(1.0f);
+        setInteractionStyle(InteractionState::Normal,
+            InteractionStyle{.scale = 1.0f, .opacity = 1.0f, .motion = std::nullopt});
+        setInteractionStyle(InteractionState::Hover,
+            InteractionStyle{.scale = 1.015f, .opacity = 1.0f, .motion = std::nullopt});
+        setInteractionStyle(InteractionState::Pressed,
+            InteractionStyle{.scale = 0.965f, .opacity = 0.92f, .motion = std::nullopt});
     }
-
-    void setOnClick(std::function<void()> cb) { m_onClick = std::move(cb); }
 
     void setLabel(const std::string& text) {
-        if (m_labelPtr) m_labelPtr->setText(text);
-    }
-
-    bool onPointerEnter(const PointerEvent& event) override {
-        (void)event;
-        if (!m_pressed) {
-            setBackgroundColor(Color{44, 50, 61, 255});
-            setBorderColor(Color{110, 122, 143, 255});
-        }
-        return true;
-    }
-
-    bool onPointerLeave(const PointerEvent& event) override {
-        (void)event;
-        m_pressed = false;
-        setBackgroundColor(Color{36, 42, 52, 255});
-        setBorderColor(Color{86, 95, 112, 255});
-        return true;
-    }
-
-    bool onPointerDown(const PointerEvent& event) override {
-        (void)event;
-        m_pressed = true;
-        setBackgroundColor(Color{52, 58, 72, 255});
-        setBorderColor(Color{136, 148, 172, 255});
-        return true;
-    }
-
-    bool onPointerUp(const PointerEvent& event) override {
-        (void)event;
-        bool wasPressed = m_pressed;
-        m_pressed = false;
-        setBackgroundColor(Color{44, 50, 61, 255});
-        setBorderColor(Color{110, 122, 143, 255});
-        if (wasPressed && m_onClick) m_onClick();
-        return true;
+        if (m_label) m_label->setText(text);
     }
 
 private:
-    std::unique_ptr<Text> m_label;
-    Text* m_labelPtr{nullptr};
-    std::function<void()> m_onClick;
-    bool m_pressed{false};
+    Text* m_label{nullptr};
 };
 
 } // namespace
@@ -121,8 +86,8 @@ int main() {
     cardContainer->setBorderRadius(0.0f);
 
     // Button & Text Widgets
-    auto clickButton = std::make_unique<BlurButton>("Tıkla: 0");
-    BlurButton* btnPtr = clickButton.get();
+    auto clickButton = std::make_unique<DemoButton>("Tıkla: 0");
+    DemoButton* btnPtr = clickButton.get();
     clickButton->getYogaNode().setWidth(176.0f);
     clickButton->getYogaNode().setHeight(44.0f);
 

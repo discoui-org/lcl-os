@@ -14,6 +14,7 @@
 3. [Building Your First Application](#3-building-your-first-application)
 4. [Custom Widget Development & Procedural Animations](#4-custom-widget-development--procedural-animations)
 5. [Event Handling & Input Pipeline](#5-event-handling--input-pipeline)
+6. [Declarative Interaction States](#6-declarative-interaction-states)
 
 ---
 
@@ -67,6 +68,9 @@ Base polymorphic class for all UI components.
 - `void markDirty()`: Registers dirty damage bounds with `RenderPass` to schedule a frame redraw.
 - `void setVisible(bool visible)`: Controls widget visibility.
 - `virtual void draw(Canvas& canvas, const Rect& damageRect)`: Virtual render method called during damage passes through the backend-neutral Canvas contract.
+- `void setInteractionStyle(InteractionState state, InteractionStyle style)`: Defines presentation-only pseudo-state values for custom controls.
+- `virtual void setOnClick(std::function<void()> callback)`: Makes any widget clickable without a pointer-event subclass.
+- `void setInteractionEnabled(bool enabled)`: Enables or disables declarative pointer behavior.
 
 ---
 
@@ -212,3 +216,46 @@ private:
 - **Pointer Events:** `onPointerEnter`, `onPointerLeave`, `onPointerDown`, `onPointerUp`, `onPointerMove`.
 - **Keyboard Events:** `onKeyDown`, `onKeyUp`, `onTextInput`.
 - **Raw Event Interceptors:** `WindowApp::setOnRawKeyEvent()`, `WindowApp::setOnRawPointerEvent()`.
+
+---
+
+## 6. Declarative Interaction States
+
+Any widget can opt into CSS-like `normal`, `hover`, `pressed`, `focused`, and
+`disabled` presentation states. State changes retarget the shared motion engine,
+so rapid pointer movement preserves spring continuity. Model layout values are
+not mutated by these effects.
+
+```cpp
+auto control = std::make_unique<Container>();
+control->setWidth(160.0f);
+control->setHeight(44.0f);
+control->setInteractionStyle(InteractionState::Normal,
+    InteractionStyle{.scale = 1.0f, .opacity = 1.0f, .motion = std::nullopt});
+control->setInteractionStyle(InteractionState::Hover,
+    InteractionStyle{.scale = 1.015f, .opacity = 1.0f,
+                     .motion = Motion::spring(0.18f, 0.0f)});
+control->setInteractionStyle(InteractionState::Pressed,
+    InteractionStyle{.scale = 0.965f, .opacity = 0.92f,
+                     .motion = Motion::spring(0.10f, 0.0f)});
+control->setOnClick([] { std::cout << "Activated\n"; });
+```
+
+The QuickJS contract accepts the same states. A state may use a physical spring
+or a tween with any named easing, `cubic-bezier(...)`, or `steps(...)`:
+
+```js
+const control = new LCL.Container();
+control.setWidth(160);
+control.setHeight(44);
+control.setInteractionStyle("hover", {
+    scale: 1.015,
+    motion: {type: "spring", duration: 180, bounce: 0}
+});
+control.setInteractionStyle("pressed", {
+    scale: 0.965,
+    opacity: 0.92,
+    motion: {type: "tween", duration: 100, easing: "cubic-bezier(0.2,0,0,1)"}
+});
+control.setOnClick(() => console.log("Activated"));
+```

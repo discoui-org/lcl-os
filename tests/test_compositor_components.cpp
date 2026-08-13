@@ -243,6 +243,61 @@ TEST(FrameSchedulerTest, AdvancesEnteringAndClosingTransitionsAtBoundedDelta) {
     EXPECT_TRUE(closing.pendingDestroy);
 }
 
+TEST(FrameSchedulerTest, MinimizeAndRestoreTransitionsOwnVisibilityAndInputEndpoints) {
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::time_point{};
+    FrameScheduler scheduler;
+    scheduler.reset(start);
+
+    SurfaceRegistry registry;
+    auto& surface = registry[1];
+    surface.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
+    surface.transitionDurationSec = 0.18f;
+    surface.transitionOpacity = 1.0f;
+    surface.transitionScale = 1.0f;
+    surface.resizeInputFrozen = true;
+
+    EXPECT_TRUE(scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(45)));
+    EXPECT_LT(surface.transitionOpacity, 1.0f);
+    EXPECT_GT(surface.transitionOpacity, 0.0f);
+    EXPECT_LT(surface.transitionScale, 1.0f);
+    EXPECT_FALSE(surface.pendingMinimize);
+    EXPECT_TRUE(surface.resizeInputFrozen);
+
+    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(90));
+    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(135));
+    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(180));
+    EXPECT_EQ(surface.transitionPhase, SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+    EXPECT_TRUE(surface.pendingMinimize);
+    EXPECT_FLOAT_EQ(surface.transitionOpacity, 0.0f);
+    EXPECT_FLOAT_EQ(surface.transitionScale, 0.92f);
+
+    surface.pendingMinimize = false;
+    surface.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring;
+    surface.transitionElapsedSec = 0.0f;
+    surface.transitionDurationSec = 0.22f;
+    surface.transitionOpacity = 0.0f;
+    surface.transitionScale = 0.92f;
+    surface.resizeInputFrozen = true;
+    scheduler.reset(start);
+
+    EXPECT_TRUE(scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(50)));
+    EXPECT_GT(surface.transitionOpacity, 0.0f);
+    EXPECT_LT(surface.transitionOpacity, 1.0f);
+    EXPECT_GT(surface.transitionScale, 0.92f);
+    EXPECT_LT(surface.transitionScale, 1.0f);
+    EXPECT_TRUE(surface.resizeInputFrozen);
+
+    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(100));
+    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(150));
+    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(200));
+    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(250));
+    EXPECT_EQ(surface.transitionPhase, SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+    EXPECT_FLOAT_EQ(surface.transitionOpacity, 1.0f);
+    EXPECT_FLOAT_EQ(surface.transitionScale, 1.0f);
+    EXPECT_FALSE(surface.resizeInputFrozen);
+}
+
 TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {
     SurfaceRegistry registry;
     auto& crossfade = registry[1];

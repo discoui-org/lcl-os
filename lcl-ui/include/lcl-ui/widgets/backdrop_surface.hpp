@@ -25,7 +25,7 @@ public:
     /** Keep backdrop filtering while opting out of button-like pointer visuals. */
     void setInteractive(bool interactive);
     bool isInteractive() const { return m_interactive; }
-    void setOnClick(std::function<void()> callback) { m_onClick = std::move(callback); }
+    void setOnClick(std::function<void()> callback) override { m_onClick = std::move(callback); }
 
     bool onPointerEnter(const PointerEvent& event) override;
     bool onPointerLeave(const PointerEvent& event) override;

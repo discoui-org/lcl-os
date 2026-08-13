@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <unordered_map>
 
 #include "lcl-motion/motion.hpp"
@@ -78,6 +79,21 @@ struct InteractionMotionTheme {
     lcl::motion::Motion pressed{lcl::motion::tokens::pressed()};
     lcl::motion::Motion release{lcl::motion::tokens::release()};
     lcl::motion::Motion focusTransition{lcl::motion::tokens::focus()};
+};
+
+enum class InteractionState : uint8_t {
+    Normal,
+    Hover,
+    Pressed,
+    Focused,
+    Disabled,
+};
+
+/** Presentation-only pseudo-state values for custom interactive widgets. */
+struct InteractionStyle {
+    std::optional<float> scale;
+    std::optional<float> opacity;
+    std::optional<lcl::motion::Motion> motion;
 };
 
 class MotionCoordinator {

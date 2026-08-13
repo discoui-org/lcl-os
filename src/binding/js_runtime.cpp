@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/core/animation.hpp"
@@ -227,6 +228,20 @@ double numberProperty(JSContext* ctx, JSValueConst object, const char* name, dou
     double result = fallback;
     if (JS_ToFloat64(ctx, &result, value) < 0) result = fallback;
     JS_FreeValue(ctx, value);
+    return result;
+}
+
+std::optional<double> optionalNumberProperty(JSContext* ctx, JSValueConst object,
+                                             const char* name) {
+    JSValue value = JS_GetPropertyStr(ctx, object, name);
+    if (JS_IsUndefined(value) || JS_IsNull(value)) {
+        JS_FreeValue(ctx, value);
+        return std::nullopt;
+    }
+    double result = 0.0;
+    const int status = JS_ToFloat64(ctx, &result, value);
+    JS_FreeValue(ctx, value);
+    if (status < 0 || !std::isfinite(result)) return std::nullopt;
     return result;
 }
 
@@ -998,6 +1013,94 @@ JSValue js_widget_setTransformOrigin(JSContext* ctx, JSValueConst this_val, int 
     return JS_UNDEFINED;
 }
 
+JSValue js_widget_setInteractionStyle(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+    if (argc < 2 || !JS_IsObject(argv[1]))
+        return JS_ThrowTypeError(ctx, "setInteractionStyle(state, style) requires a style object");
+
+    const char* stateText = JS_ToCString(ctx, argv[0]);
+    if (!stateText) return JS_EXCEPTION;
+    const std::string stateName = stateText;
+    JS_FreeCString(ctx, stateText);
+
+    lcl::ui::InteractionState state;
+    if (stateName == "normal") state = lcl::ui::InteractionState::Normal;
+    else if (stateName == "hover") state = lcl::ui::InteractionState::Hover;
+    else if (stateName == "pressed" || stateName == "active") state = lcl::ui::InteractionState::Pressed;
+    else if (stateName == "focused" || stateName == "focus") state = lcl::ui::InteractionState::Focused;
+    else if (stateName == "disabled") state = lcl::ui::InteractionState::Disabled;
+    else return JS_ThrowRangeError(ctx, "unknown interaction state: %s", stateName.c_str());
+
+    lcl::ui::InteractionStyle style;
+    if (const auto value = optionalNumberProperty(ctx, argv[1], "scale"))
+        style.scale = static_cast<float>(std::max(0.0, *value));
+    if (const auto value = optionalNumberProperty(ctx, argv[1], "opacity"))
+        style.opacity = static_cast<float>(std::clamp(*value, 0.0, 1.0));
+
+    JSValue motionObject = JS_GetPropertyStr(ctx, argv[1], "motion");
+    if (JS_IsObject(motionObject)) {
+        try {
+            const std::string type = stringProperty(ctx, motionObject, "type", "spring");
+            const float duration = static_cast<float>(std::max(
+                0.0, numberProperty(ctx, motionObject, "duration", 180.0)) / 1000.0);
+            if (type == "tween") {
+                style.motion = lcl::motion::Motion::tween(
+                    duration,
+                    parseEasing(stringProperty(ctx, motionObject, "easing", "easeOutCubic")),
+                    static_cast<float>(std::max(
+                        0.0, numberProperty(ctx, motionObject, "delay", 0.0)) / 1000.0));
+            } else {
+                const double stiffness = numberProperty(ctx, motionObject, "stiffness", -1.0);
+                if (stiffness > 0.0) {
+                    style.motion = lcl::motion::Motion::spring(
+                        static_cast<float>(numberProperty(ctx, motionObject, "mass", 1.0)),
+                        static_cast<float>(stiffness),
+                        static_cast<float>(numberProperty(ctx, motionObject, "damping", 36.0)),
+                        static_cast<float>(numberProperty(ctx, motionObject, "initialVelocity", 0.0)));
+                } else {
+                    style.motion = lcl::motion::Motion::spring(
+                        duration,
+                        static_cast<float>(numberProperty(ctx, motionObject, "bounce", 0.0)));
+                }
+            }
+        } catch (const std::exception& error) {
+            JS_FreeValue(ctx, motionObject);
+            return JS_ThrowRangeError(ctx, "%s", error.what());
+        }
+    }
+    JS_FreeValue(ctx, motionObject);
+    wrap->widget->setInteractionStyle(state, std::move(style));
+    return JS_UNDEFINED;
+}
+
+JSValue js_widget_clearInteractionStyle(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+    if (argc < 1) return JS_ThrowTypeError(ctx, "interaction state is required");
+    const char* stateText = JS_ToCString(ctx, argv[0]);
+    if (!stateText) return JS_EXCEPTION;
+    const std::string name = stateText;
+    JS_FreeCString(ctx, stateText);
+    if (name == "normal") wrap->widget->clearInteractionStyle(lcl::ui::InteractionState::Normal);
+    else if (name == "hover") wrap->widget->clearInteractionStyle(lcl::ui::InteractionState::Hover);
+    else if (name == "pressed" || name == "active") wrap->widget->clearInteractionStyle(lcl::ui::InteractionState::Pressed);
+    else if (name == "focused" || name == "focus") wrap->widget->clearInteractionStyle(lcl::ui::InteractionState::Focused);
+    else if (name == "disabled") wrap->widget->clearInteractionStyle(lcl::ui::InteractionState::Disabled);
+    else return JS_ThrowRangeError(ctx, "unknown interaction state: %s", name.c_str());
+    return JS_UNDEFINED;
+}
+
+JSValue js_widget_setInteractionEnabled(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+    if (argc >= 1) wrap->widget->setInteractionEnabled(JS_ToBool(ctx, argv[0]) != 0);
+    return JS_UNDEFINED;
+}
+
 JSValue js_image_setSourcePath(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
     if (!wrap || !wrap->widget) return JS_EXCEPTION;
@@ -1454,9 +1557,7 @@ JSValue js_button_setOnClick(JSContext* ctx, JSValueConst this_val, int argc, JS
     auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
     if (!wrap || !wrap->widget) return JS_EXCEPTION;
 
-    auto* btn = dynamic_cast<lcl::ui::Button*>(wrap->widget);
-    auto* blurSurface = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
-    if ((btn || blurSurface) && argc >= 1 && JS_IsFunction(ctx, argv[0])) {
+    if (argc >= 1 && JS_IsFunction(ctx, argv[0])) {
         JSValue funcVal = JS_DupValue(ctx, argv[0]);
         JSRuntime* rt = JS_GetRuntime(ctx);
         JSContext* ctxRef = ctx;
@@ -1485,8 +1586,7 @@ JSValue js_button_setOnClick(JSContext* ctx, JSValueConst this_val, int argc, JS
             JS_FreeValue(holder->ctx, ret);
         };
 
-        if (btn) btn->setOnClick(clickThunk);
-        if (blurSurface) blurSurface->setOnClick(clickThunk);
+        wrap->widget->setOnClick(clickThunk);
 
         wrap->widget->setGcMarkCallback([holder](void* rtPtr, void* markFuncPtr) {
             auto* rt = reinterpret_cast<JSRuntime*>(rtPtr);
@@ -1642,6 +1742,9 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, widgetProto, "setScale", JS_NewCFunction(m_ctx, js_widget_setScale, "setScale", 2));
     JS_SetPropertyStr(m_ctx, widgetProto, "setRotation", JS_NewCFunction(m_ctx, js_widget_setRotation, "setRotation", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setTransformOrigin", JS_NewCFunction(m_ctx, js_widget_setTransformOrigin, "setTransformOrigin", 2));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setInteractionStyle", JS_NewCFunction(m_ctx, js_widget_setInteractionStyle, "setInteractionStyle", 2));
+    JS_SetPropertyStr(m_ctx, widgetProto, "clearInteractionStyle", JS_NewCFunction(m_ctx, js_widget_clearInteractionStyle, "clearInteractionStyle", 1));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setInteractionEnabled", JS_NewCFunction(m_ctx, js_widget_setInteractionEnabled, "setInteractionEnabled", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "animate", JS_NewCFunction(m_ctx, js_widget_animate, "animate", 2));
     JS_SetPropertyStr(m_ctx, widgetProto, "setText", JS_NewCFunction(m_ctx, js_text_setText, "setText", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "getText", JS_NewCFunction(m_ctx, js_text_getText, "getText", 0));
