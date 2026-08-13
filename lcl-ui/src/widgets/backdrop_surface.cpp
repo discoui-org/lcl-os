@@ -32,30 +32,25 @@ void BackdropSurface::setFilters(const std::vector<lcl::protocol::FilterOp>& fil
     markDirty();
 }
 
-void BackdropSurface::addFilter(lcl::protocol::FilterType type, float value) {
-    m_filters.push_back({type, value});
-    markDirty();
+void BackdropSurface::addFilter(lcl::protocol::FilterType type, float value,
+                                float parameter1, float parameter2) {
+    lcl::protocol::FilterOp op{};
+    op.type = type;
+    op.value = value;
+
+    if (type == lcl::protocol::FilterType::Glass) {
+        op.value = 1.0f;
+        op.profile = static_cast<uint8_t>(lcl::protocol::GlassProfile::Auto);
+        op.params[0] = std::max(0.0f, value);
+        op.params[1] = std::max(1.0f, parameter1);
+        op.params[2] = std::max(0.0f, parameter2);
+    }
+
+    addFilter(op);
 }
 
-void BackdropSurface::setGlass(float thicknessPx, float refractionFactor, float dispersionGain) {
-
-    m_filters.erase(
-        std::remove_if(
-            m_filters.begin(),
-            m_filters.end(),
-            [](const lcl::protocol::FilterOp& op) {
-                return op.type == lcl::protocol::FilterType::Glass;
-            }),
-        m_filters.end());
-
-    lcl::protocol::FilterOp op{};
-    op.type = lcl::protocol::FilterType::Glass;
-    op.value = 1.0f;
-    op.profile = static_cast<uint8_t>(lcl::protocol::GlassProfile::Auto);
-    op.params[0] = std::max(0.0f, thicknessPx);
-    op.params[1] = std::max(1.0f, refractionFactor);
-    op.params[2] = std::max(0.0f, dispersionGain);
-    m_filters.push_back(op);
+void BackdropSurface::addFilter(const lcl::protocol::FilterOp& filter) {
+    m_filters.push_back(filter);
     markDirty();
 }
 

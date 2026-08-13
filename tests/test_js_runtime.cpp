@@ -29,6 +29,8 @@ TEST(JsRuntimeTest, WidgetCreationAndHierarchyInJS) {
         globalThis.testBackdrop = new LCL.BackdropSurface();
         globalThis.testBackdrop.setInteractive(false);
         globalThis.testBackdrop.addFilter("blur", 50);
+        globalThis.testBackdrop.addFilter("glass", 30, 3, 12);
+        if (typeof globalThis.testBackdrop.setGlass !== 'undefined') throw new Error('setGlass should not be exposed');
 
         globalThis.testBtn = new LCL.Button("Click Me");
         globalThis.testBtn.setWidth(100);

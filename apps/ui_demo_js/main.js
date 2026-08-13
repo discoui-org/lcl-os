@@ -10,6 +10,7 @@ app.setAppId("org.lcl.uidemo-js");
 const rootContainer = new LCL.BackdropSurface();
 rootContainer.setInteractive(false);
 rootContainer.addFilter("blur", 50);
+rootContainer.addFilter("glass", 30, 3, 12);
 rootContainer.setWidth(800);
 rootContainer.setHeight(600);
 rootContainer.setDirection("column");

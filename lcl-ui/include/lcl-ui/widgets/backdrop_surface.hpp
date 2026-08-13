@@ -12,8 +12,9 @@ public:
     ~BackdropSurface() override = default;
 
     void setFilters(const std::vector<lcl::protocol::FilterOp>& filters);
-    void addFilter(lcl::protocol::FilterType type, float value);
-    void setGlass(float thicknessPx, float refractionFactor, float dispersionGain);
+    void addFilter(lcl::protocol::FilterType type, float value,
+                   float parameter1 = 1.4f, float parameter2 = 7.0f);
+    void addFilter(const lcl::protocol::FilterOp& filter);
     void clearFilters();
 
     void setBlendMode(EffectBlend mode) { m_blendMode = mode; markDirty(); }

@@ -199,7 +199,7 @@ std::unique_ptr<lcl::ui::Container> makeDockView(DockView& view, uint32_t width,
     view.backdrop = backdrop.get();
     backdrop->setInteractive(false);
     backdrop->setBorderRadius(26.0f);
-    backdrop->setGlass(30.0f, 3.0f, 12.0f);
+    backdrop->addFilter(lcl::protocol::FilterType::Glass, 30.0f, 3.0f, 12.0f);
     panel->addChild(std::move(backdrop));
 
     auto innerBorder = std::make_unique<lcl::ui::Container>();

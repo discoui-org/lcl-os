@@ -66,6 +66,7 @@ int main() {
     auto rootContainer = std::make_unique<BackdropSurface>();
     rootContainer->setInteractive(false);
     rootContainer->addFilter(lcl::protocol::FilterType::Blur, 50.0f);
+    rootContainer->addFilter(lcl::protocol::FilterType::Glass, 30.0f, 3.0f, 12.0f);
     rootContainer->getYogaNode().setWidth(800.0f);
     rootContainer->getYogaNode().setHeight(600.0f);
     rootContainer->getYogaNode().setDirection(YGFlexDirectionColumn);

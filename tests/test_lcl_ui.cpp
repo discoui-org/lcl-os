@@ -572,6 +572,29 @@ TEST(LclUiTest, PassiveBackdropSurfaceKeepsItsVisualStateOnPointerEvents) {
     EXPECT_EQ(surface.getBackgroundColor().a, 184);
 }
 
+TEST(LclUiTest, GlassUsesTheGenericAddFilterChain) {
+    BackdropSurface surface;
+    surface.getYogaNode().setWidth(100.0f);
+    surface.getYogaNode().setHeight(100.0f);
+    surface.addFilter(lcl::protocol::FilterType::Blur, 8.0f);
+    surface.addFilter(lcl::protocol::FilterType::Glass, 30.0f, 3.0f, 12.0f);
+    surface.getYogaNode().calculateLayout(100.0f, 100.0f);
+    surface.syncLayout();
+
+    std::vector<EffectRegion> effects;
+    surface.collectEffects(effects);
+
+    ASSERT_EQ(effects.size(), 1u);
+    ASSERT_EQ(effects.front().filters.size(), 2u);
+    EXPECT_EQ(effects.front().filters[0].type, lcl::protocol::FilterType::Blur);
+    const auto& glass = effects.front().filters[1];
+    EXPECT_EQ(glass.type, lcl::protocol::FilterType::Glass);
+    EXPECT_FLOAT_EQ(glass.value, 1.0f);
+    EXPECT_FLOAT_EQ(glass.params[0], 30.0f);
+    EXPECT_FLOAT_EQ(glass.params[1], 3.0f);
+    EXPECT_FLOAT_EQ(glass.params[2], 12.0f);
+}
+
 TEST(LclUiTest, PassiveBackdropEffectDoesNotRequireAFullWindowRoundedRaster) {
     RecordingCanvas canvas;
     auto root = std::make_unique<Container>();
