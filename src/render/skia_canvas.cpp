@@ -22,7 +22,14 @@ void SkiaCanvas::setTargetPixels(uint32_t* targetPixels, uint32_t width, uint32_
     renderer().setTargetPixels(targetPixels, width, height);
 }
 
-void SkiaCanvas::setContentScale(float scale) { renderer().setContentScale(scale); }
+void SkiaCanvas::setContentScale(float scale) {
+    renderer().setContentScale(scale);
+    const float sanitized = renderer().getContentScale();
+    if (std::fabs(m_contentScale - sanitized) > 0.0001f) {
+        m_contentScale = sanitized;
+        m_textLayers.clear();
+    }
+}
 void SkiaCanvas::beginFrame() { renderer().beginFrame(); }
 void SkiaCanvas::endFrame() { renderer().endFrame(); }
 uint32_t* SkiaCanvas::rasterBuffer() { return renderer().getRasterBuffer(); }
@@ -133,6 +140,56 @@ void SkiaCanvas::drawText(float x, float y, const std::string& text,
     } else {
         renderer().drawString(static_cast<int>(point.first), static_cast<int>(point.second), text, argb, fontSize);
     }
+}
+
+void SkiaCanvas::drawRasterizedText(float x, float y, const std::string& text,
+                                    lcl::ui::Color color, float fontSize,
+                                    lcl::ui::FontFamily family) {
+    if (text.empty()) return;
+    const uint32_t argb = (static_cast<uint32_t>(color.a) << 24) |
+                          (static_cast<uint32_t>(color.r) << 16) |
+                          (static_cast<uint32_t>(color.g) << 8) |
+                          static_cast<uint32_t>(color.b);
+
+    ++m_textLayerUseCounter;
+    auto found = std::find_if(m_textLayers.begin(), m_textLayers.end(),
+        [&](const TextLayer& layer) {
+            return layer.text == text && layer.argb == argb && layer.family == family &&
+                   std::fabs(layer.fontSize - fontSize) < 0.0001f &&
+                   std::fabs(layer.contentScale - m_contentScale) < 0.0001f;
+        });
+
+    if (found == m_textLayers.end()) {
+        TextLayer layer;
+        layer.text = text;
+        layer.argb = argb;
+        layer.fontSize = fontSize;
+        layer.contentScale = m_contentScale;
+        layer.family = family;
+        if (!renderer().rasterizeString(text, argb, fontSize,
+                                        family == lcl::ui::FontFamily::Monospace,
+                                        layer.pixels, layer.width, layer.height)) {
+            drawText(x, y, text, color, fontSize, family);
+            return;
+        }
+        layer.lastUse = m_textLayerUseCounter;
+        if (m_textLayers.size() >= 96u) {
+            const auto oldest = std::min_element(m_textLayers.begin(), m_textLayers.end(),
+                [](const TextLayer& a, const TextLayer& b) { return a.lastUse < b.lastUse; });
+            m_textLayers.erase(oldest);
+        }
+        m_textLayers.push_back(std::move(layer));
+        found = std::prev(m_textLayers.end());
+    }
+    found->lastUse = m_textLayerUseCounter;
+
+    const float logicalWidth = static_cast<float>(found->width) / m_contentScale;
+    const float logicalHeight = static_cast<float>(found->height) / m_contentScale;
+    lcl::ui::Rect mapped = mapRect({x, y, logicalWidth, logicalHeight});
+    if (!applyClip(mapped)) return;
+    renderer().drawBufferTransformed(mapped.x, mapped.y,
+        found->width, found->height, found->pixels.data(), found->width,
+        m_state.opacity, 0.0f, 2.0f, false, mapped.width, mapped.height);
 }
 
 float SkiaCanvas::measureText(const std::string& text, float fontSize,

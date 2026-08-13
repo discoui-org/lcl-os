@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "lcl-ui/core/canvas.hpp"
@@ -36,6 +37,9 @@ public:
                             float roundness) override;
     void drawText(float x, float y, const std::string& text, lcl::ui::Color color,
                   float fontSize, lcl::ui::FontFamily family) override;
+    void drawRasterizedText(float x, float y, const std::string& text,
+                            lcl::ui::Color color, float fontSize,
+                            lcl::ui::FontFamily family) override;
     float measureText(const std::string& text, float fontSize,
                       lcl::ui::FontFamily family) override;
     void drawBuffer(int dstX, int dstY, int srcWidth, int srcHeight,
@@ -50,6 +54,18 @@ private:
         std::optional<lcl::ui::Rect> clip{};
     };
 
+    struct TextLayer {
+        std::string text;
+        uint32_t argb{0};
+        float fontSize{0.0f};
+        float contentScale{1.0f};
+        lcl::ui::FontFamily family{lcl::ui::FontFamily::Interface};
+        int width{0};
+        int height{0};
+        uint64_t lastUse{0};
+        std::vector<uint32_t> pixels;
+    };
+
     static SkiaColor toSkia(lcl::ui::Color color);
     lcl::ui::Rect mapRect(const lcl::ui::Rect& rect) const;
     std::pair<float, float> mapPoint(float x, float y) const;
@@ -62,6 +78,9 @@ private:
     CanvasState m_state{};
     std::vector<CanvasState> m_stack;
     std::vector<float> m_layerOpacityStack;
+    std::vector<TextLayer> m_textLayers;
+    uint64_t m_textLayerUseCounter{0};
+    float m_contentScale{1.0f};
 };
 
 std::unique_ptr<lcl::ui::Canvas> makeSkiaCanvas();

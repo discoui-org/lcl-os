@@ -39,6 +39,7 @@ public:
     Rect getAbsoluteBounds() const { return m_absoluteBounds; }
     Rect getPresentationBounds() const;
     bool containsPresentationPoint(float x, float y) const;
+    bool hasActiveAnimationInHierarchy() const;
     uint64_t getObjectId() const noexcept { return m_objectId; }
     const PresentationState& getPresentationState() const noexcept { return m_presentation; }
     std::weak_ptr<uint8_t> getLifetimeToken() const noexcept { return m_lifetimeToken; }

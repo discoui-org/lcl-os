@@ -183,7 +183,7 @@ TEST(SystemSurfacePolicyTest, WallpaperPlacementAlwaysUsesCompositorOutputBounds
     EXPECT_EQ(height, 32);
 }
 
-TEST(WindowGroupTransformTest, ChromeAndClientShareOneQuantizedAnimatedFrame) {
+TEST(WindowGroupTransformTest, ChromeAndClientShareOneSubpixelAnimatedFrame) {
     render::Window window{};
     window.x = 81;
     window.y = 63;
@@ -191,12 +191,20 @@ TEST(WindowGroupTransformTest, ChromeAndClientShareOneQuantizedAnimatedFrame) {
     window.height = 367;
 
     const auto group = makeWindowGroupTransform(window, 32, 0.963f);
-    EXPECT_EQ(group.titleHeight, static_cast<int>(std::lround(32.0f * group.scale)));
-    EXPECT_EQ(group.y + group.titleHeight + (group.height - group.titleHeight),
-              group.y + group.height);
-    EXPECT_EQ(group.x + group.width,
-              static_cast<int>(std::lround(static_cast<float>(window.x) +
-                  (static_cast<float>(window.width) + group.width) * 0.5f)));
+    EXPECT_NEAR(group.titleHeight, 32.0f * group.scale, 0.0001f);
+    EXPECT_NEAR(group.y + group.titleHeight + (group.height - group.titleHeight),
+                group.y + group.height, 0.0001f);
+    EXPECT_NEAR(group.x + group.width,
+                static_cast<float>(window.x) +
+                    (static_cast<float>(window.width) + group.width) * 0.5f,
+                0.0001f);
+    EXPECT_NE(group.width, std::round(group.width));
+
+    const auto resting = makeWindowGroupTransform(window, 32, 1.0f);
+    EXPECT_FLOAT_EQ(resting.x, std::round(resting.x));
+    EXPECT_FLOAT_EQ(resting.y, std::round(resting.y));
+    EXPECT_FLOAT_EQ(resting.width, std::round(resting.width));
+    EXPECT_FLOAT_EQ(resting.height, std::round(resting.height));
 }
 
 TEST(FrameSchedulerTest, AdvancesEnteringAndClosingTransitionsAtBoundedDelta) {

@@ -59,19 +59,18 @@ void CompositorRenderer::render(render::Renderer& renderer,
     auto drawChrome = [&](const render::Window& win, const WindowGroupTransform& group,
                           float chromeOpacity, bool drawTitlebar) {
         const float scale = DisplayScale::factor() * group.scale;
-        const float titleHeight = static_cast<float>(group.titleHeight);
+        const float titleHeight = group.titleHeight;
         const float radius = DisplayScale::pxF(kWindowCornerRadiusLogical) * group.scale;
         const auto& chromeStyle = win.chrome.style();
         const float controlSize = chromeStyle.controlSize * scale;
         const float controlGap = chromeStyle.controlGap * scale;
         const float fontSize = static_cast<float>(DisplayScale::kBaseFontPx) * scale;
         const render::WindowChromeLayout layout = win.chrome.layout(
-            static_cast<float>(group.width), titleHeight, radius, fontSize, scale);
+            group.width, titleHeight, radius, fontSize, scale);
 
         if (drawTitlebar) {
             skia->drawTopRoundedRect(
-                {static_cast<float>(group.x), static_cast<float>(group.y),
-                 static_cast<float>(group.width), titleHeight},
+                {group.x, group.y, group.width, titleHeight},
                 std::min(radius, titleHeight),
                 {17, 19, 23, applyOpacityToAlpha(255, chromeOpacity)},
                 kWindowCornerRoundness);
@@ -91,9 +90,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 return static_cast<uint8_t>(std::clamp(std::lround(
                     mix(hoverValue, static_cast<float>(pressed), pressedMix)), 0l, 255l));
             };
-            const float baseLeft = static_cast<float>(group.x) + layout.controlLeft +
+            const float baseLeft = group.x + layout.controlLeft +
                                    static_cast<float>(index) * (controlSize + controlGap);
-            const float baseTop = static_cast<float>(group.y) + layout.controlTop;
+            const float baseTop = group.y + layout.controlTop;
             const float drawSize = controlSize * interactionScale;
             const float left = baseLeft + (controlSize - drawSize) * 0.5f;
             const float top = baseTop + (controlSize - drawSize) * 0.5f;
@@ -119,15 +118,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
         if (drawTitlebar) {
             const std::string title = truncateTitle(win.chrome.title(), layout.titleWidth, fontSize);
             skia->drawString(
-                static_cast<int>(std::lround(static_cast<float>(group.x) + layout.titleLeft)),
-                static_cast<int>(std::lround(static_cast<float>(group.y) + layout.titleTop)),
+                static_cast<int>(std::lround(group.x + layout.titleLeft)),
+                static_cast<int>(std::lround(group.y + layout.titleTop)),
                 title,
                 (static_cast<uint32_t>(applyOpacityToAlpha(245, chromeOpacity)) << 24) | 0x00F0F8FFu,
                 fontSize);
         }
     };
 
-    auto drawForcedInsetBorder = [&](const render::Window& win, float opacity, float scale) {
+    auto drawForcedInsetBorder = [&](const render::Window& win, const WindowGroupTransform& group,
+                                     float opacity, float scale) {
         const uint8_t outerA = applyOpacityToAlpha(120, opacity);
         const uint8_t innerA = applyOpacityToAlpha(86, opacity);
         float baseRadius = resolveWindowCornerRadiusPx(win);
@@ -138,7 +138,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
         auto* sr = renderer.getSkiaRenderer();
         sr->drawRoundedRect(
-            {static_cast<float>(win.x), static_cast<float>(win.y), static_cast<float>(win.width), static_cast<float>(win.height)},
+            {group.x, group.y, group.width, group.height},
             radius,
             {0, 0, 0, 0},
             {10, 12, 16, outerA},
@@ -146,11 +146,11 @@ void CompositorRenderer::render(render::Renderer& renderer,
             kWindowCornerRoundness);
 
         const float inset = 1.0f;
-        const float innerW = std::max(0.0f, static_cast<float>(win.width) - inset * 2.0f);
-        const float innerH = std::max(0.0f, static_cast<float>(win.height) - inset * 2.0f);
+        const float innerW = std::max(0.0f, group.width - inset * 2.0f);
+        const float innerH = std::max(0.0f, group.height - inset * 2.0f);
         if (innerW > 0.0f && innerH > 0.0f) {
             sr->drawRoundedRect(
-                {static_cast<float>(win.x) + inset, static_cast<float>(win.y) + inset, innerW, innerH},
+                {group.x + inset, group.y + inset, innerW, innerH},
                 std::max(0.0f, radius - 1.0f),
                 {0, 0, 0, 0},
                 {245, 248, 252, innerA},
@@ -227,23 +227,23 @@ void CompositorRenderer::render(render::Renderer& renderer,
             int srcW = static_cast<int>(matchingSurface->width);
             int srcH = static_cast<int>(matchingSurface->height);
             int stridePixels = static_cast<int>(matchingSurface->stride / 4);
-            int drawX = group.x;
-            int drawY = group.y;
-            int drawW = group.width;
-            int drawH = group.height;
+            float drawX = group.x;
+            float drawY = group.y;
+            float drawW = group.width;
+            float drawH = group.height;
 
             if (win.decorationMode == render::DecorationMode::SSD) {
                 // The client buffer occupies the remaining exact pixels of
                 // the same transformed group rect used by the titlebar.
                 drawY += group.titleHeight;
-                drawH = std::max(1, group.height - group.titleHeight);
+                drawH = std::max(1.0f, group.height - group.titleHeight);
             }
 
             const float windowCornerRadiusPx = resolveWindowCornerRadiusPx(win);
             const bool maskToWindowShape = windowCornerRadiusPx > 0.001f;
 
             if (matchingSurface->previousPixels) {
-                renderer.getSkiaRenderer()->drawBuffer(
+                renderer.getSkiaRenderer()->drawBufferTransformed(
                     drawX, drawY,
                     static_cast<int>(matchingSurface->previousWidth),
                     static_cast<int>(matchingSurface->previousHeight),
@@ -257,7 +257,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     drawH);
             }
 
-            renderer.getSkiaRenderer()->drawBuffer(
+            renderer.getSkiaRenderer()->drawBufferTransformed(
                 drawX, drawY, srcW, srcH,
                 reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
                 stridePixels,
@@ -282,12 +282,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
         // Forced compositor-owned inset border for every window, independent from app UI.
         if (win.drawInsetBorder) {
-            render::Window borderWin = win;
-            borderWin.x = group.x;
-            borderWin.y = group.y;
-            borderWin.width = group.width;
-            borderWin.height = group.height;
-            drawForcedInsetBorder(borderWin, windowOpacity, windowScale);
+            drawForcedInsetBorder(win, group, windowOpacity, windowScale);
         }
     }
 

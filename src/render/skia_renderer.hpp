@@ -133,6 +133,14 @@ public:
     /** Returns the rendered text width in the caller's logical coordinate space. */
     float measureString(const std::string& text, float fontSize = 15.0f);
     float measureMonospaceString(const std::string& text, float fontSize = 15.0f);
+    /** Rasterizes one stable text layer at the current content scale. */
+    bool rasterizeString(const std::string& text,
+                         uint32_t fgColor,
+                         float fontSize,
+                         bool monospace,
+                         std::vector<uint32_t>& pixels,
+                         int& width,
+                         int& height);
     void drawBuffer(int dstX,
                     int dstY,
                     int srcW,
@@ -145,6 +153,19 @@ public:
                     bool squareTopCorners = false,
                     int drawWidth = 0,
                     int drawHeight = 0);
+    /** Composite a presentation texture without quantizing animated bounds. */
+    void drawBufferTransformed(float dstX,
+                               float dstY,
+                               int srcW,
+                               int srcH,
+                               const uint32_t* pixelData,
+                               int stridePixels,
+                               float opacity,
+                               float cornerRadius,
+                               float cornerRoundness,
+                               bool squareTopCorners,
+                               float drawWidth,
+                               float drawHeight);
     void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, float cornerRadius, float opacity, const std::vector<protocol::FilterOp>& filters);
 
     // Accessors
@@ -160,8 +181,8 @@ private:
     int scaleLength(int value) const;
     bool ensureFont(float logicalFontSize);
     bool ensureMonospaceFont(float logicalFontSize);
-    void drawBufferRaw(int dstX,
-                       int dstY,
+    void drawBufferRaw(float dstX,
+                       float dstY,
                        int srcW,
                        int srcH,
                        const uint32_t* pixelData,
@@ -171,8 +192,8 @@ private:
                        float cornerRoundness,
                        bool squareTopCorners,
                        bool squareBottomCorners,
-                       int drawWidth,
-                       int drawHeight);
+                       float drawWidth,
+                       float drawHeight);
 
     uint32_t m_width{0};
     uint32_t m_height{0};

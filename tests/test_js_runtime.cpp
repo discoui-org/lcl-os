@@ -26,6 +26,10 @@ TEST(JsRuntimeTest, WidgetCreationAndHierarchyInJS) {
         globalThis.testRoot.setWidth(800);
         globalThis.testRoot.setHeight(600);
 
+        globalThis.testBackdrop = new LCL.BackdropSurface();
+        globalThis.testBackdrop.setInteractive(false);
+        globalThis.testBackdrop.addFilter("blur", 50);
+
         globalThis.testBtn = new LCL.Button("Click Me");
         globalThis.testBtn.setWidth(100);
         globalThis.testBtn.setHeight(40);

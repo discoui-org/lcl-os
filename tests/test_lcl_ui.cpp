@@ -74,6 +74,15 @@ public:
         fontFamilies.push_back(family);
     }
 
+    void drawRasterizedText(float x, float y, const std::string& text, Color color,
+                            float fontSize, FontFamily family) override {
+        rasterTextPositions.push_back({x, y, 0.0f, 0.0f});
+        rasterTexts.push_back(text);
+        colors.push_back(color);
+        fontSizes.push_back(fontSize);
+        fontFamilies.push_back(family);
+    }
+
     float measureText(const std::string& text, float fontSize, FontFamily) override {
         return static_cast<float>(text.size()) * fontSize * 0.6f;
     }
@@ -95,6 +104,7 @@ public:
     std::vector<Rect> roundedRects;
     std::vector<Rect> topRoundedRects;
     std::vector<Rect> textPositions;
+    std::vector<Rect> rasterTextPositions;
     std::vector<float> roundedRadii;
     std::vector<float> borderWidths;
     std::vector<float> roundnesses;
@@ -103,6 +113,7 @@ public:
     std::vector<Color> colors;
     std::vector<Color> borders;
     std::vector<std::string> texts;
+    std::vector<std::string> rasterTexts;
 };
 
 } // namespace
@@ -342,6 +353,36 @@ TEST(LclUiTest, ButtonInteractionMotionComposesHoverPressFocusDisabledAndThemeOv
     pointer->setEnabled(false);
     pointer->setEnabled(true);
     EXPECT_FLOAT_EQ(pointer->getPresentationState().scaleX, 1.0f);
+}
+
+TEST(LclUiTest, TextUsesStableRasterLayerOnlyWhileAncestorAnimationIsActive) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    WindowApp app(std::move(canvas), 240, 120, "Animated text raster layer");
+    auto root = std::make_unique<Container>();
+    root->setWidth(240.0f);
+    root->setHeight(120.0f);
+    auto button = std::make_unique<Button>("Stable");
+    button->setWidth(100.0f);
+    button->setHeight(40.0f);
+    root->addChild(std::move(button));
+    app.setRootWidget(std::move(root));
+
+    ASSERT_TRUE(app.renderFrame());
+    ASSERT_EQ(recorded->texts.size(), 1u);
+    EXPECT_TRUE(recorded->rasterTexts.empty());
+
+    app.sendPointerMove(20.0f, 20.0f);
+    ASSERT_TRUE(app.renderFrame());
+    ASSERT_EQ(recorded->rasterTexts.size(), 1u);
+    EXPECT_EQ(recorded->rasterTexts.back(), "Stable");
+
+    for (int index = 0; index < 300 && app.hasActiveAnimations(); ++index) {
+        app.advanceAnimations(1.0f / 240.0f);
+    }
+    ASSERT_FALSE(app.hasActiveAnimations());
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_EQ(recorded->texts.size(), 2u);
 }
 
 TEST(LclUiTest, WindowAppRendersReplacementRootAfterInitialFrame) {
@@ -761,4 +802,22 @@ TEST(LclUiTest, RoundedRectPreservesTranslucentAlphaOnTransparentCanvas) {
                              {17, 19, 23, 184}, {}, 0.0f);
 
     EXPECT_EQ(pixels[16 + 16 * 32], 0xB8111317u);
+}
+
+TEST(LclUiTest, RoundedRectPreservesSubpixelEdgeCoverageDuringScaleMotion) {
+    const auto edgeAlphaAt = [](float x) {
+        std::vector<uint32_t> pixels(16 * 16, 0x00000000u);
+        lcl::render::SkiaRenderer renderer;
+        EXPECT_TRUE(renderer.initialize(16, 16, nullptr, pixels.data()));
+        renderer.drawRoundedRect({x, 2.0f, 8.0f, 8.0f}, 2.0f,
+                                 {255, 255, 255, 255}, {}, 0.0f);
+        return static_cast<uint8_t>((pixels[0 + 6 * 16] >> 24) & 0xFFu);
+    };
+
+    const uint8_t quarterPixel = edgeAlphaAt(0.25f);
+    const uint8_t halfPixel = edgeAlphaAt(0.50f);
+    EXPECT_GT(quarterPixel, 0u);
+    EXPECT_LT(quarterPixel, 255u);
+    EXPECT_GT(halfPixel, 0u);
+    EXPECT_LT(halfPixel, quarterPixel);
 }

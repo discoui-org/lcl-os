@@ -932,6 +932,17 @@ JSValue js_effect_clearFilters(JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_UNDEFINED;
 }
 
+JSValue js_backdrop_setInteractive(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+
+    auto* backdrop = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
+    if (!backdrop || argc < 1) return JS_UNDEFINED;
+    backdrop->setInteractive(JS_ToBool(ctx, argv[0]) != 0);
+    return JS_UNDEFINED;
+}
+
 JSValue js_effect_setOpacity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
     if (!wrap || !wrap->widget) return JS_EXCEPTION;
@@ -1625,6 +1636,7 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, widgetProto, "addFilter", JS_NewCFunction(m_ctx, js_effect_addFilter, "addFilter", 2));
     JS_SetPropertyStr(m_ctx, widgetProto, "setGlass", JS_NewCFunction(m_ctx, js_effect_setGlass, "setGlass", 2));
     JS_SetPropertyStr(m_ctx, widgetProto, "clearFilters", JS_NewCFunction(m_ctx, js_effect_clearFilters, "clearFilters", 0));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setInteractive", JS_NewCFunction(m_ctx, js_backdrop_setInteractive, "setInteractive", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setOpacity", JS_NewCFunction(m_ctx, js_effect_setOpacity, "setOpacity", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setTranslation", JS_NewCFunction(m_ctx, js_widget_setTranslation, "setTranslation", 2));
     JS_SetPropertyStr(m_ctx, widgetProto, "setScale", JS_NewCFunction(m_ctx, js_widget_setScale, "setScale", 2));

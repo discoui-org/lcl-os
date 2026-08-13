@@ -155,8 +155,9 @@ bool SkiaRenderer::initGLShader() {
         "    vec2 p = (vTexCoord - vec2(0.5)) * uSizePx;\n"
         "    vec2 halfSize = uSizePx * 0.5;\n"
         "    float d = sdSuperRoundRect(p, halfSize, r, n);\n"
-        "    float edge = 1.0;\n"
-        "    float mask = 1.0 - smoothstep(0.0, edge, d);\n"
+        // Center the device-pixel coverage ramp on the analytic edge. This
+        // remains stable while the destination quad moves through subpixels.
+        "    float mask = 1.0 - smoothstep(-0.5, 0.5, d);\n"
         "    gl_FragColor = vec4(c.rgb, c.a * mask * uOpacity);\n"
         "}\n";
 
@@ -234,8 +235,7 @@ bool SkiaRenderer::initGLShader() {
         "        float r = cornerRadiusForPoint(p, clampedR);\n"
         "        d = sdSuperRoundRect(p, halfSize, r, n);\n"
         "    }\n"
-        "    float edge = 1.0;\n"
-        "    float mask = 1.0 - smoothstep(0.0, edge, d);\n"
+        "    float mask = 1.0 - smoothstep(-0.5, 0.5, d);\n"
         "    gl_FragColor = vec4(c.b, c.g, c.r, c.a * mask * uOpacity);\n"
         "}\n";
 
@@ -1064,12 +1064,16 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
     }
 #endif
 
-    int w = std::max(1, static_cast<int>(std::lround(deviceRect.width)));
-    int h = std::max(1, static_cast<int>(std::lround(deviceRect.height)));
-    int dstX = static_cast<int>(std::lround(deviceRect.x));
-    int dstY = static_cast<int>(std::lround(deviceRect.y));
+    const float shapeW = std::max(1.0f, deviceRect.width);
+    const float shapeH = std::max(1.0f, deviceRect.height);
+    const int dstX = static_cast<int>(std::floor(deviceRect.x));
+    const int dstY = static_cast<int>(std::floor(deviceRect.y));
+    const int w = std::max(1, static_cast<int>(std::ceil(deviceRect.x + shapeW)) - dstX);
+    const int h = std::max(1, static_cast<int>(std::ceil(deviceRect.y + shapeH)) - dstY);
+    const float localOriginX = static_cast<float>(dstX) - deviceRect.x;
+    const float localOriginY = static_cast<float>(dstY) - deviceRect.y;
 
-    float r = std::clamp(radius, 0.0f, std::min(static_cast<float>(w), static_cast<float>(h)) * 0.5f);
+    float r = std::clamp(radius, 0.0f, std::min(shapeW, shapeH) * 0.5f);
     float bw = std::max(0.0f, borderWidth);
     const float n = std::clamp(roundness, 2.0f, 8.0f);
 
@@ -1101,8 +1105,8 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
 
     std::vector<uint32_t> pixels(static_cast<size_t>(w) * static_cast<size_t>(h), 0x00000000u);
 
-    const float innerW = std::max(0.0f, static_cast<float>(w) - bw * 2.0f);
-    const float innerH = std::max(0.0f, static_cast<float>(h) - bw * 2.0f);
+    const float innerW = std::max(0.0f, shapeW - bw * 2.0f);
+    const float innerH = std::max(0.0f, shapeH - bw * 2.0f);
     const float innerR = std::max(0.0f, r - bw);
 
     int aaSamples = 4;
@@ -1124,8 +1128,8 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
         for (int x = 0; x < w; ++x) {
             if (!hasFill && hasBorder && innerW > 0.0f && innerH > 0.0f) {
                 // Border-only frame path: skip interior pixels that cannot contribute.
-                float pxCenter = static_cast<float>(x) + 0.5f;
-                float pyCenter = static_cast<float>(y) + 0.5f;
+                float pxCenter = localOriginX + static_cast<float>(x) + 0.5f;
+                float pyCenter = localOriginY + static_cast<float>(y) + 0.5f;
                 if (insideRounded(pxCenter - bw, pyCenter - bw, innerW, innerH, innerR)) {
                     continue;
                 }
@@ -1136,10 +1140,12 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
 
             for (int sy = 0; sy < aaSamples; ++sy) {
                 for (int sx = 0; sx < aaSamples; ++sx) {
-                    float px = static_cast<float>(x) + (static_cast<float>(sx) + 0.5f) / static_cast<float>(aaSamples);
-                    float py = static_cast<float>(y) + (static_cast<float>(sy) + 0.5f) / static_cast<float>(aaSamples);
+                    float px = localOriginX + static_cast<float>(x) +
+                        (static_cast<float>(sx) + 0.5f) / static_cast<float>(aaSamples);
+                    float py = localOriginY + static_cast<float>(y) +
+                        (static_cast<float>(sy) + 0.5f) / static_cast<float>(aaSamples);
 
-                    if (!insideRounded(px, py, static_cast<float>(w), static_cast<float>(h), r)) {
+                    if (!insideRounded(px, py, shapeW, shapeH, r)) {
                         continue;
                     }
 
@@ -1291,6 +1297,35 @@ float SkiaRenderer::measureMonospaceString(const std::string& text, float fontSi
     return static_cast<float>(m_monospaceFontRenderer.getTextWidth(text)) / m_contentScale;
 }
 
+bool SkiaRenderer::rasterizeString(const std::string& text,
+                                   uint32_t fgColor,
+                                   float fontSize,
+                                   bool monospace,
+                                   std::vector<uint32_t>& pixels,
+                                   int& width,
+                                   int& height) {
+    width = 0;
+    height = 0;
+    pixels.clear();
+    if (!m_initialized || text.empty()) return false;
+
+    FontRenderer* font = nullptr;
+    if (monospace) {
+        if (!ensureMonospaceFont(fontSize)) return false;
+        font = &m_monospaceFontRenderer;
+    } else {
+        if (!ensureFont(fontSize)) return false;
+        font = &m_fontRenderer;
+    }
+    if (!font->isInitialized()) return false;
+
+    width = std::max(1, font->getTextWidth(text));
+    height = std::max(1, font->getCellHeight() + 2);
+    pixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0x00000000u);
+    font->renderString(pixels.data(), width, height, 0, 1, text, fgColor);
+    return true;
+}
+
 void SkiaRenderer::drawBuffer(int dstX,
                               int dstY,
                               int srcW,
@@ -1307,13 +1342,34 @@ void SkiaRenderer::drawBuffer(int dstX,
     const int deviceY = static_cast<int>(std::lround(static_cast<float>(dstY) * m_contentScale + m_contentOriginY));
     const int deviceW = (drawWidth > 0) ? scaleLength(drawWidth) : 0;
     const int deviceH = (drawHeight > 0) ? scaleLength(drawHeight) : 0;
-    drawBufferRaw(deviceX, deviceY, srcW, srcH, pixelData, stridePixels, opacity,
+    drawBufferRaw(static_cast<float>(deviceX), static_cast<float>(deviceY),
+                  srcW, srcH, pixelData, stridePixels, opacity,
                   cornerRadius * m_contentScale, cornerRoundness, squareTopCorners,
-                  false, deviceW, deviceH);
+                  false, static_cast<float>(deviceW), static_cast<float>(deviceH));
 }
 
-void SkiaRenderer::drawBufferRaw(int dstX,
-                                 int dstY,
+void SkiaRenderer::drawBufferTransformed(float dstX,
+                                         float dstY,
+                                         int srcW,
+                                         int srcH,
+                                         const uint32_t* pixelData,
+                                         int stridePixels,
+                                         float opacity,
+                                         float cornerRadius,
+                                         float cornerRoundness,
+                                         bool squareTopCorners,
+                                         float drawWidth,
+                                         float drawHeight) {
+    drawBufferRaw(
+        dstX * m_contentScale + m_contentOriginX,
+        dstY * m_contentScale + m_contentOriginY,
+        srcW, srcH, pixelData, stridePixels, opacity,
+        cornerRadius * m_contentScale, cornerRoundness, squareTopCorners,
+        false, drawWidth * m_contentScale, drawHeight * m_contentScale);
+}
+
+void SkiaRenderer::drawBufferRaw(float dstX,
+                                 float dstY,
                                  int srcW,
                                  int srcH,
                                  const uint32_t* pixelData,
@@ -1323,15 +1379,15 @@ void SkiaRenderer::drawBufferRaw(int dstX,
                                  float cornerRoundness,
                                  bool squareTopCorners,
                                  bool squareBottomCorners,
-                                 int drawWidth,
-                                 int drawHeight) {
+                                 float drawWidth,
+                                 float drawHeight) {
     if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0) return;
 
     if (stridePixels <= 0) stridePixels = srcW;
 
-    const int outW = (drawWidth > 0) ? drawWidth : srcW;
-    const int outH = (drawHeight > 0) ? drawHeight : srcH;
-    if (outW <= 0 || outH <= 0) return;
+    const float outW = (drawWidth > 0.0f) ? drawWidth : static_cast<float>(srcW);
+    const float outH = (drawHeight > 0.0f) ? drawHeight : static_cast<float>(srcH);
+    if (outW <= 0.0f || outH <= 0.0f) return;
 
 #ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
@@ -1386,10 +1442,10 @@ void SkiaRenderer::drawBufferRaw(int dstX,
 
     if (!m_targetPixels) return;
 
-    int clipX1 = std::max(0, dstX);
-    int clipY1 = std::max(0, dstY);
-    int clipX2 = std::min(static_cast<int>(m_width), dstX + outW);
-    int clipY2 = std::min(static_cast<int>(m_height), dstY + outH);
+    int clipX1 = std::max(0, static_cast<int>(std::floor(dstX)));
+    int clipY1 = std::max(0, static_cast<int>(std::floor(dstY)));
+    int clipX2 = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(dstX + outW)));
+    int clipY2 = std::min(static_cast<int>(m_height), static_cast<int>(std::ceil(dstY + outH)));
 
     if (clipX1 >= clipX2 || clipY1 >= clipY2) return;
 
@@ -1402,19 +1458,19 @@ void SkiaRenderer::drawBufferRaw(int dstX,
 
     auto insideRoundedMask = [rr, n, outW, outH, squareTopCorners, squareBottomCorners](float px, float py) {
         if (rr <= 0.001f) return true;
-        if (px < 0.0f || py < 0.0f || px > static_cast<float>(outW) || py > static_cast<float>(outH)) return false;
+        if (px < 0.0f || py < 0.0f || px > outW || py > outH) return false;
 
         bool inLeft = px < rr;
-        bool inRight = px > (static_cast<float>(outW) - rr);
+        bool inRight = px > (outW - rr);
         bool inTop = py < rr;
-        bool inBottom = !squareBottomCorners && py > (static_cast<float>(outH) - rr);
+        bool inBottom = !squareBottomCorners && py > (outH - rr);
 
         if ((inLeft || inRight) && (inTop || inBottom)) {
             if (squareTopCorners && inTop) {
                 return true;
             }
-            float cx = inLeft ? rr : (static_cast<float>(outW) - rr);
-            float cy = inTop ? rr : (static_cast<float>(outH) - rr);
+            float cx = inLeft ? rr : (outW - rr);
+            float cy = inTop ? rr : (outH - rr);
             float dx = std::abs(px - cx) / rr;
             float dy = std::abs(py - cy) / rr;
             if (n <= 2.001f) {
@@ -1426,26 +1482,52 @@ void SkiaRenderer::drawBufferRaw(int dstX,
         return true;
     };
 
+    const auto lerpByte = [](uint8_t a, uint8_t b, float amount) {
+        return static_cast<uint8_t>(std::clamp(std::lround(
+            static_cast<float>(a) + (static_cast<float>(b) - static_cast<float>(a)) * amount),
+            0l, 255l));
+    };
+    const auto bilinearPixel = [&](float sx, float sy) {
+        const int x0 = std::clamp(static_cast<int>(std::floor(sx)), 0, srcW - 1);
+        const int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, srcH - 1);
+        const int x1 = std::min(x0 + 1, srcW - 1);
+        const int y1 = std::min(y0 + 1, srcH - 1);
+        const float tx = std::clamp(sx - std::floor(sx), 0.0f, 1.0f);
+        const float ty = std::clamp(sy - std::floor(sy), 0.0f, 1.0f);
+        const uint32_t p00 = pixelData[y0 * stridePixels + x0];
+        const uint32_t p10 = pixelData[y0 * stridePixels + x1];
+        const uint32_t p01 = pixelData[y1 * stridePixels + x0];
+        const uint32_t p11 = pixelData[y1 * stridePixels + x1];
+        const auto channel = [&](int shift) {
+            const uint8_t top = lerpByte(
+                static_cast<uint8_t>((p00 >> shift) & 0xFFu),
+                static_cast<uint8_t>((p10 >> shift) & 0xFFu), tx);
+            const uint8_t bottom = lerpByte(
+                static_cast<uint8_t>((p01 >> shift) & 0xFFu),
+                static_cast<uint8_t>((p11 >> shift) & 0xFFu), tx);
+            return lerpByte(top, bottom, ty);
+        };
+        return (static_cast<uint32_t>(channel(24)) << 24) |
+               (static_cast<uint32_t>(channel(16)) << 16) |
+               (static_cast<uint32_t>(channel(8)) << 8) |
+               static_cast<uint32_t>(channel(0));
+    };
+
     for (int y = clipY1; y < clipY2; ++y) {
-        int outY = y - dstY;
-        int srcY = (outY * srcH) / outH;
-        srcY = std::clamp(srcY, 0, srcH - 1);
-        const uint32_t* srcRow = pixelData + (srcY * stridePixels);
+        const float outY = (static_cast<float>(y) + 0.5f) - dstY;
+        const float srcY = (outY / outH) * static_cast<float>(srcH) - 0.5f;
         uint32_t* dstRow = &m_targetPixels[y * m_width];
 
         for (int x = clipX1; x < clipX2; ++x) {
-            int outX = x - dstX;
-            int srcX = (outX * srcW) / outW;
-            srcX = std::clamp(srcX, 0, srcW - 1);
+            const float outX = (static_cast<float>(x) + 0.5f) - dstX;
+            const float srcX = (outX / outW) * static_cast<float>(srcW) - 0.5f;
             if (rr > 0.001f) {
-                float px = static_cast<float>(outX) + 0.5f;
-                float py = static_cast<float>(outY) + 0.5f;
-                if (!insideRoundedMask(px, py)) {
+                if (!insideRoundedMask(outX, outY)) {
                     continue;
                 }
             }
 
-            uint32_t pixel = srcRow[srcX];
+            uint32_t pixel = bilinearPixel(srcX, srcY);
             uint8_t rawA = static_cast<uint8_t>((pixel >> 24) & 0xFF);
             if (rawA == 0) continue;
 

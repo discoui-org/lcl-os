@@ -60,6 +60,14 @@ public:
                                     float roundness) = 0;
     virtual void drawText(float x, float y, const std::string& text, Color color,
                           float fontSize, FontFamily family = FontFamily::Interface) = 0;
+    // Draws text from a stable raster while an ancestor presentation transform
+    // is moving. Backends without a raster cache retain correct behavior by
+    // falling back to ordinary text drawing.
+    virtual void drawRasterizedText(float x, float y, const std::string& text,
+                                    Color color, float fontSize,
+                                    FontFamily family = FontFamily::Interface) {
+        drawText(x, y, text, color, fontSize, family);
+    }
     virtual float measureText(const std::string& text, float fontSize,
                               FontFamily family = FontFamily::Interface) = 0;
     virtual void drawBuffer(int dstX, int dstY, int srcWidth, int srcHeight,

@@ -42,7 +42,14 @@ void Text::draw(Canvas& canvas, const Rect& damageRect) {
     } else if (m_textAlign == TextAlign::End) {
         textX += std::max(0.0f, m_absoluteBounds.width - textWidth);
     }
-    canvas.drawText(textX, m_absoluteBounds.y, m_text, m_textColor, m_fontSize);
+    if (hasActiveAnimationInHierarchy()) {
+        // Keep one glyph raster stable for the entire transform. Once the
+        // animation settles the normal path below is used again, producing a
+        // fresh, pixel-aligned final render instead of scaling forever.
+        canvas.drawRasterizedText(textX, m_absoluteBounds.y, m_text, m_textColor, m_fontSize);
+    } else {
+        canvas.drawText(textX, m_absoluteBounds.y, m_text, m_textColor, m_fontSize);
+    }
     drawChildren(canvas, damageRect);
     endPresentation(canvas);
 }

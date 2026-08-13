@@ -309,6 +309,16 @@ bool Widget::containsPresentationPoint(float x, float y) const {
     return m_absoluteBounds.containsPoint(x, y);
 }
 
+bool Widget::hasActiveAnimationInHierarchy() const {
+    for (const Widget* current = this; current; current = current->m_parent) {
+        if (current->m_motionCoordinator &&
+            current->m_motionCoordinator->isObjectAnimating(current->m_objectId)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void Widget::beginPresentation(Canvas& canvas) const {
     canvas.saveState();
     const float ox = m_absoluteBounds.x + m_absoluteBounds.width * m_presentation.originX;
