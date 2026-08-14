@@ -66,16 +66,37 @@ def ensure_dirs() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def find_qemu() -> str:
-    qemu = which("qemu-system-x86_64")
+def normalize_arch(arch_str: str | None) -> str:
+    if not arch_str:
+        host_m = platform.machine().lower()
+        if host_m in ("aarch64", "arm64", "armv8", "armv9"):
+            return "aarch64"
+        return "x86_64"
+    a = arch_str.lower().strip()
+    if a in ("aarch64", "arm64", "arm"):
+        return "aarch64"
+    return "x86_64"
+
+
+def docker_platform(arch: str) -> str:
+    return "linux/arm64" if arch == "aarch64" else "linux/amd64"
+
+
+def docker_image_name(arch: str) -> str:
+    return f"lcl-os-qemu-builder:{arch}"
+
+
+def find_qemu(arch: str = "x86_64") -> str:
+    binary_name = "qemu-system-aarch64" if arch == "aarch64" else "qemu-system-x86_64"
+    qemu = which(binary_name)
     if not qemu:
-        err("qemu-system-x86_64 is not installed.")
+        err(f"{binary_name} is not installed.")
         if host_os() == "darwin":
             err("Install with: brew install qemu")
         elif host_os() == "windows":
-            err("Install QEMU and ensure qemu-system-x86_64 is on PATH.")
+            err(f"Install QEMU and ensure {binary_name} is on PATH.")
         else:
-            err("Install qemu-system-x86_64 via your package manager.")
+            err(f"Install {binary_name} via your package manager.")
         sys.exit(1)
     return qemu
 
@@ -876,15 +897,17 @@ def docker_available() -> bool:
         return False
 
 
-def ensure_docker_image() -> None:
+def ensure_docker_image(arch: str = "x86_64") -> None:
     """Build/rebuild image when missing or Dockerfile.qemu changed."""
-    log(f"Ensuring Docker image {DOCKER_IMAGE}...")
+    image_tag = docker_image_name(arch)
+    plat = docker_platform(arch)
+    log(f"Ensuring Docker image {image_tag} ({plat})...")
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = CACHE_DIR / "docker-image.stamp"
+    stamp = CACHE_DIR / f"docker-image-{arch}.stamp"
     df_mtime = str(DOCKERFILE.stat().st_mtime)
 
     inspect = subprocess.run(
-        ["docker", "image", "inspect", DOCKER_IMAGE],
+        ["docker", "image", "inspect", image_tag],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -895,15 +918,15 @@ def ensure_docker_image() -> None:
         need_build = True
 
     if need_build:
-        log("Building Docker builder image (first run / Dockerfile change may take a few minutes)...")
+        log(f"Building Docker builder image for {arch} ({plat}) (first run / Dockerfile change may take a few minutes)...")
         run(
             [
                 "docker",
                 "build",
                 "--platform",
-                "linux/amd64",
+                plat,
                 "-t",
-                DOCKER_IMAGE,
+                image_tag,
                 "-f",
                 str(DOCKERFILE),
                 str(SCRIPT_DIR),
@@ -929,7 +952,7 @@ def fix_permissions() -> None:
             pass
 
 
-def clean_build() -> None:
+def clean_build(arch: str = "x86_64") -> None:
     """Safely clean build directory using host or Docker root fallback."""
     if not BUILD_DIR.exists():
         log("build/ directory does not exist. Nothing to clean.")
@@ -942,16 +965,17 @@ def clean_build() -> None:
         if docker_available():
             log("Removing build/ via Docker container...")
             mount = str(ROOT_DIR)
-            run(["docker", "run", "--rm", "-v", f"{mount}:/src", DOCKER_IMAGE, "rm", "-rf", "/src/build"])
+            run(["docker", "run", "--rm", "-v", f"{mount}:/src", docker_image_name(arch), "rm", "-rf", "/src/build"])
             log("Successfully removed build/ via Docker")
         else:
             err("Failed to remove build/. Try running: sudo rm -rf build")
             sys.exit(1)
 
 
-def docker_run(args: list[str]) -> None:
-    ensure_docker_image()
-    # Resolve Windows paths for Docker Desktop if needed
+def docker_run(args: list[str], arch: str = "x86_64") -> None:
+    ensure_docker_image(arch)
+    image_tag = docker_image_name(arch)
+    plat = docker_platform(arch)
     mount = str(ROOT_DIR)
     env_args: list[str] = []
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
@@ -961,30 +985,32 @@ def docker_run(args: list[str]) -> None:
         "run",
         "--rm",
         "--platform",
-        "linux/amd64",
+        plat,
         *env_args,
         "-v",
         f"{mount}:/src",
         "-w",
         "/src",
-        DOCKER_IMAGE,
+        image_tag,
         "python3",
         "scripts/run_qemu.py",
         *args,
+        "--arch",
+        arch,
         "--inside-docker",
     ]
-    log("Running build/package inside Docker (linux/amd64)...")
+    log(f"Running build/package inside Docker ({plat})...")
     run(cmd)
 
 
-def docker_build_and_package(diagnostic_args: list[str]) -> Path:
-    """Build + package exclusively inside Docker (ubuntu amd64)."""
+def docker_build_and_package(diagnostic_args: list[str], arch: str = "x86_64") -> Path:
+    """Build + package exclusively inside Docker."""
     ensure_dirs()
     if not docker_available():
         err("Docker is required on every host (Linux/macOS/Windows).")
-        err("Install Docker, then: docker build -f scripts/Dockerfile.qemu -t lcl-os-qemu-builder:latest scripts/")
+        err(f"Install Docker, then: docker build --platform {docker_platform(arch)} -f scripts/Dockerfile.qemu -t {docker_image_name(arch)} scripts/")
         sys.exit(1)
-    docker_run(["--package-only", *diagnostic_args])
+    docker_run(["--package-only", *diagnostic_args], arch=arch)
     if not KERNEL_CACHE.is_file() or not INITRAMFS_IMG.is_file():
         err("Docker packaging did not produce kernel/initramfs artifacts.")
         sys.exit(1)
@@ -1008,16 +1034,7 @@ def package_inside_docker(args: argparse.Namespace) -> Path:
     return res
 
 
-# --- Host-native package path DISABLED (do not use outer OS kernel/modules) ---
-# def native_build_and_package() -> Path:
-#     ensure_dirs()
-#     cmake_build()
-#     kernel = locate_kernel()  # used to pick CachyOS/host vmlinuz — broken for guest DRM
-#     package_initramfs(kernel)
-#     return KERNEL_CACHE
-
-
-def prepare_artifacts(args: argparse.Namespace) -> Path:
+def prepare_artifacts(args: argparse.Namespace, arch: str = "x86_64") -> Path:
     """Always Docker — never package from the host OS."""
     diagnostic_args = []
     if args.trace_frames:
@@ -1026,17 +1043,17 @@ def prepare_artifacts(args: argparse.Namespace) -> Path:
         diagnostic_args.append("--debug-layout")
     if args.debug_overlay:
         diagnostic_args.append("--debug-overlay")
-    return docker_build_and_package(diagnostic_args)
+    return docker_build_and_package(diagnostic_args, arch=arch)
 
 
-def build_only() -> None:
+def build_only(arch: str = "x86_64") -> None:
     """Always Docker — never compile against host libdrm/headers."""
     ensure_dirs()
     if not docker_available():
         err("Docker is required to build on every host.")
         sys.exit(1)
-    docker_run(["--build-only"])
-    log(f"Linux binaries in {BUILD_DIR} (produced via Docker)")
+    docker_run(["--build-only"], arch=arch)
+    log(f"Linux ({arch}) binaries in {BUILD_DIR} (produced via Docker)")
 
 
 def _clamp_hz(value: float | int | None) -> int | None:
@@ -1369,6 +1386,32 @@ def launch_qemu(
         except ValueError:
             pass
 
+def launch_qemu(
+    kernel: Path,
+    arch: str = "x86_64",
+    native: bool = False,
+    iso_mode: bool = False,
+    uefi_mode: bool = False,
+    usb_passthrough: str | None = None,
+    retina: bool = False,
+    scale_override: float | None = None,
+    width_override: int | None = None,
+    height_override: int | None = None,
+) -> None:
+    qemu = find_qemu(arch)
+    host = detect_host_display()
+
+    memory = os.environ.get("LCL_QEMU_MEM") or ("2G" if (native or retina) else "1024M")
+    cpus = os.environ.get("LCL_QEMU_CPUS", "2")
+    refresh_hz = host.refresh_hz or 60
+
+    env_scale = os.environ.get("SCALE") or os.environ.get("LCL_SCALE")
+    if scale_override is None and env_scale:
+        try:
+            scale_override = float(env_scale)
+        except ValueError:
+            pass
+
     env_width = os.environ.get("WIDTH") or os.environ.get("LCL_WIDTH")
     if width_override is None and env_width:
         try:
@@ -1416,11 +1459,32 @@ def launch_qemu(
         scale = scale_override or 1.0
         host_dpr = scale
 
-    kvm = Path("/dev/kvm")
-    if kvm.exists() and os.access(kvm, os.R_OK | os.W_OK):
-        accel = ["-enable-kvm", "-cpu", "host"]
+    host_m = platform.machine().lower()
+    host_is_arm = host_m in ("aarch64", "arm64", "armv8", "armv9")
+    host_is_x86 = host_m in ("x86_64", "amd64", "x64")
+
+    if arch == "aarch64":
+        if host_os() == "darwin" and host_is_arm:
+            accel = ["-accel", "hvf", "-cpu", "host"]
+        elif is_linux() and host_is_arm:
+            kvm = Path("/dev/kvm")
+            if kvm.exists() and os.access(kvm, os.R_OK | os.W_OK):
+                accel = ["-enable-kvm", "-cpu", "host"]
+            else:
+                accel = ["-cpu", "cortex-a72"]
+        else:
+            accel = ["-cpu", "cortex-a72"]
     else:
-        accel = ["-cpu", "max"]
+        if is_linux() and host_is_x86:
+            kvm = Path("/dev/kvm")
+            if kvm.exists() and os.access(kvm, os.R_OK | os.W_OK):
+                accel = ["-enable-kvm", "-cpu", "host"]
+            else:
+                accel = ["-cpu", "max"]
+        elif host_os() == "darwin" and host_is_x86:
+            accel = ["-accel", "hvf", "-cpu", "host"]
+        else:
+            accel = ["-cpu", "max"]
 
     want_gl = os.environ.get("LCL_QEMU_GL", "").lower() in ("1", "true", "yes", "on")
 
@@ -1463,18 +1527,24 @@ def launch_qemu(
     except (subprocess.CalledProcessError, FileNotFoundError):
         dev_help = ""
     has_virtio_vga_gl = "virtio-vga-gl" in dev_help
+    has_virtio_gpu_gl = "virtio-gpu-gl" in dev_help or "virtio-gpu-gl-pci" in dev_help
     has_virtio_vga = "virtio-vga" in dev_help
 
-    # Always disable default stdvga when attaching virtio-vga (avoids dual-head / stuck BIOS fb)
-    # GL path is opt-in: virtio-vga-gl requires virgl support (absent on macOS Homebrew QEMU).
-    if want_gl:
-        if has_virtio_vga_gl:
-            gpu = ["-vga", "none", "-device", "virtio-vga-gl"]
+    if arch == "aarch64":
+        if want_gl and has_virtio_gpu_gl:
+            gpu = ["-device", "virtio-gpu-gl-pci"]
         else:
-            log("virtio-vga-gl is not available on host QEMU (e.g. macOS); falling back to virtio-vga.")
-            gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else "virtio-gpu-pci"]
+            gpu = ["-device", "virtio-gpu-pci"]
     else:
-        gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else "virtio-gpu-pci"]
+        # x86_64
+        if want_gl:
+            if has_virtio_vga_gl:
+                gpu = ["-vga", "none", "-device", "virtio-vga-gl"]
+            else:
+                log("virtio-vga-gl is not available on host QEMU (e.g. macOS); falling back to virtio-vga.")
+                gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else "virtio-gpu-pci"]
+        else:
+            gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else "virtio-gpu-pci"]
 
     if host_os() == "darwin":
         if native:
@@ -1507,7 +1577,8 @@ def launch_qemu(
         display = ["-display", disp]
 
     print("----------------------------------------------------")
-    print("  Launching QEMU Virtual Machine:")
+    print(f"  Launching QEMU Virtual Machine ({arch}):")
+    print(f"  - Architecture: {arch}")
     print(f"  - Memory: {memory}")
     print(f"  - SMP Cores: {cpus}")
     print(f"  - Guest video: {width}x{height}@{refresh_hz}")
@@ -1527,7 +1598,9 @@ def launch_qemu(
     print(f"  - GPU: {' '.join(gpu)}{'  (LCL_QEMU_GL=1 for VirGL)' if not want_gl else ''}")
     print(f"  - Display: {display[1]}")
     if iso_mode:
-        print(f"  - ISO Image: {BUILD_DIR / 'lcl-os.iso'}")
+        iso_name = f"lcl-os-{arch}.iso"
+        iso_file = BUILD_DIR / iso_name if (BUILD_DIR / iso_name).is_file() else BUILD_DIR / "lcl-os.iso"
+        print(f"  - ISO Image: {iso_file}")
     else:
         print(f"  - Kernel: {kernel}")
         print(f"  - Initrd: {INITRAMFS_IMG}")
@@ -1544,17 +1617,23 @@ def launch_qemu(
     if host.physical_width and host.physical_height:
         lcl_params += f" lcl.physical={host.physical_width}x{host.physical_height}"
 
+    serial_console = (
+        "console=ttyAMA0,115200 console=tty0 earlycon"
+        if arch == "aarch64"
+        else "console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200"
+    )
     append = (
-        f"console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200 "
+        f"{serial_console} "
         f"{video_mode} {lcl_params} "
         f"rdinit=/init loglevel=6"
     )
 
+    machine = ["-machine", "virt,highmem=on"] if arch == "aarch64" else ["-machine", "q35"]
+
     cmd = [
         qemu,
         *accel,
-        "-machine",
-        "q35",
+        *machine,
     ]
 
     if uefi_mode:
@@ -1566,9 +1645,10 @@ def launch_qemu(
         cmd.extend(["-drive", f"if=pflash,format=raw,readonly=on,file={ovmf}"])
 
     if iso_mode:
-        iso_path = BUILD_DIR / "lcl-os.iso"
+        iso_name = f"lcl-os-{arch}.iso"
+        iso_path = BUILD_DIR / iso_name if (BUILD_DIR / iso_name).is_file() else BUILD_DIR / "lcl-os.iso"
         if not iso_path.is_file():
-            err(f"Missing ISO file: {iso_path}. Please run 'make iso' first.")
+            err(f"Missing ISO file: {iso_path}. Please run 'make iso ARCH={arch}' first.")
             sys.exit(1)
         cmd.extend(["-boot", "d", "-cdrom", str(iso_path)])
     else:
@@ -1609,6 +1689,12 @@ def main() -> None:
     parser.add_argument("--iso", action="store_true", help="Boot from build/lcl-os.iso CD-ROM image")
     parser.add_argument("--uefi", action="store_true", help="Use OVMF UEFI firmware for QEMU boot")
     parser.add_argument("--clean", action="store_true", help="Remove build/ directory safely")
+    parser.add_argument(
+        "--arch",
+        "-a",
+        metavar="ARCH",
+        help="Target architecture: x86_64 (amd64) or aarch64 (arm64)",
+    )
     parser.add_argument(
         "--docker",
         action="store_true",
@@ -1676,40 +1762,43 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    arch = normalize_arch(args.arch or os.environ.get("ARCH"))
+
     if args.gpu:
         os.environ["LCL_QEMU_GL"] = "1"
 
     if args.clean:
-        clean_build()
+        clean_build(arch=arch)
         return
 
     print("====================================================")
-    print("  LCL Core Linux - QEMU Isolated Boot Launcher      ")
+    print(f"  LCL Core Linux - QEMU Isolated Boot Launcher ({arch})")
     print("====================================================")
 
     # ---- Inside Docker image: compile + package with image kernel/modules only ----
     if args.inside_docker:
         if args.build_only:
             cmake_build()
-            log("Docker build-only complete.")
+            log(f"Docker build-only ({arch}) complete.")
             return
         kernel = package_inside_docker(args)
-        log(f"Packaging complete. Kernel cache: {kernel}")
+        log(f"Packaging complete ({arch}). Kernel cache: {kernel}")
         return
 
     # ---- Outer host (Linux/macOS/Windows): always Docker for artifacts, QEMU on host ----
     # Host OS kernel/modules/userland are NEVER used for the guest initramfs.
     if args.build_only:
-        build_only()
+        build_only(arch=arch)
         return
 
-    kernel = prepare_artifacts(args)
-    log(f"QEMU binary: {find_qemu()}")
+    kernel = prepare_artifacts(args, arch=arch)
+    log(f"QEMU binary: {find_qemu(arch)}")
     log(f"Kernel: {kernel}")
 
     if args.run:
         launch_qemu(
             kernel,
+            arch=arch,
             native=args.native,
             iso_mode=args.iso,
             uefi_mode=args.uefi,
@@ -1720,8 +1809,8 @@ def main() -> None:
             height_override=args.height,
         )
     else:
-        log("Boot environment ready!")
-        log(f"Run '{Path(sys.argv[0]).name} --run' to launch QEMU in live VM.")
+        log(f"Boot environment ({arch}) ready!")
+        log(f"Run '{Path(sys.argv[0]).name} --run --arch {arch}' to launch QEMU in live VM.")
 
 
 if __name__ == "__main__":

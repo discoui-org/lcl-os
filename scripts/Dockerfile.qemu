@@ -1,5 +1,5 @@
-# Canonical QEMU guest builder — always used (never package from the host OS).
-FROM --platform=linux/amd64 ubuntu:24.04
+# Canonical QEMU guest builder — multi-arch (linux/amd64 or linux/arm64).
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
