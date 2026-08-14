@@ -62,19 +62,38 @@ int main() {
         "LCL-UI Phase 1.6 Interactive Demo App");
     app.setAppId("org.lcl.uidemo");
     app.setWindowCornerStyle(20.0f, 2.0f);
+    app.setEdgeToEdge(true);
 
     // 2. Build Centered Flexbox Layout Tree in User-Space App
-    auto rootContainer = std::make_unique<BackdropSurface>();
-    rootContainer->setInteractive(false);
-    rootContainer->setEffectBounds(EffectBounds::WindowGroup);
-    rootContainer->addFilter(lcl::protocol::FilterType::Blur, 50.0f);
+    auto rootContainer = std::make_unique<Container>();
     rootContainer->getYogaNode().setWidth(800.0f);
     rootContainer->getYogaNode().setHeight(600.0f);
-    rootContainer->getYogaNode().setDirection(YGFlexDirectionColumn);
-    rootContainer->getYogaNode().setJustifyContent(YGJustifyCenter);
-    rootContainer->getYogaNode().setAlignItems(YGAlignCenter);
-    rootContainer->getYogaNode().setGap(YGGutterAll, 20.0f);
-    rootContainer->setBackgroundColor(Color{17, 19, 23, 190});
+
+    auto backdrop = std::make_unique<BackdropSurface>();
+    backdrop->setInteractive(false);
+    // The material fills the outer surface behind system insets. Widget
+    // content remains in the compositor-provided safe content rect.
+    backdrop->setEffectBounds(EffectBounds::OuterSurface);
+    backdrop->addFilter(lcl::protocol::FilterType::Blur, 15.0f);
+    backdrop->addFilter(lcl::protocol::FilterType::Saturation, 1.4f);
+    backdrop->addFilter(lcl::protocol::FilterType::Brightness, 1.1f);
+    backdrop->setTint(Color{15, 23, 42, 128});
+    backdrop->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    backdrop->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+    backdrop->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+    backdrop->getYogaNode().setPosition(YGEdgeRight, 0.0f);
+    backdrop->getYogaNode().setPosition(YGEdgeBottom, 0.0f);
+
+    auto content = std::make_unique<Container>();
+    content->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    content->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+    content->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+    content->getYogaNode().setPosition(YGEdgeRight, 0.0f);
+    content->getYogaNode().setPosition(YGEdgeBottom, 0.0f);
+    content->getYogaNode().setDirection(YGFlexDirectionColumn);
+    content->getYogaNode().setJustifyContent(YGJustifyCenter);
+    content->getYogaNode().setAlignItems(YGAlignCenter);
+    content->getYogaNode().setGap(YGGutterAll, 20.0f);
 
     // Inner Card Container
     auto cardContainer = std::make_unique<Container>();
@@ -113,7 +132,9 @@ int main() {
 
     cardContainer->addChild(std::move(clickButton));
     cardContainer->addChild(std::move(statusText));
-    rootContainer->addChild(std::move(cardContainer));
+    content->addChild(std::move(cardContainer));
+    rootContainer->addChild(std::move(backdrop));
+    rootContainer->addChild(std::move(content));
 
     app.setRootWidget(std::move(rootContainer));
 

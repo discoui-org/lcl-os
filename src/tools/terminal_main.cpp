@@ -95,7 +95,7 @@ int main() {
     auto backdrop = std::make_unique<lcl::ui::BackdropSurface>();
     lcl::ui::BackdropSurface* backdropPtr = backdrop.get();
     backdrop->setInteractive(false);
-    backdrop->setEffectBounds(lcl::ui::EffectBounds::WindowGroup);
+    backdrop->setEffectBounds(lcl::ui::EffectBounds::OuterSurface);
     backdrop->getYogaNode().setPositionType(YGPositionTypeAbsolute);
     backdrop->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
     backdrop->getYogaNode().setPosition(YGEdgeTop, 0.0f);

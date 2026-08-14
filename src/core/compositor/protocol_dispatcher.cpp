@@ -128,6 +128,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             static_cast<int>(entry.width), static_cast<int>(entry.height) + titleOffset,
             ::lcl::theme::UI::WindowTitleFocused, !entry.unfocusable);
         m_windowManager.setDecorationMode(entry.windowId, decorationMode);
+        m_windowManager.setEdgeToEdge(entry.windowId, entry.edgeToEdge);
         m_windowManager.setWindowLayer(entry.windowId, entry.layer, entry.unfocusable);
         m_windowManager.setInsetBorderEnabled(entry.windowId, entry.insetBorderEnabled);
         m_windowManager.setResizePresentationMode(entry.windowId, entry.resizePresentation);
@@ -679,6 +680,25 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 changed = true;
             }
 
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetEdgeToEdge) {
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetEdgeToEdge)) {
+                const auto* edgeToEdgeMsg =
+                    reinterpret_cast<const lcl::protocol::LCLMsgSetEdgeToEdge*>(
+                        msg.payload.data());
+                const uint64_t surfaceKey =
+                    (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) |
+                    edgeToEdgeMsg->surfaceId;
+                const auto it = m_surfaces.find(surfaceKey);
+                if (it != m_surfaces.end()) {
+                    it->second.edgeToEdge = edgeToEdgeMsg->enabled != 0;
+                    if (it->second.windowId != 0) {
+                        m_windowManager.setEdgeToEdge(
+                            it->second.windowId, edgeToEdgeMsg->enabled != 0);
+                    }
+                    changed = true;
+                }
+            }
+
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::RequestWindowAction) {
             if (msg.payload.size() < sizeof(lcl::protocol::LCLMsgRequestWindowAction)) {
                 continue;
@@ -913,7 +933,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                                 !std::isfinite(region.cornerRoundness) ||
                                 region.cornerRoundness < 2.0f || region.cornerRoundness > 8.0f ||
                                 (region.boundsPolicy != lcl::protocol::EffectBoundsPolicy::Local &&
-                                 region.boundsPolicy != lcl::protocol::EffectBoundsPolicy::WindowGroup) ||
+                                 region.boundsPolicy != lcl::protocol::EffectBoundsPolicy::OuterSurface) ||
                                 !std::isfinite(region.opacity) ||
                                 region.opacity < 0.0f || region.opacity > 1.0f) {
                                 valid = false;

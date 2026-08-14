@@ -1,4 +1,5 @@
 #include "render/skia_renderer.hpp"
+#include "render/backdrop_filter_geometry.hpp"
 #include "render/dma_buf_crop.hpp"
 #ifndef LCL_SOFTWARE_ONLY
 #include "core/display/egl_context.hpp"
@@ -19,6 +20,17 @@ static GLuint compileShader(GLenum type, const char* source) {
     return shader;
 }
 
+void beginStraightAlphaSourceOver() {
+    glEnable(GL_BLEND);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                        GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+void endStraightAlphaSourceOver() {
+    glDisable(GL_BLEND);
+}
+
 bool SkiaRenderer::initGLShader() {
     const char* vSrc =
         "attribute vec2 aPosition;\n"
@@ -33,9 +45,10 @@ bool SkiaRenderer::initGLShader() {
         "precision mediump float;\n"
         "varying vec2 vTexCoord;\n"
         "uniform sampler2D uTexture;\n"
+        "uniform float uOpacity;\n"
         "void main() {\n"
         "    vec4 c = texture2D(uTexture, vTexCoord);\n"
-        "    gl_FragColor = vec4(c.rgb, 1.0);\n"
+        "    gl_FragColor = vec4(c.rgb, c.a * uOpacity);\n"
         "}\n";
 
     GLuint vs = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -50,6 +63,7 @@ bool SkiaRenderer::initGLShader() {
     m_aPosLoc = glGetAttribLocation(m_glProgram, "aPosition");
     m_aTexLoc = glGetAttribLocation(m_glProgram, "aTexCoord");
     m_uTextureLoc = glGetUniformLocation(m_glProgram, "uTexture");
+    m_uOpacityLoc = glGetUniformLocation(m_glProgram, "uOpacity");
 
     glGenTextures(1, &m_glTexture);
     glBindTexture(GL_TEXTURE_2D, m_glTexture);
@@ -80,25 +94,6 @@ bool SkiaRenderer::initGLShader() {
         "    float k = pow(pow(qq.x, n) + pow(qq.y, n), 1.0 / n);\n"
         "    return (k - 1.0) * r;\n"
         "}\n"
-        "vec2 mirrorRoundedTap(vec2 uv) {\n"
-        "    float r = clamp(uCornerRadiusPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
-        "    if (r <= 0.001) return uv;\n"
-        "    vec2 p = (uv - vec2(0.5)) * uSizePx;\n"
-        "    vec2 b = uSizePx * 0.5;\n"
-        "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
-        "    for (int pass = 0; pass < 2; ++pass) {\n"
-        "        float d = sdSuperRoundRect(p, b, r, n);\n"
-        "        if (d <= 0.0) break;\n"
-        "        float eps = 1.0;\n"
-        "        vec2 grad = vec2(\n"
-        "            sdSuperRoundRect(p + vec2(eps, 0.0), b, r, n) - sdSuperRoundRect(p - vec2(eps, 0.0), b, r, n),\n"
-        "            sdSuperRoundRect(p + vec2(0.0, eps), b, r, n) - sdSuperRoundRect(p - vec2(0.0, eps), b, r, n));\n"
-        "        float gradLength = length(grad);\n"
-        "        if (gradLength <= 0.0001) break;\n"
-        "        p -= 2.0 * d * (grad / gradLength);\n"
-        "    }\n"
-        "    return p / uSizePx + vec2(0.5);\n"
-        "}\n"
         "void main() {\n"
         "    if (uSigma <= 0.1) {\n"
         "        gl_FragColor = texture2D(uTexture, vTexCoord * uInputScale);\n"
@@ -107,15 +102,18 @@ bool SkiaRenderer::initGLShader() {
         "    vec4 colorAcc = vec4(0.0);\n"
         "    float weightAcc = 0.0;\n"
         "    float twoSigmaSq = 2.0 * uSigma * uSigma;\n"
-        "    for (int i = -16; i <= 16; ++i) {\n"
-        "        float fi = float(i);\n"
-        "        float weight = exp(-(fi * fi) / twoSigmaSq);\n"
-        "        vec2 coord = mirrorRoundedTap(vTexCoord + uDirection * fi);\n"
-        "        colorAcc += texture2D(uTexture, coord * uInputScale) * weight;\n"
-        "        weightAcc += weight;\n"
+        "    for (int i = -32; i <= 32; ++i) {\n"
+        "        if (i >= -uRadius && i <= uRadius) {\n"
+        "            float fi = float(i);\n"
+        "            float weight = exp(-(fi * fi) / twoSigmaSq);\n"
+        "            vec2 halfTexel = vec2(0.5) / uSizePx;\n"
+        "            vec2 coord = clamp(vTexCoord + uDirection * fi, halfTexel, vec2(1.0) - halfTexel);\n"
+        "            colorAcc += texture2D(uTexture, coord * uInputScale) * weight;\n"
+        "            weightAcc += weight;\n"
+        "        }\n"
         "    }\n"
         "    vec4 finalColor = colorAcc / weightAcc;\n"
-        "    gl_FragColor = vec4(finalColor.rgb, 1.0);\n"
+        "    gl_FragColor = finalColor;\n"
         "}\n";
 
     GLuint vsBlur = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -149,7 +147,7 @@ bool SkiaRenderer::initGLShader() {
         "void main() {\n"
         "    vec4 c = texture2D(uTexture, vTexCoord * uInputScale);\n"
         "    vec3 rgb = uColorMatrix * c.rgb + (uColorOffset / 255.0);\n"
-        "    gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), 1.0);\n"
+        "    gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);\n"
         "}\n";
 
     GLuint vsColor = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -177,6 +175,8 @@ bool SkiaRenderer::initGLShader() {
         "uniform float uRadiusPx;\n"
         "uniform float uRoundnessExp;\n"
         "uniform float uOpacity;\n"
+        "uniform float uSquareTopCorners;\n"
+        "uniform vec2 uSampleOffset;\n"
         "uniform vec2 uSampleScale;\n"
         "float sdSuperRoundRect(vec2 p, vec2 b, float r, float n) {\n"
         "    vec2 q = abs(p) - b + vec2(r);\n"
@@ -188,12 +188,14 @@ bool SkiaRenderer::initGLShader() {
         "    return (k - 1.0) * r;\n"
         "}\n"
         "void main() {\n"
-        "    vec4 c = texture2D(uTexture, vTexCoord * uSampleScale);\n"
+        "    vec4 c = texture2D(uTexture, uSampleOffset + vTexCoord * uSampleScale);\n"
         "    float r = clamp(uRadiusPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
         "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
         "    vec2 p = (vTexCoord - vec2(0.5)) * uSizePx;\n"
         "    vec2 halfSize = uSizePx * 0.5;\n"
-        "    float d = sdSuperRoundRect(p, halfSize, r, n);\n"
+        "    float d = (uSquareTopCorners > 0.5 && p.y > 0.0)\n"
+        "        ? -1.0\n"
+        "        : sdSuperRoundRect(p, halfSize, r, n);\n"
         // Center the device-pixel coverage ramp on the analytic edge. This
         // remains stable while the destination quad moves through subpixels.
         "    float mask = 1.0 - smoothstep(-0.5, 0.5, d);\n"
@@ -216,6 +218,8 @@ bool SkiaRenderer::initGLShader() {
     m_uMaskRadiusLoc = glGetUniformLocation(m_glMaskProgram, "uRadiusPx");
     m_uMaskRoundnessLoc = glGetUniformLocation(m_glMaskProgram, "uRoundnessExp");
     m_uMaskOpacityLoc = glGetUniformLocation(m_glMaskProgram, "uOpacity");
+    m_uMaskSquareTopCornersLoc = glGetUniformLocation(m_glMaskProgram, "uSquareTopCorners");
+    m_uMaskSampleOffsetLoc = glGetUniformLocation(m_glMaskProgram, "uSampleOffset");
     m_uMaskSampleScaleLoc = glGetUniformLocation(m_glMaskProgram, "uSampleScale");
 
     // --- GLSL Rounded Mask Composite Shader (BGRA-aware client surfaces) ---
@@ -394,6 +398,8 @@ bool SkiaRenderer::initGLShader() {
         "uniform float uRefractionFactor;\n"
         "uniform float uDispersionGain;\n"
         "uniform vec2 uSizePx;\n"
+        "uniform vec2 uCaptureSizePx;\n"
+        "uniform vec2 uEffectOffsetPx;\n"
         "uniform float uRadiusPx;\n"
         "uniform float uRoundnessExp;\n"
         "uniform vec2 uInputScale;\n"
@@ -414,7 +420,7 @@ bool SkiaRenderer::initGLShader() {
         "    float eta = max(1.001, uRefractionFactor);\n"
         "    float r = clamp(uRadiusPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
         "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
-        "    vec2 p = (vTexCoord - vec2(0.5)) * uSizePx;\n"
+        "    vec2 p = vTexCoord * uCaptureSizePx - uEffectOffsetPx - uSizePx * 0.5;\n"
         "    vec2 b = uSizePx * 0.5;\n"
         "    float sd = sdSuperRoundRect(p, b, r, n);\n"
         "    float edgeDepth = max(0.0, -sd);\n"
@@ -459,6 +465,8 @@ bool SkiaRenderer::initGLShader() {
     m_uRefractFactorLoc = glGetUniformLocation(m_glRefractionProgram, "uRefractionFactor");
     m_uRefractDispersionLoc = glGetUniformLocation(m_glRefractionProgram, "uDispersionGain");
     m_uRefractSizeLoc = glGetUniformLocation(m_glRefractionProgram, "uSizePx");
+    m_uRefractCaptureSizeLoc = glGetUniformLocation(m_glRefractionProgram, "uCaptureSizePx");
+    m_uRefractEffectOffsetLoc = glGetUniformLocation(m_glRefractionProgram, "uEffectOffsetPx");
     m_uRefractRadiusLoc = glGetUniformLocation(m_glRefractionProgram, "uRadiusPx");
     m_uRefractRoundnessLoc = glGetUniformLocation(m_glRefractionProgram, "uRoundnessExp");
     m_uRefractInputScaleLoc = glGetUniformLocation(m_glRefractionProgram, "uInputScale");
@@ -495,8 +503,8 @@ bool SkiaRenderer::initGLShader() {
         glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[i]);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_width, m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
         glBindFramebuffer(GL_FRAMEBUFFER, m_glFBO[i]);
@@ -781,6 +789,7 @@ void SkiaRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, textureId);
     glUniform1i(m_uTextureLoc, 0);
+    glUniform1f(m_uOpacityLoc, std::clamp(opacity, 0.0f, 1.0f));
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glVertexAttribPointer(m_aPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
@@ -788,16 +797,9 @@ void SkiaRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w
     glVertexAttribPointer(m_aTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
     glEnableVertexAttribArray(m_aTexLoc);
 
-    if (opacity < 0.999f) {
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    }
-
+    beginStraightAlphaSourceOver();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-    if (opacity < 0.999f) {
-        glDisable(GL_BLEND);
-    }
+    endStraightAlphaSourceOver();
 
     glDisableVertexAttribArray(m_aPosLoc);
     glDisableVertexAttribArray(m_aTexLoc);
@@ -811,8 +813,11 @@ void SkiaRenderer::drawMaskedTextureQuad(uint32_t textureId,
                                          float cornerRadius,
                                          float cornerRoundness,
                                          float opacity,
-                                         float uMax,
-                                         float vMax) {
+                                         bool squareTopCorners,
+                                         float uScale,
+                                         float vScale,
+                                         float uOffset,
+                                         float vOffset) {
     if (textureId == 0 || m_glMaskProgram == 0) return;
 
     float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
@@ -835,7 +840,9 @@ void SkiaRenderer::drawMaskedTextureQuad(uint32_t textureId,
     glUniform1f(m_uMaskRadiusLoc, std::max(0.0f, cornerRadius));
     glUniform1f(m_uMaskRoundnessLoc, std::clamp(cornerRoundness, 2.0f, 8.0f));
     glUniform1f(m_uMaskOpacityLoc, std::clamp(opacity, 0.0f, 1.0f));
-    glUniform2f(m_uMaskSampleScaleLoc, uMax, vMax);
+    glUniform1f(m_uMaskSquareTopCornersLoc, squareTopCorners ? 1.0f : 0.0f);
+    glUniform2f(m_uMaskSampleOffsetLoc, uOffset, vOffset);
+    glUniform2f(m_uMaskSampleScaleLoc, uScale, vScale);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glVertexAttribPointer(m_aMaskPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
@@ -843,12 +850,9 @@ void SkiaRenderer::drawMaskedTextureQuad(uint32_t textureId,
     glVertexAttribPointer(m_aMaskTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
     glEnableVertexAttribArray(m_aMaskTexLoc);
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
+    beginStraightAlphaSourceOver();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-    glDisable(GL_BLEND);
+    endStraightAlphaSourceOver();
     glDisableVertexAttribArray(m_aMaskPosLoc);
     glDisableVertexAttribArray(m_aMaskTexLoc);
 }
@@ -873,7 +877,7 @@ void SkiaRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y, flo
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, textureId);
     glUniform1i(m_uBgraTextureLoc, 0);
-    glUniform1f(m_uBgraOpacityLoc, opacity);
+    glUniform1f(m_uBgraOpacityLoc, std::clamp(opacity, 0.0f, 1.0f));
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glVertexAttribPointer(m_aBgraPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
@@ -881,12 +885,9 @@ void SkiaRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y, flo
     glVertexAttribPointer(m_aBgraTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
     glEnableVertexAttribArray(m_aBgraTexLoc);
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
+    beginStraightAlphaSourceOver();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-    glDisable(GL_BLEND);
+    endStraightAlphaSourceOver();
     glDisableVertexAttribArray(m_aBgraPosLoc);
     glDisableVertexAttribArray(m_aBgraTexLoc);
 }
@@ -942,10 +943,9 @@ void SkiaRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
     glVertexAttribPointer(m_aMaskBgraTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
     glEnableVertexAttribArray(m_aMaskBgraTexLoc);
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    beginStraightAlphaSourceOver();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glDisable(GL_BLEND);
+    endStraightAlphaSourceOver();
 
     glDisableVertexAttribArray(m_aMaskBgraPosLoc);
     glDisableVertexAttribArray(m_aMaskBgraTexLoc);
@@ -996,10 +996,9 @@ void SkiaRenderer::drawGpuRoundedRect(float x,
     glVertexAttribPointer(m_aRoundRectTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
     glEnableVertexAttribArray(m_aRoundRectTexLoc);
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    beginStraightAlphaSourceOver();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glDisable(GL_BLEND);
+    endStraightAlphaSourceOver();
 
     glDisableVertexAttribArray(m_aRoundRectPosLoc);
     glDisableVertexAttribArray(m_aRoundRectTexLoc);
@@ -1093,7 +1092,6 @@ void SkiaRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int srcW
                                                 bool squareTopCorners, float drawWidth,
                                                 float drawHeight) {
 #ifndef LCL_SOFTWARE_ONLY
-    (void)squareTopCorners;
     if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend || texture == 0) return;
     m_eglBackend->makeCurrent();
     glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
@@ -1104,7 +1102,8 @@ void SkiaRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int srcW
                                     static_cast<uint32_t>(std::max(0, backingH)));
     if (cornerRadius > 0.001f) {
         drawMaskedTextureQuad(texture, dstX, dstY, drawWidth, drawHeight,
-                              cornerRadius, cornerRoundness, opacity, crop.uMax, crop.vMax);
+                              cornerRadius, cornerRoundness, opacity,
+                              squareTopCorners, crop.uMax, crop.vMax);
     } else {
         drawTextureQuad(texture, dstX, dstY, drawWidth, drawHeight, opacity,
                         crop.uMax, crop.vMax);
@@ -1879,6 +1878,19 @@ ColorMatrix4x4 createInvertMatrix(float value) {
     return mat;
 }
 
+ColorMatrix4x4 createTintMatrix(const protocol::FilterOp& op) {
+    ColorMatrix4x4 mat;
+    const float alpha = std::clamp(op.value, 0.0f, 1.0f);
+    const float sourceScale = 1.0f - alpha;
+    mat.m[0][0] = sourceScale;
+    mat.m[1][1] = sourceScale;
+    mat.m[2][2] = sourceScale;
+    mat.o[0] = std::clamp(op.params[0], 0.0f, 255.0f) * alpha;
+    mat.o[1] = std::clamp(op.params[1], 0.0f, 255.0f) * alpha;
+    mat.o[2] = std::clamp(op.params[2], 0.0f, 255.0f) * alpha;
+    return mat;
+}
+
 void applyColorMatrixToPixels(std::vector<uint32_t>& pixels, int w, int h, const ColorMatrix4x4& mat) {
     if (mat.isIdentity() || pixels.empty()) return;
 
@@ -1933,6 +1945,30 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
         m_eglBackend->makeCurrent();
         const bool gpuBlurAvailable = m_eglBackend->isHardwareAccelerated();
 
+        int capturePadding = 0;
+        if (gpuBlurAvailable) {
+            for (const auto& op : filters) {
+                if (op.type == protocol::FilterType::Blur) {
+                    capturePadding = std::max(capturePadding, gaussianKernelRadius(op.value));
+                }
+            }
+        }
+        const BackdropFilterGeometry geometry = computeBackdropFilterGeometry(
+            dstX, dstY, srcW, srcH,
+            static_cast<int>(m_width), static_cast<int>(m_height), capturePadding);
+        if (geometry.effect.width <= 0 || geometry.effect.height <= 0 ||
+            geometry.capture.width <= 0 || geometry.capture.height <= 0) {
+            return;
+        }
+        const int effectX = geometry.effect.x;
+        const int effectY = geometry.effect.y;
+        const int effectW = geometry.effect.width;
+        const int effectH = geometry.effect.height;
+        const int captureX = geometry.capture.x;
+        const int captureY = geometry.capture.y;
+        const int captureW = geometry.capture.width;
+        const int captureH = geometry.capture.height;
+
         int logScale = 1;
         if (gpuBlurAvailable) {
             for (const auto& op : filters) {
@@ -1942,8 +1978,8 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
             }
         }
 
-        int targetW = std::max(1, w / logScale);
-        int targetH = std::max(1, h / logScale);
+        int targetW = std::max(1, captureW / logScale);
+        int targetH = std::max(1, captureH / logScale);
 
         if (targetW > static_cast<int>(m_glFBOCapacityWidth) ||
             targetH > static_cast<int>(m_glFBOCapacityHeight)) {
@@ -1959,9 +1995,9 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
                              GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
             }
         }
-        const float effectUScale = static_cast<float>(targetW) /
+        const float captureUScale = static_cast<float>(targetW) /
             static_cast<float>(std::max(1u, m_glFBOCapacityWidth));
-        const float effectVScale = static_cast<float>(targetH) /
+        const float captureVScale = static_cast<float>(targetH) /
             static_cast<float>(std::max(1u, m_glFBOCapacityHeight));
 
         // 1. Downsample the FULL source sub-rect of the current scene texture into
@@ -1974,17 +2010,17 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
             m_glExternalFrameTexture && m_glExternalBackingWidth ? m_glExternalBackingWidth : m_width);
         const float textureHeight = static_cast<float>(
             m_glExternalFrameTexture && m_glExternalBackingHeight ? m_glExternalBackingHeight : m_height);
-        float uLeft = static_cast<float>(clipX1) / textureWidth;
-        float uRight = static_cast<float>(clipX2) / textureWidth;
+        float uLeft = static_cast<float>(captureX) / textureWidth;
+        float uRight = static_cast<float>(captureX + captureW) / textureWidth;
         // Client external FBO content occupies the lower-left viewport of its
         // capacity allocation. UI coordinates are top-left, so invert within
         // the content viewport before normalizing by backing capacity.
         float vTop = m_glExternalFrameTexture
-            ? static_cast<float>(static_cast<int>(m_height) - clipY1) / textureHeight
-            : 1.0f - (static_cast<float>(clipY1) / textureHeight);
+            ? static_cast<float>(static_cast<int>(m_height) - captureY) / textureHeight
+            : 1.0f - (static_cast<float>(captureY) / textureHeight);
         float vBottom = m_glExternalFrameTexture
-            ? static_cast<float>(static_cast<int>(m_height) - clipY2) / textureHeight
-            : 1.0f - (static_cast<float>(clipY2) / textureHeight);
+            ? static_cast<float>(static_cast<int>(m_height) - (captureY + captureH)) / textureHeight
+            : 1.0f - (static_cast<float>(captureY + captureH) / textureHeight);
 
         float cropQuad[16] = {
             -1.0f,  1.0f,  uLeft,  vTop,
@@ -1997,6 +2033,8 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, activeSceneTexture());
         glUniform1i(m_uTextureLoc, 0);
+        glUniform1f(m_uOpacityLoc, 1.0f);
+        glDisable(GL_BLEND);
 
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glVertexAttribPointer(m_aPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), cropQuad);
@@ -2037,7 +2075,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[currentTex]);
             glUniform1i(m_uColorTextureLoc, 0);
-            glUniform2f(m_uColorInputScaleLoc, effectUScale, effectVScale);
+            glUniform2f(m_uColorInputScaleLoc, captureUScale, captureVScale);
 
             float mat3Val[9] = {
                 pendingColorMatrix.m[0][0], pendingColorMatrix.m[1][0], pendingColorMatrix.m[2][0],
@@ -2083,12 +2121,10 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
             glUniform2f(m_uBlurDirLoc, 1.0f / static_cast<float>(targetW), 0.0f);
             glUniform1f(m_uBlurSigmaLoc, sigma);
             glUniform1i(m_uBlurRadiusLoc, radius);
-            const float passScale = (w > 0) ? (static_cast<float>(targetW) / static_cast<float>(w)) : 1.0f;
-            const float passCornerRadiusPx = std::max(0.0f, cornerRadius) * passScale;
             glUniform2f(m_uBlurSizeLoc, static_cast<float>(targetW), static_cast<float>(targetH));
-            glUniform1f(m_uBlurCornerRadiusLoc, passCornerRadiusPx);
+            glUniform1f(m_uBlurCornerRadiusLoc, 0.0f);
             glUniform1f(m_uBlurRoundnessLoc, clampedRoundness);
-            glUniform2f(m_uBlurInputScaleLoc, effectUScale, effectVScale);
+            glUniform2f(m_uBlurInputScaleLoc, captureUScale, captureVScale);
 
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -2103,9 +2139,9 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
             glUniform1f(m_uBlurSigmaLoc, sigma);
             glUniform1i(m_uBlurRadiusLoc, radius);
             glUniform2f(m_uBlurSizeLoc, static_cast<float>(targetW), static_cast<float>(targetH));
-            glUniform1f(m_uBlurCornerRadiusLoc, passCornerRadiusPx);
+            glUniform1f(m_uBlurCornerRadiusLoc, 0.0f);
             glUniform1f(m_uBlurRoundnessLoc, clampedRoundness);
-            glUniform2f(m_uBlurInputScaleLoc, effectUScale, effectVScale);
+            glUniform2f(m_uBlurInputScaleLoc, captureUScale, captureVScale);
 
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -2134,17 +2170,27 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
             glBindTexture(GL_TEXTURE_2D, m_glFBOTexture[currentTex]);
             glUniform1i(m_uRefractTextureLoc, 0);
             glUniform2f(m_uRefractInvSizeLoc, 1.0f / static_cast<float>(targetW), 1.0f / static_cast<float>(targetH));
-            const float passScale = (w > 0) ? (static_cast<float>(targetW) / static_cast<float>(w)) : 1.0f;
-            const float passThicknessPx = std::max(0.0f, thicknessPx) * passScale;
-            const float passRadiusPx = std::max(0.0f, cornerRadius) * passScale;
+            const float passScaleX = static_cast<float>(targetW) / static_cast<float>(captureW);
+            const float passScaleY = static_cast<float>(targetH) / static_cast<float>(captureH);
+            const float passThicknessPx = std::max(0.0f, thicknessPx) * passScaleX;
+            const float passRadiusPx = std::max(0.0f, cornerRadius) * passScaleX;
+            const float effectOffsetBottom = static_cast<float>(
+                captureH - geometry.outputOffsetY - effectH);
 
             glUniform1f(m_uRefractThicknessLoc, passThicknessPx);
             glUniform1f(m_uRefractFactorLoc, std::max(1.001f, refractionFactor));
             glUniform1f(m_uRefractDispersionLoc, std::max(0.0f, dispersionGain));
-            glUniform2f(m_uRefractSizeLoc, static_cast<float>(targetW), static_cast<float>(targetH));
+            glUniform2f(m_uRefractSizeLoc,
+                        static_cast<float>(effectW) * passScaleX,
+                        static_cast<float>(effectH) * passScaleY);
+            glUniform2f(m_uRefractCaptureSizeLoc,
+                        static_cast<float>(targetW), static_cast<float>(targetH));
+            glUniform2f(m_uRefractEffectOffsetLoc,
+                        static_cast<float>(geometry.outputOffsetX) * passScaleX,
+                        effectOffsetBottom * passScaleY);
             glUniform1f(m_uRefractRadiusLoc, passRadiusPx);
             glUniform1f(m_uRefractRoundnessLoc, clampedRoundness);
-            glUniform2f(m_uRefractInputScaleLoc, effectUScale, effectVScale);
+            glUniform2f(m_uRefractInputScaleLoc, captureUScale, captureVScale);
 
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -2169,6 +2215,9 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
                     break;
                 case protocol::FilterType::Invert:
                     pendingColorMatrix.multiply(createInvertMatrix(op.value));
+                    break;
+                case protocol::FilterType::Tint:
+                    pendingColorMatrix.multiply(createTintMatrix(op));
                     break;
                 case protocol::FilterType::Blur: {
                     // An EGL context can be Mesa llvmpipe running on the CPU.
@@ -2201,16 +2250,29 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
 
+        const float outputUScale = (static_cast<float>(effectW) /
+            static_cast<float>(captureW)) * captureUScale;
+        const float outputVScale = (static_cast<float>(effectH) /
+            static_cast<float>(captureH)) * captureVScale;
+        const float outputUOffset = (static_cast<float>(geometry.outputOffsetX) /
+            static_cast<float>(captureW)) * captureUScale;
+        const float outputOffsetBottom = static_cast<float>(
+            captureH - geometry.outputOffsetY - effectH);
+        const float outputVOffset = (outputOffsetBottom /
+            static_cast<float>(captureH)) * captureVScale;
         drawMaskedTextureQuad(m_glFBOTexture[currentTex],
-                      clipX1,
-                      clipY1,
-                      static_cast<float>(w),
-                      static_cast<float>(h),
+                      effectX,
+                      effectY,
+                      static_cast<float>(effectW),
+                      static_cast<float>(effectH),
                       cornerRadius,
                       clampedRoundness,
                       opacity,
-                      effectUScale,
-                      effectVScale);
+                      false,
+                      outputUScale,
+                      outputVScale,
+                      outputUOffset,
+                      outputVOffset);
         return;
     }
 #endif
@@ -2336,6 +2398,9 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
                 break;
             case protocol::FilterType::Invert:
                 pendingColorMatrix.multiply(createInvertMatrix(op.value));
+                break;
+            case protocol::FilterType::Tint:
+                pendingColorMatrix.multiply(createTintMatrix(op));
                 break;
             case protocol::FilterType::Blur:
                 // Backdrop blur is GPU-only. Do not emulate it in the software

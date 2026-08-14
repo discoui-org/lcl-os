@@ -163,7 +163,7 @@ bool validSystemSurfaceKind(LCLSystemSurfaceKind value) {
     return value >= LCLSystemSurfaceKind::None && value <= LCLSystemSurfaceKind::Dock;
 }
 bool validFilter(FilterType value) {
-    return value >= FilterType::None && value <= FilterType::Glass;
+    return value >= FilterType::None && value <= FilterType::Tint;
 }
 bool validProfile(uint8_t value) {
     return value <= static_cast<uint8_t>(GlassProfile::Dense);
@@ -177,7 +177,7 @@ bool validBlend(EffectBlendMode value) {
 }
 bool validBoundsPolicy(EffectBoundsPolicy value) {
     return value >= EffectBoundsPolicy::Local &&
-           value <= EffectBoundsPolicy::WindowGroup;
+           value <= EffectBoundsPolicy::OuterSurface;
 }
 bool validOpcode(LCLOpcode value) {
     switch (value) {
@@ -205,6 +205,7 @@ bool validOpcode(LCLOpcode value) {
     case LCLOpcode::ShellStateDelta:
     case LCLOpcode::SetSystemSurfaceKind:
     case LCLOpcode::SetWindowCornerStyle:
+    case LCLOpcode::SetEdgeToEdge:
         return true;
     }
     return false;
@@ -441,6 +442,12 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.u32(msg.surfaceId);
         out.u32(static_cast<uint32_t>(msg.mode));
         return msg.surfaceId > 0 && validDecoration(msg.mode);
+    }
+    case LCLOpcode::SetEdgeToEdge: {
+        LOAD_ONE(LCLMsgSetEdgeToEdge, msg);
+        out.u32(msg.surfaceId);
+        out.u8(msg.enabled);
+        return msg.surfaceId > 0 && msg.enabled <= 1;
     }
     case LCLOpcode::SetWindowLayer: {
         LOAD_ONE(LCLMsgSetWindowLayer, msg);
@@ -727,6 +734,15 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             return false;
         m.mode = static_cast<LCLDecorationMode>(mode);
         if (m.surfaceId == 0 || !validDecoration(m.mode))
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::SetEdgeToEdge: {
+        LCLMsgSetEdgeToEdge m{};
+        if (!in.u32(m.surfaceId) || !in.u8(m.enabled))
+            return false;
+        if (m.surfaceId == 0 || m.enabled > 1)
             return false;
         appendNative(payload, m);
         break;

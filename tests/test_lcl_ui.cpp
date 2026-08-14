@@ -12,6 +12,7 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "render/skia_renderer.hpp"
 #include "render/skia_canvas.hpp"
+#include "render/backdrop_filter_geometry.hpp"
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -724,12 +725,68 @@ TEST(LclUiTest, WindowAppInvokesResizeLifecycleAfterLogicalResize) {
     EXPECT_EQ(callbackHeight, 72u);
 }
 
+TEST(LclUiTest, AbsoluteEdgePinnedLayerTracksWindowResize) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 64, 48, "Edge-pinned resize test");
+
+    auto root = std::make_unique<Container>();
+    root->getYogaNode().setWidth(64.0f);
+    root->getYogaNode().setHeight(48.0f);
+    auto layer = std::make_unique<Container>();
+    Container* layerPointer = layer.get();
+    layer->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    layer->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
+    layer->getYogaNode().setPosition(YGEdgeTop, 0.0f);
+    layer->getYogaNode().setPosition(YGEdgeRight, 0.0f);
+    layer->getYogaNode().setPosition(YGEdgeBottom, 0.0f);
+    root->addChild(std::move(layer));
+    app.setRootWidget(std::move(root));
+
+    app.updateLayout();
+    EXPECT_FLOAT_EQ(layerPointer->getAbsoluteBounds().width, 64.0f);
+    EXPECT_FLOAT_EQ(layerPointer->getAbsoluteBounds().height, 48.0f);
+
+    app.resize(120, 72);
+    app.updateLayout();
+    EXPECT_FLOAT_EQ(layerPointer->getAbsoluteBounds().width, 120.0f);
+    EXPECT_FLOAT_EQ(layerPointer->getAbsoluteBounds().height, 72.0f);
+}
+
 TEST(LclUiTest, WindowAppStagesSurfaceChromeBeforeCompositorConnection) {
     auto canvas = std::make_unique<RecordingCanvas>();
     WindowApp app(std::move(canvas), 64, 48, "Staged chrome test");
 
     EXPECT_TRUE(app.setDecorationMode(lcl::protocol::LCLDecorationMode::CSD));
+    EXPECT_TRUE(app.setEdgeToEdge(true));
     EXPECT_TRUE(app.setWindowCornerRadius(14.0f));
+}
+
+TEST(LclUiTest, WindowAppSendsExplicitEdgeToEdgeState) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 64, 48, "Edge-to-edge test");
+    app.setSurfaceId(5);
+    app.setExternalIpcSocket(sockets[0]);
+
+    ASSERT_TRUE(app.setEdgeToEdge(true));
+
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, lcl::protocol::LCLOpcode::SetEdgeToEdge);
+    ASSERT_EQ(payload.size(), sizeof(lcl::protocol::LCLMsgSetEdgeToEdge));
+    const auto* edgeToEdge =
+        reinterpret_cast<const lcl::protocol::LCLMsgSetEdgeToEdge*>(
+            payload.data());
+    EXPECT_EQ(edgeToEdge->surfaceId, 5u);
+    EXPECT_EQ(edgeToEdge->enabled, 1u);
+
+    close(sockets[0]);
+    close(sockets[1]);
 }
 
 TEST(LclUiTest, WindowAppSendsOneWindowCornerStyle) {
@@ -845,9 +902,10 @@ TEST(LclUiTest, GlassUsesTheGenericAddFilterChain) {
     surface.getYogaNode().setWidth(100.0f);
     surface.getYogaNode().setHeight(100.0f);
     surface.setBorderRoundness(3.2f);
-    surface.setEffectBounds(EffectBounds::WindowGroup);
+    surface.setEffectBounds(EffectBounds::OuterSurface);
     surface.addFilter(lcl::protocol::FilterType::Blur, 8.0f);
     surface.addFilter(lcl::protocol::FilterType::Glass, 30.0f, 3.0f, 12.0f);
+    surface.setTint({15, 23, 42, 128});
     surface.getYogaNode().calculateLayout(100.0f, 100.0f);
     surface.syncLayout();
 
@@ -855,9 +913,9 @@ TEST(LclUiTest, GlassUsesTheGenericAddFilterChain) {
     surface.collectEffects(effects);
 
     ASSERT_EQ(effects.size(), 1u);
-    ASSERT_EQ(effects.front().filters.size(), 2u);
+    ASSERT_EQ(effects.front().filters.size(), 3u);
     EXPECT_FLOAT_EQ(effects.front().cornerRoundness, 3.2f);
-    EXPECT_EQ(effects.front().boundsPolicy, EffectBounds::WindowGroup);
+    EXPECT_EQ(effects.front().boundsPolicy, EffectBounds::OuterSurface);
     EXPECT_EQ(effects.front().filters[0].type, lcl::protocol::FilterType::Blur);
     const auto& glass = effects.front().filters[1];
     EXPECT_EQ(glass.type, lcl::protocol::FilterType::Glass);
@@ -865,6 +923,12 @@ TEST(LclUiTest, GlassUsesTheGenericAddFilterChain) {
     EXPECT_FLOAT_EQ(glass.params[0], 30.0f);
     EXPECT_FLOAT_EQ(glass.params[1], 3.0f);
     EXPECT_FLOAT_EQ(glass.params[2], 12.0f);
+    const auto& tint = effects.front().filters[2];
+    EXPECT_EQ(tint.type, lcl::protocol::FilterType::Tint);
+    EXPECT_FLOAT_EQ(tint.value, 128.0f / 255.0f);
+    EXPECT_FLOAT_EQ(tint.params[0], 15.0f);
+    EXPECT_FLOAT_EQ(tint.params[1], 23.0f);
+    EXPECT_FLOAT_EQ(tint.params[2], 42.0f);
 }
 
 TEST(LclUiTest, PassiveBackdropEffectDoesNotRequireAFullWindowRoundedRaster) {
@@ -1147,6 +1211,78 @@ TEST(LclUiTest, RoundedRectPreservesTranslucentAlphaOnTransparentCanvas) {
     EXPECT_EQ(pixels[16 + 16 * 32], 0xB8111317u);
 }
 
+TEST(LclUiTest, StraightAlphaBufferCompositesSourceAlphaAtFullGlobalOpacity) {
+    std::vector<uint32_t> pixels(1, 0xFF0000FFu);
+    const uint32_t source = 0x66FF0000u;
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(1, 1, nullptr, pixels.data()));
+
+    renderer.drawBuffer(0, 0, 1, 1, &source, 1, 1.0f);
+
+    EXPECT_EQ(pixels[0], 0xFF660099u);
+}
+
+TEST(LclUiTest, MaskedAndUnmaskedStraightAlphaBuffersMatchAtTheirCenters) {
+    const uint32_t source = 0x6690C0F0u;
+    const auto centerPixel = [&](float radius) {
+        std::vector<uint32_t> pixels(5 * 5, 0xFF102030u);
+        lcl::render::SkiaRenderer renderer;
+        EXPECT_TRUE(renderer.initialize(5, 5, nullptr, pixels.data()));
+        renderer.drawBuffer(0, 0, 1, 1, &source, 1, 1.0f, radius, 2.0f,
+                            false, 5, 5);
+        return pixels[2 + 2 * 5];
+    };
+
+    EXPECT_EQ(centerPixel(2.0f), centerPixel(0.0f));
+}
+
+TEST(LclUiTest, StraightAlphaLayersAccumulateAlphaWithoutSquaringIt) {
+    std::vector<uint32_t> pixels(1, 0x00000000u);
+    const uint32_t red = 0x80FF0000u;
+    const uint32_t green = 0x8000FF00u;
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(1, 1, nullptr, pixels.data()));
+
+    renderer.drawBuffer(0, 0, 1, 1, &red, 1, 1.0f);
+    renderer.drawBuffer(0, 0, 1, 1, &green, 1, 1.0f);
+
+    EXPECT_EQ((pixels[0] >> 24) & 0xFFu, 192u);
+    EXPECT_EQ((pixels[0] >> 16) & 0xFFu, 85u);
+    EXPECT_EQ((pixels[0] >> 8) & 0xFFu, 170u);
+    EXPECT_EQ(pixels[0] & 0xFFu, 0u);
+}
+
+TEST(LclUiTest, BackdropBlurCaptureExpandsAndClampsWithoutChangingOutputRect) {
+    const int radius = lcl::render::gaussianKernelRadius(15.0f);
+    EXPECT_EQ(radius, 23);
+
+    const auto centered = lcl::render::computeBackdropFilterGeometry(
+        100, 50, 200, 32, 1920, 1080, radius);
+    EXPECT_EQ(centered.effect.x, 100);
+    EXPECT_EQ(centered.effect.y, 50);
+    EXPECT_EQ(centered.effect.width, 200);
+    EXPECT_EQ(centered.effect.height, 32);
+    EXPECT_EQ(centered.capture.x, 77);
+    EXPECT_EQ(centered.capture.y, 27);
+    EXPECT_EQ(centered.capture.width, 246);
+    EXPECT_EQ(centered.capture.height, 78);
+    EXPECT_EQ(centered.outputOffsetX, 23);
+    EXPECT_EQ(centered.outputOffsetY, 23);
+
+    const auto screenEdge = lcl::render::computeBackdropFilterGeometry(
+        0, 0, 1920, 32, 1920, 1080, radius);
+    EXPECT_EQ(screenEdge.effect.x, 0);
+    EXPECT_EQ(screenEdge.effect.y, 0);
+    EXPECT_EQ(screenEdge.effect.width, 1920);
+    EXPECT_EQ(screenEdge.effect.height, 32);
+    EXPECT_EQ(screenEdge.capture.x, 0);
+    EXPECT_EQ(screenEdge.capture.y, 0);
+    EXPECT_EQ(screenEdge.capture.width, 1920);
+    EXPECT_EQ(screenEdge.capture.height, 55);
+    EXPECT_EQ(screenEdge.outputOffsetX, 0);
+    EXPECT_EQ(screenEdge.outputOffsetY, 0);
+}
+
 TEST(LclUiTest, SoftwareBackdropPathSkipsBlur) {
     std::vector<uint32_t> pixels{
         0xFF102030u, 0xFF405060u,
@@ -1161,6 +1297,22 @@ TEST(LclUiTest, SoftwareBackdropPathSkipsBlur) {
         {{lcl::protocol::FilterType::Blur, 16.0f}});
 
     EXPECT_EQ(pixels, original);
+}
+
+TEST(LclUiTest, SoftwareBackdropTintUsesTheSameFilteredMaterialPass) {
+    std::vector<uint32_t> pixels{0xFF8090A0u};
+    lcl::protocol::FilterOp tint{};
+    tint.type = lcl::protocol::FilterType::Tint;
+    tint.value = 0.5f;
+    tint.params[0] = 16.0f;
+    tint.params[1] = 32.0f;
+    tint.params[2] = 48.0f;
+
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(1, 1, nullptr, pixels.data()));
+    renderer.applyBackdropFilter(0, 0, 1, 1, 0.0f, 2.0f, 1.0f, {tint});
+
+    EXPECT_EQ(pixels[0], 0xFF485868u);
 }
 
 TEST(LclUiTest, SoftwareBackdropMaskUsesTheEffectRoundness) {

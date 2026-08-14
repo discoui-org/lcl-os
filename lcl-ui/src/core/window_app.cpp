@@ -258,7 +258,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     m_waitingForInitialConfigure = true;
     if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate, &surfMsg, sizeof(surfMsg))) {
         m_waitingForInitialConfigure = false;
-        std::cerr << "[lcl-ui ERROR] Failed to create v10 surface\n";
+        std::cerr << "[lcl-ui ERROR] Failed to create v11 surface\n";
         return false;
     }
 
@@ -279,6 +279,9 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // CSD client never flashes the compositor's default title chrome.
     if (m_hasRequestedDecorationMode) {
         setDecorationMode(m_requestedDecorationMode);
+    }
+    if (m_hasRequestedEdgeToEdge) {
+        setEdgeToEdge(m_requestedEdgeToEdge);
     }
     if (m_hasRequestedCornerRadius) {
         setWindowCornerStyle(m_requestedCornerRadius, m_requestedCornerRoundness);
@@ -479,7 +482,7 @@ void WindowApp::pollIPC() {
         } else if (receiveStatus == lcl::protocol::ReceiveStatus::WouldBlock) {
             break;
         } else {
-            std::cerr << "[lcl-ui ERROR] Compositor v10 connection closed or rejected\n";
+            std::cerr << "[lcl-ui ERROR] Compositor v11 connection closed or rejected\n";
             m_ipcConnected = false;
             m_running = false;
             break;
@@ -848,6 +851,18 @@ bool WindowApp::setDecorationMode(lcl::protocol::LCLDecorationMode mode) {
                                &msg, sizeof(msg));
 }
 
+bool WindowApp::setEdgeToEdge(bool enabled) {
+    m_requestedEdgeToEdge = enabled;
+    m_hasRequestedEdgeToEdge = true;
+    if (!m_ipcConnected || m_socketFd < 0) return true;
+
+    lcl::protocol::LCLMsgSetEdgeToEdge msg{};
+    msg.surfaceId = m_surfaceId;
+    msg.enabled = enabled ? 1 : 0;
+    return sendProtocolMessage(lcl::protocol::LCLOpcode::SetEdgeToEdge,
+                               &msg, sizeof(msg));
+}
+
 bool WindowApp::setWindowLayer(lcl::protocol::LCLWindowLayer layer, bool unfocusable) {
     if (!m_ipcConnected || m_socketFd < 0) return false;
 
@@ -1093,8 +1108,8 @@ bool WindowApp::renderFrame() {
             }
         };
         auto toProtoBounds = [](EffectBounds bounds) {
-            return bounds == EffectBounds::WindowGroup
-                ? lcl::protocol::EffectBoundsPolicy::WindowGroup
+            return bounds == EffectBounds::OuterSurface
+                ? lcl::protocol::EffectBoundsPolicy::OuterSurface
                 : lcl::protocol::EffectBoundsPolicy::Local;
         };
 

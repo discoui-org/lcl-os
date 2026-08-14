@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 10;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 11;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
@@ -45,7 +45,8 @@ enum class LCLOpcode : uint32_t {
     ReleaseDmaBuf = 25,
     // Presentation timing is separate from DMA-BUF ownership. A release makes
     // a pool slot writable; this callback paces the next interactive frame.
-    FramePresented = 26
+    FramePresented = 26,
+    SetEdgeToEdge = 27
 };
 
 enum class LCLSystemSurfaceKind : uint32_t {
@@ -115,7 +116,8 @@ enum class FilterType : uint8_t {
     Saturation = 4,
     Grayscale = 5,
     Invert = 6,
-    Glass = 7
+    Glass = 7,
+    Tint = 8
 };
 
 enum class GlassProfile : uint8_t {
@@ -140,7 +142,7 @@ enum class EffectBlendMode : uint8_t {
 
 enum class EffectBoundsPolicy : uint8_t {
     Local = 0,
-    WindowGroup = 1
+    OuterSurface = 1
 };
 
 #pragma pack(push, 1)
@@ -154,11 +156,14 @@ struct FilterOp {
     uint8_t reserved0{0};
     uint16_t reserved1{0};
 
-    // Optional custom parameters (used by advanced filters like Glass).
+    // Optional custom parameters (used by advanced filters like Glass and Tint).
     // Glass mapping:
     // params[0] = thicknessPx
     // params[1] = refractionFactor
     // params[2] = dispersionGain
+    // Tint mapping:
+    // value = alpha in [0, 1]
+    // params[0..2] = red, green, blue in [0, 255]
     float params[3]{0.0f, 0.0f, 0.0f};
 };
 
@@ -274,6 +279,11 @@ struct LCLMsgInputEvent {
 struct LCLMsgSetDecorationMode {
     uint32_t surfaceId{0};
     LCLDecorationMode mode{LCLDecorationMode::SSD};
+};
+
+struct LCLMsgSetEdgeToEdge {
+    uint32_t surfaceId{0};
+    uint8_t enabled{0};
 };
 
 struct LCLMsgSetWindowLayer {

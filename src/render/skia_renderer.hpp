@@ -229,6 +229,7 @@ private:
     int32_t m_aPosLoc{-1};
     int32_t m_aTexLoc{-1};
     int32_t m_uTextureLoc{-1};
+    int32_t m_uOpacityLoc{-1};
 
     // GPU FBO & Shader Handles for Backdrop Filters & Scene Compositing
     bool m_glFBOReady{false};
@@ -272,6 +273,8 @@ private:
     int32_t m_uMaskRadiusLoc{-1};
     int32_t m_uMaskRoundnessLoc{-1};
     int32_t m_uMaskOpacityLoc{-1};
+    int32_t m_uMaskSquareTopCornersLoc{-1};
+    int32_t m_uMaskSampleOffsetLoc{-1};
     int32_t m_uMaskSampleScaleLoc{-1};
 
     uint32_t m_glMaskBgraProgram{0};
@@ -303,6 +306,8 @@ private:
     int32_t m_uRefractFactorLoc{-1};
     int32_t m_uRefractDispersionLoc{-1};
     int32_t m_uRefractSizeLoc{-1};
+    int32_t m_uRefractCaptureSizeLoc{-1};
+    int32_t m_uRefractEffectOffsetLoc{-1};
     int32_t m_uRefractRadiusLoc{-1};
     int32_t m_uRefractRoundnessLoc{-1};
     int32_t m_uRefractInputScaleLoc{-1};
@@ -322,7 +327,9 @@ private:
                          float opacity = 1.0f, float uMax = 1.0f, float vMax = 1.0f);
     void drawMaskedTextureQuad(uint32_t textureId, float x, float y, float w, float h,
                                float cornerRadius, float cornerRoundness, float opacity,
-                               float uMax = 1.0f, float vMax = 1.0f);
+                               bool squareTopCorners = false,
+                               float uScale = 1.0f, float vScale = 1.0f,
+                               float uOffset = 0.0f, float vOffset = 0.0f);
     void drawMaskedBgraTextureQuad(uint32_t textureId,
                                    float x,
                                    float y,

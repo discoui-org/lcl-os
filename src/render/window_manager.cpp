@@ -798,6 +798,19 @@ void WindowManager::setDecorationMode(uint32_t windowId, DecorationMode mode) {
     }
 }
 
+void WindowManager::setEdgeToEdge(uint32_t windowId, bool enabled) {
+    for (auto& win : m_windows) {
+        if (win.id == windowId) {
+            if (win.edgeToEdge != enabled) {
+                win.edgeToEdge = enabled;
+                win.markDirty();
+                m_mouseDirty = true;
+            }
+            break;
+        }
+    }
+}
+
 void WindowManager::setWindowLayer(uint32_t windowId, protocol::LCLWindowLayer layer, bool unfocusable) {
     for (auto& win : m_windows) {
         if (win.id == windowId) {

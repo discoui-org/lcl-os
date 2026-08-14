@@ -566,6 +566,15 @@ JSValue js_window_app_setDecorationMode(JSContext* ctx, JSValueConst this_val, i
     return JS_NewBool(ctx, ok);
 }
 
+JSValue js_window_app_setEdgeToEdge(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(
+        JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+    if (argc < 1) return JS_ThrowTypeError(ctx, "edge-to-edge enabled state is required");
+    return JS_NewBool(ctx, appWrap->app->setEdgeToEdge(JS_ToBool(ctx, argv[0]) != 0));
+}
+
 JSValue js_window_app_setWindowCornerStyle(JSContext* ctx, JSValueConst this_val,
                                            int argc, JSValueConst* argv) {
     auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
@@ -973,6 +982,31 @@ JSValue js_backdrop_setInteractive(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+JSValue js_backdrop_setTint(JSContext* ctx, JSValueConst this_val,
+                            int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(
+        ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+    auto* backdrop = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
+    if (!backdrop || argc < 4) return JS_ThrowTypeError(ctx, "tint requires r, g, b, a");
+
+    int32_t r = 0;
+    int32_t g = 0;
+    int32_t b = 0;
+    int32_t a = 0;
+    if (JS_ToInt32(ctx, &r, argv[0]) < 0 || JS_ToInt32(ctx, &g, argv[1]) < 0 ||
+        JS_ToInt32(ctx, &b, argv[2]) < 0 || JS_ToInt32(ctx, &a, argv[3]) < 0) {
+        return JS_EXCEPTION;
+    }
+    backdrop->setTint({
+        static_cast<uint8_t>(std::clamp(r, 0, 255)),
+        static_cast<uint8_t>(std::clamp(g, 0, 255)),
+        static_cast<uint8_t>(std::clamp(b, 0, 255)),
+        static_cast<uint8_t>(std::clamp(a, 0, 255)),
+    });
+    return JS_UNDEFINED;
+}
+
 JSValue js_backdrop_setEffectBounds(JSContext* ctx, JSValueConst this_val,
                                     int argc, JSValueConst* argv) {
     auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
@@ -984,12 +1018,12 @@ JSValue js_backdrop_setEffectBounds(JSContext* ctx, JSValueConst this_val,
     if (!value) return JS_EXCEPTION;
     const std::string bounds(value);
     JS_FreeCString(ctx, value);
-    if (bounds == "window-group" || bounds == "windowGroup") {
-        backdrop->setEffectBounds(lcl::ui::EffectBounds::WindowGroup);
+    if (bounds == "outer-surface" || bounds == "outerSurface") {
+        backdrop->setEffectBounds(lcl::ui::EffectBounds::OuterSurface);
     } else if (bounds == "local") {
         backdrop->setEffectBounds(lcl::ui::EffectBounds::Local);
     } else {
-        return JS_ThrowRangeError(ctx, "effect bounds must be 'local' or 'window-group'");
+        return JS_ThrowRangeError(ctx, "effect bounds must be 'local' or 'outer-surface'");
     }
     return JS_UNDEFINED;
 }
@@ -1749,6 +1783,7 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, windowAppProto, "setCsdTitlebarEnabled", JS_NewCFunction(m_ctx, js_window_app_setCsdTitlebarEnabled, "setCsdTitlebarEnabled", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "configureCsdTitlebar", JS_NewCFunction(m_ctx, js_window_app_configureCsdTitlebar, "configureCsdTitlebar", 5));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setDecorationMode", JS_NewCFunction(m_ctx, js_window_app_setDecorationMode, "setDecorationMode", 1));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "setEdgeToEdge", JS_NewCFunction(m_ctx, js_window_app_setEdgeToEdge, "setEdgeToEdge", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setWindowCornerStyle", JS_NewCFunction(m_ctx, js_window_app_setWindowCornerStyle, "setWindowCornerStyle", 2));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setResizePresentationMode", JS_NewCFunction(m_ctx, js_window_app_setResizePresentationMode, "setResizePresentationMode", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "animate", JS_NewCFunction(m_ctx, js_window_app_animate, "animate", 2));
@@ -1774,6 +1809,7 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, widgetProto, "addFilter", JS_NewCFunction(m_ctx, js_effect_addFilter, "addFilter", 4));
     JS_SetPropertyStr(m_ctx, widgetProto, "clearFilters", JS_NewCFunction(m_ctx, js_effect_clearFilters, "clearFilters", 0));
     JS_SetPropertyStr(m_ctx, widgetProto, "setInteractive", JS_NewCFunction(m_ctx, js_backdrop_setInteractive, "setInteractive", 1));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setTint", JS_NewCFunction(m_ctx, js_backdrop_setTint, "setTint", 4));
     JS_SetPropertyStr(m_ctx, widgetProto, "setEffectBounds", JS_NewCFunction(m_ctx, js_backdrop_setEffectBounds, "setEffectBounds", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setOpacity", JS_NewCFunction(m_ctx, js_effect_setOpacity, "setOpacity", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setTranslation", JS_NewCFunction(m_ctx, js_widget_setTranslation, "setTranslation", 2));

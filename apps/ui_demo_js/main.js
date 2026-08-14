@@ -6,19 +6,22 @@ console.log("========================================");
 const app = new LCL.WindowApp(800, 600, "LCL-UI JS Interactive Demo App");
 app.setAppId("org.lcl.uidemo-js");
 app.setWindowCornerStyle(20, 2);
+app.setEdgeToEdge(true);
 
 // 2. Build Centered Flexbox Layout Tree in User-Space App
 const rootContainer = new LCL.BackdropSurface();
 rootContainer.setInteractive(false);
-rootContainer.setEffectBounds("window-group");
-rootContainer.addFilter("blur", 50);
+rootContainer.setEffectBounds("outer-surface");
+rootContainer.addFilter("blur", 15);
+rootContainer.addFilter("saturation", 1.4);
+rootContainer.addFilter("brightness", 1.1);
+rootContainer.setTint(15, 23, 42, 128);
 rootContainer.setWidth(800);
 rootContainer.setHeight(600);
 rootContainer.setDirection("column");
 rootContainer.setJustifyContent("center");
 rootContainer.setAlignItems("center");
 rootContainer.setGap(20);
-rootContainer.setBackgroundColor(17, 19, 23, 190);
 
 // Inner Card Container
 const cardContainer = new LCL.Container();

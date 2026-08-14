@@ -100,6 +100,17 @@ TEST(WindowManagerTest, WindowCornerStyleOwnsRadiusAndRoundnessTogether) {
     EXPECT_FLOAT_EQ(window->cornerRoundness, 3.2f);
 }
 
+TEST(WindowManagerTest, EdgeToEdgeIsExplicitWindowState) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t id = manager.createWindow("Edge-to-edge", 80, 80, 400, 300);
+
+    manager.setEdgeToEdge(id, true);
+    const auto* window = findWindow(manager, id);
+    ASSERT_NE(window, nullptr);
+    EXPECT_TRUE(window->edgeToEdge);
+}
+
 TEST(WindowManagerTest, MaximizeRestoreMorphRetargetsFromPresentationGeometry) {
     lcl::render::WindowManager manager;
     ASSERT_TRUE(manager.initialize(1000, 700));

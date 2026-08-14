@@ -1,6 +1,7 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace lcl::ui {
 
@@ -29,6 +30,16 @@ BackdropSurface::BackdropSurface() {
 
 void BackdropSurface::setFilters(const std::vector<lcl::protocol::FilterOp>& filters) {
     m_filters = filters;
+    m_tint = {0, 0, 0, 0};
+    for (const auto& filter : m_filters) {
+        if (filter.type != lcl::protocol::FilterType::Tint) continue;
+        m_tint = {
+            static_cast<uint8_t>(std::clamp(std::lround(filter.params[0]), 0l, 255l)),
+            static_cast<uint8_t>(std::clamp(std::lround(filter.params[1]), 0l, 255l)),
+            static_cast<uint8_t>(std::clamp(std::lround(filter.params[2]), 0l, 255l)),
+            static_cast<uint8_t>(std::clamp(std::lround(filter.value * 255.0f), 0l, 255l)),
+        };
+    }
     markDirty();
 }
 
@@ -56,6 +67,27 @@ void BackdropSurface::addFilter(const lcl::protocol::FilterOp& filter) {
 
 void BackdropSurface::clearFilters() {
     m_filters.clear();
+    m_tint = {0, 0, 0, 0};
+    markDirty();
+}
+
+void BackdropSurface::setTint(const Color& color) {
+    m_filters.erase(
+        std::remove_if(m_filters.begin(), m_filters.end(), [](const auto& filter) {
+            return filter.type == lcl::protocol::FilterType::Tint;
+        }),
+        m_filters.end());
+
+    m_tint = color;
+    if (color.a > 0) {
+        lcl::protocol::FilterOp tint{};
+        tint.type = lcl::protocol::FilterType::Tint;
+        tint.value = static_cast<float>(color.a) / 255.0f;
+        tint.params[0] = static_cast<float>(color.r);
+        tint.params[1] = static_cast<float>(color.g);
+        tint.params[2] = static_cast<float>(color.b);
+        m_filters.push_back(tint);
+    }
     markDirty();
 }
 

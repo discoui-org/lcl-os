@@ -122,6 +122,7 @@ struct Window {
     bool isFocused{false};
     bool isUnfocusable{false};
     DecorationMode decorationMode{DecorationMode::SSD};
+    bool edgeToEdge{false};
     protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
 
     // Drag state
@@ -273,6 +274,8 @@ public:
      * @brief Set decoration mode (SSD/CSD/None) for a window.
      */
     void setDecorationMode(uint32_t windowId, DecorationMode mode);
+    /** Extend surface material beneath compositor-owned system insets. */
+    void setEdgeToEdge(uint32_t windowId, bool enabled);
 
     /**
      * @brief Set window layer (Bottom/Normal/TopMost) and unfocusable flag for a window.

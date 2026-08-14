@@ -22,7 +22,7 @@ enum class EffectBlend {
 
 enum class EffectBounds {
     Local,
-    WindowGroup
+    OuterSurface
 };
 
 struct EffectRegion {

@@ -16,6 +16,9 @@ public:
                    float parameter1 = 1.4f, float parameter2 = 7.0f);
     void addFilter(const lcl::protocol::FilterOp& filter);
     void clearFilters();
+    /** Composite one tint over the filtered pixels in the compositor effect pass. */
+    void setTint(const Color& color);
+    Color getTint() const { return m_tint; }
 
     void setEffectBounds(EffectBounds bounds) {
         if (m_effectBounds != bounds) {
@@ -51,6 +54,7 @@ private:
     void restoreBaseVisuals();
 
     std::vector<lcl::protocol::FilterOp> m_filters;
+    Color m_tint{0, 0, 0, 0};
     EffectBounds m_effectBounds{EffectBounds::Local};
     EffectBlend m_blendMode{EffectBlend::Normal};
     float m_opacity{1.0f};

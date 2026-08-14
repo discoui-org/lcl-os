@@ -60,6 +60,7 @@ public:
         uint32_t initialHeight{0};
         protocol::LCLSystemSurfaceKind systemSurfaceKind{protocol::LCLSystemSurfaceKind::None};
         protocol::LCLDecorationMode decorationMode{protocol::LCLDecorationMode::SSD};
+        bool edgeToEdge{false};
         protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
         bool unfocusable{false};
         bool insetBorderEnabled{true};

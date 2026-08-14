@@ -22,14 +22,17 @@ TEST(JsRuntimeTest, WidgetCreationAndHierarchyInJS) {
 
     const char* script = R"(
         globalThis.testApp = new LCL.WindowApp(800, 600, "JS Test App");
+        if (!globalThis.testApp.setEdgeToEdge(true)) throw new Error('edge-to-edge rejected');
         globalThis.testRoot = new LCL.Container();
         globalThis.testRoot.setWidth(800);
         globalThis.testRoot.setHeight(600);
 
         globalThis.testBackdrop = new LCL.BackdropSurface();
         globalThis.testBackdrop.setInteractive(false);
+        globalThis.testBackdrop.setEffectBounds("outer-surface");
         globalThis.testBackdrop.addFilter("blur", 50);
         globalThis.testBackdrop.addFilter("glass", 30, 3, 12);
+        globalThis.testBackdrop.setTint(15, 23, 42, 128);
         if (typeof globalThis.testBackdrop.setGlass !== 'undefined') throw new Error('setGlass should not be exposed');
 
         globalThis.testBtn = new LCL.Button("Click Me");

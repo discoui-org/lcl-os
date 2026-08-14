@@ -50,8 +50,8 @@ The LCL architecture consists of 5 main decoupled layers:
 * **Session RPC:** `lcl-sessiond` exposes an owner-only `SOCK_SEQPACKET`
   endpoint at `/run/user/1000/lcl-sessiond.sock`. Its explicit little-endian
   requests cover catalog snapshots and launch/process-exit lifecycle; this is
-  distinct from compositor protocol v10 surface IPC.
-* **Secure Unix Domain Socket IPC:** Compositor protocol v10 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`. Live GPU resize carries independent content/backing extents and compositor presentation timestamps.
+  distinct from compositor protocol v11 surface IPC.
+* **Secure Unix Domain Socket IPC:** Compositor protocol v11 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`. Live GPU resize carries independent content/backing extents and compositor presentation timestamps. Edge-to-edge is a platform-neutral surface policy: one outer-surface effect chain can extend beneath desktop or mobile system insets while client widgets remain inside the safe content rect.
 * **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`. Manifests declare a stable `id`; older bundles receive a deterministic `bundle.<name>` compatibility ID.
 * **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ session client. It sends `LaunchRequest` to sessiond and optionally waits for `ProcessExited`; it never forks or execs applications itself.
 

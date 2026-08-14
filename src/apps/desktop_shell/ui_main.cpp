@@ -151,16 +151,27 @@ void absolute(lcl::ui::Widget& widget, float x, float y, float width, float heig
 std::unique_ptr<lcl::ui::Container> makeMenuRoot(uint32_t width, lcl::ui::Text*& clock) {
     auto root = std::make_unique<lcl::ui::Container>();
     root->getYogaNode().setWidth(width); root->getYogaNode().setHeight(kMenuBarHeight);
-    auto glass = std::make_unique<lcl::ui::BackdropSurface>();
-    glass->setBackgroundColor({15, 23, 42, 102});
-    glass->addFilter(lcl::protocol::FilterType::Blur, 15.0f);
-    glass->addFilter(lcl::protocol::FilterType::Saturation, 1.4f);
-    glass->addFilter(lcl::protocol::FilterType::Brightness, 1.1f);
-    glass->getYogaNode().setDirection(YGFlexDirectionRow);
-    glass->getYogaNode().setJustifyContent(YGJustifyFlexEnd);
-    glass->getYogaNode().setAlignItems(YGAlignCenter);
-    glass->getYogaNode().setPadding(YGEdgeRight, 20.0f);
-    absolute(*glass, 0, 0, width, kMenuBarHeight);
+
+    // Backdrop geometry, material tint and foreground chrome remain separate:
+    // filtering never decides the alpha of the menu-bar surface itself.
+    auto backdrop = std::make_unique<lcl::ui::BackdropSurface>();
+    backdrop->setInteractive(false);
+    backdrop->setEffectBounds(lcl::ui::EffectBounds::Local);
+    backdrop->addFilter(lcl::protocol::FilterType::Blur, 15.0f);
+    backdrop->addFilter(lcl::protocol::FilterType::Saturation, 1.4f);
+    backdrop->addFilter(lcl::protocol::FilterType::Brightness, 1.1f);
+    absolute(*backdrop, 0, 0, width, kMenuBarHeight);
+
+    auto tint = std::make_unique<lcl::ui::Container>();
+    tint->setBackgroundColor({15, 23, 42, 102});
+    absolute(*tint, 0, 0, width, kMenuBarHeight);
+
+    auto foreground = std::make_unique<lcl::ui::Container>();
+    foreground->getYogaNode().setDirection(YGFlexDirectionRow);
+    foreground->getYogaNode().setJustifyContent(YGJustifyFlexEnd);
+    foreground->getYogaNode().setAlignItems(YGAlignCenter);
+    foreground->getYogaNode().setPadding(YGEdgeRight, 20.0f);
+    absolute(*foreground, 0, 0, width, kMenuBarHeight);
 
     auto text = std::make_unique<lcl::ui::Text>(timeText());
     clock = text.get();
@@ -169,13 +180,15 @@ std::unique_ptr<lcl::ui::Container> makeMenuRoot(uint32_t width, lcl::ui::Text*&
     // glyph width, while the parent keeps the label vertically centred.
     text->getYogaNode().setFlexGrow(1.0f);
     text->setTextAlign(lcl::ui::TextAlign::End);
-    glass->addChild(std::move(text));
+    foreground->addChild(std::move(text));
 
     auto border = std::make_unique<lcl::ui::Container>();
     border->setBackgroundColor({30, 41, 59, 153});
     absolute(*border, 0, kMenuBarHeight - 1, width, 1);
-    glass->addChild(std::move(border));
-    root->addChild(std::move(glass));
+    root->addChild(std::move(backdrop));
+    root->addChild(std::move(tint));
+    root->addChild(std::move(foreground));
+    root->addChild(std::move(border));
     return root;
 }
 

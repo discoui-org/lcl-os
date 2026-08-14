@@ -10,10 +10,12 @@
 #include <unistd.h>
 
 #include "core/compositor/frame_scheduler.hpp"
+#include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/input_router.hpp"
 #include "core/compositor/surface_registry.hpp"
 #include "core/compositor/system_surface_policy.hpp"
 #include "core/compositor/window_group_transform.hpp"
+#include "core/compositor/window_chrome_material.hpp"
 #include "core/display/display_scale.hpp"
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
@@ -598,6 +600,30 @@ TEST(WindowGroupTransformTest, ChromeAndClientShareOneSubpixelAnimatedFrame) {
     EXPECT_FLOAT_EQ(resting.y, std::round(resting.y));
     EXPECT_FLOAT_EQ(resting.width, std::round(resting.width));
     EXPECT_FLOAT_EQ(resting.height, std::round(resting.height));
+}
+
+TEST(CompositorRendererTest, LocalBackdropStartsBelowSsdTitlebar) {
+    protocol::EffectRegion region{};
+    region.x = 0;
+    region.y = 0;
+    region.width = 800;
+    region.height = 600;
+
+    const auto geometry = resolveLocalEffectGeometry(
+        80, 60, 32, 800, 600, region, true);
+    EXPECT_EQ(geometry.x, 80);
+    EXPECT_EQ(geometry.y, 92);
+    EXPECT_EQ(geometry.width, 800);
+    EXPECT_EQ(geometry.height, 600);
+}
+
+TEST(CompositorRendererTest, EdgeToEdgeRemovesOnlyTheOpaqueSsdBackground) {
+    EXPECT_EQ(kOpaqueSsdTitlebarMaterial.r, 17u);
+    EXPECT_EQ(kOpaqueSsdTitlebarMaterial.g, 19u);
+    EXPECT_EQ(kOpaqueSsdTitlebarMaterial.b, 23u);
+    EXPECT_EQ(kOpaqueSsdTitlebarMaterial.a, 255u);
+    EXPECT_TRUE(paintsOpaqueSsdTitlebar(false));
+    EXPECT_FALSE(paintsOpaqueSsdTitlebar(true));
 }
 
 TEST(FrameSchedulerTest, AdvancesEnteringAndClosingTransitionsAtBoundedDelta) {

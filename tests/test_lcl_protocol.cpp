@@ -539,11 +539,15 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
         { FilterType::Blur, 15.0f },
         { FilterType::Glass, 0.6f, static_cast<uint8_t>(GlassProfile::Dense) },
         { FilterType::Saturation, 1.4f },
-        { FilterType::Brightness, 1.1f }
+        { FilterType::Brightness, 1.1f },
+        { FilterType::Tint, 0.5f }
     };
     filters[1].params[0] = 20.0f;
     filters[1].params[1] = 1.40f;
     filters[1].params[2] = 7.0f;
+    filters[4].params[0] = 15.0f;
+    filters[4].params[1] = 23.0f;
+    filters[4].params[2] = 42.0f;
 
     EffectRegion region{};
     region.x = 10;
@@ -552,7 +556,7 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     region.height = 180;
     region.cornerRadius = 14.0f;
     region.cornerRoundness = 3.2f;
-    region.boundsPolicy = EffectBoundsPolicy::WindowGroup;
+    region.boundsPolicy = EffectBoundsPolicy::OuterSurface;
     region.source = EffectSourceType::Backdrop;
     region.blendMode = EffectBlendMode::Normal;
     region.filterCount = static_cast<uint16_t>(filters.size());
@@ -589,7 +593,7 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     const auto* graphRecv = reinterpret_cast<const LCLMsgSetEffectGraphHeader*>(payloadRecv.data());
     EXPECT_EQ(graphRecv->surfaceId, 2u);
     EXPECT_EQ(graphRecv->regionCount, 1u);
-    EXPECT_EQ(graphRecv->filterCount, 4u);
+    EXPECT_EQ(graphRecv->filterCount, 5u);
 
     const auto* regionRecv = reinterpret_cast<const EffectRegion*>(
         payloadRecv.data() + sizeof(LCLMsgSetEffectGraphHeader));
@@ -599,10 +603,10 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     EXPECT_EQ(regionRecv->height, 180u);
     EXPECT_FLOAT_EQ(regionRecv->cornerRadius, 14.0f);
     EXPECT_FLOAT_EQ(regionRecv->cornerRoundness, 3.2f);
-    EXPECT_EQ(regionRecv->boundsPolicy, EffectBoundsPolicy::WindowGroup);
+    EXPECT_EQ(regionRecv->boundsPolicy, EffectBoundsPolicy::OuterSurface);
     EXPECT_EQ(regionRecv->source, EffectSourceType::Backdrop);
     EXPECT_EQ(regionRecv->blendMode, EffectBlendMode::Normal);
-    EXPECT_EQ(regionRecv->filterCount, 4u);
+    EXPECT_EQ(regionRecv->filterCount, 5u);
     EXPECT_EQ(regionRecv->filterOffset, 0u);
     EXPECT_FLOAT_EQ(regionRecv->opacity, 0.85f);
 
@@ -619,6 +623,11 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     EXPECT_FLOAT_EQ(opsRecv[2].value, 1.4f);
     EXPECT_EQ(opsRecv[3].type, FilterType::Brightness);
     EXPECT_FLOAT_EQ(opsRecv[3].value, 1.1f);
+    EXPECT_EQ(opsRecv[4].type, FilterType::Tint);
+    EXPECT_FLOAT_EQ(opsRecv[4].value, 0.5f);
+    EXPECT_FLOAT_EQ(opsRecv[4].params[0], 15.0f);
+    EXPECT_FLOAT_EQ(opsRecv[4].params[1], 23.0f);
+    EXPECT_FLOAT_EQ(opsRecv[4].params[2], 42.0f);
 
     close(sv[0]);
     close(sv[1]);
@@ -648,6 +657,34 @@ TEST(LCLProtocolTest, SendAndReceiveWindowCornerStyle) {
     EXPECT_EQ(received->surfaceId, 7u);
     EXPECT_FLOAT_EQ(received->radiusPx, 20.0f);
     EXPECT_FLOAT_EQ(received->roundness, 3.2f);
+
+    close(sv[0]);
+    close(sv[1]);
+}
+
+TEST(LCLProtocolTest, SendAndReceiveEdgeToEdge) {
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
+
+    LCLMsgSetEdgeToEdge sent{};
+    sent.surfaceId = 7;
+    sent.enabled = 1;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::SetEdgeToEdge;
+    header.payloadSize = sizeof(sent);
+
+    ASSERT_TRUE(sendMsgWithFd(sv[0], header, &sent, -1));
+
+    LCLHeader receivedHeader{};
+    std::vector<uint8_t> receivedPayload;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sv[1], receivedHeader, receivedPayload, receivedFd));
+    EXPECT_EQ(receivedHeader.opcode, LCLOpcode::SetEdgeToEdge);
+    ASSERT_EQ(receivedPayload.size(), sizeof(LCLMsgSetEdgeToEdge));
+    const auto* received =
+        reinterpret_cast<const LCLMsgSetEdgeToEdge*>(receivedPayload.data());
+    EXPECT_EQ(received->surfaceId, 7u);
+    EXPECT_EQ(received->enabled, 1u);
 
     close(sv[0]);
     close(sv[1]);
