@@ -259,21 +259,13 @@ void Compositor::renderFrame() {
             entry.pendingMinimize = false;
             entry.transitionOpacity = 1.0f;
             entry.transitionScale = 1.0f;
-            entry.resizeInputFrozen = false;
         }
         if (entry.rollbackRequested) {
             m_windowManager.rollbackWindowGeometry(
                 entry.windowId,
                 {entry.rollbackX, entry.rollbackY, entry.rollbackWidth, entry.rollbackHeight},
-                entry.rollbackWasMaximized, entry.rollbackWasMinimized);
+            entry.rollbackWasMaximized, entry.rollbackWasMinimized);
             entry.rollbackRequested = false;
-            entry.resizeInputFrozen = false;
-        } else if (entry.resizeInputFrozen && entry.resizeBufferReady) {
-            const auto window = std::find_if(
-                m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
-                [&entry](const auto& candidate) { return candidate.id == entry.windowId; });
-            if (window == m_windowManager.getWindows().end() || !window->geometryTransitionActive)
-                entry.resizeInputFrozen = false;
         }
     }
     const auto surfaces = m_surfaces.snapshot();

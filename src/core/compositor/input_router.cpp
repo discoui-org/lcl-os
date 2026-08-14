@@ -169,8 +169,9 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
     const auto surfaceId = static_cast<uint32_t>(surfaceIt->first & 0xFFFFFFFFu);
     const auto& entry = surfaceIt->second;
     // System panels and surfaces that have not committed a complete frame are
-    // never normal client input targets, even if focus state was stale.
-    if (entry.unfocusable || !entry.hasCommittedBuffer || entry.resizeInputFrozen) {
+    // never normal client input targets, even if focus state was stale. Geometry
+    // morphs deliberately remain interactive while their presentation catches up.
+    if (entry.unfocusable || !entry.hasCommittedBuffer) {
         return;
     }
     protocol::LCLHeader header{};

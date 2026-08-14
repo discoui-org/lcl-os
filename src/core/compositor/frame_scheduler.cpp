@@ -36,7 +36,6 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
                 entry.pendingConfigureSerial = entry.acceptedConfigureSerial;
                 entry.forceConfigure = true;
                 entry.resizeBufferReady = true;
-                entry.resizeInputFrozen = false;
                 entry.rollbackRequested = true;
                 SurfaceRegistry::releasePreviousBuffer(entry);
             }
@@ -49,7 +48,6 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
                 entry.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None;
                 entry.resizeCrossfadeProgress = 1.0f;
                 entry.resizeBufferReady = true;
-                entry.resizeInputFrozen = false;
                 SurfaceRegistry::releasePreviousBuffer(entry);
             }
         }
@@ -96,7 +94,6 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
                 entry.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::None;
                 entry.transitionOpacity = 1.0f;
                 entry.transitionScale = 1.0f;
-                entry.resizeInputFrozen = false;
             }
         }
     }

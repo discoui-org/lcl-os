@@ -133,6 +133,56 @@ TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
     close(sockets[1]);
 }
 
+TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t windowId = manager.createWindow("Morph", 80, 90, 320, 200);
+    manager.setDecorationMode(windowId, lcl::render::DecorationMode::None);
+    auto& window = manager.getWindowsMutable().back();
+    window.geometryTransitionActive = true;
+    window.presentationX = 80.0f;
+    window.presentationY = 90.0f;
+    window.presentationWidth = 320.0f;
+    window.presentationHeight = 200.0f;
+
+    SurfaceRegistry registry;
+    const auto surfaceKey = SurfaceRegistry::makeKey(sockets[0], 101, 1);
+    auto& surface = registry[surfaceKey];
+    surface.windowId = windowId;
+    surface.clientFd = sockets[0];
+    surface.hasCommittedBuffer = true;
+    surface.bufferScale = 1.0f;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    InputEvent motion{};
+    motion.type = InputEventType::PointerMotion;
+    motion.absoluteX = 100.0;
+    motion.absoluteY = 110.0;
+    EXPECT_TRUE(router.route(motion));
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    // The morph may request its outstanding configure first; it must not
+    // suppress the following pointer event.
+    EXPECT_EQ(header.opcode, protocol::LCLOpcode::ConfigureBounds);
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    const auto* input = reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(input->type, 3u);
+    EXPECT_FLOAT_EQ(input->x, 20.0f);
+    EXPECT_FLOAT_EQ(input->y, 20.0f);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(SurfaceRegistryTest, ErasingAnEntryClosesItsOwnedDescriptor) {
     const int descriptor = eventfd(0, EFD_CLOEXEC);
     ASSERT_GE(descriptor, 0);
@@ -243,7 +293,7 @@ TEST(FrameSchedulerTest, AdvancesEnteringAndClosingTransitionsAtBoundedDelta) {
     EXPECT_TRUE(closing.pendingDestroy);
 }
 
-TEST(FrameSchedulerTest, MinimizeAndRestoreTransitionsOwnVisibilityAndInputEndpoints) {
+TEST(FrameSchedulerTest, MinimizeAndRestoreTransitionsOwnVisibilityEndpoints) {
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::time_point{};
     FrameScheduler scheduler;
@@ -255,14 +305,12 @@ TEST(FrameSchedulerTest, MinimizeAndRestoreTransitionsOwnVisibilityAndInputEndpo
     surface.transitionDurationSec = 0.18f;
     surface.transitionOpacity = 1.0f;
     surface.transitionScale = 1.0f;
-    surface.resizeInputFrozen = true;
 
     EXPECT_TRUE(scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(45)));
     EXPECT_LT(surface.transitionOpacity, 1.0f);
     EXPECT_GT(surface.transitionOpacity, 0.0f);
     EXPECT_LT(surface.transitionScale, 1.0f);
     EXPECT_FALSE(surface.pendingMinimize);
-    EXPECT_TRUE(surface.resizeInputFrozen);
 
     scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(90));
     scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(135));
@@ -278,7 +326,6 @@ TEST(FrameSchedulerTest, MinimizeAndRestoreTransitionsOwnVisibilityAndInputEndpo
     surface.transitionDurationSec = 0.22f;
     surface.transitionOpacity = 0.0f;
     surface.transitionScale = 0.92f;
-    surface.resizeInputFrozen = true;
     scheduler.reset(start);
 
     EXPECT_TRUE(scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(50)));
@@ -286,7 +333,6 @@ TEST(FrameSchedulerTest, MinimizeAndRestoreTransitionsOwnVisibilityAndInputEndpo
     EXPECT_LT(surface.transitionOpacity, 1.0f);
     EXPECT_GT(surface.transitionScale, 0.92f);
     EXPECT_LT(surface.transitionScale, 1.0f);
-    EXPECT_TRUE(surface.resizeInputFrozen);
 
     scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(100));
     scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(150));
@@ -295,7 +341,6 @@ TEST(FrameSchedulerTest, MinimizeAndRestoreTransitionsOwnVisibilityAndInputEndpo
     EXPECT_EQ(surface.transitionPhase, SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
     EXPECT_FLOAT_EQ(surface.transitionOpacity, 1.0f);
     EXPECT_FLOAT_EQ(surface.transitionScale, 1.0f);
-    EXPECT_FALSE(surface.resizeInputFrozen);
 }
 
 TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {
@@ -303,7 +348,6 @@ TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {
     auto& crossfade = registry[1];
     crossfade.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::Crossfading;
     crossfade.resizeCrossfadeProgress = 0.0f;
-    crossfade.resizeInputFrozen = true;
     crossfade.resizeBufferReady = false;
 
     FrameScheduler scheduler;
@@ -315,19 +359,16 @@ TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {
     scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(100));
     EXPECT_EQ(crossfade.resizeTransitionPhase, SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None);
     EXPECT_TRUE(crossfade.resizeBufferReady);
-    EXPECT_FALSE(crossfade.resizeInputFrozen);
 
     auto& timeout = registry[2];
     timeout.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
     timeout.resizeDeadline = start + std::chrono::milliseconds(750);
     timeout.pendingConfigureSerial = 9;
     timeout.acceptedConfigureSerial = 7;
-    timeout.resizeInputFrozen = true;
     scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(751));
     EXPECT_TRUE(timeout.rollbackRequested);
     EXPECT_EQ(timeout.pendingConfigureSerial, 7u);
     EXPECT_TRUE(timeout.resizeBufferReady);
-    EXPECT_FALSE(timeout.resizeInputFrozen);
 }
 
 TEST(FrameSchedulerTest, CursorBlinkAndFrameBudgetUseTheExistingCadence) {

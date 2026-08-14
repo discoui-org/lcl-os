@@ -180,3 +180,35 @@ TEST(WindowManagerTest, ServerChromeControlsAnimateHoverPressWithoutGlyphState) 
     for (int index = 0; index < 90; ++index) manager.updateAnimations(1.0f / 240.0f);
     EXPECT_GT(findWindow(manager, id)->chrome.control(0).scale, 1.0f);
 }
+
+TEST(WindowManagerTest, ServerChromeControlsRemainInteractiveDuringGeometryMorph) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t id = manager.createWindow("Morph chrome", 80, 60, 400, 300);
+    auto& window = manager.getWindowsMutable().back();
+    ASSERT_EQ(window.id, id);
+    window.geometryTransitionActive = true;
+    window.presentationX = 70.0f;
+    window.presentationY = 50.0f;
+    window.presentationWidth = 480.0f;
+    window.presentationHeight = 360.0f;
+
+    lcl::core::InputEvent move{};
+    move.type = lcl::core::InputEventType::PointerMotion;
+    move.absoluteX = 90.0;
+    move.absoluteY = 70.0;
+    EXPECT_TRUE(manager.processInputEvent(move));
+    ASSERT_EQ(findWindow(manager, id)->chrome.hoveredControl(), 0);
+
+    lcl::core::InputEvent down{};
+    down.type = lcl::core::InputEventType::PointerButton;
+    down.pressed = true;
+    EXPECT_TRUE(manager.processInputEvent(down));
+    EXPECT_EQ(findWindow(manager, id)->chrome.pressedControl(), 0);
+
+    lcl::core::InputEvent up{};
+    up.type = lcl::core::InputEventType::PointerButton;
+    up.pressed = false;
+    EXPECT_TRUE(manager.processInputEvent(up));
+    EXPECT_EQ(findWindow(manager, id)->chrome.pressedControl(), -1);
+}

@@ -97,7 +97,6 @@ public:
         std::chrono::steady_clock::time_point resizeDeadline{};
         float resizeCrossfadeElapsedSec{0.0f};
         float resizeCrossfadeProgress{1.0f};
-        bool resizeInputFrozen{false};
         bool resizeBufferReady{true};
         bool rollbackRequested{false};
         int rollbackX{0};

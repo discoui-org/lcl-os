@@ -128,9 +128,15 @@ namespace {
         const float cornerRadius = win.cornerRadiusPx >= 0.0f
             ? win.cornerRadiusPx
             : 20.0f * scale;
+        const float originX = win.geometryTransitionActive
+            ? win.presentationX : static_cast<float>(win.x);
+        const float originY = win.geometryTransitionActive
+            ? win.presentationY : static_cast<float>(win.y);
+        const float width = win.geometryTransitionActive
+            ? win.presentationWidth : static_cast<float>(win.width);
         return win.chrome.hitTest(
-            static_cast<float>(mouseX - win.x), static_cast<float>(mouseY - win.y),
-            static_cast<float>(win.width), static_cast<float>(core::DisplayScale::titleBarHeight()),
+            static_cast<float>(mouseX) - originX, static_cast<float>(mouseY) - originY,
+            std::max(1.0f, width), static_cast<float>(core::DisplayScale::titleBarHeight()),
             cornerRadius, scale);
     }
 }
@@ -144,14 +150,20 @@ void WindowManager::refreshChromeHoverState() {
             window.layer == protocol::LCLWindowLayer::Bottom) {
             continue;
         }
-        if (m_mouseX < window.x || m_mouseX >= window.x + window.width ||
-            m_mouseY < window.y || m_mouseY >= window.y + window.height) {
+        const float x = window.geometryTransitionActive
+            ? window.presentationX : static_cast<float>(window.x);
+        const float y = window.geometryTransitionActive
+            ? window.presentationY : static_cast<float>(window.y);
+        const float width = window.geometryTransitionActive
+            ? window.presentationWidth : static_cast<float>(window.width);
+        const float height = window.geometryTransitionActive
+            ? window.presentationHeight : static_cast<float>(window.height);
+        if (m_mouseX < x || m_mouseX >= x + width ||
+            m_mouseY < y || m_mouseY >= y + height) {
             continue;
         }
-        if (!window.geometryTransitionActive) {
-            hoveredControl = hitWindowChromeControl(window, m_mouseX, m_mouseY);
-            if (hoveredControl >= 0) hoveredWindowId = window.id;
-        }
+        hoveredControl = hitWindowChromeControl(window, m_mouseX, m_mouseY);
+        if (hoveredControl >= 0) hoveredWindowId = window.id;
         break;
     }
 
@@ -318,35 +330,30 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
             // Strict Top-to-Bottom Z-Order Hit-Testing Bug Fix:
             // Find top-most interactable window under cursor FIRST without mutating array structure mid-loop!
             uint32_t targetWinId = 0;
-            bool blockedByTransition = false;
             const int border = core::DisplayScale::px(8);
 
             for (int i = static_cast<int>(m_windows.size()) - 1; i >= 0; --i) {
                 const auto& win = m_windows[i];
-                if (win.geometryTransitionActive) {
-                    if (m_mouseX >= win.presentationX &&
-                        m_mouseX < win.presentationX + win.presentationWidth &&
-                        m_mouseY >= win.presentationY &&
-                        m_mouseY < win.presentationY + win.presentationHeight) {
-                        blockedByTransition = true;
-                        break;
-                    }
-                    continue;
-                }
                 if (win.isUnfocusable || win.isMinimized ||
                     win.layer == protocol::LCLWindowLayer::Bottom) {
                     continue; // Skip unfocusable background surfaces (e.g. Wallpaper)
                 }
-                if (m_mouseX >= win.x - border && m_mouseX < win.x + win.width + border &&
-                    m_mouseY >= win.y - border && m_mouseY < win.y + win.height + border) {
+                const float x = win.geometryTransitionActive
+                    ? win.presentationX : static_cast<float>(win.x);
+                const float y = win.geometryTransitionActive
+                    ? win.presentationY : static_cast<float>(win.y);
+                const float width = win.geometryTransitionActive
+                    ? win.presentationWidth : static_cast<float>(win.width);
+                const float height = win.geometryTransitionActive
+                    ? win.presentationHeight : static_cast<float>(win.height);
+                if (m_mouseX >= x - border && m_mouseX < x + width + border &&
+                    m_mouseY >= y - border && m_mouseY < y + height + border) {
                     targetWinId = win.id;
                     break;
                 }
             }
 
-            if (blockedByTransition) {
-                return stateChanged;
-            } else if (targetWinId > 0) {
+            if (targetWinId > 0) {
                 // Focus target window and bring to top z-order within its layer
                 focusWindow(targetWinId);
 

@@ -551,18 +551,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             const auto beginResizeTransition = [&] {
                 if (!hasCurrentWindow) return;
                 auto& entry = surfaceIt->second;
-                if (!entry.resizeInputFrozen) {
-                    entry.rollbackX = rollbackX;
-                    entry.rollbackY = rollbackY;
-                    entry.rollbackWidth = rollbackWidth;
-                    entry.rollbackHeight = rollbackHeight;
-                    entry.rollbackWasMaximized = rollbackWasMaximized;
-                    entry.rollbackWasMinimized = rollbackWasMinimized;
-                }
+                entry.rollbackX = rollbackX;
+                entry.rollbackY = rollbackY;
+                entry.rollbackWidth = rollbackWidth;
+                entry.rollbackHeight = rollbackHeight;
+                entry.rollbackWasMaximized = rollbackWasMaximized;
+                entry.rollbackWasMinimized = rollbackWasMinimized;
                 entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
                 entry.resizeDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
                 entry.resizeCrossfadeProgress = 0.0f;
-                entry.resizeInputFrozen = true;
                 entry.resizeBufferReady = false;
                 entry.rollbackRequested = false;
             };
@@ -580,7 +577,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                         surfaceIt->second.transitionDurationSec = 0.18f;
                         surfaceIt->second.transitionOpacity = 1.0f;
                         surfaceIt->second.transitionScale = 1.0f;
-                        surfaceIt->second.resizeInputFrozen = true;
                         changed = true;
                     }
                     break;
@@ -595,7 +591,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                             surfaceIt->second.transitionDurationSec = 0.22f;
                             surfaceIt->second.transitionOpacity = 0.0f;
                             surfaceIt->second.transitionScale = 0.92f;
-                            surfaceIt->second.resizeInputFrozen = true;
                             changed = true;
                         }
                     } else if (m_windowManager.restoreWindow(windowId)) { beginResizeTransition(); changed = true; }
