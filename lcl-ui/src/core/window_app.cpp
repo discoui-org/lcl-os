@@ -15,6 +15,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 
 namespace lcl::ui {
 
@@ -64,6 +65,32 @@ uint32_t crossfadePixel(uint32_t oldPixel, uint32_t newPixel, float progress) {
            blendChannel(oldPixel & 0xFFu, newPixel & 0xFFu);
 }
 
+bool frameTraceEnabled() {
+    const char* value = std::getenv("LCL_TRACE_FRAMES");
+    return value && value[0] != '\0' && value[0] != '0';
+}
+
+bool layoutOverlayEnabled() {
+    const char* value = std::getenv("LCL_DEBUG_LAYOUT");
+    return value && value[0] != '\0' && value[0] != '0';
+}
+
+void drawLayoutOverlay(const Widget& widget, Canvas& canvas, uint32_t depth = 0) {
+    static constexpr Color kPalette[] = {
+        {56, 189, 248, 220}, {74, 222, 128, 220}, {250, 204, 21, 220},
+        {244, 114, 182, 220}, {167, 139, 250, 220},
+    };
+    const Rect bounds = widget.getAbsoluteBounds();
+    if (!bounds.isEmpty()) {
+        canvas.drawRoundedRect(bounds, 0.0f, {0, 0, 0, 0},
+                               kPalette[depth % (sizeof(kPalette) / sizeof(kPalette[0]))],
+                               1.0f, 2.0f);
+    }
+    for (const auto& child : widget.getChildren()) {
+        drawLayoutOverlay(*child, canvas, depth + 1);
+    }
+}
+
 } // namespace
 
 WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height,
@@ -71,6 +98,9 @@ WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t he
     : m_width(width), m_height(height), m_title(title), m_canvas(std::move(canvas)) {
     setupAppSignalHandlers();
     if (!m_canvas) return;
+    m_frameTraceEnabled = frameTraceEnabled();
+    m_layoutOverlayEnabled = layoutOverlayEnabled();
+    m_traceLastLog = std::chrono::steady_clock::now();
     m_pixelBuffer.resize(width * height, 0xFF000000);
     m_initialized = m_canvas->initialize(width, height, m_pixelBuffer.data());
     m_motionCoordinator.setCallbacks(
@@ -127,6 +157,7 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
 }
 
 void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
+    const auto started = std::chrono::steady_clock::now();
     if (m_shmPixels) {
         munmap(m_shmPixels, m_shmSize);
         m_shmPixels = nullptr;
@@ -157,6 +188,11 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
     // Re-initializing renderer every configure event causes heavy stalls while dragging.
     m_canvas->setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
     m_shmNeedsAttach = true;
+    if (m_frameTraceEnabled) {
+        ++m_traceShmAllocations;
+        m_traceShmMs += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+    }
 }
 
 bool WindowApp::connectCompositor(const std::string& socketPath) {
@@ -353,6 +389,14 @@ void WindowApp::pollIPC() {
                 auto* cfg = reinterpret_cast<const lcl::protocol::LCLMsgConfigureBounds*>(payload.data());
                 if (cfg->surfaceId != m_surfaceId) continue;
                 if (cfg->width > 0 && cfg->height > 0) {
+                    if (m_frameTraceEnabled) {
+                        ++m_traceConfigureCount;
+                        if (cfg->resizeReason == lcl::protocol::LCLConfigureResizeReason::Interactive) {
+                            ++m_traceInteractiveConfigureCount;
+                        } else if (cfg->resizeReason == lcl::protocol::LCLConfigureResizeReason::WindowStateTransition) {
+                            ++m_traceTransitionConfigureCount;
+                        }
+                    }
                     latestWidth = cfg->width;
                     latestHeight = cfg->height;
                     latestScale = cfg->bufferScale;
@@ -422,6 +466,7 @@ void WindowApp::pollIPC() {
         if (largeJump || intervalElapsed) {
             m_configureSerial = m_pendingConfigureSerial;
             resize(m_pendingResizeWidth, m_pendingResizeHeight);
+            if (m_frameTraceEnabled) ++m_traceResizeApplies;
             m_hasPendingResize = false;
             m_lastResizeApply = now;
         }
@@ -473,7 +518,9 @@ bool WindowApp::tick() {
     const float dtSec = std::chrono::duration<float>(now - m_lastAnimationTick).count();
     m_lastAnimationTick = now;
     advanceAnimations(dtSec);
-    return renderFrame();
+    const bool rendered = renderFrame();
+    logFrameTraceIfDue();
+    return rendered;
 }
 
 namespace {
@@ -853,8 +900,14 @@ bool WindowApp::sendTextInput(const std::string& text) {
 
 void WindowApp::updateLayout() {
     if (m_rootWidget) {
+        const auto started = std::chrono::steady_clock::now();
         m_rootWidget->getYogaNode().calculateLayout(static_cast<float>(m_width), static_cast<float>(m_height));
         m_rootWidget->syncLayout(0.0f, 0.0f);
+        if (m_frameTraceEnabled) {
+            ++m_traceLayoutPasses;
+            m_traceLayoutMs += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
+        }
     }
 }
 
@@ -874,15 +927,29 @@ bool WindowApp::renderFrame() {
 
     Rect damageRect = m_renderPass.getDamageRect();
     m_renderPass.clear();
+    const auto paintStarted = std::chrono::steady_clock::now();
+    if (m_frameTraceEnabled) {
+        ++m_traceRenderedFrames;
+        m_traceDamagePixels += static_cast<uint64_t>(std::max(0.0f, damageRect.width)) *
+            static_cast<uint64_t>(std::max(0.0f, damageRect.height));
+    }
 
     m_canvas->beginFrame();
     if (auto* pixels = m_canvas->rasterBuffer()) {
         std::fill_n(pixels, static_cast<size_t>(getPixelWidth()) * static_cast<size_t>(getPixelHeight()), 0x00000000);
+        if (m_frameTraceEnabled) {
+            m_traceClearedBytes += static_cast<uint64_t>(getPixelWidth()) * getPixelHeight() * sizeof(uint32_t);
+        }
     }
     m_renderPass.begin(*m_canvas);
 
     if (m_rootWidget && m_rootWidget->isVisible()) {
         m_rootWidget->draw(*m_canvas, damageRect);
+    }
+    if (m_layoutOverlayEnabled && m_rootWidget) {
+        drawLayoutOverlay(*m_rootWidget, *m_canvas);
+        m_canvas->drawRoundedRect(damageRect, 0.0f, {0, 0, 0, 0},
+                                  {239, 68, 68, 255}, 1.0f, 2.0f);
     }
 
     std::vector<EffectRegion> uiEffects;
@@ -1003,6 +1070,7 @@ bool WindowApp::renderFrame() {
     if (m_shmPixels && !m_pixelBuffer.empty()) {
         size_t copyBytes = std::min(m_shmSize, m_pixelBuffer.size() * sizeof(uint32_t));
         std::memcpy(m_shmPixels, m_pixelBuffer.data(), copyBytes);
+        if (m_frameTraceEnabled) m_traceCopiedBytes += copyBytes;
     }
 
     // If connected over IPC, notify compositor of buffer commit
@@ -1029,7 +1097,44 @@ bool WindowApp::renderFrame() {
         }
     }
 
+    if (m_frameTraceEnabled) {
+        m_tracePaintMs += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - paintStarted).count();
+    }
     return true;
+}
+
+void WindowApp::logFrameTraceIfDue() {
+    if (!m_frameTraceEnabled) return;
+    const auto now = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(now - m_traceLastLog).count();
+    if (seconds < 1.0) return;
+    const auto average = [](double total, uint64_t count) {
+        return count == 0 ? 0.0 : total / static_cast<double>(count);
+    };
+    std::cerr << "[LCL TRACE " << m_title << "] frames=" << m_traceRenderedFrames
+              << " layout=" << m_traceLayoutPasses << " (" << average(m_traceLayoutMs, m_traceLayoutPasses) << " ms)"
+              << " paint=" << average(m_tracePaintMs, m_traceRenderedFrames) << " ms"
+              << " damage=" << m_traceDamagePixels << " px"
+              << " clear/copy=" << (m_traceClearedBytes / 1024) << '/' << (m_traceCopiedBytes / 1024) << " KiB"
+              << " cfg=" << m_traceConfigureCount << " (interactive=" << m_traceInteractiveConfigureCount
+              << ", transition=" << m_traceTransitionConfigureCount << ')'
+              << " resize=" << m_traceResizeApplies
+              << " shm=" << m_traceShmAllocations << " (" << average(m_traceShmMs, m_traceShmAllocations) << " ms)\n";
+    m_traceLayoutPasses = 0;
+    m_traceRenderedFrames = 0;
+    m_traceConfigureCount = 0;
+    m_traceInteractiveConfigureCount = 0;
+    m_traceTransitionConfigureCount = 0;
+    m_traceResizeApplies = 0;
+    m_traceShmAllocations = 0;
+    m_traceDamagePixels = 0;
+    m_traceClearedBytes = 0;
+    m_traceCopiedBytes = 0;
+    m_traceLayoutMs = 0.0;
+    m_tracePaintMs = 0.0;
+    m_traceShmMs = 0.0;
+    m_traceLastLog = now;
 }
 
 } // namespace lcl::ui

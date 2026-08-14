@@ -72,7 +72,42 @@ docker run --rm -v $(pwd):/src -w /src lcl-os-qemu-builder:latest ctest --test-d
 
 ---
 
-## 4. How to Add a New Desktop Application
+## 4. Frame, Layout, and Resize Diagnostics
+
+Diagnostics are opt-in and aggregate once per second, so they do not emit a
+line for every frame.
+
+Run a client process with `LCL_TRACE_FRAMES=1` to print its layout/render
+summary:
+
+```bash
+LCL_TRACE_FRAMES=1 /usr/bin/lcl-terminal
+```
+
+The `[LCL TRACE ...]` line reports Yoga layout passes and mean duration,
+rendered frame count and paint duration, total damaged pixels, whole-buffer
+clear/copy traffic, received configure reasons, applied resizes, and SHM
+allocation timing. `interactive` configure counts identify pointer resizing;
+`transition` counts identify maximize/restore/live-resize animation.
+
+Add `LCL_DEBUG_LAYOUT=1` to draw a depth-coloured outline for every resolved
+Yoga widget bound; the red outline is the client damage rect for that frame.
+
+Set `LCL_DEBUG_OVERLAY=1` in the compositor environment to display compositor
+FPS, frame time, render backend/vsync state, and the previous compose/present
+duration. The overlay is drawn before the compositor swaps buffers.
+
+For the standard QEMU flow, pass the matching launcher flags instead; they are
+exported by the generated init process before `lcl-core` and `lcl-sessiond`
+start:
+
+```bash
+python3 scripts/run_qemu.py --run --trace-frames --debug-layout --debug-overlay
+```
+
+---
+
+## 5. How to Add a New Desktop Application
 
 Follow these steps to add a new application `MyCustomApp` to LCL OS:
 
@@ -137,7 +172,7 @@ Add binary path and `.app` bundle installation in `scripts/run_qemu.py` under `p
 
 ---
 
-## 5. Architectural Principles to Maintain
+## 6. Architectural Principles to Maintain
 
 When contributing to LCL OS, strictly adhere to these 4 core architectural constraints defined in `docs/ARCHITECTURE.md`:
 

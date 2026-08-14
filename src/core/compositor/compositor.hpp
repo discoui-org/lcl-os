@@ -105,6 +105,7 @@ private:
     uint32_t                             m_fpsFrameCount{0};
     float                                m_currentFps{0.0f};
     float                                m_currentFrameMs{0.0f};
+    float                                m_lastComposeMs{0.0f};
     std::chrono::steady_clock::time_point m_lastFpsTime;
 };
 

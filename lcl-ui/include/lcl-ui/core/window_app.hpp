@@ -165,6 +165,7 @@ private:
     int hitCsdControl(float x, float y) const noexcept;
     bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
                              uint32_t payloadSize, int passedFd = -1);
+    void logFrameTraceIfDue();
 
     uint32_t m_width;
     uint32_t m_height;
@@ -223,6 +224,24 @@ private:
     uint32_t m_morphSnapshotHeight{0};
     float m_morphBlendProgress{1.0f};
     std::chrono::steady_clock::time_point m_lastAnimationTick{};
+
+    // Opt-in, aggregate diagnostics. Enabled with LCL_TRACE_FRAMES=1.
+    bool m_frameTraceEnabled{false};
+    bool m_layoutOverlayEnabled{false};
+    uint64_t m_traceLayoutPasses{0};
+    uint64_t m_traceRenderedFrames{0};
+    uint64_t m_traceConfigureCount{0};
+    uint64_t m_traceInteractiveConfigureCount{0};
+    uint64_t m_traceTransitionConfigureCount{0};
+    uint64_t m_traceResizeApplies{0};
+    uint64_t m_traceShmAllocations{0};
+    uint64_t m_traceDamagePixels{0};
+    uint64_t m_traceClearedBytes{0};
+    uint64_t m_traceCopiedBytes{0};
+    double m_traceLayoutMs{0.0};
+    double m_tracePaintMs{0.0};
+    double m_traceShmMs{0.0};
+    std::chrono::steady_clock::time_point m_traceLastLog{};
 
     bool m_csdTitlebarEnabled{false};
     float m_csdTitlebarHeight{32.0f};

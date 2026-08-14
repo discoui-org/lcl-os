@@ -348,7 +348,8 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
     shutil.copytree(target, cache_mod)
 
 
-def package_initramfs(kernel_path: Path) -> None:
+def package_initramfs(kernel_path: Path, *, trace_frames: bool = False,
+                      debug_layout: bool = False, debug_overlay: bool = False) -> None:
     log("Preparing initramfs root directory structure...")
     if INITRAMFS_DIR.exists():
         shutil.rmtree(INITRAMFS_DIR)
@@ -698,10 +699,20 @@ echo "===================================================="
         except Exception:
             pass
 
+    diagnostic_exports = []
+    if trace_frames:
+        diagnostic_exports.append("export LCL_TRACE_FRAMES=1")
+    if debug_layout:
+        diagnostic_exports.append("export LCL_DEBUG_LAYOUT=1")
+    if debug_overlay:
+        diagnostic_exports.append("export LCL_DEBUG_OVERLAY=1")
+    diagnostic_setup = "\n".join(diagnostic_exports)
+
     write_text(
         INITRAMFS_DIR / "init",
         """#!/bin/sh
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
+__LCL_DIAGNOSTIC_EXPORTS__
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
@@ -816,7 +827,7 @@ if [ -x /usr/bin/lcl-desktop-shell ]; then
     /usr/bin/lcl-desktop-shell 2>&1 | tee /var/log/lcl_desktop_shell.log &
 fi
 wait
-""",
+""".replace("__LCL_DIAGNOSTIC_EXPORTS__", diagnostic_setup),
         executable=True,
     )
 
@@ -966,27 +977,32 @@ def docker_run(args: list[str]) -> None:
     run(cmd)
 
 
-def docker_build_and_package() -> Path:
+def docker_build_and_package(diagnostic_args: list[str]) -> Path:
     """Build + package exclusively inside Docker (ubuntu amd64)."""
     ensure_dirs()
     if not docker_available():
         err("Docker is required on every host (Linux/macOS/Windows).")
         err("Install Docker, then: docker build -f scripts/Dockerfile.qemu -t lcl-os-qemu-builder:latest scripts/")
         sys.exit(1)
-    docker_run(["--package-only"])
+    docker_run(["--package-only", *diagnostic_args])
     if not KERNEL_CACHE.is_file() or not INITRAMFS_IMG.is_file():
         err("Docker packaging did not produce kernel/initramfs artifacts.")
         sys.exit(1)
     return KERNEL_CACHE
 
 
-def package_inside_docker() -> Path:
+def package_inside_docker(args: argparse.Namespace) -> Path:
     """Runs only with --inside-docker: cmake + initramfs from image kernel/modules."""
     ensure_dirs()
     cmake_build()
     kernel = locate_kernel()
     log(f"Docker image kernel: {kernel}")
-    package_initramfs(kernel)
+    package_initramfs(
+        kernel,
+        trace_frames=args.trace_frames,
+        debug_layout=args.debug_layout,
+        debug_overlay=args.debug_overlay,
+    )
     res = KERNEL_CACHE if KERNEL_CACHE.is_file() else kernel
     fix_permissions()
     return res
@@ -1001,9 +1017,16 @@ def package_inside_docker() -> Path:
 #     return KERNEL_CACHE
 
 
-def prepare_artifacts() -> Path:
+def prepare_artifacts(args: argparse.Namespace) -> Path:
     """Always Docker — never package from the host OS."""
-    return docker_build_and_package()
+    diagnostic_args = []
+    if args.trace_frames:
+        diagnostic_args.append("--trace-frames")
+    if args.debug_layout:
+        diagnostic_args.append("--debug-layout")
+    if args.debug_overlay:
+        diagnostic_args.append("--debug-overlay")
+    return docker_build_and_package(diagnostic_args)
 
 
 def build_only() -> None:
@@ -1611,6 +1634,21 @@ def main() -> None:
         help="Enable 3D VirGL GPU acceleration in QEMU",
     )
     parser.add_argument(
+        "--trace-frames",
+        action="store_true",
+        help="Enable one-second client layout/render/resize trace in the guest",
+    )
+    parser.add_argument(
+        "--debug-layout",
+        action="store_true",
+        help="Draw Yoga widget bounds and client damage rects in the guest",
+    )
+    parser.add_argument(
+        "--debug-overlay",
+        action="store_true",
+        help="Show the compositor FPS and compose-time overlay in the guest",
+    )
+    parser.add_argument(
         "--usb",
         metavar="VENDOR:PRODUCT",
         help="Pass through host USB device to QEMU (e.g. --usb 046d:c077 or USB=046d:c077 with make qemu)",
@@ -1639,7 +1677,7 @@ def main() -> None:
             cmake_build()
             log("Docker build-only complete.")
             return
-        kernel = package_inside_docker()
+        kernel = package_inside_docker(args)
         log(f"Packaging complete. Kernel cache: {kernel}")
         return
 
@@ -1649,7 +1687,7 @@ def main() -> None:
         build_only()
         return
 
-    kernel = prepare_artifacts()
+    kernel = prepare_artifacts(args)
     log(f"QEMU binary: {find_qemu()}")
     log(f"Kernel: {kernel}")
 

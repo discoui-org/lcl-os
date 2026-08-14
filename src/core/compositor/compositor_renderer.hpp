@@ -5,6 +5,8 @@
 #include "render/renderer.hpp"
 #include "render/window_manager.hpp"
 
+#include <functional>
+
 namespace lcl::core {
 
 /** Draws and presents one immutable surface snapshot through the compositor backend. */
@@ -13,7 +15,8 @@ public:
     void render(render::Renderer& renderer,
                 DisplayManager& displayManager,
                 const render::WindowManager& windowManager,
-                const SurfaceRegistry::Snapshot& surfaces) const;
+                const SurfaceRegistry::Snapshot& surfaces,
+                const std::function<void()>& beforePresent = {}) const;
 };
 
 } // namespace lcl::core

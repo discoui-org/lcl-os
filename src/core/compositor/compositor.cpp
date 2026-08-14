@@ -4,9 +4,19 @@
 #include <algorithm>
 #include <chrono>
 #include <csignal>
+#include <cstdlib>
 #include <iostream>
 
 namespace lcl::core {
+
+namespace {
+
+bool environmentEnabled(const char* name) {
+    const char* value = std::getenv(name);
+    return value && value[0] != '\0' && value[0] != '0';
+}
+
+} // namespace
 
 // ============================================================
 // Construction / Destruction
@@ -41,6 +51,7 @@ bool Compositor::initialize() {
     if (m_initialized) return true;
 
     signal(SIGPIPE, SIG_IGN);
+    m_showFpsOverlay = environmentEnabled("LCL_DEBUG_OVERLAY");
 
     std::cout << "====================================================\n"
               << "  LCL Core Linux (LCL) v0.1.0 - Core Engine\n"
@@ -208,7 +219,7 @@ void Compositor::renderDiagnosticOverlay() {
 
     int screenW = static_cast<int>(m_renderer.getWidth());
     int cardW = DisplayScale::px(220);
-    int cardH = DisplayScale::px(70);
+    int cardH = DisplayScale::px(88);
     int cardX = screenW - cardW - DisplayScale::px(16);
     int cardY = DisplayScale::px(16);
 
@@ -249,6 +260,9 @@ void Compositor::renderDiagnosticOverlay() {
     m_renderer.drawString(textX, textY, fpsBuf, fpsColor);
     m_renderer.drawString(textX, textY + lineSpacing, engineStr, 0xFF38BDF8);     // Cyan Engine
     m_renderer.drawString(textX, textY + lineSpacing * 2, vsyncStr, 0xFF34D399); // Emerald VSync
+    char composeBuf[64];
+    std::snprintf(composeBuf, sizeof(composeBuf), "Compose: %.2f ms", m_lastComposeMs);
+    m_renderer.drawString(textX, textY + lineSpacing * 3, composeBuf, 0xFFFACC15);
 }
 
 
@@ -272,7 +286,12 @@ void Compositor::renderFrame() {
         }
     }
     const auto surfaces = m_surfaces.snapshot();
-    m_compositorRenderer.render(m_renderer, m_displayManager, m_windowManager, surfaces);
+    const auto composeStart = std::chrono::steady_clock::now();
+    m_compositorRenderer.render(
+        m_renderer, m_displayManager, m_windowManager, surfaces,
+        [this] { renderDiagnosticOverlay(); });
+    m_lastComposeMs = std::chrono::duration<float, std::milli>(
+        std::chrono::steady_clock::now() - composeStart).count();
 
     std::vector<SurfaceRegistry::Key> surfacesToRemove;
     for (const auto& [surfaceKey, entry] : m_surfaces) {

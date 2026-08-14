@@ -27,7 +27,8 @@ std::string truncateTitle(const std::string& title, float width, float fontSize)
 void CompositorRenderer::render(render::Renderer& renderer,
                                  DisplayManager& displayManager,
                                  const render::WindowManager& windowManager,
-                                 const SurfaceRegistry::Snapshot& surfaces) const {
+                                 const SurfaceRegistry::Snapshot& surfaces,
+                                 const std::function<void()>& beforePresent) const {
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     // The snapshot contains only const entry pointers, so protocol/input work
     // cannot mutate the surface state while this frame is being composed.
@@ -332,6 +333,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
         displayManager.moveHardwareCursor(windowManager.getMouseX(), windowManager.getMouseY());
     }
 
+    if (beforePresent) beforePresent();
     renderer.swapBuffers();
 }
 
