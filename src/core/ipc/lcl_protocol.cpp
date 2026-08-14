@@ -138,6 +138,14 @@ bool validUnit(float value) {
 bool validDecoration(LCLDecorationMode value) {
     return value >= LCLDecorationMode::SSD && value <= LCLDecorationMode::None;
 }
+bool validResizePresentation(LCLResizePresentationMode value) {
+    return value >= LCLResizePresentationMode::Live &&
+           value <= LCLResizePresentationMode::CompositorMorph;
+}
+bool validConfigureResizeReason(LCLConfigureResizeReason value) {
+    return value >= LCLConfigureResizeReason::Initial &&
+           value <= LCLConfigureResizeReason::WindowStateTransition;
+}
 bool validLayer(LCLWindowLayer value) {
     return value >= LCLWindowLayer::Bottom && value <= LCLWindowLayer::TopMost;
 }
@@ -308,7 +316,8 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         if (msg.surfaceId == 0 || msg.width == 0 || msg.height == 0 ||
             !validScale(msg.bufferScale) ||
             !validString(msg.title, sizeof(msg.title)) ||
-            !validString(msg.appId, sizeof(msg.appId)) || msg.appId[0] == '\0')
+            !validString(msg.appId, sizeof(msg.appId)) || msg.appId[0] == '\0' ||
+            !validResizePresentation(msg.resizePresentation))
             return false;
         out.u32(msg.surfaceId);
         out.i32(msg.x);
@@ -318,6 +327,7 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.fixed(msg.title, sizeof(msg.title));
         out.fixed(msg.appId, sizeof(msg.appId));
         out.f32(msg.bufferScale);
+        out.u8(static_cast<uint8_t>(msg.resizePresentation));
         return true;
     }
     case LCLOpcode::SurfaceDestroy: {
@@ -329,6 +339,7 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         LOAD_ONE(LCLMsgConfigureBounds, msg);
         if (msg.surfaceId == 0 || msg.width == 0 || msg.height == 0 ||
             msg.configureSerial == 0 || msg.isFocused > 1 || !validScale(msg.bufferScale) ||
+            !validConfigureResizeReason(msg.resizeReason) ||
             !validString(msg.title, sizeof(msg.title)))
             return false;
         out.u32(msg.surfaceId);
@@ -341,6 +352,7 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.u8(msg.isFocused);
         out.fixed(msg.title, sizeof(msg.title));
         out.f32(msg.bufferScale);
+        out.u8(static_cast<uint8_t>(msg.resizeReason));
         return true;
     }
     case LCLOpcode::AttachBuffer: {
@@ -557,14 +569,18 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
     switch (opcode) {
     case LCLOpcode::SurfaceCreate: {
         LCLMsgSurfaceCreate m{};
+        uint8_t resizePresentation = 0;
         if (!in.u32(m.surfaceId) || !in.i32(m.x) || !in.i32(m.y) ||
             !in.u32(m.width) || !in.u32(m.height) ||
             !in.fixed(m.title, sizeof(m.title)) ||
-            !in.fixed(m.appId, sizeof(m.appId)) || !in.f32(m.bufferScale))
+            !in.fixed(m.appId, sizeof(m.appId)) || !in.f32(m.bufferScale) ||
+            !in.u8(resizePresentation))
             return false;
+        m.resizePresentation = static_cast<LCLResizePresentationMode>(resizePresentation);
         if (m.surfaceId == 0 || m.width == 0 || m.height == 0 ||
             !validScale(m.bufferScale) || !validString(m.title, sizeof(m.title)) ||
-            !validString(m.appId, sizeof(m.appId)) || m.appId[0] == '\0')
+            !validString(m.appId, sizeof(m.appId)) || m.appId[0] == '\0' ||
+            !validResizePresentation(m.resizePresentation))
             return false;
         appendNative(payload, m);
         break;
@@ -578,14 +594,17 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
     }
     case LCLOpcode::ConfigureBounds: {
         LCLMsgConfigureBounds m{};
+        uint8_t resizeReason = 0;
         if (!in.u32(m.surfaceId) || !in.u64(m.configureSerial) ||
             !in.i32(m.x) || !in.i32(m.y) ||
             !in.u32(m.width) || !in.u32(m.height) || !in.u32(m.headerColor) ||
             !in.u8(m.isFocused) || !in.fixed(m.title, sizeof(m.title)) ||
-            !in.f32(m.bufferScale))
+            !in.f32(m.bufferScale) || !in.u8(resizeReason))
             return false;
+        m.resizeReason = static_cast<LCLConfigureResizeReason>(resizeReason);
         if (m.surfaceId == 0 || m.configureSerial == 0 || m.width == 0 || m.height == 0 || m.isFocused > 1 ||
-            !validScale(m.bufferScale) || !validString(m.title, sizeof(m.title)))
+            !validScale(m.bufferScale) || !validConfigureResizeReason(m.resizeReason) ||
+            !validString(m.title, sizeof(m.title)))
             return false;
         appendNative(payload, m);
         break;

@@ -542,14 +542,13 @@ bool WindowManager::processInputEvent(const core::InputEvent& event) {
                 }
             }
             if (activatedWindowId > 0) {
+                auto found = std::find_if(m_windows.begin(), m_windows.end(),
+                    [activatedWindowId](const Window& window) { return window.id == activatedWindowId; });
+                if (found == m_windows.end()) return stateChanged;
                 if (activatedControl == 0) {
-                    auto found = std::find_if(m_windows.begin(), m_windows.end(),
-                        [activatedWindowId](const Window& window) { return window.id == activatedWindowId; });
-                    if (found != m_windows.end()) {
-                        std::cout << "[LCL WM] Close button clicked on window ID: " << found->id << "\n";
-                        found->closeRequested = true;
-                        found->markDirty();
-                    }
+                    std::cout << "[LCL WM] Close button clicked on window ID: " << found->id << "\n";
+                    found->closeRequested = true;
+                    found->markDirty();
                 } else if (activatedControl == 1) {
                     stateChanged = minimizeWindow(activatedWindowId) || stateChanged;
                 } else if (activatedControl == 2) {
@@ -581,6 +580,36 @@ bool WindowManager::updateAnimations(float dt) {
         if (win.chrome.tick(dt)) {
             win.markDirty();
             changed = true;
+        }
+        if (win.liveResizeTransitionActive) {
+            const auto x = m_motionEngine.findChannel({win.id, 10});
+            const auto y = m_motionEngine.findChannel({win.id, 11});
+            const auto width = m_motionEngine.findChannel({win.id, 12});
+            const auto height = m_motionEngine.findChannel({win.id, 13});
+            if (x && y && width && height) {
+                const auto sx = m_motionEngine.sample(*x);
+                const auto sy = m_motionEngine.sample(*y);
+                const auto sw = m_motionEngine.sample(*width);
+                const auto sh = m_motionEngine.sample(*height);
+                const int pendingX = static_cast<int>(std::lround(sx.value));
+                const int pendingY = static_cast<int>(std::lround(sy.value));
+                const int pendingWidth = std::max(1, static_cast<int>(std::lround(sw.value)));
+                const int pendingHeight = std::max(1, static_cast<int>(std::lround(sh.value)));
+                if (win.pendingX != pendingX || win.pendingY != pendingY ||
+                    win.pendingWidth != pendingWidth || win.pendingHeight != pendingHeight) {
+                    win.pendingX = pendingX;
+                    win.pendingY = pendingY;
+                    win.pendingWidth = pendingWidth;
+                    win.pendingHeight = pendingHeight;
+                    win.markDirty();
+                    changed = true;
+                }
+                if (!sx.active && !sy.active && !sw.active && !sh.active) {
+                    win.liveResizeMotionFinished = true;
+                }
+            } else {
+                win.liveResizeMotionFinished = true;
+            }
         }
         if (win.geometryTransitionActive) {
             const Rect before{static_cast<int>(std::lround(win.presentationX)),
@@ -671,7 +700,8 @@ bool WindowManager::updateAnimations(float dt) {
 }
 
 void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH,
-                                          bool preservePendingTarget) {
+                                          bool preservePendingTarget,
+                                          int configuredX, int configuredY) {
     auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
         return w.id == windowId;
     });
@@ -680,6 +710,11 @@ void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int fra
     Window& win = *it;
     int finalX = win.x;
     int finalY = win.y;
+
+    if (win.liveResizeTransitionActive) {
+        finalX = configuredX;
+        finalY = configuredY;
+    }
 
     // Use activeResizeEdge (remains active across client commits until queue is fully drained)
     ResizeEdge edgeToUse = (win.isResizing ? win.resizeEdge : win.activeResizeEdge);
@@ -727,13 +762,23 @@ void WindowManager::commitSurfaceGeometry(uint32_t windowId, int frameW, int fra
             win.presentationWidth = static_cast<float>(frameW);
             win.presentationHeight = static_cast<float>(frameH);
         }
-        win.pendingX = finalX;
-        win.pendingY = finalY;
+        if (!preservePendingTarget) {
+            win.pendingX = finalX;
+            win.pendingY = finalY;
+        }
         if (!win.isResizing && !preservePendingTarget) {
             win.pendingWidth = frameW;
             win.pendingHeight = frameH;
         }
         win.markDirty();
+    }
+
+    if (win.liveResizeTransitionActive && win.liveResizeMotionFinished &&
+        finalX == win.liveResizeTargetX && finalY == win.liveResizeTargetY &&
+        frameW == win.liveResizeTargetWidth && frameH == win.liveResizeTargetHeight) {
+        m_motionEngine.clearObjectChannels(win.id);
+        win.liveResizeTransitionActive = false;
+        win.liveResizeMotionFinished = false;
     }
 }
 
@@ -806,6 +851,19 @@ void WindowManager::setWindowCornerStyle(uint32_t windowId, float radiusPx, floa
     }
 }
 
+void WindowManager::setResizePresentationMode(uint32_t windowId,
+                                              protocol::LCLResizePresentationMode mode) {
+    for (auto& win : m_windows) {
+        if (win.id == windowId) {
+            if (win.resizePresentation != mode) {
+                win.resizePresentation = mode;
+                win.markDirty();
+            }
+            break;
+        }
+    }
+}
+
 void WindowManager::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right) {
     m_reservedZone = {top, bottom, left, right};
     std::cout << "[LCL WindowManager] Reserved Zone set to top=" << top << " bottom=" << bottom << " left=" << left << " right=" << right << "\n";
@@ -851,7 +909,7 @@ bool WindowManager::minimizeWindow(uint32_t windowId) {
     return true;
 }
 
-bool WindowManager::maximizeWindow(uint32_t windowId) {
+bool WindowManager::maximizeWindow(uint32_t windowId, bool animateGeometry) {
     auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
         return w.id == windowId;
     });
@@ -866,7 +924,8 @@ bool WindowManager::maximizeWindow(uint32_t windowId) {
         static_cast<int>(m_reservedZone.left),
         static_cast<int>(m_reservedZone.top),
         std::max(1, static_cast<int>(m_screenWidth) - static_cast<int>(m_reservedZone.left) - static_cast<int>(m_reservedZone.right)),
-        std::max(1, static_cast<int>(m_screenHeight) - static_cast<int>(m_reservedZone.top) - static_cast<int>(m_reservedZone.bottom)));
+        std::max(1, static_cast<int>(m_screenHeight) - static_cast<int>(m_reservedZone.top) - static_cast<int>(m_reservedZone.bottom)),
+        animateGeometry);
     it->isMaximized = true;
     it->isDragging = false;
     it->isResizing = false;
@@ -877,7 +936,7 @@ bool WindowManager::maximizeWindow(uint32_t windowId) {
     return true;
 }
 
-bool WindowManager::restoreWindow(uint32_t windowId) {
+bool WindowManager::restoreWindow(uint32_t windowId, bool animateGeometry) {
     auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
         return w.id == windowId;
     });
@@ -894,7 +953,7 @@ bool WindowManager::restoreWindow(uint32_t windowId) {
     if (wasMaximized && !wasMinimized) {
         startGeometryTransition(*it, it->restoreX, it->restoreY,
                                 std::max(1, it->restoreWidth),
-                                std::max(1, it->restoreHeight));
+                                std::max(1, it->restoreHeight), animateGeometry);
         it->isMaximized = false;
     }
     it->markDirty();
@@ -903,29 +962,64 @@ bool WindowManager::restoreWindow(uint32_t windowId) {
     return true;
 }
 
-bool WindowManager::toggleMaximizeWindow(uint32_t windowId) {
+bool WindowManager::toggleMaximizeWindow(uint32_t windowId, bool animateGeometry) {
     const auto it = std::find_if(m_windows.begin(), m_windows.end(), [windowId](const Window& w) {
         return w.id == windowId;
     });
     if (it == m_windows.end()) return false;
-    return it->isMaximized ? restoreWindow(windowId) : maximizeWindow(windowId);
+    return it->isMaximized ? restoreWindow(windowId, animateGeometry)
+                           : maximizeWindow(windowId, animateGeometry);
 }
 
 void WindowManager::startGeometryTransition(Window& window, int targetX, int targetY,
-                                            int targetWidth, int targetHeight) {
+                                            int targetWidth, int targetHeight,
+                                            bool animate) {
+    if (!animate) {
+        m_motionEngine.clearObjectChannels(window.id);
+        window.x = window.pendingX = targetX;
+        window.y = window.pendingY = targetY;
+        window.width = window.pendingWidth = targetWidth;
+        window.height = window.pendingHeight = targetHeight;
+        window.presentationX = static_cast<float>(targetX);
+        window.presentationY = static_cast<float>(targetY);
+        window.presentationWidth = static_cast<float>(targetWidth);
+        window.presentationHeight = static_cast<float>(targetHeight);
+        window.presentationInitialized = true;
+        window.geometryTransitionActive = false;
+        window.liveResizeTransitionActive = false;
+        window.liveResizeMotionFinished = false;
+        window.markDirty();
+        return;
+    }
     const auto motion = lcl::motion::tokens::windowMorph();
-    const auto animate = [&](uint32_t property, float current, float target) {
+    const auto animateProperty = [&](uint32_t property, float current, float target) {
         const auto channel = m_motionEngine.ensureChannel({window.id, property}, current);
         m_motionEngine.animateTo(channel, target, motion);
     };
-    animate(10, window.presentationX, static_cast<float>(targetX));
-    animate(11, window.presentationY, static_cast<float>(targetY));
-    animate(12, window.presentationWidth, static_cast<float>(targetWidth));
-    animate(13, window.presentationHeight, static_cast<float>(targetHeight));
+    animateProperty(10, window.presentationX, static_cast<float>(targetX));
+    animateProperty(11, window.presentationY, static_cast<float>(targetY));
+    animateProperty(12, window.presentationWidth, static_cast<float>(targetWidth));
+    animateProperty(13, window.presentationHeight, static_cast<float>(targetHeight));
+    if (window.resizePresentation == protocol::LCLResizePresentationMode::Live) {
+        // Keep the rendered geometry tied to the latest committed client
+        // buffer. updateAnimations() publishes interpolated pending bounds;
+        // InputRouter then sends them one-at-a-time as ConfigureBounds.
+        window.liveResizeTransitionActive = true;
+        window.liveResizeMotionFinished = false;
+        window.liveResizeTargetX = targetX;
+        window.liveResizeTargetY = targetY;
+        window.liveResizeTargetWidth = targetWidth;
+        window.liveResizeTargetHeight = targetHeight;
+        window.geometryTransitionActive = false;
+        window.markDirty();
+        return;
+    }
     window.x = window.pendingX = targetX;
     window.y = window.pendingY = targetY;
     window.width = window.pendingWidth = targetWidth;
     window.height = window.pendingHeight = targetHeight;
+    window.liveResizeTransitionActive = false;
+    window.liveResizeMotionFinished = false;
     window.geometryTransitionActive = true;
     window.markDirty();
 }
@@ -947,6 +1041,8 @@ bool WindowManager::rollbackWindowGeometry(uint32_t windowId, const Rect& geomet
     found->presentationHeight = static_cast<float>(found->height);
     found->presentationInitialized = true;
     found->geometryTransitionActive = false;
+    found->liveResizeTransitionActive = false;
+    found->liveResizeMotionFinished = false;
     found->isMaximized = wasMaximized;
     found->isMinimized = wasMinimized;
     found->markDirty();

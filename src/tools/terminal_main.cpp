@@ -65,6 +65,7 @@ int main() {
         lcl::render::makeSkiaCanvas(), kSurfaceWidth, kSurfaceHeight, "LCL Terminal");
     window.setAppId("org.lcl.terminal");
     window.setInitialBounds(80, 60, kSurfaceWidth, kSurfaceHeight);
+    window.setResizePresentationMode(lcl::protocol::LCLResizePresentationMode::Live);
     window.setDecorationMode(lcl::protocol::LCLDecorationMode::CSD);
     window.setWindowCornerStyle(kCornerRadius, 2.0f);
     window.setCsdTitlebarEnabled(true);
@@ -146,7 +147,11 @@ int main() {
     };
     updateTerminalGeometry(kSurfaceWidth, kSurfaceHeight);
     window.setOnResize(updateTerminalGeometry);
-    window.setResizeTransform([](uint32_t requestedWidth, uint32_t requestedHeight) {
+    window.setResizeTransform([](uint32_t requestedWidth, uint32_t requestedHeight,
+                                 lcl::protocol::LCLConfigureResizeReason reason) {
+        if (reason != lcl::protocol::LCLConfigureResizeReason::Interactive) {
+            return std::pair<uint32_t, uint32_t>{requestedWidth, requestedHeight};
+        }
         int contentWidth = static_cast<int>(requestedWidth);
         int contentHeight = std::max(1, static_cast<int>(requestedHeight - kTitlebarHeight));
         lcl::apps::TerminalApp::getSnappedDimensions(

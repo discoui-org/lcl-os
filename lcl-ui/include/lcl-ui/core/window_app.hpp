@@ -22,7 +22,8 @@ using RawTextInputCallback = std::function<bool(const TextInputEvent&)>;
 using IpcMessageCallback = std::function<void(const lcl::protocol::LCLHeader&, const std::vector<uint8_t>&)>;
 using ResizeCallback = std::function<void(uint32_t width, uint32_t height)>;
 using FrameCallback = std::function<void()>;
-using ResizeTransform = std::function<std::pair<uint32_t, uint32_t>(uint32_t width, uint32_t height)>;
+using ResizeTransform = std::function<std::pair<uint32_t, uint32_t>(
+    uint32_t width, uint32_t height, lcl::protocol::LCLConfigureResizeReason reason)>;
 
 class WindowApp {
 public:
@@ -93,6 +94,13 @@ public:
     /** Request compositor-owned policy for a trusted system surface. */
     void setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind kind) {
         if (!m_ipcConnected) m_systemSurfaceKind = kind;
+    }
+    /** Choose direct live resize or compositor-retained-buffer morph before connect. */
+    void setResizePresentationMode(lcl::protocol::LCLResizePresentationMode mode) {
+        if (!m_ipcConnected) m_resizePresentationMode = mode;
+    }
+    lcl::protocol::LCLResizePresentationMode getResizePresentationMode() const {
+        return m_resizePresentationMode;
     }
     /** Disable widget-event dispatch for visual-only surfaces such as shell panels. */
     void setInputEnabled(bool enabled) { m_inputEnabled = enabled; }
@@ -188,6 +196,8 @@ private:
     uint32_t m_surfaceId{1};
     std::string m_appId;
     lcl::protocol::LCLSystemSurfaceKind m_systemSurfaceKind{lcl::protocol::LCLSystemSurfaceKind::None};
+    lcl::protocol::LCLResizePresentationMode m_resizePresentationMode{
+        lcl::protocol::LCLResizePresentationMode::CompositorMorph};
     uint32_t m_nextRequestId{1};
     uint64_t m_configureSerial{1};
     uint64_t m_pendingConfigureSerial{1};

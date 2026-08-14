@@ -162,6 +162,9 @@ void Compositor::run() {
 
         processInput();
         if (m_windowManager.updateAnimations()) {
+            if (m_inputRouter) {
+                m_inputRouter->syncWindowState();
+            }
             m_needsRedraw = true;
             m_shellStateDirty = true;
         }

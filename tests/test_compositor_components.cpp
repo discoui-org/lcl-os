@@ -99,6 +99,7 @@ TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
     auto& window = manager.getWindowsMutable().back();
     window.pendingWidth = 360;
     window.pendingHeight = 240;
+    window.isResizing = true;
     router.syncWindowState();
 
     protocol::LCLHeader header{};
@@ -110,6 +111,7 @@ TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
     ASSERT_EQ(first->configureSerial, 6u);
     EXPECT_EQ(first->width, 360u);
     EXPECT_EQ(first->height, 240u);
+    EXPECT_EQ(first->resizeReason, protocol::LCLConfigureResizeReason::Interactive);
 
     window.pendingWidth = 400;
     window.pendingHeight = 280;

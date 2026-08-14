@@ -58,6 +58,8 @@ public:
         protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
         bool unfocusable{false};
         bool insetBorderEnabled{true};
+        protocol::LCLResizePresentationMode resizePresentation{
+            protocol::LCLResizePresentationMode::CompositorMorph};
         float cornerRadiusPx{-1.0f};
         float cornerRoundness{2.0f};
         bool suppressInitialTransition{false};

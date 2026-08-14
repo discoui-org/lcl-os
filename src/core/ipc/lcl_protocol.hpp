@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 6;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 8;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 
@@ -72,6 +72,23 @@ enum class LCLDecorationMode : uint32_t {
     SSD = 0, // Server-Side Decoration
     CSD = 1, // Client-Side Decoration
     None = 2 // Frameless / No Decoration
+};
+
+/**
+ * How the compositor presents a surface while its configured size changes.
+ * Live advances only after each matching client buffer commit; CompositorMorph
+ * animates the compositor presentation while a replacement buffer is pending.
+ */
+enum class LCLResizePresentationMode : uint8_t {
+    Live = 0,
+    CompositorMorph = 1,
+};
+
+/** Why the compositor is issuing a size configure. */
+enum class LCLConfigureResizeReason : uint8_t {
+    Initial = 0,
+    Interactive = 1,
+    WindowStateTransition = 2,
 };
 
 enum class LCLWindowLayer : uint32_t {
@@ -168,6 +185,7 @@ struct LCLMsgSurfaceCreate {
     char title[128]{0};
     char appId[64]{0};
     float bufferScale{1.0f}; // Required v3 logical-to-buffer scale.
+    LCLResizePresentationMode resizePresentation{LCLResizePresentationMode::CompositorMorph};
 };
 
 struct LCLMsgSurfaceDestroy {
@@ -185,6 +203,7 @@ struct LCLMsgConfigureBounds {
     uint8_t isFocused{0};
     char title[128]{0};
     float bufferScale{1.0f}; // Required v3 scale; bounds and input are logical.
+    LCLConfigureResizeReason resizeReason{LCLConfigureResizeReason::Initial};
 };
 
 struct LCLMsgAttachBuffer {

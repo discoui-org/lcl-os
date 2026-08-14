@@ -216,6 +216,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     surfMsg.width = m_width;
     surfMsg.height = m_height;
     surfMsg.bufferScale = m_bufferScale;
+    surfMsg.resizePresentation = m_resizePresentationMode;
     std::strncpy(surfMsg.title, m_title.c_str(), sizeof(surfMsg.title) - 1);
     std::strncpy(surfMsg.appId, m_appId.c_str(), sizeof(surfMsg.appId) - 1);
     if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate, &surfMsg, sizeof(surfMsg))) {
@@ -295,6 +296,8 @@ void WindowApp::pollIPC() {
     uint32_t latestWidth = 0;
     uint32_t latestHeight = 0;
     float latestScale = m_bufferScale;
+    lcl::protocol::LCLConfigureResizeReason latestResizeReason =
+        lcl::protocol::LCLConfigureResizeReason::Initial;
     bool pendingResize = false;
 
     while (true) {
@@ -353,6 +356,7 @@ void WindowApp::pollIPC() {
                     latestWidth = cfg->width;
                     latestHeight = cfg->height;
                     latestScale = cfg->bufferScale;
+                    latestResizeReason = cfg->resizeReason;
                     m_pendingConfigureSerial = cfg->configureSerial;
                     pendingResize = true;
                 }
@@ -376,7 +380,7 @@ void WindowApp::pollIPC() {
     if (pendingResize && (latestWidth > 0 && latestHeight > 0)) {
         if (m_resizeTransform) {
             const auto [transformedWidth, transformedHeight] =
-                m_resizeTransform(latestWidth, latestHeight);
+                m_resizeTransform(latestWidth, latestHeight, latestResizeReason);
             latestWidth = transformedWidth;
             latestHeight = transformedHeight;
             if (latestWidth == 0 || latestHeight == 0) {

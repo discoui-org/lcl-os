@@ -37,6 +37,7 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     msg.width = 800;
     msg.height = 600;
     msg.bufferScale = 1.5f;
+    msg.resizePresentation = LCLResizePresentationMode::Live;
     std::strncpy(msg.title, "Test Window Title", sizeof(msg.title) - 1);
     std::strncpy(msg.appId, "org.lcl.test", sizeof(msg.appId) - 1);
 
@@ -67,6 +68,7 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     EXPECT_EQ(msgRecv->width, 800u);
     EXPECT_EQ(msgRecv->height, 600u);
     EXPECT_FLOAT_EQ(msgRecv->bufferScale, 1.5f);
+    EXPECT_EQ(msgRecv->resizePresentation, LCLResizePresentationMode::Live);
     EXPECT_STREQ(msgRecv->title, "Test Window Title");
     EXPECT_STREQ(msgRecv->appId, "org.lcl.test");
 
@@ -83,6 +85,7 @@ TEST(LCLProtocolTest, ConfigureAndAttachRoundTripTheSameSerial) {
     configure.width = 640;
     configure.height = 480;
     configure.bufferScale = 1.0f;
+    configure.resizeReason = LCLConfigureResizeReason::WindowStateTransition;
     LCLHeader header{};
     header.opcode = LCLOpcode::ConfigureBounds;
     header.payloadSize = sizeof(configure);
@@ -95,6 +98,7 @@ TEST(LCLProtocolTest, ConfigureAndAttachRoundTripTheSameSerial) {
     ASSERT_EQ(payload.size(), sizeof(LCLMsgConfigureBounds));
     const auto* decoded = reinterpret_cast<const LCLMsgConfigureBounds*>(payload.data());
     EXPECT_EQ(decoded->configureSerial, configure.configureSerial);
+    EXPECT_EQ(decoded->resizeReason, LCLConfigureResizeReason::WindowStateTransition);
 
     close(sockets[0]);
     close(sockets[1]);
@@ -109,7 +113,9 @@ void appendLe32(std::vector<uint8_t>& bytes, uint32_t value) {
     bytes.push_back(static_cast<uint8_t>(value >> 24));
 }
 
-std::vector<uint8_t> surfaceCreatePacket(float scale) {
+std::vector<uint8_t> surfaceCreatePacket(
+    float scale,
+    LCLResizePresentationMode mode = LCLResizePresentationMode::CompositorMorph) {
     LCLHeader header{};
     header.opcode = LCLOpcode::SurfaceCreate;
     header.requestId = 91;
@@ -119,6 +125,7 @@ std::vector<uint8_t> surfaceCreatePacket(float scale) {
     create.width = 640;
     create.height = 480;
     create.bufferScale = scale;
+    create.resizePresentation = mode;
     std::strncpy(create.title, "Codec Test", sizeof(create.title) - 1);
     std::strncpy(create.appId, "org.lcl.codec-test", sizeof(create.appId) - 1);
     std::vector<uint8_t> packet;
@@ -170,9 +177,9 @@ TEST(LCLProtocolTest, RejectsMissingAndInvalidBufferScale) {
     auto packet = surfaceCreatePacket(1.5f);
     ASSERT_FALSE(packet.empty());
 
-    // A v3 SurfaceCreate must contain the final float bufferScale field.
-    packet.resize(packet.size() - sizeof(float));
-    const uint32_t shortened = sizeof(LCLMsgSurfaceCreate) - sizeof(float);
+    // A v7 SurfaceCreate must contain the final resize presentation field.
+    packet.resize(packet.size() - sizeof(uint8_t));
+    const uint32_t shortened = sizeof(LCLMsgSurfaceCreate) - sizeof(uint8_t);
     packet[20] = static_cast<uint8_t>(shortened);
     packet[21] = static_cast<uint8_t>(shortened >> 8);
     packet[22] = static_cast<uint8_t>(shortened >> 16);
@@ -184,7 +191,7 @@ TEST(LCLProtocolTest, RejectsMissingAndInvalidBufferScale) {
     packet = surfaceCreatePacket(1.5f);
     const uint32_t nanBits =
         std::bit_cast<uint32_t>(std::numeric_limits<float>::quiet_NaN());
-    const size_t scaleOffset = packet.size() - sizeof(float);
+    const size_t scaleOffset = packet.size() - sizeof(uint8_t) - sizeof(float);
     packet[scaleOffset] = static_cast<uint8_t>(nanBits);
     packet[scaleOffset + 1] = static_cast<uint8_t>(nanBits >> 8);
     packet[scaleOffset + 2] = static_cast<uint8_t>(nanBits >> 16);
@@ -193,6 +200,8 @@ TEST(LCLProtocolTest, RejectsMissingAndInvalidBufferScale) {
 
     EXPECT_TRUE(surfaceCreatePacket(0.49f).empty());
     EXPECT_TRUE(surfaceCreatePacket(4.01f).empty());
+    EXPECT_TRUE(surfaceCreatePacket(1.0f,
+        static_cast<LCLResizePresentationMode>(2)).empty());
 }
 
 TEST(LCLProtocolTest, QueuedPacketsPreserveRequestOrder) {

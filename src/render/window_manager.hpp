@@ -54,6 +54,15 @@ struct Window {
     float presentationHeight{300.0f};
     bool presentationInitialized{false};
     bool geometryTransitionActive{false};
+    // Live resize animates configure bounds and waits for matching client
+    // buffers. Unlike a compositor morph, the currently displayed buffer is
+    // never scaled to the interpolated geometry.
+    bool liveResizeTransitionActive{false};
+    bool liveResizeMotionFinished{false};
+    int liveResizeTargetX{0};
+    int liveResizeTargetY{0};
+    int liveResizeTargetWidth{0};
+    int liveResizeTargetHeight{0};
     int zIndex{0};
     bool isFocused{false};
     bool isUnfocusable{false};
@@ -98,6 +107,8 @@ struct Window {
     bool drawInsetBorder{true};
     float cornerRadiusPx{-1.0f}; // < 0 means use compositor default policy
     float cornerRoundness{2.0f};
+    protocol::LCLResizePresentationMode resizePresentation{
+        protocol::LCLResizePresentationMode::CompositorMorph};
 
     uint32_t headerColor{0xFF38BDF8};
     // Window is the parent presentation group. The compositor-owned titlebar
@@ -181,7 +192,8 @@ public:
      * @param frameH Total attached surface frame height (including titlebar).
      */
     void commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH,
-                               bool preservePendingTarget = false);
+                               bool preservePendingTarget = false,
+                               int configuredX = 0, int configuredY = 0);
 
     /**
      * @brief Set decoration mode (SSD/CSD/None) for a window.
@@ -204,6 +216,8 @@ public:
     void setWindowCornerRadius(uint32_t windowId, float radiusPx);
     /** Set compositor mask radius and superellipse exponent as one WindowGroup style. */
     void setWindowCornerStyle(uint32_t windowId, float radiusPx, float roundness);
+    void setResizePresentationMode(uint32_t windowId,
+                                   protocol::LCLResizePresentationMode mode);
 
     /**
      * @brief Set reserved desktop struts (No Window Move Zone for Menu Bar / Dock).
@@ -213,9 +227,9 @@ public:
     /** Start a compositor-owned drag from a client-local pointer position. */
     bool beginWindowDrag(uint32_t windowId, int localX, int localY);
     bool minimizeWindow(uint32_t windowId);
-    bool maximizeWindow(uint32_t windowId);
-    bool restoreWindow(uint32_t windowId);
-    bool toggleMaximizeWindow(uint32_t windowId);
+    bool maximizeWindow(uint32_t windowId, bool animateGeometry = true);
+    bool restoreWindow(uint32_t windowId, bool animateGeometry = true);
+    bool toggleMaximizeWindow(uint32_t windowId, bool animateGeometry = true);
     bool rollbackWindowGeometry(uint32_t windowId, const Rect& geometry,
                                 bool wasMaximized, bool wasMinimized);
 
@@ -263,7 +277,8 @@ private:
     void focusTopmostVisibleWindow();
     void updateWindowZOrders();
     void startGeometryTransition(Window& window, int targetX, int targetY,
-                                 int targetWidth, int targetHeight);
+                                 int targetWidth, int targetHeight,
+                                 bool animate);
     void refreshChromeHoverState();
 
     uint32_t m_screenWidth{1024};

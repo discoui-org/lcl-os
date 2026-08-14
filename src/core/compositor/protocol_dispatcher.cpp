@@ -130,6 +130,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         m_windowManager.setDecorationMode(entry.windowId, decorationMode);
         m_windowManager.setWindowLayer(entry.windowId, entry.layer, entry.unfocusable);
         m_windowManager.setInsetBorderEnabled(entry.windowId, entry.insetBorderEnabled);
+        m_windowManager.setResizePresentationMode(entry.windowId, entry.resizePresentation);
         if (entry.cornerRadiusPx >= 0.0f) {
             m_windowManager.setWindowCornerStyle(entry.windowId, entry.cornerRadiusPx,
                                                   entry.cornerRoundness);
@@ -277,12 +278,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             int winW = DisplayScale::px(540);
             int winH = DisplayScale::px(360);
             float bufferScale = 1.0f;
+            protocol::LCLResizePresentationMode resizePresentation =
+                protocol::LCLResizePresentationMode::CompositorMorph;
 
             if (msg.payload.size() == sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
                 auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
                 surfId = sm->surfaceId;
                 if (sm->title[0]) title = sm->title;
                 bufferScale = sm->bufferScale;
+                resizePresentation = sm->resizePresentation;
                 winX = logicalToPhysical(sm->x, bufferScale);
                 winY = logicalToPhysical(sm->y, bufferScale);
                 winW = (sm->width > 0) ? logicalToPhysical(static_cast<int>(sm->width), bufferScale) : static_cast<int>(m_renderer.getWidth());
@@ -307,6 +311,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.initialY = winY;
                 entry.initialWidth = static_cast<uint32_t>(winW);
                 entry.initialHeight = static_cast<uint32_t>(winH);
+                entry.resizePresentation = resizePresentation;
                 entry.systemSurfaceKind = requestedSystemKind;
                 entry.suppressInitialTransition = systemPolicy.suppressInitialTransition;
                 if (systemPolicy.isSystemSurface) {
@@ -341,6 +346,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             cfgMsg.width = physicalToLogical(static_cast<uint32_t>(winW), bufferScale);
             cfgMsg.height = physicalToLogical(static_cast<uint32_t>(winH), bufferScale);
             cfgMsg.bufferScale = bufferScale;
+            cfgMsg.resizeReason = protocol::LCLConfigureResizeReason::Initial;
             cfgMsg.isFocused = 1;
 
             configuredEntry.configuredX = winX;
@@ -500,7 +506,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     configuredWindow->pendingHeight != configuredFrameHeight;
             }
             m_windowManager.commitSurfaceGeometry(
-                entry.windowId, frameW, frameH, preserveNewerTarget);
+                entry.windowId, frameW, frameH, preserveNewerTarget,
+                entry.configuredX, entry.configuredY);
             changed = true;
 
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetDecorationMode) {
@@ -548,8 +555,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             const int rollbackHeight = hasCurrentWindow ? currentWindow->height : 0;
             const bool rollbackWasMaximized = hasCurrentWindow && currentWindow->isMaximized;
             const bool rollbackWasMinimized = hasCurrentWindow && currentWindow->isMinimized;
+            const bool compositorMorph = surfaceIt->second.resizePresentation ==
+                protocol::LCLResizePresentationMode::CompositorMorph;
             const auto beginResizeTransition = [&] {
-                if (!hasCurrentWindow) return;
+                if (!hasCurrentWindow || !compositorMorph) return;
                 auto& entry = surfaceIt->second;
                 entry.rollbackX = rollbackX;
                 entry.rollbackY = rollbackY;

@@ -125,6 +125,43 @@ TEST(WindowManagerTest, MaximizeRestoreMorphRetargetsFromPresentationGeometry) {
     EXPECT_NEAR(restored->presentationHeight, 300.0f, 0.01f);
 }
 
+TEST(WindowManagerTest, LiveResizePresentationUsesCommittedBuffersWithoutMorph) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    manager.setReservedZone(32, 60, 0, 0);
+    const uint32_t id = manager.createWindow("Live", 80, 90, 400, 300);
+
+    manager.setResizePresentationMode(id, lcl::protocol::LCLResizePresentationMode::Live);
+    ASSERT_TRUE(manager.maximizeWindow(id));
+    const auto* started = findWindow(manager, id);
+    ASSERT_NE(started, nullptr);
+    EXPECT_TRUE(started->isMaximized);
+    EXPECT_TRUE(started->liveResizeTransitionActive);
+    EXPECT_FALSE(started->geometryTransitionActive);
+    EXPECT_EQ(started->width, 400);
+    EXPECT_EQ(started->height, 300);
+
+    manager.updateAnimations(1.0f);
+    const auto* pending = findWindow(manager, id);
+    ASSERT_NE(pending, nullptr);
+    EXPECT_EQ(pending->pendingX, 0);
+    EXPECT_EQ(pending->pendingY, 32);
+    EXPECT_EQ(pending->pendingWidth, 1000);
+    EXPECT_EQ(pending->pendingHeight, 608);
+
+    manager.commitSurfaceGeometry(id, 1000, 608, false, 0, 32);
+    const auto* committed = findWindow(manager, id);
+    ASSERT_NE(committed, nullptr);
+    EXPECT_FALSE(committed->liveResizeTransitionActive);
+    EXPECT_FALSE(committed->geometryTransitionActive);
+    EXPECT_EQ(committed->x, 0);
+    EXPECT_EQ(committed->y, 32);
+    EXPECT_EQ(committed->width, 1000);
+    EXPECT_EQ(committed->height, 608);
+    EXPECT_FLOAT_EQ(committed->presentationWidth, 1000.0f);
+    EXPECT_FLOAT_EQ(committed->presentationHeight, 608.0f);
+}
+
 TEST(WindowManagerTest, IntermediateResizeCommitPreservesNewerPointerTarget) {
     lcl::render::WindowManager manager;
     ASSERT_TRUE(manager.initialize(1000, 700));

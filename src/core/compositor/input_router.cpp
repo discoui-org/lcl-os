@@ -73,10 +73,15 @@ void InputRouter::sendPendingConfigures() {
             const int titleOffset = (window.decorationMode == render::DecorationMode::SSD)
                 ? DisplayScale::titleBarHeight()
                 : 0;
+            const int configuredX = window.liveResizeTransitionActive ? window.pendingX : window.x;
+            const int configuredY = window.liveResizeTransitionActive ? window.pendingY : window.y;
             const uint32_t physicalContentW = static_cast<uint32_t>(window.pendingWidth > 0 ? window.pendingWidth : window.width);
             const uint32_t physicalContentH = static_cast<uint32_t>(std::max(1, (window.pendingHeight > 0 ? window.pendingHeight : window.height) - titleOffset));
+            const bool livePositionChanged = window.liveResizeTransitionActive &&
+                (configuredX != entry.configuredX || configuredY != entry.configuredY);
             if (physicalContentW == entry.width && physicalContentH == entry.height &&
-                entry.pendingConfigureSerial == entry.acceptedConfigureSerial && !entry.forceConfigure) {
+                entry.pendingConfigureSerial == entry.acceptedConfigureSerial && !entry.forceConfigure &&
+                !livePositionChanged) {
                 break;
             }
             protocol::LCLHeader header{};
@@ -86,16 +91,20 @@ void InputRouter::sendPendingConfigures() {
             protocol::LCLMsgConfigureBounds configure{};
             configure.surfaceId = static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu);
             configure.configureSerial = entry.nextConfigureSerial++;
-            configure.x = logicalToPhysical(window.x, 1.0f / entry.bufferScale);
-            configure.y = logicalToPhysical(window.y, 1.0f / entry.bufferScale);
+            configure.x = logicalToPhysical(configuredX, 1.0f / entry.bufferScale);
+            configure.y = logicalToPhysical(configuredY, 1.0f / entry.bufferScale);
             configure.width = physicalToLogical(physicalContentW, entry.bufferScale);
             configure.height = physicalToLogical(physicalContentH, entry.bufferScale);
             configure.bufferScale = entry.bufferScale;
+            configure.resizeReason = (!window.isMaximized &&
+                                      (window.isResizing || window.activeResizeEdge != render::ResizeEdge::None))
+                ? protocol::LCLConfigureResizeReason::Interactive
+                : protocol::LCLConfigureResizeReason::WindowStateTransition;
             configure.isFocused = window.isFocused ? 1 : 0;
             if (protocol::sendMsgWithFd(entry.clientFd, header, &configure)) {
                 entry.pendingConfigureSerial = configure.configureSerial;
-                entry.configuredX = window.x;
-                entry.configuredY = window.y;
+                entry.configuredX = configuredX;
+                entry.configuredY = configuredY;
                 entry.configuredWidth = physicalContentW;
                 entry.configuredHeight = physicalContentH;
                 entry.configuredFocused = configure.isFocused;
