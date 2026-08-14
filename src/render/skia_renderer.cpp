@@ -1720,11 +1720,14 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
 #ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
         m_eglBackend->makeCurrent();
+        const bool gpuBlurAvailable = m_eglBackend->isHardwareAccelerated();
 
         int logScale = 1;
-        for (const auto& op : filters) {
-            if (op.type == protocol::FilterType::Blur && op.value > 8.0f) {
-                logScale = std::clamp(1 + static_cast<int>(std::floor(std::log2(op.value / 8.0f))), 1, 4);
+        if (gpuBlurAvailable) {
+            for (const auto& op : filters) {
+                if (op.type == protocol::FilterType::Blur && op.value > 8.0f) {
+                    logScale = std::clamp(1 + static_cast<int>(std::floor(std::log2(op.value / 8.0f))), 1, 4);
+                }
             }
         }
 
@@ -1924,8 +1927,13 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
                     pendingColorMatrix.multiply(createInvertMatrix(op.value));
                     break;
                 case protocol::FilterType::Blur: {
-                    renderColorPass();
-                    runBlurPass(op.value);
+                    // An EGL context can be Mesa llvmpipe running on the CPU.
+                    // Blur is intentionally available only on audited hardware
+                    // renderers (VirGL/virtio), not on that emulated GL path.
+                    if (gpuBlurAvailable) {
+                        renderColorPass();
+                        runBlurPass(op.value);
+                    }
                     break;
                 }
                 case protocol::FilterType::Glass: {
