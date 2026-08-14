@@ -41,6 +41,9 @@ public:
         int clientFd{-1};
         int shmFd{-1};
         void* pixels{nullptr};
+        uint32_t dmaBufId{0};
+        uint32_t dmaBufTexture{0};
+        bool dmaBufTransportActive{false};
         uint32_t width{0};
         uint32_t height{0};
         uint32_t stride{0};
@@ -91,6 +94,8 @@ public:
         // retained until the matching configure serial arrives.
         int previousShmFd{-1};
         void* previousPixels{nullptr};
+        uint32_t previousDmaBufId{0};
+        uint32_t previousDmaBufTexture{0};
         uint32_t previousWidth{0};
         uint32_t previousHeight{0};
         uint32_t previousStride{0};
@@ -107,6 +112,18 @@ public:
         int rollbackHeight{0};
         bool rollbackWasMaximized{false};
         bool rollbackWasMinimized{false};
+
+        struct PendingDmaBufRelease {
+            uint32_t bufferId{0};
+            uint32_t texture{0};
+        };
+        // Drained only after a compositor presentation. This is the client
+        // reuse barrier for the three-slot GBM pool.
+        std::vector<PendingDmaBufRelease> pendingDmaBufReleases;
+
+        bool hasRenderableBuffer() const noexcept {
+            return pixels != nullptr || dmaBufTexture != 0;
+        }
     };
 
     using Key = uint64_t;
@@ -150,7 +167,7 @@ public:
     size_t erase(Key key);
     void clear() noexcept;
 
-    /** Release an entry's mapped SHM and memfd without erasing its metadata. */
+    /** Release an entry's mapped SHM or imported DMA-BUF without erasing metadata. */
     static void releaseBuffer(SurfaceEntry& entry) noexcept;
     static void releasePreviousBuffer(SurfaceEntry& entry) noexcept;
     static bool acceptsBufferCommit(const SurfaceEntry& entry,

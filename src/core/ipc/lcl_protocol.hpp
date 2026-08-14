@@ -10,7 +10,8 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 8;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 9;
+constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 
@@ -35,7 +36,13 @@ enum class LCLOpcode : uint32_t {
     ShellStateSnapshot = 20,
     ShellStateDelta = 21,
     SetSystemSurfaceKind = 22,
-    SetWindowCornerStyle = 23
+    SetWindowCornerStyle = 23,
+    // A single-plane DRM/GBM buffer. The file descriptor travels through
+    // SCM_RIGHTS, while this message carries the metadata needed for import.
+    AttachDmaBuf = 24,
+    // Sent by the compositor only after it has stopped sampling a DMA-BUF.
+    // Clients must not render into that pool slot before this message arrives.
+    ReleaseDmaBuf = 25
 };
 
 enum class LCLSystemSurfaceKind : uint32_t {
@@ -212,7 +219,23 @@ struct LCLMsgAttachBuffer {
     uint32_t width{0};
     uint32_t height{0};
     uint32_t stride{0};
-    uint32_t format{0}; // e.g. ARGB8888
+    uint32_t format{0}; // LCL_BUFFER_FORMAT_ARGB8888
+};
+
+struct LCLMsgAttachDmaBuf {
+    uint32_t surfaceId{0};
+    uint64_t configureSerial{0};
+    uint32_t bufferId{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t stride{0};
+    uint32_t format{0}; // LCL_BUFFER_FORMAT_ARGB8888
+    uint64_t modifier{~uint64_t{0}}; // DRM_FORMAT_MOD_INVALID when unspecified
+};
+
+struct LCLMsgReleaseDmaBuf {
+    uint32_t surfaceId{0};
+    uint32_t bufferId{0};
 };
 
 struct LCLMsgAckResponse {

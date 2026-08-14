@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "lcl-ui/core/rect.hpp"
@@ -23,6 +24,21 @@ struct AffineTransform {
     float ty{0.0f};
 };
 
+/**
+ * An optional, single-plane DMA-BUF frame exported by a Canvas backend.
+ * lcl-ui owns only the protocol-neutral metadata; GBM/EGL stay in the backend.
+ * The exported fd is consumed by the socket send operation.
+ */
+struct DmaBufFrame {
+    uint32_t bufferId{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t stride{0};
+    uint32_t format{0};
+    uint64_t modifier{~uint64_t{0}};
+    int fd{-1};
+};
+
 /** Selects the text face without exposing a renderer implementation to widgets. */
 enum class FontFamily : uint8_t {
     Interface,
@@ -43,6 +59,21 @@ public:
     virtual void beginFrame() = 0;
     virtual void endFrame() = 0;
     virtual uint32_t* rasterBuffer() = 0;
+
+    /** True only while this frame is rendered directly into a DMA-BUF. */
+    virtual bool isDmaBufFrameActive() const { return false; }
+    /** WindowApp enables DMA-BUF only after a compatible compositor connection. */
+    virtual void setDmaBufTransportEnabled(bool) {}
+    /** True when this backend can deliver frames through its DMA-BUF pool. */
+    virtual bool hasDmaBufTransport() const { return false; }
+    /** True when every pool slot is still owned by the compositor. */
+    virtual bool isDmaBufFrameBlocked() const { return false; }
+    /** Exports the completed frame. Empty preserves the existing SHM commit path. */
+    virtual std::optional<DmaBufFrame> takeDmaBufFrame() { return std::nullopt; }
+    /** Cancels an unsent export so its pool slot can be reused. */
+    virtual void cancelDmaBufFrame(uint32_t) {}
+    /** Releases a compositor-owned pool slot after ReleaseDmaBuf. */
+    virtual void releaseDmaBufFrame(uint32_t) {}
 
     // Backend-neutral presentation-layer primitives. Default implementations
     // preserve compatibility for minimal/test canvases that do not transform.

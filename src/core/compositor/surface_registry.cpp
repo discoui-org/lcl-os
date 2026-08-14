@@ -48,6 +48,11 @@ void SurfaceRegistry::clear() noexcept {
 
 void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
     releasePreviousBuffer(entry);
+    if (entry.dmaBufTexture != 0 || entry.dmaBufId != 0) {
+        entry.pendingDmaBufReleases.push_back({entry.dmaBufId, entry.dmaBufTexture});
+    }
+    entry.dmaBufId = 0;
+    entry.dmaBufTexture = 0;
     if (entry.pixels && entry.shmSize > 0) {
         munmap(entry.pixels, entry.shmSize);
     }
@@ -61,6 +66,11 @@ void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
 }
 
 void SurfaceRegistry::releasePreviousBuffer(SurfaceEntry& entry) noexcept {
+    if (entry.previousDmaBufTexture != 0 || entry.previousDmaBufId != 0) {
+        entry.pendingDmaBufReleases.push_back({entry.previousDmaBufId, entry.previousDmaBufTexture});
+    }
+    entry.previousDmaBufId = 0;
+    entry.previousDmaBufTexture = 0;
     if (entry.previousPixels && entry.previousShmSize > 0) {
         munmap(entry.previousPixels, entry.previousShmSize);
     }

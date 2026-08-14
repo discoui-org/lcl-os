@@ -4,7 +4,10 @@
 #include <cerrno>
 #include <unistd.h>
 #include <algorithm>
+#include <vector>
+#include <utility>
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 
 #ifndef EGL_PLATFORM_GBM_KHR
 #define EGL_PLATFORM_GBM_KHR 0x31D7
@@ -31,7 +34,10 @@ EGLBackend::EGLBackend(EGLBackend&& other) noexcept
       m_eglConfig(other.m_eglConfig),
       m_currentFBId(other.m_currentFBId),
       m_crtcSet(other.m_crtcSet),
-      m_initialized(other.m_initialized) {
+      m_initialized(other.m_initialized),
+      m_glRendererString(std::move(other.m_glRendererString)),
+      m_isHardwareAccelerated(other.m_isHardwareAccelerated),
+      m_importedDmaBufImages(std::move(other.m_importedDmaBufImages)) {
     other.m_drmFd = -1;
     other.m_gbmDevice = nullptr;
     other.m_gbmSurface = nullptr;
@@ -40,6 +46,7 @@ EGLBackend::EGLBackend(EGLBackend&& other) noexcept
     other.m_eglContext = EGL_NO_CONTEXT;
     other.m_eglSurface = EGL_NO_SURFACE;
     other.m_initialized = false;
+    other.m_importedDmaBufImages.clear();
 }
 
 EGLBackend& EGLBackend::operator=(EGLBackend&& other) noexcept {
@@ -61,6 +68,9 @@ EGLBackend& EGLBackend::operator=(EGLBackend&& other) noexcept {
         m_currentFBId = other.m_currentFBId;
         m_crtcSet = other.m_crtcSet;
         m_initialized = other.m_initialized;
+        m_glRendererString = std::move(other.m_glRendererString);
+        m_isHardwareAccelerated = other.m_isHardwareAccelerated;
+        m_importedDmaBufImages = std::move(other.m_importedDmaBufImages);
 
         other.m_drmFd = -1;
         other.m_gbmDevice = nullptr;
@@ -70,6 +80,7 @@ EGLBackend& EGLBackend::operator=(EGLBackend&& other) noexcept {
         other.m_eglContext = EGL_NO_CONTEXT;
         other.m_eglSurface = EGL_NO_SURFACE;
         other.m_initialized = false;
+        other.m_importedDmaBufImages.clear();
     }
     return *this;
 }
@@ -397,7 +408,80 @@ bool EGLBackend::swapBuffers() {
     return true;
 }
 
+uint32_t EGLBackend::importDmaBufTexture(const DmaBufImport& buffer) {
+    if (!m_initialized || buffer.fd < 0 || buffer.width == 0 || buffer.height == 0 ||
+        buffer.stride < buffer.width * 4 || buffer.format != 1 || !makeCurrent()) {
+        return 0;
+    }
+    const char* extensions = eglQueryString(m_eglDisplay, EGL_EXTENSIONS);
+    if (!extensions || !std::strstr(extensions, "EGL_EXT_image_dma_buf_import")) return 0;
+    const auto createImage = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(
+        eglGetProcAddress("eglCreateImageKHR"));
+    const auto imageTarget = reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(
+        eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+    if (!createImage || !imageTarget) return 0;
+
+    const uint32_t fourcc = GBM_FORMAT_ARGB8888;
+    EGLint attributes[32] = {
+        EGL_WIDTH, static_cast<EGLint>(buffer.width),
+        EGL_HEIGHT, static_cast<EGLint>(buffer.height),
+        EGL_LINUX_DRM_FOURCC_EXT, static_cast<EGLint>(fourcc),
+        EGL_DMA_BUF_PLANE0_FD_EXT, buffer.fd,
+        EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+        EGL_DMA_BUF_PLANE0_PITCH_EXT, static_cast<EGLint>(buffer.stride),
+        EGL_NONE,
+    };
+    size_t end = 12;
+    if (buffer.modifier != ~uint64_t{0}) {
+        attributes[end++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+        attributes[end++] = static_cast<EGLint>(buffer.modifier & 0xFFFFFFFFu);
+        attributes[end++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+        attributes[end++] = static_cast<EGLint>(buffer.modifier >> 32u);
+        attributes[end++] = EGL_NONE;
+    }
+    const EGLImageKHR image = createImage(m_eglDisplay, EGL_NO_CONTEXT,
+                                          EGL_LINUX_DMA_BUF_EXT, nullptr, attributes);
+    if (image == EGL_NO_IMAGE_KHR) return 0;
+
+    uint32_t texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    imageTarget(GL_TEXTURE_2D, image);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    if (glGetError() != GL_NO_ERROR) {
+        const auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(
+            eglGetProcAddress("eglDestroyImageKHR"));
+        if (destroyImage) destroyImage(m_eglDisplay, image);
+        if (texture) glDeleteTextures(1, &texture);
+        return 0;
+    }
+    m_importedDmaBufImages.emplace(texture, image);
+    return texture;
+}
+
+void EGLBackend::releaseDmaBufTexture(uint32_t texture) {
+    const auto found = m_importedDmaBufImages.find(texture);
+    if (found == m_importedDmaBufImages.end()) return;
+    if (m_initialized && makeCurrent()) {
+        glDeleteTextures(1, &texture);
+        const auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(
+            eglGetProcAddress("eglDestroyImageKHR"));
+        if (destroyImage) destroyImage(m_eglDisplay, found->second);
+    }
+    m_importedDmaBufImages.erase(found);
+}
+
 void EGLBackend::shutdown() {
+    if (m_initialized && makeCurrent()) {
+        std::vector<uint32_t> textures;
+        textures.reserve(m_importedDmaBufImages.size());
+        for (const auto& [texture, _] : m_importedDmaBufImages) textures.push_back(texture);
+        for (uint32_t texture : textures) releaseDmaBufTexture(texture);
+    }
     if (m_eglDisplay != EGL_NO_DISPLAY) {
         eglMakeCurrent(m_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         if (m_eglSurface != EGL_NO_SURFACE) {

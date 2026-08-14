@@ -270,7 +270,7 @@ TEST(LCLProtocolTest, SeqpacketRejectsTruncatedPayload) {
     close(sv[1]);
 }
 
-TEST(LCLProtocolTest, FileDescriptorIsAcceptedOnlyForAttachBuffer) {
+TEST(LCLProtocolTest, FileDescriptorIsAcceptedOnlyForBufferAttachOpcodes) {
     int sv[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
     int descriptor = dup(STDIN_FILENO);
@@ -309,6 +309,64 @@ TEST(LCLProtocolTest, FileDescriptorIsAcceptedOnlyForAttachBuffer) {
     close(descriptor);
     close(sv[0]);
     close(sv[1]);
+}
+
+TEST(LCLProtocolTest, DmaBufAttachCarriesMetadataAndFileDescriptor) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+    const int descriptor = dup(STDIN_FILENO);
+    ASSERT_GE(descriptor, 0);
+
+    LCLMsgAttachDmaBuf sent{};
+    sent.surfaceId = 9;
+    sent.configureSerial = 123;
+    sent.bufferId = 2;
+    sent.width = 640;
+    sent.height = 480;
+    sent.stride = 2560;
+    sent.format = LCL_BUFFER_FORMAT_ARGB8888;
+    sent.modifier = 0x0102030405060708ull;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::AttachDmaBuf;
+    header.payloadSize = sizeof(sent);
+    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &sent, descriptor));
+
+    LCLHeader receivedHeader{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sockets[1], receivedHeader, payload, receivedFd));
+    ASSERT_EQ(receivedHeader.opcode, LCLOpcode::AttachDmaBuf);
+    ASSERT_EQ(payload.size(), sizeof(LCLMsgAttachDmaBuf));
+    const auto* received = reinterpret_cast<const LCLMsgAttachDmaBuf*>(payload.data());
+    EXPECT_EQ(received->surfaceId, sent.surfaceId);
+    EXPECT_EQ(received->configureSerial, sent.configureSerial);
+    EXPECT_EQ(received->bufferId, sent.bufferId);
+    EXPECT_EQ(received->modifier, sent.modifier);
+    EXPECT_GE(receivedFd, 0);
+
+    close(receivedFd);
+    close(descriptor);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(LCLProtocolTest, DmaBufReleaseNeedsNoFileDescriptor) {
+    LCLMsgReleaseDmaBuf release{};
+    release.surfaceId = 9;
+    release.bufferId = 2;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::ReleaseDmaBuf;
+    header.payloadSize = sizeof(release);
+    std::vector<uint8_t> packet;
+    ASSERT_TRUE(encodePacket(header, &release, packet));
+
+    LCLHeader decodedHeader{};
+    std::vector<uint8_t> decodedPayload;
+    ASSERT_TRUE(decodePacket(packet.data(), packet.size(), decodedHeader, decodedPayload));
+    ASSERT_EQ(decodedPayload.size(), sizeof(LCLMsgReleaseDmaBuf));
+    const auto* decoded = reinterpret_cast<const LCLMsgReleaseDmaBuf*>(decodedPayload.data());
+    EXPECT_EQ(decoded->surfaceId, release.surfaceId);
+    EXPECT_EQ(decoded->bufferId, release.bufferId);
 }
 
 TEST(LCLProtocolTest, SendAndReceiveSetWindowLayerMsg) {

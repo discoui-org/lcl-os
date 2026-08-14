@@ -593,6 +593,23 @@ void SkiaRenderer::setTargetPixels(uint32_t* targetPixels, uint32_t width, uint3
     m_height = nextHeight;
 }
 
+void SkiaRenderer::setExternalFrameTarget(uint32_t framebuffer, uint32_t texture) {
+#ifndef LCL_SOFTWARE_ONLY
+    m_glExternalFrameFBO = framebuffer;
+    m_glExternalFrameTexture = texture;
+#else
+    (void)framebuffer;
+    (void)texture;
+#endif
+}
+
+void SkiaRenderer::clearExternalFrameTarget() {
+#ifndef LCL_SOFTWARE_ONLY
+    m_glExternalFrameFBO = 0;
+    m_glExternalFrameTexture = 0;
+#endif
+}
+
 void SkiaRenderer::shutdown() {
 #ifndef LCL_SOFTWARE_ONLY
     if (m_glClientTexture > 0) {
@@ -611,6 +628,8 @@ void SkiaRenderer::shutdown() {
         m_glSceneFBO = 0;
         m_glSceneTexture = 0;
     }
+    m_glExternalFrameFBO = 0;
+    m_glExternalFrameTexture = 0;
     if (m_glFBOReady) {
         glDeleteFramebuffers(2, m_glFBO);
         glDeleteTextures(2, m_glFBOTexture);
@@ -963,9 +982,9 @@ void SkiaRenderer::beginFrame() {
     if (!m_initialized) return;
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && m_glSceneFBO > 0) {
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && activeSceneFBO() > 0) {
         m_eglBackend->makeCurrent();
-        glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
         // Client canvases are alpha surfaces composited later by the window
         // manager.  KMS composition remains opaque, but an offscreen client
@@ -979,7 +998,7 @@ void SkiaRenderer::beginFrame() {
     }
 #endif
 
-    if (m_targetPixels) {
+    if (m_targetPixels && m_glExternalFrameFBO == 0) {
         // GPU path uses m_targetPixels as a temporary CPU staging surface that can
         // be flushed into the GPU scene during composition.
         // Software path still treats it as the final opaque framebuffer.
@@ -1005,11 +1024,66 @@ void SkiaRenderer::endFrame() {
             }
             glFlush();
             m_eglBackend->present();
+        } else if (m_glExternalFrameFBO != 0) {
+            glFlush();
         } else if (m_targetPixels) {
-            glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+            glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
             m_eglBackend->readback(m_targetPixels, m_width, m_height);
         }
     }
+#endif
+}
+
+uint32_t SkiaRenderer::importDmaBufTexture(const lcl::core::DmaBufImport& buffer) {
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+        return m_eglBackend->importDmaBufTexture(buffer);
+    }
+#else
+    (void)buffer;
+#endif
+    return 0;
+}
+
+void SkiaRenderer::releaseDmaBufTexture(uint32_t texture) {
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_eglBackend) m_eglBackend->releaseDmaBufTexture(texture);
+#else
+    (void)texture;
+#endif
+}
+
+void SkiaRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int srcW, int srcH,
+                                                uint32_t texture, float opacity,
+                                                float cornerRadius, float cornerRoundness,
+                                                bool squareTopCorners, float drawWidth,
+                                                float drawHeight) {
+#ifndef LCL_SOFTWARE_ONLY
+    (void)srcW;
+    (void)srcH;
+    (void)squareTopCorners;
+    if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend || texture == 0) return;
+    m_eglBackend->makeCurrent();
+    glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+    glViewport(0, 0, m_width, m_height);
+    if (cornerRadius > 0.001f) {
+        drawMaskedTextureQuad(texture, dstX, dstY, drawWidth, drawHeight,
+                              cornerRadius, cornerRoundness, opacity);
+    } else {
+        drawTextureQuad(texture, dstX, dstY, drawWidth, drawHeight, opacity);
+    }
+#else
+    (void)dstX;
+    (void)dstY;
+    (void)srcW;
+    (void)srcH;
+    (void)texture;
+    (void)opacity;
+    (void)cornerRadius;
+    (void)cornerRoundness;
+    (void)squareTopCorners;
+    (void)drawWidth;
+    (void)drawHeight;
 #endif
 }
 
@@ -1065,7 +1139,7 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
         // path entirely on the GPU.
         if (m_glFBOReady && m_glRoundRectProgram > 0) {
             m_eglBackend->makeCurrent();
-            glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+            glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
             glViewport(0, 0, m_width, m_height);
             drawGpuRoundedRect(static_cast<float>(x1), static_cast<float>(y1),
                                static_cast<float>(x2 - x1), static_cast<float>(y2 - y1),
@@ -1143,7 +1217,7 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
 #ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend && m_glRoundRectProgram > 0) {
         m_eglBackend->makeCurrent();
-        glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
 
         drawGpuRoundedRect(deviceRect.x,
@@ -1514,7 +1588,7 @@ void SkiaRenderer::drawBufferRaw(float dstX,
             }
         }
 
-        glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
 
         if (cornerRadius > 0.001f) {
@@ -1857,7 +1931,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
 
         glUseProgram(m_glProgram);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, m_glSceneTexture);
+        glBindTexture(GL_TEXTURE_2D, activeSceneTexture());
         glUniform1i(m_uTextureLoc, 0);
 
         glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -2061,7 +2135,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
 
         // 2. Draw final blurred GLSL texture directly back into m_glSceneFBO ON GPU!
         // ZERO GLREADPIXELS! ZERO CPU MEMCPY!
-        glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
 
         drawMaskedTextureQuad(m_glFBOTexture[currentTex],

@@ -267,6 +267,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
 
     m_ipcConnected = true;
     m_ownsSocketFd = true;
+    m_canvas->setDmaBufTransportEnabled(true);
     // Decoration state belongs to the surface contract, not to a later frame.
     // Send preconfigured values before the first effect graph/buffer attach so a
     // CSD client never flashes the compositor's default title chrome.
@@ -406,6 +407,12 @@ void WindowApp::pollIPC() {
                     m_pendingConfigureSerial = cfg->configureSerial;
                     receivedInitialConfigure = receivedInitialConfigure || m_waitingForInitialConfigure;
                     pendingResize = true;
+                }
+            } else if (header.opcode == lcl::protocol::LCLOpcode::ReleaseDmaBuf &&
+                       payload.size() == sizeof(lcl::protocol::LCLMsgReleaseDmaBuf)) {
+                const auto* release = reinterpret_cast<const lcl::protocol::LCLMsgReleaseDmaBuf*>(payload.data());
+                if (release->surfaceId == m_surfaceId) {
+                    m_canvas->releaseDmaBufFrame(release->bufferId);
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
                 if (payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceDestroy)) {
@@ -700,6 +707,7 @@ void WindowApp::setExternalIpcSocket(int socketFd) {
     m_socketFd = socketFd;
     m_ipcConnected = true;
     m_ownsSocketFd = false;
+    m_canvas->setDmaBufTransportEnabled(true);
 }
 
 bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
@@ -940,6 +948,16 @@ bool WindowApp::renderFrame() {
 
     Rect damageRect = m_renderPass.getDamageRect();
     m_renderPass.clear();
+    m_canvas->beginFrame();
+    if (m_canvas->isDmaBufFrameBlocked()) {
+        // Keep the last compositor-owned DMA-BUF visible until a release
+        // arrives. Requeue the exact damage instead of CPU-rendering it into
+        // SHM during configure/transition pressure.
+        m_renderPass.addDirtyRect(damageRect);
+        m_firstFrame = true;
+        return false;
+    }
+
     const auto paintStarted = std::chrono::steady_clock::now();
     if (m_frameTraceEnabled) {
         ++m_traceRenderedFrames;
@@ -948,8 +966,8 @@ bool WindowApp::renderFrame() {
     }
 
     const auto clearStarted = paintStarted;
-    m_canvas->beginFrame();
-    if (auto* pixels = m_canvas->rasterBuffer()) {
+    const bool dmaBufFrame = m_canvas->isDmaBufFrameActive();
+    if (!dmaBufFrame) if (auto* pixels = m_canvas->rasterBuffer()) {
         std::fill_n(pixels, static_cast<size_t>(getPixelWidth()) * static_cast<size_t>(getPixelHeight()), 0x00000000);
         if (m_frameTraceEnabled) {
             m_traceClearedBytes += static_cast<uint64_t>(getPixelWidth()) * getPixelHeight() * sizeof(uint32_t);
@@ -979,7 +997,7 @@ bool WindowApp::renderFrame() {
 
     m_renderPass.end(*m_canvas);
     m_canvas->endFrame();
-    blendMorphSnapshot();
+    if (!dmaBufFrame) blendMorphSnapshot();
 
     if (m_ipcConnected && m_socketFd >= 0) {
         auto toProtoSource = [](EffectSource source) {
@@ -1092,7 +1110,7 @@ bool WindowApp::renderFrame() {
 
     // Double Buffering: Copy 100% complete rendered frame to SHM buffer atomically
     const auto copyStarted = std::chrono::steady_clock::now();
-    if (m_shmPixels && !m_pixelBuffer.empty()) {
+    if (!dmaBufFrame && m_shmPixels && !m_pixelBuffer.empty()) {
         size_t copyBytes = std::min(m_shmSize, m_pixelBuffer.size() * sizeof(uint32_t));
         std::memcpy(m_shmPixels, m_pixelBuffer.data(), copyBytes);
         if (m_frameTraceEnabled) m_traceCopiedBytes += copyBytes;
@@ -1104,14 +1122,38 @@ bool WindowApp::renderFrame() {
 
     // If connected over IPC, notify compositor of buffer commit
     const auto attachStarted = std::chrono::steady_clock::now();
-    if (m_ipcConnected && m_socketFd >= 0 && m_shmFd >= 0) {
+    if (m_ipcConnected && m_socketFd >= 0 && dmaBufFrame) {
+        if (auto frame = m_canvas->takeDmaBufFrame()) {
+            lcl::protocol::LCLMsgAttachDmaBuf attachMsg{};
+            attachMsg.surfaceId = m_surfaceId;
+            attachMsg.configureSerial = m_configureSerial;
+            attachMsg.bufferId = frame->bufferId;
+            attachMsg.width = frame->width;
+            attachMsg.height = frame->height;
+            attachMsg.stride = frame->stride;
+            attachMsg.format = frame->format;
+            attachMsg.modifier = frame->modifier;
+            const bool dmaBufAttached = sendProtocolMessage(
+                lcl::protocol::LCLOpcode::AttachDmaBuf, &attachMsg, sizeof(attachMsg), frame->fd);
+            close(frame->fd);
+            if (!dmaBufAttached) {
+                m_canvas->cancelDmaBufFrame(frame->bufferId);
+                m_firstFrame = true;
+            }
+        } else {
+            // The GPU pool may be temporarily full. Keep the currently shown
+            // client buffer and retry after the compositor releases a slot.
+            m_firstFrame = true;
+        }
+    }
+    if (!dmaBufFrame && m_ipcConnected && m_socketFd >= 0 && m_shmFd >= 0) {
         lcl::protocol::LCLMsgAttachBuffer attachMsg{};
         attachMsg.surfaceId = m_surfaceId;
         attachMsg.configureSerial = m_configureSerial;
         attachMsg.width = getPixelWidth();
         attachMsg.height = getPixelHeight();
         attachMsg.stride = getPixelWidth() * 4;
-        attachMsg.format = 1;
+        attachMsg.format = lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888;
 
         const int passFd = m_shmNeedsAttach ? m_shmFd : -1;
         if (sendProtocolMessage(lcl::protocol::LCLOpcode::AttachBuffer,

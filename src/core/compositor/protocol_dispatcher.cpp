@@ -115,7 +115,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         }
     };
     auto mapSurface = [&](SurfaceRegistry::Key surfaceKey, SurfaceEntry& entry, pid_t clientPid) {
-        if (entry.windowId != 0 || !entry.pixels || entry.width == 0 || entry.height == 0) {
+        if (entry.windowId != 0 || !entry.hasRenderableBuffer() || entry.width == 0 || entry.height == 0) {
             return false;
         }
 
@@ -163,7 +163,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         if (entry.suppressInitialTransition) {
             return true;
         }
-        if (entry.windowId > 0 && entry.pixels && entry.width > 0 && entry.height > 0) {
+        if (entry.windowId > 0 && entry.hasRenderableBuffer() && entry.width > 0 && entry.height > 0) {
             entry.transitionPhase = SurfaceEntry::TransitionPhase::Closing;
             entry.transitionElapsedSec = 0.0f;
             entry.transitionDurationSec = lcl::motion::tokens::windowClose().tweenParams.durationSec;
@@ -239,6 +239,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         // --- SURFACE_CREATE: register a window on the compositor canvas ---
         const bool isSurfaceCreate = msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceCreate;
         const bool isAttachBuffer = msg.header.opcode == lcl::protocol::LCLOpcode::AttachBuffer;
+        const bool isAttachDmaBuf = msg.header.opcode == lcl::protocol::LCLOpcode::AttachDmaBuf;
 
         if (msg.header.opcode == lcl::protocol::LCLOpcode::SetSystemSurfaceKind) {
             if (msg.payload.size() != sizeof(lcl::protocol::LCLMsgSetSystemSurfaceKind)) {
@@ -357,6 +358,121 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 
             protocol::sendMsgWithFd(msg.clientFd, header, &cfgMsg);
 
+        // --- ATTACH_DMA_BUF: import one client GBM allocation as a GPU texture ---
+        } else if (isAttachDmaBuf) {
+            if (msg.payload.size() != sizeof(lcl::protocol::LCLMsgAttachDmaBuf) || msg.passedFd < 0) {
+                if (msg.passedFd >= 0) close(msg.passedFd);
+                requestAck.error(3, "invalid DMA-BUF attach");
+                continue;
+            }
+            const auto* bufferMessage = reinterpret_cast<const lcl::protocol::LCLMsgAttachDmaBuf*>(msg.payload.data());
+            const uint64_t surfaceKey =
+                (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) |
+                bufferMessage->surfaceId;
+            auto surfaceIt = m_surfaces.find(surfaceKey);
+            if (surfaceIt == m_surfaces.end()) {
+                close(msg.passedFd);
+                continue;
+            }
+            auto& entry = surfaceIt->second;
+            if (entry.ignoreBufferCommits || entry.transitionPhase == SurfaceEntry::TransitionPhase::Closing ||
+                !SurfaceRegistry::acceptsBufferCommit(entry, bufferMessage->configureSerial)) {
+                close(msg.passedFd);
+                continue;
+            }
+
+            lcl::core::DmaBufImport import{};
+            import.fd = msg.passedFd;
+            import.width = bufferMessage->width;
+            import.height = bufferMessage->height;
+            import.stride = bufferMessage->stride;
+            import.format = bufferMessage->format;
+            import.modifier = bufferMessage->modifier;
+            const uint32_t texture = m_renderer.getSkiaRenderer()->importDmaBufTexture(import);
+            close(msg.passedFd);
+            if (texture == 0) {
+                // Keep the client pool live when a compositor lacks DMA-BUF
+                // import support; its next frame can use the SHM fallback.
+                lcl::protocol::LCLHeader releaseHeader{};
+                releaseHeader.opcode = lcl::protocol::LCLOpcode::ReleaseDmaBuf;
+                releaseHeader.payloadSize = sizeof(lcl::protocol::LCLMsgReleaseDmaBuf);
+                lcl::protocol::LCLMsgReleaseDmaBuf release{};
+                release.surfaceId = bufferMessage->surfaceId;
+                release.bufferId = bufferMessage->bufferId;
+                lcl::protocol::sendMsgWithFd(msg.clientFd, releaseHeader, &release);
+                requestAck.error(4, "DMA-BUF import unavailable");
+                continue;
+            }
+
+            if (entry.resizeTransitionPhase == SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer &&
+                entry.hasRenderableBuffer()) {
+                SurfaceRegistry::releasePreviousBuffer(entry);
+                entry.previousPixels = entry.pixels;
+                entry.previousShmSize = entry.shmSize;
+                entry.previousShmFd = entry.shmFd;
+                entry.previousWidth = entry.width;
+                entry.previousHeight = entry.height;
+                entry.previousStride = entry.stride;
+                entry.previousDmaBufId = entry.dmaBufId;
+                entry.previousDmaBufTexture = entry.dmaBufTexture;
+                entry.pixels = nullptr;
+                entry.shmSize = 0;
+                entry.shmFd = -1;
+                entry.dmaBufId = 0;
+                entry.dmaBufTexture = 0;
+            } else {
+                if (entry.dmaBufTexture != 0 || entry.dmaBufId != 0) {
+                    entry.pendingDmaBufReleases.push_back({entry.dmaBufId, entry.dmaBufTexture});
+                }
+                if (entry.pixels && entry.shmSize > 0) munmap(entry.pixels, entry.shmSize);
+                if (entry.shmFd >= 0) close(entry.shmFd);
+                entry.pixels = nullptr;
+                entry.shmSize = 0;
+                entry.shmFd = -1;
+                entry.dmaBufId = 0;
+                entry.dmaBufTexture = 0;
+            }
+            entry.clientFd = msg.clientFd;
+            entry.dmaBufId = bufferMessage->bufferId;
+            entry.dmaBufTexture = texture;
+            if (!entry.dmaBufTransportActive) {
+                entry.dmaBufTransportActive = true;
+                std::cerr << "[LCL DMA-BUF] Surface " << bufferMessage->surfaceId
+                          << " zero-copy import active\n";
+            }
+            entry.width = bufferMessage->width;
+            entry.height = bufferMessage->height;
+            entry.stride = bufferMessage->stride;
+            entry.acceptedConfigureSerial = bufferMessage->configureSerial;
+            if (entry.resizeTransitionPhase == SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer) {
+                entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::Crossfading;
+                entry.resizeCrossfadeElapsedSec = 0.0f;
+                entry.resizeCrossfadeProgress = 0.0f;
+            }
+            if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) continue;
+
+            int titleOffset = 0;
+            for (const auto& win : m_windowManager.getWindows()) {
+                if (win.id == entry.windowId && win.decorationMode == render::DecorationMode::SSD) {
+                    titleOffset = DisplayScale::titleBarHeight();
+                    break;
+                }
+            }
+            const int frameW = static_cast<int>(entry.width);
+            const int frameH = static_cast<int>(entry.height) + titleOffset;
+            bool preserveNewerTarget = false;
+            const auto configuredWindow = std::find_if(
+                m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
+                [&entry](const auto& window) { return window.id == entry.windowId; });
+            if (configuredWindow != m_windowManager.getWindows().end()) {
+                const int configuredFrameHeight = static_cast<int>(entry.configuredHeight) + titleOffset;
+                preserveNewerTarget = configuredWindow->pendingWidth != static_cast<int>(entry.configuredWidth) ||
+                    configuredWindow->pendingHeight != configuredFrameHeight;
+            }
+            m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH,
+                                                  preserveNewerTarget, entry.configuredX, entry.configuredY);
+            changed = true;
+
         // --- ATTACH_BUFFER: mmap the SCM_RIGHTS memfd into compositor address space ---
         } else if (isAttachBuffer) {
             uint32_t surfId = 1;
@@ -417,7 +533,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     void* pixels = mmap(nullptr, shmSize, PROT_READ, MAP_SHARED, fd, 0);
                     if (pixels != MAP_FAILED) {
                         if (entry.resizeTransitionPhase == SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer &&
-                            entry.pixels && entry.shmSize > 0) {
+                            entry.hasRenderableBuffer()) {
                             SurfaceRegistry::releasePreviousBuffer(entry);
                             entry.previousPixels = entry.pixels;
                             entry.previousShmSize = entry.shmSize;
@@ -425,10 +541,19 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                             entry.previousWidth = entry.width;
                             entry.previousHeight = entry.height;
                             entry.previousStride = entry.stride;
+                            entry.previousDmaBufId = entry.dmaBufId;
+                            entry.previousDmaBufTexture = entry.dmaBufTexture;
                             entry.pixels = nullptr;
                             entry.shmSize = 0;
                             entry.shmFd = -1;
+                            entry.dmaBufId = 0;
+                            entry.dmaBufTexture = 0;
                         } else {
+                            if (entry.dmaBufTexture != 0 || entry.dmaBufId != 0) {
+                                entry.pendingDmaBufReleases.push_back({entry.dmaBufId, entry.dmaBufTexture});
+                            }
+                            entry.dmaBufId = 0;
+                            entry.dmaBufTexture = 0;
                             if (entry.pixels && entry.shmSize > 0) munmap(entry.pixels, entry.shmSize);
                             if (entry.shmFd >= 0 && entry.shmFd != fd) close(entry.shmFd);
                         }

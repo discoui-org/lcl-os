@@ -231,7 +231,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
         const SurfaceEntry* matchingSurface = nullptr;
         for (const auto& surface : surfaces) {
             const auto* entry = surface.entry;
-            if (entry && entry->windowId == win.id && entry->pixels) {
+            if (entry && entry->windowId == win.id && entry->hasRenderableBuffer()) {
                 matchingSurface = entry;
                 break;
             }
@@ -283,6 +283,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
             const float windowCornerRadiusPx = resolveWindowCornerRadiusPx(win);
             const bool maskToWindowShape = windowCornerRadiusPx > 0.001f;
 
+            const bool hasPrevious = matchingSurface->previousPixels ||
+                                     matchingSurface->previousDmaBufTexture != 0;
             if (matchingSurface->previousPixels) {
                 renderer.getSkiaRenderer()->drawBufferTransformed(
                     drawX, drawY,
@@ -296,19 +298,39 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     win.decorationMode == render::DecorationMode::SSD,
                     drawW,
                     drawH);
+            } else if (matchingSurface->previousDmaBufTexture != 0) {
+                renderer.getSkiaRenderer()->drawDmaBufTextureTransformed(
+                    drawX, drawY,
+                    static_cast<int>(matchingSurface->previousWidth),
+                    static_cast<int>(matchingSurface->previousHeight),
+                    matchingSurface->previousDmaBufTexture,
+                    windowOpacity * (1.0f - matchingSurface->resizeCrossfadeProgress),
+                    maskToWindowShape ? windowCornerRadiusPx : 0.0f,
+                    resolveWindowCornerRoundness(win),
+                    win.decorationMode == render::DecorationMode::SSD,
+                    drawW, drawH);
             }
 
-            renderer.getSkiaRenderer()->drawBufferTransformed(
-                drawX, drawY, srcW, srcH,
-                reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
-                stridePixels,
-                windowOpacity * (matchingSurface->previousPixels
-                    ? matchingSurface->resizeCrossfadeProgress : 1.0f),
-                maskToWindowShape ? windowCornerRadiusPx : 0.0f,
-                resolveWindowCornerRoundness(win),
-                win.decorationMode == render::DecorationMode::SSD,
-                drawW,
-                drawH);
+            const float currentOpacity = windowOpacity *
+                (hasPrevious ? matchingSurface->resizeCrossfadeProgress : 1.0f);
+            if (matchingSurface->pixels) {
+                renderer.getSkiaRenderer()->drawBufferTransformed(
+                    drawX, drawY, srcW, srcH,
+                    reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
+                    stridePixels, currentOpacity,
+                    maskToWindowShape ? windowCornerRadiusPx : 0.0f,
+                    resolveWindowCornerRoundness(win),
+                    win.decorationMode == render::DecorationMode::SSD,
+                    drawW, drawH);
+            } else {
+                renderer.getSkiaRenderer()->drawDmaBufTextureTransformed(
+                    drawX, drawY, srcW, srcH, matchingSurface->dmaBufTexture,
+                    currentOpacity,
+                    maskToWindowShape ? windowCornerRadiusPx : 0.0f,
+                    resolveWindowCornerRoundness(win),
+                    win.decorationMode == render::DecorationMode::SSD,
+                    drawW, drawH);
+            }
 
             if (!matchingSurface->effectRegions.empty()) {
                 applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground,

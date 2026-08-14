@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 namespace lcl::render {
 
@@ -18,6 +19,9 @@ SkiaColor SkiaCanvas::toSkia(lcl::ui::Color color) {
 
 bool SkiaCanvas::initialize(uint32_t width, uint32_t height, uint32_t* targetPixels) {
     if (m_clientEglContext && m_clientEglContext->initialize(width, height)) {
+        if (!m_clientEglContext->hasDmaBufPool()) {
+            std::cerr << "[LCL Canvas] Client DMA-BUF unavailable; retaining GPU-to-SHM transport\n";
+        }
         return renderer().initialize(width, height, m_clientEglContext.get(), targetPixels);
     }
     return renderer().initialize(width, height, nullptr, targetPixels);
@@ -35,9 +39,57 @@ void SkiaCanvas::setContentScale(float scale) {
         m_textLayers.clear();
     }
 }
-void SkiaCanvas::beginFrame() { renderer().beginFrame(); }
-void SkiaCanvas::endFrame() { renderer().endFrame(); }
+void SkiaCanvas::beginFrame() {
+    m_dmaBufFrameActive = false;
+    m_dmaBufFrameBlocked = false;
+    renderer().clearExternalFrameTarget();
+    if (hasDmaBufTransport()) {
+        if (const auto target = m_clientEglContext->acquireDmaBufTarget()) {
+            renderer().setExternalFrameTarget(target->framebuffer, target->texture);
+            m_dmaBufFrameActive = true;
+        } else {
+            // Never replace a live DMA-BUF frame with a CPU/SHM frame merely
+            // because the compositor has not released a pool slot yet.
+            m_dmaBufFrameBlocked = true;
+            return;
+        }
+    }
+    renderer().beginFrame();
+}
+void SkiaCanvas::endFrame() {
+    if (!m_dmaBufFrameBlocked) renderer().endFrame();
+}
 uint32_t* SkiaCanvas::rasterBuffer() { return renderer().getRasterBuffer(); }
+bool SkiaCanvas::isDmaBufFrameActive() const { return m_dmaBufFrameActive; }
+void SkiaCanvas::setDmaBufTransportEnabled(bool enabled) {
+    m_dmaBufTransportEnabled = enabled;
+    if (!enabled && m_clientEglContext) m_clientEglContext->cancelCurrentDmaBuf();
+}
+bool SkiaCanvas::hasDmaBufTransport() const {
+    return m_dmaBufTransportEnabled && m_clientEglContext && m_clientEglContext->hasDmaBufPool();
+}
+bool SkiaCanvas::isDmaBufFrameBlocked() const { return m_dmaBufFrameBlocked; }
+
+std::optional<lcl::ui::DmaBufFrame> SkiaCanvas::takeDmaBufFrame() {
+    if (!m_dmaBufFrameActive || !m_clientEglContext) return std::nullopt;
+    m_dmaBufFrameActive = false;
+    renderer().clearExternalFrameTarget();
+    const auto exported = m_clientEglContext->exportCurrentDmaBuf();
+    if (!exported) return std::nullopt;
+    return lcl::ui::DmaBufFrame{exported->bufferId, exported->width, exported->height,
+                                exported->stride, exported->format, exported->modifier,
+                                exported->fd};
+}
+
+void SkiaCanvas::cancelDmaBufFrame(uint32_t bufferId) {
+    if (!m_clientEglContext) return;
+    m_clientEglContext->cancelCurrentDmaBuf();
+    m_clientEglContext->releaseDmaBuf(bufferId);
+}
+
+void SkiaCanvas::releaseDmaBufFrame(uint32_t bufferId) {
+    if (m_clientEglContext) m_clientEglContext->releaseDmaBuf(bufferId);
+}
 
 void SkiaCanvas::saveState() { m_stack.push_back(m_state); }
 

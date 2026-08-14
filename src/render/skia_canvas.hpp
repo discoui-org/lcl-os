@@ -23,6 +23,13 @@ public:
     void beginFrame() override;
     void endFrame() override;
     uint32_t* rasterBuffer() override;
+    bool isDmaBufFrameActive() const override;
+    void setDmaBufTransportEnabled(bool enabled) override;
+    bool hasDmaBufTransport() const override;
+    bool isDmaBufFrameBlocked() const override;
+    std::optional<lcl::ui::DmaBufFrame> takeDmaBufFrame() override;
+    void cancelDmaBufFrame(uint32_t bufferId) override;
+    void releaseDmaBufFrame(uint32_t bufferId) override;
 
     void saveState() override;
     void restoreState() override;
@@ -85,6 +92,9 @@ private:
     std::vector<TextLayer> m_textLayers;
     uint64_t m_textLayerUseCounter{0};
     float m_contentScale{1.0f};
+    bool m_dmaBufFrameActive{false};
+    bool m_dmaBufFrameBlocked{false};
+    bool m_dmaBufTransportEnabled{false};
 };
 
 std::unique_ptr<lcl::ui::Canvas> makeSkiaCanvas();

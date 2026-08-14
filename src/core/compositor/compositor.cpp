@@ -270,7 +270,7 @@ void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
 
     const bool hasActiveTransitions = m_frameScheduler.advanceTransitions(m_surfaces);
-    for (auto& [_, entry] : m_surfaces) {
+    for (auto& [surfaceKey, entry] : m_surfaces) {
         if (entry.pendingMinimize) {
             m_windowManager.minimizeWindow(entry.windowId);
             entry.pendingMinimize = false;
@@ -293,6 +293,28 @@ void Compositor::renderFrame() {
     m_lastComposeMs = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - composeStart).count();
 
+    // The frame that stopped referencing these textures has now been handed
+    // to EGL/KMS. Destroy the compositor import and tell the producer that
+    // its GBM pool slot is reusable. Mesa's DMA-BUF implicit fence is the
+    // synchronization contract for this first zero-copy transport revision.
+    for (auto& [surfaceKey, entry] : m_surfaces) {
+        for (const auto& release : entry.pendingDmaBufReleases) {
+            if (release.texture != 0) {
+                m_renderer.getSkiaRenderer()->releaseDmaBufTexture(release.texture);
+            }
+            if (entry.clientFd >= 0 && release.bufferId != 0) {
+                protocol::LCLHeader header{};
+                header.opcode = protocol::LCLOpcode::ReleaseDmaBuf;
+                header.payloadSize = sizeof(protocol::LCLMsgReleaseDmaBuf);
+                protocol::LCLMsgReleaseDmaBuf message{};
+                message.surfaceId = static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu);
+                message.bufferId = release.bufferId;
+                protocol::sendMsgWithFd(entry.clientFd, header, &message);
+            }
+        }
+        entry.pendingDmaBufReleases.clear();
+    }
+
     std::vector<SurfaceRegistry::Key> surfacesToRemove;
     for (const auto& [surfaceKey, entry] : m_surfaces) {
         if (entry.pendingDestroy) {
@@ -303,6 +325,18 @@ void Compositor::renderFrame() {
         const auto found = m_surfaces.find(surfaceKey);
         if (found != m_surfaces.end() && found->second.windowId > 0) {
             m_windowManager.removeWindow(found->second.windowId);
+        }
+        if (found != m_surfaces.end()) {
+            // The client was already asked to destroy this surface, so it no
+            // longer needs a ReleaseDmaBuf message. It does need its imported
+            // textures released before the registry entry disappears.
+            SurfaceRegistry::releaseBuffer(found->second);
+            for (const auto& release : found->second.pendingDmaBufReleases) {
+                if (release.texture != 0) {
+                    m_renderer.getSkiaRenderer()->releaseDmaBufTexture(release.texture);
+                }
+            }
+            found->second.pendingDmaBufReleases.clear();
         }
         m_sceneRegistry.removeSurface(surfaceKey);
         m_surfaces.erase(surfaceKey);

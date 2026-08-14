@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <gbm.h>
@@ -62,6 +63,8 @@ public:
     bool presentsToDisplay() const override { return true; }
     bool present() override { return swapBuffers(); }
     bool readback(uint32_t*, uint32_t, uint32_t) override { return false; }
+    uint32_t importDmaBufTexture(const DmaBufImport& buffer) override;
+    void releaseDmaBufTexture(uint32_t texture) override;
 
     bool isInitialized() const override { return m_initialized; }
     bool isVSyncActive() const { return m_vsyncActive; }
@@ -100,6 +103,7 @@ private:
     bool m_initialized{false};
     std::string m_glRendererString{"Software Fallback"};
     bool m_isHardwareAccelerated{false};
+    std::unordered_map<uint32_t, EGLImageKHR> m_importedDmaBufImages;
 };
 
 } // namespace lcl::core

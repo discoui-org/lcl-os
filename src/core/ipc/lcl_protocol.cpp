@@ -185,6 +185,8 @@ bool validOpcode(LCLOpcode value) {
     case LCLOpcode::SurfaceDestroy:
     case LCLOpcode::ConfigureBounds:
     case LCLOpcode::AttachBuffer:
+    case LCLOpcode::AttachDmaBuf:
+    case LCLOpcode::ReleaseDmaBuf:
     case LCLOpcode::InputEvent:
     case LCLOpcode::AckResponse:
     case LCLOpcode::SetDecorationMode:
@@ -368,6 +370,30 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.u32(msg.height);
         out.u32(msg.stride);
         out.u32(msg.format);
+        return true;
+    }
+    case LCLOpcode::AttachDmaBuf: {
+        LOAD_ONE(LCLMsgAttachDmaBuf, msg);
+        if (msg.surfaceId == 0 || msg.configureSerial == 0 || msg.bufferId == 0 ||
+            msg.width == 0 || msg.height == 0 || msg.format != LCL_BUFFER_FORMAT_ARGB8888 ||
+            msg.width > std::numeric_limits<uint32_t>::max() / 4 ||
+            msg.stride < msg.width * 4)
+            return false;
+        out.u32(msg.surfaceId);
+        out.u64(msg.configureSerial);
+        out.u32(msg.bufferId);
+        out.u32(msg.width);
+        out.u32(msg.height);
+        out.u32(msg.stride);
+        out.u32(msg.format);
+        out.u64(msg.modifier);
+        return true;
+    }
+    case LCLOpcode::ReleaseDmaBuf: {
+        LOAD_ONE(LCLMsgReleaseDmaBuf, msg);
+        if (msg.surfaceId == 0 || msg.bufferId == 0) return false;
+        out.u32(msg.surfaceId);
+        out.u32(msg.bufferId);
         return true;
     }
     case LCLOpcode::AckResponse: {
@@ -617,6 +643,27 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
         if (m.surfaceId == 0 || m.configureSerial == 0 || m.width == 0 || m.height == 0 || m.format != 1 ||
             m.width > std::numeric_limits<uint32_t>::max() / 4 ||
             m.stride < m.width * 4)
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::AttachDmaBuf: {
+        LCLMsgAttachDmaBuf m{};
+        if (!in.u32(m.surfaceId) || !in.u64(m.configureSerial) || !in.u32(m.bufferId) ||
+            !in.u32(m.width) || !in.u32(m.height) || !in.u32(m.stride) ||
+            !in.u32(m.format) || !in.u64(m.modifier))
+            return false;
+        if (m.surfaceId == 0 || m.configureSerial == 0 || m.bufferId == 0 ||
+            m.width == 0 || m.height == 0 || m.format != LCL_BUFFER_FORMAT_ARGB8888 ||
+            m.width > std::numeric_limits<uint32_t>::max() / 4 ||
+            m.stride < m.width * 4)
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::ReleaseDmaBuf: {
+        LCLMsgReleaseDmaBuf m{};
+        if (!in.u32(m.surfaceId) || !in.u32(m.bufferId) || m.surfaceId == 0 || m.bufferId == 0)
             return false;
         appendNative(payload, m);
         break;
@@ -961,8 +1008,10 @@ bool sendMsgWithFd(int socketFd, const LCLHeader& header, const void* payload,
                    int passedFd) {
     if (socketFd < 0)
         return false;
-    if ((passedFd >= 0 && header.opcode != LCLOpcode::AttachBuffer) ||
-        (header.opcode == LCLOpcode::AttachBuffer && passedFd < -1)) {
+    const bool acceptsFd = header.opcode == LCLOpcode::AttachBuffer ||
+                           header.opcode == LCLOpcode::AttachDmaBuf;
+    if ((passedFd >= 0 && !acceptsFd) ||
+        (acceptsFd && passedFd < -1)) {
         errno = EPROTO;
         return false;
     }
@@ -1038,7 +1087,8 @@ ReceiveStatus recvPacketWithFd(int socketFd, LCLHeader& header,
         return reject();
     if (!decodePacket(packet.data(), static_cast<size_t>(count), header, payload))
         return reject();
-    if ((!descriptors.empty() && header.opcode != LCLOpcode::AttachBuffer))
+    if ((!descriptors.empty() && header.opcode != LCLOpcode::AttachBuffer &&
+         header.opcode != LCLOpcode::AttachDmaBuf))
         return reject();
     if (!descriptors.empty())
         receivedFd = descriptors.front();

@@ -10,6 +10,7 @@
 
 namespace lcl::core {
 class EGLContextBackend;
+struct DmaBufImport;
 }
 
 namespace lcl::render {
@@ -78,6 +79,9 @@ public:
      * @brief Set target buffer and dimensions for software rasterization.
      */
     void setTargetPixels(uint32_t* targetPixels, uint32_t width = 0, uint32_t height = 0);
+    /** Select an externally owned GL framebuffer for one client frame. */
+    void setExternalFrameTarget(uint32_t framebuffer, uint32_t texture = 0);
+    void clearExternalFrameTarget();
 
     /**
      * Applies a logical-pixel to raster-pixel transform to client drawing calls.
@@ -167,6 +171,13 @@ public:
     void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
                              float cornerRadius, float cornerRoundness,
                              float opacity, const std::vector<protocol::FilterOp>& filters);
+    /** Imports and composites compositor-owned DMA-BUF textures without CPU upload. */
+    uint32_t importDmaBufTexture(const lcl::core::DmaBufImport& buffer);
+    void releaseDmaBufTexture(uint32_t texture);
+    void drawDmaBufTextureTransformed(float dstX, float dstY, int srcW, int srcH,
+                                      uint32_t texture, float opacity,
+                                      float cornerRadius, float cornerRoundness,
+                                      bool squareTopCorners, float drawWidth, float drawHeight);
 
     // Accessors
     uint32_t getWidth() const { return m_width; }
@@ -222,6 +233,8 @@ private:
 
     uint32_t m_glSceneFBO{0};
     uint32_t m_glSceneTexture{0};
+    uint32_t m_glExternalFrameFBO{0};
+    uint32_t m_glExternalFrameTexture{0};
 
     uint32_t m_glBlurProgram{0};
     int32_t m_aBlurPosLoc{-1};
@@ -315,6 +328,12 @@ private:
                             float borderWidth,
                             const SkiaColor& fill,
                             const SkiaColor& border);
+    uint32_t activeSceneFBO() const {
+        return m_glExternalFrameFBO ? m_glExternalFrameFBO : m_glSceneFBO;
+    }
+    uint32_t activeSceneTexture() const {
+        return m_glExternalFrameTexture ? m_glExternalFrameTexture : m_glSceneTexture;
+    }
 };
 
 } // namespace lcl::render

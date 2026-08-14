@@ -1,6 +1,9 @@
 #include "render/client_egl_context.hpp"
 
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+
+#include "core/ipc/lcl_protocol.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -177,6 +180,9 @@ bool ClientEGLContext::initialize(uint32_t width, uint32_t height) {
     }
 
     m_initialized = true;
+    // Exporting a GBM buffer is optional. Failure leaves the already verified
+    // GPU-to-SHM path intact instead of disabling client GPU drawing entirely.
+    createDmaBufPool(width, height);
     // Native apps inherit sessiond's pipe-backed stdout.  Write the capability
     // line to the unbuffered diagnostic stream so it is visible at startup,
     // rather than only when a later trace happens to flush stdout.
@@ -198,14 +204,137 @@ bool ClientEGLContext::resize(uint32_t width, uint32_t height) {
     if (width == m_width && height == m_height) return true;
     if (width == 0 || height == 0) return false;
     if (m_surfaceless) {
+        destroyDmaBufPool();
         m_width = width;
         m_height = height;
-        return makeCurrent();
+        if (!makeCurrent()) return false;
+        createDmaBufPool(width, height);
+        return true;
     }
     eglMakeCurrent(m_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglDestroySurface(m_display, m_surface);
     m_surface = EGL_NO_SURFACE;
-    return createSurface(width, height);
+    if (!createSurface(width, height)) return false;
+    destroyDmaBufPool();
+    createDmaBufPool(width, height);
+    return true;
+}
+
+bool ClientEGLContext::createDmaBufPool(uint32_t width, uint32_t height) {
+    destroyDmaBufPool();
+    if (!m_initialized || !m_gbmDevice || width == 0 || height == 0 || !makeCurrent()) return false;
+
+    const auto createImage = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(
+        eglGetProcAddress("eglCreateImageKHR"));
+    const auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(
+        eglGetProcAddress("eglDestroyImageKHR"));
+    const auto imageTarget = reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(
+        eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+    if (!createImage || !destroyImage || !imageTarget) return false;
+
+    // Three independent BOs prevent the client from writing a frame the
+    // compositor still samples. Every slot becomes reusable only via
+    // ReleaseDmaBuf.
+    for (uint32_t index = 0; index < 3; ++index) {
+        DmaBufSlot slot{};
+        slot.id = index + 1;
+        slot.bo = gbm_bo_create(m_gbmDevice, width, height, GBM_FORMAT_ARGB8888,
+                                GBM_BO_USE_RENDERING);
+        if (!slot.bo) {
+            destroyDmaBufPool();
+            return false;
+        }
+        const EGLint attributes[] = {EGL_NONE};
+        slot.image = createImage(m_display, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR,
+                                 reinterpret_cast<EGLClientBuffer>(slot.bo), attributes);
+        if (slot.image == EGL_NO_IMAGE_KHR) {
+            destroyDmaBufPool();
+            return false;
+        }
+        glGenTextures(1, &slot.texture);
+        glBindTexture(GL_TEXTURE_2D, slot.texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        imageTarget(GL_TEXTURE_2D, slot.image);
+        glGenFramebuffers(1, &slot.framebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, slot.framebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               slot.texture, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            destroyDmaBufPool();
+            return false;
+        }
+        slot.stride = gbm_bo_get_stride(slot.bo);
+        slot.modifier = gbm_bo_get_modifier(slot.bo);
+        m_dmaBufs.push_back(slot);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    if (!m_dmaBufTransportLogged) {
+        std::cerr << "[LCL Canvas] Client DMA-BUF transport active (3 GBM buffers)\n";
+        m_dmaBufTransportLogged = true;
+    }
+    return true;
+}
+
+void ClientEGLContext::destroyDmaBufPool() {
+    if (!m_dmaBufs.empty() && m_display != EGL_NO_DISPLAY) {
+        makeCurrent();
+        const auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(
+            eglGetProcAddress("eglDestroyImageKHR"));
+        for (auto& slot : m_dmaBufs) {
+            if (slot.framebuffer) glDeleteFramebuffers(1, &slot.framebuffer);
+            if (slot.texture) glDeleteTextures(1, &slot.texture);
+            if (slot.image != EGL_NO_IMAGE_KHR && destroyImage) destroyImage(m_display, slot.image);
+            if (slot.bo) gbm_bo_destroy(slot.bo);
+        }
+    }
+    m_dmaBufs.clear();
+    m_currentDmaBuf = -1;
+}
+
+std::optional<ClientEGLContext::DmaBufTarget> ClientEGLContext::acquireDmaBufTarget() {
+    if (!m_initialized || m_currentDmaBuf >= 0 || !makeCurrent()) return std::nullopt;
+    for (size_t index = 0; index < m_dmaBufs.size(); ++index) {
+        auto& slot = m_dmaBufs[index];
+        if (slot.busy) continue;
+        slot.busy = true;
+        m_currentDmaBuf = static_cast<int>(index);
+        return DmaBufTarget{slot.id, slot.framebuffer, slot.texture};
+    }
+    return std::nullopt;
+}
+
+std::optional<ClientEGLContext::DmaBufExport> ClientEGLContext::exportCurrentDmaBuf() {
+    if (m_currentDmaBuf < 0 || static_cast<size_t>(m_currentDmaBuf) >= m_dmaBufs.size()) return std::nullopt;
+    auto& slot = m_dmaBufs[static_cast<size_t>(m_currentDmaBuf)];
+    const int fd = gbm_bo_get_fd(slot.bo);
+    m_currentDmaBuf = -1;
+    if (fd < 0) {
+        slot.busy = false;
+        return std::nullopt;
+    }
+    glFlush();
+    return DmaBufExport{slot.id, m_width, m_height, slot.stride,
+                        lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888, slot.modifier, fd};
+}
+
+void ClientEGLContext::cancelCurrentDmaBuf() {
+    if (m_currentDmaBuf >= 0 && static_cast<size_t>(m_currentDmaBuf) < m_dmaBufs.size()) {
+        m_dmaBufs[static_cast<size_t>(m_currentDmaBuf)].busy = false;
+    }
+    m_currentDmaBuf = -1;
+}
+
+void ClientEGLContext::releaseDmaBuf(uint32_t bufferId) {
+    for (auto& slot : m_dmaBufs) {
+        if (slot.id == bufferId) {
+            slot.busy = false;
+            return;
+        }
+    }
 }
 
 bool ClientEGLContext::readback(uint32_t* destination, uint32_t width, uint32_t height) {
@@ -230,6 +359,7 @@ bool ClientEGLContext::readback(uint32_t* destination, uint32_t width, uint32_t 
 }
 
 void ClientEGLContext::shutdown() {
+    destroyDmaBufPool();
     if (m_display != EGL_NO_DISPLAY) {
         eglMakeCurrent(m_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         if (m_surface != EGL_NO_SURFACE) eglDestroySurface(m_display, m_surface);
