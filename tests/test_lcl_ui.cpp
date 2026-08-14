@@ -1252,7 +1252,7 @@ TEST(LclUiTest, StraightAlphaLayersAccumulateAlphaWithoutSquaringIt) {
     EXPECT_EQ(pixels[0] & 0xFFu, 0u);
 }
 
-TEST(LclUiTest, BackdropBlurCaptureExpandsAndClampsWithoutChangingOutputRect) {
+TEST(LclUiTest, BackdropBlurCaptureClampsToSurfaceWithoutPreEntryBleed) {
     const int radius = lcl::render::gaussianKernelRadius(15.0f);
     EXPECT_EQ(radius, 23);
 
@@ -1262,12 +1262,12 @@ TEST(LclUiTest, BackdropBlurCaptureExpandsAndClampsWithoutChangingOutputRect) {
     EXPECT_EQ(centered.effect.y, 50);
     EXPECT_EQ(centered.effect.width, 200);
     EXPECT_EQ(centered.effect.height, 32);
-    EXPECT_EQ(centered.capture.x, 77);
-    EXPECT_EQ(centered.capture.y, 27);
-    EXPECT_EQ(centered.capture.width, 246);
-    EXPECT_EQ(centered.capture.height, 78);
-    EXPECT_EQ(centered.outputOffsetX, 23);
-    EXPECT_EQ(centered.outputOffsetY, 23);
+    EXPECT_EQ(centered.capture.x, 100);
+    EXPECT_EQ(centered.capture.y, 50);
+    EXPECT_EQ(centered.capture.width, 200);
+    EXPECT_EQ(centered.capture.height, 32);
+    EXPECT_EQ(centered.outputOffsetX, 0);
+    EXPECT_EQ(centered.outputOffsetY, 0);
 
     const auto screenEdge = lcl::render::computeBackdropFilterGeometry(
         0, 0, 1920, 32, 1920, 1080, radius);
@@ -1278,7 +1278,7 @@ TEST(LclUiTest, BackdropBlurCaptureExpandsAndClampsWithoutChangingOutputRect) {
     EXPECT_EQ(screenEdge.capture.x, 0);
     EXPECT_EQ(screenEdge.capture.y, 0);
     EXPECT_EQ(screenEdge.capture.width, 1920);
-    EXPECT_EQ(screenEdge.capture.height, 55);
+    EXPECT_EQ(screenEdge.capture.height, 32);
     EXPECT_EQ(screenEdge.outputOffsetX, 0);
     EXPECT_EQ(screenEdge.outputOffsetY, 0);
 }

@@ -86,13 +86,9 @@ bool SkiaRenderer::initGLShader() {
         "uniform float uCornerRadiusPx;\n"
         "uniform float uRoundnessExp;\n"
         "uniform vec2 uInputScale;\n"
-        "float sdSuperRoundRect(vec2 p, vec2 b, float r, float n) {\n"
-        "    if (r <= 0.001) return max(abs(p).x - b.x, abs(p).y - b.y);\n"
-        "    vec2 q = abs(p) - b + vec2(r);\n"
-        "    if (q.x <= 0.0 || q.y <= 0.0) return max(q.x, q.y) - r;\n"
-        "    vec2 qq = max(q, 0.0) / r;\n"
-        "    float k = pow(pow(qq.x, n) + pow(qq.y, n), 1.0 / n);\n"
-        "    return (k - 1.0) * r;\n"
+        "vec2 mirrorTexCoord(vec2 uv) {\n"
+        "    vec2 m = mod(abs(uv), 2.0);\n"
+        "    return vec2(m.x > 1.0 ? 2.0 - m.x : m.x, m.y > 1.0 ? 2.0 - m.y : m.y);\n"
         "}\n"
         "void main() {\n"
         "    if (uSigma <= 0.1) {\n"
@@ -106,8 +102,9 @@ bool SkiaRenderer::initGLShader() {
         "        if (i >= -uRadius && i <= uRadius) {\n"
         "            float fi = float(i);\n"
         "            float weight = exp(-(fi * fi) / twoSigmaSq);\n"
+        "            vec2 tap = mirrorTexCoord(vTexCoord + uDirection * fi);\n"
         "            vec2 halfTexel = vec2(0.5) / uSizePx;\n"
-        "            vec2 coord = clamp(vTexCoord + uDirection * fi, halfTexel, vec2(1.0) - halfTexel);\n"
+        "            vec2 coord = clamp(tap, halfTexel, vec2(1.0) - halfTexel);\n"
         "            colorAcc += texture2D(uTexture, coord * uInputScale) * weight;\n"
         "            weightAcc += weight;\n"
         "        }\n"
@@ -1945,17 +1942,9 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
         m_eglBackend->makeCurrent();
         const bool gpuBlurAvailable = m_eglBackend->isHardwareAccelerated();
 
-        int capturePadding = 0;
-        if (gpuBlurAvailable) {
-            for (const auto& op : filters) {
-                if (op.type == protocol::FilterType::Blur) {
-                    capturePadding = std::max(capturePadding, gaussianKernelRadius(op.value));
-                }
-            }
-        }
         const BackdropFilterGeometry geometry = computeBackdropFilterGeometry(
             dstX, dstY, srcW, srcH,
-            static_cast<int>(m_width), static_cast<int>(m_height), capturePadding);
+            static_cast<int>(m_width), static_cast<int>(m_height));
         if (geometry.effect.width <= 0 || geometry.effect.height <= 0 ||
             geometry.capture.width <= 0 || geometry.capture.height <= 0) {
             return;

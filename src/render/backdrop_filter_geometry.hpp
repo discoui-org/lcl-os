@@ -32,7 +32,7 @@ inline BackdropFilterGeometry computeBackdropFilterGeometry(
     int effectHeight,
     int sceneWidth,
     int sceneHeight,
-    int kernelRadius) {
+    int /*kernelRadius*/ = 0) {
     BackdropFilterGeometry geometry{};
     if (effectWidth <= 0 || effectHeight <= 0 || sceneWidth <= 0 || sceneHeight <= 0) {
         return geometry;
@@ -46,15 +46,11 @@ inline BackdropFilterGeometry computeBackdropFilterGeometry(
     geometry.effect.height = std::max(0, effectBottom - geometry.effect.y);
     if (geometry.effect.width == 0 || geometry.effect.height == 0) return geometry;
 
-    const int padding = std::max(0, kernelRadius);
-    geometry.capture.x = std::max(0, geometry.effect.x - padding);
-    geometry.capture.y = std::max(0, geometry.effect.y - padding);
-    const int captureRight = std::min(sceneWidth, effectRight + padding);
-    const int captureBottom = std::min(sceneHeight, effectBottom + padding);
-    geometry.capture.width = captureRight - geometry.capture.x;
-    geometry.capture.height = captureBottom - geometry.capture.y;
-    geometry.outputOffsetX = geometry.effect.x - geometry.capture.x;
-    geometry.outputOffsetY = geometry.effect.y - geometry.capture.y;
+    // Capture strictly the surface effect boundary. External scene pixels
+    // are not sampled to eliminate pre-entry blur halo bleeding.
+    geometry.capture = geometry.effect;
+    geometry.outputOffsetX = 0;
+    geometry.outputOffsetY = 0;
     return geometry;
 }
 
