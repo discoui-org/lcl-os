@@ -1453,12 +1453,28 @@ def launch_qemu(
         disp_help = ""
     backends = {line.strip() for line in disp_help.splitlines() if line.strip()}
 
+    # Probe available devices once
+    try:
+        dev_help = subprocess.check_output(
+            [qemu, "-device", "help"],
+            text=True,
+            stderr=subprocess.STDOUT,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        dev_help = ""
+    has_virtio_vga_gl = "virtio-vga-gl" in dev_help
+    has_virtio_vga = "virtio-vga" in dev_help
+
     # Always disable default stdvga when attaching virtio-vga (avoids dual-head / stuck BIOS fb)
-    # GL path is opt-in: virtio-vga-gl + gl=on often hangs on Linux ("Booting from ROM..." freeze).
+    # GL path is opt-in: virtio-vga-gl requires virgl support (absent on macOS Homebrew QEMU).
     if want_gl:
-        gpu = ["-vga", "none", "-device", "virtio-vga-gl"]
+        if has_virtio_vga_gl:
+            gpu = ["-vga", "none", "-device", "virtio-vga-gl"]
+        else:
+            log("virtio-vga-gl is not available on host QEMU (e.g. macOS); falling back to virtio-vga.")
+            gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else "virtio-gpu-pci"]
     else:
-        gpu = ["-vga", "none", "-device", "virtio-vga"]
+        gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else "virtio-gpu-pci"]
 
     if host_os() == "darwin":
         if native:
