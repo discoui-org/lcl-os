@@ -8,6 +8,8 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
+#include "core/display/egl_context.hpp"
+
 namespace lcl::core {
 
 struct EGLBuffer {
@@ -17,7 +19,7 @@ struct EGLBuffer {
     uint32_t pitch{0};
 };
 
-class EGLBackend {
+class EGLBackend : public EGLContextBackend {
 public:
     EGLBackend() = default;
     ~EGLBackend();
@@ -49,18 +51,22 @@ public:
     /**
      * @brief Make EGL context current on calling thread.
      */
-    bool makeCurrent();
+    bool makeCurrent() override;
 
     /**
      * @brief Swap EGL buffers and flip DRM page.
      * @return true on successful frame presentation
      */
     bool swapBuffers();
+    bool resize(uint32_t width, uint32_t height) override;
+    bool presentsToDisplay() const override { return true; }
+    bool present() override { return swapBuffers(); }
+    bool readback(uint32_t*, uint32_t, uint32_t) override { return false; }
 
-    bool isInitialized() const { return m_initialized; }
+    bool isInitialized() const override { return m_initialized; }
     bool isVSyncActive() const { return m_vsyncActive; }
     const std::string& getGLRendererString() const { return m_glRendererString; }
-    bool isHardwareAccelerated() const { return m_isHardwareAccelerated; }
+    bool isHardwareAccelerated() const override { return m_isHardwareAccelerated; }
     EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
     EGLContext getEGLContext() const { return m_eglContext; }
     EGLSurface getEGLSurface() const { return m_eglSurface; }

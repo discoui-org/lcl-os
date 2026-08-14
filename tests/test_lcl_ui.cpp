@@ -14,9 +14,12 @@
 #include "render/skia_canvas.hpp"
 
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstring>
+#include <string>
 #include <vector>
 
 using namespace lcl::ui;
@@ -177,6 +180,68 @@ TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     ASSERT_EQ(recorded->rects.size(), 1u);
     EXPECT_EQ(recorded->rects.front().width, 64.0f);
     EXPECT_EQ(recorded->rects.front().height, 48.0f);
+}
+
+TEST(LclUiTest, WindowAppWaitsForInitialConfigureBeforeAttachingBuffer) {
+    const std::string socketPath = "/tmp/lcl-ui-initial-configure-" +
+        std::to_string(getpid()) + ".sock";
+    unlink(socketPath.c_str());
+
+    const int listener = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    ASSERT_GE(listener, 0);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, socketPath.c_str(), sizeof(address.sun_path) - 1);
+    ASSERT_EQ(bind(listener, reinterpret_cast<const sockaddr*>(&address), sizeof(address)), 0);
+    ASSERT_EQ(listen(listener, 1), 0);
+
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 64, 48, "Initial configure gate");
+    app.setAppId("org.lcl.test.initial-configure");
+    ASSERT_TRUE(app.connectCompositor(socketPath));
+
+    const int peer = accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
+    ASSERT_GE(peer, 0);
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(peer, header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, lcl::protocol::LCLOpcode::SurfaceCreate);
+    if (receivedFd >= 0) close(receivedFd);
+
+    char byte = 0;
+    errno = 0;
+    EXPECT_EQ(recv(peer, &byte, sizeof(byte), MSG_PEEK | MSG_DONTWAIT), -1);
+    EXPECT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
+
+    lcl::protocol::LCLMsgConfigureBounds configure{};
+    configure.surfaceId = 1;
+    configure.configureSerial = 7;
+    // This intentionally differs by less than the resize-throttle large-jump
+    // threshold. The initial configure must still be applied immediately.
+    configure.width = 80;
+    configure.height = 64;
+    configure.bufferScale = 1.0f;
+    configure.resizeReason = lcl::protocol::LCLConfigureResizeReason::Initial;
+    lcl::protocol::LCLHeader configureHeader{};
+    configureHeader.opcode = lcl::protocol::LCLOpcode::ConfigureBounds;
+    configureHeader.payloadSize = sizeof(configure);
+    ASSERT_TRUE(lcl::protocol::sendMsgWithFd(peer, configureHeader, &configure));
+
+    ASSERT_TRUE(app.tick());
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(peer, header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, lcl::protocol::LCLOpcode::AttachBuffer);
+    ASSERT_EQ(payload.size(), sizeof(lcl::protocol::LCLMsgAttachBuffer));
+    const auto* attach = reinterpret_cast<const lcl::protocol::LCLMsgAttachBuffer*>(payload.data());
+    EXPECT_EQ(attach->configureSerial, configure.configureSerial);
+    EXPECT_EQ(attach->width, configure.width);
+    EXPECT_EQ(attach->height, configure.height);
+    EXPECT_GE(receivedFd, 0);
+    if (receivedFd >= 0) close(receivedFd);
+
+    close(peer);
+    close(listener);
+    unlink(socketPath.c_str());
 }
 
 TEST(LclUiTest, ImplicitTransactionInterpolatesTransformOpacityAndReflowLayout) {

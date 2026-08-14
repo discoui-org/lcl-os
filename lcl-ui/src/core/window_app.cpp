@@ -255,7 +255,9 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     surfMsg.resizePresentation = m_resizePresentationMode;
     std::strncpy(surfMsg.title, m_title.c_str(), sizeof(surfMsg.title) - 1);
     std::strncpy(surfMsg.appId, m_appId.c_str(), sizeof(surfMsg.appId) - 1);
+    m_waitingForInitialConfigure = true;
     if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate, &surfMsg, sizeof(surfMsg))) {
+        m_waitingForInitialConfigure = false;
         std::cerr << "[lcl-ui ERROR] Failed to create v3 surface\n";
         return false;
     }
@@ -278,7 +280,6 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         m_rootWidget->markDirty();
     }
     m_firstFrame = true;
-    renderFrame();
 
     std::cout << "[lcl-ui] Connected to Compositor IPC socket successfully (" << m_title << ").\n";
     return true;
@@ -335,6 +336,7 @@ void WindowApp::pollIPC() {
     lcl::protocol::LCLConfigureResizeReason latestResizeReason =
         lcl::protocol::LCLConfigureResizeReason::Initial;
     bool pendingResize = false;
+    bool receivedInitialConfigure = false;
 
     while (true) {
         lcl::protocol::LCLHeader header{};
@@ -402,6 +404,7 @@ void WindowApp::pollIPC() {
                     latestScale = cfg->bufferScale;
                     latestResizeReason = cfg->resizeReason;
                     m_pendingConfigureSerial = cfg->configureSerial;
+                    receivedInitialConfigure = receivedInitialConfigure || m_waitingForInitialConfigure;
                     pendingResize = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
@@ -463,9 +466,13 @@ void WindowApp::pollIPC() {
         const bool largeJump = (dx >= 48u) || (dy >= 48u);
         const bool intervalElapsed = (now - m_lastResizeApply) >= kMinResizeInterval;
 
-        if (largeJump || intervalElapsed) {
+        // The first configure establishes the only serial eligible for an
+        // initial commit. It must never wait for interactive-resize throttling,
+        // even when the compositor adjusted the requested bounds by a few px.
+        if (receivedInitialConfigure || largeJump || intervalElapsed) {
             m_configureSerial = m_pendingConfigureSerial;
             resize(m_pendingResizeWidth, m_pendingResizeHeight);
+            m_waitingForInitialConfigure = false;
             if (m_frameTraceEnabled) ++m_traceResizeApplies;
             m_hasPendingResize = false;
             m_lastResizeApply = now;
@@ -476,6 +483,7 @@ void WindowApp::pollIPC() {
         // acknowledge the configure serial and release compositor backpressure.
         m_hasPendingResize = false;
         m_configureSerial = m_pendingConfigureSerial;
+        m_waitingForInitialConfigure = false;
         m_firstFrame = true;
     }
 }
@@ -912,6 +920,11 @@ void WindowApp::updateLayout() {
 }
 
 bool WindowApp::renderFrame() {
+    // The compositor owns configure serial assignment. A buffer rendered from
+    // SurfaceCreate's requested geometry has no valid serial and would be
+    // discarded as stale when the initial ConfigureBounds is already queued.
+    if (m_ipcConnected && m_waitingForInitialConfigure) return false;
+
     updateLayout();
 
     if (!m_renderPass.hasDamage()) {
@@ -934,6 +947,7 @@ bool WindowApp::renderFrame() {
             static_cast<uint64_t>(std::max(0.0f, damageRect.height));
     }
 
+    const auto clearStarted = paintStarted;
     m_canvas->beginFrame();
     if (auto* pixels = m_canvas->rasterBuffer()) {
         std::fill_n(pixels, static_cast<size_t>(getPixelWidth()) * static_cast<size_t>(getPixelHeight()), 0x00000000);
@@ -941,6 +955,12 @@ bool WindowApp::renderFrame() {
             m_traceClearedBytes += static_cast<uint64_t>(getPixelWidth()) * getPixelHeight() * sizeof(uint32_t);
         }
     }
+    if (m_frameTraceEnabled) {
+        m_traceClearMs += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - clearStarted).count();
+    }
+
+    const auto drawStarted = std::chrono::steady_clock::now();
     m_renderPass.begin(*m_canvas);
 
     if (m_rootWidget && m_rootWidget->isVisible()) {
@@ -1065,15 +1085,25 @@ bool WindowApp::renderFrame() {
             m_lastEffectGraphPayload.clear();
         }
     }
+    if (m_frameTraceEnabled) {
+        m_traceDrawMs += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - drawStarted).count();
+    }
 
     // Double Buffering: Copy 100% complete rendered frame to SHM buffer atomically
+    const auto copyStarted = std::chrono::steady_clock::now();
     if (m_shmPixels && !m_pixelBuffer.empty()) {
         size_t copyBytes = std::min(m_shmSize, m_pixelBuffer.size() * sizeof(uint32_t));
         std::memcpy(m_shmPixels, m_pixelBuffer.data(), copyBytes);
         if (m_frameTraceEnabled) m_traceCopiedBytes += copyBytes;
     }
+    if (m_frameTraceEnabled) {
+        m_traceCopyMs += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - copyStarted).count();
+    }
 
     // If connected over IPC, notify compositor of buffer commit
+    const auto attachStarted = std::chrono::steady_clock::now();
     if (m_ipcConnected && m_socketFd >= 0 && m_shmFd >= 0) {
         lcl::protocol::LCLMsgAttachBuffer attachMsg{};
         attachMsg.surfaceId = m_surfaceId;
@@ -1096,6 +1126,10 @@ bool WindowApp::renderFrame() {
                       << "; retrying\n";
         }
     }
+    if (m_frameTraceEnabled) {
+        m_traceAttachMs += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - attachStarted).count();
+    }
 
     if (m_frameTraceEnabled) {
         m_tracePaintMs += std::chrono::duration<double, std::milli>(
@@ -1115,6 +1149,10 @@ void WindowApp::logFrameTraceIfDue() {
     std::cerr << "[LCL TRACE " << m_title << "] frames=" << m_traceRenderedFrames
               << " layout=" << m_traceLayoutPasses << " (" << average(m_traceLayoutMs, m_traceLayoutPasses) << " ms)"
               << " paint=" << average(m_tracePaintMs, m_traceRenderedFrames) << " ms"
+              << " stages=(clear=" << average(m_traceClearMs, m_traceRenderedFrames)
+              << ", draw=" << average(m_traceDrawMs, m_traceRenderedFrames)
+              << ", copy=" << average(m_traceCopyMs, m_traceRenderedFrames)
+              << ", attach=" << average(m_traceAttachMs, m_traceRenderedFrames) << " ms)"
               << " damage=" << m_traceDamagePixels << " px"
               << " clear/copy=" << (m_traceClearedBytes / 1024) << '/' << (m_traceCopiedBytes / 1024) << " KiB"
               << " cfg=" << m_traceConfigureCount << " (interactive=" << m_traceInteractiveConfigureCount
@@ -1133,6 +1171,10 @@ void WindowApp::logFrameTraceIfDue() {
     m_traceCopiedBytes = 0;
     m_traceLayoutMs = 0.0;
     m_tracePaintMs = 0.0;
+    m_traceClearMs = 0.0;
+    m_traceDrawMs = 0.0;
+    m_traceCopyMs = 0.0;
+    m_traceAttachMs = 0.0;
     m_traceShmMs = 0.0;
     m_traceLastLog = now;
 }

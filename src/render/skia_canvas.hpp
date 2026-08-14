@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "lcl-ui/core/canvas.hpp"
+#include "render/client_egl_context.hpp"
 #include "render/skia_renderer.hpp"
 
 namespace lcl::render {
@@ -73,6 +74,9 @@ private:
     bool applyClip(lcl::ui::Rect& rect) const;
     SkiaRenderer& renderer() { return *m_renderer; }
 
+    std::unique_ptr<ClientEGLContext> m_clientEglContext;
+    // Keep the EGL context alive until after the renderer has released its GL
+    // objects (members are destroyed in reverse declaration order).
     std::unique_ptr<SkiaRenderer> m_ownedRenderer;
     SkiaRenderer* m_renderer{nullptr};
     CanvasState m_state{};

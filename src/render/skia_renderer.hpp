@@ -9,7 +9,7 @@
 #include "render/font_renderer.hpp"
 
 namespace lcl::core {
-class EGLBackend;
+class EGLContextBackend;
 }
 
 namespace lcl::render {
@@ -66,20 +66,18 @@ public:
      * @brief Initialize Skia rendering engine (GL hardware acceleration or CPU raster fallback).
      * @param width Surface width
      * @param height Surface height
-     * @param eglBackend Optional EGL backend pointer for OpenGL GPU context
+     * @param eglBackend Optional EGL context for OpenGL GPU rendering
      * @param targetPixels Pointer to target pixel buffer for software rasterization
      * @return true if initialized successfully
      */
-    bool initialize(uint32_t width, uint32_t height, lcl::core::EGLBackend* eglBackend = nullptr, uint32_t* targetPixels = nullptr);
+    bool initialize(uint32_t width, uint32_t height,
+                    lcl::core::EGLContextBackend* eglBackend = nullptr,
+                    uint32_t* targetPixels = nullptr);
 
     /**
      * @brief Set target buffer and dimensions for software rasterization.
      */
-    void setTargetPixels(uint32_t* targetPixels, uint32_t width = 0, uint32_t height = 0) {
-        m_targetPixels = targetPixels;
-        if (width > 0) m_width = width;
-        if (height > 0) m_height = height;
-    }
+    void setTargetPixels(uint32_t* targetPixels, uint32_t width = 0, uint32_t height = 0);
 
     /**
      * Applies a logical-pixel to raster-pixel transform to client drawing calls.
@@ -200,7 +198,7 @@ private:
     uint32_t m_width{0};
     uint32_t m_height{0};
     SkiaBackendType m_backendType{SkiaBackendType::SoftwareRaster};
-    lcl::core::EGLBackend* m_eglBackend{nullptr};
+    lcl::core::EGLContextBackend* m_eglBackend{nullptr};
 
     std::vector<uint32_t> m_rasterPixels;
     uint32_t* m_targetPixels{nullptr};

@@ -6,7 +6,9 @@
 namespace lcl::render {
 
 SkiaCanvas::SkiaCanvas()
-    : m_ownedRenderer(std::make_unique<SkiaRenderer>()), m_renderer(m_ownedRenderer.get()) {}
+    : m_clientEglContext(std::make_unique<ClientEGLContext>()),
+      m_ownedRenderer(std::make_unique<SkiaRenderer>()),
+      m_renderer(m_ownedRenderer.get()) {}
 
 SkiaCanvas::SkiaCanvas(SkiaRenderer& renderer) : m_renderer(&renderer) {}
 
@@ -15,6 +17,9 @@ SkiaColor SkiaCanvas::toSkia(lcl::ui::Color color) {
 }
 
 bool SkiaCanvas::initialize(uint32_t width, uint32_t height, uint32_t* targetPixels) {
+    if (m_clientEglContext && m_clientEglContext->initialize(width, height)) {
+        return renderer().initialize(width, height, m_clientEglContext.get(), targetPixels);
+    }
     return renderer().initialize(width, height, nullptr, targetPixels);
 }
 

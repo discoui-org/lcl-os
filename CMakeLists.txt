@@ -107,26 +107,39 @@ add_subdirectory(lcl-motion)
 # Backend-neutral widgets, layout, events and WindowApp lifecycle.
 add_subdirectory(lcl-ui)
 
-# Client SHM raster backend. The same raster implementation remains in use,
-# but its OpenGL/EGL branches are compiled out so applications do not acquire
-# compositor GPU or DRM dependencies.
+# Client canvas attempts a render-node-only EGL context and falls back to the
+# established SHM raster path.  It never owns compositor KMS presentation.
 add_library(lcl-canvas-skia STATIC
+    src/render/client_egl_context.cpp
     src/render/skia_canvas.cpp
     src/render/skia_renderer.cpp
     src/render/font_renderer.cpp
 )
 
-target_compile_definitions(lcl-canvas-skia PRIVATE LCL_SOFTWARE_ONLY=1)
-
 target_include_directories(lcl-canvas-skia PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    ${DRM_INCLUDE_DIRS}
+    ${GBM_INCLUDE_DIRS}
+    ${EGL_INCLUDE_DIRS}
+    ${GLES2_INCLUDE_DIRS}
 )
 
 target_link_libraries(lcl-canvas-skia PUBLIC
     lcl-ui
     lcl-protocol
+    ${DRM_LIBRARIES}
+    ${GBM_LIBRARIES}
+    ${EGL_LIBRARIES}
+    ${GLES2_LIBRARIES}
     Threads::Threads
+)
+
+target_compile_options(lcl-canvas-skia PRIVATE
+    ${DRM_CFLAGS_OTHER}
+    ${GBM_CFLAGS_OTHER}
+    ${EGL_CFLAGS_OTHER}
+    ${GLES2_CFLAGS_OTHER}
 )
 
 # Compositor-owned render/present layer. EGL/DRM/GBM/GLES stay here and never

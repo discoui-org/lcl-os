@@ -865,6 +865,10 @@ void WindowManager::setResizePresentationMode(uint32_t windowId,
 }
 
 void WindowManager::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right) {
+    if (m_reservedZone.top == top && m_reservedZone.bottom == bottom &&
+        m_reservedZone.left == left && m_reservedZone.right == right) {
+        return;
+    }
     m_reservedZone = {top, bottom, left, right};
     std::cout << "[LCL WindowManager] Reserved Zone set to top=" << top << " bottom=" << bottom << " left=" << left << " right=" << right << "\n";
 }

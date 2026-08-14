@@ -133,17 +133,20 @@ Step 2 separates build ownership without changing protocol or shell behavior:
 - `lcl-ui` now contains only widgets, Yoga layout, event/render-pass logic,
   `WindowApp`, image loading, and IPC/SHM client lifecycle.
 - `lcl-display-scale` owns the shared logical-pixel policy.
-- `lcl-canvas-skia` owns the client software raster Canvas and font renderer;
-  it is compiled with all EGL/OpenGL branches disabled.
+- `lcl-canvas-skia` owns the client Canvas and font renderer. It first tries a
+  render-node-only EGL/GLES context for GPU drawing, then reads that frame into
+  the existing SHM staging buffer. If no audited hardware renderer is available
+  it falls back to the software raster path. It never opens a KMS scanout card
+  or presents a frame.
 - `lcl-render` owns compositor rendering, window management, EGL, DRM, GBM,
   GLES, and presentation.
 - `WindowApp` requires an injected Canvas. Native clients and the JS binding
   explicitly inject `makeSkiaCanvas()`.
 
-The Step 2 automated gate must include archive/link inspection proving that
-`liblcl-ui.a`, Terminal, desktop shell, and JS runtime have no EGL/DRM/GBM/GLES
-symbols or link dependencies. The compositor must continue to link those
-libraries through `lcl-render`.
+The boundary gate proves that `liblcl-ui.a` has no EGL/DRM/GBM/GLES dependency.
+Client executables may link those libraries solely through `lcl-canvas-skia`;
+the client context must use `/dev/dri/renderD*`, while KMS scanout and display
+presentation remain exclusively in `lcl-render`.
 
 ## Step 3 implementation record
 

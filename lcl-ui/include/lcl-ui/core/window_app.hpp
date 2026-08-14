@@ -202,6 +202,9 @@ private:
     uint32_t m_nextRequestId{1};
     uint64_t m_configureSerial{1};
     uint64_t m_pendingConfigureSerial{1};
+    // SurfaceCreate is only a request. Do not commit the provisional client
+    // buffer until the compositor assigns the first configure serial.
+    bool m_waitingForInitialConfigure{false};
     bool m_inputEnabled{true};
     int32_t m_initialX{80};
     int32_t m_initialY{60};
@@ -240,6 +243,10 @@ private:
     uint64_t m_traceCopiedBytes{0};
     double m_traceLayoutMs{0.0};
     double m_tracePaintMs{0.0};
+    double m_traceClearMs{0.0};
+    double m_traceDrawMs{0.0};
+    double m_traceCopyMs{0.0};
+    double m_traceAttachMs{0.0};
     double m_traceShmMs{0.0};
     std::chrono::steady_clock::time_point m_traceLastLog{};
 

@@ -1,6 +1,6 @@
 #include "render/skia_renderer.hpp"
 #ifndef LCL_SOFTWARE_ONLY
-#include "core/display/egl_backend.hpp"
+#include "core/display/egl_context.hpp"
 #include <GLES2/gl2.h>
 #endif
 #include <iostream>
@@ -330,7 +330,10 @@ bool SkiaRenderer::initGLShader() {
         // fully opaque, which made 16px titlebar controls look stair-stepped.
         // This matches the symmetric subpixel coverage used by the software
         // Canvas path that renders CSD controls into client buffers.
-        "    float outerMask = 1.0 - smoothstep(-0.5, 0.5, sdOuter);\n"
+        // A non-rounded rectangle is rasterized by the quad itself; applying
+        // a signed-distance edge ramp here would incorrectly make its outer
+        // pixel row half-transparent. Keep AA solely for actual curves.
+        "    float outerMask = (r <= 0.001) ? 1.0 : (1.0 - smoothstep(-0.5, 0.5, sdOuter));\n"
         "\n"
         "    float bw = max(0.0, uBorderWidthPx);\n"
         "    float innerMask = 0.0;\n"
@@ -339,7 +342,7 @@ bool SkiaRenderer::initGLShader() {
         "        vec2 halfInner = innerSize * 0.5;\n"
         "        float innerR = max(0.0, r - bw);\n"
         "        float sdInner = sdSuperRoundRect(p, halfInner, innerR, n);\n"
-        "        innerMask = 1.0 - smoothstep(-0.5, 0.5, sdInner);\n"
+        "        innerMask = (innerR <= 0.001) ? 1.0 : (1.0 - smoothstep(-0.5, 0.5, sdInner));\n"
         "    }\n"
         "\n"
         "    float borderMask = (bw > 0.001) ? max(0.0, outerMask - innerMask) : 0.0;\n"
@@ -520,7 +523,9 @@ SkiaRenderer::~SkiaRenderer() {
     shutdown();
 }
 
-bool SkiaRenderer::initialize(uint32_t width, uint32_t height, lcl::core::EGLBackend* eglBackend, uint32_t* targetPixels) {
+bool SkiaRenderer::initialize(uint32_t width, uint32_t height,
+                              lcl::core::EGLContextBackend* eglBackend,
+                              uint32_t* targetPixels) {
     if (targetPixels) {
         m_targetPixels = targetPixels;
     }
@@ -560,6 +565,32 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height, lcl::core::EGLBac
 
     m_initialized = true;
     return true;
+}
+
+void SkiaRenderer::setTargetPixels(uint32_t* targetPixels, uint32_t width, uint32_t height) {
+    const uint32_t nextWidth = width > 0 ? width : m_width;
+    const uint32_t nextHeight = height > 0 ? height : m_height;
+    const bool sizeChanged = nextWidth != m_width || nextHeight != m_height;
+
+#ifndef LCL_SOFTWARE_ONLY
+    if (sizeChanged && m_initialized && m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+        auto* eglBackend = m_eglBackend;
+        if (eglBackend->resize(nextWidth, nextHeight)) {
+            eglBackend->makeCurrent();
+            shutdown();
+            initialize(nextWidth, nextHeight, eglBackend, targetPixels);
+            return;
+        }
+        // A failed client-context resize falls back to the established SHM CPU
+        // renderer rather than risking a stale GPU surface.
+        m_eglBackend = nullptr;
+        m_backendType = SkiaBackendType::SoftwareRaster;
+    }
+#endif
+
+    m_targetPixels = targetPixels;
+    m_width = nextWidth;
+    m_height = nextHeight;
 }
 
 void SkiaRenderer::shutdown() {
@@ -936,7 +967,14 @@ void SkiaRenderer::beginFrame() {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
         glViewport(0, 0, m_width, m_height);
-        glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
+        // Client canvases are alpha surfaces composited later by the window
+        // manager.  KMS composition remains opaque, but an offscreen client
+        // target must preserve transparent rounded corners and glass regions.
+        if (m_eglBackend->presentsToDisplay()) {
+            glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
+        } else {
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        }
         glClear(GL_COLOR_BUFFER_BIT);
     }
 #endif
@@ -959,14 +997,18 @@ void SkiaRenderer::endFrame() {
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
         m_eglBackend->makeCurrent();
 
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, m_width, m_height);
-        if (m_glSceneTexture > 0) {
-            drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height);
+        if (m_eglBackend->presentsToDisplay()) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, m_width, m_height);
+            if (m_glSceneTexture > 0) {
+                drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height);
+            }
+            glFlush();
+            m_eglBackend->present();
+        } else if (m_targetPixels) {
+            glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+            m_eglBackend->readback(m_targetPixels, m_width, m_height);
         }
-
-        glFlush();
-        m_eglBackend->swapBuffers();
     }
 #endif
 }
@@ -1017,6 +1059,19 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
         int x2 = std::clamp(static_cast<int>(deviceRect.x + deviceRect.width), 0, static_cast<int>(m_width));
         int y2 = std::clamp(static_cast<int>(deviceRect.y + deviceRect.height), 0, static_cast<int>(m_height));
         if (x1 >= x2 || y1 >= y2 || color.a == 0) return;
+
+        // A solid rectangle does not need a CPU-filled texture upload.  The
+        // rounded-rect shader also represents the r=0 case and keeps this hot
+        // path entirely on the GPU.
+        if (m_glFBOReady && m_glRoundRectProgram > 0) {
+            m_eglBackend->makeCurrent();
+            glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+            glViewport(0, 0, m_width, m_height);
+            drawGpuRoundedRect(static_cast<float>(x1), static_cast<float>(y1),
+                               static_cast<float>(x2 - x1), static_cast<float>(y2 - y1),
+                               0.0f, 2.0f, 0.0f, color, {0, 0, 0, 0});
+            return;
+        }
 
         std::vector<uint32_t> fill(static_cast<size_t>(x2 - x1) * static_cast<size_t>(y2 - y1), color.toARGB());
         drawBufferRaw(x1, y1, x2 - x1, y2 - y1, fill.data(), x2 - x1, 1.0f, 0.0f, 2.0f, false, false, 0, 0);

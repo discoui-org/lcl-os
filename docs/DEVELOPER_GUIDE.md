@@ -85,10 +85,12 @@ LCL_TRACE_FRAMES=1 /usr/bin/lcl-terminal
 ```
 
 The `[LCL TRACE ...]` line reports Yoga layout passes and mean duration,
-rendered frame count and paint duration, total damaged pixels, whole-buffer
-clear/copy traffic, received configure reasons, applied resizes, and SHM
-allocation timing. `interactive` configure counts identify pointer resizing;
-`transition` counts identify maximize/restore/live-resize animation.
+rendered frame count and end-to-end paint duration, plus its `stages` split:
+full-raster clear, widget/effect draw, SHM copy, and attach IPC. It also
+reports total damaged pixels, whole-buffer clear/copy traffic, received
+configure reasons, applied resizes, and SHM allocation timing. `interactive`
+configure counts identify pointer resizing; `transition` counts identify
+maximize/restore/live-resize animation.
 
 Add `LCL_DEBUG_LAYOUT=1` to draw a depth-coloured outline for every resolved
 Yoga widget bound; the red outline is the client damage rect for that frame.

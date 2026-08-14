@@ -305,6 +305,12 @@ bool EGLBackend::makeCurrent() {
     return eglMakeCurrent(m_eglDisplay, m_eglSurface, m_eglSurface, m_eglContext) == EGL_TRUE;
 }
 
+bool EGLBackend::resize(uint32_t width, uint32_t height) {
+    // Mode changes recreate the compositor display backend as a whole.  Do not
+    // mutate its KMS surface behind the display manager's back.
+    return width == m_width && height == m_height;
+}
+
 uint32_t EGLBackend::getOrCreateFB(struct gbm_bo* bo) {
     if (!bo) return 0;
     uint32_t fbId = reinterpret_cast<uintptr_t>(gbm_bo_get_user_data(bo));
