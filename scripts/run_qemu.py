@@ -88,26 +88,57 @@ def docker_image_name(arch: str) -> str:
 
 def find_qemu(arch: str = "x86_64") -> str:
     binary_name = "qemu-system-aarch64" if arch == "aarch64" else "qemu-system-x86_64"
+
+    # 1. Check explicit environment override
+    override = os.environ.get("LCL_QEMU_BIN")
+    if override and Path(override).is_file():
+        log(f"Using custom QEMU binary (LCL_QEMU_BIN): {override}")
+        return override
+
+    # 2. On macOS, prioritize UTM QEMU binary (includes Metal VirGL 3D acceleration)
+    if host_os() == "darwin":
+        utm_candidates = [
+            Path("/Applications/UTM.app/Contents/MacOS") / binary_name,
+            Path.home() / "Applications" / "UTM.app" / "Contents" / "MacOS" / binary_name,
+            Path("/Applications/UTM.app/Contents/Resources") / binary_name,
+        ]
+        for utm_bin in utm_candidates:
+            if utm_bin.is_file() and os.access(utm_bin, os.X_OK):
+                log(f"Using UTM QEMU binary (Hardware Accelerated): {utm_bin}")
+                return str(utm_bin)
+
+    # 3. System PATH QEMU binary
     qemu = which(binary_name)
-    if not qemu:
-        err(f"{binary_name} is not installed.")
-        if host_os() == "darwin":
-            err("Install with: brew install qemu")
-        elif host_os() == "windows":
-            err(f"Install QEMU and ensure {binary_name} is on PATH.")
-        else:
-            err(f"Install {binary_name} via your package manager.")
-        sys.exit(1)
-    return qemu
+    if qemu:
+        return qemu
+
+    # 4. Common Homebrew / system fallback paths
+    fallback_paths = [
+        Path(f"/opt/homebrew/bin/{binary_name}"),
+        Path(f"/usr/local/bin/{binary_name}"),
+        Path(f"/usr/bin/{binary_name}"),
+    ]
+    for p in fallback_paths:
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
+
+    err(f"{binary_name} is not installed.")
+    if host_os() == "darwin":
+        err("Install UTM (/Applications/UTM.app) or run: brew install qemu")
+    elif host_os() == "windows":
+        err(f"Install QEMU and ensure {binary_name} is on PATH.")
+    else:
+        err(f"Install {binary_name} via your package manager.")
+    sys.exit(1)
 
 
 def ensure_fonts() -> None:
     inter = ROOT_DIR / "assets" / "fonts" / "inter"
     if not inter.is_dir() or not any(inter.iterdir()):
-        fetch = SCRIPT_DIR / "fetch_fonts.sh"
+        fetch = SCRIPT_DIR / "fetch_fonts.py"
         if fetch.is_file():
-            log("Font assets missing. Executing fetch_fonts.sh...")
-            run(["bash", str(fetch)])
+            log("Font assets missing. Executing fetch_fonts.py...")
+            run([sys.executable, str(fetch)])
 
 
 def cmake_build() -> None:
@@ -1337,54 +1368,38 @@ def validate_kernel(kernel: Path) -> None:
         log(f"WARNING: {kernel} may not be a bzImage (HdrS missing). QEMU -kernel might fail.")
 
 
-def find_ovmf_firmware() -> Path | None:
-    candidates = [
-        Path("/usr/share/edk2/x64/OVMF_CODE.4m.fd"),
-        Path("/usr/share/edk2/x64/OVMF_CODE.fd"),
-        Path("/usr/share/OVMF/OVMF_CODE.fd"),
-        Path("/usr/share/ovmf/OVMF.fd"),
-        Path("/usr/share/qemu/OVMF.fd"),
-        Path("/usr/share/edk2/x64/OVMF.4m.fd"),
-    ]
+def find_ovmf_firmware(arch: str = "x86_64") -> Path | None:
+    if arch == "aarch64":
+        candidates = [
+            Path("/Applications/UTM.app/Contents/Resources/qemu/edk2-aarch64-code.fd"),
+            Path("/Applications/UTM.app/Contents/Resources/edk2-aarch64-code.fd"),
+            Path.home() / "Applications" / "UTM.app" / "Contents" / "Resources" / "qemu" / "edk2-aarch64-code.fd",
+            Path("/opt/homebrew/share/qemu/edk2-aarch64-code.fd"),
+            Path("/usr/local/share/qemu/edk2-aarch64-code.fd"),
+            Path("/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"),
+            Path("/usr/share/edk2/aarch64/QEMU_EFI.fd"),
+            Path("/usr/share/AAVMF/AAVMF_CODE.fd"),
+            Path("/usr/share/qemu/edk2-aarch64-code.fd"),
+        ]
+    else:
+        candidates = [
+            Path("/Applications/UTM.app/Contents/Resources/qemu/edk2-x86_64-code.fd"),
+            Path("/Applications/UTM.app/Contents/Resources/edk2-x86_64-code.fd"),
+            Path.home() / "Applications" / "UTM.app" / "Contents" / "Resources" / "qemu" / "edk2-x86_64-code.fd",
+            Path("/opt/homebrew/share/qemu/edk2-x86_64-code.fd"),
+            Path("/usr/local/share/qemu/edk2-x86_64-code.fd"),
+            Path("/usr/share/edk2/x64/OVMF_CODE.4m.fd"),
+            Path("/usr/share/edk2/x64/OVMF_CODE.fd"),
+            Path("/usr/share/OVMF/OVMF_CODE.fd"),
+            Path("/usr/share/ovmf/OVMF.fd"),
+            Path("/usr/share/qemu/OVMF.fd"),
+            Path("/usr/share/edk2/x64/OVMF.4m.fd"),
+        ]
     for candidate in candidates:
         if candidate.is_file():
             return candidate
     return None
 
-
-def launch_qemu(
-    kernel: Path,
-    native: bool = False,
-    iso_mode: bool = False,
-    uefi_mode: bool = False,
-    usb_passthrough: str | None = None,
-    retina: bool = False,
-    scale_override: float | None = None,
-    width_override: int | None = None,
-    height_override: int | None = None,
-) -> None:
-    qemu = find_qemu()
-    if not iso_mode:
-        if not INITRAMFS_IMG.is_file():
-            err(f"Missing initramfs: {INITRAMFS_IMG}")
-            sys.exit(1)
-        validate_kernel(kernel)
-
-    memory = "2G"
-    cpus = "2"
-    host = detect_host_display()
-    refresh_hz = host.refresh_hz
-
-    # Environment variable overrides
-    if not retina and os.environ.get("RETINA", "").lower() in ("1", "true", "yes", "on"):
-        retina = True
-
-    env_scale = os.environ.get("SCALE") or os.environ.get("LCL_SCALE")
-    if scale_override is None and env_scale:
-        try:
-            scale_override = float(env_scale)
-        except ValueError:
-            pass
 
 def launch_qemu(
     kernel: Path,
@@ -1532,13 +1547,11 @@ def launch_qemu(
     has_virtio_vga = "virtio-vga" in dev_help
 
     if arch == "aarch64":
-        if has_apple_gfx and host_os() == "darwin":
-            log("Hardware acceleration: using Apple Paravirtualized Graphics ('apple-gfx-pci' via Metal).")
-            gpu = ["-device", "apple-gfx-pci"]
-        elif want_gl and has_virtio_gpu_gl:
-            gpu = ["-device", "virtio-gpu-gl-pci"]
+        # On aarch64 virt machine, set explicit resolution on virtio-gpu-pci to initialize FB immediately
+        if want_gl and has_virtio_gpu_gl:
+            gpu = ["-device", f"virtio-gpu-gl-pci,xres={width},yres={height}"]
         else:
-            gpu = ["-device", "virtio-gpu-pci"]
+            gpu = ["-device", f"virtio-gpu-pci,xres={width},yres={height}"]
     else:
         # x86_64
         if want_gl:
@@ -1546,9 +1559,9 @@ def launch_qemu(
                 gpu = ["-vga", "none", "-device", "virtio-vga-gl"]
             else:
                 log("virtio-vga-gl is not available on host QEMU (e.g. macOS); falling back to virtio-vga.")
-                gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else "virtio-gpu-pci"]
+                gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else f"virtio-gpu-pci,xres={width},yres={height}"]
         else:
-            gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else "virtio-gpu-pci"]
+            gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else f"virtio-gpu-pci,xres={width},yres={height}"]
 
     if host_os() == "darwin":
         if native:
@@ -1640,13 +1653,19 @@ def launch_qemu(
         *machine,
     ]
 
+    ovmf = find_ovmf_firmware(arch)
     if uefi_mode:
-        ovmf = find_ovmf_firmware()
         if not ovmf:
-            err("UEFI requested (--uefi), but OVMF firmware file not found.")
+            err(f"UEFI requested (--uefi), but firmware file for {arch} not found.")
             sys.exit(1)
         log(f"UEFI boot mode enabled. Firmware: {ovmf}")
-        cmd.extend(["-drive", f"if=pflash,format=raw,readonly=on,file={ovmf}"])
+        if arch == "aarch64":
+            cmd.extend(["-bios", str(ovmf)])
+        else:
+            cmd.extend(["-drive", f"if=pflash,format=raw,readonly=on,file={ovmf}"])
+    elif arch == "aarch64" and ovmf:
+        # Attach EDK2 firmware on aarch64 to assist EFI kernel booting if available
+        cmd.extend(["-bios", str(ovmf)])
 
     if iso_mode:
         iso_name = f"lcl-os-{arch}.iso"
