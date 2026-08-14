@@ -49,6 +49,10 @@ def normalize_arch(arch_str: str | None) -> str:
 
 
 def cmd_qemu(args: argparse.Namespace) -> None:
+    if getattr(args, "utm", False) or (platform.system().lower() == "darwin" and (Path("/Applications/UTM.app").is_dir() or (Path.home() / "Applications/UTM.app").is_dir())):
+        cmd_utm(args)
+        return
+
     run_qemu_py = SCRIPTS_DIR / "run_qemu.py"
     qemu_args = [sys.executable, str(run_qemu_py), "--run"]
 
@@ -81,6 +85,12 @@ def cmd_qemu(args: argparse.Namespace) -> None:
         qemu_args.append("--debug-overlay")
 
     subprocess.check_call(qemu_args)
+
+
+def cmd_utm(args: argparse.Namespace) -> None:
+    run_utm_py = SCRIPTS_DIR / "run_utm.py"
+    arch = normalize_arch(args.arch)
+    subprocess.check_call([sys.executable, str(run_utm_py), "--arch", arch])
 
 
 def cmd_build(args: argparse.Namespace) -> None:
@@ -157,6 +167,7 @@ def main() -> None:
     # ---- qemu ----
     p_qemu = subparsers.add_parser("qemu", help="Build & launch QEMU virtual machine")
     p_qemu.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (x86_64 or aarch64)")
+    p_qemu.add_argument("--utm", action="store_true", help="Launch via UTM / utmctl on macOS")
     p_qemu.add_argument("--native", "-n", action="store_true", help="Match host resolution + fullscreen")
     p_qemu.add_argument("--gpu", "-g", action="store_true", help="Enable 3D VirGL GPU acceleration")
     p_qemu.add_argument("--retina", action="store_true", help="13\" MacBook Air Retina (2560x1600 @ 2.0x)")
@@ -169,6 +180,10 @@ def main() -> None:
     p_qemu.add_argument("--trace-frames", action="store_true", help="Enable layout/render trace")
     p_qemu.add_argument("--debug-layout", action="store_true", help="Draw widget bounds overlay")
     p_qemu.add_argument("--debug-overlay", action="store_true", help="Draw compositor FPS overlay")
+
+    # ---- utm ----
+    p_utm = subparsers.add_parser("utm", help="Build ISO and launch via UTM / utmctl (Metal 3D)")
+    p_utm.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (aarch64 or x86_64)")
 
     # ---- build ----
     p_build = subparsers.add_parser("build", help="Build LCL OS binaries via Docker")
@@ -205,6 +220,7 @@ def main() -> None:
 
     dispatch = {
         "qemu": cmd_qemu,
+        "utm": cmd_utm,
         "build": cmd_build,
         "package": cmd_package,
         "iso": cmd_iso,
