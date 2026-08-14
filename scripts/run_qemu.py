@@ -1526,12 +1526,16 @@ def launch_qemu(
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         dev_help = ""
+    has_apple_gfx = "apple-gfx-pci" in dev_help
     has_virtio_vga_gl = "virtio-vga-gl" in dev_help
     has_virtio_gpu_gl = "virtio-gpu-gl" in dev_help or "virtio-gpu-gl-pci" in dev_help
     has_virtio_vga = "virtio-vga" in dev_help
 
     if arch == "aarch64":
-        if want_gl and has_virtio_gpu_gl:
+        if has_apple_gfx and host_os() == "darwin":
+            log("Hardware acceleration: using Apple Paravirtualized Graphics ('apple-gfx-pci' via Metal).")
+            gpu = ["-device", "apple-gfx-pci"]
+        elif want_gl and has_virtio_gpu_gl:
             gpu = ["-device", "virtio-gpu-gl-pci"]
         else:
             gpu = ["-device", "virtio-gpu-pci"]
