@@ -80,6 +80,11 @@ public:
         uint64_t pendingConfigureSerial{0};
         uint64_t acceptedConfigureSerial{0};
         uint64_t configuredGeometryGeneration{0};
+        // Non-zero only after a Live DMA-BUF commit has been accepted and
+        // before the compositor frame containing it has been presented.
+        // Keeping this separate from configure acknowledgement gives Live
+        // surfaces one complete configure -> commit -> presentation in flight.
+        uint64_t livePresentationSerial{0};
         bool forceConfigure{false};
         std::chrono::steady_clock::time_point lastConfigureSent{};
 
@@ -179,9 +184,23 @@ public:
     /** Cancel a superseded geometry transaction without releasing the current frame. */
     static void interruptGeometryTransaction(SurfaceEntry& entry,
                                              uint64_t newGeneration) noexcept;
+    /**
+     * Begin a maximize/restore buffer transaction while retaining the current
+     * frame as the rollback and crossfade source.
+     */
+    static void beginGeometryTransition(SurfaceEntry& entry,
+                                        uint64_t newGeneration,
+                                        int rollbackX, int rollbackY,
+                                        int rollbackWidth, int rollbackHeight,
+                                        bool rollbackWasMaximized,
+                                        bool rollbackWasMinimized) noexcept;
     static bool acceptsBufferCommit(const SurfaceEntry& entry,
                                     uint64_t configureSerial) noexcept;
     static bool hasOutstandingConfigure(const SurfaceEntry& entry) noexcept;
+    static bool hasUnpresentedLiveFrame(const SurfaceEntry& entry) noexcept;
+    static void queueLivePresentation(SurfaceEntry& entry,
+                                      uint64_t configureSerial) noexcept;
+    static void completeLivePresentation(SurfaceEntry& entry) noexcept;
     /** A process may own several independent surface sockets; disconnect is per socket. */
     static bool isOwnedByClientConnection(const SurfaceEntry& entry,
                                           int clientFd) noexcept;

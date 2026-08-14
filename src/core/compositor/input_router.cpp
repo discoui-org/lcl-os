@@ -56,8 +56,19 @@ bool InputRouter::route(const InputEvent& event) {
     if (result.interaction) {
         for (auto& [_, entry] : m_surfaces) {
             if (entry.windowId == result.interaction.windowId) {
-                SurfaceRegistry::interruptGeometryTransaction(
-                    entry, result.interaction.generation);
+                if (result.interaction.isWindowStateTransition() &&
+                    entry.resizePresentation ==
+                        protocol::LCLResizePresentationMode::CompositorMorph) {
+                    const auto& previous = result.interaction.previousBounds;
+                    SurfaceRegistry::beginGeometryTransition(
+                        entry, result.interaction.generation,
+                        previous.x, previous.y, previous.width, previous.height,
+                        result.interaction.previousWasMaximized,
+                        result.interaction.previousWasMinimized);
+                } else if (result.interaction.isManual()) {
+                    SurfaceRegistry::interruptGeometryTransaction(
+                        entry, result.interaction.generation);
+                }
             }
         }
     }
@@ -86,14 +97,17 @@ void InputRouter::sendPendingConfigures() {
                 continue;
             }
 
-            // CompositorMorph remains a one-in-flight transaction. Live keeps
-            // the newest serial authoritative and is bounded by display refresh;
-            // stale DMA-BUF replies are released without entering the scene.
+            // Every resize policy permits only one configure at a time. Live
+            // additionally waits until the accepted DMA-BUF has actually been
+            // presented before publishing the newest coalesced geometry.
             const bool live = entry.resizePresentation ==
                 protocol::LCLResizePresentationMode::Live;
-            if ((!live && SurfaceRegistry::hasOutstandingConfigure(entry)) ||
-                (live && entry.lastConfigureSent.time_since_epoch().count() != 0 &&
-                 now - entry.lastConfigureSent < m_refreshInterval)) {
+            const bool refreshLimited = live &&
+                entry.lastConfigureSent.time_since_epoch().count() != 0 &&
+                now - entry.lastConfigureSent < m_refreshInterval;
+            if (SurfaceRegistry::hasOutstandingConfigure(entry) ||
+                SurfaceRegistry::hasUnpresentedLiveFrame(entry) ||
+                refreshLimited) {
                 break;
             }
 
@@ -129,8 +143,9 @@ void InputRouter::sendPendingConfigures() {
                 : protocol::LCLConfigureResizeReason::WindowStateTransition;
             configure.backingWidth = configure.width;
             configure.backingHeight = configure.height;
-            if (live && configure.resizeReason ==
-                    protocol::LCLConfigureResizeReason::Interactive) {
+            if (live &&
+                (configure.resizeReason == protocol::LCLConfigureResizeReason::Interactive ||
+                 configure.resizeReason == protocol::LCLConfigureResizeReason::WindowStateTransition)) {
                 configure.backingWidth = physicalToLogical(
                     m_windowManager.getScreenWidth(), entry.bufferScale);
                 configure.backingHeight = physicalToLogical(

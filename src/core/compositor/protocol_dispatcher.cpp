@@ -491,6 +491,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                                                   preserveNewerTarget, entry.configuredX,
                                                   entry.configuredY,
                                                   entry.configuredGeometryGeneration);
+            SurfaceRegistry::queueLivePresentation(
+                entry, bufferMessage->configureSerial);
             changed = true;
 
         // --- ATTACH_BUFFER: mmap the SCM_RIGHTS memfd into compositor address space ---
@@ -710,20 +712,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
                     [windowId](const auto& window) { return window.id == windowId; });
                 if (transitionedWindow == m_windowManager.getWindows().end()) return;
-                SurfaceRegistry::interruptGeometryTransaction(
-                    entry, transitionedWindow->geometryGeneration);
-                entry.rollbackX = rollbackX;
-                entry.rollbackY = rollbackY;
-                entry.rollbackWidth = rollbackWidth;
-                entry.rollbackHeight = rollbackHeight;
-                entry.rollbackWasMaximized = rollbackWasMaximized;
-                entry.rollbackWasMinimized = rollbackWasMinimized;
-                entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
-                entry.resizeGeometryGeneration = transitionedWindow->geometryGeneration;
-                entry.resizeDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
-                entry.resizeCrossfadeProgress = 0.0f;
-                entry.resizeBufferReady = false;
-                entry.rollbackRequested = false;
+                SurfaceRegistry::beginGeometryTransition(
+                    entry, transitionedWindow->geometryGeneration,
+                    rollbackX, rollbackY, rollbackWidth, rollbackHeight,
+                    rollbackWasMaximized, rollbackWasMinimized);
             };
             switch (request->action) {
                 case lcl::protocol::LCLWindowAction::BeginDrag:

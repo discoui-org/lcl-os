@@ -22,6 +22,8 @@ bool PTYManager::spawnShell(const std::string& shellPath) {
     if (isAlive()) return true;
 
     // Open PTY master
+    m_lastCols = -1;
+    m_lastRows = -1;
     m_masterFd = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
     if (m_masterFd < 0) {
         std::cerr << "[LCL PTY ERROR] posix_openpt failed: " << std::strerror(errno) << "\n";
@@ -125,12 +127,16 @@ bool PTYManager::spawnShell(const std::string& shellPath) {
 
 void PTYManager::resizeWindow(int cols, int rows) {
     if (m_masterFd < 0) return;
+    if (cols == m_lastCols && rows == m_lastRows) return;
     struct winsize ws{};
     ws.ws_row = static_cast<unsigned short>(rows);
     ws.ws_col = static_cast<unsigned short>(cols);
     ws.ws_xpixel = static_cast<unsigned short>(cols * 8);
     ws.ws_ypixel = static_cast<unsigned short>(rows * 16);
-    ioctl(m_masterFd, TIOCSWINSZ, &ws);
+    if (ioctl(m_masterFd, TIOCSWINSZ, &ws) == 0) {
+        m_lastCols = cols;
+        m_lastRows = rows;
+    }
 }
 
 bool PTYManager::writeInput(const std::string& input) {
@@ -185,6 +191,8 @@ void PTYManager::shutdown() {
         close(m_masterFd);
         m_masterFd = -1;
     }
+    m_lastCols = -1;
+    m_lastRows = -1;
 }
 
 } // namespace lcl::core

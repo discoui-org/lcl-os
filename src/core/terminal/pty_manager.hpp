@@ -59,6 +59,8 @@ private:
     int m_masterFd{-1};
     pid_t m_childPid{-1};
     std::string m_slaveName;
+    int m_lastCols{-1};
+    int m_lastRows{-1};
 };
 
 } // namespace lcl::core

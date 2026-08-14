@@ -46,11 +46,36 @@ struct PresentedBounds {
     float height{1.0f};
 };
 
+enum class GeometryInteractionKind {
+    None,
+    Manual,
+    WindowStateTransition,
+};
+
 struct GeometryInteraction {
     uint32_t windowId{0};
     uint64_t generation{0};
+    GeometryInteractionKind kind{GeometryInteractionKind::None};
+    Rect previousBounds{};
+    bool previousWasMaximized{false};
+    bool previousWasMinimized{false};
 
     operator bool() const noexcept { return windowId != 0 && generation != 0; }
+    bool isManual() const noexcept { return kind == GeometryInteractionKind::Manual; }
+    bool isWindowStateTransition() const noexcept {
+        return kind == GeometryInteractionKind::WindowStateTransition;
+    }
+
+    static GeometryInteraction manual(uint32_t windowId, uint64_t generation) noexcept {
+        return {windowId, generation, GeometryInteractionKind::Manual};
+    }
+
+    static GeometryInteraction windowStateTransition(
+            uint32_t windowId, uint64_t generation, const Rect& previousBounds,
+            bool previousWasMaximized, bool previousWasMinimized) noexcept {
+        return {windowId, generation, GeometryInteractionKind::WindowStateTransition,
+                previousBounds, previousWasMaximized, previousWasMinimized};
+    }
 };
 
 struct WindowInputResult {

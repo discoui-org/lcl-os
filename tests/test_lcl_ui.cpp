@@ -50,6 +50,11 @@ public:
     bool configureDmaBufFrame(uint32_t contentWidth, uint32_t contentHeight,
                               uint32_t backingWidth, uint32_t backingHeight) override {
         if (!hasDmaBufTransport()) return false;
+        if (backingWidth > dmaCapacityWidth || backingHeight > dmaCapacityHeight) {
+            dmaCapacityWidth = std::max(dmaCapacityWidth, backingWidth);
+            dmaCapacityHeight = std::max(dmaCapacityHeight, backingHeight);
+            ++dmaCapacityGrowCount;
+        }
         dmaContentWidth = contentWidth;
         dmaContentHeight = contentHeight;
         dmaBackingWidth = backingWidth;
@@ -133,8 +138,11 @@ public:
     uint32_t dmaContentHeight{0};
     uint32_t dmaBackingWidth{0};
     uint32_t dmaBackingHeight{0};
+    uint32_t dmaCapacityWidth{0};
+    uint32_t dmaCapacityHeight{0};
     uint32_t nextBufferId{1};
     int dmaConfigureCount{0};
+    int dmaCapacityGrowCount{0};
     std::vector<uint32_t> releasedBufferIds;
     std::vector<Rect> rects;
     std::vector<Rect> roundedRects;
@@ -289,7 +297,8 @@ TEST(LclUiTest, LiveGpuResizeCoalescesSerialsAvoidsShmAndWaitsForPresentation) {
     app.setResizePresentationMode(lcl::protocol::LCLResizePresentationMode::Live);
     app.setExternalIpcSocket(sockets[0]);
 
-    const auto sendConfigure = [&](uint64_t serial, uint32_t width, uint32_t height) {
+    const auto sendConfigure = [&](uint64_t serial, uint32_t width, uint32_t height,
+                                   lcl::protocol::LCLConfigureResizeReason reason) {
         lcl::protocol::LCLMsgConfigureBounds configure{};
         configure.surfaceId = app.getSurfaceId();
         configure.configureSerial = serial;
@@ -298,21 +307,24 @@ TEST(LclUiTest, LiveGpuResizeCoalescesSerialsAvoidsShmAndWaitsForPresentation) {
         configure.backingWidth = 1000;
         configure.backingHeight = 700;
         configure.bufferScale = 1.0f;
-        configure.resizeReason = lcl::protocol::LCLConfigureResizeReason::Interactive;
+        configure.resizeReason = reason;
         lcl::protocol::LCLHeader header{};
         header.opcode = lcl::protocol::LCLOpcode::ConfigureBounds;
         header.payloadSize = sizeof(configure);
         ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[1], header, &configure));
     };
 
-    sendConfigure(10, 80, 60);
-    sendConfigure(11, 96, 72);
+    sendConfigure(10, 80, 60,
+                  lcl::protocol::LCLConfigureResizeReason::WindowStateTransition);
+    sendConfigure(11, 96, 72,
+                  lcl::protocol::LCLConfigureResizeReason::WindowStateTransition);
     ASSERT_TRUE(app.tick());
     EXPECT_EQ(app.getWidth(), 96u);
     EXPECT_EQ(app.getHeight(), 72u);
     EXPECT_EQ(recorded->targetSetCount, 1); // constructor only: no resize SHM target
     EXPECT_EQ(recorded->dmaBackingWidth, 1000u);
     EXPECT_EQ(recorded->dmaBackingHeight, 700u);
+    EXPECT_EQ(recorded->dmaCapacityGrowCount, 1);
 
     lcl::protocol::LCLHeader header{};
     std::vector<uint8_t> payload;
@@ -325,7 +337,8 @@ TEST(LclUiTest, LiveGpuResizeCoalescesSerialsAvoidsShmAndWaitsForPresentation) {
     EXPECT_EQ(first->backingWidth, 1000u);
     if (receivedFd >= 0) close(receivedFd);
 
-    sendConfigure(12, 112, 84);
+    sendConfigure(12, 112, 84,
+                  lcl::protocol::LCLConfigureResizeReason::WindowStateTransition);
     EXPECT_FALSE(app.tick());
     EXPECT_EQ(app.getWidth(), 96u);
 
@@ -342,7 +355,67 @@ TEST(LclUiTest, LiveGpuResizeCoalescesSerialsAvoidsShmAndWaitsForPresentation) {
     ASSERT_TRUE(lcl::protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
     const auto* second = reinterpret_cast<const lcl::protocol::LCLMsgAttachDmaBuf*>(payload.data());
     EXPECT_EQ(second->configureSerial, 12u);
+    const uint32_t secondBufferId = second->bufferId;
+    EXPECT_EQ(recorded->dmaCapacityGrowCount, 1);
     if (receivedFd >= 0) close(receivedFd);
+
+    // A genuinely rejected in-flight Live frame must return the frame credit;
+    // otherwise a newer configure would leave WindowApp gated forever.
+    sendConfigure(13, 128, 96,
+                  lcl::protocol::LCLConfigureResizeReason::WindowStateTransition);
+    lcl::protocol::LCLMsgReleaseDmaBuf release{};
+    release.surfaceId = app.getSurfaceId();
+    release.bufferId = secondBufferId;
+    header = {};
+    header.opcode = lcl::protocol::LCLOpcode::ReleaseDmaBuf;
+    header.payloadSize = sizeof(release);
+    ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[1], header, &release));
+
+    ASSERT_TRUE(app.tick());
+    EXPECT_EQ(app.getWidth(), 128u);
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    const auto* recovered =
+        reinterpret_cast<const lcl::protocol::LCLMsgAttachDmaBuf*>(payload.data());
+    EXPECT_EQ(recovered->configureSerial, 13u);
+    if (receivedFd >= 0) close(receivedFd);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(LclUiTest, ResizeFirstFrameDamagesPostLayoutRootExtent) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    recorded->dmaBufAvailable = true;
+    WindowApp app(std::move(canvas), 100, 100, "Resize damage");
+    app.setExternalIpcSocket(sockets[0]);
+    ASSERT_TRUE(recorded->configureDmaBufFrame(100, 100, 100, 100));
+
+    auto root = std::make_unique<Container>();
+    root->getYogaNode().setWidth(100.0f);
+    root->getYogaNode().setHeight(100.0f);
+    root->getYogaNode().setAlignItems(YGAlignCenter);
+    root->getYogaNode().setJustifyContent(YGJustifyCenter);
+    auto child = std::make_unique<Button>("Moved");
+    child->setWidth(40.0f);
+    child->setHeight(24.0f);
+    root->addChild(std::move(child));
+    app.setRootWidget(std::move(root));
+
+    ASSERT_TRUE(app.renderFrame());
+
+    recorded->roundedRects.clear();
+    recorded->texts.clear();
+    recorded->textPositions.clear();
+    app.resize(400, 100);
+    ASSERT_TRUE(app.renderFrame());
+
+    ASSERT_FALSE(recorded->roundedRects.empty());
+    EXPECT_GT(recorded->roundedRects.back().x, 100.0f);
+    ASSERT_EQ(recorded->texts.size(), 1u);
+    EXPECT_EQ(recorded->texts.front(), "Moved");
 
     close(sockets[0]);
     close(sockets[1]);

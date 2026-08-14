@@ -376,7 +376,7 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                                 targetWin, GeometryPhase::Drag);
                             targetWin.dragOffsetX = m_mouseX - targetWin.x;
                             targetWin.dragOffsetY = m_mouseY - targetWin.y;
-                            interaction = {targetWin.id, generation};
+                            interaction = GeometryInteraction::manual(targetWin.id, generation);
                             targetWin.markDirty();
                             stateChanged = true;
                         } else if (event.button == BTN_RIGHT) {
@@ -408,7 +408,7 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                             const uint64_t generation = beginGeometryInteraction(
                                 targetWin, GeometryPhase::Resize);
                             initializeResizeInteraction(targetWin, edge);
-                            interaction = {targetWin.id, generation};
+                            interaction = GeometryInteraction::manual(targetWin.id, generation);
                             targetWin.markDirty();
                             stateChanged = true;
                         }
@@ -420,7 +420,7 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                             const uint64_t generation = beginGeometryInteraction(
                                 targetWin, GeometryPhase::Resize);
                             initializeResizeInteraction(targetWin, edge);
-                            interaction = {targetWin.id, generation};
+                            interaction = GeometryInteraction::manual(targetWin.id, generation);
                             targetWin.markDirty();
                             stateChanged = true;
                         } else if (titleH > 0 && m_mouseY >= visibleBounds.y &&
@@ -430,7 +430,7 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                                 targetWin, GeometryPhase::Drag);
                             targetWin.dragOffsetX = m_mouseX - targetWin.x;
                             targetWin.dragOffsetY = m_mouseY - targetWin.y;
-                            interaction = {targetWin.id, generation};
+                            interaction = GeometryInteraction::manual(targetWin.id, generation);
                             targetWin.markDirty();
                             stateChanged = true;
                         }
@@ -522,6 +522,9 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                 } else if (activatedControl == 1) {
                     stateChanged = minimizeWindow(activatedWindowId) || stateChanged;
                 } else if (activatedControl == 2) {
+                    const Rect previousBounds = found->getBounds();
+                    const bool previousWasMaximized = found->isMaximized;
+                    const bool previousWasMinimized = found->isMinimized;
                     if (toggleMaximizeWindow(activatedWindowId)) {
                         const auto transitioned = std::find_if(
                             m_windows.begin(), m_windows.end(),
@@ -529,7 +532,10 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                                 return window.id == activatedWindowId;
                             });
                         if (transitioned != m_windows.end()) {
-                            interaction = {transitioned->id, transitioned->geometryGeneration};
+                            interaction = GeometryInteraction::windowStateTransition(
+                                transitioned->id, transitioned->geometryGeneration,
+                                previousBounds, previousWasMaximized,
+                                previousWasMinimized);
                         }
                         stateChanged = true;
                     }
@@ -932,7 +938,7 @@ GeometryInteraction WindowManager::beginWindowDrag(uint32_t windowId, int localX
     it->dragOffsetY = std::clamp(localY, 0, std::max(0, it->height - 1));
     it->markDirty();
     m_mouseDirty = true;
-    return {it->id, generation};
+    return GeometryInteraction::manual(it->id, generation);
 }
 
 bool WindowManager::minimizeWindow(uint32_t windowId) {

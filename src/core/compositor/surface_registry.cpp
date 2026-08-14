@@ -47,6 +47,7 @@ void SurfaceRegistry::clear() noexcept {
 }
 
 void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
+    completeLivePresentation(entry);
     releasePreviousBuffer(entry);
     if (entry.dmaBufTexture != 0 || entry.dmaBufId != 0) {
         entry.pendingDmaBufReleases.push_back({entry.dmaBufId, entry.dmaBufTexture});
@@ -84,6 +85,9 @@ void SurfaceRegistry::releasePreviousBuffer(SurfaceEntry& entry) noexcept {
 
 void SurfaceRegistry::interruptGeometryTransaction(SurfaceEntry& entry,
                                                    uint64_t newGeneration) noexcept {
+    const bool preserveLiveFlight =
+        entry.resizePresentation == protocol::LCLResizePresentationMode::Live &&
+        (hasOutstandingConfigure(entry) || hasUnpresentedLiveFrame(entry));
     releasePreviousBuffer(entry);
     entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::None;
     entry.resizeCrossfadeElapsedSec = 0.0f;
@@ -92,12 +96,38 @@ void SurfaceRegistry::interruptGeometryTransaction(SurfaceEntry& entry,
     entry.rollbackRequested = false;
     entry.resizeGeometryGeneration = 0;
 
-    // Drop configure backpressure from the superseded generation. The caller
-    // forces a fresh configure immediately; any old reply then fails serial
-    // validation and cannot reach WindowManager geometry.
-    entry.pendingConfigureSerial = 0;
-    entry.configuredGeometryGeneration = newGeneration;
+    // A Live client may already be rendering the only in-flight serial. Keep
+    // that serial valid until its real buffer is accepted and presented; the
+    // generation check prevents it from committing obsolete window geometry.
+    // The forced configure below then publishes only the newest target. Morph
+    // transactions retain their existing cancellation semantics.
+    if (!preserveLiveFlight) {
+        entry.pendingConfigureSerial = 0;
+        entry.configuredGeometryGeneration = newGeneration;
+    }
     entry.forceConfigure = true;
+}
+
+void SurfaceRegistry::beginGeometryTransition(SurfaceEntry& entry,
+                                              uint64_t newGeneration,
+                                              int rollbackX, int rollbackY,
+                                              int rollbackWidth, int rollbackHeight,
+                                              bool rollbackWasMaximized,
+                                              bool rollbackWasMinimized) noexcept {
+    interruptGeometryTransaction(entry, newGeneration);
+    entry.rollbackX = rollbackX;
+    entry.rollbackY = rollbackY;
+    entry.rollbackWidth = rollbackWidth;
+    entry.rollbackHeight = rollbackHeight;
+    entry.rollbackWasMaximized = rollbackWasMaximized;
+    entry.rollbackWasMinimized = rollbackWasMinimized;
+    entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
+    entry.resizeGeometryGeneration = newGeneration;
+    entry.resizeDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
+    entry.resizeCrossfadeElapsedSec = 0.0f;
+    entry.resizeCrossfadeProgress = 0.0f;
+    entry.resizeBufferReady = false;
+    entry.rollbackRequested = false;
 }
 
 bool SurfaceRegistry::acceptsBufferCommit(const SurfaceEntry& entry,
@@ -113,6 +143,22 @@ bool SurfaceRegistry::acceptsBufferCommit(const SurfaceEntry& entry,
 bool SurfaceRegistry::hasOutstandingConfigure(const SurfaceEntry& entry) noexcept {
     return entry.pendingConfigureSerial != 0 &&
            entry.pendingConfigureSerial != entry.acceptedConfigureSerial;
+}
+
+bool SurfaceRegistry::hasUnpresentedLiveFrame(const SurfaceEntry& entry) noexcept {
+    return entry.resizePresentation == protocol::LCLResizePresentationMode::Live &&
+           entry.livePresentationSerial != 0;
+}
+
+void SurfaceRegistry::queueLivePresentation(SurfaceEntry& entry,
+                                            uint64_t configureSerial) noexcept {
+    if (entry.resizePresentation == protocol::LCLResizePresentationMode::Live) {
+        entry.livePresentationSerial = configureSerial;
+    }
+}
+
+void SurfaceRegistry::completeLivePresentation(SurfaceEntry& entry) noexcept {
+    entry.livePresentationSerial = 0;
 }
 
 bool SurfaceRegistry::isOwnedByClientConnection(const SurfaceEntry& entry,

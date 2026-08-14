@@ -326,10 +326,10 @@ void Compositor::renderFrame() {
     const uint64_t presentedAtNs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
-    for (const auto& [surfaceKey, entry] : m_surfaces) {
+    for (auto& [surfaceKey, entry] : m_surfaces) {
         if (entry.clientFd < 0 || !entry.dmaBufTransportActive ||
-            entry.resizePresentation != protocol::LCLResizePresentationMode::Live ||
-            !entry.hasCommittedBuffer) continue;
+            !entry.hasCommittedBuffer ||
+            !SurfaceRegistry::hasUnpresentedLiveFrame(entry)) continue;
         protocol::LCLHeader header{};
         header.opcode = protocol::LCLOpcode::FramePresented;
         header.payloadSize = sizeof(protocol::LCLMsgFramePresented);
@@ -337,7 +337,9 @@ void Compositor::renderFrame() {
         message.surfaceId = static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu);
         message.timestampNs = presentedAtNs;
         message.refreshIntervalNs = m_refreshIntervalNs;
-        protocol::sendMsgWithFd(entry.clientFd, header, &message);
+        if (protocol::sendMsgWithFd(entry.clientFd, header, &message)) {
+            SurfaceRegistry::completeLivePresentation(entry);
+        }
     }
 
     std::vector<SurfaceRegistry::Key> surfacesToRemove;
