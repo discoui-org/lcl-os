@@ -40,6 +40,12 @@ endforeach()
 # Compiler flags for LCL OS core
 add_compile_options(-Wall -Wextra -Wpedantic)
 
+# Platform-agnostic interface library (consumed by core and render without concrete platform dependencies)
+add_library(lcl-platform-common INTERFACE)
+target_include_directories(lcl-platform-common INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
 # Shared compositor/client IPC wire-format implementation.
 add_library(lcl-protocol STATIC
     src/core/ipc/lcl_protocol.cpp
@@ -328,6 +334,7 @@ if(BUILD_TESTS)
     FetchContent_MakeAvailable(googletest)
 
     add_executable(lcl_unit_tests
+        tests/test_platform_interfaces.cpp
         tests/test_motion.cpp
         tests/test_lcl_protocol.cpp
         tests/test_app_bundle_parser.cpp

@@ -1,0 +1,53 @@
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <string>
+
+namespace lcl::platform {
+
+enum class RawInputEventType {
+    Unknown,
+    PointerMotion,
+    PointerButton,
+    KeyboardKey,
+    TouchDown,
+    TouchMove,
+    TouchUp
+};
+
+struct RawInputEvent {
+    RawInputEventType type{RawInputEventType::Unknown};
+    double dx{0.0};
+    double dy{0.0};
+    double absoluteX{-1.0};
+    double absoluteY{-1.0};
+    uint32_t button{0};
+    bool pressed{false};
+    bool isRepeat{false};
+    uint32_t key{0};
+    bool superPressed{false};
+    uint8_t modifiers{0};
+    char32_t codepoint{0};
+    std::string deviceName;
+};
+
+using InputEventCallback = std::function<void(const RawInputEvent&)>;
+
+/**
+ * @brief Platform-agnostic hardware input event listener.
+ *
+ * Dispatches raw events to the Compositor's event router.
+ */
+class IInputBackend {
+public:
+    virtual ~IInputBackend() = default;
+
+    virtual bool initialize(InputEventCallback callback) = 0;
+    virtual void shutdown() = 0;
+    virtual bool isInitialized() const = 0;
+
+    virtual size_t pollEvents(int screenWidth, int screenHeight) = 0;
+};
+
+} // namespace lcl::platform
