@@ -46,6 +46,8 @@ public:
         bool dmaBufTransportActive{false};
         uint32_t width{0};
         uint32_t height{0};
+        uint32_t backingWidth{0};
+        uint32_t backingHeight{0};
         uint32_t stride{0};
         float bufferScale{1.0f};
         size_t shmSize{0};
@@ -77,6 +79,7 @@ public:
         uint64_t nextConfigureSerial{1};
         uint64_t pendingConfigureSerial{0};
         uint64_t acceptedConfigureSerial{0};
+        uint64_t configuredGeometryGeneration{0};
         bool forceConfigure{false};
         std::chrono::steady_clock::time_point lastConfigureSent{};
 
@@ -98,6 +101,8 @@ public:
         uint32_t previousDmaBufTexture{0};
         uint32_t previousWidth{0};
         uint32_t previousHeight{0};
+        uint32_t previousBackingWidth{0};
+        uint32_t previousBackingHeight{0};
         uint32_t previousStride{0};
         size_t previousShmSize{0};
         ResizeTransitionPhase resizeTransitionPhase{ResizeTransitionPhase::None};
@@ -106,6 +111,7 @@ public:
         float resizeCrossfadeProgress{1.0f};
         bool resizeBufferReady{true};
         bool rollbackRequested{false};
+        uint64_t resizeGeometryGeneration{0};
         int rollbackX{0};
         int rollbackY{0};
         int rollbackWidth{0};
@@ -170,6 +176,9 @@ public:
     /** Release an entry's mapped SHM or imported DMA-BUF without erasing metadata. */
     static void releaseBuffer(SurfaceEntry& entry) noexcept;
     static void releasePreviousBuffer(SurfaceEntry& entry) noexcept;
+    /** Cancel a superseded geometry transaction without releasing the current frame. */
+    static void interruptGeometryTransaction(SurfaceEntry& entry,
+                                             uint64_t newGeneration) noexcept;
     static bool acceptsBufferCommit(const SurfaceEntry& entry,
                                     uint64_t configureSerial) noexcept;
     static bool hasOutstandingConfigure(const SurfaceEntry& entry) noexcept;

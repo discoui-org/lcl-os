@@ -79,6 +79,25 @@ void SurfaceRegistry::releasePreviousBuffer(SurfaceEntry& entry) noexcept {
     if (entry.previousShmFd >= 0) close(entry.previousShmFd);
     entry.previousShmFd = -1;
     entry.previousWidth = entry.previousHeight = entry.previousStride = 0;
+    entry.previousBackingWidth = entry.previousBackingHeight = 0;
+}
+
+void SurfaceRegistry::interruptGeometryTransaction(SurfaceEntry& entry,
+                                                   uint64_t newGeneration) noexcept {
+    releasePreviousBuffer(entry);
+    entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::None;
+    entry.resizeCrossfadeElapsedSec = 0.0f;
+    entry.resizeCrossfadeProgress = 1.0f;
+    entry.resizeBufferReady = true;
+    entry.rollbackRequested = false;
+    entry.resizeGeometryGeneration = 0;
+
+    // Drop configure backpressure from the superseded generation. The caller
+    // forces a fresh configure immediately; any old reply then fails serial
+    // validation and cannot reach WindowManager geometry.
+    entry.pendingConfigureSerial = 0;
+    entry.configuredGeometryGeneration = newGeneration;
+    entry.forceConfigure = true;
 }
 
 bool SurfaceRegistry::acceptsBufferCommit(const SurfaceEntry& entry,

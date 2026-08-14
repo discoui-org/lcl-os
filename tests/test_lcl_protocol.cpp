@@ -84,6 +84,8 @@ TEST(LCLProtocolTest, ConfigureAndAttachRoundTripTheSameSerial) {
     configure.configureSerial = 0x0102030405060708ull;
     configure.width = 640;
     configure.height = 480;
+    configure.backingWidth = 1920;
+    configure.backingHeight = 1080;
     configure.bufferScale = 1.0f;
     configure.resizeReason = LCLConfigureResizeReason::WindowStateTransition;
     LCLHeader header{};
@@ -98,6 +100,8 @@ TEST(LCLProtocolTest, ConfigureAndAttachRoundTripTheSameSerial) {
     ASSERT_EQ(payload.size(), sizeof(LCLMsgConfigureBounds));
     const auto* decoded = reinterpret_cast<const LCLMsgConfigureBounds*>(payload.data());
     EXPECT_EQ(decoded->configureSerial, configure.configureSerial);
+    EXPECT_EQ(decoded->backingWidth, 1920u);
+    EXPECT_EQ(decoded->backingHeight, 1080u);
     EXPECT_EQ(decoded->resizeReason, LCLConfigureResizeReason::WindowStateTransition);
 
     close(sockets[0]);
@@ -323,7 +327,9 @@ TEST(LCLProtocolTest, DmaBufAttachCarriesMetadataAndFileDescriptor) {
     sent.bufferId = 2;
     sent.width = 640;
     sent.height = 480;
-    sent.stride = 2560;
+    sent.backingWidth = 800;
+    sent.backingHeight = 600;
+    sent.stride = 3200;
     sent.format = LCL_BUFFER_FORMAT_ARGB8888;
     sent.modifier = 0x0102030405060708ull;
     LCLHeader header{};
@@ -341,6 +347,8 @@ TEST(LCLProtocolTest, DmaBufAttachCarriesMetadataAndFileDescriptor) {
     EXPECT_EQ(received->surfaceId, sent.surfaceId);
     EXPECT_EQ(received->configureSerial, sent.configureSerial);
     EXPECT_EQ(received->bufferId, sent.bufferId);
+    EXPECT_EQ(received->width, 640u);
+    EXPECT_EQ(received->backingWidth, 800u);
     EXPECT_EQ(received->modifier, sent.modifier);
     EXPECT_GE(receivedFd, 0);
 
@@ -367,6 +375,59 @@ TEST(LCLProtocolTest, DmaBufReleaseNeedsNoFileDescriptor) {
     const auto* decoded = reinterpret_cast<const LCLMsgReleaseDmaBuf*>(decodedPayload.data());
     EXPECT_EQ(decoded->surfaceId, release.surfaceId);
     EXPECT_EQ(decoded->bufferId, release.bufferId);
+}
+
+TEST(LCLProtocolTest, ContentExtentMustFitInsideGpuBacking) {
+    LCLMsgConfigureBounds configure{};
+    configure.surfaceId = 1;
+    configure.configureSerial = 2;
+    configure.width = 801;
+    configure.height = 480;
+    configure.backingWidth = 800;
+    configure.backingHeight = 600;
+    configure.bufferScale = 1.0f;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::ConfigureBounds;
+    header.payloadSize = sizeof(configure);
+    std::vector<uint8_t> packet;
+    EXPECT_FALSE(encodePacket(header, &configure, packet));
+
+    LCLMsgAttachDmaBuf attach{};
+    attach.surfaceId = 1;
+    attach.configureSerial = 2;
+    attach.bufferId = 3;
+    attach.width = 640;
+    attach.height = 480;
+    attach.backingWidth = 800;
+    attach.backingHeight = 600;
+    attach.stride = 800 * 4 - 1;
+    attach.format = LCL_BUFFER_FORMAT_ARGB8888;
+    header.opcode = LCLOpcode::AttachDmaBuf;
+    header.payloadSize = sizeof(attach);
+    EXPECT_FALSE(encodePacket(header, &attach, packet));
+}
+
+TEST(LCLProtocolTest, FramePresentedRoundTripsWithoutFileDescriptor) {
+    LCLMsgFramePresented presented{};
+    presented.surfaceId = 9;
+    presented.timestampNs = 123456789;
+    presented.refreshIntervalNs = 6944444;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::FramePresented;
+    header.payloadSize = sizeof(presented);
+    std::vector<uint8_t> packet;
+    ASSERT_TRUE(encodePacket(header, &presented, packet));
+    LCLHeader decodedHeader{};
+    std::vector<uint8_t> payload;
+    ASSERT_TRUE(decodePacket(packet.data(), packet.size(), decodedHeader, payload));
+    const auto* decoded = reinterpret_cast<const LCLMsgFramePresented*>(payload.data());
+    EXPECT_EQ(decoded->timestampNs, presented.timestampNs);
+    EXPECT_EQ(decoded->refreshIntervalNs, presented.refreshIntervalNs);
+
+    const int descriptor = dup(STDIN_FILENO);
+    ASSERT_GE(descriptor, 0);
+    EXPECT_FALSE(sendMsgWithFd(STDOUT_FILENO, header, &presented, descriptor));
+    close(descriptor);
 }
 
 TEST(LCLProtocolTest, SendAndReceiveSetWindowLayerMsg) {

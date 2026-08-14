@@ -79,8 +79,11 @@ public:
      * @brief Set target buffer and dimensions for software rasterization.
      */
     void setTargetPixels(uint32_t* targetPixels, uint32_t width = 0, uint32_t height = 0);
+    /** Change the drawable content viewport without resizing the EGL backing. */
+    void setFrameExtent(uint32_t width, uint32_t height);
     /** Select an externally owned GL framebuffer for one client frame. */
-    void setExternalFrameTarget(uint32_t framebuffer, uint32_t texture = 0);
+    void setExternalFrameTarget(uint32_t framebuffer, uint32_t texture = 0,
+                                uint32_t backingWidth = 0, uint32_t backingHeight = 0);
     void clearExternalFrameTarget();
 
     /**
@@ -175,6 +178,7 @@ public:
     uint32_t importDmaBufTexture(const lcl::core::DmaBufImport& buffer);
     void releaseDmaBufTexture(uint32_t texture);
     void drawDmaBufTextureTransformed(float dstX, float dstY, int srcW, int srcH,
+                                      int backingW, int backingH,
                                       uint32_t texture, float opacity,
                                       float cornerRadius, float cornerRoundness,
                                       bool squareTopCorners, float drawWidth, float drawHeight);
@@ -230,11 +234,15 @@ private:
     bool m_glFBOReady{false};
     uint32_t m_glFBO[2]{0, 0};
     uint32_t m_glFBOTexture[2]{0, 0};
+    uint32_t m_glFBOCapacityWidth{0};
+    uint32_t m_glFBOCapacityHeight{0};
 
     uint32_t m_glSceneFBO{0};
     uint32_t m_glSceneTexture{0};
     uint32_t m_glExternalFrameFBO{0};
     uint32_t m_glExternalFrameTexture{0};
+    uint32_t m_glExternalBackingWidth{0};
+    uint32_t m_glExternalBackingHeight{0};
 
     uint32_t m_glBlurProgram{0};
     int32_t m_aBlurPosLoc{-1};
@@ -246,6 +254,7 @@ private:
     int32_t m_uBlurSizeLoc{-1};
     int32_t m_uBlurCornerRadiusLoc{-1};
     int32_t m_uBlurRoundnessLoc{-1};
+    int32_t m_uBlurInputScaleLoc{-1};
 
     uint32_t m_glColorMatrixProgram{0};
     int32_t m_aColorPosLoc{-1};
@@ -253,6 +262,7 @@ private:
     int32_t m_uColorTextureLoc{-1};
     int32_t m_uColorMatrixLoc{-1};
     int32_t m_uColorOffsetLoc{-1};
+    int32_t m_uColorInputScaleLoc{-1};
 
     uint32_t m_glMaskProgram{0};
     int32_t m_aMaskPosLoc{-1};
@@ -262,6 +272,7 @@ private:
     int32_t m_uMaskRadiusLoc{-1};
     int32_t m_uMaskRoundnessLoc{-1};
     int32_t m_uMaskOpacityLoc{-1};
+    int32_t m_uMaskSampleScaleLoc{-1};
 
     uint32_t m_glMaskBgraProgram{0};
     int32_t m_aMaskBgraPosLoc{-1};
@@ -294,6 +305,7 @@ private:
     int32_t m_uRefractSizeLoc{-1};
     int32_t m_uRefractRadiusLoc{-1};
     int32_t m_uRefractRoundnessLoc{-1};
+    int32_t m_uRefractInputScaleLoc{-1};
 
     // GPU BGRA Surface Compositing Handles
     uint32_t m_glClientTexture{0};
@@ -306,8 +318,11 @@ private:
     int32_t m_uBgraOpacityLoc{-1};
 
     // Helper for rendering textured quads on GPU
-    void drawTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
-    void drawMaskedTextureQuad(uint32_t textureId, float x, float y, float w, float h, float cornerRadius, float cornerRoundness, float opacity);
+    void drawTextureQuad(uint32_t textureId, float x, float y, float w, float h,
+                         float opacity = 1.0f, float uMax = 1.0f, float vMax = 1.0f);
+    void drawMaskedTextureQuad(uint32_t textureId, float x, float y, float w, float h,
+                               float cornerRadius, float cornerRoundness, float opacity,
+                               float uMax = 1.0f, float vMax = 1.0f);
     void drawMaskedBgraTextureQuad(uint32_t textureId,
                                    float x,
                                    float y,

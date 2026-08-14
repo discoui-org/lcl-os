@@ -222,6 +222,10 @@ bool ClientEGLContext::resize(uint32_t width, uint32_t height) {
 
 bool ClientEGLContext::createDmaBufPool(uint32_t width, uint32_t height) {
     destroyDmaBufPool();
+    return appendDmaBufPool(width, height);
+}
+
+bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
     if (!m_initialized || !m_gbmDevice || width == 0 || height == 0 || !makeCurrent()) return false;
 
     const auto createImage = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(
@@ -235,20 +239,43 @@ bool ClientEGLContext::createDmaBufPool(uint32_t width, uint32_t height) {
     // Three independent BOs prevent the client from writing a frame the
     // compositor still samples. Every slot becomes reusable only via
     // ReleaseDmaBuf.
+    // Free slots from the old generation can be destroyed immediately. Busy
+    // slots stay alive, retired, until their compositor release arrives.
+    for (size_t index = m_dmaBufs.size(); index > 0; --index) {
+        auto& slot = m_dmaBufs[index - 1];
+        if (slot.busy) {
+            slot.retired = true;
+        } else {
+            destroyDmaBufSlot(slot);
+            m_dmaBufs.erase(m_dmaBufs.begin() + static_cast<std::ptrdiff_t>(index - 1));
+        }
+    }
+    const size_t retainedPoolSize = m_dmaBufs.size();
     for (uint32_t index = 0; index < 3; ++index) {
         DmaBufSlot slot{};
-        slot.id = index + 1;
+        slot.id = m_nextDmaBufId++;
+        slot.width = width;
+        slot.height = height;
         slot.bo = gbm_bo_create(m_gbmDevice, width, height, GBM_FORMAT_ARGB8888,
                                 GBM_BO_USE_RENDERING);
         if (!slot.bo) {
-            destroyDmaBufPool();
+            while (m_dmaBufs.size() > retainedPoolSize) {
+                destroyDmaBufSlot(m_dmaBufs.back());
+                m_dmaBufs.pop_back();
+            }
+            for (auto& existing : m_dmaBufs) existing.retired = false;
             return false;
         }
         const EGLint attributes[] = {EGL_NONE};
         slot.image = createImage(m_display, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR,
                                  reinterpret_cast<EGLClientBuffer>(slot.bo), attributes);
         if (slot.image == EGL_NO_IMAGE_KHR) {
-            destroyDmaBufPool();
+            destroyDmaBufSlot(slot);
+            while (m_dmaBufs.size() > retainedPoolSize) {
+                destroyDmaBufSlot(m_dmaBufs.back());
+                m_dmaBufs.pop_back();
+            }
+            for (auto& existing : m_dmaBufs) existing.retired = false;
             return false;
         }
         glGenTextures(1, &slot.texture);
@@ -263,7 +290,12 @@ bool ClientEGLContext::createDmaBufPool(uint32_t width, uint32_t height) {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                slot.texture, 0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            destroyDmaBufPool();
+            destroyDmaBufSlot(slot);
+            while (m_dmaBufs.size() > retainedPoolSize) {
+                destroyDmaBufSlot(m_dmaBufs.back());
+                m_dmaBufs.pop_back();
+            }
+            for (auto& existing : m_dmaBufs) existing.retired = false;
             return false;
         }
         slot.stride = gbm_bo_get_stride(slot.bo);
@@ -272,6 +304,8 @@ bool ClientEGLContext::createDmaBufPool(uint32_t width, uint32_t height) {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
+    m_dmaBufCapacityWidth = width;
+    m_dmaBufCapacityHeight = height;
     if (!m_dmaBufTransportLogged) {
         std::cerr << "[LCL Canvas] Client DMA-BUF transport active (3 GBM buffers)\n";
         m_dmaBufTransportLogged = true;
@@ -279,30 +313,45 @@ bool ClientEGLContext::createDmaBufPool(uint32_t width, uint32_t height) {
     return true;
 }
 
+bool ClientEGLContext::ensureDmaBufCapacity(uint32_t width, uint32_t height) {
+    if (!m_initialized || width == 0 || height == 0) return false;
+    if (!m_dmaBufs.empty() && width <= m_dmaBufCapacityWidth &&
+        height <= m_dmaBufCapacityHeight) return true;
+    return appendDmaBufPool(std::max(width, m_dmaBufCapacityWidth),
+                            std::max(height, m_dmaBufCapacityHeight));
+}
+
+void ClientEGLContext::destroyDmaBufSlot(DmaBufSlot& slot) {
+    const auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(
+        eglGetProcAddress("eglDestroyImageKHR"));
+    if (slot.framebuffer) glDeleteFramebuffers(1, &slot.framebuffer);
+    if (slot.texture) glDeleteTextures(1, &slot.texture);
+    if (slot.image != EGL_NO_IMAGE_KHR && destroyImage) destroyImage(m_display, slot.image);
+    if (slot.bo) gbm_bo_destroy(slot.bo);
+    slot = {};
+}
+
 void ClientEGLContext::destroyDmaBufPool() {
     if (!m_dmaBufs.empty() && m_display != EGL_NO_DISPLAY) {
         makeCurrent();
-        const auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(
-            eglGetProcAddress("eglDestroyImageKHR"));
         for (auto& slot : m_dmaBufs) {
-            if (slot.framebuffer) glDeleteFramebuffers(1, &slot.framebuffer);
-            if (slot.texture) glDeleteTextures(1, &slot.texture);
-            if (slot.image != EGL_NO_IMAGE_KHR && destroyImage) destroyImage(m_display, slot.image);
-            if (slot.bo) gbm_bo_destroy(slot.bo);
+            destroyDmaBufSlot(slot);
         }
     }
     m_dmaBufs.clear();
     m_currentDmaBuf = -1;
+    m_dmaBufCapacityWidth = 0;
+    m_dmaBufCapacityHeight = 0;
 }
 
 std::optional<ClientEGLContext::DmaBufTarget> ClientEGLContext::acquireDmaBufTarget() {
     if (!m_initialized || m_currentDmaBuf >= 0 || !makeCurrent()) return std::nullopt;
     for (size_t index = 0; index < m_dmaBufs.size(); ++index) {
         auto& slot = m_dmaBufs[index];
-        if (slot.busy) continue;
+        if (slot.busy || slot.retired) continue;
         slot.busy = true;
         m_currentDmaBuf = static_cast<int>(index);
-        return DmaBufTarget{slot.id, slot.framebuffer, slot.texture};
+        return DmaBufTarget{slot.id, slot.framebuffer, slot.texture, slot.width, slot.height};
     }
     return std::nullopt;
 }
@@ -317,7 +366,7 @@ std::optional<ClientEGLContext::DmaBufExport> ClientEGLContext::exportCurrentDma
         return std::nullopt;
     }
     glFlush();
-    return DmaBufExport{slot.id, m_width, m_height, slot.stride,
+    return DmaBufExport{slot.id, slot.width, slot.height, slot.stride,
                         lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888, slot.modifier, fd};
 }
 
@@ -329,11 +378,15 @@ void ClientEGLContext::cancelCurrentDmaBuf() {
 }
 
 void ClientEGLContext::releaseDmaBuf(uint32_t bufferId) {
-    for (auto& slot : m_dmaBufs) {
-        if (slot.id == bufferId) {
-            slot.busy = false;
-            return;
+    for (size_t index = 0; index < m_dmaBufs.size(); ++index) {
+        auto& slot = m_dmaBufs[index];
+        if (slot.id != bufferId) continue;
+        slot.busy = false;
+        if (slot.retired) {
+            if (makeCurrent()) destroyDmaBufSlot(slot);
+            m_dmaBufs.erase(m_dmaBufs.begin() + static_cast<std::ptrdiff_t>(index));
         }
+        return;
     }
 }
 

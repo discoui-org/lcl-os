@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+
 #include "core/compositor/surface_registry.hpp"
 #include "core/input/input_manager.hpp"
 #include "core/scene/scene_registry.hpp"
@@ -24,6 +26,9 @@ public:
 
     /** Send configure events after a compositor-originated window action. */
     void syncWindowState();
+    void setRefreshInterval(std::chrono::nanoseconds interval) {
+        if (interval.count() > 0) m_refreshInterval = interval;
+    }
 
 private:
     void sendPendingConfigures();
@@ -34,6 +39,7 @@ private:
     render::WindowManager& m_windowManager;
     SurfaceRegistry& m_surfaces;
     SceneRegistry& m_scenes;
+    std::chrono::nanoseconds m_refreshInterval{std::chrono::nanoseconds(16666667)};
 };
 
 } // namespace lcl::core

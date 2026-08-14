@@ -30,6 +30,36 @@ enum class DecorationMode {
     None  // Frameless / No Decoration
 };
 
+enum class GeometryPhase {
+    Idle,
+    Morph,
+    LiveTransition,
+    Drag,
+    Resize,
+    SnapBack,
+};
+
+struct PresentedBounds {
+    float x{0.0f};
+    float y{0.0f};
+    float width{1.0f};
+    float height{1.0f};
+};
+
+struct GeometryInteraction {
+    uint32_t windowId{0};
+    uint64_t generation{0};
+
+    operator bool() const noexcept { return windowId != 0 && generation != 0; }
+};
+
+struct WindowInputResult {
+    bool stateChanged{false};
+    GeometryInteraction interaction{};
+
+    operator bool() const noexcept { return stateChanged; }
+};
+
 struct ReservedZone {
     uint32_t top{0};
     uint32_t bottom{0};
@@ -53,11 +83,11 @@ struct Window {
     float presentationWidth{400.0f};
     float presentationHeight{300.0f};
     bool presentationInitialized{false};
-    bool geometryTransitionActive{false};
+    GeometryPhase geometryPhase{GeometryPhase::Idle};
+    uint64_t geometryGeneration{1};
     // Live resize animates configure bounds and waits for matching client
     // buffers. Unlike a compositor morph, the currently displayed buffer is
     // never scaled to the interpolated geometry.
-    bool liveResizeTransitionActive{false};
     bool liveResizeMotionFinished{false};
     int liveResizeTargetX{0};
     int liveResizeTargetY{0};
@@ -70,13 +100,11 @@ struct Window {
     protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
 
     // Drag state
-    bool isDragging{false};
     int dragOffsetX{0};
     int dragOffsetY{0};
     float lastDragVelX{0.0f};
     float lastDragVelY{0.0f};
 
-    bool snapBackActive{false};
     float snapX{0.0f};
     float snapY{0.0f};
     float snapVelX{0.0f};
@@ -85,7 +113,6 @@ struct Window {
     float snapTargetY{0.0f};
 
     // Resize state
-    bool isResizing{false};
     ResizeEdge resizeEdge{ResizeEdge::None};
     ResizeEdge activeResizeEdge{ResizeEdge::None};
     int resizeStartX{0};
@@ -141,7 +168,24 @@ struct Window {
         isDirty = false;
         damageRect = Rect{0, 0, 0, 0};
     }
+
+    bool isDragging() const noexcept { return geometryPhase == GeometryPhase::Drag; }
+    bool isResizing() const noexcept { return geometryPhase == GeometryPhase::Resize; }
+    bool isMorphing() const noexcept { return geometryPhase == GeometryPhase::Morph; }
+    bool isLiveTransitioning() const noexcept {
+        return geometryPhase == GeometryPhase::LiveTransition;
+    }
+    bool isSnappingBack() const noexcept { return geometryPhase == GeometryPhase::SnapBack; }
 };
+
+inline PresentedBounds presentedBounds(const Window& window) noexcept {
+    if (!window.presentationInitialized) {
+        return {static_cast<float>(window.x), static_cast<float>(window.y),
+                static_cast<float>(window.width), static_cast<float>(window.height)};
+    }
+    return {window.presentationX, window.presentationY,
+            window.presentationWidth, window.presentationHeight};
+}
 
 class WindowManager {
 public:
@@ -160,6 +204,8 @@ public:
      * @brief Initialize window manager canvas dimensions.
      */
     bool initialize(uint32_t screenWidth = 1024, uint32_t screenHeight = 768);
+    uint32_t getScreenWidth() const noexcept { return m_screenWidth; }
+    uint32_t getScreenHeight() const noexcept { return m_screenHeight; }
 
     /**
      * @brief Create a new window dynamically.
@@ -174,9 +220,9 @@ public:
 
     /**
      * @brief Process input event for hit testing, window focus, and dragging.
-     * @return True if window state or mouse position changed requiring redraw.
+     * @return Redraw state plus the generation of any newly authoritative interaction.
      */
-    bool processInputEvent(const core::InputEvent& ev);
+    WindowInputResult processInputEvent(const core::InputEvent& ev);
 
     /**
      * @brief Advance spring snap-back animations for dragged windows.
@@ -190,10 +236,13 @@ public:
      * @param windowId Target window ID.
      * @param frameW Total attached surface frame width.
      * @param frameH Total attached surface frame height (including titlebar).
+     * @param expectedGeneration Zero for initial/legacy commits, otherwise the
+     * generation that issued the accepted configure.
      */
-    void commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH,
+    bool commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH,
                                bool preservePendingTarget = false,
-                               int configuredX = 0, int configuredY = 0);
+                               int configuredX = 0, int configuredY = 0,
+                               uint64_t expectedGeneration = 0);
 
     /**
      * @brief Set decoration mode (SSD/CSD/None) for a window.
@@ -225,13 +274,14 @@ public:
     void setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right);
 
     /** Start a compositor-owned drag from a client-local pointer position. */
-    bool beginWindowDrag(uint32_t windowId, int localX, int localY);
+    GeometryInteraction beginWindowDrag(uint32_t windowId, int localX, int localY);
     bool minimizeWindow(uint32_t windowId);
     bool maximizeWindow(uint32_t windowId, bool animateGeometry = true);
     bool restoreWindow(uint32_t windowId, bool animateGeometry = true);
     bool toggleMaximizeWindow(uint32_t windowId, bool animateGeometry = true);
     bool rollbackWindowGeometry(uint32_t windowId, const Rect& geometry,
-                                bool wasMaximized, bool wasMinimized);
+                                bool wasMaximized, bool wasMinimized,
+                                uint64_t expectedGeneration = 0);
 
     const ReservedZone& getReservedZone() const { return m_reservedZone; }
 
@@ -279,6 +329,9 @@ private:
     void startGeometryTransition(Window& window, int targetX, int targetY,
                                  int targetWidth, int targetHeight,
                                  bool animate);
+    uint64_t beginGeometryInteraction(Window& window, GeometryPhase phase);
+    void initializeResizeInteraction(Window& window, ResizeEdge edge);
+    void settleGeometry(Window& window, GeometryPhase phase = GeometryPhase::Idle);
     void refreshChromeHoverState();
 
     uint32_t m_screenWidth{1024};

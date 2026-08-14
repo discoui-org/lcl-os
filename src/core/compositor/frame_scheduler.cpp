@@ -49,6 +49,7 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
                 entry.resizeCrossfadeProgress = 1.0f;
                 entry.resizeBufferReady = true;
                 SurfaceRegistry::releasePreviousBuffer(entry);
+                entry.resizeGeometryGeneration = 0;
             }
         }
         if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::None) {

@@ -36,7 +36,32 @@ uint32_t toClientPointerButton(uint32_t linuxButton) {
 } // namespace
 
 bool InputRouter::route(const InputEvent& event) {
-    const bool stateChanged = m_windowManager.processInputEvent(event);
+    bool visibilityInputBlocked = false;
+    if (event.type == InputEventType::PointerButton && event.pressed) {
+        const uint32_t focusedWindowId = m_windowManager.getFocusedWindowId();
+        const auto surface = std::find_if(
+            m_surfaces.begin(), m_surfaces.end(),
+            [focusedWindowId](const auto& item) {
+                if (item.second.windowId != focusedWindowId) return false;
+                const auto phase = item.second.transitionPhase;
+                return phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing ||
+                       phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring ||
+                       phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing;
+            });
+        visibilityInputBlocked = surface != m_surfaces.end();
+    }
+    const auto result = visibilityInputBlocked
+        ? render::WindowInputResult{}
+        : m_windowManager.processInputEvent(event);
+    if (result.interaction) {
+        for (auto& [_, entry] : m_surfaces) {
+            if (entry.windowId == result.interaction.windowId) {
+                SurfaceRegistry::interruptGeometryTransaction(
+                    entry, result.interaction.generation);
+            }
+        }
+    }
+    const bool stateChanged = result.stateChanged;
     if (stateChanged) {
         sendPendingConfigures();
         processCloseRequests();
@@ -51,6 +76,7 @@ void InputRouter::syncWindowState() {
 }
 
 void InputRouter::sendPendingConfigures() {
+    const auto now = std::chrono::steady_clock::now();
     for (const auto& window : m_windowManager.getWindows()) {
         if (window.isMinimized) {
             continue;
@@ -60,27 +86,28 @@ void InputRouter::sendPendingConfigures() {
                 continue;
             }
 
-            // ConfigureBounds is a one-in-flight transaction. Pointer motion
-            // may continue updating Window::pending* while the client renders,
-            // but issuing another serial here would make the expected reply
-            // stale before it can reach the compositor. Once that commit is
-            // accepted, processIPC() calls syncWindowState() again and sends
-            // the newest coalesced geometry.
-            if (SurfaceRegistry::hasOutstandingConfigure(entry)) {
+            // CompositorMorph remains a one-in-flight transaction. Live keeps
+            // the newest serial authoritative and is bounded by display refresh;
+            // stale DMA-BUF replies are released without entering the scene.
+            const bool live = entry.resizePresentation ==
+                protocol::LCLResizePresentationMode::Live;
+            if ((!live && SurfaceRegistry::hasOutstandingConfigure(entry)) ||
+                (live && entry.lastConfigureSent.time_since_epoch().count() != 0 &&
+                 now - entry.lastConfigureSent < m_refreshInterval)) {
                 break;
             }
 
             const int titleOffset = (window.decorationMode == render::DecorationMode::SSD)
                 ? DisplayScale::titleBarHeight()
                 : 0;
-            const int configuredX = window.liveResizeTransitionActive ? window.pendingX : window.x;
-            const int configuredY = window.liveResizeTransitionActive ? window.pendingY : window.y;
+            const int configuredX = window.isLiveTransitioning() ? window.pendingX : window.x;
+            const int configuredY = window.isLiveTransitioning() ? window.pendingY : window.y;
             const uint32_t physicalContentW = static_cast<uint32_t>(window.pendingWidth > 0 ? window.pendingWidth : window.width);
             const uint32_t physicalContentH = static_cast<uint32_t>(std::max(1, (window.pendingHeight > 0 ? window.pendingHeight : window.height) - titleOffset));
-            const bool livePositionChanged = window.liveResizeTransitionActive &&
+            const bool livePositionChanged = window.isLiveTransitioning() &&
                 (configuredX != entry.configuredX || configuredY != entry.configuredY);
-            if (physicalContentW == entry.width && physicalContentH == entry.height &&
-                entry.pendingConfigureSerial == entry.acceptedConfigureSerial && !entry.forceConfigure &&
+            if (physicalContentW == entry.configuredWidth && physicalContentH == entry.configuredHeight &&
+                !entry.forceConfigure &&
                 !livePositionChanged) {
                 break;
             }
@@ -97,18 +124,28 @@ void InputRouter::sendPendingConfigures() {
             configure.height = physicalToLogical(physicalContentH, entry.bufferScale);
             configure.bufferScale = entry.bufferScale;
             configure.resizeReason = (!window.isMaximized &&
-                                      (window.isResizing || window.activeResizeEdge != render::ResizeEdge::None))
+                                      (window.isResizing() || window.activeResizeEdge != render::ResizeEdge::None))
                 ? protocol::LCLConfigureResizeReason::Interactive
                 : protocol::LCLConfigureResizeReason::WindowStateTransition;
+            configure.backingWidth = configure.width;
+            configure.backingHeight = configure.height;
+            if (live && configure.resizeReason ==
+                    protocol::LCLConfigureResizeReason::Interactive) {
+                configure.backingWidth = physicalToLogical(
+                    m_windowManager.getScreenWidth(), entry.bufferScale);
+                configure.backingHeight = physicalToLogical(
+                    m_windowManager.getScreenHeight(), entry.bufferScale);
+            }
             configure.isFocused = window.isFocused ? 1 : 0;
             if (protocol::sendMsgWithFd(entry.clientFd, header, &configure)) {
                 entry.pendingConfigureSerial = configure.configureSerial;
+                entry.configuredGeometryGeneration = window.geometryGeneration;
                 entry.configuredX = configuredX;
                 entry.configuredY = configuredY;
                 entry.configuredWidth = physicalContentW;
                 entry.configuredHeight = physicalContentH;
                 entry.configuredFocused = configure.isFocused;
-                entry.lastConfigureSent = std::chrono::steady_clock::now();
+                entry.lastConfigureSent = now;
                 entry.forceConfigure = false;
             }
             break;
@@ -183,6 +220,11 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
     if (entry.unfocusable || !entry.hasCommittedBuffer) {
         return;
     }
+    if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing ||
+        entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring ||
+        entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing) {
+        return;
+    }
     protocol::LCLHeader header{};
     header.opcode = protocol::LCLOpcode::InputEvent;
     header.payloadSize = sizeof(protocol::LCLMsgInputEvent);
@@ -222,8 +264,9 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
     protocol::LCLMsgInputEvent input{};
     input.surfaceId = surfaceId;
     input.type = event.type == InputEventType::PointerMotion ? 3 : 4;
-    input.x = static_cast<float>(m_windowManager.getMouseX() - windowIt->x) / scale;
-    input.y = static_cast<float>(m_windowManager.getMouseY() - windowIt->y - titleOffset) / scale;
+    const auto bounds = render::presentedBounds(*windowIt);
+    input.x = (static_cast<float>(m_windowManager.getMouseX()) - bounds.x) / scale;
+    input.y = (static_cast<float>(m_windowManager.getMouseY()) - bounds.y - titleOffset) / scale;
     // lcl-ui's backend-independent pointer contract uses 0 for primary.
     // The compositor continues to use raw BTN_* codes for its own shortcuts.
     input.key = toClientPointerButton(event.button);

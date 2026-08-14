@@ -202,6 +202,8 @@ private:
     uint32_t m_nextRequestId{1};
     uint64_t m_configureSerial{1};
     uint64_t m_pendingConfigureSerial{1};
+    uint32_t m_backingWidth{0};
+    uint32_t m_backingHeight{0};
     // SurfaceCreate is only a request. Do not commit the provisional client
     // buffer until the compositor assigns the first configure serial.
     bool m_waitingForInitialConfigure{false};
@@ -217,6 +219,10 @@ private:
     uint32_t m_pendingResizeWidth{0};
     uint32_t m_pendingResizeHeight{0};
     bool m_hasPendingResize{false};
+    bool m_liveInteractiveResize{false};
+    bool m_liveFrameGateOpen{true};
+    uint64_t m_lastPresentedTimestampNs{0};
+    uint64_t m_refreshIntervalNs{0};
     std::chrono::steady_clock::time_point m_lastResizeApply{};
     bool m_running{false};
     bool m_morphInputFrozen{false};

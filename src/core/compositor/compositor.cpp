@@ -100,6 +100,8 @@ bool Compositor::initialize() {
     uint32_t hz = (m_displayManager.isInitialized()
                    ? m_displayManager.getActiveDisplayMode().refreshRate : 60);
     if (hz == 0) hz = 60;
+    m_refreshIntervalNs = 1000000000ull / hz;
+    m_inputRouter->setRefreshInterval(std::chrono::nanoseconds(m_refreshIntervalNs));
 
     std::cout << "[LCL Core] Pure Display Server active on " << kCompositorSocket
               << ". Listening for client surface registrations.\n"
@@ -180,6 +182,10 @@ void Compositor::run() {
             m_shellStateDirty = true;
         }
         processIPC();
+        // Refresh-cadenced Live configures may have been deferred while an
+        // input batch arrived. Revisit the coalesced newest geometry once per
+        // compositor loop even when the pointer becomes stationary.
+        if (m_inputRouter) m_inputRouter->syncWindowState();
         synchronizeShellState();
         if (m_frameScheduler.cursorBlinkDue()) {
             m_needsRedraw = true;
@@ -281,8 +287,10 @@ void Compositor::renderFrame() {
             m_windowManager.rollbackWindowGeometry(
                 entry.windowId,
                 {entry.rollbackX, entry.rollbackY, entry.rollbackWidth, entry.rollbackHeight},
-            entry.rollbackWasMaximized, entry.rollbackWasMinimized);
+                entry.rollbackWasMaximized, entry.rollbackWasMinimized,
+                entry.resizeGeometryGeneration);
             entry.rollbackRequested = false;
+            entry.resizeGeometryGeneration = 0;
         }
     }
     const auto surfaces = m_surfaces.snapshot();
@@ -313,6 +321,23 @@ void Compositor::renderFrame() {
             }
         }
         entry.pendingDmaBufReleases.clear();
+    }
+
+    const uint64_t presentedAtNs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    for (const auto& [surfaceKey, entry] : m_surfaces) {
+        if (entry.clientFd < 0 || !entry.dmaBufTransportActive ||
+            entry.resizePresentation != protocol::LCLResizePresentationMode::Live ||
+            !entry.hasCommittedBuffer) continue;
+        protocol::LCLHeader header{};
+        header.opcode = protocol::LCLOpcode::FramePresented;
+        header.payloadSize = sizeof(protocol::LCLMsgFramePresented);
+        protocol::LCLMsgFramePresented message{};
+        message.surfaceId = static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu);
+        message.timestampNs = presentedAtNs;
+        message.refreshIntervalNs = m_refreshIntervalNs;
+        protocol::sendMsgWithFd(entry.clientFd, header, &message);
     }
 
     std::vector<SurfaceRegistry::Key> surfacesToRemove;

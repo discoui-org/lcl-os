@@ -346,6 +346,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             cfgMsg.y = logicalToPhysical(winY, 1.0f / bufferScale);
             cfgMsg.width = physicalToLogical(static_cast<uint32_t>(winW), bufferScale);
             cfgMsg.height = physicalToLogical(static_cast<uint32_t>(winH), bufferScale);
+            cfgMsg.backingWidth = cfgMsg.width;
+            cfgMsg.backingHeight = cfgMsg.height;
             cfgMsg.bufferScale = bufferScale;
             cfgMsg.resizeReason = protocol::LCLConfigureResizeReason::Initial;
             cfgMsg.isFocused = 1;
@@ -375,16 +377,28 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 continue;
             }
             auto& entry = surfaceIt->second;
+            const auto releaseRejected = [&] {
+                lcl::protocol::LCLHeader releaseHeader{};
+                releaseHeader.opcode = lcl::protocol::LCLOpcode::ReleaseDmaBuf;
+                releaseHeader.payloadSize = sizeof(lcl::protocol::LCLMsgReleaseDmaBuf);
+                lcl::protocol::LCLMsgReleaseDmaBuf release{};
+                release.surfaceId = bufferMessage->surfaceId;
+                release.bufferId = bufferMessage->bufferId;
+                lcl::protocol::sendMsgWithFd(msg.clientFd, releaseHeader, &release);
+            };
             if (entry.ignoreBufferCommits || entry.transitionPhase == SurfaceEntry::TransitionPhase::Closing ||
                 !SurfaceRegistry::acceptsBufferCommit(entry, bufferMessage->configureSerial)) {
                 close(msg.passedFd);
+                // Stale live frames are normal under latest-serial coalescing.
+                // Return ownership without diagnostics or importing the fd.
+                releaseRejected();
                 continue;
             }
 
             lcl::core::DmaBufImport import{};
             import.fd = msg.passedFd;
-            import.width = bufferMessage->width;
-            import.height = bufferMessage->height;
+            import.width = bufferMessage->backingWidth;
+            import.height = bufferMessage->backingHeight;
             import.stride = bufferMessage->stride;
             import.format = bufferMessage->format;
             import.modifier = bufferMessage->modifier;
@@ -412,6 +426,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.previousShmFd = entry.shmFd;
                 entry.previousWidth = entry.width;
                 entry.previousHeight = entry.height;
+                entry.previousBackingWidth = entry.backingWidth;
+                entry.previousBackingHeight = entry.backingHeight;
                 entry.previousStride = entry.stride;
                 entry.previousDmaBufId = entry.dmaBufId;
                 entry.previousDmaBufTexture = entry.dmaBufTexture;
@@ -442,6 +458,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
             entry.width = bufferMessage->width;
             entry.height = bufferMessage->height;
+            entry.backingWidth = bufferMessage->backingWidth;
+            entry.backingHeight = bufferMessage->backingHeight;
             entry.stride = bufferMessage->stride;
             entry.acceptedConfigureSerial = bufferMessage->configureSerial;
             if (entry.resizeTransitionPhase == SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer) {
@@ -470,7 +488,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     configuredWindow->pendingHeight != configuredFrameHeight;
             }
             m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH,
-                                                  preserveNewerTarget, entry.configuredX, entry.configuredY);
+                                                  preserveNewerTarget, entry.configuredX,
+                                                  entry.configuredY,
+                                                  entry.configuredGeometryGeneration);
             changed = true;
 
         // --- ATTACH_BUFFER: mmap the SCM_RIGHTS memfd into compositor address space ---
@@ -632,7 +652,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
             m_windowManager.commitSurfaceGeometry(
                 entry.windowId, frameW, frameH, preserveNewerTarget,
-                entry.configuredX, entry.configuredY);
+                entry.configuredX, entry.configuredY,
+                entry.configuredGeometryGeneration);
             changed = true;
 
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetDecorationMode) {
@@ -685,6 +706,12 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             const auto beginResizeTransition = [&] {
                 if (!hasCurrentWindow || !compositorMorph) return;
                 auto& entry = surfaceIt->second;
+                const auto transitionedWindow = std::find_if(
+                    m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
+                    [windowId](const auto& window) { return window.id == windowId; });
+                if (transitionedWindow == m_windowManager.getWindows().end()) return;
+                SurfaceRegistry::interruptGeometryTransaction(
+                    entry, transitionedWindow->geometryGeneration);
                 entry.rollbackX = rollbackX;
                 entry.rollbackY = rollbackY;
                 entry.rollbackWidth = rollbackWidth;
@@ -692,6 +719,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.rollbackWasMaximized = rollbackWasMaximized;
                 entry.rollbackWasMinimized = rollbackWasMinimized;
                 entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
+                entry.resizeGeometryGeneration = transitionedWindow->geometryGeneration;
                 entry.resizeDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
                 entry.resizeCrossfadeProgress = 0.0f;
                 entry.resizeBufferReady = false;
@@ -699,10 +727,14 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             };
             switch (request->action) {
                 case lcl::protocol::LCLWindowAction::BeginDrag:
-                    changed = m_windowManager.beginWindowDrag(
+                    if (const auto interaction = m_windowManager.beginWindowDrag(
                         windowId,
                         logicalToPhysical(static_cast<int>(std::lround(request->localX)), surfaceIt->second.bufferScale),
-                        logicalToPhysical(static_cast<int>(std::lround(request->localY)), surfaceIt->second.bufferScale)) || changed;
+                        logicalToPhysical(static_cast<int>(std::lround(request->localY)), surfaceIt->second.bufferScale))) {
+                        SurfaceRegistry::interruptGeometryTransaction(
+                            surfaceIt->second, interaction.generation);
+                        changed = true;
+                    }
                     break;
                 case lcl::protocol::LCLWindowAction::Minimize:
                     if (windowId != 0 && surfaceIt->second.transitionPhase == SurfaceEntry::TransitionPhase::None) {
@@ -745,10 +777,14 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | moveMsg->surfaceId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end() && it->second.windowId > 0) {
-                    changed = m_windowManager.beginWindowDrag(
+                    if (const auto interaction = m_windowManager.beginWindowDrag(
                         it->second.windowId,
                         logicalToPhysical(static_cast<int>(std::lround(moveMsg->localX)), it->second.bufferScale),
-                        logicalToPhysical(static_cast<int>(std::lround(moveMsg->localY)), it->second.bufferScale)) || changed;
+                        logicalToPhysical(static_cast<int>(std::lround(moveMsg->localY)), it->second.bufferScale))) {
+                        SurfaceRegistry::interruptGeometryTransaction(
+                            it->second, interaction.generation);
+                        changed = true;
+                    }
                 }
             }
 

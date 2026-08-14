@@ -45,7 +45,8 @@ void SkiaCanvas::beginFrame() {
     renderer().clearExternalFrameTarget();
     if (hasDmaBufTransport()) {
         if (const auto target = m_clientEglContext->acquireDmaBufTarget()) {
-            renderer().setExternalFrameTarget(target->framebuffer, target->texture);
+            renderer().setExternalFrameTarget(target->framebuffer, target->texture,
+                                               target->width, target->height);
             m_dmaBufFrameActive = true;
         } else {
             // Never replace a live DMA-BUF frame with a CPU/SHM frame merely
@@ -68,6 +69,16 @@ void SkiaCanvas::setDmaBufTransportEnabled(bool enabled) {
 bool SkiaCanvas::hasDmaBufTransport() const {
     return m_dmaBufTransportEnabled && m_clientEglContext && m_clientEglContext->hasDmaBufPool();
 }
+bool SkiaCanvas::configureDmaBufFrame(uint32_t contentWidth, uint32_t contentHeight,
+                                      uint32_t backingWidth, uint32_t backingHeight) {
+    if (!m_clientEglContext || contentWidth == 0 || contentHeight == 0 ||
+        backingWidth < contentWidth || backingHeight < contentHeight ||
+        !m_clientEglContext->ensureDmaBufCapacity(backingWidth, backingHeight)) return false;
+    m_dmaBufContentWidth = contentWidth;
+    m_dmaBufContentHeight = contentHeight;
+    renderer().setFrameExtent(contentWidth, contentHeight);
+    return true;
+}
 bool SkiaCanvas::isDmaBufFrameBlocked() const { return m_dmaBufFrameBlocked; }
 
 std::optional<lcl::ui::DmaBufFrame> SkiaCanvas::takeDmaBufFrame() {
@@ -76,7 +87,8 @@ std::optional<lcl::ui::DmaBufFrame> SkiaCanvas::takeDmaBufFrame() {
     renderer().clearExternalFrameTarget();
     const auto exported = m_clientEglContext->exportCurrentDmaBuf();
     if (!exported) return std::nullopt;
-    return lcl::ui::DmaBufFrame{exported->bufferId, exported->width, exported->height,
+    return lcl::ui::DmaBufFrame{exported->bufferId, m_dmaBufContentWidth, m_dmaBufContentHeight,
+                                exported->width, exported->height,
                                 exported->stride, exported->format, exported->modifier,
                                 exported->fd};
 }

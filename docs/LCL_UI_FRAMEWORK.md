@@ -20,7 +20,7 @@
 
 ## 1. Architecture Overview
 
-`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v4 Unix Domain `SOCK_SEQPACKET` IPC (`/run/user/1000/lcl-compositor.sock`) and shared memory (`memfd`).
+`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v10 Unix Domain `SOCK_SEQPACKET` IPC (`/run/user/1000/lcl-compositor.sock`), DMA-BUF, and lazy shared-memory (`memfd`) fallback.
 
 ```text
 +-----------------------------------------------------------+

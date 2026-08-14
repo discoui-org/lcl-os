@@ -22,6 +22,8 @@ public:
         uint32_t bufferId{0};
         uint32_t framebuffer{0};
         uint32_t texture{0};
+        uint32_t width{0};
+        uint32_t height{0};
     };
 
     struct DmaBufExport {
@@ -51,6 +53,7 @@ public:
     bool readback(uint32_t* destination, uint32_t width, uint32_t height) override;
 
     bool hasDmaBufPool() const { return !m_dmaBufs.empty(); }
+    bool ensureDmaBufCapacity(uint32_t width, uint32_t height);
     std::optional<DmaBufTarget> acquireDmaBufTarget();
     std::optional<DmaBufExport> exportCurrentDmaBuf();
     void cancelCurrentDmaBuf();
@@ -59,8 +62,11 @@ public:
     const std::string& rendererString() const { return m_rendererString; }
 
 private:
+    struct DmaBufSlot;
     bool createSurface(uint32_t width, uint32_t height);
     bool createDmaBufPool(uint32_t width, uint32_t height);
+    bool appendDmaBufPool(uint32_t width, uint32_t height);
+    void destroyDmaBufSlot(DmaBufSlot& slot);
     void destroyDmaBufPool();
     static bool isSoftwareRenderer(const char* renderer);
 
@@ -72,7 +78,10 @@ private:
         uint32_t framebuffer{0};
         uint32_t stride{0};
         uint64_t modifier{~uint64_t{0}};
+        uint32_t width{0};
+        uint32_t height{0};
         bool busy{false};
+        bool retired{false};
     };
 
     int m_renderFd{-1};
@@ -89,6 +98,9 @@ private:
     std::string m_rendererString{"unavailable"};
     std::vector<DmaBufSlot> m_dmaBufs;
     int m_currentDmaBuf{-1};
+    uint32_t m_nextDmaBufId{1};
+    uint32_t m_dmaBufCapacityWidth{0};
+    uint32_t m_dmaBufCapacityHeight{0};
     bool m_dmaBufTransportLogged{false};
 };
 

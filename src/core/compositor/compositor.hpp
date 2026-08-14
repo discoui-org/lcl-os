@@ -99,6 +99,7 @@ private:
     bool                                 m_needsRedraw{true};
     bool                                 m_shellStateDirty{true};
     uint64_t                             m_loopTicks{0};
+    uint64_t                             m_refreshIntervalNs{16666667};
 
     // Diagnostic Overlay & FPS metrics
     bool                                 m_showFpsOverlay{false};

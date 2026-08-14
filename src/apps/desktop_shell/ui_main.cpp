@@ -367,16 +367,29 @@ int main() {
     std::string lastTime;
     auto nextShellReconnect = std::chrono::steady_clock::now();
     while (true) {
+        const auto frameStart = std::chrono::steady_clock::now();
         const std::string now = timeText();
         if (clock && now != lastTime) { lastTime = now; clock->setText(now); }
-        wallpaper->tick();
+        bool rendered = wallpaper->tick();
         if (!shellState.isConnected() && std::chrono::steady_clock::now() >= nextShellReconnect) {
             shellState.connect();
             nextShellReconnect = std::chrono::steady_clock::now() + std::chrono::seconds(1);
         }
         shellState.poll();
-        menu->tick();
-        dock->tick();
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        rendered = menu->tick() || rendered;
+        rendered = dock->tick() || rendered;
+
+        // This process drives three WindowApps itself, so it must provide the
+        // same active-frame pacing as WindowApp::runEventLoop().  The old fixed
+        // 16 ms delay capped all shell animations at roughly 60 Hz.
+        if (rendered) {
+            constexpr auto kActiveFramePeriod = std::chrono::microseconds(6900);
+            const auto elapsed = std::chrono::steady_clock::now() - frameStart;
+            if (elapsed < kActiveFramePeriod) {
+                std::this_thread::sleep_for(kActiveFramePeriod - elapsed);
+            }
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
     }
 }

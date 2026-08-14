@@ -31,8 +31,12 @@ struct AffineTransform {
  */
 struct DmaBufFrame {
     uint32_t bufferId{0};
+    // Valid content pixels rendered for this configure.
     uint32_t width{0};
     uint32_t height{0};
+    // Allocation capacity exported through the DMA-BUF fd.
+    uint32_t backingWidth{0};
+    uint32_t backingHeight{0};
     uint32_t stride{0};
     uint32_t format{0};
     uint64_t modifier{~uint64_t{0}};
@@ -66,6 +70,8 @@ public:
     virtual void setDmaBufTransportEnabled(bool) {}
     /** True when this backend can deliver frames through its DMA-BUF pool. */
     virtual bool hasDmaBufTransport() const { return false; }
+    /** Select content viewport and grow the GPU pool only when capacity requires it. */
+    virtual bool configureDmaBufFrame(uint32_t, uint32_t, uint32_t, uint32_t) { return false; }
     /** True when every pool slot is still owned by the compositor. */
     virtual bool isDmaBufFrameBlocked() const { return false; }
     /** Exports the completed frame. Empty preserves the existing SHM commit path. */

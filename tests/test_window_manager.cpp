@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
+#include <linux/input-event-codes.h>
 
 #include "render/window_manager.hpp"
 
@@ -63,7 +65,7 @@ TEST(WindowManagerTest, WindowActionsPreserveRestoreGeometryAndFocus) {
     ASSERT_TRUE(manager.beginWindowDrag(first, 24, 18));
     const auto* dragging = findWindow(manager, first);
     ASSERT_NE(dragging, nullptr);
-    EXPECT_TRUE(dragging->isDragging);
+    EXPECT_TRUE(dragging->isDragging());
     EXPECT_EQ(dragging->dragOffsetX, 24);
     EXPECT_EQ(dragging->dragOffsetY, 18);
 }
@@ -118,7 +120,7 @@ TEST(WindowManagerTest, MaximizeRestoreMorphRetargetsFromPresentationGeometry) {
     EXPECT_NEAR(findWindow(manager, id)->presentationWidth, midWidth, 0.001f);
     for (int index = 0; index < 240; ++index) manager.updateAnimations(1.0f / 240.0f);
     const auto* restored = findWindow(manager, id);
-    EXPECT_FALSE(restored->geometryTransitionActive);
+    EXPECT_EQ(restored->geometryPhase, lcl::render::GeometryPhase::Idle);
     EXPECT_NEAR(restored->presentationX, 80.0f, 0.01f);
     EXPECT_NEAR(restored->presentationY, 90.0f, 0.01f);
     EXPECT_NEAR(restored->presentationWidth, 400.0f, 0.01f);
@@ -136,8 +138,8 @@ TEST(WindowManagerTest, LiveResizePresentationUsesCommittedBuffersWithoutMorph) 
     const auto* started = findWindow(manager, id);
     ASSERT_NE(started, nullptr);
     EXPECT_TRUE(started->isMaximized);
-    EXPECT_TRUE(started->liveResizeTransitionActive);
-    EXPECT_FALSE(started->geometryTransitionActive);
+    EXPECT_TRUE(started->isLiveTransitioning());
+    EXPECT_FALSE(started->isMorphing());
     EXPECT_EQ(started->width, 400);
     EXPECT_EQ(started->height, 300);
 
@@ -152,8 +154,8 @@ TEST(WindowManagerTest, LiveResizePresentationUsesCommittedBuffersWithoutMorph) 
     manager.commitSurfaceGeometry(id, 1000, 608, false, 0, 32);
     const auto* committed = findWindow(manager, id);
     ASSERT_NE(committed, nullptr);
-    EXPECT_FALSE(committed->liveResizeTransitionActive);
-    EXPECT_FALSE(committed->geometryTransitionActive);
+    EXPECT_FALSE(committed->isLiveTransitioning());
+    EXPECT_FALSE(committed->isMorphing());
     EXPECT_EQ(committed->x, 0);
     EXPECT_EQ(committed->y, 32);
     EXPECT_EQ(committed->width, 1000);
@@ -184,6 +186,120 @@ TEST(WindowManagerTest, IntermediateResizeCommitPreservesNewerPointerTarget) {
     ASSERT_NE(final, nullptr);
     EXPECT_EQ(final->pendingHeight, 520);
     EXPECT_EQ(final->activeResizeEdge, lcl::render::ResizeEdge::None);
+}
+
+TEST(WindowManagerTest, RestoreMorphIsPreemptedByDragAtThePresentedRect) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    manager.setReservedZone(32, 60, 0, 0);
+    const uint32_t id = manager.createWindow("Interruptible", 80, 90, 400, 300);
+
+    ASSERT_TRUE(manager.maximizeWindow(id, false));
+    ASSERT_TRUE(manager.restoreWindow(id, true));
+    manager.updateAnimations(0.05f);
+    const auto before = lcl::render::presentedBounds(*findWindow(manager, id));
+    const uint64_t morphGeneration = findWindow(manager, id)->geometryGeneration;
+
+    const auto interaction = manager.beginWindowDrag(id, 24, 18);
+    ASSERT_TRUE(interaction);
+    EXPECT_GT(interaction.generation, morphGeneration);
+    const auto* pinned = findWindow(manager, id);
+    ASSERT_NE(pinned, nullptr);
+    EXPECT_TRUE(pinned->isDragging());
+    EXPECT_EQ(pinned->x, static_cast<int>(std::lround(before.x)));
+    EXPECT_EQ(pinned->width, static_cast<int>(std::lround(before.width)));
+
+    manager.updateAnimations(1.0f);
+    const auto* afterTick = findWindow(manager, id);
+    ASSERT_NE(afterTick, nullptr);
+    EXPECT_TRUE(afterTick->isDragging());
+    EXPECT_FLOAT_EQ(afterTick->presentationX, static_cast<float>(afterTick->x));
+    EXPECT_FLOAT_EQ(afterTick->presentationWidth, static_cast<float>(afterTick->width));
+    const int dragStartX = afterTick->x;
+    const int dragStartY = afterTick->y;
+
+    lcl::core::InputEvent motion{};
+    motion.type = lcl::core::InputEventType::PointerMotion;
+    motion.absoluteX = static_cast<double>(dragStartX + 24 + 60);
+    motion.absoluteY = static_cast<double>(dragStartY + 18 + 30);
+    EXPECT_TRUE(manager.processInputEvent(motion));
+    EXPECT_EQ(findWindow(manager, id)->x, dragStartX + 60);
+    EXPECT_FLOAT_EQ(findWindow(manager, id)->presentationX,
+                    static_cast<float>(findWindow(manager, id)->x));
+}
+
+TEST(WindowManagerTest, PresentedBoundsOwnResizeHitTestingDuringMorph) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t id = manager.createWindow("Presented edge", 0, 32, 1000, 668);
+    auto& window = manager.getWindowsMutable().back();
+    window.geometryPhase = lcl::render::GeometryPhase::Morph;
+    window.presentationX = 100.0f;
+    window.presentationY = 100.0f;
+    window.presentationWidth = 400.0f;
+    window.presentationHeight = 300.0f;
+
+    lcl::core::InputEvent motion{};
+    motion.type = lcl::core::InputEventType::PointerMotion;
+    motion.absoluteX = 500.0;
+    motion.absoluteY = 220.0;
+    manager.processInputEvent(motion);
+
+    lcl::core::InputEvent down{};
+    down.type = lcl::core::InputEventType::PointerButton;
+    down.button = BTN_LEFT;
+    down.pressed = true;
+    const auto result = manager.processInputEvent(down);
+    ASSERT_TRUE(result.interaction);
+    const auto* resizing = findWindow(manager, id);
+    ASSERT_NE(resizing, nullptr);
+    EXPECT_TRUE(resizing->isResizing());
+    EXPECT_EQ(resizing->resizeEdge, lcl::render::ResizeEdge::Right);
+    EXPECT_EQ(resizing->x, 100);
+    EXPECT_EQ(resizing->width, 400);
+
+    motion.absoluteX = 540.0;
+    EXPECT_TRUE(manager.processInputEvent(motion));
+    EXPECT_EQ(findWindow(manager, id)->pendingWidth, 440);
+}
+
+TEST(WindowManagerTest, NewDragInvalidatesSnapRollbackAndLateResizeCommit) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t id = manager.createWindow("Generation", 80, 90, 400, 300);
+
+    const auto firstDrag = manager.beginWindowDrag(id, 399, 10);
+    ASSERT_TRUE(firstDrag);
+    lcl::core::InputEvent motion{};
+    motion.type = lcl::core::InputEventType::PointerMotion;
+    motion.absoluteX = 0.0;
+    motion.absoluteY = 100.0;
+    manager.processInputEvent(motion);
+    lcl::core::InputEvent release{};
+    release.type = lcl::core::InputEventType::PointerButton;
+    release.button = BTN_LEFT;
+    release.pressed = false;
+    manager.processInputEvent(release);
+    ASSERT_TRUE(findWindow(manager, id)->isSnappingBack());
+    manager.updateAnimations(1.0f / 120.0f);
+
+    const auto secondDrag = manager.beginWindowDrag(id, 10, 10);
+    ASSERT_TRUE(secondDrag);
+    ASSERT_GT(secondDrag.generation, firstDrag.generation);
+    const int pinnedX = findWindow(manager, id)->x;
+    const int pinnedY = findWindow(manager, id)->y;
+    const int pinnedWidth = findWindow(manager, id)->width;
+    manager.updateAnimations(2.0f);
+    EXPECT_TRUE(findWindow(manager, id)->isDragging());
+    EXPECT_EQ(findWindow(manager, id)->x, pinnedX);
+
+    EXPECT_FALSE(manager.rollbackWindowGeometry(
+        id, {0, 32, 1000, 668}, true, false, firstDrag.generation));
+    EXPECT_FALSE(manager.commitSurfaceGeometry(
+        id, 700, 500, false, 0, 32, firstDrag.generation));
+    EXPECT_EQ(findWindow(manager, id)->x, pinnedX);
+    EXPECT_EQ(findWindow(manager, id)->y, pinnedY);
+    EXPECT_EQ(findWindow(manager, id)->width, pinnedWidth);
 }
 
 TEST(WindowManagerTest, ServerChromeControlsAnimateHoverPressWithoutGlyphState) {
@@ -224,7 +340,7 @@ TEST(WindowManagerTest, ServerChromeControlsRemainInteractiveDuringGeometryMorph
     const uint32_t id = manager.createWindow("Morph chrome", 80, 60, 400, 300);
     auto& window = manager.getWindowsMutable().back();
     ASSERT_EQ(window.id, id);
-    window.geometryTransitionActive = true;
+    window.geometryPhase = lcl::render::GeometryPhase::Morph;
     window.presentationX = 70.0f;
     window.presentationY = 50.0f;
     window.presentationWidth = 480.0f;

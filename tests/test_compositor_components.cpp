@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <fcntl.h>
+#include <linux/input-event-codes.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -16,6 +17,7 @@
 #include "core/scene/scene_registry.hpp"
 #include "core/scene/shell_state_broker.hpp"
 #include "render/window_manager.hpp"
+#include "render/dma_buf_crop.hpp"
 
 namespace lcl::core {
 
@@ -53,6 +55,53 @@ TEST(SurfaceRegistryTest, RejectsStaleSerialButAcceptsClientConstrainedDimension
     EXPECT_TRUE(SurfaceRegistry::hasOutstandingConfigure(entry));
     entry.acceptedConfigureSerial = 12;
     EXPECT_FALSE(SurfaceRegistry::hasOutstandingConfigure(entry));
+}
+
+TEST(CompositorRendererTest, DmaBufCropShowsContentWithoutScalingTheBacking) {
+    const auto crop = lcl::render::makeDmaBufCrop(640, 480, 1920, 1080);
+    EXPECT_FLOAT_EQ(crop.uMax, 640.0f / 1920.0f);
+    EXPECT_FLOAT_EQ(crop.vMax, 480.0f / 1080.0f);
+    const auto exact = lcl::render::makeDmaBufCrop(800, 600, 800, 600);
+    EXPECT_FLOAT_EQ(exact.uMax, 1.0f);
+    EXPECT_FLOAT_EQ(exact.vMax, 1.0f);
+}
+
+TEST(SurfaceRegistryTest, DmaBufSlotIsReleasedOnlyAfterLeavingThePresentedSet) {
+    SurfaceRegistry::SurfaceEntry entry;
+    entry.dmaBufId = 2;
+    entry.dmaBufTexture = 17;
+    SurfaceRegistry::releaseBuffer(entry);
+    ASSERT_EQ(entry.pendingDmaBufReleases.size(), 1u);
+    EXPECT_EQ(entry.pendingDmaBufReleases.front().bufferId, 2u);
+    EXPECT_EQ(entry.pendingDmaBufReleases.front().texture, 17u);
+    EXPECT_EQ(entry.dmaBufId, 0u);
+    EXPECT_EQ(entry.dmaBufTexture, 0u);
+}
+
+TEST(SurfaceRegistryTest, GeometryInterruptionInvalidatesRollbackSerialAndPreviousBuffer) {
+    SurfaceRegistry::SurfaceEntry entry;
+    entry.resizeTransitionPhase =
+        SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::Crossfading;
+    entry.rollbackRequested = true;
+    entry.pendingConfigureSerial = 9;
+    entry.acceptedConfigureSerial = 7;
+    entry.previousDmaBufId = 3;
+    entry.previousDmaBufTexture = 19;
+
+    SurfaceRegistry::interruptGeometryTransaction(entry, 42);
+
+    EXPECT_EQ(entry.resizeTransitionPhase,
+              SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None);
+    EXPECT_FALSE(entry.rollbackRequested);
+    EXPECT_TRUE(entry.resizeBufferReady);
+    EXPECT_FLOAT_EQ(entry.resizeCrossfadeProgress, 1.0f);
+    EXPECT_EQ(entry.pendingConfigureSerial, 0u);
+    EXPECT_FALSE(SurfaceRegistry::acceptsBufferCommit(entry, 7));
+    EXPECT_EQ(entry.configuredGeometryGeneration, 42u);
+    EXPECT_TRUE(entry.forceConfigure);
+    ASSERT_EQ(entry.pendingDmaBufReleases.size(), 1u);
+    EXPECT_EQ(entry.pendingDmaBufReleases.front().bufferId, 3u);
+    EXPECT_EQ(entry.pendingDmaBufReleases.front().texture, 19u);
 }
 
 TEST(SurfaceRegistryTest, SurfaceKeyUsesPidWhenAvailableAndClientFdOtherwise) {
@@ -99,7 +148,7 @@ TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
     auto& window = manager.getWindowsMutable().back();
     window.pendingWidth = 360;
     window.pendingHeight = 240;
-    window.isResizing = true;
+    window.geometryPhase = lcl::render::GeometryPhase::Resize;
     router.syncWindowState();
 
     protocol::LCLHeader header{};
@@ -135,6 +184,54 @@ TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
     close(sockets[1]);
 }
 
+TEST(InputRouterTest, LiveResizePublishesLatestSerialAtRefreshCadenceWithWorkspaceBacking) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t windowId = manager.createWindow("Live", 40, 50, 320, 200);
+    manager.setDecorationMode(windowId, lcl::render::DecorationMode::None);
+    SurfaceRegistry registry;
+    auto& surface = registry[SurfaceRegistry::makeKey(sockets[0], 102, 1)];
+    surface.windowId = windowId;
+    surface.clientFd = sockets[0];
+    surface.width = 320;
+    surface.height = 200;
+    surface.pendingConfigureSerial = 4;
+    surface.acceptedConfigureSerial = 4;
+    surface.nextConfigureSerial = 5;
+    surface.resizePresentation = protocol::LCLResizePresentationMode::Live;
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    router.setRefreshInterval(std::chrono::nanoseconds(1));
+    auto& window = manager.getWindowsMutable().back();
+    window.geometryPhase = lcl::render::GeometryPhase::Resize;
+    window.pendingWidth = 360;
+    window.pendingHeight = 240;
+    router.syncWindowState();
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int fd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, fd));
+    const auto* first = reinterpret_cast<const protocol::LCLMsgConfigureBounds*>(payload.data());
+    EXPECT_EQ(first->configureSerial, 5u);
+    EXPECT_EQ(first->backingWidth, 1000u);
+    EXPECT_EQ(first->backingHeight, 700u);
+
+    window.pendingWidth = 400;
+    window.pendingHeight = 280;
+    router.syncWindowState();
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, fd));
+    const auto* latest = reinterpret_cast<const protocol::LCLMsgConfigureBounds*>(payload.data());
+    EXPECT_EQ(latest->configureSerial, 6u);
+    EXPECT_EQ(latest->width, 400u);
+    EXPECT_EQ(surface.acceptedConfigureSerial, 4u);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
@@ -144,7 +241,11 @@ TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     const uint32_t windowId = manager.createWindow("Morph", 80, 90, 320, 200);
     manager.setDecorationMode(windowId, lcl::render::DecorationMode::None);
     auto& window = manager.getWindowsMutable().back();
-    window.geometryTransitionActive = true;
+    window.geometryPhase = lcl::render::GeometryPhase::Morph;
+    window.x = 400;
+    window.y = 300;
+    window.width = 700;
+    window.height = 500;
     window.presentationX = 80.0f;
     window.presentationY = 90.0f;
     window.presentationWidth = 320.0f;
@@ -180,6 +281,84 @@ TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     EXPECT_EQ(input->type, 3u);
     EXPECT_FLOAT_EQ(input->x, 20.0f);
     EXPECT_FLOAT_EQ(input->y, 20.0f);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(InputRouterTest, ManualGestureCancelsOutstandingGeometryRollback) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t windowId = manager.createWindow("Gesture", 80, 90, 320, 200);
+    SurfaceRegistry registry;
+    auto& surface = registry[SurfaceRegistry::makeKey(sockets[0], 103, 1)];
+    surface.windowId = windowId;
+    surface.clientFd = sockets[0];
+    surface.hasCommittedBuffer = true;
+    surface.width = 320;
+    surface.height = 168;
+    surface.configuredWidth = 320;
+    surface.configuredHeight = 168;
+    surface.pendingConfigureSerial = 9;
+    surface.acceptedConfigureSerial = 7;
+    surface.nextConfigureSerial = 10;
+    surface.resizeTransitionPhase =
+        SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
+    surface.rollbackRequested = true;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    InputEvent move{};
+    move.type = InputEventType::PointerMotion;
+    move.absoluteX = 200.0;
+    move.absoluteY = 100.0;
+    router.route(move);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.button = BTN_LEFT;
+    down.pressed = true;
+    EXPECT_TRUE(router.route(down));
+
+    const auto& window = manager.getWindows().back();
+    EXPECT_TRUE(window.isDragging());
+    EXPECT_EQ(surface.resizeTransitionPhase,
+              SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None);
+    EXPECT_FALSE(surface.rollbackRequested);
+    EXPECT_EQ(surface.pendingConfigureSerial, 10u);
+    EXPECT_EQ(surface.configuredGeometryGeneration, window.geometryGeneration);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(InputRouterTest, RestoreVisibilityTransitionBlocksPointerDispatch) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK, 0, sockets), 0);
+
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t windowId = manager.createWindow("Restoring", 80, 60, 400, 300);
+    SurfaceRegistry registry;
+    auto& surface = registry[SurfaceRegistry::makeKey(sockets[0], 104, 1)];
+    surface.windowId = windowId;
+    surface.clientFd = sockets[0];
+    surface.hasCommittedBuffer = true;
+    surface.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring;
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.button = BTN_LEFT;
+    down.pressed = true;
+    EXPECT_FALSE(router.route(down));
+    char byte = 0;
+    EXPECT_EQ(recv(sockets[1], &byte, sizeof(byte), MSG_DONTWAIT), -1);
+    EXPECT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
 
     close(sockets[0]);
     close(sockets[1]);

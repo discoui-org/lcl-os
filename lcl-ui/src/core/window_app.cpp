@@ -258,16 +258,22 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     m_waitingForInitialConfigure = true;
     if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate, &surfMsg, sizeof(surfMsg))) {
         m_waitingForInitialConfigure = false;
-        std::cerr << "[lcl-ui ERROR] Failed to create v3 surface\n";
+        std::cerr << "[lcl-ui ERROR] Failed to create v10 surface\n";
         return false;
     }
-
-    // 3. Allocate SHM memory buffer and attach to compositor
-    allocateSHM(m_width, m_height);
 
     m_ipcConnected = true;
     m_ownsSocketFd = true;
     m_canvas->setDmaBufTransportEnabled(true);
+    m_backingWidth = m_width;
+    m_backingHeight = m_height;
+    if (!m_canvas->hasDmaBufTransport() ||
+        !m_canvas->configureDmaBufFrame(getPixelWidth(), getPixelHeight(),
+                                        getPixelWidth(), getPixelHeight())) {
+        // CPU storage is prepared only when GPU transport is genuinely absent.
+        m_canvas->setDmaBufTransportEnabled(false);
+        allocateSHM(m_width, m_height);
+    }
     // Decoration state belongs to the surface contract, not to a later frame.
     // Send preconfigured values before the first effect graph/buffer attach so a
     // CSD client never flashes the compositor's default title chrome.
@@ -301,7 +307,19 @@ void WindowApp::resize(uint32_t width, uint32_t height) {
     }
 
     if (m_ipcConnected) {
-        allocateSHM(width, height);
+        const uint32_t backingPixelWidth = toBufferPixels(
+            std::max(width, m_backingWidth), m_bufferScale);
+        const uint32_t backingPixelHeight = toBufferPixels(
+            std::max(height, m_backingHeight), m_bufferScale);
+        if (m_canvas->hasDmaBufTransport()) {
+            if (!m_canvas->configureDmaBufFrame(getPixelWidth(), getPixelHeight(),
+                                                backingPixelWidth, backingPixelHeight)) {
+                m_canvas->setDmaBufTransportEnabled(false);
+                allocateSHM(width, height);
+            }
+        } else {
+            allocateSHM(width, height);
+        }
         // Defer render+attach to the main loop's renderFrame() so each resize tick
         // produces at most one frame and one attach commit.
         m_firstFrame = true;
@@ -333,6 +351,8 @@ void WindowApp::pollIPC() {
 
     uint32_t latestWidth = 0;
     uint32_t latestHeight = 0;
+    uint32_t latestBackingWidth = 0;
+    uint32_t latestBackingHeight = 0;
     float latestScale = m_bufferScale;
     lcl::protocol::LCLConfigureResizeReason latestResizeReason =
         lcl::protocol::LCLConfigureResizeReason::Initial;
@@ -402,6 +422,8 @@ void WindowApp::pollIPC() {
                     }
                     latestWidth = cfg->width;
                     latestHeight = cfg->height;
+                    latestBackingWidth = cfg->backingWidth;
+                    latestBackingHeight = cfg->backingHeight;
                     latestScale = cfg->bufferScale;
                     latestResizeReason = cfg->resizeReason;
                     m_pendingConfigureSerial = cfg->configureSerial;
@@ -414,6 +436,26 @@ void WindowApp::pollIPC() {
                 if (release->surfaceId == m_surfaceId) {
                     m_canvas->releaseDmaBufFrame(release->bufferId);
                 }
+            } else if (header.opcode == lcl::protocol::LCLOpcode::FramePresented &&
+                       payload.size() == sizeof(lcl::protocol::LCLMsgFramePresented)) {
+                const auto* presented = reinterpret_cast<const lcl::protocol::LCLMsgFramePresented*>(payload.data());
+                if (presented->surfaceId == m_surfaceId) {
+                    m_lastPresentedTimestampNs = presented->timestampNs;
+                    m_refreshIntervalNs = presented->refreshIntervalNs;
+                    m_liveFrameGateOpen = true;
+                }
+            } else if (header.opcode == lcl::protocol::LCLOpcode::AckResponse &&
+                       payload.size() == sizeof(lcl::protocol::LCLMsgAckResponse)) {
+                const auto* ack = reinterpret_cast<const lcl::protocol::LCLMsgAckResponse*>(payload.data());
+                if (ack->status == 4 &&
+                    std::strncmp(ack->message, "DMA-BUF import unavailable",
+                                 sizeof(ack->message)) == 0 &&
+                    m_canvas->hasDmaBufTransport()) {
+                    m_canvas->setDmaBufTransportEnabled(false);
+                    allocateSHM(m_width, m_height);
+                    m_firstFrame = true;
+                    m_liveFrameGateOpen = true;
+                }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
                 if (payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceDestroy)) {
                     auto* destroy = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceDestroy*>(payload.data());
@@ -424,7 +466,7 @@ void WindowApp::pollIPC() {
         } else if (receiveStatus == lcl::protocol::ReceiveStatus::WouldBlock) {
             break;
         } else {
-            std::cerr << "[lcl-ui ERROR] Compositor v4 connection closed or rejected\n";
+            std::cerr << "[lcl-ui ERROR] Compositor v10 connection closed or rejected\n";
             m_ipcConnected = false;
             m_running = false;
             break;
@@ -442,12 +484,26 @@ void WindowApp::pollIPC() {
             }
         }
 
+        m_backingWidth = std::max(latestWidth, latestBackingWidth);
+        m_backingHeight = std::max(latestHeight, latestBackingHeight);
+        m_liveInteractiveResize =
+            m_resizePresentationMode == lcl::protocol::LCLResizePresentationMode::Live &&
+            latestResizeReason == lcl::protocol::LCLConfigureResizeReason::Interactive &&
+            m_canvas->hasDmaBufTransport();
+
         if (std::fabs(latestScale - m_bufferScale) > 0.0001f) {
             m_bufferScale = latestScale;
             m_canvas->setContentScale(m_bufferScale);
             // A scale-only configure has identical logical bounds but needs a new buffer.
             if (latestWidth == m_width && latestHeight == m_height && m_ipcConnected) {
-                allocateSHM(m_width, m_height);
+                if (m_canvas->hasDmaBufTransport()) {
+                    m_canvas->configureDmaBufFrame(
+                        getPixelWidth(), getPixelHeight(),
+                        toBufferPixels(std::max(m_width, m_backingWidth), m_bufferScale),
+                        toBufferPixels(std::max(m_height, m_backingHeight), m_bufferScale));
+                } else {
+                    allocateSHM(m_width, m_height);
+                }
                 m_firstFrame = true;
             }
         }
@@ -458,7 +514,7 @@ void WindowApp::pollIPC() {
 
     // Throttled resize apply: demos update every pixel while dragging; applying each
     // configure causes SHM recreate storms. Keep latest target and apply at a bounded rate.
-    if (m_hasPendingResize &&
+    if (m_hasPendingResize && (!m_liveInteractiveResize || m_liveFrameGateOpen) &&
         (m_pendingResizeWidth != m_width || m_pendingResizeHeight != m_height)) {
         const auto now = std::chrono::steady_clock::now();
         constexpr auto kMinResizeInterval = std::chrono::milliseconds(22);
@@ -476,7 +532,7 @@ void WindowApp::pollIPC() {
         // The first configure establishes the only serial eligible for an
         // initial commit. It must never wait for interactive-resize throttling,
         // even when the compositor adjusted the requested bounds by a few px.
-        if (receivedInitialConfigure || largeJump || intervalElapsed) {
+        if (m_liveInteractiveResize || receivedInitialConfigure || largeJump || intervalElapsed) {
             m_configureSerial = m_pendingConfigureSerial;
             resize(m_pendingResizeWidth, m_pendingResizeHeight);
             m_waitingForInitialConfigure = false;
@@ -484,13 +540,19 @@ void WindowApp::pollIPC() {
             m_hasPendingResize = false;
             m_lastResizeApply = now;
         }
-    } else if (m_hasPendingResize) {
+    } else if (m_hasPendingResize && (!m_liveInteractiveResize || m_liveFrameGateOpen)) {
         // The compositor often confirms the initial logical size verbatim.
         // It requires no SHM reallocation, but it still needs one commit to
         // acknowledge the configure serial and release compositor backpressure.
         m_hasPendingResize = false;
         m_configureSerial = m_pendingConfigureSerial;
         m_waitingForInitialConfigure = false;
+        if (m_canvas->hasDmaBufTransport()) {
+            m_canvas->configureDmaBufFrame(
+                getPixelWidth(), getPixelHeight(),
+                toBufferPixels(std::max(m_width, m_backingWidth), m_bufferScale),
+                toBufferPixels(std::max(m_height, m_backingHeight), m_bufferScale));
+        }
         m_firstFrame = true;
     }
 }
@@ -503,7 +565,7 @@ void WindowApp::runEventLoop() {
 
         bool rendered = tick();
 
-        if (rendered) {
+        if (rendered && !(m_liveInteractiveResize && m_canvas->hasDmaBufTransport())) {
             auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::high_resolution_clock::now() - frameStart);
             // Keep app-side pacing close to terminal loop to avoid resize thrash.
@@ -932,6 +994,8 @@ bool WindowApp::renderFrame() {
     // SurfaceCreate's requested geometry has no valid serial and would be
     // discarded as stale when the initial ConfigureBounds is already queued.
     if (m_ipcConnected && m_waitingForInitialConfigure) return false;
+    if (m_liveInteractiveResize && m_canvas->hasDmaBufTransport() &&
+        !m_liveFrameGateOpen) return false;
 
     updateLayout();
 
@@ -1130,6 +1194,8 @@ bool WindowApp::renderFrame() {
             attachMsg.bufferId = frame->bufferId;
             attachMsg.width = frame->width;
             attachMsg.height = frame->height;
+            attachMsg.backingWidth = frame->backingWidth;
+            attachMsg.backingHeight = frame->backingHeight;
             attachMsg.stride = frame->stride;
             attachMsg.format = frame->format;
             attachMsg.modifier = frame->modifier;
@@ -1139,6 +1205,8 @@ bool WindowApp::renderFrame() {
             if (!dmaBufAttached) {
                 m_canvas->cancelDmaBufFrame(frame->bufferId);
                 m_firstFrame = true;
+            } else if (m_liveInteractiveResize) {
+                m_liveFrameGateOpen = false;
             }
         } else {
             // The GPU pool may be temporarily full. Keep the currently shown

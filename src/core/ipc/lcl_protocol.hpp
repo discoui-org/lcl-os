@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 9;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 10;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
@@ -42,7 +42,10 @@ enum class LCLOpcode : uint32_t {
     AttachDmaBuf = 24,
     // Sent by the compositor only after it has stopped sampling a DMA-BUF.
     // Clients must not render into that pool slot before this message arrives.
-    ReleaseDmaBuf = 25
+    ReleaseDmaBuf = 25,
+    // Presentation timing is separate from DMA-BUF ownership. A release makes
+    // a pool slot writable; this callback paces the next interactive frame.
+    FramePresented = 26
 };
 
 enum class LCLSystemSurfaceKind : uint32_t {
@@ -206,6 +209,10 @@ struct LCLMsgConfigureBounds {
     int32_t y{0};
     uint32_t width{0};
     uint32_t height{0};
+    // Logical capacity hint for a GPU backing allocation. Content remains
+    // width x height and must fit inside this extent without being scaled.
+    uint32_t backingWidth{0};
+    uint32_t backingHeight{0};
     uint32_t headerColor{0};
     uint8_t isFocused{0};
     char title[128]{0};
@@ -226,8 +233,12 @@ struct LCLMsgAttachDmaBuf {
     uint32_t surfaceId{0};
     uint64_t configureSerial{0};
     uint32_t bufferId{0};
+    // Physical pixels containing valid newly rendered content.
     uint32_t width{0};
     uint32_t height{0};
+    // Physical dimensions of the exported GBM allocation.
+    uint32_t backingWidth{0};
+    uint32_t backingHeight{0};
     uint32_t stride{0};
     uint32_t format{0}; // LCL_BUFFER_FORMAT_ARGB8888
     uint64_t modifier{~uint64_t{0}}; // DRM_FORMAT_MOD_INVALID when unspecified
@@ -236,6 +247,12 @@ struct LCLMsgAttachDmaBuf {
 struct LCLMsgReleaseDmaBuf {
     uint32_t surfaceId{0};
     uint32_t bufferId{0};
+};
+
+struct LCLMsgFramePresented {
+    uint32_t surfaceId{0};
+    uint64_t timestampNs{0};
+    uint64_t refreshIntervalNs{0};
 };
 
 struct LCLMsgAckResponse {

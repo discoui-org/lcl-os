@@ -35,6 +35,7 @@ public:
     }
 
     void setTargetPixels(uint32_t* targetPixels, uint32_t width, uint32_t height) override {
+        ++targetSetCount;
         pixels = targetPixels;
         pixelWidth = width;
         pixelHeight = height;
@@ -44,6 +45,28 @@ public:
     void beginFrame() override { ++beginCount; }
     void endFrame() override { ++endCount; }
     uint32_t* rasterBuffer() override { return pixels; }
+    void setDmaBufTransportEnabled(bool enabled) override { dmaBufEnabled = enabled; }
+    bool hasDmaBufTransport() const override { return dmaBufAvailable && dmaBufEnabled; }
+    bool configureDmaBufFrame(uint32_t contentWidth, uint32_t contentHeight,
+                              uint32_t backingWidth, uint32_t backingHeight) override {
+        if (!hasDmaBufTransport()) return false;
+        dmaContentWidth = contentWidth;
+        dmaContentHeight = contentHeight;
+        dmaBackingWidth = backingWidth;
+        dmaBackingHeight = backingHeight;
+        ++dmaConfigureCount;
+        return true;
+    }
+    bool isDmaBufFrameActive() const override { return hasDmaBufTransport(); }
+    std::optional<DmaBufFrame> takeDmaBufFrame() override {
+        if (!hasDmaBufTransport()) return std::nullopt;
+        const int fd = dup(STDIN_FILENO);
+        if (fd < 0) return std::nullopt;
+        return DmaBufFrame{nextBufferId++, dmaContentWidth, dmaContentHeight,
+                           dmaBackingWidth, dmaBackingHeight, dmaBackingWidth * 4,
+                           lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888, ~uint64_t{0}, fd};
+    }
+    void releaseDmaBufFrame(uint32_t bufferId) override { releasedBufferIds.push_back(bufferId); }
 
     void drawRect(const Rect& rect, Color color) override {
         rects.push_back(rect);
@@ -103,6 +126,16 @@ public:
     int beginCount{0};
     int endCount{0};
     int bufferDrawCount{0};
+    int targetSetCount{0};
+    bool dmaBufAvailable{false};
+    bool dmaBufEnabled{false};
+    uint32_t dmaContentWidth{0};
+    uint32_t dmaContentHeight{0};
+    uint32_t dmaBackingWidth{0};
+    uint32_t dmaBackingHeight{0};
+    uint32_t nextBufferId{1};
+    int dmaConfigureCount{0};
+    std::vector<uint32_t> releasedBufferIds;
     std::vector<Rect> rects;
     std::vector<Rect> roundedRects;
     std::vector<Rect> topRoundedRects;
@@ -221,6 +254,8 @@ TEST(LclUiTest, WindowAppWaitsForInitialConfigureBeforeAttachingBuffer) {
     // threshold. The initial configure must still be applied immediately.
     configure.width = 80;
     configure.height = 64;
+    configure.backingWidth = 80;
+    configure.backingHeight = 64;
     configure.bufferScale = 1.0f;
     configure.resizeReason = lcl::protocol::LCLConfigureResizeReason::Initial;
     lcl::protocol::LCLHeader configureHeader{};
@@ -242,6 +277,75 @@ TEST(LclUiTest, WindowAppWaitsForInitialConfigureBeforeAttachingBuffer) {
     close(peer);
     close(listener);
     unlink(socketPath.c_str());
+}
+
+TEST(LclUiTest, LiveGpuResizeCoalescesSerialsAvoidsShmAndWaitsForPresentation) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    recorded->dmaBufAvailable = true;
+    WindowApp app(std::move(canvas), 64, 48, "Live GPU resize");
+    app.setResizePresentationMode(lcl::protocol::LCLResizePresentationMode::Live);
+    app.setExternalIpcSocket(sockets[0]);
+
+    const auto sendConfigure = [&](uint64_t serial, uint32_t width, uint32_t height) {
+        lcl::protocol::LCLMsgConfigureBounds configure{};
+        configure.surfaceId = app.getSurfaceId();
+        configure.configureSerial = serial;
+        configure.width = width;
+        configure.height = height;
+        configure.backingWidth = 1000;
+        configure.backingHeight = 700;
+        configure.bufferScale = 1.0f;
+        configure.resizeReason = lcl::protocol::LCLConfigureResizeReason::Interactive;
+        lcl::protocol::LCLHeader header{};
+        header.opcode = lcl::protocol::LCLOpcode::ConfigureBounds;
+        header.payloadSize = sizeof(configure);
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[1], header, &configure));
+    };
+
+    sendConfigure(10, 80, 60);
+    sendConfigure(11, 96, 72);
+    ASSERT_TRUE(app.tick());
+    EXPECT_EQ(app.getWidth(), 96u);
+    EXPECT_EQ(app.getHeight(), 72u);
+    EXPECT_EQ(recorded->targetSetCount, 1); // constructor only: no resize SHM target
+    EXPECT_EQ(recorded->dmaBackingWidth, 1000u);
+    EXPECT_EQ(recorded->dmaBackingHeight, 700u);
+
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, lcl::protocol::LCLOpcode::AttachDmaBuf);
+    const auto* first = reinterpret_cast<const lcl::protocol::LCLMsgAttachDmaBuf*>(payload.data());
+    EXPECT_EQ(first->configureSerial, 11u);
+    EXPECT_EQ(first->width, 96u);
+    EXPECT_EQ(first->backingWidth, 1000u);
+    if (receivedFd >= 0) close(receivedFd);
+
+    sendConfigure(12, 112, 84);
+    EXPECT_FALSE(app.tick());
+    EXPECT_EQ(app.getWidth(), 96u);
+
+    lcl::protocol::LCLMsgFramePresented presented{};
+    presented.surfaceId = app.getSurfaceId();
+    presented.timestampNs = 1000000000ull;
+    presented.refreshIntervalNs = 6944444ull;
+    header = {};
+    header.opcode = lcl::protocol::LCLOpcode::FramePresented;
+    header.payloadSize = sizeof(presented);
+    ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[1], header, &presented));
+    ASSERT_TRUE(app.tick());
+    EXPECT_EQ(app.getWidth(), 112u);
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    const auto* second = reinterpret_cast<const lcl::protocol::LCLMsgAttachDmaBuf*>(payload.data());
+    EXPECT_EQ(second->configureSerial, 12u);
+    if (receivedFd >= 0) close(receivedFd);
+
+    close(sockets[0]);
+    close(sockets[1]);
 }
 
 TEST(LclUiTest, ImplicitTransactionInterpolatesTransformOpacityAndReflowLayout) {

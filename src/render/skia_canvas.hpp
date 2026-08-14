@@ -26,6 +26,8 @@ public:
     bool isDmaBufFrameActive() const override;
     void setDmaBufTransportEnabled(bool enabled) override;
     bool hasDmaBufTransport() const override;
+    bool configureDmaBufFrame(uint32_t contentWidth, uint32_t contentHeight,
+                              uint32_t backingWidth, uint32_t backingHeight) override;
     bool isDmaBufFrameBlocked() const override;
     std::optional<lcl::ui::DmaBufFrame> takeDmaBufFrame() override;
     void cancelDmaBufFrame(uint32_t bufferId) override;
@@ -95,6 +97,8 @@ private:
     bool m_dmaBufFrameActive{false};
     bool m_dmaBufFrameBlocked{false};
     bool m_dmaBufTransportEnabled{false};
+    uint32_t m_dmaBufContentWidth{0};
+    uint32_t m_dmaBufContentHeight{0};
 };
 
 std::unique_ptr<lcl::ui::Canvas> makeSkiaCanvas();
