@@ -37,7 +37,6 @@ void CompositorRenderer::render(render::Renderer& renderer,
     skia->beginFrame();
 
     constexpr float kWindowCornerRadiusLogical = 20.0f;
-    constexpr float kWindowCornerRoundness = 2.0f;
 
     auto resolveWindowCornerRadiusPx = [&](const render::Window& win) {
         if (win.cornerRadiusPx >= 0.0f) {
@@ -55,12 +54,17 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
         return 0.0f;
     };
+    auto resolveWindowCornerRoundness = [](const render::Window& win) {
+        return std::clamp(win.cornerRoundness, 2.0f, 8.0f);
+    };
 
     auto drawChrome = [&](const render::Window& win, const WindowGroupTransform& group,
-                          float chromeOpacity, bool drawTitlebar) {
+                          float chromeOpacity, bool drawTitlebar,
+                          bool showBackdropThroughTitlebar) {
         const float scale = DisplayScale::factor() * group.scale;
         const float titleHeight = group.titleHeight;
-        const float radius = DisplayScale::pxF(kWindowCornerRadiusLogical) * group.scale;
+        const float radius = resolveWindowCornerRadiusPx(win) * group.scale;
+        const float roundness = resolveWindowCornerRoundness(win);
         const auto& chromeStyle = win.chrome.style();
         const float controlSize = chromeStyle.controlSize * scale;
         const float controlGap = chromeStyle.controlGap * scale;
@@ -69,11 +73,15 @@ void CompositorRenderer::render(render::Renderer& renderer,
             group.width, titleHeight, radius, fontSize, scale);
 
         if (drawTitlebar) {
+            // A WindowGroup backdrop already occupies this titlebar area. Keep
+            // chrome as a legible tint over it instead of replacing it with an
+            // opaque server rectangle.
+            const uint8_t titlebarBaseAlpha = showBackdropThroughTitlebar ? 190 : 255;
             skia->drawTopRoundedRect(
                 {group.x, group.y, group.width, titleHeight},
                 std::min(radius, titleHeight),
-                {17, 19, 23, applyOpacityToAlpha(255, chromeOpacity)},
-                kWindowCornerRoundness);
+                {17, 19, 23, applyOpacityToAlpha(titlebarBaseAlpha, chromeOpacity)},
+                roundness);
         }
 
         for (int index = 0; index < 3; ++index) {
@@ -143,7 +151,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
             {0, 0, 0, 0},
             {10, 12, 16, outerA},
             1.0f,
-            kWindowCornerRoundness);
+            resolveWindowCornerRoundness(win));
 
         const float inset = 1.0f;
         const float innerW = std::max(0.0f, group.width - inset * 2.0f);
@@ -155,7 +163,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 {0, 0, 0, 0},
                 {245, 248, 252, innerA},
                 1.0f,
-                kWindowCornerRoundness);
+                resolveWindowCornerRoundness(win));
         }
     };
 
@@ -167,7 +175,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
     auto applySurfaceRegionEffects = [&](const render::Window& win,
                                          const SurfaceEntry& surface,
                                          protocol::EffectSourceType sourceType,
-                                         float windowOpacity) {
+                                         float windowOpacity,
+                                         const WindowGroupTransform& group) {
         int titleOffset = (win.decorationMode == render::DecorationMode::SSD)
             ? DisplayScale::titleBarHeight()
             : 0;
@@ -175,17 +184,39 @@ void CompositorRenderer::render(render::Renderer& renderer,
         for (const auto& fx : surface.effectRegions) {
             if (fx.region.source != sourceType || fx.filters.empty()) continue;
 
-            int fxX = win.x + (fx.followSurfaceBounds ? 0 : fx.region.x);
-            int fxY = win.y + titleOffset + (fx.followSurfaceBounds ? 0 : fx.region.y);
-            int fxW = fx.followSurfaceBounds ? static_cast<int>(surface.width) : static_cast<int>(fx.region.width);
-            int fxH = fx.followSurfaceBounds ? static_cast<int>(surface.height) : static_cast<int>(fx.region.height);
+            const bool windowGroup = fx.region.boundsPolicy == protocol::EffectBoundsPolicy::WindowGroup;
+            int fxX = 0;
+            int fxY = 0;
+            int fxW = 0;
+            int fxH = 0;
+            float cornerRadius = 0.0f;
+            float cornerRoundness = 2.0f;
+            if (windowGroup) {
+                // The compositor owns WindowGroup geometry, including the SSD
+                // titlebar. A root backdrop therefore cannot drift below it or
+                // select a different corner superellipse than the window mask.
+                fxX = static_cast<int>(std::lround(group.x));
+                fxY = static_cast<int>(std::lround(group.y));
+                fxW = std::max(1, static_cast<int>(std::lround(group.width)));
+                fxH = std::max(1, static_cast<int>(std::lround(group.height)));
+                cornerRadius = resolveWindowCornerRadiusPx(win) * group.scale;
+                cornerRoundness = resolveWindowCornerRoundness(win);
+            } else {
+                fxX = win.x + (fx.followSurfaceBounds ? 0 : fx.region.x);
+                fxY = win.y + titleOffset + (fx.followSurfaceBounds ? 0 : fx.region.y);
+                fxW = fx.followSurfaceBounds ? static_cast<int>(surface.width) : static_cast<int>(fx.region.width);
+                fxH = fx.followSurfaceBounds ? static_cast<int>(surface.height) : static_cast<int>(fx.region.height);
+                cornerRadius = std::max(0.0f, fx.region.cornerRadius);
+                cornerRoundness = std::clamp(fx.region.cornerRoundness, 2.0f, 8.0f);
+            }
             if (fxW <= 0 || fxH <= 0) continue;
 
             // Initial executor supports chain filters with source-type routing.
             // Advanced blend modes are currently treated as normal blend.
             renderer.getSkiaRenderer()->applyBackdropFilter(
                 fxX, fxY, fxW, fxH,
-                std::max(0.0f, fx.region.cornerRadius),
+                cornerRadius,
+                cornerRoundness,
                 std::clamp(fx.region.opacity * windowOpacity, 0.0f, 1.0f),
                 fx.filters);
         }
@@ -220,8 +251,17 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
         // B. Apply effect-graph backdrop regions (new pipeline only)
         if (matchingSurface && !matchingSurface->effectRegions.empty()) {
-            applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Backdrop, windowOpacity);
+            applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Backdrop,
+                                      windowOpacity, group);
         }
+
+        const bool hasWindowGroupBackdrop = matchingSurface && std::any_of(
+            matchingSurface->effectRegions.begin(), matchingSurface->effectRegions.end(),
+            [](const SurfaceRegistry::SurfaceEffectRegion& effect) {
+                return effect.region.source == protocol::EffectSourceType::Backdrop &&
+                       effect.region.boundsPolicy == protocol::EffectBoundsPolicy::WindowGroup &&
+                       !effect.filters.empty();
+            });
 
         if (matchingSurface) {
             int srcW = static_cast<int>(matchingSurface->width);
@@ -251,7 +291,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     static_cast<int>(matchingSurface->previousStride / 4),
                     windowOpacity * (1.0f - matchingSurface->resizeCrossfadeProgress),
                     maskToWindowShape ? windowCornerRadiusPx : 0.0f,
-                    kWindowCornerRoundness,
+                    resolveWindowCornerRoundness(win),
                     win.decorationMode == render::DecorationMode::SSD,
                     drawW,
                     drawH);
@@ -264,20 +304,21 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 windowOpacity * (matchingSurface->previousPixels
                     ? matchingSurface->resizeCrossfadeProgress : 1.0f),
                 maskToWindowShape ? windowCornerRadiusPx : 0.0f,
-                kWindowCornerRoundness,
+                resolveWindowCornerRoundness(win),
                 win.decorationMode == render::DecorationMode::SSD,
                 drawW,
                 drawH);
 
             if (!matchingSurface->effectRegions.empty()) {
-                applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground, windowOpacity);
+                applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground,
+                                          windowOpacity, group);
             }
 
         }
 
         // C. Render Server-Side Window Frame (Titlebar & Inset Border) on top of content.
         if (win.decorationMode == render::DecorationMode::SSD) {
-            drawChrome(win, group, windowOpacity, true);
+            drawChrome(win, group, windowOpacity, true, hasWindowGroupBackdrop);
         }
 
         // Forced compositor-owned inset border for every window, independent from app UI.

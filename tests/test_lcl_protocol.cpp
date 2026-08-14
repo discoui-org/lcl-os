@@ -423,6 +423,8 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     region.width = 300;
     region.height = 180;
     region.cornerRadius = 14.0f;
+    region.cornerRoundness = 3.2f;
+    region.boundsPolicy = EffectBoundsPolicy::WindowGroup;
     region.source = EffectSourceType::Backdrop;
     region.blendMode = EffectBlendMode::Normal;
     region.filterCount = static_cast<uint16_t>(filters.size());
@@ -468,6 +470,8 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     EXPECT_EQ(regionRecv->width, 300u);
     EXPECT_EQ(regionRecv->height, 180u);
     EXPECT_FLOAT_EQ(regionRecv->cornerRadius, 14.0f);
+    EXPECT_FLOAT_EQ(regionRecv->cornerRoundness, 3.2f);
+    EXPECT_EQ(regionRecv->boundsPolicy, EffectBoundsPolicy::WindowGroup);
     EXPECT_EQ(regionRecv->source, EffectSourceType::Backdrop);
     EXPECT_EQ(regionRecv->blendMode, EffectBlendMode::Normal);
     EXPECT_EQ(regionRecv->filterCount, 4u);
@@ -487,6 +491,35 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     EXPECT_FLOAT_EQ(opsRecv[2].value, 1.4f);
     EXPECT_EQ(opsRecv[3].type, FilterType::Brightness);
     EXPECT_FLOAT_EQ(opsRecv[3].value, 1.1f);
+
+    close(sv[0]);
+    close(sv[1]);
+}
+
+TEST(LCLProtocolTest, SendAndReceiveWindowCornerStyle) {
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
+
+    LCLMsgSetWindowCornerStyle sent{};
+    sent.surfaceId = 7;
+    sent.radiusPx = 20.0f;
+    sent.roundness = 3.2f;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::SetWindowCornerStyle;
+    header.payloadSize = sizeof(sent);
+
+    ASSERT_TRUE(sendMsgWithFd(sv[0], header, &sent, -1));
+
+    LCLHeader receivedHeader{};
+    std::vector<uint8_t> receivedPayload;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sv[1], receivedHeader, receivedPayload, receivedFd));
+    EXPECT_EQ(receivedHeader.opcode, LCLOpcode::SetWindowCornerStyle);
+    ASSERT_EQ(receivedPayload.size(), sizeof(LCLMsgSetWindowCornerStyle));
+    const auto* received = reinterpret_cast<const LCLMsgSetWindowCornerStyle*>(receivedPayload.data());
+    EXPECT_EQ(received->surfaceId, 7u);
+    EXPECT_FLOAT_EQ(received->radiusPx, 20.0f);
+    EXPECT_FLOAT_EQ(received->roundness, 3.2f);
 
     close(sv[0]);
     close(sv[1]);

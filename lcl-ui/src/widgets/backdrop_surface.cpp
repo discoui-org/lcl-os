@@ -192,6 +192,8 @@ void BackdropSurface::collectEffects(std::vector<EffectRegion>& outEffects) cons
             EffectRegion region;
             region.bounds = abs;
             region.cornerRadius = getBorderRadius();
+            region.cornerRoundness = getBorderRoundness();
+            region.boundsPolicy = m_effectBounds;
             region.source = EffectSource::Backdrop;
             region.blend = m_blendMode;
             region.opacity = m_opacity;

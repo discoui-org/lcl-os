@@ -5,10 +5,12 @@ console.log("========================================");
 // 1. Initialize WindowApp Application Pipeline (800x600)
 const app = new LCL.WindowApp(800, 600, "LCL-UI JS Interactive Demo App");
 app.setAppId("org.lcl.uidemo-js");
+app.setWindowCornerStyle(20, 2);
 
 // 2. Build Centered Flexbox Layout Tree in User-Space App
 const rootContainer = new LCL.BackdropSurface();
 rootContainer.setInteractive(false);
+rootContainer.setEffectBounds("window-group");
 rootContainer.addFilter("blur", 50);
 rootContainer.setWidth(800);
 rootContainer.setHeight(600);

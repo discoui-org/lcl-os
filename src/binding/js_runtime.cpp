@@ -566,6 +566,23 @@ JSValue js_window_app_setDecorationMode(JSContext* ctx, JSValueConst this_val, i
     return JS_NewBool(ctx, ok);
 }
 
+JSValue js_window_app_setWindowCornerStyle(JSContext* ctx, JSValueConst this_val,
+                                           int argc, JSValueConst* argv) {
+    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
+    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
+    if (argc < 1) return JS_ThrowTypeError(ctx, "radius is required");
+
+    double radius = 0.0;
+    double roundness = 2.0;
+    if (JS_ToFloat64(ctx, &radius, argv[0]) < 0 ||
+        (argc >= 2 && JS_ToFloat64(ctx, &roundness, argv[1]) < 0) ||
+        !std::isfinite(radius) || !std::isfinite(roundness) || radius < 0.0) {
+        return JS_ThrowRangeError(ctx, "corner style must use a non-negative finite radius");
+    }
+    return JS_NewBool(ctx, appWrap->app->setWindowCornerStyle(
+        static_cast<float>(radius), static_cast<float>(roundness)));
+}
+
 // ------------------------------------------------------------
 // Widget / Container / Button / Text Constructors
 // ------------------------------------------------------------
@@ -934,6 +951,27 @@ JSValue js_backdrop_setInteractive(JSContext* ctx, JSValueConst this_val,
     auto* backdrop = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
     if (!backdrop || argc < 1) return JS_UNDEFINED;
     backdrop->setInteractive(JS_ToBool(ctx, argv[0]) != 0);
+    return JS_UNDEFINED;
+}
+
+JSValue js_backdrop_setEffectBounds(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* wrap = static_cast<JsWidgetWrapper*>(JS_GetOpaque2(ctx, this_val, g_widget_class_id));
+    if (!wrap || !wrap->widget) return JS_EXCEPTION;
+    auto* backdrop = dynamic_cast<lcl::ui::BackdropSurface*>(wrap->widget);
+    if (!backdrop || argc < 1) return JS_UNDEFINED;
+
+    const char* value = JS_ToCString(ctx, argv[0]);
+    if (!value) return JS_EXCEPTION;
+    const std::string bounds(value);
+    JS_FreeCString(ctx, value);
+    if (bounds == "window-group" || bounds == "windowGroup") {
+        backdrop->setEffectBounds(lcl::ui::EffectBounds::WindowGroup);
+    } else if (bounds == "local") {
+        backdrop->setEffectBounds(lcl::ui::EffectBounds::Local);
+    } else {
+        return JS_ThrowRangeError(ctx, "effect bounds must be 'local' or 'window-group'");
+    }
     return JS_UNDEFINED;
 }
 
@@ -1692,6 +1730,7 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, windowAppProto, "setCsdTitlebarEnabled", JS_NewCFunction(m_ctx, js_window_app_setCsdTitlebarEnabled, "setCsdTitlebarEnabled", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "configureCsdTitlebar", JS_NewCFunction(m_ctx, js_window_app_configureCsdTitlebar, "configureCsdTitlebar", 5));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setDecorationMode", JS_NewCFunction(m_ctx, js_window_app_setDecorationMode, "setDecorationMode", 1));
+    JS_SetPropertyStr(m_ctx, windowAppProto, "setWindowCornerStyle", JS_NewCFunction(m_ctx, js_window_app_setWindowCornerStyle, "setWindowCornerStyle", 2));
     JS_SetPropertyStr(m_ctx, windowAppProto, "animate", JS_NewCFunction(m_ctx, js_window_app_animate, "animate", 2));
     JS_SetClassProto(m_ctx, g_window_app_class_id, windowAppProto);
 
@@ -1715,6 +1754,7 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, widgetProto, "addFilter", JS_NewCFunction(m_ctx, js_effect_addFilter, "addFilter", 4));
     JS_SetPropertyStr(m_ctx, widgetProto, "clearFilters", JS_NewCFunction(m_ctx, js_effect_clearFilters, "clearFilters", 0));
     JS_SetPropertyStr(m_ctx, widgetProto, "setInteractive", JS_NewCFunction(m_ctx, js_backdrop_setInteractive, "setInteractive", 1));
+    JS_SetPropertyStr(m_ctx, widgetProto, "setEffectBounds", JS_NewCFunction(m_ctx, js_backdrop_setEffectBounds, "setEffectBounds", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setOpacity", JS_NewCFunction(m_ctx, js_effect_setOpacity, "setOpacity", 1));
     JS_SetPropertyStr(m_ctx, widgetProto, "setTranslation", JS_NewCFunction(m_ctx, js_widget_setTranslation, "setTranslation", 2));
     JS_SetPropertyStr(m_ctx, widgetProto, "setScale", JS_NewCFunction(m_ctx, js_widget_setScale, "setScale", 2));

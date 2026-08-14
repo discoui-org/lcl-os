@@ -86,6 +86,18 @@ TEST(WindowManagerTest, UnfocusableSystemWindowDoesNotStealApplicationFocus) {
     EXPECT_FALSE(panelWindow->isFocused);
 }
 
+TEST(WindowManagerTest, WindowCornerStyleOwnsRadiusAndRoundnessTogether) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t id = manager.createWindow("Styled", 80, 80, 400, 300);
+
+    manager.setWindowCornerStyle(id, 20.0f, 3.2f);
+    const auto* window = findWindow(manager, id);
+    ASSERT_NE(window, nullptr);
+    EXPECT_FLOAT_EQ(window->cornerRadiusPx, 20.0f);
+    EXPECT_FLOAT_EQ(window->cornerRoundness, 3.2f);
+}
+
 TEST(WindowManagerTest, MaximizeRestoreMorphRetargetsFromPresentationGeometry) {
     lcl::render::WindowManager manager;
     ASSERT_TRUE(manager.initialize(1000, 700));

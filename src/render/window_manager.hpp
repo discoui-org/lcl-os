@@ -97,6 +97,7 @@ struct Window {
     int restoreHeight{0};
     bool drawInsetBorder{true};
     float cornerRadiusPx{-1.0f}; // < 0 means use compositor default policy
+    float cornerRoundness{2.0f};
 
     uint32_t headerColor{0xFF38BDF8};
     // Window is the parent presentation group. The compositor-owned titlebar
@@ -201,6 +202,8 @@ public:
      * @brief Set compositor mask corner radius for a window in pixels.
      */
     void setWindowCornerRadius(uint32_t windowId, float radiusPx);
+    /** Set compositor mask radius and superellipse exponent as one WindowGroup style. */
+    void setWindowCornerStyle(uint32_t windowId, float radiusPx, float roundness);
 
     /**
      * @brief Set reserved desktop struts (No Window Move Zone for Menu Bar / Dock).

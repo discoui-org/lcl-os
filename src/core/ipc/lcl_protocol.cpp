@@ -167,6 +167,10 @@ bool validSource(EffectSourceType value) {
 bool validBlend(EffectBlendMode value) {
     return value >= EffectBlendMode::Normal && value <= EffectBlendMode::Plus;
 }
+bool validBoundsPolicy(EffectBoundsPolicy value) {
+    return value >= EffectBoundsPolicy::Local &&
+           value <= EffectBoundsPolicy::WindowGroup;
+}
 bool validOpcode(LCLOpcode value) {
     switch (value) {
     case LCLOpcode::SurfaceCreate:
@@ -189,6 +193,7 @@ bool validOpcode(LCLOpcode value) {
     case LCLOpcode::ShellStateSnapshot:
     case LCLOpcode::ShellStateDelta:
     case LCLOpcode::SetSystemSurfaceKind:
+    case LCLOpcode::SetWindowCornerStyle:
         return true;
     }
     return false;
@@ -262,6 +267,8 @@ void encodeRegion(Writer& out, const EffectRegion& region) {
     out.u32(region.width);
     out.u32(region.height);
     out.f32(region.cornerRadius);
+    out.f32(region.cornerRoundness);
+    out.u8(static_cast<uint8_t>(region.boundsPolicy));
     out.u8(static_cast<uint8_t>(region.source));
     out.u8(static_cast<uint8_t>(region.blendMode));
     out.u16(region.filterCount);
@@ -269,16 +276,22 @@ void encodeRegion(Writer& out, const EffectRegion& region) {
     out.f32(region.opacity);
 }
 bool decodeRegion(Reader& in, EffectRegion& region) {
-    uint8_t source = 0, blend = 0;
+    uint8_t boundsPolicy = 0, source = 0, blend = 0;
     if (!in.i32(region.x) || !in.i32(region.y) || !in.u32(region.width) ||
         !in.u32(region.height) || !in.f32(region.cornerRadius) ||
+        !in.f32(region.cornerRoundness) ||
+        !in.u8(boundsPolicy) ||
         !in.u8(source) || !in.u8(blend) || !in.u16(region.filterCount) ||
         !in.u32(region.filterOffset) || !in.f32(region.opacity))
         return false;
+    region.boundsPolicy = static_cast<EffectBoundsPolicy>(boundsPolicy);
     region.source = static_cast<EffectSourceType>(source);
     region.blendMode = static_cast<EffectBlendMode>(blend);
     return region.width > 0 && region.height > 0 &&
            validFloat(region.cornerRadius) && region.cornerRadius >= 0.0f &&
+           validFloat(region.cornerRoundness) && region.cornerRoundness >= 2.0f &&
+           region.cornerRoundness <= 8.0f &&
+           validBoundsPolicy(region.boundsPolicy) &&
            validSource(region.source) && validBlend(region.blendMode) &&
            validUnit(region.opacity);
 }
@@ -414,6 +427,9 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
             if (region.filterOffset > graph.filterCount ||
                 region.filterCount > graph.filterCount - region.filterOffset ||
                 !validFloat(region.cornerRadius) || region.cornerRadius < 0.0f ||
+                !validFloat(region.cornerRoundness) || region.cornerRoundness < 2.0f ||
+                region.cornerRoundness > 8.0f ||
+                !validBoundsPolicy(region.boundsPolicy) ||
                 !validUnit(region.opacity) || !validSource(region.source) ||
                 !validBlend(region.blendMode) || region.width == 0 ||
                 region.height == 0)
@@ -461,6 +477,15 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.f32(msg.radiusPx);
         return msg.surfaceId > 0 && validFloat(msg.radiusPx) &&
                msg.radiusPx >= 0.0f;
+    }
+    case LCLOpcode::SetWindowCornerStyle: {
+        LOAD_ONE(LCLMsgSetWindowCornerStyle, msg);
+        out.u32(msg.surfaceId);
+        out.f32(msg.radiusPx);
+        out.f32(msg.roundness);
+        return msg.surfaceId > 0 && validFloat(msg.radiusPx) &&
+               msg.radiusPx >= 0.0f && validFloat(msg.roundness) &&
+               msg.roundness >= 2.0f && msg.roundness <= 8.0f;
     }
     case LCLOpcode::RequestWindowAction: {
         LOAD_ONE(LCLMsgRequestWindowAction, msg);
@@ -685,6 +710,15 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
         LCLMsgSetWindowCornerRadius m{};
         if (!in.u32(m.surfaceId) || !in.f32(m.radiusPx) || m.surfaceId == 0 ||
             !validFloat(m.radiusPx) || m.radiusPx < 0.0f)
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::SetWindowCornerStyle: {
+        LCLMsgSetWindowCornerStyle m{};
+        if (!in.u32(m.surfaceId) || !in.f32(m.radiusPx) || !in.f32(m.roundness) ||
+            m.surfaceId == 0 || !validFloat(m.radiusPx) || m.radiusPx < 0.0f ||
+            !validFloat(m.roundness) || m.roundness < 2.0f || m.roundness > 8.0f)
             return false;
         appendNative(payload, m);
         break;

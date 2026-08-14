@@ -131,7 +131,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         m_windowManager.setWindowLayer(entry.windowId, entry.layer, entry.unfocusable);
         m_windowManager.setInsetBorderEnabled(entry.windowId, entry.insetBorderEnabled);
         if (entry.cornerRadiusPx >= 0.0f) {
-            m_windowManager.setWindowCornerRadius(entry.windowId, entry.cornerRadiusPx);
+            m_windowManager.setWindowCornerStyle(entry.windowId, entry.cornerRadiusPx,
+                                                  entry.cornerRoundness);
         }
 
         if (entry.suppressInitialTransition) {
@@ -686,7 +687,26 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 if (it != m_surfaces.end()) {
                     it->second.cornerRadiusPx = radiusMsg->radiusPx * it->second.bufferScale;
                     if (it->second.windowId != 0) {
-                        m_windowManager.setWindowCornerRadius(it->second.windowId, it->second.cornerRadiusPx);
+                        m_windowManager.setWindowCornerStyle(it->second.windowId,
+                                                              it->second.cornerRadiusPx,
+                                                              it->second.cornerRoundness);
+                    }
+                    changed = true;
+                }
+            }
+
+        } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetWindowCornerStyle) {
+            if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgSetWindowCornerStyle)) {
+                auto* styleMsg = reinterpret_cast<const lcl::protocol::LCLMsgSetWindowCornerStyle*>(msg.payload.data());
+                uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | styleMsg->surfaceId;
+                auto it = m_surfaces.find(surfaceKey);
+                if (it != m_surfaces.end()) {
+                    it->second.cornerRadiusPx = styleMsg->radiusPx * it->second.bufferScale;
+                    it->second.cornerRoundness = std::clamp(styleMsg->roundness, 2.0f, 8.0f);
+                    if (it->second.windowId != 0) {
+                        m_windowManager.setWindowCornerStyle(it->second.windowId,
+                                                              it->second.cornerRadiusPx,
+                                                              it->second.cornerRoundness);
                     }
                     changed = true;
                 }
@@ -731,7 +751,14 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                             const auto& region = regions[i];
                             size_t offset = static_cast<size_t>(region.filterOffset);
                             size_t count = static_cast<size_t>(region.filterCount);
-                            if (offset + count > static_cast<size_t>(graphHeader->filterCount)) {
+                            if (offset + count > static_cast<size_t>(graphHeader->filterCount) ||
+                                !std::isfinite(region.cornerRadius) || region.cornerRadius < 0.0f ||
+                                !std::isfinite(region.cornerRoundness) ||
+                                region.cornerRoundness < 2.0f || region.cornerRoundness > 8.0f ||
+                                (region.boundsPolicy != lcl::protocol::EffectBoundsPolicy::Local &&
+                                 region.boundsPolicy != lcl::protocol::EffectBoundsPolicy::WindowGroup) ||
+                                !std::isfinite(region.opacity) ||
+                                region.opacity < 0.0f || region.opacity > 1.0f) {
                                 valid = false;
                                 break;
                             }

@@ -235,7 +235,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         setDecorationMode(m_requestedDecorationMode);
     }
     if (m_hasRequestedCornerRadius) {
-        setWindowCornerRadius(m_requestedCornerRadius);
+        setWindowCornerStyle(m_requestedCornerRadius, m_requestedCornerRoundness);
     }
     if (m_rootWidget) {
         m_rootWidget->markDirty();
@@ -729,17 +729,23 @@ bool WindowApp::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, ui
                                &msg, sizeof(msg));
 }
 
-bool WindowApp::setWindowCornerRadius(float radiusPx) {
+bool WindowApp::setWindowCornerStyle(float radiusPx, float roundness) {
     m_requestedCornerRadius = std::max(0.0f, radiusPx);
+    m_requestedCornerRoundness = std::clamp(roundness, 2.0f, 8.0f);
     m_hasRequestedCornerRadius = true;
     if (!m_ipcConnected || m_socketFd < 0) return true;
 
-    lcl::protocol::LCLMsgSetWindowCornerRadius msg{};
+    lcl::protocol::LCLMsgSetWindowCornerStyle msg{};
     msg.surfaceId = m_surfaceId;
     msg.radiusPx = m_requestedCornerRadius;
+    msg.roundness = m_requestedCornerRoundness;
 
-    return sendProtocolMessage(lcl::protocol::LCLOpcode::SetWindowCornerRadius,
+    return sendProtocolMessage(lcl::protocol::LCLOpcode::SetWindowCornerStyle,
                                &msg, sizeof(msg));
+}
+
+bool WindowApp::setWindowCornerRadius(float radiusPx) {
+    return setWindowCornerStyle(radiusPx, m_requestedCornerRoundness);
 }
 
 void WindowApp::configureCsdTitlebar(float height, float controlLeft, float controlTop,
@@ -901,6 +907,11 @@ bool WindowApp::renderFrame() {
                 default:                    return lcl::protocol::EffectBlendMode::Normal;
             }
         };
+        auto toProtoBounds = [](EffectBounds bounds) {
+            return bounds == EffectBounds::WindowGroup
+                ? lcl::protocol::EffectBoundsPolicy::WindowGroup
+                : lcl::protocol::EffectBoundsPolicy::Local;
+        };
 
         std::vector<lcl::protocol::EffectRegion> protoRegions;
         std::vector<lcl::protocol::FilterOp> flatFilters;
@@ -925,6 +936,8 @@ bool WindowApp::renderFrame() {
             region.width = static_cast<uint32_t>(w);
             region.height = static_cast<uint32_t>(h);
             region.cornerRadius = std::max(0.0f, effect.cornerRadius * m_bufferScale);
+            region.cornerRoundness = std::clamp(effect.cornerRoundness, 2.0f, 8.0f);
+            region.boundsPolicy = toProtoBounds(effect.boundsPolicy);
             region.source = toProtoSource(effect.source);
             region.blendMode = toProtoBlend(effect.blend);
             region.opacity = std::clamp(effect.opacity, 0.0f, 1.0f);

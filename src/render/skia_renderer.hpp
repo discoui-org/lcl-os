@@ -166,7 +166,9 @@ public:
                                bool squareTopCorners,
                                float drawWidth,
                                float drawHeight);
-    void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, float cornerRadius, float opacity, const std::vector<protocol::FilterOp>& filters);
+    void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
+                             float cornerRadius, float cornerRoundness,
+                             float opacity, const std::vector<protocol::FilterOp>& filters);
 
     // Accessors
     uint32_t getWidth() const { return m_width; }
@@ -230,6 +232,9 @@ private:
     int32_t m_uBlurDirLoc{-1};
     int32_t m_uBlurSigmaLoc{-1};
     int32_t m_uBlurRadiusLoc{-1};
+    int32_t m_uBlurSizeLoc{-1};
+    int32_t m_uBlurCornerRadiusLoc{-1};
+    int32_t m_uBlurRoundnessLoc{-1};
 
     uint32_t m_glColorMatrixProgram{0};
     int32_t m_aColorPosLoc{-1};
@@ -277,6 +282,7 @@ private:
     int32_t m_uRefractDispersionLoc{-1};
     int32_t m_uRefractSizeLoc{-1};
     int32_t m_uRefractRadiusLoc{-1};
+    int32_t m_uRefractRoundnessLoc{-1};
 
     // GPU BGRA Surface Compositing Handles
     uint32_t m_glClientTexture{0};

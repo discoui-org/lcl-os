@@ -490,6 +490,32 @@ TEST(LclUiTest, WindowAppStagesSurfaceChromeBeforeCompositorConnection) {
     EXPECT_TRUE(app.setWindowCornerRadius(14.0f));
 }
 
+TEST(LclUiTest, WindowAppSendsOneWindowCornerStyle) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 64, 48, "Corner style test");
+    app.setSurfaceId(5);
+    app.setExternalIpcSocket(sockets[0]);
+
+    ASSERT_TRUE(app.setWindowCornerStyle(20.0f, 3.2f));
+
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, lcl::protocol::LCLOpcode::SetWindowCornerStyle);
+    ASSERT_EQ(payload.size(), sizeof(lcl::protocol::LCLMsgSetWindowCornerStyle));
+    const auto* style = reinterpret_cast<const lcl::protocol::LCLMsgSetWindowCornerStyle*>(payload.data());
+    EXPECT_EQ(style->surfaceId, 5u);
+    EXPECT_FLOAT_EQ(style->radiusPx, 20.0f);
+    EXPECT_FLOAT_EQ(style->roundness, 3.2f);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(LclUiTest, WindowAppCsdControlsAndCustomRequestsUseWindowActions) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
@@ -576,6 +602,8 @@ TEST(LclUiTest, GlassUsesTheGenericAddFilterChain) {
     BackdropSurface surface;
     surface.getYogaNode().setWidth(100.0f);
     surface.getYogaNode().setHeight(100.0f);
+    surface.setBorderRoundness(3.2f);
+    surface.setEffectBounds(EffectBounds::WindowGroup);
     surface.addFilter(lcl::protocol::FilterType::Blur, 8.0f);
     surface.addFilter(lcl::protocol::FilterType::Glass, 30.0f, 3.0f, 12.0f);
     surface.getYogaNode().calculateLayout(100.0f, 100.0f);
@@ -586,6 +614,8 @@ TEST(LclUiTest, GlassUsesTheGenericAddFilterChain) {
 
     ASSERT_EQ(effects.size(), 1u);
     ASSERT_EQ(effects.front().filters.size(), 2u);
+    EXPECT_FLOAT_EQ(effects.front().cornerRoundness, 3.2f);
+    EXPECT_EQ(effects.front().boundsPolicy, EffectBounds::WindowGroup);
     EXPECT_EQ(effects.front().filters[0].type, lcl::protocol::FilterType::Blur);
     const auto& glass = effects.front().filters[1];
     EXPECT_EQ(glass.type, lcl::protocol::FilterType::Glass);
@@ -605,6 +635,7 @@ TEST(LclUiTest, PassiveBackdropEffectDoesNotRequireAFullWindowRoundedRaster) {
     auto effect = std::make_unique<BackdropSurface>();
     effect->setInteractive(false);
     effect->setBorderRadius(20.0f);
+    effect->setBorderRoundness(3.2f);
     effect->addFilter(lcl::protocol::FilterType::Blur, 3.5f);
     effect->getYogaNode().setPositionType(YGPositionTypeAbsolute);
     effect->getYogaNode().setWidth(540.0f);
@@ -623,6 +654,7 @@ TEST(LclUiTest, PassiveBackdropEffectDoesNotRequireAFullWindowRoundedRaster) {
     ASSERT_EQ(effects.size(), 1u);
     EXPECT_EQ(effects.front().source, EffectSource::Backdrop);
     EXPECT_EQ(effects.front().cornerRadius, 20.0f);
+    EXPECT_FLOAT_EQ(effects.front().cornerRoundness, 3.2f);
 }
 
 TEST(LclUiTest, SkiaCanvasInjectionPreservesRasterOutput) {
@@ -883,10 +915,29 @@ TEST(LclUiTest, SoftwareBackdropPathSkipsBlur) {
     ASSERT_TRUE(renderer.initialize(2, 2, nullptr, pixels.data()));
 
     renderer.applyBackdropFilter(
-        0, 0, 2, 2, 0.0f, 1.0f,
+        0, 0, 2, 2, 0.0f, 2.0f, 1.0f,
         {{lcl::protocol::FilterType::Blur, 16.0f}});
 
     EXPECT_EQ(pixels, original);
+}
+
+TEST(LclUiTest, SoftwareBackdropMaskUsesTheEffectRoundness) {
+    const std::vector<lcl::protocol::FilterOp> filters{
+        {lcl::protocol::FilterType::Brightness, 1.0f},
+    };
+
+    std::vector<uint32_t> circularPixels(16 * 16, 0xFF102030u);
+    lcl::render::SkiaRenderer circularRenderer;
+    ASSERT_TRUE(circularRenderer.initialize(16, 16, nullptr, circularPixels.data()));
+    circularRenderer.applyBackdropFilter(0, 0, 16, 16, 6.0f, 2.0f, 1.0f, filters);
+
+    std::vector<uint32_t> superellipsePixels(16 * 16, 0xFF102030u);
+    lcl::render::SkiaRenderer superellipseRenderer;
+    ASSERT_TRUE(superellipseRenderer.initialize(16, 16, nullptr, superellipsePixels.data()));
+    superellipseRenderer.applyBackdropFilter(0, 0, 16, 16, 6.0f, 8.0f, 1.0f, filters);
+
+    EXPECT_EQ(circularPixels[1 + 1 * 16] >> 24, 0u);
+    EXPECT_EQ(superellipsePixels[1 + 1 * 16] >> 24, 0xFFu);
 }
 
 TEST(LclUiTest, RoundedRectPreservesSubpixelEdgeCoverageDuringScaleMotion) {

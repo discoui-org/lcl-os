@@ -67,6 +67,36 @@ bool SkiaRenderer::initGLShader() {
         "uniform vec2 uDirection;\n"
         "uniform float uSigma;\n"
         "uniform int uRadius;\n"
+        "uniform vec2 uSizePx;\n"
+        "uniform float uCornerRadiusPx;\n"
+        "uniform float uRoundnessExp;\n"
+        "float sdSuperRoundRect(vec2 p, vec2 b, float r, float n) {\n"
+        "    if (r <= 0.001) return max(abs(p).x - b.x, abs(p).y - b.y);\n"
+        "    vec2 q = abs(p) - b + vec2(r);\n"
+        "    if (q.x <= 0.0 || q.y <= 0.0) return max(q.x, q.y) - r;\n"
+        "    vec2 qq = max(q, 0.0) / r;\n"
+        "    float k = pow(pow(qq.x, n) + pow(qq.y, n), 1.0 / n);\n"
+        "    return (k - 1.0) * r;\n"
+        "}\n"
+        "vec2 mirrorRoundedTap(vec2 uv) {\n"
+        "    float r = clamp(uCornerRadiusPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
+        "    if (r <= 0.001) return uv;\n"
+        "    vec2 p = (uv - vec2(0.5)) * uSizePx;\n"
+        "    vec2 b = uSizePx * 0.5;\n"
+        "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
+        "    for (int pass = 0; pass < 2; ++pass) {\n"
+        "        float d = sdSuperRoundRect(p, b, r, n);\n"
+        "        if (d <= 0.0) break;\n"
+        "        float eps = 1.0;\n"
+        "        vec2 grad = vec2(\n"
+        "            sdSuperRoundRect(p + vec2(eps, 0.0), b, r, n) - sdSuperRoundRect(p - vec2(eps, 0.0), b, r, n),\n"
+        "            sdSuperRoundRect(p + vec2(0.0, eps), b, r, n) - sdSuperRoundRect(p - vec2(0.0, eps), b, r, n));\n"
+        "        float gradLength = length(grad);\n"
+        "        if (gradLength <= 0.0001) break;\n"
+        "        p -= 2.0 * d * (grad / gradLength);\n"
+        "    }\n"
+        "    return p / uSizePx + vec2(0.5);\n"
+        "}\n"
         "void main() {\n"
         "    if (uSigma <= 0.1) {\n"
         "        gl_FragColor = texture2D(uTexture, vTexCoord);\n"
@@ -78,7 +108,7 @@ bool SkiaRenderer::initGLShader() {
         "    for (int i = -16; i <= 16; ++i) {\n"
         "        float fi = float(i);\n"
         "        float weight = exp(-(fi * fi) / twoSigmaSq);\n"
-        "        vec2 coord = vTexCoord + uDirection * fi;\n"
+        "        vec2 coord = mirrorRoundedTap(vTexCoord + uDirection * fi);\n"
         "        colorAcc += texture2D(uTexture, coord) * weight;\n"
         "        weightAcc += weight;\n"
         "    }\n"
@@ -101,6 +131,9 @@ bool SkiaRenderer::initGLShader() {
     m_uBlurDirLoc = glGetUniformLocation(m_glBlurProgram, "uDirection");
     m_uBlurSigmaLoc = glGetUniformLocation(m_glBlurProgram, "uSigma");
     m_uBlurRadiusLoc = glGetUniformLocation(m_glBlurProgram, "uRadius");
+    m_uBlurSizeLoc = glGetUniformLocation(m_glBlurProgram, "uSizePx");
+    m_uBlurCornerRadiusLoc = glGetUniformLocation(m_glBlurProgram, "uCornerRadiusPx");
+    m_uBlurRoundnessLoc = glGetUniformLocation(m_glBlurProgram, "uRoundnessExp");
 
     // --- GLSL Color Matrix Fragment Shader ---
     const char* fColorMatrixSrc =
@@ -352,9 +385,14 @@ bool SkiaRenderer::initGLShader() {
         "uniform float uDispersionGain;\n"
         "uniform vec2 uSizePx;\n"
         "uniform float uRadiusPx;\n"
-        "float sdRoundRect(vec2 p, vec2 b, float r) {\n"
+        "uniform float uRoundnessExp;\n"
+        "float sdSuperRoundRect(vec2 p, vec2 b, float r, float n) {\n"
+        "    if (r <= 0.001) return max(abs(p).x - b.x, abs(p).y - b.y);\n"
         "    vec2 q = abs(p) - b + vec2(r);\n"
-        "    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;\n"
+        "    if (q.x <= 0.0 || q.y <= 0.0) return max(q.x, q.y) - r;\n"
+        "    vec2 qq = max(q, 0.0) / r;\n"
+        "    float k = pow(pow(qq.x, n) + pow(qq.y, n), 1.0 / n);\n"
+        "    return (k - 1.0) * r;\n"
         "}\n"
         "float safeAsin(float x) {\n"
         "    return asin(clamp(x, -1.0, 1.0));\n"
@@ -364,17 +402,18 @@ bool SkiaRenderer::initGLShader() {
         "    float thickness = max(0.001, uThicknessPx);\n"
         "    float eta = max(1.001, uRefractionFactor);\n"
         "    float r = clamp(uRadiusPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
+        "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
         "    vec2 p = (vTexCoord - vec2(0.5)) * uSizePx;\n"
         "    vec2 b = uSizePx * 0.5;\n"
-        "    float sd = sdRoundRect(p, b, r);\n"
+        "    float sd = sdSuperRoundRect(p, b, r, n);\n"
         "    float edgeDepth = max(0.0, -sd);\n"
         "    if (sd >= 0.0 || edgeDepth >= thickness) {\n"
         "        gl_FragColor = base;\n"
         "        return;\n"
         "    }\n"
         "    float eps = 1.0;\n"
-        "    float sdx = sdRoundRect(p + vec2(eps, 0.0), b, r) - sdRoundRect(p - vec2(eps, 0.0), b, r);\n"
-        "    float sdy = sdRoundRect(p + vec2(0.0, eps), b, r) - sdRoundRect(p - vec2(0.0, eps), b, r);\n"
+        "    float sdx = sdSuperRoundRect(p + vec2(eps, 0.0), b, r, n) - sdSuperRoundRect(p - vec2(eps, 0.0), b, r, n);\n"
+        "    float sdy = sdSuperRoundRect(p + vec2(0.0, eps), b, r, n) - sdSuperRoundRect(p - vec2(0.0, eps), b, r, n);\n"
         "    vec2 normal = vec2(sdx, sdy) * 700.0;\n"
         "    float xRatio = 1.0 - edgeDepth / thickness;\n"
         "    float thetaI = safeAsin(xRatio * xRatio);\n"
@@ -410,6 +449,7 @@ bool SkiaRenderer::initGLShader() {
     m_uRefractDispersionLoc = glGetUniformLocation(m_glRefractionProgram, "uDispersionGain");
     m_uRefractSizeLoc = glGetUniformLocation(m_glRefractionProgram, "uSizePx");
     m_uRefractRadiusLoc = glGetUniformLocation(m_glRefractionProgram, "uRadiusPx");
+    m_uRefractRoundnessLoc = glGetUniformLocation(m_glRefractionProgram, "uRoundnessExp");
 
     // --- GLSL BGRA Client Surface Fragment Shader ---
     const char* fBgraSrc =
@@ -1695,7 +1735,9 @@ void applyColorMatrixToPixels(std::vector<uint32_t>& pixels, int w, int h, const
 
 } // namespace
 
-void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, float cornerRadius, float opacity, const std::vector<protocol::FilterOp>& filters) {
+void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
+                                       float cornerRadius, float cornerRoundness,
+                                       float opacity, const std::vector<protocol::FilterOp>& filters) {
     if (!m_initialized || srcW <= 0 || srcH <= 0 || filters.empty()) return;
 
     int clipX1 = std::max(0, dstX);
@@ -1707,6 +1749,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
 
     int w = clipX2 - clipX1;
     int h = clipY2 - clipY1;
+    const float clampedRoundness = std::clamp(cornerRoundness, 2.0f, 8.0f);
 
     auto resolveGlassValues = [&](const protocol::FilterOp& op,
                                   float& outThicknessPx,
@@ -1851,6 +1894,11 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
             glUniform2f(m_uBlurDirLoc, 1.0f / static_cast<float>(targetW), 0.0f);
             glUniform1f(m_uBlurSigmaLoc, sigma);
             glUniform1i(m_uBlurRadiusLoc, radius);
+            const float passScale = (w > 0) ? (static_cast<float>(targetW) / static_cast<float>(w)) : 1.0f;
+            const float passCornerRadiusPx = std::max(0.0f, cornerRadius) * passScale;
+            glUniform2f(m_uBlurSizeLoc, static_cast<float>(targetW), static_cast<float>(targetH));
+            glUniform1f(m_uBlurCornerRadiusLoc, passCornerRadiusPx);
+            glUniform1f(m_uBlurRoundnessLoc, clampedRoundness);
 
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -1864,6 +1912,9 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
             glUniform2f(m_uBlurDirLoc, 0.0f, 1.0f / static_cast<float>(targetH));
             glUniform1f(m_uBlurSigmaLoc, sigma);
             glUniform1i(m_uBlurRadiusLoc, radius);
+            glUniform2f(m_uBlurSizeLoc, static_cast<float>(targetW), static_cast<float>(targetH));
+            glUniform1f(m_uBlurCornerRadiusLoc, passCornerRadiusPx);
+            glUniform1f(m_uBlurRoundnessLoc, clampedRoundness);
 
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -1901,6 +1952,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
             glUniform1f(m_uRefractDispersionLoc, std::max(0.0f, dispersionGain));
             glUniform2f(m_uRefractSizeLoc, static_cast<float>(targetW), static_cast<float>(targetH));
             glUniform1f(m_uRefractRadiusLoc, passRadiusPx);
+            glUniform1f(m_uRefractRoundnessLoc, clampedRoundness);
 
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -1963,7 +2015,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
                       static_cast<float>(w),
                       static_cast<float>(h),
                       cornerRadius,
-                      2.0f,
+                      clampedRoundness,
                       opacity);
         return;
     }
@@ -1978,6 +2030,24 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
     }
 
     ColorMatrix4x4 pendingColorMatrix;
+    auto sdSuperRoundRect = [clampedRoundness](float px, float py,
+                                               float halfW, float halfH,
+                                               float radius) {
+        if (radius <= 0.001f) {
+            return std::max(std::abs(px) - halfW, std::abs(py) - halfH);
+        }
+        const float qx = std::abs(px) - halfW + radius;
+        const float qy = std::abs(py) - halfH + radius;
+        if (qx <= 0.0f || qy <= 0.0f) {
+            return std::max(qx, qy) - radius;
+        }
+        const float nx = std::max(qx, 0.0f) / radius;
+        const float ny = std::max(qy, 0.0f) / radius;
+        const float k = std::pow(
+            std::pow(nx, clampedRoundness) + std::pow(ny, clampedRoundness),
+            1.0f / clampedRoundness);
+        return (k - 1.0f) * radius;
+    };
     auto runCpuRefraction = [&](std::vector<uint32_t>& pixels,
                                 int pxW,
                                 int pxH,
@@ -1994,16 +2064,6 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
         const float eta = std::max(1.001f, refractionFactor);
         const float disp = std::max(0.0f, dispersionGain) * 0.02f;
 
-        auto sdRoundRect = [&](float px, float py) {
-            float qx = std::abs(px) - halfW + rr;
-            float qy = std::abs(py) - halfH + rr;
-            float ox = std::max(qx, 0.0f);
-            float oy = std::max(qy, 0.0f);
-            float outside = std::sqrt(ox * ox + oy * oy);
-            float inside = std::min(std::max(qx, qy), 0.0f);
-            return outside + inside - rr;
-        };
-
         auto sample = [&](float sx, float sy) -> uint32_t {
             int ix = std::clamp(static_cast<int>(std::lround(sx)), 0, pxW - 1);
             int iy = std::clamp(static_cast<int>(std::lround(sy)), 0, pxH - 1);
@@ -2018,7 +2078,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
             for (int x = 0; x < pxW; ++x) {
                 const float px = (static_cast<float>(x) + 0.5f) - halfW;
                 const float py = (static_cast<float>(y) + 0.5f) - halfH;
-                const float sd = sdRoundRect(px, py);
+                const float sd = sdSuperRoundRect(px, py, halfW, halfH, rr);
                 const float edgeDepth = std::max(0.0f, -sd);
 
                 if (sd >= 0.0f || edgeDepth >= thicknessPx) {
@@ -2026,8 +2086,10 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
                 }
 
                 const float eps = 1.0f;
-                float sdx = sdRoundRect(px + eps, py) - sdRoundRect(px - eps, py);
-                float sdy = sdRoundRect(px, py + eps) - sdRoundRect(px, py - eps);
+                float sdx = sdSuperRoundRect(px + eps, py, halfW, halfH, rr) -
+                            sdSuperRoundRect(px - eps, py, halfW, halfH, rr);
+                float sdy = sdSuperRoundRect(px, py + eps, halfW, halfH, rr) -
+                            sdSuperRoundRect(px, py - eps, halfW, halfH, rr);
                 float nLen = std::sqrt(sdx * sdx + sdy * sdy);
                 if (nLen <= 0.0001f) {
                     continue;
@@ -2115,24 +2177,11 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
 
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
-                bool inside = true;
-                if (r > 0.0f) {
-                    float fx = static_cast<float>(x) + 0.5f;
-                    float fy = static_cast<float>(y) + 0.5f;
-
-                    bool inLeft = fx < r;
-                    bool inRight = fx > (static_cast<float>(w) - r);
-                    bool inTop = fy < r;
-                    bool inBottom = fy > (static_cast<float>(h) - r);
-
-                    if ((inLeft || inRight) && (inTop || inBottom)) {
-                        float cx = inLeft ? r : (static_cast<float>(w) - r);
-                        float cy = inTop ? r : (static_cast<float>(h) - r);
-                        float dx = fx - cx;
-                        float dy = fy - cy;
-                        inside = (dx * dx + dy * dy) <= (r * r);
-                    }
-                }
+                const float fx = (static_cast<float>(x) + 0.5f) - static_cast<float>(w) * 0.5f;
+                const float fy = (static_cast<float>(y) + 0.5f) - static_cast<float>(h) * 0.5f;
+                const bool inside = sdSuperRoundRect(
+                    fx, fy, static_cast<float>(w) * 0.5f,
+                    static_cast<float>(h) * 0.5f, r) <= 0.0f;
 
                 uint32_t& p = crop[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)];
                 uint8_t a = static_cast<uint8_t>((p >> 24) & 0xFF);

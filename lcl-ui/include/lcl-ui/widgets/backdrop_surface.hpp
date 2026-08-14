@@ -17,6 +17,14 @@ public:
     void addFilter(const lcl::protocol::FilterOp& filter);
     void clearFilters();
 
+    void setEffectBounds(EffectBounds bounds) {
+        if (m_effectBounds != bounds) {
+            m_effectBounds = bounds;
+            markDirty();
+        }
+    }
+    EffectBounds getEffectBounds() const { return m_effectBounds; }
+
     void setBlendMode(EffectBlend mode) { m_blendMode = mode; markDirty(); }
     EffectBlend getBlendMode() const { return m_blendMode; }
 
@@ -43,6 +51,7 @@ private:
     void restoreBaseVisuals();
 
     std::vector<lcl::protocol::FilterOp> m_filters;
+    EffectBounds m_effectBounds{EffectBounds::Local};
     EffectBlend m_blendMode{EffectBlend::Normal};
     float m_opacity{1.0f};
     std::function<void()> m_onClick{nullptr};

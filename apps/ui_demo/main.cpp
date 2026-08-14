@@ -61,10 +61,12 @@ int main() {
         lcl::render::makeSkiaCanvas(), 800, 600,
         "LCL-UI Phase 1.6 Interactive Demo App");
     app.setAppId("org.lcl.uidemo");
+    app.setWindowCornerStyle(20.0f, 2.0f);
 
     // 2. Build Centered Flexbox Layout Tree in User-Space App
     auto rootContainer = std::make_unique<BackdropSurface>();
     rootContainer->setInteractive(false);
+    rootContainer->setEffectBounds(EffectBounds::WindowGroup);
     rootContainer->addFilter(lcl::protocol::FilterType::Blur, 50.0f);
     rootContainer->getYogaNode().setWidth(800.0f);
     rootContainer->getYogaNode().setHeight(600.0f);

@@ -779,11 +779,18 @@ void WindowManager::setInsetBorderEnabled(uint32_t windowId, bool enabled) {
 }
 
 void WindowManager::setWindowCornerRadius(uint32_t windowId, float radiusPx) {
-    const float clamped = std::max(0.0f, radiusPx);
+    setWindowCornerStyle(windowId, radiusPx, 2.0f);
+}
+
+void WindowManager::setWindowCornerStyle(uint32_t windowId, float radiusPx, float roundness) {
+    const float clampedRadius = std::max(0.0f, radiusPx);
+    const float clampedRoundness = std::clamp(roundness, 2.0f, 8.0f);
     for (auto& win : m_windows) {
         if (win.id == windowId) {
-            if (std::abs(win.cornerRadiusPx - clamped) > 0.01f) {
-                win.cornerRadiusPx = clamped;
+            if (std::abs(win.cornerRadiusPx - clampedRadius) > 0.01f ||
+                std::abs(win.cornerRoundness - clampedRoundness) > 0.01f) {
+                win.cornerRadiusPx = clampedRadius;
+                win.cornerRoundness = clampedRoundness;
                 win.markDirty();
                 m_mouseDirty = true;
             }

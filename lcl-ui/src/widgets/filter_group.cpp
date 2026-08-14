@@ -32,6 +32,8 @@ void FilterGroup::collectEffects(std::vector<EffectRegion>& outEffects) const {
         if (!abs.isEmpty()) {
             EffectRegion region;
             region.bounds = abs;
+            region.cornerRadius = getBorderRadius();
+            region.cornerRoundness = getBorderRoundness();
             region.source = EffectSource::Foreground;
             region.blend = m_blendMode;
             region.opacity = m_opacity;

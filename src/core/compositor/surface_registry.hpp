@@ -59,6 +59,7 @@ public:
         bool unfocusable{false};
         bool insetBorderEnabled{true};
         float cornerRadiusPx{-1.0f};
+        float cornerRoundness{2.0f};
         bool suppressInitialTransition{false};
         std::string appId;
         std::vector<SurfaceEffectRegion> effectRegions;

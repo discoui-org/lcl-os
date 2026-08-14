@@ -66,7 +66,7 @@ int main() {
     window.setAppId("org.lcl.terminal");
     window.setInitialBounds(80, 60, kSurfaceWidth, kSurfaceHeight);
     window.setDecorationMode(lcl::protocol::LCLDecorationMode::CSD);
-    window.setWindowCornerRadius(kCornerRadius);
+    window.setWindowCornerStyle(kCornerRadius, 2.0f);
     window.setCsdTitlebarEnabled(true);
 
     const lcl::ui::chrome::WindowChromeStyle chromeStyle;
@@ -94,7 +94,7 @@ int main() {
     auto backdrop = std::make_unique<lcl::ui::BackdropSurface>();
     lcl::ui::BackdropSurface* backdropPtr = backdrop.get();
     backdrop->setInteractive(false);
-    backdrop->setBorderRadius(kCornerRadius);
+    backdrop->setEffectBounds(lcl::ui::EffectBounds::WindowGroup);
     backdrop->getYogaNode().setPositionType(YGPositionTypeAbsolute);
     backdrop->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
     backdrop->getYogaNode().setPosition(YGEdgeTop, 0.0f);

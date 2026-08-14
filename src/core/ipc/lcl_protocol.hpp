@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 4;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 6;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 
@@ -34,7 +34,8 @@ enum class LCLOpcode : uint32_t {
     SubscribeShellState = 19,
     ShellStateSnapshot = 20,
     ShellStateDelta = 21,
-    SetSystemSurfaceKind = 22
+    SetSystemSurfaceKind = 22,
+    SetWindowCornerStyle = 23
 };
 
 enum class LCLSystemSurfaceKind : uint32_t {
@@ -110,6 +111,11 @@ enum class EffectBlendMode : uint8_t {
     Plus = 4
 };
 
+enum class EffectBoundsPolicy : uint8_t {
+    Local = 0,
+    WindowGroup = 1
+};
+
 #pragma pack(push, 1)
 
 struct FilterOp {
@@ -135,6 +141,8 @@ struct EffectRegion {
     uint32_t width{0};
     uint32_t height{0};
     float cornerRadius{0.0f};
+    float cornerRoundness{2.0f};
+    EffectBoundsPolicy boundsPolicy{EffectBoundsPolicy::Local};
     EffectSourceType source{EffectSourceType::Backdrop};
     EffectBlendMode blendMode{EffectBlendMode::Normal};
     uint16_t filterCount{0};
@@ -259,6 +267,12 @@ struct LCLMsgSetInsetBorder {
 struct LCLMsgSetWindowCornerRadius {
     uint32_t surfaceId{0};
     float radiusPx{0.0f};
+};
+
+struct LCLMsgSetWindowCornerStyle {
+    uint32_t surfaceId{0};
+    float radiusPx{0.0f};
+    float roundness{2.0f};
 };
 
 /** Subscribe to compositor-owned scene/focus state from a known revision. */
