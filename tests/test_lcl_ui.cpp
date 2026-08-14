@@ -873,6 +873,22 @@ TEST(LclUiTest, RoundedRectPreservesTranslucentAlphaOnTransparentCanvas) {
     EXPECT_EQ(pixels[16 + 16 * 32], 0xB8111317u);
 }
 
+TEST(LclUiTest, SoftwareBackdropPathSkipsBlur) {
+    std::vector<uint32_t> pixels{
+        0xFF102030u, 0xFF405060u,
+        0xFF708090u, 0xFFA0B0C0u,
+    };
+    const auto original = pixels;
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(2, 2, nullptr, pixels.data()));
+
+    renderer.applyBackdropFilter(
+        0, 0, 2, 2, 0.0f, 1.0f,
+        {{lcl::protocol::FilterType::Blur, 16.0f}});
+
+    EXPECT_EQ(pixels, original);
+}
+
 TEST(LclUiTest, RoundedRectPreservesSubpixelEdgeCoverageDuringScaleMotion) {
     const auto edgeAlphaAt = [](float x) {
         std::vector<uint32_t> pixels(16 * 16, 0x00000000u);

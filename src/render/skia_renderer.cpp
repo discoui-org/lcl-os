@@ -1671,17 +1671,6 @@ ColorMatrix4x4 createInvertMatrix(float value) {
     return mat;
 }
 
-inline int mirrorIndex(int p, int max) {
-    if (max <= 1) return 0;
-    if (p < 0) {
-        p = -p;
-    }
-    if (p >= max) {
-        p = 2 * max - 2 - p;
-    }
-    return std::clamp(p, 0, max - 1);
-}
-
 void applyColorMatrixToPixels(std::vector<uint32_t>& pixels, int w, int h, const ColorMatrix4x4& mat) {
     if (mat.isIdentity() || pixels.empty()) return;
 
@@ -1701,77 +1690,6 @@ void applyColorMatrixToPixels(std::vector<uint32_t>& pixels, int w, int h, const
         uint8_t bu = static_cast<uint8_t>(std::clamp(outB, 0.0f, 255.0f));
 
         pixels[i] = (p & 0xFF000000) | (ru << 16) | (gu << 8) | bu;
-    }
-}
-
-void applyGaussianBlurToPixels(std::vector<uint32_t>& pixels, int w, int h, float blurRadius) {
-    if (w <= 0 || h <= 0 || blurRadius <= 0.5f || pixels.empty()) return;
-
-    int radius = std::clamp(static_cast<int>(blurRadius), 1, 64);
-    int windowSize = 2 * radius + 1;
-    float invWindow = 1.0f / static_cast<float>(windowSize);
-
-    std::vector<uint32_t> temp(pixels.size());
-
-    // 1. Horizontal Pass (Sliding window over rows)
-    for (int y = 0; y < h; ++y) {
-        int rowOffset = y * w;
-        uint32_t rAcc = 0, gAcc = 0, bAcc = 0;
-
-        for (int dx = -radius; dx <= radius; ++dx) {
-            int kx = mirrorIndex(dx, w);
-            uint32_t p = pixels[rowOffset + kx];
-            rAcc += (p >> 16) & 0xFF;
-            gAcc += (p >> 8) & 0xFF;
-            bAcc += p & 0xFF;
-        }
-
-        for (int x = 0; x < w; ++x) {
-            temp[rowOffset + x] = (0xFF000000) |
-                (static_cast<uint32_t>(rAcc * invWindow) << 16) |
-                (static_cast<uint32_t>(gAcc * invWindow) << 8) |
-                static_cast<uint32_t>(bAcc * invWindow);
-
-            int leftKx = mirrorIndex(x - radius, w);
-            int rightKx = mirrorIndex(x + radius + 1, w);
-
-            uint32_t leftP = pixels[rowOffset + leftKx];
-            uint32_t rightP = pixels[rowOffset + rightKx];
-
-            rAcc += ((rightP >> 16) & 0xFF) - ((leftP >> 16) & 0xFF);
-            gAcc += ((rightP >> 8) & 0xFF) - ((leftP >> 8) & 0xFF);
-            bAcc += (rightP & 0xFF) - (leftP & 0xFF);
-        }
-    }
-
-    // 2. Vertical Pass (Sliding window over columns)
-    for (int x = 0; x < w; ++x) {
-        uint32_t rAcc = 0, gAcc = 0, bAcc = 0;
-
-        for (int dy = -radius; dy <= radius; ++dy) {
-            int ky = mirrorIndex(dy, h);
-            uint32_t p = temp[ky * w + x];
-            rAcc += (p >> 16) & 0xFF;
-            gAcc += (p >> 8) & 0xFF;
-            bAcc += p & 0xFF;
-        }
-
-        for (int y = 0; y < h; ++y) {
-            pixels[y * w + x] = (0xFF000000) |
-                (static_cast<uint32_t>(rAcc * invWindow) << 16) |
-                (static_cast<uint32_t>(gAcc * invWindow) << 8) |
-                static_cast<uint32_t>(bAcc * invWindow);
-
-            int topKy = mirrorIndex(y - radius, h);
-            int bottomKy = mirrorIndex(y + radius + 1, h);
-
-            uint32_t topP = temp[topKy * w + x];
-            uint32_t bottomP = temp[bottomKy * w + x];
-
-            rAcc += ((bottomP >> 16) & 0xFF) - ((topP >> 16) & 0xFF);
-            gAcc += ((bottomP >> 8) & 0xFF) - ((topP >> 8) & 0xFF);
-            bAcc += (bottomP & 0xFF) - (topP & 0xFF);
-        }
     }
 }
 
@@ -2156,11 +2074,9 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH, f
                 pendingColorMatrix.multiply(createInvertMatrix(op.value));
                 break;
             case protocol::FilterType::Blur:
-                if (!pendingColorMatrix.isIdentity()) {
-                    applyColorMatrixToPixels(crop, w, h, pendingColorMatrix);
-                    pendingColorMatrix.reset();
-                }
-                applyGaussianBlurToPixels(crop, w, h, op.value);
+                // Backdrop blur is GPU-only. Do not emulate it in the software
+                // raster fallback: it is expensive and its rectangular sampling
+                // does not match the final rounded effect mask.
                 break;
             case protocol::FilterType::Glass: {
                 if (!pendingColorMatrix.isIdentity()) {
