@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 LCL OS - UTM & utmctl Manager (Pure Python)
-Builds bootable ISO, generates/configures LCL-OS.utm bundle, and launches via utmctl on macOS.
+Packages kernel & initramfs, configures LCL-OS.utm bundle with Direct Kernel Boot
+and Metal-accelerated VirtIO GPU GL, and launches via utmctl/UTM on macOS.
 """
 
 from __future__ import annotations
@@ -43,12 +44,10 @@ def normalize_arch(arch_str: str | None) -> str:
 
 
 def find_utmctl() -> Path | None:
-    # 1. System PATH
     p = shutil.which("utmctl")
     if p:
         return Path(p)
 
-    # 2. UTM.app bundle locations
     candidates = [
         Path("/Applications/UTM.app/Contents/MacOS/utmctl"),
         Path.home() / "Applications/UTM.app/Contents/MacOS/utmctl",
@@ -61,17 +60,30 @@ def find_utmctl() -> Path | None:
     return None
 
 
-def generate_utm_bundle(iso_file: Path, arch: str = "aarch64") -> Path:
-    log(f"Creating/updating UTM bundle at {UTM_BUNDLE}...")
+def generate_utm_bundle(kernel_src: Path, initramfs_src: Path, arch: str = "aarch64") -> Path:
+    log(f"Creating/updating UTM bundle at {UTM_BUNDLE} (Direct Kernel Boot)...")
     UTM_BUNDLE.mkdir(parents=True, exist_ok=True)
     data_dir = UTM_BUNDLE / "Data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy ISO to bundle data directory as lcl-os.iso
-    dest_iso = data_dir / "lcl-os.iso"
-    if not dest_iso.is_file() or dest_iso.stat().st_mtime < iso_file.stat().st_mtime:
-        log(f"Copying {iso_file.name} to {dest_iso}...")
-        shutil.copy2(iso_file, dest_iso)
+    dest_kernel = data_dir / "vmlinuz"
+    dest_initrd = data_dir / "initramfs.cpio.gz"
+
+    if not dest_kernel.is_file() or dest_kernel.stat().st_mtime < kernel_src.stat().st_mtime:
+        shutil.copy2(kernel_src, dest_kernel)
+    if not dest_initrd.is_file() or dest_initrd.stat().st_mtime < initramfs_src.stat().st_mtime:
+        shutil.copy2(initramfs_src, dest_initrd)
+
+    serial_console = (
+        "console=ttyAMA0,115200 console=tty0 earlycon"
+        if arch == "aarch64"
+        else "console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200"
+    )
+    boot_args = (
+        f"{serial_console} "
+        f"video=2560x1600-32@60 lcl.scale=2.0 lcl.width=2560 lcl.height=1600 "
+        f"rdinit=/init loglevel=6"
+    )
 
     # Create config.plist for UTM QEMU with VirtIO GPU GL (Metal 3D Acceleration)
     config: dict = {
@@ -97,6 +109,9 @@ def generate_utm_bundle(iso_file: Path, arch: str = "aarch64") -> Path:
             "PS2Controller": False,
             "RNGDevice": True,
             "BalloonDevice": True,
+            "DirectKernelPath": "vmlinuz",
+            "DirectInitrdPath": "initramfs.cpio.gz",
+            "DirectBootArgs": boot_args,
         },
         "Display": [
             {
@@ -105,15 +120,6 @@ def generate_utm_bundle(iso_file: Path, arch: str = "aarch64") -> Path:
                 "DynamicResolution": True,
                 "UpscalingFilter": "Linear",
                 "DownscalingFilter": "Linear",
-            }
-        ],
-        "Drive": [
-            {
-                "Interface": "virtio",
-                "Removable": True,
-                "ReadOnly": True,
-                "ImageName": "lcl-os.iso",
-                "Identifier": str(uuid.uuid5(uuid.NAMESPACE_DNS, "lcl-os-iso-drive")),
             }
         ],
         "Input": {
@@ -131,29 +137,30 @@ def generate_utm_bundle(iso_file: Path, arch: str = "aarch64") -> Path:
     with config_plist.open("wb") as f:
         plistlib.dump(config, f)
 
-    log("UTM bundle configuration generated successfully with VirtIO GPU GL (Metal).")
+    log("UTM bundle configured successfully (Direct Kernel Boot + Metal GPU).")
     return UTM_BUNDLE
 
 
 def launch_utm(arch: str = "aarch64") -> None:
     target_arch = normalize_arch(arch)
-    iso_file = BUILD_DIR / f"lcl-os-{target_arch}.iso"
 
-    # 1. Build ISO if needed
-    if not iso_file.is_file():
-        log(f"ISO {iso_file} not found. Generating bootable ISO first...")
-        build_iso_py = SCRIPT_DIR / "build_iso.py"
-        subprocess.check_call([sys.executable, str(build_iso_py), "--arch", target_arch])
+    # 1. Package kernel & initramfs via run_qemu.py --package-only
+    kernel_src = BUILD_DIR / "qemu-cache" / "vmlinuz"
+    initramfs_src = BUILD_DIR / "initramfs.cpio.gz"
+
+    if not kernel_src.is_file() or not initramfs_src.is_file():
+        log(f"Packaging kernel & initramfs for {target_arch}...")
+        run_qemu_py = SCRIPT_DIR / "run_qemu.py"
+        subprocess.check_call([sys.executable, str(run_qemu_py), "--package-only", "--arch", target_arch])
 
     # 2. Prepare UTM bundle
-    bundle = generate_utm_bundle(iso_file, arch=target_arch)
+    bundle = generate_utm_bundle(kernel_src, initramfs_src, arch=target_arch)
 
     # 3. Launch via utmctl or open
     utmctl = find_utmctl()
     if utmctl:
         log(f"Found utmctl at {utmctl}")
         try:
-            # Check if LCL-OS is already registered in utmctl
             out = subprocess.check_output([str(utmctl), "list"], text=True)
             if "LCL-OS" in out:
                 log("Starting LCL-OS VM via utmctl...")
@@ -166,7 +173,7 @@ def launch_utm(arch: str = "aarch64") -> None:
     if platform.system().lower() == "darwin":
         log("Opening LCL-OS.utm bundle in UTM...")
         subprocess.check_call(["open", str(bundle)])
-        log("VM opened in UTM with Metal GPU hardware acceleration!")
+        log("VM launched in UTM with Metal GPU hardware acceleration!")
     else:
         err(f"UTM launch is supported on macOS. Bundle created at: {bundle}")
 

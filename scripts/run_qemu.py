@@ -118,13 +118,9 @@ def find_qemu(arch: str = "x86_64") -> str:
         Path(f"/usr/local/bin/{binary_name}"),
         Path(f"/usr/bin/{binary_name}"),
     ]
-    # 4. If on macOS and UTM is installed, seamlessly forward to UTM launcher
-    if host_os() == "darwin" and (Path("/Applications/UTM.app").is_dir() or (Path.home() / "Applications/UTM.app").is_dir()):
-        log("Standard QEMU CLI not found, but UTM.app is installed.")
-        log("Launching via UTM (Metal GPU Hardware Accelerated)...")
-        run_utm_py = SCRIPT_DIR / "run_utm.py"
-        subprocess.check_call([sys.executable, str(run_utm_py), "--arch", arch])
-        sys.exit(0)
+    for p in fallback_paths:
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
 
     err(f"{binary_name} is not installed.")
     if host_os() == "darwin":
@@ -1820,10 +1816,14 @@ def main() -> None:
         return
 
     kernel = prepare_artifacts(args, arch=arch)
-    log(f"QEMU binary: {find_qemu(arch)}")
-    log(f"Kernel: {kernel}")
+
+    if args.package_only:
+        log(f"Packaging complete ({arch}). Kernel cache: {kernel}")
+        return
 
     if args.run:
+        log(f"QEMU binary: {find_qemu(arch)}")
+        log(f"Kernel: {kernel}")
         launch_qemu(
             kernel,
             arch=arch,
@@ -1837,7 +1837,7 @@ def main() -> None:
             height_override=args.height,
         )
     else:
-        log(f"Boot environment ({arch}) ready!")
+        log(f"Boot environment ({arch}) ready! Kernel: {kernel}")
         log(f"Run '{Path(sys.argv[0]).name} --run --arch {arch}' to launch QEMU in live VM.")
 
 
