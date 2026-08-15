@@ -210,12 +210,24 @@ for i in $(seq 1 100); do
     sleep 0.05
 done
 
-# 6. Launch canonical same-binary applications directly via dynamic loader
+# 6. Start LCL Session Daemon (lcl-sessiond)
+/system/lcl/lib64/ld-linux-x86-64.so.2 --library-path /system/lcl/lib64 /system/lcl/bin/lcl-sessiond > /data/local/tmp/lcl-sessiond.log 2>&1 &
+SESSIOND_PID=$!
+
+# 7. Wait for session socket readiness
+for i in $(seq 1 100); do
+    if [ -S "/run/user/1000/lcl-sessiond.sock" ]; then
+        break
+    fi
+    sleep 0.05
+done
+
+# 8. Launch canonical same-binary applications directly via dynamic loader
 /system/lcl/lib64/ld-linux-x86-64.so.2 --library-path /system/lcl/lib64 /system/lcl/bin/lcl-desktop-shell > /data/local/tmp/lcl-shell.log 2>&1 &
 /system/lcl/lib64/ld-linux-x86-64.so.2 --library-path /system/lcl/lib64 /system/lcl/bin/lcl-terminal > /data/local/tmp/lcl-terminal.log 2>&1 &
 
-# 7. Keep bootstrap process alive so init does not kill children
-wait $CORE_PID
+# 9. Keep bootstrap process alive so init does not kill children
+wait $CORE_PID $SESSIOND_PID
 """
     lcl_bootstrap_path = tmp_dir / "lcl-bootstrap.sh"
     lcl_bootstrap_path.write_text(lcl_bootstrap_content)
@@ -224,10 +236,17 @@ wait $CORE_PID
     # Binaries and assets
     desktop_shell = BUILD_DIR / "lcl-desktop-shell"
     desktop_term = BUILD_DIR / "lcl-terminal"
+    sessiond_bin = BUILD_DIR / "lcl-sessiond"
     android_core = BUILD_ANDROID_DIR / "lcl-core-android"
     wallpaper_jpg = PROJECT_ROOT / "wallpaper.jpg"
     wallpaper_png = PROJECT_ROOT / "wallpaper.png"
-    icon_png = PROJECT_ROOT / "src/apps/terminal/assets/icon.png"
+
+    term_meta = PROJECT_ROOT / "src/apps/terminal/metadata.json"
+    term_icon = PROJECT_ROOT / "src/apps/terminal/assets/icon.png"
+    uidemo_meta = PROJECT_ROOT / "apps/ui_demo/metadata.json"
+    uidemo_icon = PROJECT_ROOT / "apps/ui_demo/assets/icon.png"
+    uidemojs_meta = PROJECT_ROOT / "apps/ui_demo_js/metadata.json"
+    uidemojs_icon = PROJECT_ROOT / "apps/ui_demo_js/assets/icon.png"
 
     # Assemble debugfs commands
     debugfs_script = []
@@ -267,7 +286,9 @@ wait $CORE_PID
         "cd /system/lcl/usr/share",
         "mkdir fonts",
         "mkdir wallpapers",
-        "mkdir icons",
+        "mkdir lcl",
+        "cd /system/lcl/usr/share/lcl",
+        "mkdir apps",
         "cd /system/lcl/usr/share/fonts",
         "mkdir jetbrains-mono",
         "mkdir inter",
@@ -281,6 +302,9 @@ wait $CORE_PID
         "rm lcl-core-android",
         f"write {android_core} lcl-core-android",
         "sif lcl-core-android mode 0100755",
+        "rm lcl-sessiond",
+        f"write {sessiond_bin} lcl-sessiond",
+        "sif lcl-sessiond mode 0100755",
         "rm lcl-desktop-shell",
         f"write {desktop_shell} lcl-desktop-shell",
         "sif lcl-desktop-shell mode 0100755",
@@ -302,6 +326,65 @@ wait $CORE_PID
             debugfs_script.append(f"rm {so_file.name}")
             debugfs_script.append(f"write {so_file} {so_file.name}")
             debugfs_script.append(f"sif {so_file.name} mode 0100755")
+
+    # Install canonical .app bundles into /system/lcl/usr/share/lcl/apps
+    # 1. Terminal.app
+    debugfs_script.extend([
+        "cd /system/lcl/usr/share/lcl/apps",
+        "mkdir Terminal.app",
+        "cd /system/lcl/usr/share/lcl/apps/Terminal.app",
+        "mkdir assets",
+        "mkdir bin",
+        f"write {term_meta} metadata.json",
+        "sif metadata.json mode 0100644",
+        "cd /system/lcl/usr/share/lcl/apps/Terminal.app/assets",
+        f"write {term_icon} icon.png",
+        "sif icon.png mode 0100644",
+        "cd /system/lcl/usr/share/lcl/apps/Terminal.app/bin",
+        "symlink terminal /system/lcl/bin/lcl-terminal",
+    ])
+
+    # 2. UIDemo.app
+    if uidemo_meta.is_file() and uidemo_icon.is_file():
+        debugfs_script.extend([
+            "cd /system/lcl/usr/share/lcl/apps",
+            "mkdir UIDemo.app",
+            "cd /system/lcl/usr/share/lcl/apps/UIDemo.app",
+            "mkdir assets",
+            "mkdir bin",
+            f"write {uidemo_meta} metadata.json",
+            "sif metadata.json mode 0100644",
+            "cd /system/lcl/usr/share/lcl/apps/UIDemo.app/assets",
+            f"write {uidemo_icon} icon.png",
+            "sif icon.png mode 0100644",
+        ])
+
+    # 3. UIDemoJS.app
+    if uidemojs_meta.is_file() and uidemojs_icon.is_file():
+        debugfs_script.extend([
+            "cd /system/lcl/usr/share/lcl/apps",
+            "mkdir UIDemoJS.app",
+            "cd /system/lcl/usr/share/lcl/apps/UIDemoJS.app",
+            "mkdir assets",
+            "mkdir bin",
+            f"write {uidemojs_meta} metadata.json",
+            "sif metadata.json mode 0100644",
+            "cd /system/lcl/usr/share/lcl/apps/UIDemoJS.app/assets",
+            f"write {uidemojs_icon} icon.png",
+            "sif icon.png mode 0100644",
+        ])
+
+    # Install binary symlinks in /system/bin and /system/lcl/usr/bin
+    debugfs_script.extend([
+        "cd /system/lcl/usr/bin",
+        "symlink lcl-terminal /system/lcl/bin/lcl-terminal",
+        "symlink lcl-sessiond /system/lcl/bin/lcl-sessiond",
+        "symlink lcl-desktop-shell /system/lcl/bin/lcl-desktop-shell",
+        "cd /system/bin",
+        "symlink lcl-terminal /system/lcl/bin/lcl-terminal",
+        "symlink lcl-sessiond /system/lcl/bin/lcl-sessiond",
+        "symlink lcl-desktop-shell /system/lcl/bin/lcl-desktop-shell",
+    ])
 
     # Install fonts into canonical paths
     fonts_root = PROJECT_ROOT / "assets/fonts"
@@ -326,12 +409,6 @@ wait $CORE_PID
     if wallpaper_jpg.is_file():
         debugfs_script.append(f"write {wallpaper_jpg} wallpaper.jpg")
         debugfs_script.append("sif wallpaper.jpg mode 0100644")
-
-    # Install icons
-    debugfs_script.append("cd /system/lcl/usr/share/icons")
-    if icon_png.is_file():
-        debugfs_script.append(f"write {icon_png} terminal.png")
-        debugfs_script.append("sif terminal.png mode 0100644")
 
     # Create root symlinks at /
     debugfs_script.extend([
@@ -388,22 +465,25 @@ def build_android_images() -> tuple[Path, Path]:
     # 1. Check canonical same-binary executables
     desktop_shell = BUILD_DIR / "lcl-desktop-shell"
     desktop_term = BUILD_DIR / "lcl-terminal"
+    sessiond_bin = BUILD_DIR / "lcl-sessiond"
     android_core = BUILD_ANDROID_DIR / "lcl-core-android"
 
-    if not desktop_shell.is_file() or not desktop_term.is_file():
-        raise FileNotFoundError("Canonical desktop applications (lcl-desktop-shell, lcl-terminal) not found.")
+    if not desktop_shell.is_file() or not desktop_term.is_file() or not sessiond_bin.is_file():
+        raise FileNotFoundError("Canonical desktop applications/tools (lcl-desktop-shell, lcl-terminal, lcl-sessiond) not found.")
     if not android_core.is_file():
         raise FileNotFoundError("Android core composition root (lcl-core-android) not found.")
 
     shell_sha = get_sha256(desktop_shell)
     term_sha = get_sha256(desktop_term)
+    sessiond_sha = get_sha256(sessiond_bin)
     log(f"Canonical Desktop Shell SHA-256:    {shell_sha}")
     log(f"Canonical Desktop Terminal SHA-256: {term_sha}")
+    log(f"Canonical Session Daemon SHA-256:   {sessiond_sha}")
 
     # 2. Stage glibc userspace runtime
     from run_avd import stage_glibc_runtime
     runtime_dir = BUILD_DIR / "lcl-runtime"
-    stage_glibc_runtime([desktop_shell, desktop_term], runtime_dir)
+    stage_glibc_runtime([desktop_shell, desktop_term, sessiond_bin], runtime_dir)
 
     # 3. Parse GPT partitions dynamically
     partitions = parse_gpt_partitions(paths.stock_system)

@@ -28,7 +28,7 @@ public:
     }
 
     std::string appCatalogDirectory() const override {
-        return "/usr/share/applications";
+        return "/usr/share/lcl/apps";
     }
 
     std::vector<std::string> fontSearchDirectories() const override {

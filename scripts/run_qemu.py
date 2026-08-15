@@ -964,7 +964,24 @@ def ensure_docker_image(arch: str = "x86_64") -> None:
                 str(SCRIPT_DIR),
             ]
         )
-        stamp.write_text(df_mtime + "\n", encoding="utf-8")
+        # CACHE_DIR may be root-owned from a previous Docker run; try to fix
+        # permissions before writing the stamp so the host user can write it.
+        try:
+            subprocess.run(
+                ["chmod", "-R", "a+rwX", str(CACHE_DIR)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+        try:
+            stamp.write_text(df_mtime + "\n", encoding="utf-8")
+        except PermissionError:
+            log(
+                f"[WARN] Could not write stamp {stamp} (permission denied). "
+                "Run: sudo chown -R $USER:$USER build/  to fix ownership. "
+                "The Docker image was built successfully and QEMU will proceed."
+            )
 
 
 def fix_permissions() -> None:
@@ -1784,6 +1801,11 @@ def main() -> None:
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="Skip Docker build/package step; launch QEMU using existing cached kernel/initramfs artifacts.",
+    )
     args = parser.parse_args()
 
     arch = normalize_arch(args.arch or os.environ.get("ARCH"))
@@ -1815,7 +1837,20 @@ def main() -> None:
         build_only(arch=arch)
         return
 
-    kernel = prepare_artifacts(args, arch=arch)
+    if args.no_build:
+        # Skip Docker build/package; use whatever is already cached.
+        if not KERNEL_CACHE.is_file() or not INITRAMFS_IMG.is_file():
+            err(
+                "--no-build requires pre-built artifacts but none were found.\n"
+                f"  Expected kernel:    {KERNEL_CACHE}\n"
+                f"  Expected initramfs: {INITRAMFS_IMG}\n"
+                "Run without --no-build first to build them."
+            )
+            sys.exit(1)
+        kernel = KERNEL_CACHE
+        log(f"[--no-build] Skipping Docker build. Using cached kernel: {kernel}")
+    else:
+        kernel = prepare_artifacts(args, arch=arch)
 
     if args.package_only:
         log(f"Packaging complete ({arch}). Kernel cache: {kernel}")

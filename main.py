@@ -84,6 +84,8 @@ def cmd_qemu(args: argparse.Namespace) -> None:
         qemu_args.append("--debug-layout")
     if args.debug_overlay:
         qemu_args.append("--debug-overlay")
+    if args.no_build:
+        qemu_args.append("--no-build")
 
     subprocess.check_call(qemu_args)
 
@@ -197,6 +199,7 @@ def main() -> None:
     p_qemu.add_argument("--trace-frames", action="store_true", help="Enable layout/render trace")
     p_qemu.add_argument("--debug-layout", action="store_true", help="Draw widget bounds overlay")
     p_qemu.add_argument("--debug-overlay", action="store_true", help="Draw compositor FPS overlay")
+    p_qemu.add_argument("--no-build", action="store_true", help="Skip Docker build/package; launch QEMU with existing cached artifacts")
 
     # ---- utm ----
     p_utm = subparsers.add_parser("utm", help="Build ISO and launch via UTM / utmctl (Metal 3D)")

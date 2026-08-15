@@ -25,7 +25,7 @@ struct AppInstance {
 class SessionService {
 public:
     explicit SessionService(std::vector<std::string> appSearchPaths = {
-        "/home/user/Applications", "/Applications"});
+        "/usr/share/lcl/apps", "/home/user/Applications", "/Applications"});
     ~SessionService();
 
     SessionService(const SessionService&) = delete;

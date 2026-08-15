@@ -140,16 +140,17 @@ def stage_glibc_runtime(binaries: list[Path], staging_dir: Path) -> None:
 def build_targets(env: AndroidEnvironment, force_rebuild: bool = False) -> None:
     desktop_shell = BUILD_DIR / "lcl-desktop-shell"
     desktop_term = BUILD_DIR / "lcl-terminal"
+    sessiond_bin = BUILD_DIR / "lcl-sessiond"
     android_core = BUILD_ANDROID_DIR / "lcl-core-android"
 
     # Build Canonical Desktop apps
-    if force_rebuild or not desktop_shell.is_file() or not desktop_term.is_file():
-        log("Building canonical LCL desktop applications...")
+    if force_rebuild or not desktop_shell.is_file() or not desktop_term.is_file() or not sessiond_bin.is_file():
+        log("Building canonical LCL desktop applications & session daemon...")
         if not (BUILD_DIR / "CMakeCache.txt").is_file():
             subprocess.run(["cmake", "-B", str(BUILD_DIR), "-S", str(ROOT_DIR)], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([
             "cmake", "--build", str(BUILD_DIR),
-            "--target", "lcl-desktop-shell", "lcl-terminal",
+            "--target", "lcl-desktop-shell", "lcl-terminal", "lcl-sessiond",
             "-j", str(os.cpu_count() or 4)
         ], check=True, stdout=subprocess.DEVNULL)
 
@@ -242,8 +243,6 @@ def launch_avd(args: argparse.Namespace) -> None:
     emu_cmd = [
         str(env.emulator),
         "-avd", avd_name,
-        "-system", str(out_system_img),
-        "-ramdisk", str(out_ramdisk_img),
         "-no-snapshot-load",
         "-no-boot-anim",
         "-selinux", "permissive",
