@@ -8,6 +8,7 @@ namespace lcl::platform {
 struct DisplayMode {
     uint32_t width{0};
     uint32_t height{0};
+    uint32_t refreshRate{60};
     uint32_t refreshRateHz{60};
     float scaleFactor{1.0f};
     std::string name;

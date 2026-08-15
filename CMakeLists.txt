@@ -148,12 +148,39 @@ target_compile_options(lcl-canvas-skia PRIVATE
     ${GLES2_CFLAGS_OTHER}
 )
 
-# Compositor-owned render/present layer. EGL/DRM/GBM/GLES stay here and never
-# flow through lcl-ui or the client Canvas target.
+# Desktop Linux platform implementation library
+add_library(lcl-platform-desktop STATIC
+    src/platform/desktop/drm_display_backend.cpp
+    src/platform/desktop/gbm_graphics_context.cpp
+)
+
+target_include_directories(lcl-platform-desktop PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${DRM_INCLUDE_DIRS}
+    ${GBM_INCLUDE_DIRS}
+    ${EGL_INCLUDE_DIRS}
+    ${GLES2_INCLUDE_DIRS}
+)
+
+target_link_libraries(lcl-platform-desktop PUBLIC
+    lcl-platform-common
+    lcl-display-scale
+    ${DRM_LIBRARIES}
+    ${GBM_LIBRARIES}
+    ${EGL_LIBRARIES}
+    ${GLES2_LIBRARIES}
+)
+
+target_compile_options(lcl-platform-desktop PRIVATE
+    ${DRM_CFLAGS_OTHER}
+    ${GBM_CFLAGS_OTHER}
+    ${EGL_CFLAGS_OTHER}
+    ${GLES2_CFLAGS_OTHER}
+)
+
+# Compositor-owned render/present layer.
+# Depends strictly on lcl-platform-common; never on lcl-platform-desktop.
 add_library(lcl-render STATIC
-    src/core/compositor/compositor_renderer.cpp
-    src/core/display/display_manager.cpp
-    src/core/display/egl_backend.cpp
     src/render/font_renderer.cpp
     src/render/renderer.cpp
     src/render/skia_renderer.cpp
@@ -163,9 +190,6 @@ add_library(lcl-render STATIC
 
 target_include_directories(lcl-render PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${DRM_INCLUDE_DIRS}
-    ${GBM_INCLUDE_DIRS}
-    ${EGL_INCLUDE_DIRS}
     ${GLES2_INCLUDE_DIRS}
 )
 
@@ -173,24 +197,22 @@ target_link_libraries(lcl-render PUBLIC
     lcl-motion
     lcl-protocol
     lcl-display-scale
-    ${DRM_LIBRARIES}
-    ${GBM_LIBRARIES}
-    ${EGL_LIBRARIES}
+    lcl-platform-common
     ${GLES2_LIBRARIES}
     Threads::Threads
 )
 
 target_compile_options(lcl-render PRIVATE
-    ${DRM_CFLAGS_OTHER}
-    ${GBM_CFLAGS_OTHER}
-    ${EGL_CFLAGS_OTHER}
     ${GLES2_CFLAGS_OTHER}
 )
 
 # Main Compositor Executable Target
 add_executable(lcl-core
     src/main.cpp
+    src/core/display/display_manager.cpp
+    src/core/display/egl_backend.cpp
     src/core/compositor/compositor.cpp
+    src/core/compositor/compositor_renderer.cpp
     src/core/compositor/frame_scheduler.cpp
     src/core/compositor/input_router.cpp
     src/core/compositor/protocol_dispatcher.cpp
@@ -216,9 +238,14 @@ target_include_directories(lcl-core PRIVATE
 
 target_link_libraries(lcl-core PRIVATE
     lcl-render
+    lcl-platform-desktop
     lcl-protocol
     ${LIBINPUT_LIBRARIES}
     ${UDEV_LIBRARIES}
+    ${DRM_LIBRARIES}
+    ${GBM_LIBRARIES}
+    ${EGL_LIBRARIES}
+    ${GLES2_LIBRARIES}
     Threads::Threads
 )
 
@@ -403,6 +430,7 @@ if(BUILD_TESTS)
         Threads::Threads
         lcl-ui
         lcl-canvas-skia
+        lcl-platform-desktop
         lcl-protocol
         lcl-session
         qjs

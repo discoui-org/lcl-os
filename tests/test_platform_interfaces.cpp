@@ -60,7 +60,7 @@ public:
     bool m_initialized{false};
     bool m_cursorActive{false};
     int m_cursorX{0}, m_cursorY{0};
-    DisplayMode m_mode{1920, 1080, 60, 1.0f, "1080p"};
+    DisplayMode m_mode{1920, 1080, 60, 60, 1.0f, "1080p"};
 };
 
 // Mock concrete input backend
@@ -190,3 +190,40 @@ TEST(PlatformInterfacesTest, PlatformServicesComposition) {
     EXPECT_TRUE(iface.graphics().isHardwareAccelerated());
     EXPECT_EQ(iface.paths().compositorSocketPath(), "/tmp/mock-compositor.sock");
 }
+
+#include "platform/desktop/drm_display_backend.hpp"
+#include "platform/desktop/gbm_graphics_context.hpp"
+#include "platform/desktop/dma_buf_native_buffer.hpp"
+
+TEST(DesktopPlatformTest, DrmDisplayBackendImplementsIDisplayBackend) {
+    lcl::platform::desktop::DrmDisplayBackend drmBackend;
+    lcl::platform::IDisplayBackend& iface = drmBackend;
+
+    EXPECT_FALSE(iface.isInitialized());
+    EXPECT_FALSE(iface.isHardwareCursorActive());
+    EXPECT_EQ(drmBackend.getDisplayType(), lcl::platform::desktop::DesktopDisplayType::None);
+    EXPECT_EQ(drmBackend.getDrmFd(), -1);
+}
+
+TEST(DesktopPlatformTest, GbmGraphicsContextImplementsIGraphicsContext) {
+    lcl::platform::desktop::GbmGraphicsContext gbmCtx;
+    lcl::platform::IGraphicsContext& iface = gbmCtx;
+
+    EXPECT_FALSE(iface.isInitialized());
+    EXPECT_FALSE(iface.isHardwareAccelerated());
+    EXPECT_TRUE(iface.presentsToDisplay());
+    EXPECT_FALSE(iface.readback(nullptr, 0, 0));
+}
+
+TEST(DesktopPlatformTest, DmaBufNativeBufferImplementsINativeBuffer) {
+    lcl::platform::desktop::DmaBufNativeBuffer dmaBuf(10, 1920, 1080, 1920 * 4, 1, 0x12345678ULL);
+    const lcl::platform::INativeBuffer& iface = dmaBuf;
+
+    EXPECT_EQ(iface.width(), 1920u);
+    EXPECT_EQ(iface.height(), 1080u);
+    EXPECT_EQ(dmaBuf.fd(), 10);
+    EXPECT_EQ(dmaBuf.stride(), 1920u * 4u);
+    EXPECT_EQ(dmaBuf.format(), 1u);
+    EXPECT_EQ(dmaBuf.modifier(), 0x12345678ULL);
+}
+

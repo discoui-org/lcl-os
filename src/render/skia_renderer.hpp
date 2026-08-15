@@ -8,10 +8,7 @@
 #include "core/ipc/lcl_protocol.hpp"
 #include "render/font_renderer.hpp"
 
-namespace lcl::core {
-class EGLContextBackend;
-struct DmaBufImport;
-}
+#include "platform/common/graphics_context.hpp"
 
 namespace lcl::render {
 
@@ -72,7 +69,7 @@ public:
      * @return true if initialized successfully
      */
     bool initialize(uint32_t width, uint32_t height,
-                    lcl::core::EGLContextBackend* eglBackend = nullptr,
+                    lcl::platform::IGraphicsContext* eglBackend = nullptr,
                     uint32_t* targetPixels = nullptr);
 
     /**
@@ -97,6 +94,12 @@ public:
     void setContentOrigin(float x, float y) { m_contentOriginX = x; m_contentOriginY = y; }
     float getContentOriginX() const { return m_contentOriginX; }
     float getContentOriginY() const { return m_contentOriginY; }
+
+    /**
+     * @brief Clear whole canvas or subregion with specific background color.
+     */
+    void clear(const SkiaColor& color);
+    void clearRect(const SkiaRect& rect, const SkiaColor& color);
 
     /**
      * @brief Shutdown Skia renderer.
@@ -174,9 +177,15 @@ public:
     void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
                              float cornerRadius, float cornerRoundness,
                              float opacity, const std::vector<protocol::FilterOp>& filters);
-    /** Imports and composites compositor-owned DMA-BUF textures without CPU upload. */
-    uint32_t importDmaBufTexture(const lcl::core::DmaBufImport& buffer);
-    void releaseDmaBufTexture(uint32_t texture);
+    /** Imports and composites compositor-owned native textures without CPU upload. */
+    uint32_t importTexture(const lcl::platform::INativeBuffer& buffer);
+    void releaseTexture(uint32_t texture);
+    uint32_t importDmaBufTexture(const lcl::platform::INativeBuffer& buffer) {
+        return importTexture(buffer);
+    }
+    void releaseDmaBufTexture(uint32_t texture) {
+        releaseTexture(texture);
+    }
     void drawDmaBufTextureTransformed(float dstX, float dstY, int srcW, int srcH,
                                       int backingW, int backingH,
                                       uint32_t texture, float opacity,
@@ -213,7 +222,7 @@ private:
     uint32_t m_width{0};
     uint32_t m_height{0};
     SkiaBackendType m_backendType{SkiaBackendType::SoftwareRaster};
-    lcl::core::EGLContextBackend* m_eglBackend{nullptr};
+    lcl::platform::IGraphicsContext* m_eglBackend{nullptr};
 
     std::vector<uint32_t> m_rasterPixels;
     uint32_t* m_targetPixels{nullptr};

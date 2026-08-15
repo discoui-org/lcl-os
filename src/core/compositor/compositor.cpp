@@ -74,7 +74,10 @@ bool Compositor::initialize() {
     }
 
     // --- Renderer ---
-    if (!m_renderer.initialize(&m_displayManager)) {
+    const auto& mode = m_displayManager.getActiveDisplayMode();
+    uint32_t renW = mode.width > 0 ? mode.width : 1024;
+    uint32_t renH = mode.height > 0 ? mode.height : 768;
+    if (!m_renderer.initialize(renW, renH, m_displayManager.getEGLBackend(), m_displayManager.getDisplayBackend(), m_displayManager.getFBPixelData())) {
         std::cout << "[LCL Core] Renderer running in fallback mode.\n";
     }
 

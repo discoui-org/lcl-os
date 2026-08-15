@@ -125,76 +125,66 @@ Renderer::Renderer() = default;
 Renderer::~Renderer() { shutdown(); }
 
 Renderer::Renderer(Renderer&& other) noexcept
-    : m_displayManager(other.m_displayManager),
+    : m_graphicsContext(other.m_graphicsContext),
+      m_displayBackend(other.m_displayBackend),
+      m_fbPixels(other.m_fbPixels),
+      m_fontRenderer(std::move(other.m_fontRenderer)),
       m_width(other.m_width),
       m_height(other.m_height),
       m_initialized(other.m_initialized),
-      m_usingDRMHardware(other.m_usingDRMHardware),
-      m_dumbBuffer(other.m_dumbBuffer),
       m_softwareBackBuffer(std::move(other.m_softwareBackBuffer)),
       m_renderedFrames(other.m_renderedFrames) {
-    other.m_displayManager = nullptr;
-    other.m_dumbBuffer = Framebuffer{};
+    other.m_graphicsContext = nullptr;
+    other.m_displayBackend = nullptr;
+    other.m_fbPixels = nullptr;
     other.m_initialized = false;
-    other.m_usingDRMHardware = false;
 }
 
 Renderer& Renderer::operator=(Renderer&& other) noexcept {
     if (this != &other) {
         shutdown();
-        m_displayManager = other.m_displayManager;
+        m_graphicsContext = other.m_graphicsContext;
+        m_displayBackend = other.m_displayBackend;
+        m_fbPixels = other.m_fbPixels;
+        m_fontRenderer = std::move(other.m_fontRenderer);
         m_width = other.m_width;
         m_height = other.m_height;
         m_initialized = other.m_initialized;
-        m_usingDRMHardware = other.m_usingDRMHardware;
-        m_dumbBuffer = other.m_dumbBuffer;
         m_softwareBackBuffer = std::move(other.m_softwareBackBuffer);
         m_renderedFrames = other.m_renderedFrames;
 
-        other.m_displayManager = nullptr;
-        other.m_dumbBuffer = Framebuffer{};
+        other.m_graphicsContext = nullptr;
+        other.m_displayBackend = nullptr;
+        other.m_fbPixels = nullptr;
         other.m_initialized = false;
-        other.m_usingDRMHardware = false;
     }
     return *this;
 }
 
-bool Renderer::initialize(core::DisplayManager* displayManager) {
+bool Renderer::initialize(uint32_t width, uint32_t height,
+                          platform::IGraphicsContext* graphicsContext,
+                          platform::IDisplayBackend* displayBackend,
+                          uint32_t* fbPixels) {
     if (m_initialized) return true;
 
-    m_displayManager = displayManager;
-    if (m_displayManager && m_displayManager->isInitialized()) {
-        const auto& mode = m_displayManager->getActiveDisplayMode();
-        if (mode.width > 0 && mode.height > 0) {
-            m_width = mode.width;
-            m_height = mode.height;
-        }
-    }
+    m_width = width > 0 ? width : 1024;
+    m_height = height > 0 ? height : 768;
+    m_graphicsContext = graphicsContext;
+    m_displayBackend = displayBackend;
+    m_fbPixels = fbPixels;
 
     std::cout << "[LCL Render] Initializing Renderer Engine (" << m_width << "x" << m_height << ")...\n";
     m_softwareBackBuffer.assign(m_width * m_height, 0xFF000000);
 
-    if (m_displayManager && m_displayManager->isInitialized()) {
-        if (m_displayManager->getBackendType() == core::DisplayBackendType::DRM_KMS) {
-            if (createDumbBuffer()) {
-                m_usingDRMHardware = true;
-                // Hardware cursor buffer sized for scaled arrow (base 12x16 × DPR)
-                const int cs = std::max(1, core::DisplayScale::px(1));
-                const uint32_t cursorDim = static_cast<uint32_t>(
-                    std::max(64, std::max(12 * cs, 16 * cs) + 8));
-                m_displayManager->initHardwareCursor(cursorDim, cursorDim);
-                std::cout << "[LCL Render] DRM Hardware acceleration active! Driver: "
-                          << m_displayManager->getDriverName()
-                          << " (Render Node: "
-                          << (m_displayManager->getRenderNodePath().empty() ? "Direct KMS" : m_displayManager->getRenderNodePath())
-                          << ")\n";
-            }
-        }
+    if (m_displayBackend && m_displayBackend->isInitialized()) {
+        const int cs = std::max(1, core::DisplayScale::px(1));
+        const uint32_t cursorDim = static_cast<uint32_t>(
+            std::max(64, std::max(12 * cs, 16 * cs) + 8));
+        m_displayBackend->initHardwareCursor(cursorDim, cursorDim);
     }
 
     // Initialize Skia Hardware / Software Rendering Backend
-    core::EGLBackend* eglBackend = m_displayManager ? m_displayManager->getEGLBackend() : nullptr;
-    m_skiaRenderer.initialize(m_width, m_height, eglBackend, m_softwareBackBuffer.data());
+    m_skiaRenderer.initialize(m_width, m_height, m_graphicsContext, m_softwareBackBuffer.data());
 
     // Initialize TrueType Vector Font Engine (Inter TTF/OTF)
     std::vector<std::string> fontPaths = {
@@ -212,50 +202,6 @@ bool Renderer::initialize(core::DisplayManager* displayManager) {
     m_initialized = true;
     std::cout << "[LCL Render] UI scale: " << core::DisplayScale::factor()
               << "  font: " << fontPx << "px\n";
-    return true;
-}
-
-bool Renderer::createDumbBuffer() {
-    if (!m_displayManager || m_displayManager->getDRMFd() < 0) return false;
-
-    int drmFd = m_displayManager->getDRMFd();
-    const auto& drmDevice = m_displayManager->getDRMDevice();
-    if (!drmDevice.crtc || !drmDevice.connector) return false;
-
-    uint32_t crtcId = drmDevice.crtc->crtc_id;
-    uint32_t connectorId = drmDevice.connector->connector_id;
-    auto modeInfo = drmDevice.currentMode;
-
-    struct drm_mode_create_dumb creq{};
-    creq.width = m_width;
-    creq.height = m_height;
-    creq.bpp = 32;
-
-    if (ioctl(drmFd, DRM_IOCTL_MODE_CREATE_DUMB, &creq) < 0) return false;
-
-    m_dumbBuffer.width = m_width;
-    m_dumbBuffer.height = m_height;
-    m_dumbBuffer.pitch = creq.pitch;
-    m_dumbBuffer.handle = creq.handle;
-    m_dumbBuffer.size = creq.size;
-
-    if (drmModeAddFB(drmFd, m_width, m_height, 24, 32, creq.pitch, creq.handle, &m_dumbBuffer.fbId) != 0) return false;
-
-    struct drm_mode_map_dumb mreq{};
-    mreq.handle = creq.handle;
-    if (ioctl(drmFd, DRM_IOCTL_MODE_MAP_DUMB, &mreq) < 0) return false;
-
-    void* mapPtr = mmap(nullptr, creq.size, PROT_READ | PROT_WRITE, MAP_SHARED, drmFd, mreq.offset);
-    if (mapPtr == MAP_FAILED) return false;
-
-    m_dumbBuffer.pixelData = static_cast<uint32_t*>(mapPtr);
-
-    if (drmModeSetCrtc(drmFd, crtcId, m_dumbBuffer.fbId, 0, 0, &connectorId, 1, &modeInfo) != 0) {
-        std::cerr << "[LCL Render WARNING] drmModeSetCrtc failed.\n";
-    } else {
-        std::cout << "[LCL Render] DRM Modeset active on CRTC ID: " << crtcId << " (FB ID: " << m_dumbBuffer.fbId << ")\n";
-    }
-
     return true;
 }
 
@@ -491,8 +437,8 @@ void Renderer::renderDesktop(const WindowManager& windowManager,
     }
 
     // 2. Mouse cursor on top of everything
-    if (m_displayManager && m_displayManager->isHardwareCursorActive()) {
-        m_displayManager->moveHardwareCursor(windowManager.getMouseX(), windowManager.getMouseY());
+    if (m_displayBackend && m_displayBackend->isHardwareCursorActive()) {
+        m_displayBackend->moveHardwareCursor(windowManager.getMouseX(), windowManager.getMouseY());
     } else {
         drawCursor(windowManager.getMouseX(), windowManager.getMouseY());
     }
@@ -621,51 +567,19 @@ void Renderer::swapBuffers() {
 
     if (m_skiaRenderer.getBackendType() == SkiaBackendType::OpenGL_EGL) {
         m_skiaRenderer.endFrame();
-        return; // EGL/GBM handles buffer swapping & page flip directly!
+        return; // EGL/GBM/Android handles buffer swapping & page flip directly!
     }
 
-    if (m_displayManager && m_displayManager->isInitialized()) {
-        const uint32_t* srcPixels = m_skiaRenderer.getRasterBuffer() ? m_skiaRenderer.getRasterBuffer() : m_softwareBackBuffer.data();
-        if (m_usingDRMHardware && m_dumbBuffer.pixelData && m_dumbBuffer.fbId > 0) {
-            std::memcpy(m_dumbBuffer.pixelData, srcPixels, std::min(m_dumbBuffer.size, m_width * m_height * sizeof(uint32_t)));
-
-            int drmFd = m_displayManager->getDRMFd();
-            if (drmFd >= 0) {
-                drmModeDirtyFB(drmFd, m_dumbBuffer.fbId, nullptr, 0);
-            }
-        } else if (m_displayManager->getBackendType() == core::DisplayBackendType::LinuxFB) {
-            uint32_t* fbPixels = m_displayManager->getFBPixelData();
-            if (fbPixels) {
-                size_t copyBytes = std::min(static_cast<size_t>(m_width * m_height * sizeof(uint32_t)),
-                                            static_cast<size_t>(m_displayManager->getFBDevice().size));
-                std::memcpy(fbPixels, srcPixels, copyBytes);
-            }
-        }
+    const uint32_t* srcPixels = m_skiaRenderer.getRasterBuffer() ? m_skiaRenderer.getRasterBuffer() : m_softwareBackBuffer.data();
+    if (m_fbPixels && srcPixels) {
+        std::memcpy(m_fbPixels, srcPixels, m_width * m_height * sizeof(uint32_t));
     }
 }
 
 void Renderer::shutdown() {
     if (!m_initialized) return;
     std::cout << "[LCL Render] Shutting down Renderer Engine (Total frames rendered: " << m_renderedFrames << ")...\n";
-    destroyDumbBuffer();
     m_initialized = false;
-}
-
-void Renderer::destroyDumbBuffer() {
-    if (m_dumbBuffer.pixelData && m_dumbBuffer.size > 0) {
-        munmap(m_dumbBuffer.pixelData, m_dumbBuffer.size);
-        m_dumbBuffer.pixelData = nullptr;
-    }
-    if (m_dumbBuffer.fbId > 0 && m_displayManager && m_displayManager->getDRMFd() >= 0) {
-        drmModeRmFB(m_displayManager->getDRMFd(), m_dumbBuffer.fbId);
-        m_dumbBuffer.fbId = 0;
-    }
-    if (m_dumbBuffer.handle > 0 && m_displayManager && m_displayManager->getDRMFd() >= 0) {
-        struct drm_mode_destroy_dumb dreq{};
-        dreq.handle = m_dumbBuffer.handle;
-        ioctl(m_displayManager->getDRMFd(), DRM_IOCTL_MODE_DESTROY_DUMB, &dreq);
-        m_dumbBuffer.handle = 0;
-    }
 }
 
 } // namespace lcl::render

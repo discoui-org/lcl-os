@@ -3,61 +3,24 @@
 #include <string>
 #include <memory>
 #include <vector>
-#include <xf86drm.h>
-#include <xf86drmMode.h>
-#include <linux/fb.h>
 
 #include "core/display/egl_backend.hpp"
+#include "platform/common/display_backend.hpp"
+#include "platform/desktop/drm_display_backend.hpp"
 
 namespace lcl::core {
 
-enum class DisplayBackendType {
-    None,
-    DRM_KMS,
-    LinuxFB
-};
+using DisplayBackendType = platform::desktop::DesktopDisplayType;
+using DisplayMode = platform::DisplayMode;
+using DRMDevice = platform::desktop::DRMDeviceInfo;
+using FBDevice = platform::desktop::FBDeviceInfo;
 
-struct DisplayMode {
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t refreshRate{0};
-    std::string name;
-};
-
-struct DRMDevice {
-    int fd{-1};
-    std::string path;
-    std::string driverName;
-    std::string driverVersion;
-    std::string renderNodePath;
-    int renderNodeFd{-1};
-    bool hasHardwareAcceleration{false};
-    uint32_t cursorHandle{0};
-    uint32_t* cursorPixels{nullptr};
-    uint64_t cursorSize{0};
-    uint32_t cursorWidth{64};
-    uint32_t cursorHeight{64};
-    bool hasHardwareCursor{false};
-    drmModeResPtr resources{nullptr};
-    drmModeConnectorPtr connector{nullptr};
-    drmModeEncoderPtr encoder{nullptr};
-    drmModeCrtcPtr crtc{nullptr};
-    drmModeModeInfo currentMode{};
-};
-
-struct FBDevice {
-    int fd{-1};
-    std::string path;
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t bpp{32};
-    uint32_t pitch{0};
-    uint64_t size{0};
-    uint32_t* pixelData{nullptr};
-    struct fb_var_screeninfo vinfo{};
-    struct fb_fix_screeninfo finfo{};
-};
-
+/**
+ * @brief Transitional DisplayManager adapter wrapping DrmDisplayBackend and EGLBackend.
+ *
+ * Extracted in Stage 2A: All DRM/KMS mode-setting, CRTC/Connector configuration,
+ * and hardware cursor plane logic is delegated to DrmDisplayBackend (IDisplayBackend).
+ */
 class DisplayManager {
 public:
     DisplayManager();
@@ -84,44 +47,43 @@ public:
     void shutdown();
 
     bool isInitialized() const { return m_initialized; }
-    DisplayBackendType getBackendType() const { return m_backendType; }
-    const DisplayMode& getActiveDisplayMode() const { return m_activeMode; }
-    const std::string& getDevicePath() const { return m_devicePath; }
+    DisplayBackendType getBackendType() const { return m_backend.getDisplayType(); }
+    const DisplayMode& getActiveDisplayMode() const { return m_backend.activeMode(); }
+    const std::string& getDevicePath() const { return m_backend.getDevicePath(); }
 
     // DRM / FB Data accessors
-    int getDRMFd() const { return m_drmDevice.fd; }
-    const DRMDevice& getDRMDevice() const { return m_drmDevice; }
-    const FBDevice& getFBDevice() const { return m_fbDevice; }
-    uint32_t* getFBPixelData() const { return m_fbDevice.pixelData; }
+    int getDRMFd() const { return m_backend.getDrmFd(); }
+    const DRMDevice& getDRMDevice() const { return m_backend.getDrmDevice(); }
+    const FBDevice& getFBDevice() const { return m_backend.getFbDevice(); }
+    uint32_t* getFBPixelData() const { return m_backend.getFbPixelData(); }
 
     // Hardware Acceleration & Driver Metadata
-    const std::string& getDriverName() const { return m_drmDevice.driverName; }
-    const std::string& getDriverVersion() const { return m_drmDevice.driverVersion; }
-    const std::string& getRenderNodePath() const { return m_drmDevice.renderNodePath; }
-    bool isHardwareAccelerated() const { return m_drmDevice.hasHardwareAcceleration; }
+    const std::string& getDriverName() const { return m_backend.getDriverName(); }
+    const std::string& getDriverVersion() const { return m_backend.getDriverVersion(); }
+    const std::string& getRenderNodePath() const { return m_backend.getRenderNodePath(); }
+    bool isHardwareAccelerated() const { return m_backend.isHardwareAccelerated(); }
 
     // DRM Hardware Cursor Plane (Zero-Latency GPU Cursor)
-    bool initHardwareCursor(uint32_t width = 64, uint32_t height = 64);
-    bool moveHardwareCursor(int x, int y);
-    bool isHardwareCursorActive() const { return m_drmDevice.hasHardwareCursor; }
+    bool initHardwareCursor(uint32_t width = 64, uint32_t height = 64) {
+        return m_backend.initHardwareCursor(width, height);
+    }
+    bool moveHardwareCursor(int x, int y) {
+        return m_backend.moveHardwareCursor(x, y);
+    }
+    bool isHardwareCursorActive() const {
+        return m_backend.isHardwareCursorActive();
+    }
 
-    // EGL Hardware Backend Accessor
+    // Platform display backend accessor
+    platform::IDisplayBackend* getDisplayBackend() { return &m_backend; }
+    platform::desktop::DrmDisplayBackend* getDrmBackend() { return &m_backend; }
+
+    // EGL Hardware Backend Accessor (Stage 2B will transition this to GbmGraphicsContext)
     EGLBackend* getEGLBackend() { return &m_eglBackend; }
 
 private:
-    bool probeDRMWithRetry(const std::string& devicePath);
-    bool probeDRMResources();
-    bool probeRenderNode();
-    bool probeLinuxFramebuffer();
-    void cleanupDRMDevice();
-    void cleanupFBDevice();
-
-    std::string m_devicePath;
-    DRMDevice m_drmDevice;
-    FBDevice m_fbDevice;
+    platform::desktop::DrmDisplayBackend m_backend;
     EGLBackend m_eglBackend;
-    DisplayMode m_activeMode;
-    DisplayBackendType m_backendType{DisplayBackendType::None};
     bool m_initialized{false};
 };
 

@@ -9,14 +9,14 @@
 #include <EGL/eglext.h>
 #include <gbm.h>
 
-#include "core/display/egl_context.hpp"
+#include "platform/common/graphics_context.hpp"
 
 namespace lcl::render {
 
 // Client-only EGL target.  It opens a DRM render node, never a KMS card, so it
 // cannot page-flip or otherwise own the display.  Its output is read back to
 // WindowApp's existing SHM staging buffer until the DMA-BUF protocol arrives.
-class ClientEGLContext final : public lcl::core::EGLContextBackend {
+class ClientEGLContext final : public lcl::platform::IGraphicsContext {
 public:
     struct DmaBufTarget {
         uint32_t bufferId{0};
@@ -51,6 +51,10 @@ public:
     bool presentsToDisplay() const override { return false; }
     bool present() override { return true; }
     bool readback(uint32_t* destination, uint32_t width, uint32_t height) override;
+    lcl::platform::TextureHandle importTexture(const lcl::platform::INativeBuffer&) override {
+        return lcl::platform::kInvalidTextureHandle;
+    }
+    void releaseTexture(lcl::platform::TextureHandle) override {}
 
     bool hasDmaBufPool() const { return !m_dmaBufs.empty(); }
     bool ensureDmaBufCapacity(uint32_t width, uint32_t height);

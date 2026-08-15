@@ -2,6 +2,7 @@
 #include "lcl-motion/motion.hpp"
 #include "core/display/display_scale.hpp"
 #include "theme/palette.hpp"
+#include "platform/desktop/dma_buf_native_buffer.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -396,14 +397,14 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 continue;
             }
 
-            lcl::core::DmaBufImport import{};
-            import.fd = msg.passedFd;
-            import.width = bufferMessage->backingWidth;
-            import.height = bufferMessage->backingHeight;
-            import.stride = bufferMessage->stride;
-            import.format = bufferMessage->format;
-            import.modifier = bufferMessage->modifier;
-            const uint32_t texture = m_renderer.getSkiaRenderer()->importDmaBufTexture(import);
+            lcl::platform::desktop::DmaBufNativeBuffer nativeBuffer(
+                msg.passedFd,
+                bufferMessage->backingWidth,
+                bufferMessage->backingHeight,
+                bufferMessage->stride,
+                bufferMessage->format,
+                bufferMessage->modifier);
+            const uint32_t texture = m_renderer.getSkiaRenderer()->importTexture(nativeBuffer);
             close(msg.passedFd);
             if (texture == 0) {
                 // Keep the client pool live when a compositor lacks DMA-BUF

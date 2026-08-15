@@ -4,12 +4,11 @@
 #include <vector>
 #include <memory>
 #include <cstdint>
-#include <xf86drm.h>
-#include <xf86drmMode.h>
-#include "core/display/display_manager.hpp"
+
+#include "platform/common/graphics_context.hpp"
+#include "platform/common/display_backend.hpp"
 #include "render/window_manager.hpp"
 #include "render/render_types.hpp"
-
 #include "render/font_renderer.hpp"
 #include "render/skia_renderer.hpp"
 
@@ -38,16 +37,6 @@ struct Color {
     }
 };
 
-struct Framebuffer {
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t pitch{0};
-    uint32_t handle{0};
-    uint32_t fbId{0};
-    uint64_t size{0};
-    uint32_t* pixelData{nullptr};
-};
-
 class Renderer {
 public:
     Renderer();
@@ -62,11 +51,18 @@ public:
     Renderer& operator=(Renderer&&) noexcept;
 
     /**
-     * @brief Initialize renderer using DisplayManager context or fallback canvas.
-     * @param displayManager Pointer to initialized DisplayManager instance
+     * @brief Initialize renderer with dimensions and platform interfaces.
+     * @param width Viewport width
+     * @param height Viewport height
+     * @param graphicsContext Optional platform graphics context (EGL/GLES)
+     * @param displayBackend Optional platform display backend
+     * @param fbPixels Optional raw framebuffer pixel memory for software raster mode
      * @return true if initialized, false otherwise
      */
-    bool initialize(core::DisplayManager* displayManager);
+    bool initialize(uint32_t width = 1024, uint32_t height = 768,
+                    platform::IGraphicsContext* graphicsContext = nullptr,
+                    platform::IDisplayBackend* displayBackend = nullptr,
+                    uint32_t* fbPixels = nullptr);
 
     /**
      * @brief Release framebuffer and rendering resources.
@@ -93,7 +89,7 @@ public:
     void renderWindowContent(const Window& win, const WindowRenderContent* content);
 
     /**
-     * @brief Present back buffer onto DRM display CRTC or log virtual frame.
+     * @brief Present back buffer onto display CRTC or log virtual frame.
      */
     void swapBuffers();
 
@@ -108,19 +104,16 @@ private:
     void renderBackground();
     void renderTaskbar();
 
-    // --- DRM dumb buffer management ---
-    bool createDumbBuffer();
-    void destroyDumbBuffer();
+    platform::IGraphicsContext* m_graphicsContext{nullptr};
+    platform::IDisplayBackend* m_displayBackend{nullptr};
+    uint32_t* m_fbPixels{nullptr};
 
-    core::DisplayManager* m_displayManager{nullptr};
     FontRenderer m_fontRenderer;
     SkiaRenderer m_skiaRenderer;
     uint32_t m_width{1024};
     uint32_t m_height{768};
     bool m_initialized{false};
-    bool m_usingDRMHardware{false};
 
-    Framebuffer m_dumbBuffer;
     std::vector<uint32_t> m_softwareBackBuffer;
     uint64_t m_renderedFrames{0};
 };

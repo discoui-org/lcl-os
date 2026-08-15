@@ -540,7 +540,7 @@ SkiaRenderer::~SkiaRenderer() {
 }
 
 bool SkiaRenderer::initialize(uint32_t width, uint32_t height,
-                              lcl::core::EGLContextBackend* eglBackend,
+                              lcl::platform::IGraphicsContext* eglBackend,
                               uint32_t* targetPixels) {
     if (targetPixels) {
         m_targetPixels = targetPixels;
@@ -1063,10 +1063,10 @@ void SkiaRenderer::endFrame() {
 #endif
 }
 
-uint32_t SkiaRenderer::importDmaBufTexture(const lcl::core::DmaBufImport& buffer) {
+uint32_t SkiaRenderer::importTexture(const lcl::platform::INativeBuffer& buffer) {
 #ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
-        return m_eglBackend->importDmaBufTexture(buffer);
+        return m_eglBackend->importTexture(buffer);
     }
 #else
     (void)buffer;
@@ -1074,9 +1074,9 @@ uint32_t SkiaRenderer::importDmaBufTexture(const lcl::core::DmaBufImport& buffer
     return 0;
 }
 
-void SkiaRenderer::releaseDmaBufTexture(uint32_t texture) {
+void SkiaRenderer::releaseTexture(uint32_t texture) {
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_eglBackend) m_eglBackend->releaseDmaBufTexture(texture);
+    if (m_eglBackend) m_eglBackend->releaseTexture(texture);
 #else
     (void)texture;
 #endif
