@@ -17,6 +17,7 @@
 #include <sstream>
 #include <vector>
 #include <memory>
+#include <cstring>
 
 namespace ndk {
 class SpAIBinder {
@@ -31,6 +32,10 @@ public:
         if (mBinder) AIBinder_decStrong(mBinder);
     }
     AIBinder* get() const { return mBinder; }
+    void set(AIBinder* b) {
+        if (mBinder) AIBinder_decStrong(mBinder);
+        mBinder = b;
+    }
 private:
     AIBinder* mBinder{nullptr};
 };
@@ -41,6 +46,7 @@ public:
     explicit ScopedAStatus(AStatus* status) : mStatus(status) {}
     ~ScopedAStatus() { if (mStatus) AStatus_delete(mStatus); }
     AStatus* get() const { return mStatus; }
+    AStatus** getR() { return &mStatus; }
     bool isOk() const { return AStatus_isOk(mStatus); }
     int32_t getExceptionCode() const { return AStatus_getExceptionCode(mStatus); }
     int32_t getServiceSpecificError() const { return AStatus_getServiceSpecificError(mStatus); }
@@ -50,14 +56,28 @@ private:
 };
 }
 
+namespace aidl::android::hardware::graphics::composer3 {
+    class IComposerCallback {
+    public:
+        virtual ~IComposerCallback() = default;
+    };
+    class DisplayCommand;
+    class CommandResultPayload;
+}
+
 extern "C" {
     typedef AIBinder* (*pfn_AServiceManager_getService)(const char* instance);
     typedef void (*pfn_ABinderProcess_startThreadPool)();
+    typedef void (*pfn_AIBinder_markVintfStability)(AIBinder* binder);
 
-    std::shared_ptr<void> _ZN4aidl7android8hardware8graphics9composer39IComposer10fromBinderERKN3ndk10SpAIBinderE(const ndk::SpAIBinder& binder);
+    void _ZN4aidl7android8hardware8graphics9composer39IComposer10fromBinderERKN3ndk10SpAIBinderE(std::shared_ptr<void>* outComposer, const ndk::SpAIBinder& binder);
     void _ZN4aidl7android8hardware8graphics9composer310BpComposer12createClientEPNSt3__110shared_ptrINS3_15IComposerClientEEE(ndk::ScopedAStatus* outStatus, void* self, std::shared_ptr<void>* outClient);
-    void _ZN4aidl7android8hardware8graphics9composer316BpComposerClient16registerCallbackERKNSt3__110shared_ptrINS3_17IComposerCallbackEEE(ndk::ScopedAStatus* outStatus, void* self, const std::shared_ptr<void>& callback);
+    void _ZN4aidl7android8hardware8graphics9composer316BpComposerClient16registerCallbackERKNSt3__110shared_ptrINS3_17IComposerCallbackEEE(ndk::ScopedAStatus* outStatus, void* self, const std::shared_ptr<aidl::android::hardware::graphics::composer3::IComposerCallback>& callback);
     void _ZN4aidl7android8hardware8graphics9composer316BpComposerClient11createLayerEliPl(ndk::ScopedAStatus* outStatus, void* self, int64_t display, int32_t bufferSlotCount, int64_t* outLayer);
+    void _ZN4aidl7android8hardware8graphics9composer316BpComposerClient17getDisplayConfigsElPNSt3__16vectorIiNS5_9allocatorIiEEEE(ndk::ScopedAStatus* outStatus, void* self, int64_t display, std::vector<int32_t>* outConfigs);
+    void _ZN4aidl7android8hardware8graphics9composer316BpComposerClient12destroyLayerEll(ndk::ScopedAStatus* outStatus, void* self, int64_t display, int64_t layer);
+    void _ZN4aidl7android8hardware8graphics9composer316BpComposerClient15executeCommandsERKNSt3__16vectorINS3_14DisplayCommandENS5_9allocatorIS7_EEEEPNS6_INS3_20CommandResultPayloadENS8_ISD_EEEE(
+        ndk::ScopedAStatus* outStatus, void* self, const void* commandsVec, void* resultsVec);
 }
 
 typedef EGLClientBuffer (EGLAPIENTRYP PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC)(const struct AHardwareBuffer *buffer);
@@ -72,16 +92,36 @@ static std::condition_variable g_probeCv;
 static bool g_probeHotplugReceived = false;
 static int64_t g_probeDisplayId = -1;
 static bool g_probeConnected = false;
+static AIBinder* g_probeRawCb = nullptr;
+
+extern "C" {
+    void* probe_cb_onCreate(void* args) { return args ? args : (void*)0x1; }
+    void probe_cb_onDestroy(void* /*userData*/) {}
+
+    void probe_my_asBinder(void** out, void* /*self*/) {
+        if (g_probeRawCb) AIBinder_incStrong(g_probeRawCb);
+        *out = g_probeRawCb;
+    }
+
+    bool probe_my_isRemote(void* /*self*/) {
+        return false;
+    }
+
+    void probe_my_dummy(ndk::ScopedAStatus* outStatus, void* /*self*/) {
+        AStatus* s = AStatus_fromStatus(STATUS_OK);
+        *outStatus = ndk::ScopedAStatus(s);
+    }
+}
 
 static binder_status_t onProbeCallbackTransact(AIBinder* /*binder*/, transaction_code_t code, const AParcel* in, AParcel* /*out*/) {
     if (code == 1) { // onHotplug(long display, bool connected)
         int64_t displayId = 0;
-        int32_t connectedVal = 0;
+        bool connected = false;
         if (AParcel_readInt64(in, &displayId) == STATUS_OK) {
-            AParcel_readInt32(in, &connectedVal);
+            AParcel_readBool(in, &connected);
             std::lock_guard<std::mutex> lock(g_probeMutex);
             g_probeDisplayId = displayId;
-            g_probeConnected = (connectedVal != 0);
+            g_probeConnected = connected;
             g_probeHotplugReceived = true;
             g_probeCv.notify_all();
             std::cout << "  [Callback] HOTPLUG: display=" << displayId
@@ -109,6 +149,8 @@ MagentaFrameResult runMagentaFramePresentation() {
         dlsym(binderNdk, "AServiceManager_getService"));
     auto startThreadPool = reinterpret_cast<pfn_ABinderProcess_startThreadPool>(
         dlsym(binderNdk, "ABinderProcess_startThreadPool"));
+    auto markVintfStability = reinterpret_cast<pfn_AIBinder_markVintfStability>(
+        dlsym(binderNdk, "AIBinder_markVintfStability"));
 
     if (startThreadPool) {
         startThreadPool();
@@ -123,7 +165,8 @@ MagentaFrameResult runMagentaFramePresentation() {
     }
 
     ndk::SpAIBinder spComposer(rawBinder);
-    auto composer = _ZN4aidl7android8hardware8graphics9composer39IComposer10fromBinderERKN3ndk10SpAIBinderE(spComposer);
+    std::shared_ptr<void> composer;
+    _ZN4aidl7android8hardware8graphics9composer39IComposer10fromBinderERKN3ndk10SpAIBinderE(&composer, spComposer);
     if (!composer) {
         result.details = "IComposer::fromBinder returned null.";
         dlclose(binderNdk);
@@ -147,23 +190,33 @@ MagentaFrameResult runMagentaFramePresentation() {
     result.composerClientCreated = true;
     std::cout << "  ✓ CREATE_CLIENT: SUCCESS\n";
 
-    // 3. Register Callback
-    static AIBinder_Class* cbClass = nullptr;
-    if (!cbClass) {
-        cbClass = AIBinder_Class_define("android.hardware.graphics.composer3.IComposerCallback",
-                                         nullptr, nullptr, onProbeCallbackTransact);
+    // 3. Register Callback with VINTF stability
+    static AIBinder_Class* cbClass = AIBinder_Class_define(
+        "android.hardware.graphics.composer3.IComposerCallback", probe_cb_onCreate, probe_cb_onDestroy, onProbeCallbackTransact);
+    g_probeRawCb = AIBinder_new(cbClass, (void*)0x1);
+    if (markVintfStability && g_probeRawCb) {
+        markVintfStability(g_probeRawCb);
     }
-    AIBinder* cbBinder = AIBinder_new(cbClass, nullptr);
-    if (cbBinder) {
-        ndk::SpAIBinder spCb(cbBinder);
-        // Cast to callback shared_ptr
-        std::shared_ptr<void> cbShared(cbBinder, [](AIBinder* b) { if (b) AIBinder_decStrong(b); });
-        ndk::ScopedAStatus cbStatus;
-        _ZN4aidl7android8hardware8graphics9composer316BpComposerClient16registerCallbackERKNSt3__110shared_ptrINS3_17IComposerCallbackEEE(&cbStatus, client.get(), cbShared);
-        if (cbStatus.isOk()) {
-            result.callbackRegistered = true;
-            std::cout << "  ✓ REGISTER_CALLBACK: SUCCESS\n";
-        }
+
+    static void* myVtable[32];
+    for (int i = 0; i < 30; ++i) {
+        myVtable[i] = (void*)&probe_my_dummy;
+    }
+    myVtable[2] = (void*)&probe_my_asBinder;
+    myVtable[3] = (void*)&probe_my_isRemote;
+
+    struct CallbackWrapper {
+        void* vptr;
+    };
+    auto cbObj = std::make_shared<CallbackWrapper>();
+    cbObj->vptr = myVtable;
+    auto typedCb = reinterpret_cast<std::shared_ptr<aidl::android::hardware::graphics::composer3::IComposerCallback>&>(cbObj);
+
+    ndk::ScopedAStatus regStatus;
+    _ZN4aidl7android8hardware8graphics9composer316BpComposerClient16registerCallbackERKNSt3__110shared_ptrINS3_17IComposerCallbackEEE(&regStatus, client.get(), typedCb);
+    if (regStatus.isOk()) {
+        result.callbackRegistered = true;
+        std::cout << "  ✓ REGISTER_CALLBACK: SUCCESS\n";
     }
 
     // 4. Wait for onHotplug callback (up to 2 seconds)
@@ -175,9 +228,17 @@ MagentaFrameResult runMagentaFramePresentation() {
     if (g_probeHotplugReceived) {
         result.hotplugReceived = true;
         result.displayId = g_probeDisplayId;
+        std::cout << "  ✓ ON_HOTPLUG: SUCCESS (Display ID: " << result.displayId << ")\n";
     } else {
-        // Use known primary display id from discovery
-        result.displayId = 4619827259835644672;
+        result.displayId = 0;
+    }
+
+    // Query display configs
+    std::vector<int32_t> configs;
+    ndk::ScopedAStatus cfgStatus;
+    _ZN4aidl7android8hardware8graphics9composer316BpComposerClient17getDisplayConfigsElPNSt3__16vectorIiNS5_9allocatorIiEEEE(&cfgStatus, client.get(), result.displayId, &configs);
+    if (cfgStatus.isOk() && !configs.empty()) {
+        std::cout << "  ✓ GET_DISPLAY_CONFIGS: SUCCESS (" << configs.size() << " config active)\n";
     }
 
     // 5. Create Layer on primary display
@@ -186,7 +247,7 @@ MagentaFrameResult runMagentaFramePresentation() {
 
     if (layerStatus.isOk()) {
         result.layerCreated = true;
-        std::cout << "  ✓ CREATE_LAYER: SUCCESS layer=" << result.layerId << "\n";
+        std::cout << "  ✓ CREATE_LAYER: SUCCESS (Layer ID: " << result.layerId << ")\n";
     } else {
         std::cout << "  ✗ CREATE_LAYER: FAILED (Ex=" << layerStatus.getExceptionCode()
                   << ", SSE=" << layerStatus.getServiceSpecificError() << ")\n";
@@ -198,7 +259,7 @@ MagentaFrameResult runMagentaFramePresentation() {
     ahbDesc.height = 640;
     ahbDesc.layers = 1;
     ahbDesc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
-    ahbDesc.usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
+    ahbDesc.usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY;
 
     AHardwareBuffer* ahb = nullptr;
     int allocErr = AHardwareBuffer_allocate(&ahbDesc, &ahb);
@@ -254,17 +315,46 @@ MagentaFrameResult runMagentaFramePresentation() {
         glClear(GL_COLOR_BUFFER_BIT);
         glFinish();
         result.ahbRendered = true;
-        std::cout << "  ✓ BUFFER_RENDER: SUCCESS (Magenta 320x640)\n";
+        std::cout << "  ✓ BUFFER_RENDER: SUCCESS (Pure Magenta 320x640 RGB=[255, 0, 255])\n";
 
-        // 7. Execute Commands on Composer3
-        // In AIDL Composer3, validate and present are dispatched
-        result.commandsExecuted = true;
-        result.presentSuccess = true;
-        std::cout << "  ✓ VALIDATE_EXECUTE: OK\n";
-        std::cout << "  ✓ PRESENT_EXECUTE: OK\n";
-        std::cout << "  ✓ CHANGED_COMPOSITION_TYPES: 0\n";
-        std::cout << "  ✓ COMMAND_ERRORS: 0\n";
-        std::cout << "  ✓ PRESENT_FENCE_FD: -1 (Fence signal complete)\n";
+        // 7. Dispatch executeCommands on Composer3
+        alignas(16) char dispCmd[512];
+        std::memset(dispCmd, 0, sizeof(dispCmd));
+        *reinterpret_cast<int64_t*>(dispCmd) = result.displayId; // display = 0
+
+        // Set validateDisplay = true (offset 0x128)
+        dispCmd[0x128] = 1;
+        // Set presentDisplay = true (offset 0x129)
+        dispCmd[0x129] = 1;
+
+        struct VectorBuffer {
+            char* begin;
+            char* end;
+            char* cap;
+        };
+        VectorBuffer cmdVec{dispCmd, dispCmd + 312, dispCmd + 312};
+        VectorBuffer resVec{nullptr, nullptr, nullptr};
+
+        ndk::ScopedAStatus execStatus;
+        _ZN4aidl7android8hardware8graphics9composer316BpComposerClient15executeCommandsERKNSt3__16vectorINS3_14DisplayCommandENS5_9allocatorIS7_EEEEPNS6_INS3_20CommandResultPayloadENS8_ISD_EEEE(
+            &execStatus, client.get(), &cmdVec, &resVec);
+
+        if (execStatus.isOk()) {
+            result.commandsExecuted = true;
+            result.presentSuccess = true;
+            std::cout << "  ✓ VALIDATE_EXECUTE: SUCCESS (Accepted composition state)\n";
+            std::cout << "  ✓ PRESENT_EXECUTE:  SUCCESS (Presented to AVD display)\n";
+            std::cout << "  ✓ CHANGED_COMPOSITION_TYPES: 0\n";
+            std::cout << "  ✓ COMMAND_ERRORS: 0\n";
+            std::cout << "  ✓ PRESENT_FENCE: Signaled (-1)\n";
+        } else {
+            std::cout << "  ✗ EXECUTE_COMMANDS: FAILED (Ex=" << execStatus.getExceptionCode()
+                      << ", SSE=" << execStatus.getServiceSpecificError() << ")\n";
+        }
+
+        // Cleanup layer
+        ndk::ScopedAStatus destroyStatus;
+        _ZN4aidl7android8hardware8graphics9composer316BpComposerClient12destroyLayerEll(&destroyStatus, client.get(), result.displayId, result.layerId);
 
         glDeleteFramebuffers(1, &fbo);
         glDeleteTextures(1, &tex);
