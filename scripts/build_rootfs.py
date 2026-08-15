@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+"""
+LCL Core Linux - Canonical RootFS Artifact Builder (Stage 4C.1)
+
+Builds a single, deterministic, platform-independent ext4 root filesystem artifact:
+    build/rootfs/lcl-rootfs-x86_64.ext4
+from the canonical staging tree:
+    build/rootfs/x86_64/
+
+Contains the standard LCL userspace contract:
+    /bin -> usr/bin
+    /lib64 -> usr/lib
+    /usr/bin/{lcl-core, lcl-sessiond, lcl-desktop-shell, lcl-terminal, lcl-open, bash, ...}
+    /usr/lib/{ld-linux-x86-64.so.2, libc.so.6, libreadline.so.8, ...}
+    /usr/share/lcl/apps/{Terminal.app, UIDemo.app, UIDemoJS.app}
+    /usr/share/fonts/
+    /usr/share/wallpapers/
+    /etc/profile
+    /home/user/{.bashrc, .profile}
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+BUILD_DIR = PROJECT_ROOT / "build"
+ROOTFS_BASE_DIR = BUILD_DIR / "rootfs"
+
+
+def log(msg: str) -> None:
+    print(f"[LCL ROOTFS] {msg}", flush=True)
+
+
+def err(msg: str) -> None:
+    print(f"[LCL ROOTFS ERROR] {msg}", file=sys.stderr, flush=True)
+
+
+def get_sha256(filepath: Path) -> str:
+    h = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def find_host_bin(name: str) -> Path | None:
+    w = shutil.which(name)
+    if w and Path(w).is_file():
+        return Path(w)
+    for cand in (f"/usr/bin/{name}", f"/bin/{name}", f"/usr/sbin/{name}", f"/sbin/{name}"):
+        cp = Path(cand)
+        if cp.is_file():
+            return cp
+    return None
+
+
+def copy_ldd_deps(binary: Path, dest_lib: Path) -> None:
+    if not binary.is_file():
+        return
+    try:
+        out = subprocess.check_output(["ldd", str(binary)], text=True, stderr=subprocess.DEVNULL)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return
+
+    for line in out.splitlines():
+        parts = line.strip().split()
+        lib_path = None
+        if "=>" in parts:
+            idx = parts.index("=>")
+            if idx + 1 < len(parts) and parts[idx + 1].startswith("/"):
+                lib_path = parts[idx + 1]
+        elif parts and parts[0].startswith("/"):
+            lib_path = parts[0]
+        if lib_path and Path(lib_path).is_file():
+            target = dest_lib / Path(lib_path).name
+            if not target.exists():
+                shutil.copy2(lib_path, target, follow_symlinks=True)
+
+
+def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
+    """Ensures that required canonical LCL application and tool binaries exist."""
+    binaries = {
+        "lcl-desktop-shell": BUILD_DIR / "lcl-desktop-shell",
+        "lcl-terminal": BUILD_DIR / "lcl-terminal",
+        "lcl-sessiond": BUILD_DIR / "lcl-sessiond",
+        "lcl-open": BUILD_DIR / "lcl-open",
+        "lcl-core": BUILD_DIR / "lcl-core",
+    }
+
+    missing = [name for name, p in binaries.items() if not p.is_file()]
+    if missing:
+        log(f"Building missing canonical targets: {missing}...")
+        if not (BUILD_DIR / "CMakeCache.txt").is_file():
+            subprocess.run(["cmake", "-B", str(BUILD_DIR), "-S", str(PROJECT_ROOT)], check=True)
+        subprocess.run(
+            ["cmake", "--build", str(BUILD_DIR), "--target"] + missing + ["-j", str(os.cpu_count() or 4)],
+            check=True,
+        )
+
+    # Optional targets
+    for opt_name in ["lcl-js", "lcl_ui_demo"]:
+        opt_path = BUILD_DIR / opt_name
+        if opt_path.is_file():
+            binaries[opt_name] = opt_path
+
+    return binaries
+
+
+def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str, str]:
+    """Populates the deterministic canonical userspace filesystem layout."""
+    log(f"Staging canonical LCL userspace at {staging_dir} ({arch})...")
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+
+    # 1. Directory hierarchy
+    subdirs = [
+        "proc",
+        "sys",
+        "dev",
+        "tmp",
+        "etc",
+        "var/log",
+        "usr/bin",
+        "usr/lib",
+        "usr/share",
+        "usr/share/fonts",
+        "usr/share/wallpapers",
+        "usr/share/lcl/apps",
+        "home/user/Desktop",
+        "home/user/Documents",
+        "home/user/Downloads",
+        "home/user/Applications",
+        "run/user/1000",
+        "run/user/0",
+    ]
+    for sub in subdirs:
+        (staging_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    # 2. Canonical symlinks at /
+    for link, target in [
+        ("bin", "usr/bin"),
+        ("sbin", "usr/bin"),
+        ("lib", "usr/lib"),
+        ("lib64", "usr/lib"),
+    ]:
+        link_path = staging_dir / link
+        if not link_path.exists():
+            link_path.symlink_to(target)
+
+    dest_bin = staging_dir / "usr" / "bin"
+    dest_lib = staging_dir / "usr" / "lib"
+    dest_share = staging_dir / "usr" / "share"
+
+    # 3. Dynamic linker
+    loader_found = False
+    for loader_cand in [
+        Path("/lib64/ld-linux-x86-64.so.2"),
+        Path("/usr/lib64/ld-linux-x86-64.so.2"),
+        Path("/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"),
+        Path("/usr/lib/ld-linux-x86-64.so.2"),
+    ]:
+        if loader_cand.is_file():
+            shutil.copy2(loader_cand.resolve(), dest_lib / "ld-linux-x86-64.so.2")
+            loader_found = True
+            break
+    if not loader_found:
+        raise RuntimeError("Host dynamic linker ld-linux-x86-64.so.2 not found.")
+
+    # 4. Canonical LCL binaries
+    binaries = ensure_binaries(arch)
+    sha_map: dict[str, str] = {}
+    for name, bin_path in binaries.items():
+        dst = dest_bin / name
+        shutil.copy2(bin_path, dst)
+        dst.chmod(0o755)
+        sha_map[name] = get_sha256(dst)
+        copy_ldd_deps(dst, dest_lib)
+
+    # Standard open symlink
+    if (dest_bin / "lcl-open").is_file():
+        open_sym = dest_bin / "open"
+        if open_sym.exists() or open_sym.is_symlink():
+            open_sym.unlink()
+        open_sym.symlink_to("lcl-open")
+
+    # 5. GNU Bash and essential utilities
+    bash_src = find_host_bin("bash") or find_host_bin("sh")
+    if not bash_src:
+        raise RuntimeError("Host bash binary not found.")
+    shutil.copy2(bash_src, dest_bin / "bash")
+    (dest_bin / "bash").chmod(0o755)
+    sha_map["bash"] = get_sha256(dest_bin / "bash")
+    copy_ldd_deps(dest_bin / "bash", dest_lib)
+
+    # Symlink /bin/sh -> bash if not present
+    sh_sym = dest_bin / "sh"
+    if not sh_sym.exists():
+        sh_sym.symlink_to("bash")
+
+    util_names = [
+        "mount", "mkdir", "sleep", "ls", "cat", "uname", "grep",
+        "printf", "dmesg", "tee", "find", "cp", "mv", "rm", "chmod",
+        "chown", "touch", "wc", "head", "tail", "clear"
+    ]
+    for u in util_names:
+        u_src = find_host_bin(u)
+        if u_src and u_src.is_file():
+            u_dst = dest_bin / u
+            shutil.copy2(u_src, u_dst)
+            u_dst.chmod(0o755)
+            copy_ldd_deps(u_dst, dest_lib)
+
+    # Helper script for clear if missing
+    if not (dest_bin / "clear").is_file():
+        (dest_bin / "clear").write_text("#!/bin/sh\nprintf \"\\033[2J\\033[H\"\n")
+        (dest_bin / "clear").chmod(0o755)
+
+    # 6. Graphics & EGL drivers (Mesa DRI, GLVND, libinput)
+    for dri_cand in [Path("/usr/lib/x86_64-linux-gnu/dri"), Path("/usr/lib/dri"), Path("/usr/lib64/dri")]:
+        if dri_cand.is_dir():
+            dri_dst = dest_lib / "dri"
+            dri_dst.mkdir(parents=True, exist_ok=True)
+            for dri_so in dri_cand.glob("*.so"):
+                shutil.copy2(dri_so, dri_dst / dri_so.name)
+            break
+
+    glvnd_vendor = Path("/usr/share/glvnd/egl_vendor.d")
+    if glvnd_vendor.is_dir():
+        glvnd_dst = dest_share / "glvnd" / "egl_vendor.d"
+        glvnd_dst.mkdir(parents=True, exist_ok=True)
+        for j in glvnd_vendor.glob("*.json"):
+            shutil.copy2(j, glvnd_dst / j.name)
+
+    libinput_share = Path("/usr/share/libinput")
+    if libinput_share.is_dir():
+        shutil.copytree(libinput_share, dest_share / "libinput", dirs_exist_ok=True)
+
+    # 7. System Fonts
+    fonts_src = PROJECT_ROOT / "assets" / "fonts"
+    fonts_dst = dest_share / "fonts"
+    if fonts_src.is_dir():
+        for fam in ["jetbrains-mono", "inter", "liberation-sans", "liberation-serif"]:
+            src_fam = fonts_src / fam
+            if src_fam.is_dir():
+                shutil.copytree(src_fam, fonts_dst / fam, dirs_exist_ok=True)
+
+    # 8. Wallpapers
+    wp_dst = dest_share / "wallpapers"
+    wp_dst.mkdir(parents=True, exist_ok=True)
+    for wp_name in ["wallpaper.jpg", "wallpaper.png"]:
+        wp_src = PROJECT_ROOT / wp_name
+        if wp_src.is_file():
+            shutil.copy2(wp_src, wp_dst / wp_name)
+            shutil.copy2(wp_src, dest_share / wp_name)
+
+    # 9. Canonical App Bundles
+    apps_dst = dest_share / "lcl" / "apps"
+
+    # Terminal.app
+    term_app_dst = apps_dst / "Terminal.app"
+    term_app_dst.mkdir(parents=True, exist_ok=True)
+    (term_app_dst / "assets").mkdir(parents=True, exist_ok=True)
+    (term_app_dst / "bin").mkdir(parents=True, exist_ok=True)
+    term_meta = PROJECT_ROOT / "src" / "apps" / "terminal" / "metadata.json"
+    term_icon = PROJECT_ROOT / "src" / "apps" / "terminal" / "assets" / "icon.png"
+    if term_meta.is_file():
+        shutil.copy2(term_meta, term_app_dst / "metadata.json")
+    if term_icon.is_file():
+        shutil.copy2(term_icon, term_app_dst / "assets" / "icon.png")
+
+    # UIDemo.app
+    uidemo_meta = PROJECT_ROOT / "apps" / "ui_demo" / "metadata.json"
+    uidemo_icon = PROJECT_ROOT / "apps" / "ui_demo" / "assets" / "icon.png"
+    if uidemo_meta.is_file() and uidemo_icon.is_file():
+        uidemo_app_dst = apps_dst / "UIDemo.app"
+        uidemo_app_dst.mkdir(parents=True, exist_ok=True)
+        (uidemo_app_dst / "assets").mkdir(parents=True, exist_ok=True)
+        (uidemo_app_dst / "bin").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(uidemo_meta, uidemo_app_dst / "metadata.json")
+        shutil.copy2(uidemo_icon, uidemo_app_dst / "assets" / "icon.png")
+        if (BUILD_DIR / "lcl_ui_demo").is_file():
+            shutil.copy2(BUILD_DIR / "lcl_ui_demo", uidemo_app_dst / "bin" / "ui_demo")
+            (uidemo_app_dst / "bin" / "ui_demo").chmod(0o755)
+
+    # UIDemoJS.app
+    uidemojs_meta = PROJECT_ROOT / "apps" / "ui_demo_js" / "metadata.json"
+    uidemojs_icon = PROJECT_ROOT / "apps" / "ui_demo_js" / "assets" / "icon.png"
+    uidemojs_main = PROJECT_ROOT / "apps" / "ui_demo_js" / "bin" / "main.js"
+    if uidemojs_meta.is_file() and uidemojs_icon.is_file():
+        uidemojs_app_dst = apps_dst / "UIDemoJS.app"
+        uidemojs_app_dst.mkdir(parents=True, exist_ok=True)
+        (uidemojs_app_dst / "assets").mkdir(parents=True, exist_ok=True)
+        (uidemojs_app_dst / "bin").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(uidemojs_meta, uidemojs_app_dst / "metadata.json")
+        shutil.copy2(uidemojs_icon, uidemojs_app_dst / "assets" / "icon.png")
+        if uidemojs_main.is_file():
+            shutil.copy2(uidemojs_main, uidemojs_app_dst / "bin" / "main.js")
+
+    # Link /home/user/Applications to canonical /usr/share/lcl/apps
+    user_apps = staging_dir / "home" / "user" / "Applications"
+    for app_dir in apps_dst.iterdir():
+        if app_dir.is_dir() and app_dir.name.endswith(".app"):
+            dst_link = user_apps / app_dir.name
+            if not dst_link.exists():
+                shutil.copytree(app_dir, dst_link)
+
+    # 10. Canonical Environment Files
+    (staging_dir / "etc" / "profile").write_text(
+        "export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH\n"
+        "export HOME=/home/user\n"
+        "export TERM=xterm-256color\n"
+        "export HISTSIZE=500\n"
+        "export HISTFILESIZE=1000\n"
+        "alias ls='ls --color=auto'\n"
+        "alias ll='ls -la'\n"
+        "if [ -f /home/user/.bashrc ]; then\n"
+        "    . /home/user/.bashrc\n"
+        "fi\n"
+    )
+
+    (staging_dir / "home" / "user" / ".bashrc").write_text(
+        "export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH\n"
+        "export TERM=xterm-256color\n"
+        "export PS1='\\[\\033[1;34m\\]\\W\\[\\033[0m\\] ❯ '\n"
+        "export HISTSIZE=500\n"
+        "alias ls='ls --color=auto'\n"
+        "alias ll='ls -la'\n"
+        "bind 'set completion-ignore-case on' 2>/dev/null || true\n"
+        "bind 'set show-all-if-ambiguous on' 2>/dev/null || true\n"
+        "bind 'TAB:menu-complete' 2>/dev/null || true\n"
+        "bind '\"\\e[Z\":menu-complete-backward' 2>/dev/null || true\n"
+    )
+
+    (staging_dir / "home" / "user" / ".profile").write_text(". /home/user/.bashrc\n")
+
+    # Set permissions
+    for root, dirs, files in os.walk(staging_dir):
+        for d in dirs:
+            os.chmod(os.path.join(root, d), 0o755)
+        for f in files:
+            p = Path(root) / f
+            if not p.is_symlink():
+                # Preserve execute bit if present, else 0644
+                cur = p.stat().st_mode
+                if cur & stat.S_IXUSR:
+                    p.chmod(0o755)
+                else:
+                    p.chmod(0o644)
+
+    return sha_map
+
+
+def build_rootfs_ext4(arch: str = "x86_64", image_size_mb: int = 512) -> tuple[Path, Path, dict[str, str]]:
+    """Builds the canonical ext4 rootfs image from the staging tree."""
+    ROOTFS_BASE_DIR.mkdir(parents=True, exist_ok=True)
+    staging_dir = ROOTFS_BASE_DIR / arch
+    out_ext4 = ROOTFS_BASE_DIR / f"lcl-rootfs-{arch}.ext4"
+
+    sha_map = stage_canonical_rootfs(staging_dir, arch)
+
+    log(f"Creating ext4 rootfs image at {out_ext4} ({image_size_mb} MB)...")
+    if out_ext4.exists():
+        out_ext4.unlink()
+
+    # Create sparse/empty file
+    subprocess.run(["truncate", "-s", f"{image_size_mb}M", str(out_ext4)], check=True)
+
+    # Format and populate directory contents via mkfs.ext4 -d
+    mkfs_cmd = [
+        "mkfs.ext4",
+        "-F",
+        "-L", "lcl-rootfs",
+        "-d", str(staging_dir),
+        str(out_ext4),
+    ]
+    res = subprocess.run(mkfs_cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        err(f"mkfs.ext4 failed:\n{res.stderr}")
+        raise RuntimeError("Failed to build ext4 rootfs image")
+
+    img_size = out_ext4.stat().st_size
+    log(f"✓ Built {out_ext4.name} ({img_size} bytes / {img_size / (1024*1024):.1f} MB)")
+
+    # Verify content inside ext4 image using debugfs
+    verify_rootfs_image(out_ext4)
+
+    return staging_dir, out_ext4, sha_map
+
+
+def verify_rootfs_image(ext4_path: Path) -> None:
+    """Verifies that key canonical userspace files exist inside the generated ext4 image."""
+    log(f"Verifying ext4 filesystem contents of {ext4_path.name}...")
+    required_files = [
+        "/bin/bash",
+        "/bin/lcl-terminal",
+        "/bin/lcl-sessiond",
+        "/bin/lcl-desktop-shell",
+        "/usr/share/lcl/apps/Terminal.app/metadata.json",
+        "/etc/profile",
+        "/home/user/.bashrc",
+    ]
+
+    for req in required_files:
+        cmd = ["debugfs", "-R", f"stat {req}", str(ext4_path)]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if "Inode:" not in res.stdout or res.returncode != 0:
+            raise AssertionError(f"Required canonical file '{req}' missing from rootfs image {ext4_path}")
+
+    # Check Terminal.app metadata content
+    cat_cmd = ["debugfs", "-R", "cat /usr/share/lcl/apps/Terminal.app/metadata.json", str(ext4_path)]
+    cat_res = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
+    meta_json = json.loads(cat_res.stdout)
+    if meta_json.get("executable") != "/bin/lcl-terminal":
+        raise AssertionError(f"Terminal.app metadata in rootfs has invalid executable: {meta_json.get('executable')}")
+
+    log("✓ All required canonical userspace files and metadata verified successfully.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="LCL Core Linux - Canonical RootFS Builder")
+    parser.add_argument("--arch", default="x86_64", help="Target architecture (default: x86_64)")
+    parser.add_argument("--size", type=int, default=512, help="Filesystem size in MB (default: 512)")
+    args = parser.parse_args()
+
+    staging_dir, out_ext4, sha_map = build_rootfs_ext4(arch=args.arch, image_size_mb=args.size)
+    print("\n--- Summary ---")
+    print(f"Staging tree: {staging_dir}")
+    print(f"RootFS image: {out_ext4} ({out_ext4.stat().st_size} bytes)")
+    for k, v in sha_map.items():
+        print(f"  {k}: {v}")
+
+
+if __name__ == "__main__":
+    main()

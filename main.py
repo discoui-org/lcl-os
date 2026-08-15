@@ -130,6 +130,15 @@ def cmd_iso(args: argparse.Namespace) -> None:
     subprocess.check_call([sys.executable, str(build_iso_py), "--arch", arch])
 
 
+def cmd_rootfs(args: argparse.Namespace) -> None:
+    build_rootfs_py = SCRIPTS_DIR / "build_rootfs.py"
+    arch = normalize_arch(args.arch)
+    rootfs_args = [sys.executable, str(build_rootfs_py), "--arch", arch]
+    if getattr(args, "size", None):
+        rootfs_args.extend(["--size", str(args.size)])
+    subprocess.check_call(rootfs_args)
+
+
 def cmd_flash(args: argparse.Namespace) -> None:
     arch = normalize_arch(args.arch)
     iso_file = BUILD_DIR / f"lcl-os-{arch}.iso"
@@ -221,6 +230,11 @@ def main() -> None:
     p_pkg = subparsers.add_parser("package", help="Build binaries and package initramfs")
     p_pkg.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (x86_64 or aarch64)")
 
+    # ---- rootfs ----
+    p_rootfs = subparsers.add_parser("rootfs", help="Build single canonical ext4 rootfs image")
+    p_rootfs.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (x86_64 or aarch64)")
+    p_rootfs.add_argument("--size", "-s", type=int, default=512, metavar="MB", help="Filesystem size in MB (default: 512)")
+
     # ---- iso ----
     p_iso = subparsers.add_parser("iso", help="Build Limine bootable ISO image")
     p_iso.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (x86_64 or aarch64)")
@@ -252,6 +266,7 @@ def main() -> None:
         "avd": cmd_avd,
         "build": cmd_build,
         "package": cmd_package,
+        "rootfs": cmd_rootfs,
         "iso": cmd_iso,
         "flash": cmd_flash,
         "fonts": cmd_fonts,
