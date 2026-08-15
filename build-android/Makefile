@@ -668,6 +668,2214 @@ src/platform/android/android_platform_services.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/android_platform_services.cpp.s
 .PHONY : src/platform/android/android_platform_services.cpp.s
 
+src/platform/android/generated/src/android/hardware/common/Ashmem.o: src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/common/Ashmem.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.o
+
+src/platform/android/generated/src/android/hardware/common/Ashmem.i: src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/common/Ashmem.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.i
+
+src/platform/android/generated/src/android/hardware/common/Ashmem.s: src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/common/Ashmem.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.s
+
+src/platform/android/generated/src/android/hardware/common/MappableFile.o: src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/common/MappableFile.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.o
+
+src/platform/android/generated/src/android/hardware/common/MappableFile.i: src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/common/MappableFile.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.i
+
+src/platform/android/generated/src/android/hardware/common/MappableFile.s: src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/common/MappableFile.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/common/MappableFile.cpp.s
+
+src/platform/android/generated/src/android/hardware/common/NativeHandle.o: src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/common/NativeHandle.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.o
+
+src/platform/android/generated/src/android/hardware/common/NativeHandle.i: src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/common/NativeHandle.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.i
+
+src/platform/android/generated/src/android/hardware/common/NativeHandle.s: src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/common/NativeHandle.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/common/NativeHandle.cpp.s
+
+src/platform/android/generated/src/android/hardware/drm/HdcpLevel.o: src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevel.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.o
+
+src/platform/android/generated/src/android/hardware/drm/HdcpLevel.i: src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevel.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.i
+
+src/platform/android/generated/src/android/hardware/drm/HdcpLevel.s: src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevel.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevel.cpp.s
+
+src/platform/android/generated/src/android/hardware/drm/HdcpLevels.o: src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevels.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.o
+
+src/platform/android/generated/src/android/hardware/drm/HdcpLevels.i: src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevels.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.i
+
+src/platform/android/generated/src/android/hardware/drm/HdcpLevels.s: src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevels.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/drm/HdcpLevels.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.o: src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.i: src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.s: src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.o: src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.i: src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.s: src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.o: src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.i: src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.s: src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.o: src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.i: src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.s: src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.o: src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.i: src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.s: src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/Compression.o: src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Compression.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/Compression.i: src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Compression.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/Compression.s: src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Compression.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Compression.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.o: src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.i: src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.s: src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.o: src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.i: src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.s: src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.o: src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.i: src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.s: src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.o: src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.i: src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.s: src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.o: src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.i: src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.s: src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/FRect.o: src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/FRect.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/FRect.i: src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/FRect.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/FRect.s: src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/FRect.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/FRect.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.o: src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.i: src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.s: src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.o: src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.i: src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.s: src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/Hdr.o: src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Hdr.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/Hdr.i: src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Hdr.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/Hdr.s: src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Hdr.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Hdr.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.o: src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.i: src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.s: src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.o: src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.i: src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.s: src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.o: src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.i: src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.s: src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.o: src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.i: src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.s: src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.o: src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.i: src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.s: src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.o: src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.i: src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.s: src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.o: src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.i: src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.s: src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/Point.o: src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Point.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/Point.i: src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Point.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/Point.s: src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Point.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Point.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/Rect.o: src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Rect.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/Rect.i: src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Rect.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/Rect.s: src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Rect.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Rect.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.o: src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.i: src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.s: src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.o: src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.i: src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.s: src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/Transform.o: src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Transform.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/Transform.i: src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Transform.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/Transform.s: src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Transform.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/Transform.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/common/XyColor.o: src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/XyColor.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/common/XyColor.i: src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/XyColor.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/common/XyColor.s: src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/XyColor.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/common/XyColor.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.o: src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.i: src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.s: src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.o: src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.i: src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.s: src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Color.o: src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Color.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Color.i: src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Color.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Color.s: src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Color.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Color.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.o: src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.i: src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.s: src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.o: src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.i: src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.s: src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.o: src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.i: src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.s: src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.o: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.i: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.s: src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.o: src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.i: src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.s: src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.o: src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.i: src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.s: src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.o: src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.i: src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.s: src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.o: src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.i: src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.s: src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.o: src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.i: src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.s: src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.o: src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.i: src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.s: src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.o: src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.i: src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.s: src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.o: src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.i: src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.s: src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.o: src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.i: src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.s: src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.o: src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.i: src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.s: src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.o: src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.i: src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.s: src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.o: src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.i: src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.s: src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.o: src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.i: src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.s: src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.o: src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.i: src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.s: src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.o: src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.i: src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.s: src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.o: src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.i: src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.s: src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.o: src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.i: src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.s: src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.o: src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.i: src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.s: src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.o: src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.i: src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.s: src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.o: src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.i: src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.s: src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.o: src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.i: src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.s: src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.o: src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.i: src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.s: src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.o: src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.i: src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.s: src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.o: src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.i: src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.s: src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.o: src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.i: src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.s: src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.cpp.s
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.o: src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.o
+
+# target to build an object file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.o
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.o
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.i: src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.i
+
+# target to preprocess a source file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.i
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.i
+
+src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.s: src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.s
+
+# target to generate assembly for a file
+src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.s
+.PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.s
+
 src/platform/common/keyboard_mapper.o: src/platform/common/keyboard_mapper.cpp.o
 .PHONY : src/platform/common/keyboard_mapper.o
 
@@ -782,6 +2990,282 @@ help:
 	@echo "... src/platform/android/android_platform_services.o"
 	@echo "... src/platform/android/android_platform_services.i"
 	@echo "... src/platform/android/android_platform_services.s"
+	@echo "... src/platform/android/generated/src/android/hardware/common/Ashmem.o"
+	@echo "... src/platform/android/generated/src/android/hardware/common/Ashmem.i"
+	@echo "... src/platform/android/generated/src/android/hardware/common/Ashmem.s"
+	@echo "... src/platform/android/generated/src/android/hardware/common/MappableFile.o"
+	@echo "... src/platform/android/generated/src/android/hardware/common/MappableFile.i"
+	@echo "... src/platform/android/generated/src/android/hardware/common/MappableFile.s"
+	@echo "... src/platform/android/generated/src/android/hardware/common/NativeHandle.o"
+	@echo "... src/platform/android/generated/src/android/hardware/common/NativeHandle.i"
+	@echo "... src/platform/android/generated/src/android/hardware/common/NativeHandle.s"
+	@echo "... src/platform/android/generated/src/android/hardware/drm/HdcpLevel.o"
+	@echo "... src/platform/android/generated/src/android/hardware/drm/HdcpLevel.i"
+	@echo "... src/platform/android/generated/src/android/hardware/drm/HdcpLevel.s"
+	@echo "... src/platform/android/generated/src/android/hardware/drm/HdcpLevels.o"
+	@echo "... src/platform/android/generated/src/android/hardware/drm/HdcpLevels.i"
+	@echo "... src/platform/android/generated/src/android/hardware/drm/HdcpLevels.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/AlphaInterpretation.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/BlendMode.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/BufferUsage.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/ChromaSiting.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/ColorTransform.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Compression.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Compression.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Compression.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Cta861_3.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Dataspace.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/DisplayDecorationSupport.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/DisplayHotplugEvent.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/ExtendableType.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/FRect.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/FRect.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/FRect.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HardwareBuffer.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HardwareBufferDescription.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Hdr.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Hdr.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Hdr.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionCapability.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/HdrConversionStrategy.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Interlaced.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PixelFormat.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayout.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponent.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/PlaneLayoutComponentType.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Point.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Point.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Point.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Rect.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Rect.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Rect.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Smpte2086.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/StandardMetadataType.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Transform.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Transform.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/Transform.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/XyColor.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/XyColor.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/common/XyColor.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Buffer.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Capability.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionLayer.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ChangedCompositionTypes.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTarget.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetProperty.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClientTargetPropertyWithBrightness.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ClockMonotonicTimestamp.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Color.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Color.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Color.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ColorMode.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/CommandError.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/CommandResultPayload.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Composition.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ContentType.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DimmingStage.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayAttribute.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayBrightness.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCapability.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayCommand.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConfiguration.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayConnectionType.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSample.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayContentSamplingAttributes.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayIdentification.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayLuts.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/DisplayRequest.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/FormatColorComponent.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/HdrCapabilities.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/IComposer.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerCallback.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/IComposerClient.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LayerBrightness.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LayerCommand.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LayerLifecycleBatchCommandType.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/LutProperties.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/Luts.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/OutputType.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/OverlayProperties.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableBlendMode.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableComposition.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableDataspace.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ParcelableTransform.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadata.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataBlob.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PerFrameMetadataKey.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PlaneAlpha.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PowerMode.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PresentFence.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/PresentOrValidate.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ReadbackBufferAttributes.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/RefreshRateChangedDebugData.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ReleaseFences.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/RenderIntent.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ScreenPartStatus.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VirtualDisplay.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VrrConfig.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeConstraints.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/VsyncPeriodChangeTimeline.s"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.o"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.i"
+	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.s"
 	@echo "... src/platform/common/keyboard_mapper.o"
 	@echo "... src/platform/common/keyboard_mapper.i"
 	@echo "... src/platform/common/keyboard_mapper.s"

@@ -115,21 +115,28 @@ if(ANDROID)
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
     # Android Platform implementation library
+    # Collect generated AIDL NDK sources
+    file(GLOB_RECURSE ANDROID_AIDL_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/src/*.cpp"
+    )
+
+    # Android Platform implementation library
     add_library(lcl-platform-android STATIC
         src/platform/android/android_input_backend.cpp
         src/platform/android/android_display_backend.cpp
         src/platform/android/android_graphics_context.cpp
         src/platform/android/android_platform_services.cpp
+        ${ANDROID_AIDL_SOURCES}
     )
 
     target_include_directories(lcl-platform-android PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/include
     )
 
     target_link_libraries(lcl-platform-android PUBLIC
         lcl-platform-common
         binder_ndk
-        ${CMAKE_CURRENT_SOURCE_DIR}/tools/android_graphics_probe/libs/android.hardware.graphics.composer3-V4-ndk.so
         EGL
         GLESv3
         android
@@ -141,6 +148,7 @@ if(ANDROID)
     )
     target_include_directories(test_android_platform_services PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/include
     )
     target_link_libraries(test_android_platform_services PRIVATE
         lcl-platform-android

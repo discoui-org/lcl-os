@@ -1,131 +1,101 @@
 #include "platform/android/android_display_backend.hpp"
 
+#include <aidl/android/hardware/graphics/composer3/IComposer.h>
+#include <aidl/android/hardware/graphics/composer3/IComposerClient.h>
+#include <aidl/android/hardware/graphics/composer3/BnComposerCallback.h>
 #include <android/binder_ibinder.h>
 #include <android/binder_status.h>
 #include <android/binder_parcel.h>
 #include <dlfcn.h>
+
 #include <iostream>
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
 #include <vector>
-#include <cstring>
-
-namespace ndk {
-class SpAIBinder {
-public:
-    SpAIBinder() : mBinder(nullptr) {}
-    explicit SpAIBinder(AIBinder* binder) : mBinder(binder) {}
-    SpAIBinder(const SpAIBinder& other) {
-        mBinder = other.mBinder;
-        if (mBinder) AIBinder_incStrong(mBinder);
-    }
-    ~SpAIBinder() {
-        if (mBinder) AIBinder_decStrong(mBinder);
-    }
-    AIBinder* get() const { return mBinder; }
-    void set(AIBinder* b) {
-        if (mBinder) AIBinder_decStrong(mBinder);
-        mBinder = b;
-    }
-private:
-    AIBinder* mBinder{nullptr};
-};
-
-class ScopedAStatus {
-public:
-    ScopedAStatus() : mStatus(nullptr) {}
-    explicit ScopedAStatus(AStatus* status) : mStatus(status) {}
-    ~ScopedAStatus() { if (mStatus) AStatus_delete(mStatus); }
-    AStatus* get() const { return mStatus; }
-    bool isOk() const { return AStatus_isOk(mStatus); }
-    int32_t getExceptionCode() const { return AStatus_getExceptionCode(mStatus); }
-    int32_t getServiceSpecificError() const { return AStatus_getServiceSpecificError(mStatus); }
-    const char* getMessage() const { return AStatus_getMessage(mStatus); }
-private:
-    AStatus* mStatus{nullptr};
-};
-}
-
-namespace aidl::android::hardware::graphics::composer3 {
-    class IComposerCallback {
-    public:
-        virtual ~IComposerCallback() = default;
-    };
-}
-
-extern "C" {
-    typedef AIBinder* (*pfn_AServiceManager_getService)(const char* instance);
-    typedef void (*pfn_ABinderProcess_startThreadPool)();
-    typedef void (*pfn_AIBinder_markVintfStability)(AIBinder* binder);
-
-    void _ZN4aidl7android8hardware8graphics9composer39IComposer10fromBinderERKN3ndk10SpAIBinderE(std::shared_ptr<void>* outComposer, const ndk::SpAIBinder& binder);
-    void _ZN4aidl7android8hardware8graphics9composer310BpComposer12createClientEPNSt3__110shared_ptrINS3_15IComposerClientEEE(ndk::ScopedAStatus* outStatus, void* self, std::shared_ptr<void>* outClient);
-    void _ZN4aidl7android8hardware8graphics9composer316BpComposerClient16registerCallbackERKNSt3__110shared_ptrINS3_17IComposerCallbackEEE(ndk::ScopedAStatus* outStatus, void* self, const std::shared_ptr<aidl::android::hardware::graphics::composer3::IComposerCallback>& callback);
-    void _ZN4aidl7android8hardware8graphics9composer316BpComposerClient17getDisplayConfigsElPNSt3__16vectorIiNS5_9allocatorIiEEEE(ndk::ScopedAStatus* outStatus, void* self, int64_t display, std::vector<int32_t>* outConfigs);
-}
 
 namespace lcl::platform::android {
 
+using aidl::android::hardware::graphics::composer3::IComposer;
+using aidl::android::hardware::graphics::composer3::IComposerClient;
+using aidl::android::hardware::graphics::composer3::BnComposerCallback;
+using aidl::android::hardware::graphics::composer3::VsyncPeriodChangeTimeline;
+using aidl::android::hardware::graphics::composer3::RefreshRateChangedDebugData;
+using aidl::android::hardware::graphics::common::DisplayHotplugEvent;
+using aidl::android::hardware::drm::HdcpLevels;
+
+typedef AIBinder* (*pfn_AServiceManager_getService)(const char* instance);
+typedef void (*pfn_ABinderProcess_startThreadPool)();
+typedef void (*pfn_AIBinder_markVintfStability)(AIBinder* binder);
+
 struct AndroidDisplayBackend::Impl {
+    std::shared_ptr<IComposer> composer;
+    std::shared_ptr<IComposerClient> client;
+    std::shared_ptr<BnComposerCallback> callback;
+
     void* binderNdkLib{nullptr};
     pfn_AServiceManager_getService getService{nullptr};
     pfn_ABinderProcess_startThreadPool startThreadPool{nullptr};
     pfn_AIBinder_markVintfStability markVintfStability{nullptr};
-
-    std::shared_ptr<void> composer;
-    std::shared_ptr<void> client;
-    AIBinder* rawCallbackBinder{nullptr};
 
     std::mutex mutex;
     std::condition_variable cv;
     bool hotplugReceived{false};
     int64_t hotplugDisplayId{-1};
     bool hotplugConnected{false};
-
-    void* callbackVtable[32]{nullptr};
 };
 
-static AndroidDisplayBackend::Impl* g_currentDisplayBackendImpl = nullptr;
+class AndroidComposerCallback final : public BnComposerCallback {
+public:
+    explicit AndroidComposerCallback(AndroidDisplayBackend::Impl* impl) : m_impl(impl) {}
 
-extern "C" {
-    static void* backend_cb_onCreate(void* args) { return args ? args : (void*)0x1; }
-    static void backend_cb_onDestroy(void* /*userData*/) {}
-
-    static void backend_cb_asBinder(void** out, void* /*self*/) {
-        if (g_currentDisplayBackendImpl && g_currentDisplayBackendImpl->rawCallbackBinder) {
-            AIBinder_incStrong(g_currentDisplayBackendImpl->rawCallbackBinder);
-            *out = g_currentDisplayBackendImpl->rawCallbackBinder;
-        } else {
-            *out = nullptr;
+    ::ndk::ScopedAStatus onHotplug(int64_t in_display, bool in_connected) override {
+        if (m_impl) {
+            std::lock_guard<std::mutex> lock(m_impl->mutex);
+            m_impl->hotplugDisplayId = in_display;
+            m_impl->hotplugConnected = in_connected;
+            m_impl->hotplugReceived = true;
+            m_impl->cv.notify_all();
         }
+        return ::ndk::ScopedAStatus::ok();
     }
 
-    static bool backend_cb_isRemote(void* /*self*/) {
-        return false;
+    ::ndk::ScopedAStatus onHotplugEvent(int64_t in_display, DisplayHotplugEvent in_event) override {
+        bool connected = (in_event == DisplayHotplugEvent::CONNECTED);
+        return onHotplug(in_display, connected);
     }
 
-    static void backend_cb_dummy(ndk::ScopedAStatus* outStatus, void* /*self*/) {
-        AStatus* s = AStatus_fromStatus(STATUS_OK);
-        *outStatus = ndk::ScopedAStatus(s);
+    ::ndk::ScopedAStatus onRefresh(int64_t /*in_display*/) override {
+        return ::ndk::ScopedAStatus::ok();
     }
-}
 
-static binder_status_t backendOnCallbackTransact(AIBinder* /*binder*/, transaction_code_t code, const AParcel* in, AParcel* /*out*/) {
-    if (code == 1 && g_currentDisplayBackendImpl) { // onHotplug(long display, bool connected)
-        int64_t displayId = 0;
-        bool connected = false;
-        if (AParcel_readInt64(in, &displayId) == STATUS_OK) {
-            AParcel_readBool(in, &connected);
-            std::lock_guard<std::mutex> lock(g_currentDisplayBackendImpl->mutex);
-            g_currentDisplayBackendImpl->hotplugDisplayId = displayId;
-            g_currentDisplayBackendImpl->hotplugConnected = connected;
-            g_currentDisplayBackendImpl->hotplugReceived = true;
-            g_currentDisplayBackendImpl->cv.notify_all();
-        }
+    ::ndk::ScopedAStatus onSeamlessPossible(int64_t /*in_display*/) override {
+        return ::ndk::ScopedAStatus::ok();
     }
-    return STATUS_OK;
-}
+
+    ::ndk::ScopedAStatus onVsync(int64_t /*in_display*/, int64_t /*in_timestamp*/, int32_t /*in_vsyncPeriodNanos*/) override {
+        return ::ndk::ScopedAStatus::ok();
+    }
+
+    ::ndk::ScopedAStatus onVsyncPeriodTimingChanged(int64_t /*in_display*/, const VsyncPeriodChangeTimeline& /*in_updatedTimeline*/) override {
+        return ::ndk::ScopedAStatus::ok();
+    }
+
+    ::ndk::ScopedAStatus onVsyncIdle(int64_t /*in_display*/) override {
+        return ::ndk::ScopedAStatus::ok();
+    }
+
+    ::ndk::ScopedAStatus onRefreshRateChangedDebug(const RefreshRateChangedDebugData& /*in_data*/) override {
+        return ::ndk::ScopedAStatus::ok();
+    }
+
+    ::ndk::ScopedAStatus onHdcpLevelsChanged(int64_t /*in_display*/, const HdcpLevels& /*in_levels*/) override {
+        return ::ndk::ScopedAStatus::ok();
+    }
+
+private:
+    AndroidDisplayBackend::Impl* m_impl{nullptr};
+};
 
 AndroidDisplayBackend::AndroidDisplayBackend()
     : m_impl(std::make_unique<Impl>()) {
@@ -143,8 +113,6 @@ AndroidDisplayBackend::~AndroidDisplayBackend() {
 
 bool AndroidDisplayBackend::initialize() {
     if (m_initialized) return true;
-
-    g_currentDisplayBackendImpl = m_impl.get();
 
     m_impl->binderNdkLib = dlopen("libbinder_ndk.so", RTLD_NOW);
     if (!m_impl->binderNdkLib) {
@@ -168,58 +136,40 @@ bool AndroidDisplayBackend::initialize() {
         return false;
     }
 
-    // 1. Connect to Composer3 service
-    AIBinder* rawComposer = m_impl->getService("android.hardware.graphics.composer3.IComposer/default");
-    if (!rawComposer) {
+    // 1. Connect to Composer3 service via standard NDK ServiceManager
+    AIBinder* rawBinder = m_impl->getService("android.hardware.graphics.composer3.IComposer/default");
+    if (!rawBinder) {
         std::cerr << "[AndroidDisplayBackend] Failed to acquire Composer3 service\n";
         return false;
     }
 
-    ndk::SpAIBinder spComposer(rawComposer);
-    _ZN4aidl7android8hardware8graphics9composer39IComposer10fromBinderERKN3ndk10SpAIBinderE(&m_impl->composer, spComposer);
+    ::ndk::SpAIBinder spComposer(rawBinder);
+    m_impl->composer = IComposer::fromBinder(spComposer);
     if (!m_impl->composer) {
         std::cerr << "[AndroidDisplayBackend] IComposer::fromBinder returned null\n";
         return false;
     }
 
-    // 2. Create Composer Client
-    ndk::ScopedAStatus createStatus;
-    _ZN4aidl7android8hardware8graphics9composer310BpComposer12createClientEPNSt3__110shared_ptrINS3_15IComposerClientEEE(&createStatus, m_impl->composer.get(), &m_impl->client);
+    // 2. Create Composer Client session
+    auto createStatus = m_impl->composer->createClient(&m_impl->client);
     if (!createStatus.isOk() || !m_impl->client) {
-        std::cerr << "[AndroidDisplayBackend] createClient failed (Ex=" << createStatus.getExceptionCode()
-                  << ", SSE=" << createStatus.getServiceSpecificError() << ")\n";
+        std::cerr << "[AndroidDisplayBackend] createClient failed: " << createStatus.getDescription() << "\n";
         return false;
     }
 
-    // 3. Register Callback with VINTF stability
-    static AIBinder_Class* cbClass = AIBinder_Class_define(
-        "android.hardware.graphics.composer3.IComposerCallback", backend_cb_onCreate, backend_cb_onDestroy, backendOnCallbackTransact);
-    m_impl->rawCallbackBinder = AIBinder_new(cbClass, (void*)0x1);
-    if (m_impl->markVintfStability && m_impl->rawCallbackBinder) {
-        m_impl->markVintfStability(m_impl->rawCallbackBinder);
+    // 3. Instantiate callback with VINTF stability and register with HAL
+    m_impl->callback = ::ndk::SharedRefBase::make<AndroidComposerCallback>(m_impl.get());
+    if (m_impl->markVintfStability) {
+        m_impl->markVintfStability(m_impl->callback->asBinder().get());
     }
 
-    for (int i = 0; i < 30; ++i) {
-        m_impl->callbackVtable[i] = (void*)&backend_cb_dummy;
-    }
-    m_impl->callbackVtable[2] = (void*)&backend_cb_asBinder;
-    m_impl->callbackVtable[3] = (void*)&backend_cb_isRemote;
-
-    struct CallbackWrapper {
-        void* vptr;
-    };
-    auto cbObj = std::make_shared<CallbackWrapper>();
-    cbObj->vptr = m_impl->callbackVtable;
-    auto typedCb = reinterpret_cast<std::shared_ptr<aidl::android::hardware::graphics::composer3::IComposerCallback>&>(cbObj);
-
-    ndk::ScopedAStatus regStatus;
-    _ZN4aidl7android8hardware8graphics9composer316BpComposerClient16registerCallbackERKNSt3__110shared_ptrINS3_17IComposerCallbackEEE(&regStatus, m_impl->client.get(), typedCb);
+    auto regStatus = m_impl->client->registerCallback(m_impl->callback);
     if (!regStatus.isOk()) {
-        std::cerr << "[AndroidDisplayBackend] registerCallback failed\n";
+        std::cerr << "[AndroidDisplayBackend] registerCallback failed: " << regStatus.getDescription() << "\n";
         return false;
     }
 
-    // 4. Wait for onHotplug event
+    // 4. Wait for onHotplug event (up to 2 seconds)
     {
         std::unique_lock<std::mutex> lock(m_impl->mutex);
         m_impl->cv.wait_for(lock, std::chrono::seconds(2), [this] {
@@ -235,10 +185,9 @@ bool AndroidDisplayBackend::initialize() {
         m_displayConnected = true;
     }
 
-    // 5. Query display configurations
+    // 5. Query active display configurations
     std::vector<int32_t> configs;
-    ndk::ScopedAStatus cfgStatus;
-    _ZN4aidl7android8hardware8graphics9composer316BpComposerClient17getDisplayConfigsElPNSt3__16vectorIiNS5_9allocatorIiEEEE(&cfgStatus, m_impl->client.get(), m_displayId, &configs);
+    auto cfgStatus = m_impl->client->getDisplayConfigs(m_displayId, &configs);
     if (cfgStatus.isOk() && !configs.empty()) {
         m_activeMode.name = "Android Display " + std::to_string(m_displayId);
     }
@@ -250,15 +199,7 @@ bool AndroidDisplayBackend::initialize() {
 void AndroidDisplayBackend::shutdown() {
     if (!m_initialized) return;
 
-    if (g_currentDisplayBackendImpl == m_impl.get()) {
-        g_currentDisplayBackendImpl = nullptr;
-    }
-
-    if (m_impl->rawCallbackBinder) {
-        AIBinder_decStrong(m_impl->rawCallbackBinder);
-        m_impl->rawCallbackBinder = nullptr;
-    }
-
+    m_impl->callback.reset();
     m_impl->client.reset();
     m_impl->composer.reset();
 

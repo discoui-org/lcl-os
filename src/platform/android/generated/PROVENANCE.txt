@@ -1,0 +1,10 @@
+LCL Core Linux — Android Generated AIDL NDK Bindings
+Generated On: 2026-08-15T03:15:09Z
+AOSP Release Tag: android-16.0.0_r1
+
+Pinned Interfaces:
+- android.hardware.graphics.composer3-V4
+- android.hardware.graphics.common-V6
+- android.hardware.common-V2
+- android.hardware.drm.common-V1
+- frameworks/native NDK Binder include_cpp (android-16.0.0_r1)
