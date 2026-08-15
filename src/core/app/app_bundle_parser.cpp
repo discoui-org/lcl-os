@@ -52,11 +52,15 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
         return std::nullopt;
     }
 
-    std::string metaPath = bundlePath;
-    if (metaPath.back() != '/') metaPath += "/";
-    metaPath += "metadata.json";
+    std::string base = bundlePath;
+    if (base.back() != '/') base += "/";
 
-    std::ifstream file(metaPath);
+    std::string manifestPath = base + "Manifest.json";
+    std::ifstream file(manifestPath);
+    if (!file.is_open()) {
+        manifestPath = base + "metadata.json";
+        file.open(manifestPath);
+    }
     if (!file.is_open()) {
         return std::nullopt;
     }
@@ -74,9 +78,10 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
     meta.name = extractJsonString(content, "name");
     meta.version = extractJsonString(content, "version");
     meta.icon = extractJsonString(content, "icon");
+    meta.runtime = extractJsonString(content, "runtime");
     meta.type = extractJsonString(content, "type");
     if (meta.type.empty()) {
-        meta.type = "cli";
+        meta.type = "gui";
     }
 
     std::string execRel = extractJsonString(content, "executable");
@@ -92,8 +97,6 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
     if (execRel[0] == '/') {
         meta.executablePath = execRel;
     } else {
-        std::string base = bundlePath;
-        if (base.back() != '/') base += "/";
         meta.executablePath = base + execRel;
     }
 

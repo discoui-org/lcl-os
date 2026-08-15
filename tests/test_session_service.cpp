@@ -31,16 +31,17 @@ protected:
     fs::path createBundle(const std::string& directory, const std::string& appId,
                           const std::string& executableBody = "#!/bin/sh\nexit 23\n") {
         const fs::path bundle = tempDir / directory;
-        fs::create_directories(bundle / "bin");
-        std::ofstream metadata(bundle / "metadata.json");
-        metadata << "{\"id\":\"" << appId
+        fs::create_directories(bundle / "Executables");
+        fs::create_directories(bundle / "Resources");
+        std::ofstream manifest(bundle / "Manifest.json");
+        manifest << "{\"id\":\"" << appId
                  << "\",\"name\":\"Test App\",\"version\":\"1.0\","
-                    "\"executable\":\"bin/test-app\",\"type\":\"gui\"}";
-        metadata.close();
-        std::ofstream executable(bundle / "bin" / "test-app");
+                    "\"executable\":\"Executables/test-app\",\"icon\":\"Resources/Icon.png\",\"type\":\"gui\"}";
+        manifest.close();
+        std::ofstream executable(bundle / "Executables" / "test-app");
         executable << executableBody;
         executable.close();
-        chmod((bundle / "bin" / "test-app").c_str(), 0755);
+        chmod((bundle / "Executables" / "test-app").c_str(), 0755);
         return bundle;
     }
 };

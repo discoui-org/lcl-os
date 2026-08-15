@@ -20,23 +20,23 @@ public:
 
     // Canonical LCL runtime paths
     std::string compositorSocketPath() const override {
-        return "/run/user/1000/lcl-compositor.sock";
+        return "/Runtime/lcl-compositor.sock";
     }
 
     std::string sessionSocketPath() const override {
-        return "/run/user/1000/lcl-session.sock";
+        return "/Runtime/lcl-sessiond.sock";
     }
 
     std::string appCatalogDirectory() const override {
-        return "/usr/share/lcl/apps";
+        return "/System/Applications";
     }
 
     std::vector<std::string> fontSearchDirectories() const override {
-        return {"/usr/share/fonts", "/system/fonts"};
+        return {"/System/Library/Fonts", "/usr/share/fonts", "/system/fonts"};
     }
 
     std::string temporaryDirectory() const override {
-        return "/tmp";
+        return "/Runtime/Temporary";
     }
 };
 

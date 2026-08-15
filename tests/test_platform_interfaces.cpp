@@ -261,10 +261,10 @@ TEST(DesktopPlatformTest, DesktopRuntimePathsImplementsIRuntimePaths) {
     lcl::platform::desktop::DesktopRuntimePaths paths;
     const lcl::platform::IRuntimePaths& iface = paths;
 
-    EXPECT_EQ(iface.compositorSocketPath(), "/run/user/1000/lcl-compositor.sock");
-    EXPECT_EQ(iface.sessionSocketPath(), "/run/user/1000/lcl-sessiond.sock");
-    EXPECT_EQ(iface.appCatalogDirectory(), "/usr/share/lcl/apps");
-    EXPECT_EQ(iface.temporaryDirectory(), "/tmp");
+    EXPECT_EQ(iface.compositorSocketPath(), "/Runtime/lcl-compositor.sock");
+    EXPECT_EQ(iface.sessionSocketPath(), "/Runtime/lcl-sessiond.sock");
+    EXPECT_EQ(iface.appCatalogDirectory(), "/System/Applications");
+    EXPECT_EQ(iface.temporaryDirectory(), "/Runtime/Temporary");
     EXPECT_FALSE(iface.fontSearchDirectories().empty());
 }
 
@@ -276,5 +276,5 @@ TEST(DesktopPlatformTest, DesktopPlatformServicesImplementsIPlatformServices) {
     EXPECT_FALSE(iface.display().isInitialized());
     EXPECT_FALSE(iface.graphics().isInitialized());
     EXPECT_FALSE(iface.input().isInitialized());
-    EXPECT_EQ(iface.paths().compositorSocketPath(), "/run/user/1000/lcl-compositor.sock");
+    EXPECT_EQ(iface.paths().compositorSocketPath(), "/Runtime/lcl-compositor.sock");
 }

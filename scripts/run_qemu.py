@@ -541,10 +541,11 @@ if [ -d "/lib/modules/$KVER" ] && [ ! -d "/sysroot/usr/lib/modules/$KVER" ]; the
     cp -a "/lib/modules/$KVER" "/sysroot/usr/lib/modules/" 2>/dev/null || true
 fi
 
-# Move pseudo filesystems to sysroot before switch_root
-mkdir -p /sysroot/run /sysroot/dev /sysroot/proc /sysroot/sys
-if mountpoint -q /run 2>/dev/null; then
-    mount --move /run /sysroot/run 2>/dev/null || true
+# Clean up any bootstrap /run and hand off canonical virtual filesystems
+umount -l /run 2>/dev/null || true
+mkdir -p /sysroot/Runtime /sysroot/dev /sysroot/proc /sysroot/sys
+if mountpoint -q /Runtime 2>/dev/null; then
+    mount --move /Runtime /sysroot/Runtime 2>/dev/null || true
 fi
 mount --move /dev /sysroot/dev 2>/dev/null || true
 mount --move /proc /sysroot/proc 2>/dev/null || true

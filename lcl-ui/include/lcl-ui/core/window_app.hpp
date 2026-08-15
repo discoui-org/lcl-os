@@ -79,7 +79,7 @@ public:
     bool sendTextInput(const std::string& text);
 
     // Compositor IPC Client Connection & Loop
-    bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock");
+    bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock");
     void runEventLoop();
     /** Process compositor messages and render at most one frame; useful for multi-surface shells. */
     bool tick();

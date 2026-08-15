@@ -25,7 +25,7 @@ struct AppInstance {
 class SessionService {
 public:
     explicit SessionService(std::vector<std::string> appSearchPaths = {
-        "/usr/share/lcl/apps", "/home/user/Applications", "/Applications"});
+        "/System/Applications", "/Applications", (std::getenv("HOME") ? std::string(std::getenv("HOME")) + "/Applications" : "/Users/Rei/Applications")});
     ~SessionService();
 
     SessionService(const SessionService&) = delete;
