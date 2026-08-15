@@ -12,9 +12,11 @@ FetchContent_Declare(
     URL https://github.com/facebook/yoga/archive/refs/tags/v2.0.0.tar.gz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
-set(YOGA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(yoga)
+FetchContent_GetProperties(yoga)
+if(NOT yoga_POPULATED)
+    FetchContent_Populate(yoga)
+    add_subdirectory(${yoga_SOURCE_DIR}/yoga ${yoga_BINARY_DIR}/yoga EXCLUDE_FROM_ALL)
+endif()
 
 add_library(lcl-ui STATIC
     src/core/image_loader.cpp

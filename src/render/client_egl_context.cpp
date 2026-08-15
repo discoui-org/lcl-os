@@ -18,6 +18,7 @@
 namespace lcl::render {
 namespace {
 
+#if !defined(__ANDROID__)
 int openRenderNode() {
     for (int index = 128; index <= 143; ++index) {
         const std::string path = "/dev/dri/renderD" + std::to_string(index);
@@ -26,6 +27,7 @@ int openRenderNode() {
     }
     return -1;
 }
+#endif
 
 bool unavailable(const std::string& reason) {
     // This is emitted once per app at startup, so it remains useful during
@@ -82,6 +84,11 @@ bool ClientEGLContext::createSurface(uint32_t width, uint32_t height) {
 }
 
 bool ClientEGLContext::initialize(uint32_t width, uint32_t height) {
+#if defined(__ANDROID__)
+    (void)width;
+    (void)height;
+    return unavailable("Android client uses CPU software raster + SHM transport");
+#else
     if (m_initialized) return resize(width, height);
     if (width == 0 || height == 0) return unavailable("invalid surface size");
 
@@ -123,6 +130,7 @@ bool ClientEGLContext::initialize(uint32_t width, uint32_t height) {
         shutdown();
         return unavailable("could not bind the OpenGL ES API");
     }
+#endif
     // The renderer draws exclusively into its own FBO. VirGL's GBM EGL
     // implementation exposes no pbuffer configs, but it does expose the
     // standard surfaceless extension required for exactly this use case.
@@ -226,6 +234,11 @@ bool ClientEGLContext::createDmaBufPool(uint32_t width, uint32_t height) {
 }
 
 bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
+#if defined(__ANDROID__)
+    (void)width;
+    (void)height;
+    return false;
+#else
     if (!m_initialized || !m_gbmDevice || width == 0 || height == 0 || !makeCurrent()) return false;
 
     const auto createImage = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(
@@ -311,14 +324,21 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         m_dmaBufTransportLogged = true;
     }
     return true;
+#endif
 }
 
 bool ClientEGLContext::ensureDmaBufCapacity(uint32_t width, uint32_t height) {
+#if defined(__ANDROID__)
+    (void)width;
+    (void)height;
+    return false;
+#else
     if (!m_initialized || width == 0 || height == 0) return false;
     if (!m_dmaBufs.empty() && width <= m_dmaBufCapacityWidth &&
         height <= m_dmaBufCapacityHeight) return true;
     return appendDmaBufPool(std::max(width, m_dmaBufCapacityWidth),
                             std::max(height, m_dmaBufCapacityHeight));
+#endif
 }
 
 void ClientEGLContext::destroyDmaBufSlot(DmaBufSlot& slot) {
@@ -327,7 +347,9 @@ void ClientEGLContext::destroyDmaBufSlot(DmaBufSlot& slot) {
     if (slot.framebuffer) glDeleteFramebuffers(1, &slot.framebuffer);
     if (slot.texture) glDeleteTextures(1, &slot.texture);
     if (slot.image != EGL_NO_IMAGE_KHR && destroyImage) destroyImage(m_display, slot.image);
+#if !defined(__ANDROID__)
     if (slot.bo) gbm_bo_destroy(slot.bo);
+#endif
     slot = {};
 }
 
@@ -340,8 +362,10 @@ void ClientEGLContext::destroyDmaBufPool() {
     }
     m_dmaBufs.clear();
     m_currentDmaBuf = -1;
+#if !defined(__ANDROID__)
     m_dmaBufCapacityWidth = 0;
     m_dmaBufCapacityHeight = 0;
+#endif
 }
 
 std::optional<ClientEGLContext::DmaBufTarget> ClientEGLContext::acquireDmaBufTarget() {
@@ -357,6 +381,9 @@ std::optional<ClientEGLContext::DmaBufTarget> ClientEGLContext::acquireDmaBufTar
 }
 
 std::optional<ClientEGLContext::DmaBufExport> ClientEGLContext::exportCurrentDmaBuf() {
+#if defined(__ANDROID__)
+    return std::nullopt;
+#else
     if (m_currentDmaBuf < 0 || static_cast<size_t>(m_currentDmaBuf) >= m_dmaBufs.size()) return std::nullopt;
     auto& slot = m_dmaBufs[static_cast<size_t>(m_currentDmaBuf)];
     const int fd = gbm_bo_get_fd(slot.bo);
@@ -368,6 +395,7 @@ std::optional<ClientEGLContext::DmaBufExport> ClientEGLContext::exportCurrentDma
     glFlush();
     return DmaBufExport{slot.id, slot.width, slot.height, slot.stride,
                         lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888, slot.modifier, fd};
+#endif
 }
 
 void ClientEGLContext::cancelCurrentDmaBuf() {
@@ -422,7 +450,9 @@ void ClientEGLContext::shutdown() {
     m_surface = EGL_NO_SURFACE;
     m_context = EGL_NO_CONTEXT;
     m_display = EGL_NO_DISPLAY;
+#if !defined(__ANDROID__)
     if (m_gbmDevice) gbm_device_destroy(m_gbmDevice);
+#endif
     m_gbmDevice = nullptr;
     if (m_renderFd >= 0) close(m_renderFd);
     m_renderFd = -1;

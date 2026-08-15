@@ -200,12 +200,18 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         std::cerr << "[lcl-ui ERROR] WindowApp requires a canonical app ID before connection\n";
         return false;
     }
+    std::string effectiveSocketPath = socketPath;
+    if (const char* envSocket = std::getenv("LCL_COMPOSITOR_SOCKET")) {
+        if (envSocket[0] != '\0') {
+            effectiveSocketPath = envSocket;
+        }
+    }
     for (int i = 0; i < 50; ++i) {
         m_socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
         if (m_socketFd >= 0) {
             struct sockaddr_un addr{};
             addr.sun_family = AF_UNIX;
-            std::strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
+            std::strncpy(addr.sun_path, effectiveSocketPath.c_str(), sizeof(addr.sun_path) - 1);
             if (connect(m_socketFd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
                 break;
             }
@@ -216,7 +222,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     }
 
     if (m_socketFd < 0) {
-        std::cerr << "[lcl-ui ERROR] Could not connect to compositor IPC socket: " << socketPath << "\n";
+        std::cerr << "[lcl-ui ERROR] Could not connect to compositor IPC socket: " << effectiveSocketPath << "\n";
         return false;
     }
 

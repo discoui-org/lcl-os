@@ -22,7 +22,7 @@ bool AndroidPlatformServices::initialize() {
     uint32_t width = mode.width > 0 ? mode.width : 320;
     uint32_t height = mode.height > 0 ? mode.height : 640;
 
-    if (!m_graphicsContext.initialize(width, height)) {
+    if (!m_graphicsContext.initialize(width, height, &m_displayBackend)) {
         std::cerr << "[AndroidPlatformServices] Graphics context initialization failed.\n";
         return false;
     }

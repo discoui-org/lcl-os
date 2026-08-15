@@ -158,6 +158,7 @@ preinstall/fast:
 
 # clear depends
 depend:
+	$(CMAKE_COMMAND) -P /home/superb/Projects/lcl-os/build-android/CMakeFiles/VerifyGlobs.cmake
 	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 1
 .PHONY : depend
 
@@ -240,6 +241,32 @@ lcl-shell-state/fast:
 .PHONY : lcl-shell-state/fast
 
 #=============================================================================
+# Target rules for targets named lcl-render
+
+# Build rule for target.
+lcl-render: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-render
+.PHONY : lcl-render
+
+# fast build rule for target.
+lcl-render/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/build
+.PHONY : lcl-render/fast
+
+#=============================================================================
+# Target rules for targets named lcl-core-engine
+
+# Build rule for target.
+lcl-core-engine: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-core-engine
+.PHONY : lcl-core-engine
+
+# fast build rule for target.
+lcl-core-engine/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/build
+.PHONY : lcl-core-engine/fast
+
+#=============================================================================
 # Target rules for targets named lcl-platform-android
 
 # Build rule for target.
@@ -264,6 +291,58 @@ test_android_platform_services: cmake_check_build_system
 test_android_platform_services/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_platform_services.dir/build.make CMakeFiles/test_android_platform_services.dir/build
 .PHONY : test_android_platform_services/fast
+
+#=============================================================================
+# Target rules for targets named lcl-core-android
+
+# Build rule for target.
+lcl-core-android: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-core-android
+.PHONY : lcl-core-android
+
+# fast build rule for target.
+lcl-core-android/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-android.dir/build.make CMakeFiles/lcl-core-android.dir/build
+.PHONY : lcl-core-android/fast
+
+#=============================================================================
+# Target rules for targets named lcl-canvas-skia-android
+
+# Build rule for target.
+lcl-canvas-skia-android: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-canvas-skia-android
+.PHONY : lcl-canvas-skia-android
+
+# fast build rule for target.
+lcl-canvas-skia-android/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/build
+.PHONY : lcl-canvas-skia-android/fast
+
+#=============================================================================
+# Target rules for targets named lcl-desktop-shell-android
+
+# Build rule for target.
+lcl-desktop-shell-android: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-desktop-shell-android
+.PHONY : lcl-desktop-shell-android
+
+# fast build rule for target.
+lcl-desktop-shell-android/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell-android.dir/build.make CMakeFiles/lcl-desktop-shell-android.dir/build
+.PHONY : lcl-desktop-shell-android/fast
+
+#=============================================================================
+# Target rules for targets named lcl-terminal-android
+
+# Build rule for target.
+lcl-terminal-android: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-terminal-android
+.PHONY : lcl-terminal-android
+
+# fast build rule for target.
+lcl-terminal-android/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/build
+.PHONY : lcl-terminal-android/fast
 
 #=============================================================================
 # Target rules for targets named qjs
@@ -356,6 +435,117 @@ test_conv/fast:
 	$(MAKE) $(MAKESILENT) -f _deps/quickjs-build/CMakeFiles/test_conv.dir/build.make _deps/quickjs-build/CMakeFiles/test_conv.dir/build
 .PHONY : test_conv/fast
 
+#=============================================================================
+# Target rules for targets named lcl-motion
+
+# Build rule for target.
+lcl-motion: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-motion
+.PHONY : lcl-motion
+
+# fast build rule for target.
+lcl-motion/fast:
+	$(MAKE) $(MAKESILENT) -f lcl-motion/CMakeFiles/lcl-motion.dir/build.make lcl-motion/CMakeFiles/lcl-motion.dir/build
+.PHONY : lcl-motion/fast
+
+#=============================================================================
+# Target rules for targets named lcl-ui
+
+# Build rule for target.
+lcl-ui: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-ui
+.PHONY : lcl-ui
+
+# fast build rule for target.
+lcl-ui/fast:
+	$(MAKE) $(MAKESILENT) -f lcl-ui/CMakeFiles/lcl-ui.dir/build.make lcl-ui/CMakeFiles/lcl-ui.dir/build
+.PHONY : lcl-ui/fast
+
+#=============================================================================
+# Target rules for targets named yogacore
+
+# Build rule for target.
+yogacore: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 yogacore
+.PHONY : yogacore
+
+# fast build rule for target.
+yogacore/fast:
+	$(MAKE) $(MAKESILENT) -f _deps/yoga-build/yoga/CMakeFiles/yogacore.dir/build.make _deps/yoga-build/yoga/CMakeFiles/yogacore.dir/build
+.PHONY : yogacore/fast
+
+src/apps/desktop_shell/ui_main.o: src/apps/desktop_shell/ui_main.cpp.o
+.PHONY : src/apps/desktop_shell/ui_main.o
+
+# target to build an object file
+src/apps/desktop_shell/ui_main.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell-android.dir/build.make CMakeFiles/lcl-desktop-shell-android.dir/src/apps/desktop_shell/ui_main.cpp.o
+.PHONY : src/apps/desktop_shell/ui_main.cpp.o
+
+src/apps/desktop_shell/ui_main.i: src/apps/desktop_shell/ui_main.cpp.i
+.PHONY : src/apps/desktop_shell/ui_main.i
+
+# target to preprocess a source file
+src/apps/desktop_shell/ui_main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell-android.dir/build.make CMakeFiles/lcl-desktop-shell-android.dir/src/apps/desktop_shell/ui_main.cpp.i
+.PHONY : src/apps/desktop_shell/ui_main.cpp.i
+
+src/apps/desktop_shell/ui_main.s: src/apps/desktop_shell/ui_main.cpp.s
+.PHONY : src/apps/desktop_shell/ui_main.s
+
+# target to generate assembly for a file
+src/apps/desktop_shell/ui_main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell-android.dir/build.make CMakeFiles/lcl-desktop-shell-android.dir/src/apps/desktop_shell/ui_main.cpp.s
+.PHONY : src/apps/desktop_shell/ui_main.cpp.s
+
+src/apps/terminal/terminal_app.o: src/apps/terminal/terminal_app.cpp.o
+.PHONY : src/apps/terminal/terminal_app.o
+
+# target to build an object file
+src/apps/terminal/terminal_app.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/apps/terminal/terminal_app.cpp.o
+.PHONY : src/apps/terminal/terminal_app.cpp.o
+
+src/apps/terminal/terminal_app.i: src/apps/terminal/terminal_app.cpp.i
+.PHONY : src/apps/terminal/terminal_app.i
+
+# target to preprocess a source file
+src/apps/terminal/terminal_app.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/apps/terminal/terminal_app.cpp.i
+.PHONY : src/apps/terminal/terminal_app.cpp.i
+
+src/apps/terminal/terminal_app.s: src/apps/terminal/terminal_app.cpp.s
+.PHONY : src/apps/terminal/terminal_app.s
+
+# target to generate assembly for a file
+src/apps/terminal/terminal_app.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/apps/terminal/terminal_app.cpp.s
+.PHONY : src/apps/terminal/terminal_app.cpp.s
+
+src/apps/terminal/terminal_view.o: src/apps/terminal/terminal_view.cpp.o
+.PHONY : src/apps/terminal/terminal_view.o
+
+# target to build an object file
+src/apps/terminal/terminal_view.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/apps/terminal/terminal_view.cpp.o
+.PHONY : src/apps/terminal/terminal_view.cpp.o
+
+src/apps/terminal/terminal_view.i: src/apps/terminal/terminal_view.cpp.i
+.PHONY : src/apps/terminal/terminal_view.i
+
+# target to preprocess a source file
+src/apps/terminal/terminal_view.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/apps/terminal/terminal_view.cpp.i
+.PHONY : src/apps/terminal/terminal_view.cpp.i
+
+src/apps/terminal/terminal_view.s: src/apps/terminal/terminal_view.cpp.s
+.PHONY : src/apps/terminal/terminal_view.s
+
+# target to generate assembly for a file
+src/apps/terminal/terminal_view.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/apps/terminal/terminal_view.cpp.s
+.PHONY : src/apps/terminal/terminal_view.cpp.s
+
 src/core/app/app_bundle_parser.o: src/core/app/app_bundle_parser.cpp.o
 .PHONY : src/core/app/app_bundle_parser.o
 
@@ -379,6 +569,174 @@ src/core/app/app_bundle_parser.s: src/core/app/app_bundle_parser.cpp.s
 src/core/app/app_bundle_parser.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-session.dir/build.make CMakeFiles/lcl-session.dir/src/core/app/app_bundle_parser.cpp.s
 .PHONY : src/core/app/app_bundle_parser.cpp.s
+
+src/core/compositor/compositor.o: src/core/compositor/compositor.cpp.o
+.PHONY : src/core/compositor/compositor.o
+
+# target to build an object file
+src/core/compositor/compositor.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/compositor.cpp.o
+.PHONY : src/core/compositor/compositor.cpp.o
+
+src/core/compositor/compositor.i: src/core/compositor/compositor.cpp.i
+.PHONY : src/core/compositor/compositor.i
+
+# target to preprocess a source file
+src/core/compositor/compositor.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/compositor.cpp.i
+.PHONY : src/core/compositor/compositor.cpp.i
+
+src/core/compositor/compositor.s: src/core/compositor/compositor.cpp.s
+.PHONY : src/core/compositor/compositor.s
+
+# target to generate assembly for a file
+src/core/compositor/compositor.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/compositor.cpp.s
+.PHONY : src/core/compositor/compositor.cpp.s
+
+src/core/compositor/compositor_renderer.o: src/core/compositor/compositor_renderer.cpp.o
+.PHONY : src/core/compositor/compositor_renderer.o
+
+# target to build an object file
+src/core/compositor/compositor_renderer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/compositor_renderer.cpp.o
+.PHONY : src/core/compositor/compositor_renderer.cpp.o
+
+src/core/compositor/compositor_renderer.i: src/core/compositor/compositor_renderer.cpp.i
+.PHONY : src/core/compositor/compositor_renderer.i
+
+# target to preprocess a source file
+src/core/compositor/compositor_renderer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/compositor_renderer.cpp.i
+.PHONY : src/core/compositor/compositor_renderer.cpp.i
+
+src/core/compositor/compositor_renderer.s: src/core/compositor/compositor_renderer.cpp.s
+.PHONY : src/core/compositor/compositor_renderer.s
+
+# target to generate assembly for a file
+src/core/compositor/compositor_renderer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/compositor_renderer.cpp.s
+.PHONY : src/core/compositor/compositor_renderer.cpp.s
+
+src/core/compositor/frame_scheduler.o: src/core/compositor/frame_scheduler.cpp.o
+.PHONY : src/core/compositor/frame_scheduler.o
+
+# target to build an object file
+src/core/compositor/frame_scheduler.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/frame_scheduler.cpp.o
+.PHONY : src/core/compositor/frame_scheduler.cpp.o
+
+src/core/compositor/frame_scheduler.i: src/core/compositor/frame_scheduler.cpp.i
+.PHONY : src/core/compositor/frame_scheduler.i
+
+# target to preprocess a source file
+src/core/compositor/frame_scheduler.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/frame_scheduler.cpp.i
+.PHONY : src/core/compositor/frame_scheduler.cpp.i
+
+src/core/compositor/frame_scheduler.s: src/core/compositor/frame_scheduler.cpp.s
+.PHONY : src/core/compositor/frame_scheduler.s
+
+# target to generate assembly for a file
+src/core/compositor/frame_scheduler.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/frame_scheduler.cpp.s
+.PHONY : src/core/compositor/frame_scheduler.cpp.s
+
+src/core/compositor/input_router.o: src/core/compositor/input_router.cpp.o
+.PHONY : src/core/compositor/input_router.o
+
+# target to build an object file
+src/core/compositor/input_router.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/input_router.cpp.o
+.PHONY : src/core/compositor/input_router.cpp.o
+
+src/core/compositor/input_router.i: src/core/compositor/input_router.cpp.i
+.PHONY : src/core/compositor/input_router.i
+
+# target to preprocess a source file
+src/core/compositor/input_router.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/input_router.cpp.i
+.PHONY : src/core/compositor/input_router.cpp.i
+
+src/core/compositor/input_router.s: src/core/compositor/input_router.cpp.s
+.PHONY : src/core/compositor/input_router.s
+
+# target to generate assembly for a file
+src/core/compositor/input_router.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/input_router.cpp.s
+.PHONY : src/core/compositor/input_router.cpp.s
+
+src/core/compositor/protocol_dispatcher.o: src/core/compositor/protocol_dispatcher.cpp.o
+.PHONY : src/core/compositor/protocol_dispatcher.o
+
+# target to build an object file
+src/core/compositor/protocol_dispatcher.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/protocol_dispatcher.cpp.o
+.PHONY : src/core/compositor/protocol_dispatcher.cpp.o
+
+src/core/compositor/protocol_dispatcher.i: src/core/compositor/protocol_dispatcher.cpp.i
+.PHONY : src/core/compositor/protocol_dispatcher.i
+
+# target to preprocess a source file
+src/core/compositor/protocol_dispatcher.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/protocol_dispatcher.cpp.i
+.PHONY : src/core/compositor/protocol_dispatcher.cpp.i
+
+src/core/compositor/protocol_dispatcher.s: src/core/compositor/protocol_dispatcher.cpp.s
+.PHONY : src/core/compositor/protocol_dispatcher.s
+
+# target to generate assembly for a file
+src/core/compositor/protocol_dispatcher.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/protocol_dispatcher.cpp.s
+.PHONY : src/core/compositor/protocol_dispatcher.cpp.s
+
+src/core/compositor/surface_registry.o: src/core/compositor/surface_registry.cpp.o
+.PHONY : src/core/compositor/surface_registry.o
+
+# target to build an object file
+src/core/compositor/surface_registry.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/surface_registry.cpp.o
+.PHONY : src/core/compositor/surface_registry.cpp.o
+
+src/core/compositor/surface_registry.i: src/core/compositor/surface_registry.cpp.i
+.PHONY : src/core/compositor/surface_registry.i
+
+# target to preprocess a source file
+src/core/compositor/surface_registry.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/surface_registry.cpp.i
+.PHONY : src/core/compositor/surface_registry.cpp.i
+
+src/core/compositor/surface_registry.s: src/core/compositor/surface_registry.cpp.s
+.PHONY : src/core/compositor/surface_registry.s
+
+# target to generate assembly for a file
+src/core/compositor/surface_registry.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/surface_registry.cpp.s
+.PHONY : src/core/compositor/surface_registry.cpp.s
+
+src/core/compositor/system_surface_policy.o: src/core/compositor/system_surface_policy.cpp.o
+.PHONY : src/core/compositor/system_surface_policy.o
+
+# target to build an object file
+src/core/compositor/system_surface_policy.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/system_surface_policy.cpp.o
+.PHONY : src/core/compositor/system_surface_policy.cpp.o
+
+src/core/compositor/system_surface_policy.i: src/core/compositor/system_surface_policy.cpp.i
+.PHONY : src/core/compositor/system_surface_policy.i
+
+# target to preprocess a source file
+src/core/compositor/system_surface_policy.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/system_surface_policy.cpp.i
+.PHONY : src/core/compositor/system_surface_policy.cpp.i
+
+src/core/compositor/system_surface_policy.s: src/core/compositor/system_surface_policy.cpp.s
+.PHONY : src/core/compositor/system_surface_policy.s
+
+# target to generate assembly for a file
+src/core/compositor/system_surface_policy.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/system_surface_policy.cpp.s
+.PHONY : src/core/compositor/system_surface_policy.cpp.s
 
 src/core/display/display_scale.o: src/core/display/display_scale.cpp.o
 .PHONY : src/core/display/display_scale.o
@@ -404,6 +762,57 @@ src/core/display/display_scale.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-display-scale.dir/build.make CMakeFiles/lcl-display-scale.dir/src/core/display/display_scale.cpp.s
 .PHONY : src/core/display/display_scale.cpp.s
 
+src/core/input/input_manager.o: src/core/input/input_manager.cpp.o
+.PHONY : src/core/input/input_manager.o
+
+# target to build an object file
+src/core/input/input_manager.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/input/input_manager.cpp.o
+.PHONY : src/core/input/input_manager.cpp.o
+
+src/core/input/input_manager.i: src/core/input/input_manager.cpp.i
+.PHONY : src/core/input/input_manager.i
+
+# target to preprocess a source file
+src/core/input/input_manager.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/input/input_manager.cpp.i
+.PHONY : src/core/input/input_manager.cpp.i
+
+src/core/input/input_manager.s: src/core/input/input_manager.cpp.s
+.PHONY : src/core/input/input_manager.s
+
+# target to generate assembly for a file
+src/core/input/input_manager.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/input/input_manager.cpp.s
+.PHONY : src/core/input/input_manager.cpp.s
+
+src/core/ipc/ipc_manager.o: src/core/ipc/ipc_manager.cpp.o
+.PHONY : src/core/ipc/ipc_manager.o
+
+# target to build an object file
+src/core/ipc/ipc_manager.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/ipc/ipc_manager.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell-android.dir/build.make CMakeFiles/lcl-desktop-shell-android.dir/src/core/ipc/ipc_manager.cpp.o
+.PHONY : src/core/ipc/ipc_manager.cpp.o
+
+src/core/ipc/ipc_manager.i: src/core/ipc/ipc_manager.cpp.i
+.PHONY : src/core/ipc/ipc_manager.i
+
+# target to preprocess a source file
+src/core/ipc/ipc_manager.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/ipc/ipc_manager.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell-android.dir/build.make CMakeFiles/lcl-desktop-shell-android.dir/src/core/ipc/ipc_manager.cpp.i
+.PHONY : src/core/ipc/ipc_manager.cpp.i
+
+src/core/ipc/ipc_manager.s: src/core/ipc/ipc_manager.cpp.s
+.PHONY : src/core/ipc/ipc_manager.s
+
+# target to generate assembly for a file
+src/core/ipc/ipc_manager.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/ipc/ipc_manager.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell-android.dir/build.make CMakeFiles/lcl-desktop-shell-android.dir/src/core/ipc/ipc_manager.cpp.s
+.PHONY : src/core/ipc/ipc_manager.cpp.s
+
 src/core/ipc/lcl_protocol.o: src/core/ipc/lcl_protocol.cpp.o
 .PHONY : src/core/ipc/lcl_protocol.o
 
@@ -427,6 +836,78 @@ src/core/ipc/lcl_protocol.s: src/core/ipc/lcl_protocol.cpp.s
 src/core/ipc/lcl_protocol.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-protocol.dir/build.make CMakeFiles/lcl-protocol.dir/src/core/ipc/lcl_protocol.cpp.s
 .PHONY : src/core/ipc/lcl_protocol.cpp.s
+
+src/core/scene/focus_controller.o: src/core/scene/focus_controller.cpp.o
+.PHONY : src/core/scene/focus_controller.o
+
+# target to build an object file
+src/core/scene/focus_controller.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/scene/focus_controller.cpp.o
+.PHONY : src/core/scene/focus_controller.cpp.o
+
+src/core/scene/focus_controller.i: src/core/scene/focus_controller.cpp.i
+.PHONY : src/core/scene/focus_controller.i
+
+# target to preprocess a source file
+src/core/scene/focus_controller.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/scene/focus_controller.cpp.i
+.PHONY : src/core/scene/focus_controller.cpp.i
+
+src/core/scene/focus_controller.s: src/core/scene/focus_controller.cpp.s
+.PHONY : src/core/scene/focus_controller.s
+
+# target to generate assembly for a file
+src/core/scene/focus_controller.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/scene/focus_controller.cpp.s
+.PHONY : src/core/scene/focus_controller.cpp.s
+
+src/core/scene/scene_registry.o: src/core/scene/scene_registry.cpp.o
+.PHONY : src/core/scene/scene_registry.o
+
+# target to build an object file
+src/core/scene/scene_registry.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/scene/scene_registry.cpp.o
+.PHONY : src/core/scene/scene_registry.cpp.o
+
+src/core/scene/scene_registry.i: src/core/scene/scene_registry.cpp.i
+.PHONY : src/core/scene/scene_registry.i
+
+# target to preprocess a source file
+src/core/scene/scene_registry.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/scene/scene_registry.cpp.i
+.PHONY : src/core/scene/scene_registry.cpp.i
+
+src/core/scene/scene_registry.s: src/core/scene/scene_registry.cpp.s
+.PHONY : src/core/scene/scene_registry.s
+
+# target to generate assembly for a file
+src/core/scene/scene_registry.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/scene/scene_registry.cpp.s
+.PHONY : src/core/scene/scene_registry.cpp.s
+
+src/core/scene/shell_state_broker.o: src/core/scene/shell_state_broker.cpp.o
+.PHONY : src/core/scene/shell_state_broker.o
+
+# target to build an object file
+src/core/scene/shell_state_broker.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/scene/shell_state_broker.cpp.o
+.PHONY : src/core/scene/shell_state_broker.cpp.o
+
+src/core/scene/shell_state_broker.i: src/core/scene/shell_state_broker.cpp.i
+.PHONY : src/core/scene/shell_state_broker.i
+
+# target to preprocess a source file
+src/core/scene/shell_state_broker.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/scene/shell_state_broker.cpp.i
+.PHONY : src/core/scene/shell_state_broker.cpp.i
+
+src/core/scene/shell_state_broker.s: src/core/scene/shell_state_broker.cpp.s
+.PHONY : src/core/scene/shell_state_broker.s
+
+# target to generate assembly for a file
+src/core/scene/shell_state_broker.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/scene/shell_state_broker.cpp.s
+.PHONY : src/core/scene/shell_state_broker.cpp.s
 
 src/core/session/app_registry.o: src/core/session/app_registry.cpp.o
 .PHONY : src/core/session/app_registry.o
@@ -571,6 +1052,30 @@ src/core/shell/shell_state_model.s: src/core/shell/shell_state_model.cpp.s
 src/core/shell/shell_state_model.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-shell-state.dir/build.make CMakeFiles/lcl-shell-state.dir/src/core/shell/shell_state_model.cpp.s
 .PHONY : src/core/shell/shell_state_model.cpp.s
+
+src/core/terminal/pty_manager.o: src/core/terminal/pty_manager.cpp.o
+.PHONY : src/core/terminal/pty_manager.o
+
+# target to build an object file
+src/core/terminal/pty_manager.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/core/terminal/pty_manager.cpp.o
+.PHONY : src/core/terminal/pty_manager.cpp.o
+
+src/core/terminal/pty_manager.i: src/core/terminal/pty_manager.cpp.i
+.PHONY : src/core/terminal/pty_manager.i
+
+# target to preprocess a source file
+src/core/terminal/pty_manager.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/core/terminal/pty_manager.cpp.i
+.PHONY : src/core/terminal/pty_manager.cpp.i
+
+src/core/terminal/pty_manager.s: src/core/terminal/pty_manager.cpp.s
+.PHONY : src/core/terminal/pty_manager.s
+
+# target to generate assembly for a file
+src/core/terminal/pty_manager.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/core/terminal/pty_manager.cpp.s
+.PHONY : src/core/terminal/pty_manager.cpp.s
 
 src/platform/android/android_display_backend.o: src/platform/android/android_display_backend.cpp.o
 .PHONY : src/platform/android/android_display_backend.o
@@ -2876,6 +3381,30 @@ src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cp
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.s
 .PHONY : src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.cpp.s
 
+src/platform/android/main_android.o: src/platform/android/main_android.cpp.o
+.PHONY : src/platform/android/main_android.o
+
+# target to build an object file
+src/platform/android/main_android.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-android.dir/build.make CMakeFiles/lcl-core-android.dir/src/platform/android/main_android.cpp.o
+.PHONY : src/platform/android/main_android.cpp.o
+
+src/platform/android/main_android.i: src/platform/android/main_android.cpp.i
+.PHONY : src/platform/android/main_android.i
+
+# target to preprocess a source file
+src/platform/android/main_android.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-android.dir/build.make CMakeFiles/lcl-core-android.dir/src/platform/android/main_android.cpp.i
+.PHONY : src/platform/android/main_android.cpp.i
+
+src/platform/android/main_android.s: src/platform/android/main_android.cpp.s
+.PHONY : src/platform/android/main_android.s
+
+# target to generate assembly for a file
+src/platform/android/main_android.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-android.dir/build.make CMakeFiles/lcl-core-android.dir/src/platform/android/main_android.cpp.s
+.PHONY : src/platform/android/main_android.cpp.s
+
 src/platform/common/keyboard_mapper.o: src/platform/common/keyboard_mapper.cpp.o
 .PHONY : src/platform/common/keyboard_mapper.o
 
@@ -2899,6 +3428,204 @@ src/platform/common/keyboard_mapper.s: src/platform/common/keyboard_mapper.cpp.s
 src/platform/common/keyboard_mapper.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-common.dir/build.make CMakeFiles/lcl-platform-common.dir/src/platform/common/keyboard_mapper.cpp.s
 .PHONY : src/platform/common/keyboard_mapper.cpp.s
+
+src/render/client_egl_context.o: src/render/client_egl_context.cpp.o
+.PHONY : src/render/client_egl_context.o
+
+# target to build an object file
+src/render/client_egl_context.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/client_egl_context.cpp.o
+.PHONY : src/render/client_egl_context.cpp.o
+
+src/render/client_egl_context.i: src/render/client_egl_context.cpp.i
+.PHONY : src/render/client_egl_context.i
+
+# target to preprocess a source file
+src/render/client_egl_context.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/client_egl_context.cpp.i
+.PHONY : src/render/client_egl_context.cpp.i
+
+src/render/client_egl_context.s: src/render/client_egl_context.cpp.s
+.PHONY : src/render/client_egl_context.s
+
+# target to generate assembly for a file
+src/render/client_egl_context.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/client_egl_context.cpp.s
+.PHONY : src/render/client_egl_context.cpp.s
+
+src/render/font_renderer.o: src/render/font_renderer.cpp.o
+.PHONY : src/render/font_renderer.o
+
+# target to build an object file
+src/render/font_renderer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/font_renderer.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/font_renderer.cpp.o
+.PHONY : src/render/font_renderer.cpp.o
+
+src/render/font_renderer.i: src/render/font_renderer.cpp.i
+.PHONY : src/render/font_renderer.i
+
+# target to preprocess a source file
+src/render/font_renderer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/font_renderer.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/font_renderer.cpp.i
+.PHONY : src/render/font_renderer.cpp.i
+
+src/render/font_renderer.s: src/render/font_renderer.cpp.s
+.PHONY : src/render/font_renderer.s
+
+# target to generate assembly for a file
+src/render/font_renderer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/font_renderer.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/font_renderer.cpp.s
+.PHONY : src/render/font_renderer.cpp.s
+
+src/render/renderer.o: src/render/renderer.cpp.o
+.PHONY : src/render/renderer.o
+
+# target to build an object file
+src/render/renderer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/renderer.cpp.o
+.PHONY : src/render/renderer.cpp.o
+
+src/render/renderer.i: src/render/renderer.cpp.i
+.PHONY : src/render/renderer.i
+
+# target to preprocess a source file
+src/render/renderer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/renderer.cpp.i
+.PHONY : src/render/renderer.cpp.i
+
+src/render/renderer.s: src/render/renderer.cpp.s
+.PHONY : src/render/renderer.s
+
+# target to generate assembly for a file
+src/render/renderer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/renderer.cpp.s
+.PHONY : src/render/renderer.cpp.s
+
+src/render/skia_canvas.o: src/render/skia_canvas.cpp.o
+.PHONY : src/render/skia_canvas.o
+
+# target to build an object file
+src/render/skia_canvas.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/skia_canvas.cpp.o
+.PHONY : src/render/skia_canvas.cpp.o
+
+src/render/skia_canvas.i: src/render/skia_canvas.cpp.i
+.PHONY : src/render/skia_canvas.i
+
+# target to preprocess a source file
+src/render/skia_canvas.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/skia_canvas.cpp.i
+.PHONY : src/render/skia_canvas.cpp.i
+
+src/render/skia_canvas.s: src/render/skia_canvas.cpp.s
+.PHONY : src/render/skia_canvas.s
+
+# target to generate assembly for a file
+src/render/skia_canvas.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/skia_canvas.cpp.s
+.PHONY : src/render/skia_canvas.cpp.s
+
+src/render/skia_renderer.o: src/render/skia_renderer.cpp.o
+.PHONY : src/render/skia_renderer.o
+
+# target to build an object file
+src/render/skia_renderer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/skia_renderer.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/skia_renderer.cpp.o
+.PHONY : src/render/skia_renderer.cpp.o
+
+src/render/skia_renderer.i: src/render/skia_renderer.cpp.i
+.PHONY : src/render/skia_renderer.i
+
+# target to preprocess a source file
+src/render/skia_renderer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/skia_renderer.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/skia_renderer.cpp.i
+.PHONY : src/render/skia_renderer.cpp.i
+
+src/render/skia_renderer.s: src/render/skia_renderer.cpp.s
+.PHONY : src/render/skia_renderer.s
+
+# target to generate assembly for a file
+src/render/skia_renderer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/skia_renderer.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-canvas-skia-android.dir/build.make CMakeFiles/lcl-canvas-skia-android.dir/src/render/skia_renderer.cpp.s
+.PHONY : src/render/skia_renderer.cpp.s
+
+src/render/window_chrome_widget.o: src/render/window_chrome_widget.cpp.o
+.PHONY : src/render/window_chrome_widget.o
+
+# target to build an object file
+src/render/window_chrome_widget.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/window_chrome_widget.cpp.o
+.PHONY : src/render/window_chrome_widget.cpp.o
+
+src/render/window_chrome_widget.i: src/render/window_chrome_widget.cpp.i
+.PHONY : src/render/window_chrome_widget.i
+
+# target to preprocess a source file
+src/render/window_chrome_widget.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/window_chrome_widget.cpp.i
+.PHONY : src/render/window_chrome_widget.cpp.i
+
+src/render/window_chrome_widget.s: src/render/window_chrome_widget.cpp.s
+.PHONY : src/render/window_chrome_widget.s
+
+# target to generate assembly for a file
+src/render/window_chrome_widget.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/window_chrome_widget.cpp.s
+.PHONY : src/render/window_chrome_widget.cpp.s
+
+src/render/window_manager.o: src/render/window_manager.cpp.o
+.PHONY : src/render/window_manager.o
+
+# target to build an object file
+src/render/window_manager.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/window_manager.cpp.o
+.PHONY : src/render/window_manager.cpp.o
+
+src/render/window_manager.i: src/render/window_manager.cpp.i
+.PHONY : src/render/window_manager.i
+
+# target to preprocess a source file
+src/render/window_manager.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/window_manager.cpp.i
+.PHONY : src/render/window_manager.cpp.i
+
+src/render/window_manager.s: src/render/window_manager.cpp.s
+.PHONY : src/render/window_manager.s
+
+# target to generate assembly for a file
+src/render/window_manager.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/window_manager.cpp.s
+.PHONY : src/render/window_manager.cpp.s
+
+src/tools/terminal_main.o: src/tools/terminal_main.cpp.o
+.PHONY : src/tools/terminal_main.o
+
+# target to build an object file
+src/tools/terminal_main.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/tools/terminal_main.cpp.o
+.PHONY : src/tools/terminal_main.cpp.o
+
+src/tools/terminal_main.i: src/tools/terminal_main.cpp.i
+.PHONY : src/tools/terminal_main.i
+
+# target to preprocess a source file
+src/tools/terminal_main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/tools/terminal_main.cpp.i
+.PHONY : src/tools/terminal_main.cpp.i
+
+src/tools/terminal_main.s: src/tools/terminal_main.cpp.s
+.PHONY : src/tools/terminal_main.s
+
+# target to generate assembly for a file
+src/tools/terminal_main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal-android.dir/build.make CMakeFiles/lcl-terminal-android.dir/src/tools/terminal_main.cpp.s
+.PHONY : src/tools/terminal_main.cpp.s
 
 tests/android/test_android_platform_services.o: tests/android/test_android_platform_services.cpp.o
 .PHONY : tests/android/test_android_platform_services.o
@@ -2937,13 +3664,21 @@ help:
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
 	@echo "... function_source"
+	@echo "... lcl-canvas-skia-android"
+	@echo "... lcl-core-android"
+	@echo "... lcl-core-engine"
+	@echo "... lcl-desktop-shell-android"
 	@echo "... lcl-display-scale"
+	@echo "... lcl-motion"
 	@echo "... lcl-platform-android"
 	@echo "... lcl-platform-common"
 	@echo "... lcl-protocol"
+	@echo "... lcl-render"
 	@echo "... lcl-session"
 	@echo "... lcl-session-protocol"
 	@echo "... lcl-shell-state"
+	@echo "... lcl-terminal-android"
+	@echo "... lcl-ui"
 	@echo "... qjs"
 	@echo "... qjs_exe"
 	@echo "... qjsc"
@@ -2951,15 +3686,61 @@ help:
 	@echo "... test_android_platform_services"
 	@echo "... test_conv"
 	@echo "... unicode_gen"
+	@echo "... yogacore"
+	@echo "... src/apps/desktop_shell/ui_main.o"
+	@echo "... src/apps/desktop_shell/ui_main.i"
+	@echo "... src/apps/desktop_shell/ui_main.s"
+	@echo "... src/apps/terminal/terminal_app.o"
+	@echo "... src/apps/terminal/terminal_app.i"
+	@echo "... src/apps/terminal/terminal_app.s"
+	@echo "... src/apps/terminal/terminal_view.o"
+	@echo "... src/apps/terminal/terminal_view.i"
+	@echo "... src/apps/terminal/terminal_view.s"
 	@echo "... src/core/app/app_bundle_parser.o"
 	@echo "... src/core/app/app_bundle_parser.i"
 	@echo "... src/core/app/app_bundle_parser.s"
+	@echo "... src/core/compositor/compositor.o"
+	@echo "... src/core/compositor/compositor.i"
+	@echo "... src/core/compositor/compositor.s"
+	@echo "... src/core/compositor/compositor_renderer.o"
+	@echo "... src/core/compositor/compositor_renderer.i"
+	@echo "... src/core/compositor/compositor_renderer.s"
+	@echo "... src/core/compositor/frame_scheduler.o"
+	@echo "... src/core/compositor/frame_scheduler.i"
+	@echo "... src/core/compositor/frame_scheduler.s"
+	@echo "... src/core/compositor/input_router.o"
+	@echo "... src/core/compositor/input_router.i"
+	@echo "... src/core/compositor/input_router.s"
+	@echo "... src/core/compositor/protocol_dispatcher.o"
+	@echo "... src/core/compositor/protocol_dispatcher.i"
+	@echo "... src/core/compositor/protocol_dispatcher.s"
+	@echo "... src/core/compositor/surface_registry.o"
+	@echo "... src/core/compositor/surface_registry.i"
+	@echo "... src/core/compositor/surface_registry.s"
+	@echo "... src/core/compositor/system_surface_policy.o"
+	@echo "... src/core/compositor/system_surface_policy.i"
+	@echo "... src/core/compositor/system_surface_policy.s"
 	@echo "... src/core/display/display_scale.o"
 	@echo "... src/core/display/display_scale.i"
 	@echo "... src/core/display/display_scale.s"
+	@echo "... src/core/input/input_manager.o"
+	@echo "... src/core/input/input_manager.i"
+	@echo "... src/core/input/input_manager.s"
+	@echo "... src/core/ipc/ipc_manager.o"
+	@echo "... src/core/ipc/ipc_manager.i"
+	@echo "... src/core/ipc/ipc_manager.s"
 	@echo "... src/core/ipc/lcl_protocol.o"
 	@echo "... src/core/ipc/lcl_protocol.i"
 	@echo "... src/core/ipc/lcl_protocol.s"
+	@echo "... src/core/scene/focus_controller.o"
+	@echo "... src/core/scene/focus_controller.i"
+	@echo "... src/core/scene/focus_controller.s"
+	@echo "... src/core/scene/scene_registry.o"
+	@echo "... src/core/scene/scene_registry.i"
+	@echo "... src/core/scene/scene_registry.s"
+	@echo "... src/core/scene/shell_state_broker.o"
+	@echo "... src/core/scene/shell_state_broker.i"
+	@echo "... src/core/scene/shell_state_broker.s"
 	@echo "... src/core/session/app_registry.o"
 	@echo "... src/core/session/app_registry.i"
 	@echo "... src/core/session/app_registry.s"
@@ -2978,6 +3759,9 @@ help:
 	@echo "... src/core/shell/shell_state_model.o"
 	@echo "... src/core/shell/shell_state_model.i"
 	@echo "... src/core/shell/shell_state_model.s"
+	@echo "... src/core/terminal/pty_manager.o"
+	@echo "... src/core/terminal/pty_manager.i"
+	@echo "... src/core/terminal/pty_manager.s"
 	@echo "... src/platform/android/android_display_backend.o"
 	@echo "... src/platform/android/android_display_backend.i"
 	@echo "... src/platform/android/android_display_backend.s"
@@ -3266,9 +4050,36 @@ help:
 	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.o"
 	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.i"
 	@echo "... src/platform/android/generated/src/android/hardware/graphics/composer3/ZOrder.s"
+	@echo "... src/platform/android/main_android.o"
+	@echo "... src/platform/android/main_android.i"
+	@echo "... src/platform/android/main_android.s"
 	@echo "... src/platform/common/keyboard_mapper.o"
 	@echo "... src/platform/common/keyboard_mapper.i"
 	@echo "... src/platform/common/keyboard_mapper.s"
+	@echo "... src/render/client_egl_context.o"
+	@echo "... src/render/client_egl_context.i"
+	@echo "... src/render/client_egl_context.s"
+	@echo "... src/render/font_renderer.o"
+	@echo "... src/render/font_renderer.i"
+	@echo "... src/render/font_renderer.s"
+	@echo "... src/render/renderer.o"
+	@echo "... src/render/renderer.i"
+	@echo "... src/render/renderer.s"
+	@echo "... src/render/skia_canvas.o"
+	@echo "... src/render/skia_canvas.i"
+	@echo "... src/render/skia_canvas.s"
+	@echo "... src/render/skia_renderer.o"
+	@echo "... src/render/skia_renderer.i"
+	@echo "... src/render/skia_renderer.s"
+	@echo "... src/render/window_chrome_widget.o"
+	@echo "... src/render/window_chrome_widget.i"
+	@echo "... src/render/window_chrome_widget.s"
+	@echo "... src/render/window_manager.o"
+	@echo "... src/render/window_manager.i"
+	@echo "... src/render/window_manager.s"
+	@echo "... src/tools/terminal_main.o"
+	@echo "... src/tools/terminal_main.i"
+	@echo "... src/tools/terminal_main.s"
 	@echo "... tests/android/test_android_platform_services.o"
 	@echo "... tests/android/test_android_platform_services.i"
 	@echo "... tests/android/test_android_platform_services.s"
@@ -3283,6 +4094,7 @@ help:
 # No rule that depends on this can have commands that come from listfiles
 # because they might be regenerated.
 cmake_check_build_system:
+	$(CMAKE_COMMAND) -P /home/superb/Projects/lcl-os/build-android/CMakeFiles/VerifyGlobs.cmake
 	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 0
 .PHONY : cmake_check_build_system
 

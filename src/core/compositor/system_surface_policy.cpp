@@ -84,7 +84,10 @@ bool SystemSurfacePolicyRegistry::isTrustedShellPeer(pid_t pid) noexcept {
     if (count <= 0) return false;
     resolved[static_cast<size_t>(count)] = '\0';
     const auto executable = std::filesystem::path(resolved.data()).filename();
-    return executable == "lcl-desktop-shell" || executable == "lcl-mobile-shell";
+    return executable == "lcl-desktop-shell" ||
+           executable == "lcl-mobile-shell" ||
+           executable == "lcl-desktop-shell-android" ||
+           executable == "lcl-mobile-shell-android";
 }
 
 } // namespace lcl::core

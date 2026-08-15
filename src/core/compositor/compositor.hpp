@@ -62,6 +62,8 @@ public:
 
     void toggleFpsOverlay() noexcept { m_showFpsOverlay = !m_showFpsOverlay; }
     bool isFpsOverlayVisible() const noexcept { return m_showFpsOverlay; }
+    size_t activeSurfaceCount() const noexcept { return m_surfaces.snapshot().size(); }
+    size_t activeWindowCount() const noexcept { return m_windowManager.getWindows().size(); }
 
 private:
     void processInput();

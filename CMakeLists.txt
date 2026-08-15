@@ -111,10 +111,87 @@ target_include_directories(lcl-display-scale PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# Renderer/UI-independent motion primitives shared by clients and compositor.
+add_subdirectory(lcl-motion)
+
+# Backend-neutral widgets, layout, events and WindowApp lifecycle.
+add_subdirectory(lcl-ui)
+
+# Compositor-owned render/present layer.
+# Depends strictly on lcl-platform-common; never on concrete platform layers.
+add_library(lcl-render STATIC
+    src/render/font_renderer.cpp
+    src/render/renderer.cpp
+    src/render/skia_renderer.cpp
+    src/render/window_chrome_widget.cpp
+    src/render/window_manager.cpp
+)
+
+target_include_directories(lcl-render PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+if(ANDROID)
+    target_link_libraries(lcl-render PUBLIC
+        lcl-motion
+        lcl-protocol
+        lcl-display-scale
+        lcl-platform-common
+        GLESv3
+        EGL
+        android
+        Threads::Threads
+    )
+else()
+    target_include_directories(lcl-render PUBLIC
+        ${GLES2_INCLUDE_DIRS}
+    )
+    target_link_libraries(lcl-render PUBLIC
+        lcl-motion
+        lcl-protocol
+        lcl-display-scale
+        lcl-platform-common
+        ${GLES2_LIBRARIES}
+        Threads::Threads
+    )
+    target_compile_options(lcl-render PRIVATE
+        ${GLES2_CFLAGS_OTHER}
+    )
+endif()
+
+# Platform-agnostic Core Compositor Engine Library
+add_library(lcl-core-engine STATIC
+    src/core/compositor/compositor.cpp
+    src/core/compositor/compositor_renderer.cpp
+    src/core/compositor/frame_scheduler.cpp
+    src/core/compositor/input_router.cpp
+    src/core/compositor/protocol_dispatcher.cpp
+    src/core/compositor/surface_registry.cpp
+    src/core/compositor/system_surface_policy.cpp
+    src/core/scene/focus_controller.cpp
+    src/core/scene/scene_registry.cpp
+    src/core/scene/shell_state_broker.cpp
+    src/core/input/input_manager.cpp
+    src/core/ipc/ipc_manager.cpp
+)
+
+target_include_directories(lcl-core-engine PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(lcl-core-engine PUBLIC
+    lcl-render
+    lcl-platform-common
+    lcl-protocol
+    lcl-display-scale
+    lcl-session
+    lcl-motion
+    Threads::Threads
+)
+
 if(ANDROID)
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
-    # Android Platform implementation library
     # Collect generated AIDL NDK sources
     file(GLOB_RECURSE ANDROID_AIDL_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/src/*.cpp"
@@ -143,6 +220,7 @@ if(ANDROID)
         dl
     )
 
+    # Standalone Platform Smoke Test
     add_executable(test_android_platform_services
         tests/android/test_android_platform_services.cpp
     )
@@ -153,13 +231,82 @@ if(ANDROID)
     target_link_libraries(test_android_platform_services PRIVATE
         lcl-platform-android
     )
+
+    # Android Compositor Runtime (Composition Root)
+    add_executable(lcl-core-android
+        src/platform/android/main_android.cpp
+    )
+    target_include_directories(lcl-core-android PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/include
+    )
+    target_link_libraries(lcl-core-android PRIVATE
+        lcl-core-engine
+        lcl-platform-android
+    )
+
+    # Client canvas for Android (software raster + SHM transport to compositor)
+    add_library(lcl-canvas-skia-android STATIC
+        src/render/client_egl_context.cpp
+        src/render/skia_canvas.cpp
+        src/render/skia_renderer.cpp
+        src/render/font_renderer.cpp
+    )
+
+    target_include_directories(lcl-canvas-skia-android PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+
+    target_link_libraries(lcl-canvas-skia-android PUBLIC
+        lcl-ui
+        lcl-protocol
+        GLESv3
+        EGL
+        android
+        Threads::Threads
+    )
+
+    # Standalone Desktop Shell Daemon Target for Android (lcl-desktop-shell-android)
+    add_executable(lcl-desktop-shell-android
+        src/apps/desktop_shell/ui_main.cpp
+        src/core/ipc/ipc_manager.cpp
+    )
+
+    target_include_directories(lcl-desktop-shell-android PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+
+    target_link_libraries(lcl-desktop-shell-android PRIVATE
+        lcl-ui
+        lcl-canvas-skia-android
+        lcl-protocol
+        lcl-shell-state
+        lcl-session
+        Threads::Threads
+    )
+
+    # Standalone Client Terminal App Target for Android (lcl-terminal-android)
+    add_executable(lcl-terminal-android
+        src/tools/terminal_main.cpp
+        src/apps/terminal/terminal_app.cpp
+        src/apps/terminal/terminal_view.cpp
+        src/core/terminal/pty_manager.cpp
+    )
+
+    target_include_directories(lcl-terminal-android PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+
+    target_link_libraries(lcl-terminal-android PRIVATE
+        lcl-ui
+        lcl-canvas-skia-android
+        lcl-protocol
+        Threads::Threads
+    )
 else()
-    # Renderer/UI-independent motion primitives shared by clients and compositor.
-    add_subdirectory(lcl-motion)
-
-    # Backend-neutral widgets, layout, events and WindowApp lifecycle.
-    add_subdirectory(lcl-ui)
-
     # Client canvas attempts a render-node-only EGL context and falls back to the
     # established SHM raster path.  It never owns compositor KMS presentation.
     add_library(lcl-canvas-skia STATIC
@@ -233,64 +380,6 @@ else()
         ${GLES2_CFLAGS_OTHER}
         ${LIBINPUT_CFLAGS_OTHER}
         ${UDEV_CFLAGS_OTHER}
-    )
-
-    # Compositor-owned render/present layer.
-    # Depends strictly on lcl-platform-common; never on lcl-platform-desktop.
-    add_library(lcl-render STATIC
-        src/render/font_renderer.cpp
-        src/render/renderer.cpp
-        src/render/skia_renderer.cpp
-        src/render/window_chrome_widget.cpp
-        src/render/window_manager.cpp
-    )
-
-    target_include_directories(lcl-render PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${GLES2_INCLUDE_DIRS}
-    )
-
-    target_link_libraries(lcl-render PUBLIC
-        lcl-motion
-        lcl-protocol
-        lcl-display-scale
-        lcl-platform-common
-        ${GLES2_LIBRARIES}
-        Threads::Threads
-    )
-
-    target_compile_options(lcl-render PRIVATE
-        ${GLES2_CFLAGS_OTHER}
-    )
-
-    # Platform-agnostic Core Compositor Engine Library
-    add_library(lcl-core-engine STATIC
-        src/core/compositor/compositor.cpp
-        src/core/compositor/compositor_renderer.cpp
-        src/core/compositor/frame_scheduler.cpp
-        src/core/compositor/input_router.cpp
-        src/core/compositor/protocol_dispatcher.cpp
-        src/core/compositor/surface_registry.cpp
-        src/core/compositor/system_surface_policy.cpp
-        src/core/scene/focus_controller.cpp
-        src/core/scene/scene_registry.cpp
-        src/core/scene/shell_state_broker.cpp
-        src/core/input/input_manager.cpp
-        src/core/ipc/ipc_manager.cpp
-    )
-
-    target_include_directories(lcl-core-engine PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
-
-    target_link_libraries(lcl-core-engine PUBLIC
-        lcl-render
-        lcl-platform-common
-        lcl-protocol
-        lcl-display-scale
-        lcl-session
-        lcl-motion
-        Threads::Threads
     )
 
     # Main Compositor Executable Target (Desktop Composition Root)
