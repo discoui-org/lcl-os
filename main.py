@@ -233,7 +233,7 @@ def main() -> None:
     # ---- rootfs ----
     p_rootfs = subparsers.add_parser("rootfs", help="Build single canonical ext4 rootfs image")
     p_rootfs.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (x86_64 or aarch64)")
-    p_rootfs.add_argument("--size", "-s", type=int, default=512, metavar="MB", help="Filesystem size in MB (default: 512)")
+    p_rootfs.add_argument("--size", "-s", type=int, default=1024, metavar="MB", help="Filesystem size in MB (default: 1024)")
 
     # ---- iso ----
     p_iso = subparsers.add_parser("iso", help="Build Limine bootable ISO image")

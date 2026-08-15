@@ -87,17 +87,31 @@ def copy_ldd_deps(binary: Path, dest_lib: Path) -> None:
                 shutil.copy2(lib_path, target, follow_symlinks=True)
 
 
+def find_built_binary(name: str) -> Path | None:
+    for cand in [
+        BUILD_DIR / name,
+        BUILD_DIR / "apps" / "ui_demo" / name,
+        BUILD_DIR / "apps" / name / name,
+        BUILD_DIR / "src" / "tools" / name,
+    ]:
+        if cand.is_file():
+            return cand
+    return None
+
+
 def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
     """Ensures that required canonical LCL application and tool binaries exist."""
-    binaries = {
-        "lcl-desktop-shell": BUILD_DIR / "lcl-desktop-shell",
-        "lcl-terminal": BUILD_DIR / "lcl-terminal",
-        "lcl-sessiond": BUILD_DIR / "lcl-sessiond",
-        "lcl-open": BUILD_DIR / "lcl-open",
-        "lcl-core": BUILD_DIR / "lcl-core",
-    }
+    targets = [
+        "lcl-desktop-shell",
+        "lcl-terminal",
+        "lcl-sessiond",
+        "lcl-open",
+        "lcl-core",
+        "lcl-js",
+        "lcl_ui_demo",
+    ]
 
-    missing = [name for name, p in binaries.items() if not p.is_file()]
+    missing = [name for name in targets if not find_built_binary(name)]
     if missing:
         log(f"Building missing canonical targets: {missing}...")
         if not (BUILD_DIR / "CMakeCache.txt").is_file():
@@ -107,11 +121,12 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
             check=True,
         )
 
-    # Optional targets
-    for opt_name in ["lcl-js", "lcl_ui_demo"]:
-        opt_path = BUILD_DIR / opt_name
-        if opt_path.is_file():
-            binaries[opt_name] = opt_path
+    binaries: dict[str, Path] = {}
+    for name in targets:
+        p = find_built_binary(name)
+        if not p or not p.is_file():
+            raise RuntimeError(f"Required canonical binary '{name}' was not found after build.")
+        binaries[name] = p
 
     return binaries
 
@@ -225,21 +240,92 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
         (dest_bin / "clear").write_text("#!/bin/sh\nprintf \"\\033[2J\\033[H\"\n")
         (dest_bin / "clear").chmod(0o755)
 
-    # 6. Graphics & EGL drivers (Mesa DRI, GLVND, libinput)
-    for dri_cand in [Path("/usr/lib/x86_64-linux-gnu/dri"), Path("/usr/lib/dri"), Path("/usr/lib64/dri")]:
-        if dri_cand.is_dir():
-            dri_dst = dest_lib / "dri"
-            dri_dst.mkdir(parents=True, exist_ok=True)
-            for dri_so in dri_cand.glob("*.so"):
-                shutil.copy2(dri_so, dri_dst / dri_so.name)
+    # 6. Graphics & EGL drivers (Mesa DRI, GBM, GLVND, libinput)
+    dri_dirs = [
+        Path("/usr/lib/x86_64-linux-gnu/dri"),
+        Path("/usr/lib/dri"),
+        Path("/usr/lib64/dri"),
+    ]
+    dri_dst = dest_lib / "dri"
+    dri_dst.mkdir(parents=True, exist_ok=True)
+
+    for dri_src in dri_dirs:
+        if dri_src.is_dir():
+            for dri_item in dri_src.iterdir():
+                if dri_item.is_file() or dri_item.is_symlink():
+                    if dri_item.is_symlink():
+                        target_name = os.readlink(str(dri_item))
+                        (dri_dst / dri_item.name).unlink(missing_ok=True)
+                        try:
+                            os.symlink(target_name, str(dri_dst / dri_item.name))
+                        except OSError:
+                            pass
+                    else:
+                        shutil.copy2(dri_item, dri_dst / dri_item.name)
+                        copy_ldd_deps(dri_item, dest_lib)
             break
 
-    glvnd_vendor = Path("/usr/share/glvnd/egl_vendor.d")
-    if glvnd_vendor.is_dir():
-        glvnd_dst = dest_share / "glvnd" / "egl_vendor.d"
-        glvnd_dst.mkdir(parents=True, exist_ok=True)
-        for j in glvnd_vendor.glob("*.json"):
-            shutil.copy2(j, glvnd_dst / j.name)
+    gbm_dirs = [
+        Path("/usr/lib/x86_64-linux-gnu/gbm"),
+        Path("/usr/lib/gbm"),
+        Path("/usr/lib64/gbm"),
+    ]
+    gbm_dst = dest_lib / "gbm"
+    gbm_dst.mkdir(parents=True, exist_ok=True)
+
+    for gbm_src in gbm_dirs:
+        if gbm_src.is_dir():
+            for gbm_item in gbm_src.iterdir():
+                if gbm_item.is_file() or gbm_item.is_symlink():
+                    if gbm_item.is_symlink():
+                        target_name = os.readlink(str(gbm_item))
+                        (gbm_dst / gbm_item.name).unlink(missing_ok=True)
+                        try:
+                            os.symlink(target_name, str(gbm_dst / gbm_item.name))
+                        except OSError:
+                            pass
+                    else:
+                        shutil.copy2(gbm_item, gbm_dst / gbm_item.name)
+                        copy_ldd_deps(gbm_item, dest_lib)
+            break
+
+    # Copy Mesa backend libraries, libgbm, libEGL, libglapi into dest_lib
+    for mesa_cand in [Path("/usr/lib/x86_64-linux-gnu"), Path("/usr/lib64"), Path("/usr/lib")]:
+        if mesa_cand.is_dir():
+            for pat in ("libEGL*", "libGL*", "libgbm*", "libglapi*", "libdrm*", "libgallium*", "libLLVM*"):
+                for m_so in mesa_cand.glob(pat):
+                    if m_so.is_file() or m_so.is_symlink():
+                        if m_so.is_symlink():
+                            tname = os.readlink(str(m_so))
+                            (dest_lib / m_so.name).unlink(missing_ok=True)
+                            try:
+                                os.symlink(tname, str(dest_lib / m_so.name))
+                            except OSError:
+                                pass
+                        else:
+                            shutil.copy2(m_so, dest_lib / m_so.name)
+                            copy_ldd_deps(m_so, dest_lib)
+
+    # Symlink /usr/lib/x86_64-linux-gnu -> . so dynamic loader and Mesa loaders find dri/ and gbm/
+    triplet_link = dest_lib / "x86_64-linux-gnu"
+    if triplet_link.exists() or triplet_link.is_symlink():
+        if triplet_link.is_dir() and not triplet_link.is_symlink():
+            shutil.rmtree(triplet_link)
+        else:
+            triplet_link.unlink()
+    triplet_link.symlink_to(".")
+
+    glvnd_share = Path("/usr/share/glvnd")
+    if glvnd_share.is_dir():
+        shutil.copytree(glvnd_share, dest_share / "glvnd", dirs_exist_ok=True)
+
+    glvnd_etc = Path("/etc/glvnd")
+    if glvnd_etc.is_dir():
+        shutil.copytree(glvnd_etc, staging_dir / "etc" / "glvnd", dirs_exist_ok=True)
+
+    drirc_share = Path("/usr/share/drirc.d")
+    if drirc_share.is_dir():
+        shutil.copytree(drirc_share, dest_share / "drirc.d", dirs_exist_ok=True)
 
     libinput_share = Path("/usr/share/libinput")
     if libinput_share.is_dir():
@@ -273,46 +359,57 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
     (term_app_dst / "bin").mkdir(parents=True, exist_ok=True)
     term_meta = PROJECT_ROOT / "src" / "apps" / "terminal" / "metadata.json"
     term_icon = PROJECT_ROOT / "src" / "apps" / "terminal" / "assets" / "icon.png"
-    if term_meta.is_file():
-        shutil.copy2(term_meta, term_app_dst / "metadata.json")
+    if not term_meta.is_file():
+        raise RuntimeError(f"Missing Terminal.app metadata at {term_meta}")
+    shutil.copy2(term_meta, term_app_dst / "metadata.json")
     if term_icon.is_file():
         shutil.copy2(term_icon, term_app_dst / "assets" / "icon.png")
 
     # UIDemo.app
     uidemo_meta = PROJECT_ROOT / "apps" / "ui_demo" / "metadata.json"
     uidemo_icon = PROJECT_ROOT / "apps" / "ui_demo" / "assets" / "icon.png"
-    if uidemo_meta.is_file() and uidemo_icon.is_file():
-        uidemo_app_dst = apps_dst / "UIDemo.app"
-        uidemo_app_dst.mkdir(parents=True, exist_ok=True)
-        (uidemo_app_dst / "assets").mkdir(parents=True, exist_ok=True)
-        (uidemo_app_dst / "bin").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(uidemo_meta, uidemo_app_dst / "metadata.json")
-        shutil.copy2(uidemo_icon, uidemo_app_dst / "assets" / "icon.png")
-        if (BUILD_DIR / "lcl_ui_demo").is_file():
-            shutil.copy2(BUILD_DIR / "lcl_ui_demo", uidemo_app_dst / "bin" / "ui_demo")
-            (uidemo_app_dst / "bin" / "ui_demo").chmod(0o755)
+    if not uidemo_meta.is_file() or not uidemo_icon.is_file():
+        raise RuntimeError(f"Missing UIDemo.app source files in {PROJECT_ROOT / 'apps' / 'ui_demo'}")
+    uidemo_app_dst = apps_dst / "UIDemo.app"
+    uidemo_app_dst.mkdir(parents=True, exist_ok=True)
+    (uidemo_app_dst / "assets").mkdir(parents=True, exist_ok=True)
+    (uidemo_app_dst / "bin").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(uidemo_meta, uidemo_app_dst / "metadata.json")
+    shutil.copy2(uidemo_icon, uidemo_app_dst / "assets" / "icon.png")
+    
+    ui_demo_bin = find_built_binary("lcl_ui_demo")
+    if not ui_demo_bin or not ui_demo_bin.is_file():
+        raise RuntimeError(f"Compiled binary 'lcl_ui_demo' not found in build directory.")
+    shutil.copy2(ui_demo_bin, uidemo_app_dst / "bin" / "ui_demo")
+    (uidemo_app_dst / "bin" / "ui_demo").chmod(0o755)
+    copy_ldd_deps(uidemo_app_dst / "bin" / "ui_demo", dest_lib)
 
     # UIDemoJS.app
     uidemojs_meta = PROJECT_ROOT / "apps" / "ui_demo_js" / "metadata.json"
     uidemojs_icon = PROJECT_ROOT / "apps" / "ui_demo_js" / "assets" / "icon.png"
-    uidemojs_main = PROJECT_ROOT / "apps" / "ui_demo_js" / "bin" / "main.js"
-    if uidemojs_meta.is_file() and uidemojs_icon.is_file():
-        uidemojs_app_dst = apps_dst / "UIDemoJS.app"
-        uidemojs_app_dst.mkdir(parents=True, exist_ok=True)
-        (uidemojs_app_dst / "assets").mkdir(parents=True, exist_ok=True)
-        (uidemojs_app_dst / "bin").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(uidemojs_meta, uidemojs_app_dst / "metadata.json")
-        shutil.copy2(uidemojs_icon, uidemojs_app_dst / "assets" / "icon.png")
-        if uidemojs_main.is_file():
-            shutil.copy2(uidemojs_main, uidemojs_app_dst / "bin" / "main.js")
+    uidemojs_main = PROJECT_ROOT / "apps" / "ui_demo_js" / "main.js"
+    if not uidemojs_meta.is_file() or not uidemojs_icon.is_file() or not uidemojs_main.is_file():
+        raise RuntimeError(f"Missing UIDemoJS.app source files in {PROJECT_ROOT / 'apps' / 'ui_demo_js'}")
+    uidemojs_app_dst = apps_dst / "UIDemoJS.app"
+    uidemojs_app_dst.mkdir(parents=True, exist_ok=True)
+    (uidemojs_app_dst / "assets").mkdir(parents=True, exist_ok=True)
+    (uidemojs_app_dst / "bin").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(uidemojs_meta, uidemojs_app_dst / "metadata.json")
+    shutil.copy2(uidemojs_icon, uidemojs_app_dst / "assets" / "icon.png")
+    shutil.copy2(uidemojs_main, uidemojs_app_dst / "bin" / "main.js")
+    (uidemojs_app_dst / "bin" / "main.js").chmod(0o755)
 
     # Link /home/user/Applications to canonical /usr/share/lcl/apps
     user_apps = staging_dir / "home" / "user" / "Applications"
     for app_dir in apps_dst.iterdir():
         if app_dir.is_dir() and app_dir.name.endswith(".app"):
             dst_link = user_apps / app_dir.name
-            if not dst_link.exists():
-                shutil.copytree(app_dir, dst_link)
+            if dst_link.exists():
+                shutil.rmtree(dst_link)
+            shutil.copytree(app_dir, dst_link)
+
+    # Validate all app bundles in staging directory
+    validate_app_bundles(staging_dir)
 
     # 10. Canonical Environment Files
     (staging_dir / "etc" / "profile").write_text(
@@ -343,6 +440,75 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
 
     (staging_dir / "home" / "user" / ".profile").write_text(". /home/user/.bashrc\n")
 
+    # 11. Canonical RootFS /init Entrypoint
+    init_script_content = """#!/bin/sh
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
+
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sysfs /sys 2>/dev/null || true
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mkdir -p /var/log /var/tmp /dev/pts /dev/input /home/user/Desktop /home/user/Documents /home/user/Downloads /home/user/Applications
+mount -t devpts devpts /dev/pts -o mode=0620,ptmxmode=0666 2>/dev/null || mount -t devpts devpts /dev/pts 2>/dev/null || true
+if [ ! -e /dev/ptmx ]; then
+    mknod -m 666 /dev/ptmx c 5 2 2>/dev/null || ln -sf pts/ptmx /dev/ptmx 2>/dev/null || true
+fi
+chmod 666 /dev/ptmx 2>/dev/null || true
+
+# Wait for /dev/dri/card* (up to ~3s)
+i=0
+while [ "$i" -lt 30 ]; do
+    if ls /dev/dri/card* >/dev/null 2>&1; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.1
+done
+
+# Save kernel dmesg log and input inventory
+dmesg > /var/log/dmesg.log 2>&1 || true
+ls -la /dev/input/ > /var/log/input_devices.log 2>&1 || true
+
+ROOT_DEV="unknown"
+while read -r rdev rmp rtype rrest; do
+    if [ "$rmp" = "/" ]; then
+        ROOT_DEV="$rdev ($rtype)"
+        break
+    fi
+done < /proc/mounts
+
+echo "===================================================="
+echo "  LCL Core Linux (LCL) - Canonical RootFS Session   "
+echo "===================================================="
+echo "Root device: $ROOT_DEV"
+echo "Kernel: $(uname -r)  cmdline: $(cat /proc/cmdline 2>/dev/null)"
+echo "DRM devices detected:"
+ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
+echo "Input devices detected:"
+ls /dev/input/ 2>/dev/null || echo "  (none yet)"
+
+# Start Compositor Display Server
+/bin/lcl-core 2>&1 | tee /var/log/lcl_compositor.log &
+sleep 0.2
+
+# Start LCL Session Daemon (sole application launch authority)
+if [ -x /usr/bin/lcl-sessiond ]; then
+    echo "[init] Starting lcl-sessiond..."
+    /usr/bin/lcl-sessiond 2>&1 | tee /var/log/lcl_sessiond.log &
+    sleep 0.1
+fi
+
+# Start LCL Desktop Shell
+if [ -x /usr/bin/lcl-desktop-shell ]; then
+    echo "[init] Starting lcl-desktop-shell..."
+    /usr/bin/lcl-desktop-shell 2>&1 | tee /var/log/lcl_desktop_shell.log &
+fi
+
+wait
+"""
+    init_path = staging_dir / "init"
+    init_path.write_text(init_script_content, encoding="utf-8")
+    init_path.chmod(0o755)
+
     # Set permissions
     for root, dirs, files in os.walk(staging_dir):
         for d in dirs:
@@ -360,7 +526,7 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
     return sha_map
 
 
-def build_rootfs_ext4(arch: str = "x86_64", image_size_mb: int = 512) -> tuple[Path, Path, dict[str, str]]:
+def build_rootfs_ext4(arch: str = "x86_64", image_size_mb: int = 1024) -> tuple[Path, Path, dict[str, str]]:
     """Builds the canonical ext4 rootfs image from the staging tree."""
     ROOTFS_BASE_DIR.mkdir(parents=True, exist_ok=True)
     staging_dir = ROOTFS_BASE_DIR / arch
@@ -397,6 +563,77 @@ def build_rootfs_ext4(arch: str = "x86_64", image_size_mb: int = 512) -> tuple[P
     return staging_dir, out_ext4, sha_map
 
 
+def validate_app_bundles(staging_dir: Path) -> None:
+    """Strictly validates all .app bundles in the staging directory."""
+    apps_dirs = [
+        staging_dir / "usr" / "share" / "lcl" / "apps",
+        staging_dir / "home" / "user" / "Applications",
+    ]
+
+    validated_count = 0
+    for parent in apps_dirs:
+        if not parent.is_dir():
+            raise RuntimeError(f"App directory {parent} does not exist in staging tree.")
+        for app_dir in parent.iterdir():
+            if not app_dir.is_dir() or not app_dir.name.endswith(".app"):
+                continue
+
+            meta_file = app_dir / "metadata.json"
+            if not meta_file.is_file():
+                raise RuntimeError(f"Bundle {app_dir.name} in {parent.name} is missing metadata.json")
+
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except Exception as ex:
+                raise RuntimeError(f"Invalid JSON in {meta_file}: {ex}")
+
+            app_id = meta.get("id") or meta.get("appId") or meta.get("bundleId")
+            if not app_id:
+                raise RuntimeError(f"Bundle {app_dir.name} is missing 'id' field in metadata.json")
+
+            app_name = meta.get("name")
+            if not app_name:
+                raise RuntimeError(f"Bundle {app_dir.name} is missing 'name' field in metadata.json")
+
+            icon_rel = meta.get("icon")
+            if icon_rel and not (app_dir / icon_rel).is_file():
+                raise RuntimeError(f"Bundle {app_dir.name} icon not found: {app_dir / icon_rel}")
+
+            exec_ref = meta.get("executable") or meta.get("exec")
+            if not exec_ref:
+                raise RuntimeError(f"Bundle {app_dir.name} is missing 'executable' field in metadata.json")
+
+            # Resolve executable target
+            if exec_ref.startswith("/"):
+                # Absolute executable path in rootfs
+                target_exec = staging_dir / exec_ref.lstrip("/")
+            else:
+                # Bundle-relative executable path
+                target_exec = app_dir / exec_ref
+
+            if not target_exec.is_file():
+                raise RuntimeError(f"Bundle {app_dir.name} resolved executable not found: {target_exec}")
+
+            # Check script vs binary
+            if exec_ref.endswith(".js"):
+                # Requires lcl-js interpreter in /usr/bin/lcl-js
+                interp = staging_dir / "usr" / "bin" / "lcl-js"
+                if not interp.is_file():
+                    raise RuntimeError(f"Bundle {app_dir.name} requires JavaScript interpreter {interp}, but not found.")
+                if not os.access(str(interp), os.X_OK):
+                    raise RuntimeError(f"JavaScript interpreter {interp} is not executable.")
+            else:
+                # Binary or shell script - check executable permission
+                if not os.access(str(target_exec), os.X_OK):
+                    raise RuntimeError(f"Bundle {app_dir.name} executable {target_exec} does not have execute permission (0755).")
+
+            log(f"  ✓ Validated bundle {app_dir.name} in {parent.name} (id={app_id}, exec={exec_ref})")
+            validated_count += 1
+
+    if validated_count == 0:
+        raise RuntimeError("No app bundles were found or validated in the staging tree.")
+
+
 def verify_rootfs_image(ext4_path: Path) -> None:
     """Verifies that key canonical userspace files exist inside the generated ext4 image."""
     log(f"Verifying ext4 filesystem contents of {ext4_path.name}...")
@@ -405,9 +642,22 @@ def verify_rootfs_image(ext4_path: Path) -> None:
         "/bin/lcl-terminal",
         "/bin/lcl-sessiond",
         "/bin/lcl-desktop-shell",
+        "/bin/lcl-open",
+        "/bin/lcl-core",
+        "/usr/bin/lcl-js",
         "/usr/share/lcl/apps/Terminal.app/metadata.json",
+        "/usr/share/lcl/apps/UIDemo.app/metadata.json",
+        "/usr/share/lcl/apps/UIDemo.app/bin/ui_demo",
+        "/usr/share/lcl/apps/UIDemoJS.app/metadata.json",
+        "/usr/share/lcl/apps/UIDemoJS.app/bin/main.js",
+        "/home/user/Applications/Terminal.app/metadata.json",
+        "/home/user/Applications/UIDemo.app/bin/ui_demo",
+        "/home/user/Applications/UIDemoJS.app/bin/main.js",
+        "/usr/lib/gbm/dri_gbm.so",
+        "/usr/lib/dri/virtio_gpu_dri.so",
         "/etc/profile",
         "/home/user/.bashrc",
+        "/init",
     ]
 
     for req in required_files:
@@ -423,13 +673,27 @@ def verify_rootfs_image(ext4_path: Path) -> None:
     if meta_json.get("executable") != "/bin/lcl-terminal":
         raise AssertionError(f"Terminal.app metadata in rootfs has invalid executable: {meta_json.get('executable')}")
 
+    # Check UIDemo.app metadata content
+    cat_cmd = ["debugfs", "-R", "cat /usr/share/lcl/apps/UIDemo.app/metadata.json", str(ext4_path)]
+    cat_res = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
+    meta_json = json.loads(cat_res.stdout)
+    if meta_json.get("executable") != "bin/ui_demo":
+        raise AssertionError(f"UIDemo.app metadata in rootfs has invalid executable: {meta_json.get('executable')}")
+
+    # Check UIDemoJS.app metadata content
+    cat_cmd = ["debugfs", "-R", "cat /usr/share/lcl/apps/UIDemoJS.app/metadata.json", str(ext4_path)]
+    cat_res = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
+    meta_json = json.loads(cat_res.stdout)
+    if meta_json.get("executable") != "bin/main.js":
+        raise AssertionError(f"UIDemoJS.app metadata in rootfs has invalid executable: {meta_json.get('executable')}")
+
     log("✓ All required canonical userspace files and metadata verified successfully.")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="LCL Core Linux - Canonical RootFS Builder")
     parser.add_argument("--arch", default="x86_64", help="Target architecture (default: x86_64)")
-    parser.add_argument("--size", type=int, default=512, help="Filesystem size in MB (default: 512)")
+    parser.add_argument("--size", type=int, default=1024, help="Filesystem size in MB (default: 1024)")
     args = parser.parse_args()
 
     staging_dir, out_ext4, sha_map = build_rootfs_ext4(arch=args.arch, image_size_mb=args.size)
