@@ -5,6 +5,7 @@ Provides a clean, cross-platform CLI for building, running QEMU, ISO generation,
 
 Usage:
   ./main.py qemu [--native] [--gpu] [--arch aarch64|x86_64]
+  ./main.py avd [--avd-name lcl-phone] [--no-window] [--rebuild]
   ./main.py build [--arch ...]
   ./main.py iso [--arch ...]
   ./main.py flash [--dev /dev/sdX]
@@ -29,11 +30,11 @@ BUILD_DIR = ROOT_DIR / "build"
 
 
 def log(msg: str) -> None:
-    print(f"[LCL] {msg}")
+    print(f"[LCL] {msg}", flush=True)
 
 
 def err(msg: str) -> None:
-    print(f"[LCL ERROR] {msg}", file=sys.stderr)
+    print(f"[LCL ERROR] {msg}", file=sys.stderr, flush=True)
 
 
 def normalize_arch(arch_str: str | None) -> str:
@@ -91,6 +92,20 @@ def cmd_utm(args: argparse.Namespace) -> None:
     run_utm_py = SCRIPTS_DIR / "run_utm.py"
     arch = normalize_arch(args.arch)
     subprocess.check_call([sys.executable, str(run_utm_py), "--arch", arch])
+
+
+def cmd_avd(args: argparse.Namespace) -> None:
+    run_avd_py = SCRIPTS_DIR / "run_avd.py"
+    avd_args = [sys.executable, str(run_avd_py)]
+    if getattr(args, "avd_name", None):
+        avd_args.extend(["--avd-name", str(args.avd_name)])
+    if getattr(args, "no_window", False):
+        avd_args.append("--no-window")
+    if getattr(args, "no_build", False):
+        avd_args.append("--no-build")
+    if getattr(args, "rebuild", False):
+        avd_args.append("--rebuild")
+    subprocess.check_call(avd_args)
 
 
 def cmd_build(args: argparse.Namespace) -> None:
@@ -185,6 +200,13 @@ def main() -> None:
     p_utm = subparsers.add_parser("utm", help="Build ISO and launch via UTM / utmctl (Metal 3D)")
     p_utm.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (aarch64 or x86_64)")
 
+    # ---- avd ----
+    p_avd = subparsers.add_parser("avd", help="Build & launch LCL OS on Android AVD emulator")
+    p_avd.add_argument("--avd-name", metavar="NAME", default="lcl-phone", help="Target AVD name (default: lcl-phone)")
+    p_avd.add_argument("--no-window", action="store_true", help="Run emulator headless without GUI window")
+    p_avd.add_argument("--no-build", action="store_true", help="Skip artifact build & packaging")
+    p_avd.add_argument("--rebuild", action="store_true", help="Force clean rebuild of all targets")
+
     # ---- build ----
     p_build = subparsers.add_parser("build", help="Build LCL OS binaries via Docker")
     p_build.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (x86_64 or aarch64)")
@@ -221,6 +243,7 @@ def main() -> None:
     dispatch = {
         "qemu": cmd_qemu,
         "utm": cmd_utm,
+        "avd": cmd_avd,
         "build": cmd_build,
         "package": cmd_package,
         "iso": cmd_iso,
