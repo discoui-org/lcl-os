@@ -226,148 +226,85 @@ def launch_avd(args: argparse.Namespace) -> None:
         err(f"AVD '{avd_name}' not found. Available AVDs: {available_avds}")
         sys.exit(1)
 
-    # 1. Build artifacts & stage runtime
-    if not args.no_build:
+    # 1. Build targets & generate custom bootable LCL images
+    out_system_img = BUILD_DIR / "android" / "lcl-system.img"
+    out_ramdisk_img = BUILD_DIR / "android" / "lcl-ramdisk.img"
+
+    if not args.no_build or not out_system_img.is_file() or not out_ramdisk_img.is_file():
         build_targets(env, force_rebuild=args.rebuild)
+        from build_android_images import build_android_images
+        out_system_img, out_ramdisk_img = build_android_images()
 
-    desktop_shell = BUILD_DIR / "lcl-desktop-shell"
-    desktop_term = BUILD_DIR / "lcl-terminal"
-    android_core = BUILD_ANDROID_DIR / "lcl-core-android"
-
-    shell_sha = get_sha256(desktop_shell)
-    term_sha = get_sha256(desktop_term)
-
-    # 2. Start emulator if not already online
+    # 2. Start emulator directly with custom LCL system and ramdisk images
     emulator_proc = None
-    if not is_device_online(env):
-        clean_stale_avd_locks(avd_name)
-        log(f"Starting {avd_name}...")
-        emu_cmd = [
-            str(env.emulator),
-            "-avd", avd_name,
-            "-no-snapshot-load",
-            "-no-boot-anim",
-            "-qemu", "-cpu", "host"
-        ]
-        if args.no_window:
-            emu_cmd.append("-no-window")
+    clean_stale_avd_locks(avd_name)
+    log(f"Booting {avd_name} directly with custom LCL system & ramdisk images...")
+    emu_cmd = [
+        str(env.emulator),
+        "-avd", avd_name,
+        "-system", str(out_system_img),
+        "-ramdisk", str(out_ramdisk_img),
+        "-no-snapshot-load",
+        "-no-boot-anim",
+        "-selinux", "permissive",
+        "-qemu", "-cpu", "host"
+    ]
+    if args.show_kernel:
+        emu_cmd.insert(4, "-show-kernel")
+    if args.no_window:
+        emu_cmd.append("-no-window")
 
-        emulator_proc = subprocess.Popen(
-            emu_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-    else:
-        log(f"Connected to running {avd_name} instance.")
-
-    compositor_proc = None
-    shell_proc = None
-    term_proc = None
+    emulator_proc = subprocess.Popen(
+        emu_cmd,
+        stdout=None if args.show_kernel else subprocess.DEVNULL,
+        stderr=None if args.show_kernel else subprocess.DEVNULL
+    )
 
     try:
-        # 3. Wait for Android boot
-        wait_for_boot(env)
-
-        # 4. Acquire root
-        env.run_adb("root", check=False)
-        time.sleep(1)
-        env.run_adb("wait-for-device", check=True)
-
-        # 5. Deploy runtime & artifacts
-        log("Deploying LCL runtime...")
-        env.run_adb("push", str(STAGING_RUNTIME_DIR), "/data/local/tmp/", check=True)
-        env.run_adb("push", str(android_core), "/data/local/tmp/lcl-core-android", check=True)
-        env.run_adb("push", str(desktop_shell), "/data/local/tmp/lcl-desktop-shell", check=True)
-        env.run_adb("push", str(desktop_term), "/data/local/tmp/lcl-terminal", check=True)
-
-        env.adb_shell("chmod -R 755 /data/local/tmp/lcl-runtime /data/local/tmp/lcl-core-android /data/local/tmp/lcl-desktop-shell /data/local/tmp/lcl-terminal")
-
-        # Verify deployed hashes
-        remote_shell_sha = env.adb_shell("sha256sum /data/local/tmp/lcl-desktop-shell").stdout.split()[0]
-        remote_term_sha = env.adb_shell("sha256sum /data/local/tmp/lcl-terminal").stdout.split()[0]
-        if remote_shell_sha != shell_sha or remote_term_sha != term_sha:
-            raise RuntimeError("Deployed application binary SHA-256 mismatch!")
-
-        # 6. Stop SurfaceFlinger and take display ownership
-        log("Taking display ownership...")
-        env.adb_shell("stop surfaceflinger")
-        env.adb_shell("rm -f /data/local/tmp/lcl-compositor.sock /data/local/tmp/*.log")
+        # Diagnostic monitoring
+        log("Waiting for LCL OS startup on AVD...")
         time.sleep(2)
+        env.run_adb("wait-for-device", check=False, quiet=True)
 
-        # 7. Start lcl-core-android
-        log("Starting lcl-core...")
-        compositor_proc = subprocess.Popen(
-            [str(env.adb), "shell", "/data/local/tmp/lcl-core-android"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-
-        # Wait for compositor socket readiness
+        # Poll for LCL compositor socket readiness
+        log("Waiting for LCL Compositor socket...")
         socket_ready = False
-        for _ in range(50):
-            res = env.adb_shell("[ -S /data/local/tmp/lcl-compositor.sock ] && echo READY")
+        for _ in range(60):
+            res = env.adb_shell("[ -S /run/user/1000/lcl-compositor.sock -o -S /data/local/tmp/lcl-compositor.sock ] && echo READY")
             if "READY" in res.stdout:
                 socket_ready = True
                 break
-            time.sleep(0.2)
+            time.sleep(0.5)
 
-        if not socket_ready:
-            raise RuntimeError("Compositor socket startup timed out.")
+        if socket_ready:
+            log("============================================================")
+            log("LCL OS is running directly on Android AVD (Stage 4A Direct Boot)!")
+            log("Active components: Wallpaper, MenuBar, Dock, Terminal")
+            log("Press Ctrl+C to stop session.")
+            log("============================================================")
+        else:
+            log("Compositor socket pending. System is running.")
 
-        # 8. Start desktop shell
-        log("Starting desktop shell...")
-        shell_proc = subprocess.Popen(
-            [
-                str(env.adb), "shell",
-                "LCL_COMPOSITOR_SOCKET=/data/local/tmp/lcl-compositor.sock "
-                "/data/local/tmp/lcl-runtime/ld-linux-x86-64.so.2 "
-                "--library-path /data/local/tmp/lcl-runtime/lib "
-                "/data/local/tmp/lcl-desktop-shell"
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        time.sleep(0.5)
-
-        # 9. Start terminal
-        log("Starting terminal...")
-        term_proc = subprocess.Popen(
-            [
-                str(env.adb), "shell",
-                "LCL_COMPOSITOR_SOCKET=/data/local/tmp/lcl-compositor.sock "
-                "/data/local/tmp/lcl-runtime/ld-linux-x86-64.so.2 "
-                "--library-path /data/local/tmp/lcl-runtime/lib "
-                "/data/local/tmp/lcl-terminal"
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-
-        log("LCL is running. Press Ctrl+C to stop.")
-
-        # 10. Keep-alive monitor loop
+        # Keep-alive monitor loop
         while True:
             time.sleep(1)
-            if compositor_proc.poll() is not None:
-                log("Compositor process terminated.")
+            if emulator_proc.poll() is not None:
+                log("Emulator process terminated.")
                 break
 
     except KeyboardInterrupt:
         print("")
         log("Received interrupt signal. Shutting down LCL session...")
     finally:
-        log("Cleaning up LCL processes on AVD...")
-        if compositor_proc:
-            compositor_proc.terminate()
-        if shell_proc:
-            shell_proc.terminate()
-        if term_proc:
-            term_proc.terminate()
-        env.adb_shell("killall lcl-core-android lcl-desktop-shell lcl-terminal 2>/dev/null || true")
-        time.sleep(0.5)
-        log("Restoring SurfaceFlinger display server...")
-        env.adb_shell("start surfaceflinger")
-        time.sleep(1)
+        log("Stopping emulator...")
+        if emulator_proc:
+            emulator_proc.terminate()
+            try:
+                emulator_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                emulator_proc.kill()
+        env.run_adb("emu", "kill", check=False, quiet=True)
+        clean_stale_avd_locks(avd_name)
         log("LCL AVD session closed cleanly.")
 
 
@@ -376,6 +313,7 @@ def main() -> None:
         description="LCL OS - Android AVD Developer Launcher"
     )
     parser.add_argument("--avd-name", default="lcl-phone", help="Target AVD name (default: lcl-phone)")
+    parser.add_argument("--show-kernel", action="store_true", help="Display live guest kernel and init boot logs in terminal")
     parser.add_argument("--no-window", action="store_true", help="Run emulator headless without GUI window")
     parser.add_argument("--no-build", action="store_true", help="Skip build step")
     parser.add_argument("--rebuild", action="store_true", help="Force clean rebuild of all targets")

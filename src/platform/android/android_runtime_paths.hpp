@@ -18,25 +18,25 @@ public:
     AndroidRuntimePaths() = default;
     ~AndroidRuntimePaths() override = default;
 
-    // Development-only temporary socket paths
+    // Canonical LCL runtime paths
     std::string compositorSocketPath() const override {
-        return "/data/local/tmp/lcl-compositor.sock";
+        return "/run/user/1000/lcl-compositor.sock";
     }
 
     std::string sessionSocketPath() const override {
-        return "/data/local/tmp/lcl-session.sock";
+        return "/run/user/1000/lcl-session.sock";
     }
 
     std::string appCatalogDirectory() const override {
-        return "/data/local/tmp/apps";
+        return "/usr/share/applications";
     }
 
     std::vector<std::string> fontSearchDirectories() const override {
-        return {"/system/fonts"};
+        return {"/usr/share/fonts", "/system/fonts"};
     }
 
     std::string temporaryDirectory() const override {
-        return "/data/local/tmp";
+        return "/tmp";
     }
 };
 

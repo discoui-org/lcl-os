@@ -99,6 +99,8 @@ def cmd_avd(args: argparse.Namespace) -> None:
     avd_args = [sys.executable, str(run_avd_py)]
     if getattr(args, "avd_name", None):
         avd_args.extend(["--avd-name", str(args.avd_name)])
+    if getattr(args, "show_kernel", False):
+        avd_args.append("--show-kernel")
     if getattr(args, "no_window", False):
         avd_args.append("--no-window")
     if getattr(args, "no_build", False):
@@ -203,6 +205,7 @@ def main() -> None:
     # ---- avd ----
     p_avd = subparsers.add_parser("avd", help="Build & launch LCL OS on Android AVD emulator")
     p_avd.add_argument("--avd-name", metavar="NAME", default="lcl-phone", help="Target AVD name (default: lcl-phone)")
+    p_avd.add_argument("--show-kernel", action="store_true", help="Display live guest kernel and init boot logs in terminal")
     p_avd.add_argument("--no-window", action="store_true", help="Run emulator headless without GUI window")
     p_avd.add_argument("--no-build", action="store_true", help="Skip artifact build & packaging")
     p_avd.add_argument("--rebuild", action="store_true", help="Force clean rebuild of all targets")
