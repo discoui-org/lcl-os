@@ -189,14 +189,19 @@ fi
 mkdir -p /run/user/1000 /run/user/0 2>/dev/null
 chmod 755 /run /run/user /run/user/1000 2>/dev/null
 
-# 2. Canonical symlinks
+    # 2. Canonical symlinks & home directory
 [ ! -e /usr ] && ln -s /system/lcl/usr /usr 2>/dev/null
+[ ! -e /bin ] && ln -s /system/lcl/bin /bin 2>/dev/null
 [ ! -e /lib64 ] && ln -s /system/lcl/lib64 /lib64 2>/dev/null
+[ ! -e /home ] && ln -s /system/lcl/home /home 2>/dev/null
+mkdir -p /home/user/Applications /home/user/Desktop /home/user/Documents /home/user/Downloads 2>/dev/null
 
 # 3. Export canonical environment
-export PATH="/system/lcl/bin:/system/bin:$PATH"
+export PATH="/usr/bin:/bin:/system/lcl/bin:/system/bin:$PATH"
+export HOME="/home/user"
 export LD_LIBRARY_PATH="/system/lib64:/apex/com.android.i18n/lib64:/apex/com.android.art/lib64:/vendor/lib64:/vendor/lib64/hw:/system/lib64/hw:/system/lcl/lib64"
 export LCL_COMPOSITOR_SOCKET="/run/user/1000/lcl-compositor.sock"
+export LCL_SESSION_SOCKET="/run/user/1000/lcl-sessiond.sock"
 
 # 4. Start LCL Platform Compositor directly on Composer3
 /system/lcl/bin/lcl-core-android > /data/local/tmp/lcl-core.log 2>&1 &
@@ -222,9 +227,9 @@ for i in $(seq 1 100); do
     sleep 0.05
 done
 
-# 8. Launch canonical same-binary applications directly via dynamic loader
+# 8. Launch canonical desktop shell via dynamic loader
+# lcl-terminal is NOT launched here — lcl-sessiond's launchDefaultProfile() is the sole terminal launch authority
 /system/lcl/lib64/ld-linux-x86-64.so.2 --library-path /system/lcl/lib64 /system/lcl/bin/lcl-desktop-shell > /data/local/tmp/lcl-shell.log 2>&1 &
-/system/lcl/lib64/ld-linux-x86-64.so.2 --library-path /system/lcl/lib64 /system/lcl/bin/lcl-terminal > /data/local/tmp/lcl-terminal.log 2>&1 &
 
 # 9. Keep bootstrap process alive so init does not kill children
 wait $CORE_PID $SESSIOND_PID
@@ -238,15 +243,35 @@ wait $CORE_PID $SESSIOND_PID
     desktop_term = BUILD_DIR / "lcl-terminal"
     sessiond_bin = BUILD_DIR / "lcl-sessiond"
     android_core = BUILD_ANDROID_DIR / "lcl-core-android"
+    bash_bin = Path("/bin/bash") if Path("/bin/bash").is_file() else Path("/usr/bin/bash")
     wallpaper_jpg = PROJECT_ROOT / "wallpaper.jpg"
     wallpaper_png = PROJECT_ROOT / "wallpaper.png"
 
+    # Canonical Terminal.app metadata (identical on all platforms)
     term_meta = PROJECT_ROOT / "src/apps/terminal/metadata.json"
     term_icon = PROJECT_ROOT / "src/apps/terminal/assets/icon.png"
     uidemo_meta = PROJECT_ROOT / "apps/ui_demo/metadata.json"
     uidemo_icon = PROJECT_ROOT / "apps/ui_demo/assets/icon.png"
     uidemojs_meta = PROJECT_ROOT / "apps/ui_demo_js/metadata.json"
     uidemojs_icon = PROJECT_ROOT / "apps/ui_demo_js/assets/icon.png"
+
+    # Shell profile and bashrc for canonical /home/user environment
+    bashrc_path = tmp_dir / "bashrc"
+    bashrc_path.write_text("""export PATH=/usr/bin:/bin:/system/lcl/bin:/system/bin:$PATH
+export TERM=xterm-256color
+export PS1='\\[\\033[1;34m\\]\\W\\[\\033[0m\\] ❯ '
+export HISTSIZE=500
+alias ls='ls --color=auto'
+alias ll='ls -la'
+""")
+    profile_path = tmp_dir / "profile"
+    profile_path.write_text("""export PATH=/usr/bin:/bin:/system/lcl/bin:/system/bin:$PATH
+export HOME=/home/user
+export TERM=xterm-256color
+if [ -f /home/user/.bashrc ]; then
+    . /home/user/.bashrc
+fi
+""")
 
     # Assemble debugfs commands
     debugfs_script = []
@@ -279,7 +304,22 @@ wait $CORE_PID $SESSIOND_PID
         "mkdir bin",
         "mkdir lib64",
         "mkdir etc",
+        "mkdir home",
         "mkdir usr",
+        "cd /system/lcl/home",
+        "mkdir user",
+        "cd /system/lcl/home/user",
+        "mkdir Applications",
+        "mkdir Desktop",
+        "mkdir Documents",
+        "mkdir Downloads",
+        f"write {bashrc_path} .bashrc",
+        "sif .bashrc mode 0100644",
+        f"write {profile_path} .profile",
+        "sif .profile mode 0100644",
+        "cd /system/lcl/etc",
+        f"write {profile_path} profile",
+        "sif profile mode 0100644",
         "cd /system/lcl/usr",
         "mkdir bin",
         "mkdir share",
@@ -311,6 +351,9 @@ wait $CORE_PID $SESSIOND_PID
         "rm lcl-terminal",
         f"write {desktop_term} lcl-terminal",
         "sif lcl-terminal mode 0100755",
+        "rm bash",
+        f"write {bash_bin} bash",
+        "sif bash mode 0100755",
         "rm lcl-bootstrap.sh",
         f"write {lcl_bootstrap_path} lcl-bootstrap.sh",
         "sif lcl-bootstrap.sh mode 0100755",
@@ -328,7 +371,7 @@ wait $CORE_PID $SESSIOND_PID
             debugfs_script.append(f"sif {so_file.name} mode 0100755")
 
     # Install canonical .app bundles into /system/lcl/usr/share/lcl/apps
-    # 1. Terminal.app
+    # 1. Terminal.app (canonical metadata.json pointing to /bin/lcl-terminal)
     debugfs_script.extend([
         "cd /system/lcl/usr/share/lcl/apps",
         "mkdir Terminal.app",
@@ -380,10 +423,12 @@ wait $CORE_PID $SESSIOND_PID
         "symlink lcl-terminal /system/lcl/bin/lcl-terminal",
         "symlink lcl-sessiond /system/lcl/bin/lcl-sessiond",
         "symlink lcl-desktop-shell /system/lcl/bin/lcl-desktop-shell",
+        "symlink bash /system/lcl/bin/bash",
         "cd /system/bin",
         "symlink lcl-terminal /system/lcl/bin/lcl-terminal",
         "symlink lcl-sessiond /system/lcl/bin/lcl-sessiond",
         "symlink lcl-desktop-shell /system/lcl/bin/lcl-desktop-shell",
+        "symlink bash /system/lcl/bin/bash",
     ])
 
     # Install fonts into canonical paths
@@ -414,7 +459,9 @@ wait $CORE_PID $SESSIOND_PID
     debugfs_script.extend([
         "cd /",
         "symlink usr system/lcl/usr",
+        "symlink bin system/lcl/bin",
         "symlink lib64 system/lcl/lib64",
+        "symlink home system/lcl/home",
         "mkdir run",
         "quit",
     ])
@@ -483,7 +530,8 @@ def build_android_images() -> tuple[Path, Path]:
     # 2. Stage glibc userspace runtime
     from run_avd import stage_glibc_runtime
     runtime_dir = BUILD_DIR / "lcl-runtime"
-    stage_glibc_runtime([desktop_shell, desktop_term, sessiond_bin], runtime_dir)
+    bash_bin = Path("/bin/bash") if Path("/bin/bash").is_file() else Path("/usr/bin/bash")
+    stage_glibc_runtime([desktop_shell, desktop_term, sessiond_bin, bash_bin], runtime_dir)
 
     # 3. Parse GPT partitions dynamically
     partitions = parse_gpt_partitions(paths.stock_system)

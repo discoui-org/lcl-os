@@ -174,7 +174,8 @@ def build_targets(env: AndroidEnvironment, force_rebuild: bool = False) -> None:
         ], check=True, stdout=subprocess.DEVNULL)
 
     # Stage glibc runtime
-    stage_glibc_runtime([desktop_shell, desktop_term], STAGING_RUNTIME_DIR)
+    bash_bin = Path("/bin/bash") if Path("/bin/bash").is_file() else Path("/usr/bin/bash")
+    stage_glibc_runtime([desktop_shell, desktop_term, sessiond_bin, bash_bin], STAGING_RUNTIME_DIR)
 
 
 def is_device_online(env: AndroidEnvironment) -> bool:

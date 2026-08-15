@@ -1434,7 +1434,7 @@ def launch_qemu(
     qemu = find_qemu(arch)
     host = detect_host_display()
 
-    memory = os.environ.get("LCL_QEMU_MEM") or ("2G" if (native or retina) else "1024M")
+    memory = os.environ.get("LCL_QEMU_MEM") or "2G"
     cpus = os.environ.get("LCL_QEMU_CPUS", "2")
     refresh_hz = host.refresh_hz or 60
 
