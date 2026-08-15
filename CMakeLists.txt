@@ -114,9 +114,6 @@ target_include_directories(lcl-display-scale PUBLIC
 # Renderer/UI-independent motion primitives shared by clients and compositor.
 add_subdirectory(lcl-motion)
 
-# Backend-neutral widgets, layout, events and WindowApp lifecycle.
-add_subdirectory(lcl-ui)
-
 # Compositor-owned render/present layer.
 # Depends strictly on lcl-platform-common; never on concrete platform layers.
 add_library(lcl-render STATIC
@@ -244,69 +241,21 @@ if(ANDROID)
         lcl-core-engine
         lcl-platform-android
     )
-
-    # Client canvas for Android (software raster + SHM transport to compositor)
-    add_library(lcl-canvas-skia-android STATIC
-        src/render/client_egl_context.cpp
-        src/render/skia_canvas.cpp
-        src/render/skia_renderer.cpp
-        src/render/font_renderer.cpp
-    )
-
-    target_include_directories(lcl-canvas-skia-android PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
-    )
-
-    target_link_libraries(lcl-canvas-skia-android PUBLIC
-        lcl-ui
-        lcl-protocol
-        GLESv3
-        EGL
-        android
-        Threads::Threads
-    )
-
-    # Standalone Desktop Shell Daemon Target for Android (lcl-desktop-shell-android)
-    add_executable(lcl-desktop-shell-android
-        src/apps/desktop_shell/ui_main.cpp
-        src/core/ipc/ipc_manager.cpp
-    )
-
-    target_include_directories(lcl-desktop-shell-android PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
-    )
-
-    target_link_libraries(lcl-desktop-shell-android PRIVATE
-        lcl-ui
-        lcl-canvas-skia-android
-        lcl-protocol
-        lcl-shell-state
-        lcl-session
-        Threads::Threads
-    )
-
-    # Standalone Client Terminal App Target for Android (lcl-terminal-android)
-    add_executable(lcl-terminal-android
-        src/tools/terminal_main.cpp
-        src/apps/terminal/terminal_app.cpp
-        src/apps/terminal/terminal_view.cpp
-        src/core/terminal/pty_manager.cpp
-    )
-
-    target_include_directories(lcl-terminal-android PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
-    )
-
-    target_link_libraries(lcl-terminal-android PRIVATE
-        lcl-ui
-        lcl-canvas-skia-android
-        lcl-protocol
-        Threads::Threads
-    )
 else()
+    # =========================================================================
+    # LCL Application Runtime & Canonical Executables
+    #
+    # ARCHITECTURAL INVARIANT:
+    # For the same CPU architecture, LCL application executables are
+    # platform-independent artifacts and must be reused byte-for-byte
+    # across LCL platform targets.
+    #
+    # Platform differences terminate below the LCL userspace ABI.
+    # =========================================================================
+
+    # Backend-neutral widgets, layout, events and WindowApp lifecycle.
+    add_subdirectory(lcl-ui)
+
     # Client canvas attempts a render-node-only EGL context and falls back to the
     # established SHM raster path.  It never owns compositor KMS presentation.
     add_library(lcl-canvas-skia STATIC

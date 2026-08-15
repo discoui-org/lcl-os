@@ -12,6 +12,7 @@ All architectural decisions, directory structures, and vertical slice definition
 2. **Asynchronous I/O:** Never block the main rendering thread. File system operations must use `io_uring` or POSIX async calls to maintain zero-stutter frame rates.
 3. **Decoupled Design:** Keep the Window Manager (spatial/box/geometry logic) strictly separated from the Shell (UI, taskbar, launcher, and presentation layer).
 4. **Memory Management:** Zero-tolerance for raw pointer leaks in the C++ core. Use smart pointers (`std::unique_ptr`, `std::shared_ptr`) and strict RAII principles.
+5. **Platform-Independent Application Binaries (Same-Binary Invariant):** For the same CPU architecture, LCL application executables (`lcl-terminal`, `lcl-desktop-shell`, etc.) are platform-independent artifacts and must be reused byte-for-byte across LCL platform targets. Platform differences terminate below the LCL userspace ABI. Alternately compiled or Android-specific application rebuilds are strictly forbidden.
 
 ---
 

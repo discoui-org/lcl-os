@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <unistd.h>
 
 namespace lcl::core {
@@ -83,11 +84,27 @@ bool SystemSurfacePolicyRegistry::isTrustedShellPeer(pid_t pid) noexcept {
     const ssize_t count = readlink(procPath.data(), resolved.data(), resolved.size() - 1);
     if (count <= 0) return false;
     resolved[static_cast<size_t>(count)] = '\0';
-    const auto executable = std::filesystem::path(resolved.data()).filename();
-    return executable == "lcl-desktop-shell" ||
-           executable == "lcl-mobile-shell" ||
-           executable == "lcl-desktop-shell-android" ||
-           executable == "lcl-mobile-shell-android";
+    const auto executable = std::filesystem::path(resolved.data()).filename().string();
+    if (executable == "lcl-desktop-shell" || executable == "lcl-mobile-shell") {
+        return true;
+    }
+    // If invoked via an explicit dynamic linker (e.g. ld-linux-x86-64.so.2),
+    // inspect /proc/<pid>/cmdline to check the target executable argument.
+    if (executable.rfind("ld-linux", 0) == 0 || executable.rfind("ld.so", 0) == 0 || executable.rfind("ld-", 0) == 0) {
+        std::array<char, 64> cmdlinePath{};
+        std::snprintf(cmdlinePath.data(), cmdlinePath.size(), "/proc/%d/cmdline", static_cast<int>(pid));
+        std::ifstream cmdlineFile(cmdlinePath.data(), std::ios::binary);
+        if (cmdlineFile) {
+            std::string arg;
+            while (std::getline(cmdlineFile, arg, '\0')) {
+                const auto targetName = std::filesystem::path(arg).filename().string();
+                if (targetName == "lcl-desktop-shell" || targetName == "lcl-mobile-shell") {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 } // namespace lcl::core
