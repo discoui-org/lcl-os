@@ -200,6 +200,20 @@ def wait_for_boot(env: AndroidEnvironment, timeout_sec: int = 60) -> None:
     raise TimeoutError("Timed out waiting for sys.boot_completed=1")
 
 
+def clean_stale_avd_locks(avd_name: str) -> None:
+    for base in [Path.home() / ".android/avd", Path.home() / ".config/.android/avd"]:
+        avd_dir = base / f"{avd_name}.avd"
+        if avd_dir.is_dir():
+            for lock_item in avd_dir.glob("*.lock"):
+                try:
+                    if lock_item.is_dir():
+                        shutil.rmtree(lock_item)
+                    else:
+                        lock_item.unlink()
+                except Exception:
+                    pass
+
+
 def launch_avd(args: argparse.Namespace) -> None:
     env = AndroidEnvironment()
 
@@ -226,6 +240,7 @@ def launch_avd(args: argparse.Namespace) -> None:
     # 2. Start emulator if not already online
     emulator_proc = None
     if not is_device_online(env):
+        clean_stale_avd_locks(avd_name)
         log(f"Starting {avd_name}...")
         emu_cmd = [
             str(env.emulator),

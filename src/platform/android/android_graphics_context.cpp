@@ -253,10 +253,13 @@ bool AndroidGraphicsContext::resize(uint32_t width, uint32_t height) {
 bool AndroidGraphicsContext::present() {
     if (!m_initialized) return false;
 
-    // 1. Copy the rendered PBuffer contents into the active scanout AHardwareBuffer FBO
+    // 1. Copy the rendered PBuffer contents into the active scanout AHardwareBuffer FBO.
+    // OpenGL PBuffer coordinate origin is bottom-left (Y=0 is bottom row in PBuffer).
+    // AHardwareBuffer / Android Composer3 scanout memory origin is top-left (Row 0 is top scanline of display).
+    // Blit with inverted destination Y [0..m_height] -> [m_height..0] to map UI top to display top scanline.
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_scanoutSlots[m_currentSlotIndex].fbo);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0); // PBuffer default FBO
-    glBlitFramebuffer(0, 0, m_width, m_height, 0, 0, m_width, m_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(0, 0, m_width, m_height, 0, m_height, m_width, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glFinish();
 
     // 2. Present active AHardwareBuffer to display via Composer3

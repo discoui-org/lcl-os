@@ -202,8 +202,15 @@ bool AndroidDisplayBackend::initialize() {
         return false;
     }
 
-    // 2. Create Composer Client session
-    auto createStatus = m_impl->composer->createClient(&m_impl->client);
+    // 2. Create Composer Client session (retry if SurfaceFlinger client is still being recycled)
+    ::ndk::ScopedAStatus createStatus = ::ndk::ScopedAStatus::ok();
+    for (int retry = 0; retry < 15; ++retry) {
+        createStatus = m_impl->composer->createClient(&m_impl->client);
+        if (createStatus.isOk() && m_impl->client) {
+            break;
+        }
+        usleep(200000); // 200ms
+    }
     if (!createStatus.isOk() || !m_impl->client) {
         std::cerr << "[AndroidDisplayBackend] createClient failed: " << createStatus.getDescription() << "\n";
         return false;
