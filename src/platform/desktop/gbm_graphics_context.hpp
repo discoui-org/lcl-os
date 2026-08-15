@@ -51,6 +51,7 @@ public:
     bool readback(uint32_t*, uint32_t, uint32_t) override { return false; }
     lcl::platform::TextureHandle importTexture(const lcl::platform::INativeBuffer& buffer) override;
     void releaseTexture(lcl::platform::TextureHandle texture) override;
+    lcl::platform::TextureHandle importDmaBuf(const lcl::platform::DmaBufDescriptor& descriptor) override;
 
     // Desktop/GBM specific methods
     bool swapBuffers();

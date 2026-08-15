@@ -40,6 +40,7 @@ target_include_directories(lcl-ui PUBLIC
 )
 
 target_link_libraries(lcl-ui PUBLIC
+    lcl-platform-common
     lcl-motion
     lcl-protocol
     lcl-display-scale

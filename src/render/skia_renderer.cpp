@@ -1074,6 +1074,17 @@ uint32_t SkiaRenderer::importTexture(const lcl::platform::INativeBuffer& buffer)
     return 0;
 }
 
+uint32_t SkiaRenderer::importDmaBuf(const lcl::platform::DmaBufDescriptor& descriptor) {
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+        return m_eglBackend->importDmaBuf(descriptor);
+    }
+#else
+    (void)descriptor;
+#endif
+    return 0;
+}
+
 void SkiaRenderer::releaseTexture(uint32_t texture) {
 #ifndef LCL_SOFTWARE_ONLY
     if (m_eglBackend) m_eglBackend->releaseTexture(texture);

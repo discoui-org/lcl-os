@@ -1,7 +1,6 @@
 #include "apps/terminal/terminal_app.hpp"
-#include "core/input/key_mapper.hpp"
+#include "platform/common/keyboard_mapper.hpp"
 #include <iostream>
-#include <linux/input-event-codes.h>
 
 namespace lcl::apps {
 
@@ -218,10 +217,10 @@ void TerminalApp::resize(int width, int height) {
     m_ptyManager.resizeWindow(cols, rows);
 }
 
-void TerminalApp::handleInput(const core::InputEvent& ev) {
+void TerminalApp::handleInput(const lcl::platform::RawInputEvent& ev) {
     if (!m_initialized) return;
 
-    if (ev.type == core::InputEventType::KeyboardKey) {
+    if (ev.type == lcl::platform::RawInputEventType::KeyboardKey) {
         if (!ev.pressed) return; // Only act on key down
         m_lastInputTime = std::chrono::steady_clock::now();
 
@@ -233,20 +232,33 @@ void TerminalApp::handleInput(const core::InputEvent& ev) {
             } else if (cp <= 0x7FF) {
                 seq.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
                 seq.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+            } else if (cp <= 0xFFFF) {
+                seq.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+                seq.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                seq.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+            } else if (cp <= 0x10FFFF) {
+                seq.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
+                seq.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+                seq.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                seq.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
             }
         } else {
-            seq = core::KeyMapper::toUTF8(ev.key, ev.modifiers);
+            seq = lcl::platform::KeyboardMapper::toUTF8(ev.key, ev.modifiers);
         }
 
         if (seq.empty()) {
             // Check ANSI escape sequences for navigation keys (Up, Down, Left, Right, Home, End)
             switch (ev.key) {
-                case KEY_UP:    seq = "\033[A"; break;
-                case KEY_DOWN:  seq = "\033[B"; break;
-                case KEY_LEFT:  seq = "\033[D"; break;
-                case KEY_RIGHT: seq = "\033[C"; break;
-                case KEY_HOME:  seq = "\033[H"; break;
-                case KEY_END:   seq = "\033[F"; break;
+                case lcl::platform::PhysicalKey::ArrowUp:    seq = "\033[A"; break;
+                case lcl::platform::PhysicalKey::ArrowDown:  seq = "\033[B"; break;
+                case lcl::platform::PhysicalKey::ArrowLeft:  seq = "\033[D"; break;
+                case lcl::platform::PhysicalKey::ArrowRight: seq = "\033[C"; break;
+                case lcl::platform::PhysicalKey::Home:       seq = "\033[H"; break;
+                case lcl::platform::PhysicalKey::End:        seq = "\033[F"; break;
+                case lcl::platform::PhysicalKey::PageUp:     seq = "\033[5~"; break;
+                case lcl::platform::PhysicalKey::PageDown:   seq = "\033[6~"; break;
+                case lcl::platform::PhysicalKey::Insert:     seq = "\033[2~"; break;
+                case lcl::platform::PhysicalKey::Delete:     seq = "\033[3~"; break;
                 default: break;
             }
         }
@@ -255,15 +267,19 @@ void TerminalApp::handleInput(const core::InputEvent& ev) {
     }
 }
 
-void TerminalApp::handleKey(uint32_t keycode, bool pressed, uint8_t modifiers, char32_t codepoint) {
+void TerminalApp::handleKey(lcl::platform::PhysicalKey key, bool pressed, uint8_t modifiers, char32_t codepoint) {
     if (!m_initialized || !pressed) return;
-    core::InputEvent ev{};
-    ev.type = core::InputEventType::KeyboardKey;
-    ev.key = keycode;
+    lcl::platform::RawInputEvent ev{};
+    ev.type = lcl::platform::RawInputEventType::KeyboardKey;
+    ev.key = key;
     ev.pressed = pressed;
     ev.modifiers = modifiers;
     ev.codepoint = codepoint;
     handleInput(ev);
+}
+
+void TerminalApp::handleKey(uint32_t keycode, bool pressed, uint8_t modifiers, char32_t codepoint) {
+    handleKey(static_cast<lcl::platform::PhysicalKey>(keycode), pressed, modifiers, codepoint);
 }
 
 void TerminalApp::handleText(const std::string& text) {

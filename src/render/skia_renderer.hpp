@@ -179,6 +179,7 @@ public:
                              float opacity, const std::vector<protocol::FilterOp>& filters);
     /** Imports and composites compositor-owned native textures without CPU upload. */
     uint32_t importTexture(const lcl::platform::INativeBuffer& buffer);
+    uint32_t importDmaBuf(const lcl::platform::DmaBufDescriptor& descriptor);
     void releaseTexture(uint32_t texture);
     uint32_t importDmaBufTexture(const lcl::platform::INativeBuffer& buffer) {
         return importTexture(buffer);

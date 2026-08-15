@@ -2,11 +2,9 @@
 #include <iostream>
 #include <memory>
 
-#include <linux/input-event-codes.h>
-
 #include "apps/terminal/terminal_app.hpp"
 #include "apps/terminal/terminal_view.hpp"
-#include "core/input/key_mapper.hpp"
+#include "platform/common/keyboard_types.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
@@ -21,27 +19,27 @@ constexpr float kTitlebarHeight = 34.0f;
 constexpr float kCornerRadius = 20.0f;
 constexpr float kTitleFontSize = 14.0f;
 
-bool isTerminalControlKey(int keyCode, uint8_t modifiers) {
-    if ((modifiers & lcl::core::LCL_MOD_CTRL) != 0) {
+bool isTerminalControlKey(lcl::platform::PhysicalKey key, uint8_t modifiers) {
+    if ((modifiers & lcl::platform::kModCtrl) != 0) {
         return true;
     }
 
-    switch (keyCode) {
-        case KEY_ENTER:
-        case KEY_KPENTER:
-        case KEY_BACKSPACE:
-        case KEY_TAB:
-        case KEY_ESC:
-        case KEY_UP:
-        case KEY_DOWN:
-        case KEY_LEFT:
-        case KEY_RIGHT:
-        case KEY_HOME:
-        case KEY_END:
-        case KEY_PAGEUP:
-        case KEY_PAGEDOWN:
-        case KEY_INSERT:
-        case KEY_DELETE:
+    switch (key) {
+        case lcl::platform::PhysicalKey::Enter:
+        case lcl::platform::PhysicalKey::KpEnter:
+        case lcl::platform::PhysicalKey::Backspace:
+        case lcl::platform::PhysicalKey::Tab:
+        case lcl::platform::PhysicalKey::Escape:
+        case lcl::platform::PhysicalKey::ArrowUp:
+        case lcl::platform::PhysicalKey::ArrowDown:
+        case lcl::platform::PhysicalKey::ArrowLeft:
+        case lcl::platform::PhysicalKey::ArrowRight:
+        case lcl::platform::PhysicalKey::Home:
+        case lcl::platform::PhysicalKey::End:
+        case lcl::platform::PhysicalKey::PageUp:
+        case lcl::platform::PhysicalKey::PageDown:
+        case lcl::platform::PhysicalKey::Insert:
+        case lcl::platform::PhysicalKey::Delete:
             return true;
         default:
             return false;
@@ -164,10 +162,10 @@ int main() {
 
     window.setOnRawKeyEvent([&](const lcl::ui::KeyEvent& event) {
         if (event.type != lcl::ui::KeyEventType::KeyDown ||
-            !isTerminalControlKey(event.keyCode, event.modifiers)) {
+            !isTerminalControlKey(event.key, event.modifiers)) {
             return false;
         }
-        terminal.handleKey(static_cast<uint32_t>(event.keyCode), true, event.modifiers, event.codepoint);
+        terminal.handleKey(event.key, true, event.modifiers, event.codepoint);
         terminalViewPtr->markDirty();
         return true;
     });

@@ -982,7 +982,7 @@ bool WindowApp::sendPointerUp(float x, float y, int button) {
 }
 
 bool WindowApp::sendKeyDown(int keyCode, char32_t codepoint, uint8_t modifiers) {
-    KeyEvent ev{keyCode, codepoint, modifiers, KeyEventType::KeyDown};
+    KeyEvent ev{static_cast<lcl::platform::PhysicalKey>(keyCode), keyCode, codepoint, modifiers, KeyEventType::KeyDown};
     if (m_onRawKey && m_onRawKey(ev)) {
         return true;
     }
@@ -990,7 +990,7 @@ bool WindowApp::sendKeyDown(int keyCode, char32_t codepoint, uint8_t modifiers) 
 }
 
 bool WindowApp::sendKeyUp(int keyCode, uint8_t modifiers) {
-    KeyEvent ev{keyCode, 0, modifiers, KeyEventType::KeyUp};
+    KeyEvent ev{static_cast<lcl::platform::PhysicalKey>(keyCode), keyCode, 0, modifiers, KeyEventType::KeyUp};
     if (m_onRawKey && m_onRawKey(ev)) {
         return true;
     }

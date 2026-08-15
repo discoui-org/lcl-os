@@ -41,8 +41,10 @@ endforeach()
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 # Platform-agnostic interface library (consumed by core and render without concrete platform dependencies)
-add_library(lcl-platform-common INTERFACE)
-target_include_directories(lcl-platform-common INTERFACE
+add_library(lcl-platform-common STATIC
+    src/platform/common/keyboard_mapper.cpp
+)
+target_include_directories(lcl-platform-common PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
@@ -152,6 +154,8 @@ target_compile_options(lcl-canvas-skia PRIVATE
 add_library(lcl-platform-desktop STATIC
     src/platform/desktop/drm_display_backend.cpp
     src/platform/desktop/gbm_graphics_context.cpp
+    src/platform/desktop/evdev_input_backend.cpp
+    src/platform/desktop/evdev_key_mapper.cpp
 )
 
 target_include_directories(lcl-platform-desktop PUBLIC
@@ -160,6 +164,8 @@ target_include_directories(lcl-platform-desktop PUBLIC
     ${GBM_INCLUDE_DIRS}
     ${EGL_INCLUDE_DIRS}
     ${GLES2_INCLUDE_DIRS}
+    ${LIBINPUT_INCLUDE_DIRS}
+    ${UDEV_INCLUDE_DIRS}
 )
 
 target_link_libraries(lcl-platform-desktop PUBLIC
@@ -169,6 +175,8 @@ target_link_libraries(lcl-platform-desktop PUBLIC
     ${GBM_LIBRARIES}
     ${EGL_LIBRARIES}
     ${GLES2_LIBRARIES}
+    ${LIBINPUT_LIBRARIES}
+    ${UDEV_LIBRARIES}
 )
 
 target_compile_options(lcl-platform-desktop PRIVATE
@@ -176,6 +184,8 @@ target_compile_options(lcl-platform-desktop PRIVATE
     ${GBM_CFLAGS_OTHER}
     ${EGL_CFLAGS_OTHER}
     ${GLES2_CFLAGS_OTHER}
+    ${LIBINPUT_CFLAGS_OTHER}
+    ${UDEV_CFLAGS_OTHER}
 )
 
 # Compositor-owned render/present layer.
@@ -222,7 +232,6 @@ add_executable(lcl-core
     src/core/scene/scene_registry.cpp
     src/core/scene/shell_state_broker.cpp
     src/core/input/input_manager.cpp
-    src/core/input/key_mapper.cpp
     src/core/ipc/ipc_manager.cpp
 )
 
@@ -307,7 +316,6 @@ add_executable(lcl-terminal
     src/tools/terminal_main.cpp
     src/apps/terminal/terminal_app.cpp
     src/apps/terminal/terminal_view.cpp
-    src/core/input/key_mapper.cpp
     src/core/terminal/pty_manager.cpp
 )
 
@@ -389,7 +397,6 @@ if(BUILD_TESTS)
         src/core/app/app_bundle_parser.cpp
         src/core/display/display_scale.cpp
         src/core/input/input_manager.cpp
-        src/core/input/key_mapper.cpp
         src/render/window_chrome_widget.cpp
         src/render/window_manager.cpp
         src/binding/js_runtime.cpp

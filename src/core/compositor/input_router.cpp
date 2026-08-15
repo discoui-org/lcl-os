@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <linux/input-event-codes.h>
 #include <vector>
 
 namespace lcl::core {
@@ -24,13 +23,11 @@ uint32_t physicalToLogical(uint32_t value, float scale) {
     return std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(value) / scale)));
 }
 
-uint32_t toClientPointerButton(uint32_t linuxButton) {
-    switch (linuxButton) {
-        case BTN_LEFT: return 0;
-        case BTN_MIDDLE: return 1;
-        case BTN_RIGHT: return 2;
-        default: return linuxButton;
-    }
+uint32_t toClientPointerButton(uint32_t button) {
+    if (button == 0x110 || button == 0) return 0; // Primary / Left
+    if (button == 0x112 || button == 1) return 1; // Middle
+    if (button == 0x111 || button == 2) return 2; // Secondary / Right
+    return button;
 }
 
 } // namespace
@@ -248,7 +245,7 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
         protocol::LCLMsgInputEvent input{};
         input.surfaceId = surfaceId;
         input.type = event.pressed ? 1 : 2;
-        input.key = event.key;
+        input.key = static_cast<uint32_t>(event.key);
         input.pressed = event.pressed ? 1 : 0;
         input.modifiers = event.modifiers;
         input.codepoint = event.codepoint;

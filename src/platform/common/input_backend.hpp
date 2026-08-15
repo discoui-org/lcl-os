@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include "platform/common/keyboard_types.hpp"
 
 namespace lcl::platform {
 
@@ -25,7 +26,7 @@ struct RawInputEvent {
     uint32_t button{0};
     bool pressed{false};
     bool isRepeat{false};
-    uint32_t key{0};
+    PhysicalKey key{PhysicalKey::Unknown};
     bool superPressed{false};
     uint8_t modifiers{0};
     char32_t codepoint{0};

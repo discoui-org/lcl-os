@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <variant>
+#include "platform/common/keyboard_types.hpp"
 
 namespace lcl::ui {
 
@@ -30,10 +31,17 @@ enum class KeyEventType {
 };
 
 struct KeyEvent {
+    lcl::platform::PhysicalKey key{lcl::platform::PhysicalKey::Unknown};
     int keyCode{0};
     char32_t codepoint{0};
     uint8_t modifiers{0}; // Bitfield for Shift, Ctrl, Alt
     KeyEventType type{KeyEventType::KeyDown};
+
+    KeyEvent() = default;
+    KeyEvent(int code, char32_t cp = 0, uint8_t mods = 0, KeyEventType t = KeyEventType::KeyDown)
+        : key(static_cast<lcl::platform::PhysicalKey>(code)), keyCode(code), codepoint(cp), modifiers(mods), type(t) {}
+    KeyEvent(lcl::platform::PhysicalKey k, int code, char32_t cp = 0, uint8_t mods = 0, KeyEventType t = KeyEventType::KeyDown)
+        : key(k), keyCode(code), codepoint(cp), modifiers(mods), type(t) {}
 };
 
 struct TextInputEvent {

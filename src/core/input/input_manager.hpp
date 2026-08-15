@@ -1,42 +1,29 @@
 #pragma once
 
-#include <string>
-#include <vector>
-#include <memory>
+#include <cstdint>
 #include <functional>
-#include <libinput.h>
-#include <libudev.h>
+#include <memory>
+#include <string>
+
+#include "platform/common/input_backend.hpp"
 
 namespace lcl::core {
 
-enum class InputEventType {
-    Unknown,
-    PointerMotion,
-    PointerButton,
-    KeyboardKey
-};
+using InputEventType = lcl::platform::RawInputEventType;
+using InputEvent = lcl::platform::RawInputEvent;
 
-struct InputEvent {
-    InputEventType type{InputEventType::Unknown};
-    double dx{0.0};
-    double dy{0.0};
-    double absoluteX{-1.0};
-    double absoluteY{-1.0};
-    uint32_t button{0};
-    bool pressed{false};
-    bool isRepeat{false};
-    uint32_t key{0};
-    bool superPressed{false};
-    uint8_t modifiers{0};
-    char32_t codepoint{0};
-    std::string deviceName;
-};
-
+/**
+ * @brief Platform-agnostic Compositor InputManager.
+ *
+ * Delegates all hardware event listening and dispatching to IInputBackend.
+ * Completely free of any Linux evdev, libinput, udev, or netlink headers.
+ */
 class InputManager {
 public:
-    using EventCallback = std::function<void(const InputEvent&)>;
+    using EventCallback = lcl::platform::InputEventCallback;
 
     InputManager();
+    explicit InputManager(std::unique_ptr<lcl::platform::IInputBackend> backend);
     ~InputManager();
 
     // Non-copyable
@@ -48,90 +35,33 @@ public:
     InputManager& operator=(InputManager&&) noexcept;
 
     /**
-     * @brief Initialize input subsystem. Tries libinput (udev) first,
-     *        then falls back to raw Linux evdev (no udev required).
-     * @param seatName Seat identifier (default: "seat0")
-     * @return true if any input backend initialized successfully
+     * @brief Initialize input subsystem with given backend.
+     * @param backend Platform-specific input backend instance
+     * @return true if backend initialized successfully
      */
-    bool initialize(const std::string& seatName = "seat0");
+    bool initialize(std::unique_ptr<lcl::platform::IInputBackend> backend);
 
-    void setEventCallback(EventCallback cb) { m_eventCallback = std::move(cb); }
+    void setEventCallback(EventCallback cb);
 
     /**
      * @brief Poll and process pending input events.
-     * @param screenWidth  Screen width for absolute coordinate scaling
-     * @param screenHeight Screen height for absolute coordinate scaling
+     * @param screenWidth  Screen width for coordinate scaling
+     * @param screenHeight Screen height for coordinate scaling
      * @return Number of events dispatched
      */
     size_t dispatchEvents(int screenWidth = 1024, int screenHeight = 768);
 
     void shutdown();
 
-    bool isInitialized() const { return m_initialized; }
-    int getFD() const;
+    bool isInitialized() const { return m_initialized && m_backend != nullptr; }
+    int getFD() const { return -1; }
+
+    lcl::platform::IInputBackend* getBackend() { return m_backend.get(); }
 
 private:
-    bool initWithLibinputUdev(const std::string& seatName);
-    bool initWithEvdev();
-
-    size_t dispatchLibinputEvents(int screenWidth, int screenHeight);
-    size_t dispatchEvdevEvents(int screenWidth, int screenHeight);
-
-    void cleanup();
-
-    // libinput backend
-    struct udev* m_udev{nullptr};
-    struct libinput* m_libinput{nullptr};
-
-    // Raw evdev backend
-    struct EvdevDevice {
-        int fd{-1};
-        std::string path;
-        std::string name;
-        bool hasRelX{false};
-        bool hasRelY{false};
-        bool hasAbsX{false};
-        bool hasAbsY{false};
-        bool isTouchpad{false};
-
-        int absXMin{0}, absXMax{1};
-        int absYMin{0}, absYMax{1};
-        int currentAbsX{-1};
-        int currentAbsY{-1};
-
-        // Touchpad tracking
-        int lastTouchX{-1};
-        int lastTouchY{-1};
-        bool isTouching{false};
-
-        bool absXUpdated{false};
-        bool absYUpdated{false};
-        double currentRelX{0.0};
-        double currentRelY{0.0};
-        bool relXUpdated{false};
-        bool relYUpdated{false};
-    };
-    std::vector<EvdevDevice> m_evdevDevices;
-
-    bool initUeventSocket();
-    void processUeventHotplug();
-    size_t rescanEvdevDevices();
-    void performPeriodicRescan();
-
-    int m_netlinkFd{-1};
-    uint64_t m_dispatchCounter{0};
-    std::string m_seatName;
+    std::unique_ptr<lcl::platform::IInputBackend> m_backend;
     EventCallback m_eventCallback;
     bool m_initialized{false};
-    bool m_usingEvdev{false};
-    bool m_superPressed{false};
-    bool m_shiftPressed{false};
-    bool m_ctrlPressed{false};
-    bool m_altPressed{false};
-    bool m_capsLockActive{false};
-
-    uint8_t getActiveModifiers() const;
 };
 
 } // namespace lcl::core
-

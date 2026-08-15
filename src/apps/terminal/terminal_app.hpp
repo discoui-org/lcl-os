@@ -4,7 +4,8 @@
 #include <vector>
 #include <chrono>
 #include "core/terminal/pty_manager.hpp"
-#include "core/input/input_manager.hpp"
+#include "platform/common/input_backend.hpp"
+#include "platform/common/keyboard_mapper.hpp"
 
 namespace lcl::apps {
 
@@ -33,8 +34,10 @@ public:
      * Pure PTY passthrough — all line editing, history, and tab completion
      * is delegated to the shell (bash/readline) inside the PTY.
      */
-    void handleInput(const core::InputEvent& ev);
+    void handleInput(const lcl::platform::RawInputEvent& ev);
+    void handleKey(lcl::platform::PhysicalKey key, bool pressed, uint8_t modifiers = 0, char32_t codepoint = 0);
     void handleKey(uint32_t keycode, bool pressed, uint8_t modifiers = 0, char32_t codepoint = 0);
+
     /** Write UTF-8 text received from WindowApp's text-input lifecycle. */
     void handleText(const std::string& text);
 

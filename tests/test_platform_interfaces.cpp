@@ -194,6 +194,7 @@ TEST(PlatformInterfacesTest, PlatformServicesComposition) {
 #include "platform/desktop/drm_display_backend.hpp"
 #include "platform/desktop/gbm_graphics_context.hpp"
 #include "platform/desktop/dma_buf_native_buffer.hpp"
+#include "platform/desktop/evdev_input_backend.hpp"
 
 TEST(DesktopPlatformTest, DrmDisplayBackendImplementsIDisplayBackend) {
     lcl::platform::desktop::DrmDisplayBackend drmBackend;
@@ -227,3 +228,23 @@ TEST(DesktopPlatformTest, DmaBufNativeBufferImplementsINativeBuffer) {
     EXPECT_EQ(dmaBuf.modifier(), 0x12345678ULL);
 }
 
+TEST(DesktopPlatformTest, EvdevInputBackendImplementsIInputBackend) {
+    lcl::platform::desktop::EvdevInputBackend inputBackend;
+    lcl::platform::IInputBackend& iface = inputBackend;
+
+    EXPECT_FALSE(iface.isInitialized());
+    EXPECT_EQ(inputBackend.getFd(), -1);
+
+    bool callbackCalled = false;
+    bool init = iface.initialize([&](const lcl::platform::RawInputEvent&) {
+        callbackCalled = true;
+    });
+    // On host without udevd/input nodes, falls back gracefully or succeeds
+    if (init) {
+        EXPECT_TRUE(iface.isInitialized());
+        iface.pollEvents(1920, 1080);
+        iface.shutdown();
+        EXPECT_FALSE(iface.isInitialized());
+    }
+    (void)callbackCalled;
+}

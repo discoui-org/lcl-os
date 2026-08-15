@@ -482,6 +482,12 @@ lcl::platform::TextureHandle GbmGraphicsContext::importTexture(const lcl::platfo
     return texture;
 }
 
+lcl::platform::TextureHandle GbmGraphicsContext::importDmaBuf(const lcl::platform::DmaBufDescriptor& descriptor) {
+    DmaBufNativeBuffer buffer(descriptor.fd, descriptor.width, descriptor.height,
+                              descriptor.stride, descriptor.format, descriptor.modifier);
+    return importTexture(buffer);
+}
+
 void GbmGraphicsContext::releaseTexture(lcl::platform::TextureHandle texture) {
     const auto found = m_importedDmaBufImages.find(texture);
     if (found == m_importedDmaBufImages.end()) return;

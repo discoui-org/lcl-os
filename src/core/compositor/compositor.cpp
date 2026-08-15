@@ -1,5 +1,6 @@
 #include "core/compositor/compositor.hpp"
 #include "core/display/display_scale.hpp"
+#include "platform/desktop/evdev_input_backend.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -69,7 +70,7 @@ bool Compositor::initialize() {
     }
 
     // --- Input (libinput → evdev fallback) ---
-    if (!m_inputManager.initialize("seat0")) {
+    if (!m_inputManager.initialize(std::make_unique<platform::desktop::EvdevInputBackend>())) {
         std::cout << "[LCL Core] Input subsystem running in fallback/skeleton mode.\n";
     }
 

@@ -33,6 +33,12 @@ public:
     // Opaque polymorphic native buffer texture import/release
     virtual TextureHandle importTexture(const INativeBuffer& buffer) = 0;
     virtual void releaseTexture(TextureHandle texture) = 0;
+
+    // IPC DMA-BUF descriptor convenience import
+    virtual TextureHandle importDmaBuf(const DmaBufDescriptor& descriptor) {
+        (void)descriptor;
+        return kInvalidTextureHandle;
+    }
 };
 
 } // namespace lcl::platform

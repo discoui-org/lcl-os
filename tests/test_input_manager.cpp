@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 #include "core/input/input_manager.hpp"
-#include <linux/input-event-codes.h>
+#include "platform/desktop/evdev_input_backend.hpp"
 
 using namespace lcl::core;
 
@@ -17,7 +17,7 @@ TEST(InputManagerTest, DefaultEventProperties) {
 TEST(InputManagerTest, LifecycleInitializeAndShutdown) {
     InputManager input;
     // On systems where udev/evdev is accessible, initialize succeeds or falls back gracefully
-    bool init = input.initialize("seat0");
+    bool init = input.initialize(std::make_unique<lcl::platform::desktop::EvdevInputBackend>());
     EXPECT_TRUE(init);
     EXPECT_TRUE(input.isInitialized());
     input.shutdown();
