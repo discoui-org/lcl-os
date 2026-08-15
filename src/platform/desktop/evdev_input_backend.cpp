@@ -343,6 +343,8 @@ size_t EvdevInputBackend::dispatchLibinputEvents(int screenWidth, int screenHeig
                 outEv.type = RawInputEventType::PointerMotion;
                 outEv.dx = libinput_event_pointer_get_dx(p);
                 outEv.dy = libinput_event_pointer_get_dy(p);
+                outEv.superPressed = m_superPressed;
+                outEv.modifiers = getActiveModifiers();
                 if (m_callback) m_callback(outEv);
                 break;
             }
@@ -351,14 +353,18 @@ size_t EvdevInputBackend::dispatchLibinputEvents(int screenWidth, int screenHeig
                 outEv.type = RawInputEventType::PointerMotion;
                 outEv.absoluteX = libinput_event_pointer_get_absolute_x_transformed(p, screenWidth);
                 outEv.absoluteY = libinput_event_pointer_get_absolute_y_transformed(p, screenHeight);
+                outEv.superPressed = m_superPressed;
+                outEv.modifiers = getActiveModifiers();
                 if (m_callback) m_callback(outEv);
                 break;
             }
             case LIBINPUT_EVENT_POINTER_BUTTON: {
                 auto* p = libinput_event_get_pointer_event(event);
                 outEv.type = RawInputEventType::PointerButton;
-                outEv.button = libinput_event_pointer_get_button(p);
+                outEv.button = EvdevKeyMapper::toPointerButton(libinput_event_pointer_get_button(p));
                 outEv.pressed = libinput_event_pointer_get_button_state(p) == LIBINPUT_BUTTON_STATE_PRESSED;
+                outEv.superPressed = m_superPressed;
+                outEv.modifiers = getActiveModifiers();
                 if (m_callback) m_callback(outEv);
                 break;
             }
@@ -465,6 +471,8 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     outEv.deviceName = dev.name;
                     outEv.dx = dev.currentRelX;
                     outEv.dy = dev.currentRelY;
+                    outEv.superPressed = m_superPressed;
+                    outEv.modifiers = getActiveModifiers();
                     if (m_callback) m_callback(outEv);
 
                     dev.currentRelX = 0.0;
@@ -504,6 +512,8 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                                 outEv.deviceName = dev.name;
                                 outEv.dx = dx;
                                 outEv.dy = dy;
+                                outEv.superPressed = m_superPressed;
+                                outEv.modifiers = getActiveModifiers();
                                 m_callback(outEv);
                             }
                         }
@@ -523,6 +533,8 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                         outEv.absoluteY = (dev.currentAbsY >= 0)
                             ? (static_cast<double>(dev.currentAbsY - dev.absYMin) / rangeY * screenHeight)
                             : -1.0;
+                        outEv.superPressed = m_superPressed;
+                        outEv.modifiers = getActiveModifiers();
 
                         if (m_callback) m_callback(outEv);
                     }
@@ -535,8 +547,10 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     RawInputEvent outEv{};
                     outEv.deviceName = dev.name;
                     outEv.type = RawInputEventType::PointerButton;
-                    outEv.button = 0; // Primary / Left
+                    outEv.button = PointerButton::Left;
                     outEv.pressed = (ev.value != 0);
+                    outEv.superPressed = m_superPressed;
+                    outEv.modifiers = getActiveModifiers();
                     if (ev.value != 0) {
                         dev.isTouching = true;
                         dev.lastTouchX = dev.currentAbsX;
@@ -552,8 +566,10 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     RawInputEvent outEv{};
                     outEv.deviceName = dev.name;
                     outEv.type = RawInputEventType::PointerButton;
-                    outEv.button = (ev.code == BTN_LEFT) ? 0 : (ev.code == BTN_MIDDLE ? 1 : 2);
+                    outEv.button = EvdevKeyMapper::toPointerButton(ev.code);
                     outEv.pressed = (ev.value != 0);
+                    outEv.superPressed = m_superPressed;
+                    outEv.modifiers = getActiveModifiers();
                     if (m_callback) m_callback(outEv);
                     count++;
                 } else if (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER) {

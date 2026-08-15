@@ -8,8 +8,7 @@
 #include <vector>
 #include <cstdint>
 
-#include "core/display/display_manager.hpp"
-#include "core/input/input_manager.hpp"
+#include "platform/common/platform_services.hpp"
 #include "core/ipc/ipc_manager.hpp"
 #include "core/compositor/surface_registry.hpp"
 #include "core/compositor/input_router.hpp"
@@ -27,15 +26,12 @@ namespace lcl::core {
 /**
  * @brief LCL Compositor — Pure Display Server & Compositor orchestrator.
  *
- * Responsibilities:
- *  - Subsystem initialization and ordered shutdown
- *  - IPC message and protocol packet dispatch
- *  - Direct DRM/KMS and EGL hardware-accelerated frame composition
- *  - Frame pacing at target display refresh rate
+ * Consumes platform-agnostic IPlatformServices injected via composition root.
+ * Completely free of any platform-specific DRM, GBM, EGL, or evdev types.
  */
 class Compositor {
 public:
-    Compositor();
+    explicit Compositor(lcl::platform::IPlatformServices& platformServices);
     ~Compositor();
 
     // Non-copyable, non-moveable
@@ -43,8 +39,8 @@ public:
     Compositor& operator=(const Compositor&) = delete;
 
     /**
-     * @brief Initialize all subsystems in dependency order.
-     * @return true if core subsystems came up, false on fatal error.
+     * @brief Initialize all core compositor subsystems.
+     * @return true if core subsystems initialized successfully, false on fatal error.
      */
     bool initialize();
 
@@ -74,17 +70,16 @@ private:
     void renderDiagnosticOverlay();
     void synchronizeShellState();
 
+    // Injected Platform Services reference
+    lcl::platform::IPlatformServices& m_platformServices;
+
     // Subsystems — declared in init order, destructed in reverse
-    DisplayManager         m_displayManager;
-    InputManager           m_inputManager;
     IPCManager             m_ipcManager;
     render::Renderer       m_renderer;
     render::WindowManager  m_windowManager;
 
     /// IPC surface registry: (clientFd << 32 | surfaceId) → SurfaceEntry
     SurfaceRegistry m_surfaces;
-    // Scene/focus are compositor-owned authority.  The broker is intentionally
-    // transport-free until the typed shell subscription layer is introduced.
     SceneRegistry m_sceneRegistry;
     FocusController m_focusController;
     ShellStateBroker m_shellStateBroker;

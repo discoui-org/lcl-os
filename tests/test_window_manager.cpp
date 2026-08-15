@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <linux/input-event-codes.h>
 
 #include "render/window_manager.hpp"
 
@@ -258,7 +257,7 @@ TEST(WindowManagerTest, PresentedBoundsOwnResizeHitTestingDuringMorph) {
 
     lcl::core::InputEvent down{};
     down.type = lcl::core::InputEventType::PointerButton;
-    down.button = BTN_LEFT;
+    down.button = lcl::platform::PointerButton::Left;
     down.pressed = true;
     const auto result = manager.processInputEvent(down);
     ASSERT_TRUE(result.interaction);
@@ -288,7 +287,7 @@ TEST(WindowManagerTest, NewDragInvalidatesSnapRollbackAndLateResizeCommit) {
     manager.processInputEvent(motion);
     lcl::core::InputEvent release{};
     release.type = lcl::core::InputEventType::PointerButton;
-    release.button = BTN_LEFT;
+    release.button = lcl::platform::PointerButton::Left;
     release.pressed = false;
     manager.processInputEvent(release);
     ASSERT_TRUE(findWindow(manager, id)->isSnappingBack());
@@ -375,4 +374,140 @@ TEST(WindowManagerTest, ServerChromeControlsRemainInteractiveDuringGeometryMorph
     up.pressed = false;
     EXPECT_TRUE(manager.processInputEvent(up));
     EXPECT_EQ(findWindow(manager, id)->chrome.pressedControl(), -1);
+}
+
+TEST(WindowManagerRegressionTest, SuperLeftDragMovesWindow) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1920, 1080));
+    const uint32_t id = manager.createWindow("TestWindow", 100, 100, 400, 300);
+
+    const auto* win = findWindow(manager, id);
+    ASSERT_NE(win, nullptr);
+    EXPECT_EQ(win->x, 100);
+    EXPECT_EQ(win->y, 100);
+
+    // 1. Move cursor inside window bounds
+    lcl::core::InputEvent motion{};
+    motion.type = lcl::core::InputEventType::PointerMotion;
+    motion.absoluteX = 200.0;
+    motion.absoluteY = 200.0;
+    manager.processInputEvent(motion);
+
+    // 2. Press Super + Left Button
+    lcl::core::InputEvent down{};
+    down.type = lcl::core::InputEventType::PointerButton;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.superPressed = true;
+    const auto downResult = manager.processInputEvent(down);
+    EXPECT_TRUE(downResult.stateChanged);
+
+    const auto* draggingWin = findWindow(manager, id);
+    ASSERT_NE(draggingWin, nullptr);
+    EXPECT_TRUE(draggingWin->isDragging());
+
+    // 3. Move pointer with drag (+50px X, +30px Y)
+    motion.absoluteX = 250.0;
+    motion.absoluteY = 230.0;
+    EXPECT_TRUE(manager.processInputEvent(motion));
+
+    const auto* movedWin = findWindow(manager, id);
+    ASSERT_NE(movedWin, nullptr);
+    EXPECT_EQ(movedWin->x, 150);
+    EXPECT_EQ(movedWin->y, 130);
+
+    // 4. Release Left Button
+    lcl::core::InputEvent up = down;
+    up.pressed = false;
+    manager.processInputEvent(up);
+    EXPECT_FALSE(findWindow(manager, id)->isDragging());
+}
+
+TEST(WindowManagerRegressionTest, SuperRightDragResizesWindow) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1920, 1080));
+    const uint32_t id = manager.createWindow("TestWindow", 100, 100, 400, 300);
+
+    // 1. Move cursor near bottom-right quadrant of window
+    lcl::core::InputEvent motion{};
+    motion.type = lcl::core::InputEventType::PointerMotion;
+    motion.absoluteX = 450.0;
+    motion.absoluteY = 350.0;
+    manager.processInputEvent(motion);
+
+    // 2. Press Super + Right Button
+    lcl::core::InputEvent down{};
+    down.type = lcl::core::InputEventType::PointerButton;
+    down.button = lcl::platform::PointerButton::Right;
+    down.pressed = true;
+    down.superPressed = true;
+    const auto downResult = manager.processInputEvent(down);
+    EXPECT_TRUE(downResult.stateChanged);
+
+    const auto* resizingWin = findWindow(manager, id);
+    ASSERT_NE(resizingWin, nullptr);
+    EXPECT_TRUE(resizingWin->isResizing());
+    EXPECT_EQ(resizingWin->resizeEdge, lcl::render::ResizeEdge::BottomRight);
+
+    // 3. Move pointer outwards (+60px X, +40px Y)
+    motion.absoluteX = 510.0;
+    motion.absoluteY = 390.0;
+    EXPECT_TRUE(manager.processInputEvent(motion));
+
+    const auto* resizedWin = findWindow(manager, id);
+    ASSERT_NE(resizedWin, nullptr);
+    EXPECT_EQ(resizedWin->pendingWidth, 460);
+    EXPECT_EQ(resizedWin->pendingHeight, 340);
+
+    // 4. Release Right Button
+    lcl::core::InputEvent up = down;
+    up.pressed = false;
+    manager.processInputEvent(up);
+    EXPECT_FALSE(findWindow(manager, id)->isResizing());
+}
+
+TEST(WindowManagerRegressionTest, SsdTitlebarDragMovesWindow) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1920, 1080));
+    const uint32_t id = manager.createWindow("TestWindow", 100, 100, 400, 300);
+    auto* winMut = const_cast<lcl::render::Window*>(findWindow(manager, id));
+    ASSERT_NE(winMut, nullptr);
+    winMut->decorationMode = lcl::render::DecorationMode::SSD;
+
+    // Titlebar height is 32px; titlebar spans y: [100, 132), center at (200, 116)
+    // 1. Move pointer to titlebar
+    lcl::core::InputEvent motion{};
+    motion.type = lcl::core::InputEventType::PointerMotion;
+    motion.absoluteX = 200.0;
+    motion.absoluteY = 116.0;
+    manager.processInputEvent(motion);
+
+    // 2. Normal Left Click (Super = false) on titlebar
+    lcl::core::InputEvent down{};
+    down.type = lcl::core::InputEventType::PointerButton;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.superPressed = false;
+    const auto downResult = manager.processInputEvent(down);
+    EXPECT_TRUE(downResult.stateChanged);
+
+    const auto* draggingWin = findWindow(manager, id);
+    ASSERT_NE(draggingWin, nullptr);
+    EXPECT_TRUE(draggingWin->isDragging());
+
+    // 3. Drag window (+80px X, +50px Y)
+    motion.absoluteX = 280.0;
+    motion.absoluteY = 166.0;
+    EXPECT_TRUE(manager.processInputEvent(motion));
+
+    const auto* movedWin = findWindow(manager, id);
+    ASSERT_NE(movedWin, nullptr);
+    EXPECT_EQ(movedWin->x, 180);
+    EXPECT_EQ(movedWin->y, 150);
+
+    // 4. Release Left Button
+    lcl::core::InputEvent up = down;
+    up.pressed = false;
+    manager.processInputEvent(up);
+    EXPECT_FALSE(findWindow(manager, id)->isDragging());
 }

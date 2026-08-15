@@ -1,7 +1,7 @@
 #pragma once
 
 #include "core/compositor/surface_registry.hpp"
-#include "core/display/display_manager.hpp"
+#include "platform/common/display_backend.hpp"
 #include "render/renderer.hpp"
 #include "render/window_manager.hpp"
 
@@ -13,7 +13,7 @@ namespace lcl::core {
 class CompositorRenderer {
 public:
     void render(render::Renderer& renderer,
-                DisplayManager& displayManager,
+                lcl::platform::IDisplayBackend& displayBackend,
                 const render::WindowManager& windowManager,
                 const SurfaceRegistry::Snapshot& surfaces,
                 const std::function<void()>& beforePresent = {}) const;

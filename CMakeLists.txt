@@ -156,6 +156,8 @@ add_library(lcl-platform-desktop STATIC
     src/platform/desktop/gbm_graphics_context.cpp
     src/platform/desktop/evdev_input_backend.cpp
     src/platform/desktop/evdev_key_mapper.cpp
+    src/platform/desktop/desktop_runtime_paths.cpp
+    src/platform/desktop/desktop_platform_services.cpp
 )
 
 target_include_directories(lcl-platform-desktop PUBLIC
@@ -216,11 +218,8 @@ target_compile_options(lcl-render PRIVATE
     ${GLES2_CFLAGS_OTHER}
 )
 
-# Main Compositor Executable Target
-add_executable(lcl-core
-    src/main.cpp
-    src/core/display/display_manager.cpp
-    src/core/display/egl_backend.cpp
+# Platform-agnostic Core Compositor Engine Library
+add_library(lcl-core-engine STATIC
     src/core/compositor/compositor.cpp
     src/core/compositor/compositor_renderer.cpp
     src/core/compositor/frame_scheduler.cpp
@@ -235,27 +234,32 @@ add_executable(lcl-core
     src/core/ipc/ipc_manager.cpp
 )
 
+target_include_directories(lcl-core-engine PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(lcl-core-engine PUBLIC
+    lcl-render
+    lcl-platform-common
+    lcl-protocol
+    lcl-display-scale
+    lcl-session
+    lcl-motion
+    Threads::Threads
+)
+
+# Main Compositor Executable Target (Desktop Composition Root)
+add_executable(lcl-core
+    src/main.cpp
+)
+
 target_include_directories(lcl-core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${DRM_INCLUDE_DIRS}
-    ${GBM_INCLUDE_DIRS}
-    ${EGL_INCLUDE_DIRS}
-    ${GLES2_INCLUDE_DIRS}
-    ${LIBINPUT_INCLUDE_DIRS}
-    ${UDEV_INCLUDE_DIRS}
 )
 
 target_link_libraries(lcl-core PRIVATE
-    lcl-render
+    lcl-core-engine
     lcl-platform-desktop
-    lcl-protocol
-    ${LIBINPUT_LIBRARIES}
-    ${UDEV_LIBRARIES}
-    ${DRM_LIBRARIES}
-    ${GBM_LIBRARIES}
-    ${EGL_LIBRARIES}
-    ${GLES2_LIBRARIES}
-    Threads::Threads
 )
 
 target_compile_options(lcl-core PRIVATE

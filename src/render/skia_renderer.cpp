@@ -2,7 +2,6 @@
 #include "render/backdrop_filter_geometry.hpp"
 #include "render/dma_buf_crop.hpp"
 #ifndef LCL_SOFTWARE_ONLY
-#include "core/display/egl_context.hpp"
 #include <GLES2/gl2.h>
 #endif
 #include <iostream>

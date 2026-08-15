@@ -18,6 +18,10 @@ class IPlatformServices {
 public:
     virtual ~IPlatformServices() = default;
 
+    virtual bool initialize() = 0;
+    virtual void shutdown() = 0;
+    virtual bool isInitialized() const = 0;
+
     virtual IDisplayBackend& display() = 0;
     virtual IGraphicsContext& graphics() = 0;
     virtual IInputBackend& input() = 0;

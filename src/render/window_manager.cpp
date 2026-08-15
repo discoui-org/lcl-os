@@ -4,7 +4,6 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
-#include <linux/input-event-codes.h>
 
 namespace lcl::render {
 
@@ -360,7 +359,7 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                     }
 
                     // Controls share the exact WindowChrome layout used to draw SSD.
-                    if (event.superPressed && event.button == BTN_MIDDLE) {
+                    if (event.superPressed && event.button == lcl::platform::PointerButton::Middle) {
                         targetWin.closeRequested = true;
                         targetWin.markDirty();
                         stateChanged = true;
@@ -370,7 +369,7 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                         stateChanged = true;
                     } else if (event.superPressed) {
                         // GNOME / KDE Style Super Shortcuts
-                        if (event.button == BTN_LEFT) {
+                        if (event.button == lcl::platform::PointerButton::Left) {
                             // Super + Left Click = Move
                             const uint64_t generation = beginGeometryInteraction(
                                 targetWin, GeometryPhase::Drag);
@@ -379,7 +378,7 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                             interaction = GeometryInteraction::manual(targetWin.id, generation);
                             targetWin.markDirty();
                             stateChanged = true;
-                        } else if (event.button == BTN_RIGHT) {
+                        } else if (event.button == lcl::platform::PointerButton::Right) {
                             // Super + Right Click = Normalized Aspect-Aware Grid
                             double normX = (visibleBounds.width > 0.0f)
                                 ? static_cast<double>(m_mouseX - visibleBounds.x) /
@@ -412,7 +411,7 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                             targetWin.markDirty();
                             stateChanged = true;
                         }
-                    } else if (event.button == BTN_LEFT) {
+                    } else if (event.button == lcl::platform::PointerButton::Left) {
                         // Normal Left Click
                         ResizeEdge edge = detectResizeEdge(m_mouseX, m_mouseY, targetWin);
                         if (edge != ResizeEdge::None) {

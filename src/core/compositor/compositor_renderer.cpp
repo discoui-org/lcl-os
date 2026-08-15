@@ -27,7 +27,7 @@ std::string truncateTitle(const std::string& title, float width, float fontSize)
 } // namespace
 
 void CompositorRenderer::render(render::Renderer& renderer,
-                                 DisplayManager& displayManager,
+                                 lcl::platform::IDisplayBackend& displayBackend,
                                  const render::WindowManager& windowManager,
                                  const SurfaceRegistry::Snapshot& surfaces,
                                  const std::function<void()>& beforePresent) const {
@@ -352,8 +352,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
     }
 
     // 3. Hardware cursor only (no software cursor fallback)
-    if (displayManager.isHardwareCursorActive()) {
-        displayManager.moveHardwareCursor(windowManager.getMouseX(), windowManager.getMouseY());
+    if (displayBackend.isHardwareCursorActive()) {
+        displayBackend.moveHardwareCursor(windowManager.getMouseX(), windowManager.getMouseY());
     }
 
     if (beforePresent) beforePresent();

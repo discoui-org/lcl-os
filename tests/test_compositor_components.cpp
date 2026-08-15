@@ -4,7 +4,6 @@
 #include <cerrno>
 #include <cstdlib>
 #include <fcntl.h>
-#include <linux/input-event-codes.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -356,7 +355,7 @@ TEST(InputRouterTest, SsdMaximizeBeginsMorphTransactionWithoutReleasingCurrentTe
     router.route(move);
     InputEvent down{};
     down.type = InputEventType::PointerButton;
-    down.button = BTN_LEFT;
+    down.button = lcl::platform::PointerButton::Left;
     down.pressed = true;
     ASSERT_TRUE(router.route(down));
     InputEvent up = down;
@@ -483,7 +482,7 @@ TEST(InputRouterTest, ManualGestureCancelsOutstandingGeometryRollback) {
 
     InputEvent down{};
     down.type = InputEventType::PointerButton;
-    down.button = BTN_LEFT;
+    down.button = lcl::platform::PointerButton::Left;
     down.pressed = true;
     EXPECT_TRUE(router.route(down));
 
@@ -517,7 +516,7 @@ TEST(InputRouterTest, RestoreVisibilityTransitionBlocksPointerDispatch) {
 
     InputEvent down{};
     down.type = InputEventType::PointerButton;
-    down.button = BTN_LEFT;
+    down.button = lcl::platform::PointerButton::Left;
     down.pressed = true;
     EXPECT_FALSE(router.route(down));
     char byte = 0;

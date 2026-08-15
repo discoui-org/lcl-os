@@ -1,6 +1,7 @@
 #include <csignal>
 #include <iostream>
 #include "core/compositor/compositor.hpp"
+#include "platform/desktop/desktop_platform_services.hpp"
 
 namespace {
     // Raw pointer — safe for signal-handler context (no heap allocation)
@@ -17,14 +18,27 @@ int main() {
     std::signal(SIGINT,  signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    lcl::core::Compositor compositor;
+    // 1. Instantiate concrete Desktop Platform Services (Composition Root)
+    lcl::platform::desktop::DesktopPlatformServices platformServices;
+    if (!platformServices.initialize()) {
+        std::cerr << "[LCL] Fatal: Desktop Platform Services initialization failed.\n";
+        return 1;
+    }
+
+    // 2. Inject IPlatformServices into LCL Core Compositor
+    lcl::core::Compositor compositor(platformServices);
     g_compositor = &compositor;
 
     if (!compositor.initialize()) {
         std::cerr << "[LCL] Fatal: Compositor initialization failed.\n";
+        platformServices.shutdown();
         return 1;
     }
 
-    compositor.run(); // blocks until requestShutdown()
+    // 3. Run compositor event loop (blocks until requestShutdown())
+    compositor.run();
+
+    // 4. Clean platform shutdown
+    platformServices.shutdown();
     return 0;
 }

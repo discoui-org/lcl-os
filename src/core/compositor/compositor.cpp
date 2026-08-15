@@ -1,6 +1,5 @@
 #include "core/compositor/compositor.hpp"
 #include "core/display/display_scale.hpp"
-#include "platform/desktop/evdev_input_backend.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -23,22 +22,17 @@ bool environmentEnabled(const char* name) {
 // Construction / Destruction
 // ============================================================
 
-Compositor::Compositor() = default;
+Compositor::Compositor(lcl::platform::IPlatformServices& platformServices)
+    : m_platformServices(platformServices) {}
 
 Compositor::~Compositor() {
     if (!m_initialized) return;
 
-    // 1. IPC — close socket before renderer/input tear-down
+    // 1. IPC — close socket before renderer tear-down
     m_ipcManager.shutdown();
 
-    // 2. Renderer — release DRM framebuffer
+    // 2. Renderer — release DRM/GPU surface resources
     m_renderer.shutdown();
-
-    // 3. Input — close evdev/libinput handles
-    m_inputManager.shutdown();
-
-    // 4. Display — release DRM/KMS lease
-    m_displayManager.shutdown();
 
     std::cout << "[LCL Core] Clean shutdown complete. Total event loop ticks: "
               << m_loopTicks << "\n";
@@ -64,21 +58,16 @@ bool Compositor::initialize() {
     // --- Display scale (reads lcl.scale= from /proc/cmdline) ---
     DisplayScale::initialize();
 
-    // --- DRM/KMS Display ---
-    if (!m_displayManager.initialize("/dev/dri/card0")) {
-        std::cout << "[LCL Core] Display subsystem running in fallback/skeleton mode.\n";
-    }
-
-    // --- Input (libinput → evdev fallback) ---
-    if (!m_inputManager.initialize(std::make_unique<platform::desktop::EvdevInputBackend>())) {
-        std::cout << "[LCL Core] Input subsystem running in fallback/skeleton mode.\n";
-    }
+    auto& display = m_platformServices.display();
+    auto& graphics = m_platformServices.graphics();
+    auto& input = m_platformServices.input();
+    const auto& paths = m_platformServices.paths();
 
     // --- Renderer ---
-    const auto& mode = m_displayManager.getActiveDisplayMode();
+    const auto& mode = display.activeMode();
     uint32_t renW = mode.width > 0 ? mode.width : 1024;
     uint32_t renH = mode.height > 0 ? mode.height : 768;
-    if (!m_renderer.initialize(renW, renH, m_displayManager.getEGLBackend(), m_displayManager.getDisplayBackend(), m_displayManager.getFBPixelData())) {
+    if (!m_renderer.initialize(renW, renH, &graphics, &display, nullptr)) {
         std::cout << "[LCL Core] Renderer running in fallback mode.\n";
     }
 
@@ -89,25 +78,24 @@ bool Compositor::initialize() {
         m_focusController, m_shellStateBroker);
 
     // --- IPC (Unix Domain Socket, SO_PEERCRED auth, 0600 perms) ---
-    m_ipcManager.initialize(kCompositorSocket);
+    m_ipcManager.initialize(paths.compositorSocketPath());
 
     // --- Route input through the dedicated focus/hit-test bridge ---
     m_inputRouter = std::make_unique<InputRouter>(m_windowManager, m_surfaces, m_sceneRegistry);
-    m_inputManager.setEventCallback([this](const InputEvent& event) {
+    input.initialize([this](const lcl::platform::RawInputEvent& event) {
         if (m_inputRouter && m_inputRouter->route(event)) {
             m_needsRedraw = true;
             m_shellStateDirty = true;
         }
     });
 
-    // --- Frame pacing from DRM refresh rate ---
-    uint32_t hz = (m_displayManager.isInitialized()
-                   ? m_displayManager.getActiveDisplayMode().refreshRate : 60);
-    if (hz == 0) hz = 60;
+    // --- Frame pacing from display refresh rate ---
+    uint32_t hz = (display.isInitialized() && mode.refreshRate > 0)
+                   ? mode.refreshRate : 60;
     m_refreshIntervalNs = 1000000000ull / hz;
     m_inputRouter->setRefreshInterval(std::chrono::nanoseconds(m_refreshIntervalNs));
 
-    std::cout << "[LCL Core] Pure Display Server active on " << kCompositorSocket
+    std::cout << "[LCL Core] Pure Display Server active on " << paths.compositorSocketPath()
               << ". Listening for client surface registrations.\n"
               << "[LCL Core] High Refresh Rate active: targeting " << hz
               << " Hz (~" << (1000000 / hz) << " us per frame budget).\n";
@@ -122,13 +110,12 @@ bool Compositor::initialize() {
 // ============================================================
 
 void Compositor::processInput() {
-    if (m_inputManager.isInitialized()) {
-        m_inputManager.dispatchEvents(
+    if (m_platformServices.input().isInitialized()) {
+        m_platformServices.input().pollEvents(
             static_cast<int>(m_renderer.getWidth()),
             static_cast<int>(m_renderer.getHeight()));
     }
 }
-
 
 void Compositor::processIPC() {
     if (m_protocolDispatcher && m_protocolDispatcher->process(m_ipcManager)) {
@@ -158,9 +145,10 @@ void Compositor::synchronizeShellState() {
 void Compositor::run() {
     if (!m_initialized) return;
 
-    // 1. Query dynamic DRM/KMS monitor refresh rate (default to 60Hz if undetected)
-    uint32_t refreshHz = (m_displayManager.isInitialized() ? m_displayManager.getActiveDisplayMode().refreshRate : 60);
-    if (refreshHz == 0) refreshHz = 60;
+    // 1. Query dynamic monitor refresh rate (default to 60Hz if undetected)
+    const auto& mode = m_platformServices.display().activeMode();
+    uint32_t refreshHz = (m_platformServices.display().isInitialized() && mode.refreshRate > 0)
+                         ? mode.refreshRate : 60;
 
     // 2. Calculate dynamic frame period & headroom allowance (~0.5ms safety budget)
     float targetPeriodMs = 1000.0f / static_cast<float>(refreshHz);
@@ -237,18 +225,18 @@ void Compositor::renderDiagnosticOverlay() {
     m_renderer.drawFilledRect(cardX, cardY, cardW, cardH, 0xDD0F172A);
     m_renderer.drawRect(cardX, cardY, cardW, cardH, 0x6638BDF8);
 
-    // Determine engine label from audited EGL backend renderer string
+    // Determine engine label from platform graphics context
     std::string engineStr = "Engine: ";
-    auto* egl = m_displayManager.getEGLBackend();
-    if (egl && egl->isInitialized()) {
-        engineStr += egl->getGLRendererString();
+    auto& graphics = m_platformServices.graphics();
+    if (graphics.isInitialized()) {
+        engineStr += graphics.isHardwareAccelerated() ? "Hardware Accelerated" : "Software Fallback";
     } else {
         engineStr += "Software Fallback";
     }
 
     // Determine VSync label
     std::string vsyncStr = "VSync: ";
-    if (egl && egl->isInitialized() && egl->isVSyncActive()) {
+    if (graphics.isInitialized() && graphics.presentsToDisplay()) {
         vsyncStr += "ON";
     } else {
         vsyncStr += "OFF";
@@ -275,7 +263,6 @@ void Compositor::renderDiagnosticOverlay() {
     m_renderer.drawString(textX, textY + lineSpacing * 3, composeBuf, 0xFFFACC15);
 }
 
-
 void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
 
@@ -300,7 +287,7 @@ void Compositor::renderFrame() {
     const auto surfaces = m_surfaces.snapshot();
     const auto composeStart = std::chrono::steady_clock::now();
     m_compositorRenderer.render(
-        m_renderer, m_displayManager, m_windowManager, surfaces,
+        m_renderer, m_platformServices.display(), m_windowManager, surfaces,
         [this] { renderDiagnosticOverlay(); });
     m_lastComposeMs = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - composeStart).count();
@@ -380,6 +367,5 @@ void Compositor::renderFrame() {
     m_needsRedraw = hasActiveTransitions || !surfacesToRemove.empty();
     ++m_fpsFrameCount;
 }
-
 
 } // namespace lcl::core

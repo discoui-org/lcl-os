@@ -23,11 +23,11 @@ uint32_t physicalToLogical(uint32_t value, float scale) {
     return std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(value) / scale)));
 }
 
-uint32_t toClientPointerButton(uint32_t button) {
-    if (button == 0x110 || button == 0) return 0; // Primary / Left
-    if (button == 0x112 || button == 1) return 1; // Middle
-    if (button == 0x111 || button == 2) return 2; // Secondary / Right
-    return button;
+uint32_t toClientPointerButton(lcl::platform::PointerButton button) {
+    if (button == lcl::platform::PointerButton::Left) return 0; // Primary / Left
+    if (button == lcl::platform::PointerButton::Middle) return 1; // Middle
+    if (button == lcl::platform::PointerButton::Right) return 2; // Secondary / Right
+    return 0;
 }
 
 } // namespace

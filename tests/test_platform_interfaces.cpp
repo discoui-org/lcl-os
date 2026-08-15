@@ -102,11 +102,16 @@ public:
 // Mock concrete platform services container
 class MockPlatformServices final : public IPlatformServices {
 public:
+    bool initialize() override { m_initialized = true; return true; }
+    void shutdown() override { m_initialized = false; }
+    bool isInitialized() const override { return m_initialized; }
+
     IDisplayBackend& display() override { return m_display; }
     IGraphicsContext& graphics() override { return m_graphics; }
     IInputBackend& input() override { return m_input; }
     const IRuntimePaths& paths() const override { return m_paths; }
 
+    bool m_initialized{false};
     MockDisplayBackend m_display;
     MockGraphicsContext m_graphics;
     MockInputBackend m_input;
@@ -247,4 +252,29 @@ TEST(DesktopPlatformTest, EvdevInputBackendImplementsIInputBackend) {
         EXPECT_FALSE(iface.isInitialized());
     }
     (void)callbackCalled;
+}
+
+#include "platform/desktop/desktop_runtime_paths.hpp"
+#include "platform/desktop/desktop_platform_services.hpp"
+
+TEST(DesktopPlatformTest, DesktopRuntimePathsImplementsIRuntimePaths) {
+    lcl::platform::desktop::DesktopRuntimePaths paths;
+    const lcl::platform::IRuntimePaths& iface = paths;
+
+    EXPECT_EQ(iface.compositorSocketPath(), "/run/user/1000/lcl-compositor.sock");
+    EXPECT_EQ(iface.sessionSocketPath(), "/run/user/1000/lcl-sessiond.sock");
+    EXPECT_EQ(iface.appCatalogDirectory(), "/usr/share/lcl/apps");
+    EXPECT_EQ(iface.temporaryDirectory(), "/tmp");
+    EXPECT_FALSE(iface.fontSearchDirectories().empty());
+}
+
+TEST(DesktopPlatformTest, DesktopPlatformServicesImplementsIPlatformServices) {
+    lcl::platform::desktop::DesktopPlatformServices services;
+    lcl::platform::IPlatformServices& iface = services;
+
+    EXPECT_FALSE(iface.isInitialized());
+    EXPECT_FALSE(iface.display().isInitialized());
+    EXPECT_FALSE(iface.graphics().isInitialized());
+    EXPECT_FALSE(iface.input().isInitialized());
+    EXPECT_EQ(iface.paths().compositorSocketPath(), "/run/user/1000/lcl-compositor.sock");
 }

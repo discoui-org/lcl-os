@@ -108,4 +108,19 @@ PhysicalKey EvdevKeyMapper::toPhysicalKey(uint32_t linuxKeycode) {
     }
 }
 
+PointerButton EvdevKeyMapper::toPointerButton(uint32_t linuxButton) {
+    switch (linuxButton) {
+        case BTN_LEFT:
+        case BTN_TOUCH:
+        case BTN_TOOL_FINGER:
+            return PointerButton::Left;
+        case BTN_RIGHT:
+            return PointerButton::Right;
+        case BTN_MIDDLE:
+            return PointerButton::Middle;
+        default:
+            return PointerButton::None;
+    }
+}
+
 } // namespace lcl::platform::desktop
