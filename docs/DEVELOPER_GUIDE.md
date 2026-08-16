@@ -6,19 +6,20 @@ Welcome to the **LCL OS** developer guide! This document provides technical inst
 
 ## 1. Environment & Build System Setup
 
-LCL OS uses a CMake build system configured for C++20 and a direct kernel QEMU isolated test runner (`scripts/run_qemu.py`).
+LCL OS uses a unified Python 3 CLI (`main.py`) driving CMake for C++20 targets, GoogleTest test runners, QEMU bare-metal environments, and Android AVD platform emulation.
 
 ### Native Build Requirements
 - Linux (Ubuntu 24.04+, Arch, Debian 12+) or macOS/Windows (using Docker)
 - C++20 toolchain (`g++-13`, `clang-16` or newer)
 - CMake 3.20+
 - Ninja or GNU Make
-- `qemu-system-x86_64` (for kernel testing)
+- `qemu-system-x86_64` (for bare-metal kernel testing)
+- Android SDK with Emulator & Android 36 x86_64 system images (for AVD testing)
 
 ### Build Commands
 To build the complete OS kernel tree, compositor daemon, window manager, CLI utilities, and application bundles:
 ```bash
-make
+./main.py build
 ```
 
 To build a bootable hybrid ISO (`build/lcl-os.iso`) powered by Limine bootloader:
@@ -28,20 +29,26 @@ make iso
 
 ---
 
-## 2. Running & Testing LCL OS in QEMU
+## 2. Running & Testing LCL OS
 
-### 1. Direct Kernel Boot Mode (Fast Development Iteration)
+### 1. Direct Kernel QEMU Mode (Bare-Metal DRM/KMS + Evdev)
 ```bash
-make qemu GPU=1 NATIVE=1
+./main.py qemu
 ```
 - Direct kernel scanout via `/dev/dri/renderD128` (VirtIO-GPU VirGL 3D).
 
-### 2. Bootable ISO via Limine Bootloader (Legacy BIOS Mode)
+### 2. Android AVD Target Mode (Stage 4C.3 Substrate)
+```bash
+./main.py avd
+```
+- Boots the Android Emulator directly attaching the exact, byte-for-byte canonical rootfs (`lcl-rootfs-x86_64.ext4`).
+
+### 3. Bootable ISO via Limine Bootloader (Legacy BIOS Mode)
 ```bash
 make qemu-iso
 ```
 
-### 3. Bootable ISO via Limine Bootloader (UEFI Mode)
+### 4. Bootable ISO via Limine Bootloader (UEFI Mode)
 ```bash
 make qemu-iso UEFI=1
 ```
@@ -51,19 +58,20 @@ make qemu-iso UEFI=1
 
 ## 3. Running Unit Tests & Test Suite
 
-LCL OS features a comprehensive GoogleTest CTest suite (22 test cases) validating:
-- IPC Protocol header magic and message serializations
+LCL OS features a comprehensive GoogleTest CTest suite (**167 passing test cases**) validating:
+- IPC Protocol header magic, opcode serialization, and socket lifecycle
 - App Bundle (`metadata.json`) scanner and parser
-- Display scaling DPIScale calculations
+- Display scaling DPIScale calculations and subpixel antialiasing
 - Unix Domain Socket permission (`0600`) and kernel peer credentials (`SO_PEERCRED`)
 - Dynamic Input Hotplug (`AF_NETLINK` uevent) and Touchpad `EV_ABS` delta math
-- Yoga Flexbox layout engine tree hierarchy
-- Widget damage rectangle intersection math
-- Depth-first hit testing and event dispatcher callbacks
+- Yoga Flexbox layout engine tree hierarchy and layout passes
+- Skia 2D canvas rendering and backdrop blur filter chain
+- Hit-testing and declarative event routing
+- JavaScript ES2022+ runtime bindings, widget hierarchy, and animations
 
 Run all unit tests:
 ```bash
-make test
+./main.py test
 ```
 Or directly inside docker:
 ```bash

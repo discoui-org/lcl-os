@@ -201,3 +201,37 @@ Guest display boot args (when `NATIVE=1`):
 1. **Secure Domain Socket Protocol:** Compositor IPC v3 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
 2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v3 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
 3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits a typed disconnect event upon socket EOF. `ProtocolDispatcher` ilgili pencereyi `WindowManager`dan kaldırır; `SurfaceRegistry` SHM eşlemesini ve memfd'yi tek sahip olarak serbest bırakır.
+
+---
+
+## 8. Multi-Platform Substrates & Stage 4C.3 Architecture
+
+LCL OS decouples the user-space runtime environment from the underlying platform substrate:
+
+```text
++-----------------------------------------------------------------------------------------+
+|                  Canonical LCL Userspace (build/rootfs/lcl-rootfs-x86_64.ext4)          |
+|  - Desktop Apps: Terminal.app, UIDemo.app, UIDemoJS.app, ShaderDemo.app                |
+|  - System Daemons: lcl-sessiond, lcl-desktop-shell, lcl-open                           |
+|  - User Home (/Users/Rei), Shell (/System/Tools/bash), Fonts, C/C++ glibc Libraries     |
++-----------------------------------------------------------------------------------------+
+                                         │
+                 ┌───────────────────────┴───────────────────────┐
+                 │  Shared IPC Bridge: /Runtime/*.sock           │
+                 ▼                                               ▼
++─────────────────────────────────+             +─────────────────────────────────+
+|   Bare-Metal Linux Substrate    |             |    Android Substrate (Stage 4C) |
+|   - Driver: Linux DRM/KMS       |             |    - Driver: AIDL Composer3/HAL |
+|   - Compositor: lcl-core        |             |    - Compositor: lcl-core-android|
+|   - Input: evdev / libinput     |             |    - Mount: /mnt/lcl ext4        |
+|   - Init: Limine / custom init  |             |    - Init: Android init / lcl.rc |
++─────────────────────────────────+             +─────────────────────────────────+
+```
+
+### Key Invariants of Stage 4C.3
+1. **Same-Binary Invariant:** All user-facing binaries and system daemons are built once and packaged into `lcl-rootfs-x86_64.ext4`. They run unmodified across bare-metal Linux and Android AVD.
+2. **Minimal Substrate Footprint:** Android `system.img` contains ONLY platform-specific substrate components (`lcl-core-android`, `lcl.rc`, `lcl-bootstrap.sh`). Zero user applications or desktop daemons reside inside `system.img`.
+3. **Idempotent RootFS Attachment & Probe Isolation:** Canonical rootfs is attached as an independent raw block device (`-drive file=...,format=raw`) and mounted on `/mnt/lcl`. Probing for block device discovery is performed on `/mnt/lcl-probe` and immediately unmounted to prevent overlay stacking and `EBUSY` remount errors.
+4. **Kernel devpts Bind-Mount:** The kernel `devpts` pseudo-filesystem is explicitly bind-mounted (`/dev/pts` -> `/mnt/lcl/dev/pts`) to ensure glibc `posix_openpt()` can allocate pseudo-terminals for `Terminal.app` without `ENODEV`.
+5. **Shared `/Runtime` tmpfs IPC Bridge:** `/Runtime` tmpfs is bind-mounted into `/mnt/lcl/Runtime`, enabling transparent little-endian `SOCK_SEQPACKET` IPC communication between `lcl-core-android` (host substrate) and canonical desktop processes.
+
