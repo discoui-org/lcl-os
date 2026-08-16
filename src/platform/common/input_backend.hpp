@@ -8,13 +8,16 @@
 namespace lcl::platform {
 
 /**
- * @brief Platform-agnostic mouse/pointer button identifiers.
+ * @brief Platform-agnostic pointer source identifier (Mouse vs Touch).
  */
 enum class PointerSource : uint8_t {
     Mouse = 0,
     Touch = 1
 };
 
+/**
+ * @brief Platform-agnostic mouse/pointer button identifiers.
+ */
 enum class PointerButton : uint32_t {
     None = 0,
     Left = 1,     // Primary
@@ -31,7 +34,7 @@ enum class RawInputEventType {
 
 struct RawInputEvent {
     RawInputEventType type{RawInputEventType::Unknown};
-    PointerSource pointerSource{PointerSource::Mouse};
+    PointerSource source{PointerSource::Mouse};
     double dx{0.0};
     double dy{0.0};
     double absoluteX{-1.0};
@@ -67,6 +70,7 @@ public:
 } // namespace lcl::platform
 
 namespace lcl::core {
-// Transitional type alias for core
+// Transitional type aliases for core
+using PointerSource = lcl::platform::PointerSource;
 using PointerButton = lcl::platform::PointerButton;
 } // namespace lcl::core

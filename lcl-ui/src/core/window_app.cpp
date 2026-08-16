@@ -392,14 +392,18 @@ void WindowApp::pollIPC() {
                 } else if (inputMsg->type == 2) { // KeyUp
                     sendKeyUp(inputMsg->key, inputMsg->modifiers);
                 } else if (inputMsg->type == 3) { // PointerMotion
-                    const auto src = static_cast<PointerSource>(inputMsg->pointerSource);
-                    sendPointerMove(inputMsg->x, inputMsg->y, src);
+                    const auto source = (inputMsg->source == static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch))
+                        ? PointerSource::Touch
+                        : PointerSource::Mouse;
+                    sendPointerMove(inputMsg->x, inputMsg->y, source);
                 } else if (inputMsg->type == 4) { // PointerButton
-                    const auto src = static_cast<PointerSource>(inputMsg->pointerSource);
+                    const auto source = (inputMsg->source == static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch))
+                        ? PointerSource::Touch
+                        : PointerSource::Mouse;
                     if (inputMsg->pressed) {
-                        sendPointerDown(inputMsg->x, inputMsg->y, inputMsg->key, src);
+                        sendPointerDown(inputMsg->x, inputMsg->y, inputMsg->key, source);
                     } else {
-                        sendPointerUp(inputMsg->x, inputMsg->y, inputMsg->key, src);
+                        sendPointerUp(inputMsg->x, inputMsg->y, inputMsg->key, source);
                     }
                 } else if (inputMsg->type == 5) { // KeyPress / TextInput
                     if (inputMsg->codepoint > 0) {
@@ -982,7 +986,6 @@ bool WindowApp::sendPointerUp(float x, float y, int button, PointerSource source
         }
         return true;
     }
-
     PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Up, source};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;

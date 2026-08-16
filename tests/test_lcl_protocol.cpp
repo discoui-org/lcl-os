@@ -794,3 +794,43 @@ TEST(LCLProtocolTest, SurfaceCreateRequiresCanonicalAppId) {
     std::strncpy(request.appId, "org.lcl.test", sizeof(request.appId) - 1);
     EXPECT_TRUE(encodePacket(header, &request, packet));
 }
+
+TEST(LCLProtocolTest, InputEventCodecRoundTripWithPointerSource) {
+    LCLMsgInputEvent input{};
+    input.surfaceId = 12;
+    input.type = 3; // PointerMotion
+    input.key = 1;
+    input.pressed = 1;
+    input.modifiers = 0x05;
+    input.source = static_cast<uint8_t>(LCLPointerSource::Touch);
+    input.codepoint = 0;
+    input.x = 123.45f;
+    input.y = 678.90f;
+
+    LCLHeader header{};
+    header.opcode = LCLOpcode::InputEvent;
+    header.requestId = 88;
+    header.payloadSize = sizeof(input);
+
+    std::vector<uint8_t> packet;
+    ASSERT_TRUE(encodePacket(header, &input, packet));
+
+    LCLHeader decodedHeader{};
+    std::vector<uint8_t> decodedPayload;
+    ASSERT_TRUE(decodePacket(packet.data(), packet.size(), decodedHeader, decodedPayload));
+
+    EXPECT_EQ(decodedHeader.opcode, LCLOpcode::InputEvent);
+    EXPECT_EQ(decodedHeader.requestId, 88u);
+    ASSERT_EQ(decodedPayload.size(), sizeof(input));
+
+    const auto* decodedInput = reinterpret_cast<const LCLMsgInputEvent*>(decodedPayload.data());
+    EXPECT_EQ(decodedInput->surfaceId, 12u);
+    EXPECT_EQ(decodedInput->type, 3u);
+    EXPECT_EQ(decodedInput->key, 1u);
+    EXPECT_EQ(decodedInput->pressed, 1u);
+    EXPECT_EQ(decodedInput->modifiers, 0x05u);
+    EXPECT_EQ(decodedInput->source, static_cast<uint8_t>(LCLPointerSource::Touch));
+    EXPECT_FLOAT_EQ(decodedInput->x, 123.45f);
+    EXPECT_FLOAT_EQ(decodedInput->y, 678.90f);
+}
+

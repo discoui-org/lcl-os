@@ -279,11 +279,11 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
     const auto bounds = render::presentedBounds(*windowIt);
     input.x = (static_cast<float>(m_windowManager.getMouseX()) - bounds.x) / scale;
     input.y = (static_cast<float>(m_windowManager.getMouseY()) - bounds.y - titleOffset) / scale;
-    // lcl-ui's backend-independent pointer contract uses 0 for primary.
-    // The compositor continues to use raw BTN_* codes for its own shortcuts.
     input.key = toClientPointerButton(event.button);
     input.pressed = event.pressed ? 1 : 0;
-    input.pointerSource = static_cast<uint8_t>(event.pointerSource);
+    input.source = static_cast<uint8_t>(event.source == lcl::platform::PointerSource::Touch
+        ? protocol::LCLPointerSource::Touch
+        : protocol::LCLPointerSource::Mouse);
     protocol::sendMsgWithFd(entry.clientFd, header, &input);
 }
 

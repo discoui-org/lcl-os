@@ -278,3 +278,49 @@ TEST(DesktopPlatformTest, DesktopPlatformServicesImplementsIPlatformServices) {
     EXPECT_FALSE(iface.input().isInitialized());
     EXPECT_EQ(iface.paths().compositorSocketPath(), "/Runtime/lcl-compositor.sock");
 }
+
+#include "platform/android/android_input_backend.hpp"
+
+TEST(AndroidPlatformTest, AndroidInputBackendImplementsIInputBackend) {
+    lcl::platform::android::AndroidInputBackend inputBackend;
+    lcl::platform::IInputBackend& iface = inputBackend;
+
+    EXPECT_FALSE(iface.isInitialized());
+
+    bool callbackCalled = false;
+    bool init = iface.initialize([&](const lcl::platform::RawInputEvent&) {
+        callbackCalled = true;
+    });
+    EXPECT_TRUE(init);
+    EXPECT_TRUE(iface.isInitialized());
+
+    // Polling without events returns 0 and does not crash
+    size_t count = iface.pollEvents(1080, 1920);
+    EXPECT_EQ(count, 0u);
+
+    iface.shutdown();
+    EXPECT_FALSE(iface.isInitialized());
+    (void)callbackCalled;
+}
+
+TEST(AndroidPlatformTest, AndroidInputBackendReinitializesWithCallback) {
+    lcl::platform::android::AndroidInputBackend inputBackend;
+    lcl::platform::IInputBackend& iface = inputBackend;
+
+    // 1. Initial initialization with nullptr (e.g. AndroidPlatformServices::initialize)
+    EXPECT_TRUE(iface.initialize(nullptr));
+    EXPECT_TRUE(iface.isInitialized());
+
+    // 2. Subsequent initialization with real callback (e.g. Compositor::initialize)
+    bool callbackCalled = false;
+    EXPECT_TRUE(iface.initialize([&](const lcl::platform::RawInputEvent&) {
+        callbackCalled = true;
+    }));
+    EXPECT_TRUE(iface.isInitialized());
+
+    iface.shutdown();
+    EXPECT_FALSE(iface.isInitialized());
+    (void)callbackCalled;
+}
+
+

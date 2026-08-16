@@ -341,6 +341,7 @@ size_t EvdevInputBackend::dispatchLibinputEvents(int screenWidth, int screenHeig
             case LIBINPUT_EVENT_POINTER_MOTION: {
                 auto* p = libinput_event_get_pointer_event(event);
                 outEv.type = RawInputEventType::PointerMotion;
+                outEv.source = PointerSource::Mouse;
                 outEv.dx = libinput_event_pointer_get_dx(p);
                 outEv.dy = libinput_event_pointer_get_dy(p);
                 outEv.superPressed = m_superPressed;
@@ -351,6 +352,7 @@ size_t EvdevInputBackend::dispatchLibinputEvents(int screenWidth, int screenHeig
             case LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE: {
                 auto* p = libinput_event_get_pointer_event(event);
                 outEv.type = RawInputEventType::PointerMotion;
+                outEv.source = PointerSource::Mouse;
                 outEv.absoluteX = libinput_event_pointer_get_absolute_x_transformed(p, screenWidth);
                 outEv.absoluteY = libinput_event_pointer_get_absolute_y_transformed(p, screenHeight);
                 outEv.superPressed = m_superPressed;
@@ -361,6 +363,7 @@ size_t EvdevInputBackend::dispatchLibinputEvents(int screenWidth, int screenHeig
             case LIBINPUT_EVENT_POINTER_BUTTON: {
                 auto* p = libinput_event_get_pointer_event(event);
                 outEv.type = RawInputEventType::PointerButton;
+                outEv.source = PointerSource::Mouse;
                 outEv.button = EvdevKeyMapper::toPointerButton(libinput_event_pointer_get_button(p));
                 outEv.pressed = libinput_event_pointer_get_button_state(p) == LIBINPUT_BUTTON_STATE_PRESSED;
                 outEv.superPressed = m_superPressed;
@@ -468,6 +471,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                 if (dev.relXUpdated || dev.relYUpdated) {
                     RawInputEvent outEv{};
                     outEv.type = RawInputEventType::PointerMotion;
+                    outEv.source = PointerSource::Mouse;
                     outEv.deviceName = dev.name;
                     outEv.dx = dev.currentRelX;
                     outEv.dy = dev.currentRelY;
@@ -509,6 +513,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                             if ((dx != 0.0 || dy != 0.0) && m_callback) {
                                 RawInputEvent outEv{};
                                 outEv.type = RawInputEventType::PointerMotion;
+                                outEv.source = PointerSource::Mouse;
                                 outEv.deviceName = dev.name;
                                 outEv.dx = dx;
                                 outEv.dy = dy;
@@ -520,6 +525,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     } else {
                         RawInputEvent outEv{};
                         outEv.type = RawInputEventType::PointerMotion;
+                        outEv.source = PointerSource::Mouse;
                         outEv.deviceName = dev.name;
 
                         double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
@@ -547,6 +553,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     RawInputEvent outEv{};
                     outEv.deviceName = dev.name;
                     outEv.type = RawInputEventType::PointerButton;
+                    outEv.source = PointerSource::Mouse;
                     outEv.button = PointerButton::Left;
                     outEv.pressed = (ev.value != 0);
                     outEv.superPressed = m_superPressed;
@@ -566,6 +573,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     RawInputEvent outEv{};
                     outEv.deviceName = dev.name;
                     outEv.type = RawInputEventType::PointerButton;
+                    outEv.source = PointerSource::Mouse;
                     outEv.button = EvdevKeyMapper::toPointerButton(ev.code);
                     outEv.pressed = (ev.value != 0);
                     outEv.superPressed = m_superPressed;

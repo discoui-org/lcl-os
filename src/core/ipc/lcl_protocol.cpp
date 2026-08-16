@@ -425,15 +425,14 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
     case LCLOpcode::InputEvent: {
         LOAD_ONE(LCLMsgInputEvent, msg);
         if (msg.surfaceId == 0 || msg.type < 1 || msg.type > 5 || msg.pressed > 1 ||
-            msg.pointerSource > 1 || !validFloat(msg.x) || !validFloat(msg.y))
+            !validFloat(msg.x) || !validFloat(msg.y))
             return false;
         out.u32(msg.surfaceId);
         out.u32(msg.type);
         out.u32(msg.key);
         out.u8(msg.pressed);
         out.u8(msg.modifiers);
-        out.u8(msg.pointerSource);
-        out.u8(msg.reserved0);
+        out.u8(msg.source);
         out.u32(msg.codepoint);
         out.f32(msg.x);
         out.f32(msg.y);
@@ -720,12 +719,11 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
     case LCLOpcode::InputEvent: {
         LCLMsgInputEvent m{};
         if (!in.u32(m.surfaceId) || !in.u32(m.type) || !in.u32(m.key) ||
-            !in.u8(m.pressed) || !in.u8(m.modifiers) || !in.u8(m.pointerSource) ||
-            !in.u8(m.reserved0) || !in.u32(m.codepoint) ||
+            !in.u8(m.pressed) || !in.u8(m.modifiers) || !in.u8(m.source) || !in.u32(m.codepoint) ||
             !in.f32(m.x) || !in.f32(m.y))
             return false;
         if (m.surfaceId == 0 || m.type < 1 || m.type > 5 || m.pressed > 1 ||
-            m.pointerSource > 1 || !validFloat(m.x) || !validFloat(m.y))
+            !validFloat(m.x) || !validFloat(m.y))
             return false;
         appendNative(payload, m);
         break;

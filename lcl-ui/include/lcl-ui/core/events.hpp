@@ -7,9 +7,9 @@
 
 namespace lcl::ui {
 
-enum class PointerSource : uint8_t {
-    Mouse = 0,
-    Touch = 1
+enum class PointerSource {
+    Mouse,
+    Touch
 };
 
 enum class PointerEventType {

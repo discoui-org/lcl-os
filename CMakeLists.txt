@@ -484,6 +484,7 @@ else()
             src/core/app/app_bundle_parser.cpp
             src/core/display/display_scale.cpp
             src/core/input/input_manager.cpp
+            src/platform/android/android_input_backend.cpp
             src/render/window_chrome_widget.cpp
             src/render/window_manager.cpp
             src/binding/js_runtime.cpp

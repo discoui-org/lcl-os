@@ -257,3 +257,78 @@ TEST(LclUiEventsTest, VisualOnlyWindowIgnoresCompositorPointerEvents) {
     close(sockets[0]);
     close(sockets[1]);
 }
+
+TEST(LclUiEventsTest, PointerEventSourcePropagation) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+    ASSERT_NE(fcntl(sockets[1], F_SETFL, fcntl(sockets[1], F_GETFL) | O_NONBLOCK), -1);
+
+    {
+        WindowApp app(lcl::render::makeSkiaCanvas(), 400, 300, "Source Test");
+        app.setSurfaceId(1);
+        app.setInputEnabled(true);
+        app.setExternalIpcSocket(sockets[1]);
+
+        std::vector<PointerEvent> receivedEvents;
+        app.setOnRawPointerEvent([&receivedEvents](const PointerEvent& ev) {
+            receivedEvents.push_back(ev);
+            return true;
+        });
+
+        // 1. Send Mouse PointerMotion
+        lcl::protocol::LCLHeader header{};
+        header.opcode = lcl::protocol::LCLOpcode::InputEvent;
+        header.payloadSize = sizeof(lcl::protocol::LCLMsgInputEvent);
+
+        lcl::protocol::LCLMsgInputEvent mouseMotion{};
+        mouseMotion.surfaceId = 1;
+        mouseMotion.type = 3; // PointerMotion
+        mouseMotion.x = 20.0f;
+        mouseMotion.y = 30.0f;
+        mouseMotion.source = static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Mouse);
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[0], header, &mouseMotion));
+
+        // 2. Send Touch PointerDown
+        lcl::protocol::LCLMsgInputEvent touchDown{};
+        touchDown.surfaceId = 1;
+        touchDown.type = 4; // PointerButton
+        touchDown.pressed = 1;
+        touchDown.key = 0;
+        touchDown.x = 50.0f;
+        touchDown.y = 60.0f;
+        touchDown.source = static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch);
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[0], header, &touchDown));
+
+        // 3. Send Touch PointerUp
+        lcl::protocol::LCLMsgInputEvent touchUp{};
+        touchUp.surfaceId = 1;
+        touchUp.type = 4; // PointerButton
+        touchUp.pressed = 0;
+        touchUp.key = 0;
+        touchUp.x = 50.0f;
+        touchUp.y = 60.0f;
+        touchUp.source = static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch);
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[0], header, &touchUp));
+
+        app.tick();
+
+        ASSERT_EQ(receivedEvents.size(), 3u);
+        EXPECT_EQ(receivedEvents[0].type, PointerEventType::Move);
+        EXPECT_EQ(receivedEvents[0].source, PointerSource::Mouse);
+        EXPECT_FLOAT_EQ(receivedEvents[0].x, 20.0f);
+        EXPECT_FLOAT_EQ(receivedEvents[0].y, 30.0f);
+
+        EXPECT_EQ(receivedEvents[1].type, PointerEventType::Down);
+        EXPECT_EQ(receivedEvents[1].source, PointerSource::Touch);
+        EXPECT_FLOAT_EQ(receivedEvents[1].x, 50.0f);
+        EXPECT_FLOAT_EQ(receivedEvents[1].y, 60.0f);
+
+        EXPECT_EQ(receivedEvents[2].type, PointerEventType::Up);
+        EXPECT_EQ(receivedEvents[2].source, PointerSource::Touch);
+        EXPECT_FLOAT_EQ(receivedEvents[2].x, 50.0f);
+        EXPECT_FLOAT_EQ(receivedEvents[2].y, 60.0f);
+    }
+
+    close(sockets[0]);
+    close(sockets[1]);
+}

@@ -442,8 +442,24 @@ TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
     const auto* input = reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
     EXPECT_EQ(input->type, 3u);
+    EXPECT_EQ(input->source, static_cast<uint8_t>(protocol::LCLPointerSource::Mouse));
     EXPECT_FLOAT_EQ(input->x, 20.0f);
     EXPECT_FLOAT_EQ(input->y, 20.0f);
+
+    // Route a Touch event
+    InputEvent touchMotion{};
+    touchMotion.type = InputEventType::PointerMotion;
+    touchMotion.source = lcl::platform::PointerSource::Touch;
+    touchMotion.absoluteX = 100.0;
+    touchMotion.absoluteY = 110.0;
+    EXPECT_TRUE(router.route(touchMotion));
+
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    const auto* touchInput = reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(touchInput->type, 3u);
+    EXPECT_EQ(touchInput->source, static_cast<uint8_t>(protocol::LCLPointerSource::Touch));
 
     close(sockets[0]);
     close(sockets[1]);
