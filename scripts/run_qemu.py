@@ -1100,6 +1100,7 @@ def launch_qemu(
     uefi_mode: bool = False,
     usb_passthrough: str | None = None,
     retina: bool = False,
+    mobile: bool = False,
     scale_override: float | None = None,
     width_override: int | None = None,
     height_override: int | None = None,
@@ -1132,7 +1133,17 @@ def launch_qemu(
         except ValueError:
             pass
 
-    if retina:
+    if mobile:
+        # Portrait iPhone-like display: 1179x2556 physical, 393x852 logical, 3.0x UI scale
+        width = width_override or 1179
+        height = height_override or 2556
+        scale = scale_override or 3.0
+        host_dpr = scale
+        host.logical_width = 393
+        host.logical_height = 852
+        host.physical_width = width
+        host.physical_height = height
+    elif retina:
         # 13" MacBook Air Retina baseline: 2560x1600 physical resolution, 2.0x UI scale (1280x800 logical viewport)
         width = width_override or 2560
         height = height_override or 1600
@@ -1258,6 +1269,8 @@ def launch_qemu(
         if native:
             disp = "cocoa,full-screen=on,zoom-to-fit=on"
             extra_qemu = ["-full-screen"]
+        elif mobile:
+            disp = "cocoa,zoom-to-fit=on,show-cursor=on"
         else:
             disp = "cocoa"
         display = ["-display", disp]
@@ -1269,6 +1282,8 @@ def launch_qemu(
                 if want_gl:
                     disp = "gtk,gl=on,full-screen=on,zoom-to-fit=on"
                 extra_qemu = ["-full-screen"]
+            elif mobile:
+                disp = "gtk,gl=on,zoom-to-fit=on,show-cursor=on" if want_gl else "gtk,zoom-to-fit=on,show-cursor=on"
             else:
                 disp = "gtk,gl=on" if want_gl else "gtk,zoom-to-fit=on"
         elif "sdl" in backends:
@@ -1277,6 +1292,8 @@ def launch_qemu(
                 if want_gl:
                     disp = "sdl,gl=on,full-screen=on"
                 extra_qemu = ["-full-screen"]
+            elif mobile:
+                disp = "sdl,gl=on,show-cursor=on" if want_gl else "sdl,show-cursor=on"
             else:
                 disp = "sdl,gl=on" if want_gl else "sdl"
         else:
@@ -1291,7 +1308,11 @@ def launch_qemu(
     print(f"  - SMP Cores: {cpus}")
     print(f"  - Guest video: {width}x{height}@{refresh_hz}")
     print(f"  - UI scale: {scale} (lcl.scale)")
-    if native:
+    if mobile:
+        print("  - Mode: mobile portrait display (1179x2556 @ 3x scale)")
+        print(f"  - Logical viewport: {host.logical_width}x{host.logical_height}")
+        print("  - Touch device: virtio-multitouch-pci")
+    elif native:
         print("  - Mode: native host display (fullscreen)")
         print(f"  - Host DPR: {host_dpr}  UI scale: {scale}")
         if host.logical_width and host.physical_width:
@@ -1381,6 +1402,12 @@ def launch_qemu(
             f"file={rootfs_img},format=raw,if=virtio,id=rootfs",
         ])
 
+    input_devices = ["-device", "virtio-keyboard-pci"]
+    if mobile:
+        input_devices.extend(["-device", "virtio-multitouch-pci"])
+    else:
+        input_devices.extend(["-device", "virtio-tablet-pci"])
+
     cmd.extend([
         "-m",
         memory,
@@ -1389,10 +1416,7 @@ def launch_qemu(
         *gpu,
         *display,
         *extra_qemu,
-        "-device",
-        "virtio-keyboard-pci",
-        "-device",
-        "virtio-tablet-pci",
+        *input_devices,
         "-serial",
         "stdio",
         "-no-reboot",
@@ -1430,6 +1454,11 @@ def main() -> None:
         "--retina",
         action="store_true",
         help="Launch in 13\" MacBook Air Retina mode (2560x1600 @ 2.0x UI scale)",
+    )
+    parser.add_argument(
+        "--mobile",
+        action="store_true",
+        help="Portrait iPhone-like display mode (1179x2556 physical @ 3.0x UI scale, virtio-multitouch)",
     )
     parser.add_argument(
         "--scale",
@@ -1546,6 +1575,7 @@ def main() -> None:
             uefi_mode=args.uefi,
             usb_passthrough=args.usb,
             retina=args.retina,
+            mobile=args.mobile,
             scale_override=args.scale,
             width_override=args.width,
             height_override=args.height,

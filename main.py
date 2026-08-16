@@ -66,6 +66,8 @@ def cmd_qemu(args: argparse.Namespace) -> None:
         qemu_args.append("--gpu")
     if args.retina:
         qemu_args.append("--retina")
+    if getattr(args, "mobile", False):
+        qemu_args.append("--mobile")
     if args.iso:
         qemu_args.append("--iso")
     if args.uefi:
@@ -199,6 +201,7 @@ def main() -> None:
     p_qemu.add_argument("--native", "-n", action="store_true", help="Match host resolution + fullscreen")
     p_qemu.add_argument("--gpu", "-g", action="store_true", help="Enable 3D VirGL GPU acceleration")
     p_qemu.add_argument("--retina", action="store_true", help="13\" MacBook Air Retina (2560x1600 @ 2.0x)")
+    p_qemu.add_argument("--mobile", action="store_true", help="Portrait iPhone-like display (1179x2556 @ 3.0x, virtio-multitouch)")
     p_qemu.add_argument("--scale", type=float, metavar="FACTOR", help="UI scale factor (e.g. 1.5, 2.0)")
     p_qemu.add_argument("--width", type=int, metavar="PX", help="Display width in pixels")
     p_qemu.add_argument("--height", type=int, metavar="PX", help="Display height in pixels")
