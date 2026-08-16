@@ -301,7 +301,7 @@ size_t EvdevInputBackend::rescanEvdevDevices() {
 
         const bool isMTTouchscreen = (hasMTAbsX && hasMTAbsY && hasMTTrackingId && !hasPropPointer);
         const bool isExplicitDirect = (hasPropDirect && (hasMTAbsX || hasMTAbsY || (dev.hasAbsX && dev.hasAbsY)));
-        const bool isSingleTouchscreen = (dev.hasAbsX && dev.hasAbsY && !hasPropPointer && !hasMTAbsX && (hasPropDirect || !dev.hasRelX));
+        const bool isSingleTouchscreen = (dev.hasAbsX && dev.hasAbsY && !hasPropPointer && !hasMTAbsX && hasPropDirect);
 
         if (isMTTouchscreen || isExplicitDirect || isSingleTouchscreen) {
             dev.isDirectTouchscreen = true;

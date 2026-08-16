@@ -1092,6 +1092,39 @@ def find_ovmf_firmware(arch: str = "x86_64") -> Path | None:
     return None
 
 
+def is_rootfs_stale(rootfs_img: Path, arch: str = "x86_64") -> bool:
+    """Check if the canonical ext4 rootfs image is missing or older than any compiled binary or asset."""
+    if not rootfs_img.is_file():
+        return True
+
+    rootfs_mtime = rootfs_img.stat().st_mtime
+
+    candidate_binaries = [
+        BINARY,
+        SESSIOND_BIN,
+        SHELL_BIN,
+        OPEN_BIN,
+        JS_BIN,
+        TERM_BIN,
+        DEMO_BIN,
+        BUILD_DIR / "UIDemo",
+        BUILD_DIR / "Terminal",
+        BUILD_DIR / "apps" / "ui_demo" / "UIDemo",
+        BUILD_DIR / "apps" / "terminal" / "Terminal",
+    ]
+    for b in candidate_binaries:
+        if b.is_file() and b.stat().st_mtime > rootfs_mtime:
+            return True
+
+    for directory in (ROOT_DIR / "apps", ROOT_DIR / "assets"):
+        if directory.is_dir():
+            for p in directory.rglob("*"):
+                if p.is_file() and p.stat().st_mtime > rootfs_mtime:
+                    return True
+
+    return False
+
+
 def launch_qemu(
     kernel: Path,
     arch: str = "x86_64",
@@ -1104,6 +1137,8 @@ def launch_qemu(
     scale_override: float | None = None,
     width_override: int | None = None,
     height_override: int | None = None,
+    no_build: bool = False,
+    rebuild: bool = False,
 ) -> None:
     qemu = find_qemu(arch)
     host = detect_host_display()
@@ -1311,7 +1346,6 @@ def launch_qemu(
     if mobile:
         print("  - Mode: mobile portrait display (1179x2556 @ 3x scale)")
         print(f"  - Logical viewport: {host.logical_width}x{host.logical_height}")
-        print("  - Touch device: virtio-multitouch-pci")
     elif native:
         print("  - Mode: native host display (fullscreen)")
         print(f"  - Host DPR: {host_dpr}  UI scale: {scale}")
@@ -1388,7 +1422,18 @@ def launch_qemu(
         cmd.extend(["-boot", "d", "-cdrom", str(iso_path)])
     else:
         rootfs_img = BUILD_DIR / "rootfs" / f"lcl-rootfs-{arch}.ext4"
-        if not rootfs_img.is_file():
+        if rebuild:
+            log(f"Force rebuild requested (--rebuild). Rebuilding canonical rootfs ({rootfs_img.name})...")
+            sys.path.insert(0, str(SCRIPT_DIR))
+            from build_rootfs import build_rootfs_ext4
+            build_rootfs_ext4(arch=arch)
+        elif not no_build and is_rootfs_stale(rootfs_img, arch=arch):
+            log(f"Canonical rootfs artifact ({rootfs_img.name}) is missing or stale. Rebuilding...")
+            sys.path.insert(0, str(SCRIPT_DIR))
+            from build_rootfs import build_rootfs_ext4
+            build_rootfs_ext4(arch=arch)
+        elif not rootfs_img.is_file():
+            sys.path.insert(0, str(SCRIPT_DIR))
             from build_rootfs import build_rootfs_ext4
             build_rootfs_ext4(arch=arch)
         cmd.extend([
@@ -1402,11 +1447,7 @@ def launch_qemu(
             f"file={rootfs_img},format=raw,if=virtio,id=rootfs",
         ])
 
-    input_devices = ["-device", "virtio-keyboard-pci"]
-    if mobile:
-        input_devices.extend(["-device", "virtio-multitouch-pci"])
-    else:
-        input_devices.extend(["-device", "virtio-tablet-pci"])
+    input_devices = ["-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci"]
 
     cmd.extend([
         "-m",
@@ -1458,7 +1499,7 @@ def main() -> None:
     parser.add_argument(
         "--mobile",
         action="store_true",
-        help="Portrait iPhone-like display mode (1179x2556 physical @ 3.0x UI scale, virtio-multitouch)",
+        help="Portrait iPhone-like display mode (1179x2556 physical @ 3.0x UI scale)",
     )
     parser.add_argument(
         "--scale",
@@ -1514,7 +1555,15 @@ def main() -> None:
         action="store_true",
         help="Skip Docker build/package step; launch QEMU using existing cached kernel/initramfs artifacts.",
     )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Force clean rebuild of all binaries, initramfs, and canonical rootfs image",
+    )
     args = parser.parse_args()
+
+    if getattr(args, "rebuild", False) and getattr(args, "no_build", False):
+        parser.error("Cannot specify both --rebuild and --no-build.")
 
     arch = normalize_arch(args.arch or os.environ.get("ARCH"))
 
@@ -1579,6 +1628,8 @@ def main() -> None:
             scale_override=args.scale,
             width_override=args.width,
             height_override=args.height,
+            no_build=args.no_build,
+            rebuild=args.rebuild,
         )
     else:
         log(f"Boot environment ({arch}) ready! Kernel: {kernel}")

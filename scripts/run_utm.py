@@ -141,17 +141,23 @@ def generate_utm_bundle(kernel_src: Path, initramfs_src: Path, arch: str = "aarc
     return UTM_BUNDLE
 
 
-def launch_utm(arch: str = "aarch64") -> None:
+def launch_utm(arch: str = "aarch64", rebuild: bool = False, no_build: bool = False) -> None:
     target_arch = normalize_arch(arch)
 
     # 1. Package kernel & initramfs via run_qemu.py --package-only
     kernel_src = BUILD_DIR / "qemu-cache" / "vmlinuz"
     initramfs_src = BUILD_DIR / "initramfs.cpio.gz"
 
-    if not kernel_src.is_file() or not initramfs_src.is_file():
+    if rebuild or (not no_build and (not kernel_src.is_file() or not initramfs_src.is_file())):
         log(f"Packaging kernel & initramfs for {target_arch}...")
         run_qemu_py = SCRIPT_DIR / "run_qemu.py"
-        subprocess.check_call([sys.executable, str(run_qemu_py), "--package-only", "--arch", target_arch])
+        pkg_args = [sys.executable, str(run_qemu_py), "--package-only", "--arch", target_arch]
+        if rebuild:
+            pkg_args.append("--rebuild")
+        subprocess.check_call(pkg_args)
+    elif not kernel_src.is_file() or not initramfs_src.is_file():
+        err("Missing kernel or initramfs artifacts for --no-build.")
+        sys.exit(1)
 
     # 2. Prepare UTM bundle
     bundle = generate_utm_bundle(kernel_src, initramfs_src, arch=target_arch)
@@ -185,8 +191,18 @@ def main() -> None:
         metavar="ARCH",
         help="Target architecture: aarch64 (ARM64) or x86_64",
     )
+    parser.add_argument("--no-build", action="store_true", help="Skip build step; launch existing VM directly")
+    parser.add_argument("--rebuild", action="store_true", help="Force clean rebuild of kernel and initramfs")
     args = parser.parse_args()
-    launch_utm(arch=args.arch or os.environ.get("ARCH"))
+
+    if getattr(args, "rebuild", False) and getattr(args, "no_build", False):
+        parser.error("Cannot specify both --rebuild and --no-build.")
+
+    launch_utm(
+        arch=args.arch or os.environ.get("ARCH"),
+        rebuild=args.rebuild,
+        no_build=args.no_build,
+    )
 
 
 if __name__ == "__main__":

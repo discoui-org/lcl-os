@@ -95,20 +95,83 @@ class AndroidEnvironment:
         return subprocess.run([str(self.adb), "shell", cmd_str], capture_output=capture_output, text=True, check=check)
 
 
-def build_targets(env: AndroidEnvironment, force_rebuild: bool = False) -> None:
-    # 1. Build canonical rootfs artifact (Stage 4C.3 Single Source of Truth)
-    if force_rebuild or not CANONICAL_ROOTFS_EXT4.is_file():
-        log("Building canonical LCL ext4 root filesystem artifact...")
+def is_rootfs_stale(rootfs_img: Path) -> bool:
+    if not rootfs_img.is_file():
+        return True
+    rootfs_mtime = rootfs_img.stat().st_mtime
+    candidates = [
+        BUILD_DIR / "lcl-core",
+        BUILD_DIR / "lcl-desktop-shell",
+        BUILD_DIR / "lcl-sessiond",
+        BUILD_DIR / "lcl-open",
+        BUILD_DIR / "lcl-js",
+        BUILD_DIR / "UIDemo",
+        BUILD_DIR / "Terminal",
+        BUILD_DIR / "apps" / "ui_demo" / "UIDemo",
+        BUILD_DIR / "apps" / "terminal" / "Terminal",
+    ]
+    for b in candidates:
+        if b.is_file() and b.stat().st_mtime > rootfs_mtime:
+            return True
+    for directory in (ROOT_DIR / "apps", ROOT_DIR / "assets"):
+        if directory.is_dir():
+            for p in directory.rglob("*"):
+                if p.is_file() and p.stat().st_mtime > rootfs_mtime:
+                    return True
+    return False
+
+
+def is_android_core_stale(android_core: Path) -> bool:
+    if not android_core.is_file():
+        return True
+    core_mtime = android_core.stat().st_mtime
+    for d in (ROOT_DIR / "src" / "platform" / "android", ROOT_DIR / "src" / "platform" / "common"):
+        if d.is_dir():
+            for p in d.rglob("*"):
+                if p.is_file() and p.stat().st_mtime > core_mtime:
+                    return True
+    cm = ROOT_DIR / "CMakeLists.txt"
+    if cm.is_file() and cm.stat().st_mtime > core_mtime:
+        return True
+    return False
+
+
+def is_android_images_stale(out_system_img: Path, out_ramdisk_img: Path, android_core: Path) -> bool:
+    if not out_system_img.is_file() or not out_ramdisk_img.is_file():
+        return True
+    sys_mtime = out_system_img.stat().st_mtime
+    if android_core.is_file() and android_core.stat().st_mtime > sys_mtime:
+        return True
+    scripts = [
+        SCRIPT_DIR / "build_android_images.py",
+        ROOT_DIR / "src" / "platform" / "android" / "lcl.rc",
+        ROOT_DIR / "src" / "platform" / "android" / "lcl-bootstrap.sh",
+    ]
+    for s in scripts:
+        if s.is_file() and s.stat().st_mtime > sys_mtime:
+            return True
+    return False
+
+
+def build_targets(env: AndroidEnvironment, force_rebuild: bool = False, arch: str = "x86_64") -> None:
+    # 1. Incremental build of canonical Linux userspace binaries via Docker
+    log("Ensuring canonical Linux userspace binaries are up to date (Docker)...")
+    run_qemu_py = SCRIPT_DIR / "run_qemu.py"
+    subprocess.check_call([sys.executable, str(run_qemu_py), "--build-only", "--arch", arch])
+
+    # 2. Build canonical rootfs artifact if missing, stale, or forced
+    if force_rebuild or is_rootfs_stale(CANONICAL_ROOTFS_EXT4):
+        log("Canonical ext4 rootfs artifact is missing or stale. Building...")
         sys.path.insert(0, str(SCRIPT_DIR))
         from build_rootfs import build_rootfs_ext4
-        build_rootfs_ext4()
+        build_rootfs_ext4(arch=arch)
 
     rootfs_sha = get_sha256(CANONICAL_ROOTFS_EXT4)
     log(f"Canonical ext4 rootfs ready ({CANONICAL_ROOTFS_EXT4.stat().st_size} bytes, SHA-256: {rootfs_sha})")
 
-    # 2. Build Android Platform Composition Root (lcl-core-android)
+    # 3. Build Android Platform Composition Root (lcl-core-android)
     android_core = BUILD_ANDROID_DIR / "lcl-core-android"
-    if force_rebuild or not android_core.is_file():
+    if force_rebuild or is_android_core_stale(android_core):
         log("Building Android platform compositor (lcl-core-android)...")
         if not env.ndk_root:
             raise RuntimeError("Android NDK not found. Set ANDROID_NDK_ROOT.")
@@ -174,12 +237,19 @@ def launch_avd(args: argparse.Namespace) -> None:
     # 1. Build targets & generate custom bootable LCL images
     out_system_img = BUILD_DIR / "android" / "lcl-system.img"
     out_ramdisk_img = BUILD_DIR / "android" / "lcl-ramdisk.img"
+    android_core = BUILD_ANDROID_DIR / "lcl-core-android"
 
-    if not args.no_build or not out_system_img.is_file() or not out_ramdisk_img.is_file():
-        build_targets(env, force_rebuild=args.rebuild)
-        sys.path.insert(0, str(SCRIPT_DIR))
-        from build_android_images import build_android_images
-        out_system_img, out_ramdisk_img = build_android_images()
+    if not args.no_build:
+        build_targets(env, force_rebuild=args.rebuild, arch=getattr(args, "arch", "x86_64") or "x86_64")
+        if args.rebuild or is_android_images_stale(out_system_img, out_ramdisk_img, android_core):
+            sys.path.insert(0, str(SCRIPT_DIR))
+            from build_android_images import build_android_images
+            out_system_img, out_ramdisk_img = build_android_images()
+        else:
+            log("Android substrate images (system & ramdisk) are up to date.")
+    elif not out_system_img.is_file() or not out_ramdisk_img.is_file() or not CANONICAL_ROOTFS_EXT4.is_file():
+        err("Missing required AVD images or canonical rootfs for --no-build.")
+        sys.exit(1)
 
     rootfs_sha = get_sha256(CANONICAL_ROOTFS_EXT4)
     log(f"Attaching exact canonical rootfs artifact: {CANONICAL_ROOTFS_EXT4.name} (SHA-256: {rootfs_sha})")
@@ -276,12 +346,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="LCL OS - Android AVD Developer Launcher"
     )
+    parser.add_argument("--arch", "-a", default="x86_64", help="Target architecture (only x86_64 supported on AVD)")
     parser.add_argument("--avd-name", default="lcl-phone", help="Target AVD name (default: lcl-phone)")
     parser.add_argument("--show-kernel", action="store_true", help="Display live guest kernel and init boot logs in terminal")
     parser.add_argument("--no-window", action="store_true", help="Run emulator headless without GUI window")
     parser.add_argument("--no-build", action="store_true", help="Skip build step")
     parser.add_argument("--rebuild", action="store_true", help="Force clean rebuild of all targets")
     args = parser.parse_args()
+
+    if getattr(args, "rebuild", False) and getattr(args, "no_build", False):
+        parser.error("Cannot specify both --rebuild and --no-build.")
+
+    arch = args.arch.lower().strip()
+    if arch not in ("x86_64", "amd64", "x64"):
+        err(f"AVD platform substrate only supports 'x86_64' (requested: '{args.arch}').")
+        sys.exit(1)
 
     launch_avd(args)
 

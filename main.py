@@ -88,6 +88,8 @@ def cmd_qemu(args: argparse.Namespace) -> None:
         qemu_args.append("--debug-overlay")
     if args.no_build:
         qemu_args.append("--no-build")
+    if getattr(args, "rebuild", False):
+        qemu_args.append("--rebuild")
 
     subprocess.check_call(qemu_args)
 
@@ -95,12 +97,22 @@ def cmd_qemu(args: argparse.Namespace) -> None:
 def cmd_utm(args: argparse.Namespace) -> None:
     run_utm_py = SCRIPTS_DIR / "run_utm.py"
     arch = normalize_arch(args.arch)
-    subprocess.check_call([sys.executable, str(run_utm_py), "--arch", arch])
+    utm_args = [sys.executable, str(run_utm_py), "--arch", arch]
+    if getattr(args, "rebuild", False):
+        utm_args.append("--rebuild")
+    if getattr(args, "no_build", False):
+        utm_args.append("--no-build")
+    subprocess.check_call(utm_args)
 
 
 def cmd_avd(args: argparse.Namespace) -> None:
+    arch = normalize_arch(getattr(args, "arch", None))
+    if arch != "x86_64":
+        err(f"AVD platform substrate only supports 'x86_64' (requested: '{arch}').")
+        sys.exit(1)
+
     run_avd_py = SCRIPTS_DIR / "run_avd.py"
-    avd_args = [sys.executable, str(run_avd_py)]
+    avd_args = [sys.executable, str(run_avd_py), "--arch", arch]
     if getattr(args, "avd_name", None):
         avd_args.extend(["--avd-name", str(args.avd_name)])
     if getattr(args, "show_kernel", False):
@@ -201,7 +213,7 @@ def main() -> None:
     p_qemu.add_argument("--native", "-n", action="store_true", help="Match host resolution + fullscreen")
     p_qemu.add_argument("--gpu", "-g", action="store_true", help="Enable 3D VirGL GPU acceleration")
     p_qemu.add_argument("--retina", action="store_true", help="13\" MacBook Air Retina (2560x1600 @ 2.0x)")
-    p_qemu.add_argument("--mobile", action="store_true", help="Portrait iPhone-like display (1179x2556 @ 3.0x, virtio-multitouch)")
+    p_qemu.add_argument("--mobile", action="store_true", help="Portrait iPhone-like display (1179x2556 @ 3.0x)")
     p_qemu.add_argument("--scale", type=float, metavar="FACTOR", help="UI scale factor (e.g. 1.5, 2.0)")
     p_qemu.add_argument("--width", type=int, metavar="PX", help="Display width in pixels")
     p_qemu.add_argument("--height", type=int, metavar="PX", help="Display height in pixels")
@@ -211,14 +223,18 @@ def main() -> None:
     p_qemu.add_argument("--trace-frames", action="store_true", help="Enable layout/render trace")
     p_qemu.add_argument("--debug-layout", action="store_true", help="Draw widget bounds overlay")
     p_qemu.add_argument("--debug-overlay", action="store_true", help="Draw compositor FPS overlay")
-    p_qemu.add_argument("--no-build", action="store_true", help="Skip Docker build/package; launch QEMU with existing cached artifacts")
+    p_qemu.add_argument("--no-build", action="store_true", help="Skip build/package; launch QEMU with existing cached artifacts")
+    p_qemu.add_argument("--rebuild", action="store_true", help="Force clean rebuild of all binaries and canonical rootfs image")
 
     # ---- utm ----
     p_utm = subparsers.add_parser("utm", help="Build ISO and launch via UTM / utmctl (Metal 3D)")
     p_utm.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (aarch64 or x86_64)")
+    p_utm.add_argument("--no-build", action="store_true", help="Skip build; launch existing UTM VM directly")
+    p_utm.add_argument("--rebuild", action="store_true", help="Force clean rebuild of ISO and VM image")
 
     # ---- avd ----
     p_avd = subparsers.add_parser("avd", help="Build & launch LCL OS on Android AVD emulator")
+    p_avd.add_argument("--arch", "-a", metavar="ARCH", default="x86_64", help="Target architecture (only x86_64 supported on AVD)")
     p_avd.add_argument("--avd-name", metavar="NAME", default="lcl-phone", help="Target AVD name (default: lcl-phone)")
     p_avd.add_argument("--show-kernel", action="store_true", help="Display live guest kernel and init boot logs in terminal")
     p_avd.add_argument("--no-window", action="store_true", help="Run emulator headless without GUI window")
@@ -262,6 +278,9 @@ def main() -> None:
         return
 
     args = parser.parse_args()
+
+    if getattr(args, "rebuild", False) and getattr(args, "no_build", False):
+        parser.error("Cannot specify both --rebuild and --no-build.")
 
     dispatch = {
         "qemu": cmd_qemu,
