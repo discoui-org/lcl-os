@@ -10,6 +10,7 @@
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/window_chrome.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
+#include "lcl-ui/widgets/scroll_view.hpp"
 #include "render/skia_renderer.hpp"
 #include "render/skia_canvas.hpp"
 #include "render/backdrop_filter_geometry.hpp"
@@ -1351,3 +1352,205 @@ TEST(LclUiTest, RoundedRectPreservesSubpixelEdgeCoverageDuringScaleMotion) {
     EXPECT_GT(halfPixel, 0u);
     EXPECT_LT(halfPixel, quarterPixel);
 }
+
+TEST(LclUiTest, ScrollViewClampsOffsetWhenContentLargerThanViewport) {
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(100.0f);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    content->setHeight(300.0f);
+    scrollView->setContent(std::move(content));
+
+    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->syncLayout(0.0f, 0.0f);
+
+    EXPECT_FLOAT_EQ(scrollView->getContentHeight(), 300.0f);
+    EXPECT_FLOAT_EQ(scrollView->getMaxScrollY(), 200.0f);
+
+    scrollView->setScrollY(-50.0f);
+    EXPECT_FLOAT_EQ(scrollView->getScrollY(), 0.0f);
+
+    scrollView->setScrollY(120.0f);
+    EXPECT_FLOAT_EQ(scrollView->getScrollY(), 120.0f);
+
+    scrollView->setScrollY(500.0f);
+    EXPECT_FLOAT_EQ(scrollView->getScrollY(), 200.0f);
+}
+
+TEST(LclUiTest, ScrollViewHandlesWheelScroll) {
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(100.0f);
+    scrollView->setScrollSpeed(20.0f);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    content->setHeight(400.0f);
+    scrollView->setContent(std::move(content));
+
+    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->syncLayout(0.0f, 0.0f);
+
+    EXPECT_FLOAT_EQ(scrollView->getScrollY(), 0.0f);
+
+    PointerEvent scrollDown{};
+    scrollDown.type = PointerEventType::Scroll;
+    scrollDown.deltaY = 2.0f;
+
+    EXPECT_TRUE(scrollView->onScroll(scrollDown));
+    EXPECT_FLOAT_EQ(scrollView->getScrollY(), 40.0f);
+
+    PointerEvent scrollUp{};
+    scrollUp.type = PointerEventType::Scroll;
+    scrollUp.deltaY = -1.0f;
+
+    EXPECT_TRUE(scrollView->onScroll(scrollUp));
+    EXPECT_FLOAT_EQ(scrollView->getScrollY(), 20.0f);
+}
+
+TEST(LclUiTest, ScrollViewZeroOffsetWhenContentSmallerThanViewport) {
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(300.0f);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    content->setHeight(150.0f);
+    scrollView->setContent(std::move(content));
+
+    scrollView->getYogaNode().calculateLayout(200.0f, 300.0f);
+    scrollView->syncLayout(0.0f, 0.0f);
+
+    EXPECT_FLOAT_EQ(scrollView->getContentHeight(), 150.0f);
+    EXPECT_FLOAT_EQ(scrollView->getMaxScrollY(), 0.0f);
+
+    scrollView->setScrollY(100.0f);
+    EXPECT_FLOAT_EQ(scrollView->getScrollY(), 0.0f);
+
+    PointerEvent scrollEv{};
+    scrollEv.type = PointerEventType::Scroll;
+    scrollEv.deltaY = 5.0f;
+    EXPECT_FALSE(scrollView->onScroll(scrollEv));
+    EXPECT_FLOAT_EQ(scrollView->getScrollY(), 0.0f);
+}
+
+TEST(LclUiTest, ScrollViewHitTestRoutesToScrolledChild) {
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(100.0f);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    content->setHeight(500.0f);
+
+    auto item1 = std::make_unique<Button>("Item 1");
+    item1->setWidth(200.0f);
+    item1->setHeight(50.0f);
+
+    auto item2 = std::make_unique<Button>("Item 2");
+    item2->setWidth(200.0f);
+    item2->setHeight(50.0f);
+    item2->setPosition(YGEdgeTop, 200.0f);
+
+    Button* item1Ptr = item1.get();
+    Button* item2Ptr = item2.get();
+
+    content->addChild(std::move(item1));
+    content->addChild(std::move(item2));
+    scrollView->setContent(std::move(content));
+
+    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->syncLayout(0.0f, 0.0f);
+
+    EventDispatcher dispatcher;
+
+    // At scrollY = 0: Point (50, 25) hits item 1
+    EXPECT_EQ(dispatcher.hitTest(scrollView.get(), 50.0f, 25.0f), item1Ptr);
+
+    // Point (50, 80) is inside ScrollView, but below item1 and above item2 -> hits content container
+    EXPECT_EQ(dispatcher.hitTest(scrollView.get(), 50.0f, 80.0f), scrollView->getContent());
+
+    // Scroll by 200px so item 2 moves into viewport Y: [0, 50]
+    scrollView->setScrollY(200.0f);
+
+    // Point (50, 25) now hits item 2
+    EXPECT_EQ(dispatcher.hitTest(scrollView.get(), 50.0f, 25.0f), item2Ptr);
+
+    // Point (50, 225) is physically outside ScrollView viewport (height 100) -> hitTest returns nullptr
+    EXPECT_EQ(dispatcher.hitTest(scrollView.get(), 50.0f, 225.0f), nullptr);
+}
+
+TEST(LclUiTest, CanvasClipDiscardsPrimitivesCompletelyOutside) {
+    std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
+    lcl::render::SkiaCanvas canvas(renderer);
+
+    canvas.clipRect(Rect{0.0f, 0.0f, 10.0f, 10.0f});
+    canvas.drawRect(Rect{15.0f, 15.0f, 10.0f, 10.0f}, Color{255, 255, 255, 255});
+
+    for (uint32_t p : pixels) {
+        EXPECT_EQ(p, 0x00000000u);
+    }
+}
+
+TEST(LclUiTest, CanvasClipClipsPartiallyIntersectingRect) {
+    std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
+    lcl::render::SkiaCanvas canvas(renderer);
+
+    canvas.clipRect(Rect{0.0f, 0.0f, 16.0f, 16.0f});
+    canvas.drawRect(Rect{0.0f, 0.0f, 32.0f, 32.0f}, Color{255, 255, 255, 255});
+
+    // Inside clip
+    EXPECT_EQ(pixels[5 + 5 * 32], 0xFFFFFFFFu);
+    EXPECT_EQ(pixels[15 + 15 * 32], 0xFFFFFFFFu);
+
+    // Outside clip
+    EXPECT_EQ(pixels[17 + 5 * 32], 0x00000000u);
+    EXPECT_EQ(pixels[5 + 17 * 32], 0x00000000u);
+    EXPECT_EQ(pixels[20 + 20 * 32], 0x00000000u);
+}
+
+TEST(LclUiTest, CanvasClipClipsTextRendering) {
+    std::vector<uint32_t> pixels(64 * 64, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(64, 64, nullptr, pixels.data()));
+    lcl::render::SkiaCanvas canvas(renderer);
+
+    canvas.clipRect(Rect{0.0f, 0.0f, 32.0f, 20.0f});
+    // Draw text outside clip
+    canvas.drawText(0.0f, 40.0f, "Out of bounds text", Color{255, 255, 255, 255}, 14.0f, FontFamily::Interface);
+
+    for (int y = 30; y < 64; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            EXPECT_EQ(pixels[x + y * 64], 0x00000000u);
+        }
+    }
+}
+
+TEST(LclUiTest, CanvasClipSaveAndRestoreRestoresPreviousClip) {
+    std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
+    lcl::render::SkiaCanvas canvas(renderer);
+
+    canvas.clipRect(Rect{0.0f, 0.0f, 24.0f, 24.0f});
+    canvas.saveState();
+    canvas.clipRect(Rect{0.0f, 0.0f, 8.0f, 8.0f});
+
+    // Draw while inner clip is active
+    canvas.drawRect(Rect{12.0f, 12.0f, 4.0f, 4.0f}, Color{255, 0, 0, 255});
+    EXPECT_EQ(pixels[13 + 13 * 32], 0x00000000u); // Rejected by inner clip
+
+    canvas.restoreState();
+
+    // After restore, outer clip [0..24, 0..24] is active again
+    canvas.drawRect(Rect{12.0f, 12.0f, 4.0f, 4.0f}, Color{0, 255, 0, 255});
+    EXPECT_EQ(pixels[13 + 13 * 32], 0xFF00FF00u); // Drawn successfully
+}
+
+

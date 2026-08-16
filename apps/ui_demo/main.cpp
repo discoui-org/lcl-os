@@ -6,6 +6,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "lcl-ui/widgets/scroll_view.hpp"
 #include "render/skia_canvas.hpp"
 
 using namespace lcl::ui;
@@ -20,10 +21,10 @@ public:
         getYogaNode().setJustifyContent(YGJustifyCenter);
         getYogaNode().setAlignItems(YGAlignCenter);
         getYogaNode().setPadding(YGEdgeHorizontal, 16.0f);
-        getYogaNode().setPadding(YGEdgeVertical, 10.0f);
+        getYogaNode().setPadding(YGEdgeVertical, 8.0f);
 
         auto labelWidget = std::make_unique<Text>(label);
-        labelWidget->setFontSize(16.0f);
+        labelWidget->setFontSize(15.0f);
         labelWidget->setTextColor(Color{236, 239, 244, 255});
         m_label = labelWidget.get();
         addChild(std::move(labelWidget));
@@ -31,7 +32,7 @@ public:
         setBackgroundColor(Color{36, 42, 52, 255});
         setBorderColor(Color{86, 95, 112, 255});
         setBorderWidth(1.0f);
-        setBorderRadius(14.0f);
+        setBorderRadius(10.0f);
         setOpacity(1.0f);
         setInteractionStyle(InteractionState::Normal,
             InteractionStyle{.scale = 1.0f, .opacity = 1.0f, .motion = std::nullopt});
@@ -53,13 +54,13 @@ private:
 
 int main() {
     std::cout << "========================================\n";
-    std::cout << "  LCL OS - lcl-ui Phase 1.6 Live Demo   \n";
+    std::cout << "  LCL OS - lcl-ui ScrollView Live Demo  \n";
     std::cout << "========================================\n";
 
     // 1. Initialize WindowApp Application Pipeline (800x600)
     WindowApp app(
         lcl::render::makeSkiaCanvas(), 800, 600,
-        "LCL-UI Phase 1.6 Interactive Demo App");
+        "LCL-UI ScrollView Interactive Demo App");
     app.setAppId("org.lcl.uidemo");
     app.setWindowCornerStyle(20.0f, 2.0f);
     app.setEdgeToEdge(true);
@@ -93,45 +94,66 @@ int main() {
     content->getYogaNode().setDirection(YGFlexDirectionColumn);
     content->getYogaNode().setJustifyContent(YGJustifyCenter);
     content->getYogaNode().setAlignItems(YGAlignCenter);
-    content->getYogaNode().setGap(YGGutterAll, 20.0f);
+    content->getYogaNode().setGap(YGGutterAll, 16.0f);
 
-    // Inner Card Container
+    // Main Card Container
     auto cardContainer = std::make_unique<Container>();
     cardContainer->getYogaNode().setDirection(YGFlexDirectionColumn);
     cardContainer->getYogaNode().setAlignItems(YGAlignCenter);
-    cardContainer->getYogaNode().setPadding(YGEdgeAll, 24.0f);
-    cardContainer->getYogaNode().setGap(YGGutterAll, 16.0f);
+    cardContainer->getYogaNode().setPadding(YGEdgeAll, 20.0f);
+    cardContainer->getYogaNode().setGap(YGGutterAll, 12.0f);
     cardContainer->setBackgroundColor(Color{26, 30, 36, 255});
-    cardContainer->setBorderColor(Color{10, 12, 16, 120});
+    cardContainer->setBorderColor(Color{60, 68, 80, 180});
     cardContainer->setBorderWidth(1.0f);
-    cardContainer->setBorderRadius(0.0f);
+    cardContainer->setBorderRadius(16.0f);
 
-    // Button & Text Widgets
-    auto clickButton = std::make_unique<DemoButton>("Tıkla: 0");
-    DemoButton* btnPtr = clickButton.get();
-    clickButton->getYogaNode().setWidth(176.0f);
-    clickButton->getYogaNode().setHeight(44.0f);
+    // Title & Status Label
+    auto titleText = std::make_unique<Text>("ScrollView Test Paneli");
+    titleText->setFontSize(18.0f);
+    titleText->setTextColor(Color{240, 244, 250, 255});
 
-    auto statusText = std::make_unique<Text>("Tıklama Sayısı: 0");
+    auto statusText = std::make_unique<Text>("Seçilen: Henüz yok (Tıklama: 0)");
     Text* textPtr = statusText.get();
-    statusText->setFontSize(16.0f);
-    statusText->setTextColor(Color{196, 202, 211, 255});
+    statusText->setFontSize(14.0f);
+    statusText->setTextColor(Color{160, 174, 192, 255});
 
-    // Application State & Interactive Counter Callback
+    // ScrollView Viewport (340x280)
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->getYogaNode().setWidth(340.0f);
+    scrollView->getYogaNode().setHeight(280.0f);
+
+    // Scrollable Content Container
+    auto scrollContent = std::make_unique<Container>();
+    scrollContent->getYogaNode().setDirection(YGFlexDirectionColumn);
+    scrollContent->getYogaNode().setGap(YGGutterAll, 8.0f);
+    scrollContent->getYogaNode().setPadding(YGEdgeAll, 8.0f);
+    scrollContent->setBackgroundColor(Color{18, 22, 28, 255});
+    scrollContent->setBorderColor(Color{45, 52, 64, 255});
+    scrollContent->setBorderWidth(1.0f);
+    scrollContent->setBorderRadius(12.0f);
+
+    // Add 18 Interactive Row Buttons
     static int clickCounter = 0;
-    btnPtr->setOnClick([btnPtr, textPtr]() {
-        clickCounter++;
-        std::string newBtnLabel = "Tıkla: " + std::to_string(clickCounter);
-        std::string newText = "Tıklama Sayısı: " + std::to_string(clickCounter);
+    for (int i = 1; i <= 18; ++i) {
+        std::string rowName = "Satır #" + std::to_string(i) + (i % 2 == 0 ? " (Çift)" : " (Tek)");
+        auto rowBtn = std::make_unique<DemoButton>(rowName);
+        rowBtn->getYogaNode().setHeight(36.0f);
 
-        btnPtr->setLabel(newBtnLabel);
-        textPtr->setText(newText);
+        rowBtn->setOnClick([i, textPtr]() {
+            clickCounter++;
+            std::string newText = "Seçilen: Satır #" + std::to_string(i) + " (Tıklama: " + std::to_string(clickCounter) + ")";
+            textPtr->setText(newText);
+            std::cout << "[lcl_ui_demo] Scrolled Row #" << i << " clicked! Total clicks: " << clickCounter << std::endl;
+        });
 
-        std::cout << "[lcl_ui_demo] Button clicked! User application state updated to: " << newText << std::endl;
-    });
+        scrollContent->addChild(std::move(rowBtn));
+    }
 
-    cardContainer->addChild(std::move(clickButton));
+    scrollView->setContent(std::move(scrollContent));
+
+    cardContainer->addChild(std::move(titleText));
     cardContainer->addChild(std::move(statusText));
+    cardContainer->addChild(std::move(scrollView));
     content->addChild(std::move(cardContainer));
     rootContainer->addChild(std::move(backdrop));
     rootContainer->addChild(std::move(content));
@@ -146,3 +168,4 @@ int main() {
 
     return 0;
 }
+

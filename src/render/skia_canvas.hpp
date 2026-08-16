@@ -80,7 +80,7 @@ private:
     lcl::ui::Rect mapRect(const lcl::ui::Rect& rect) const;
     std::pair<float, float> mapPoint(float x, float y) const;
     lcl::ui::Color mapColor(lcl::ui::Color color) const;
-    bool applyClip(lcl::ui::Rect& rect) const;
+    void syncRendererClip();
     SkiaRenderer& renderer() { return *m_renderer; }
 
     std::unique_ptr<ClientEGLContext> m_clientEglContext;

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -94,6 +95,9 @@ public:
     void setContentOrigin(float x, float y) { m_contentOriginX = x; m_contentOriginY = y; }
     float getContentOriginX() const { return m_contentOriginX; }
     float getContentOriginY() const { return m_contentOriginY; }
+
+    void setClipRect(const std::optional<SkiaRect>& clip);
+    const std::optional<SkiaRect>& getClipRect() const { return m_clipRect; }
 
     /**
      * @brief Clear whole canvas or subregion with specific background color.
@@ -366,6 +370,9 @@ private:
     uint32_t activeSceneTexture() const {
         return m_glExternalFrameTexture ? m_glExternalFrameTexture : m_glSceneTexture;
     }
+
+    std::optional<SkiaRect> m_clipRect;
+    void applyScissorState();
 };
 
 } // namespace lcl::render

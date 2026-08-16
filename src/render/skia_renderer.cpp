@@ -1001,8 +1001,38 @@ void SkiaRenderer::drawGpuRoundedRect(float x,
 }
 #endif
 
+void SkiaRenderer::applyScissorState() {
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend) return;
+    if (m_clipRect.has_value()) {
+        const SkiaRect deviceClip = scaleRect(*m_clipRect);
+        int sx = std::max(0, static_cast<int>(std::floor(deviceClip.x)));
+        int syTop = std::max(0, static_cast<int>(std::floor(deviceClip.y)));
+        int sRight = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width)));
+        int sBottom = std::min(static_cast<int>(m_height), static_cast<int>(std::ceil(deviceClip.y + deviceClip.height)));
+        int sw = std::max(0, sRight - sx);
+        int sh = std::max(0, sBottom - syTop);
+        m_eglBackend->makeCurrent();
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(sx, std::max(0, static_cast<int>(m_height) - (syTop + sh)), sw, sh);
+    } else {
+        if (m_eglBackend) {
+            m_eglBackend->makeCurrent();
+            glDisable(GL_SCISSOR_TEST);
+        }
+    }
+#endif
+}
+
+void SkiaRenderer::setClipRect(const std::optional<SkiaRect>& clip) {
+    m_clipRect = clip;
+    applyScissorState();
+}
+
 void SkiaRenderer::beginFrame() {
     if (!m_initialized) return;
+    m_clipRect = std::nullopt;
+    applyScissorState();
 
 #ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && activeSceneFBO() > 0) {
@@ -1204,6 +1234,14 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
     int y1 = std::clamp(static_cast<int>(deviceRect.y), 0, static_cast<int>(m_height));
     int x2 = std::clamp(static_cast<int>(deviceRect.x + deviceRect.width), 0, static_cast<int>(m_width));
     int y2 = std::clamp(static_cast<int>(deviceRect.y + deviceRect.height), 0, static_cast<int>(m_height));
+
+    if (m_clipRect) {
+        const SkiaRect deviceClip = scaleRect(*m_clipRect);
+        x1 = std::max(x1, std::max(0, static_cast<int>(std::floor(deviceClip.x))));
+        y1 = std::max(y1, std::max(0, static_cast<int>(std::floor(deviceClip.y))));
+        x2 = std::min(x2, std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width))));
+        y2 = std::min(y2, std::min(static_cast<int>(m_height), static_cast<int>(std::ceil(deviceClip.y + deviceClip.height))));
+    }
 
     if (x1 >= x2 || y1 >= y2) return;
 
@@ -1474,7 +1512,16 @@ void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fg
 #endif
 
     if (m_fontRenderer.isInitialized() && m_targetPixels) {
-        m_fontRenderer.renderString(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor);
+        if (m_clipRect) {
+            const SkiaRect deviceClip = scaleRect(*m_clipRect);
+            int minX = std::max(0, static_cast<int>(std::floor(deviceClip.x)));
+            int minY = std::max(0, static_cast<int>(std::floor(deviceClip.y)));
+            int maxX = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width)));
+            int maxY = std::min(static_cast<int>(m_height), static_cast<int>(std::ceil(deviceClip.y + deviceClip.height)));
+            m_fontRenderer.renderStringClipped(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor, minX, minY, maxX, maxY);
+        } else {
+            m_fontRenderer.renderString(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor);
+        }
     }
 }
 
@@ -1497,7 +1544,16 @@ void SkiaRenderer::drawMonospaceString(int x, int y, const std::string& text,
 #endif
 
     if (m_targetPixels) {
-        m_monospaceFontRenderer.renderString(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor);
+        if (m_clipRect) {
+            const SkiaRect deviceClip = scaleRect(*m_clipRect);
+            int minX = std::max(0, static_cast<int>(std::floor(deviceClip.x)));
+            int minY = std::max(0, static_cast<int>(std::floor(deviceClip.y)));
+            int maxX = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width)));
+            int maxY = std::min(static_cast<int>(m_height), static_cast<int>(std::ceil(deviceClip.y + deviceClip.height)));
+            m_monospaceFontRenderer.renderStringClipped(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor, minX, minY, maxX, maxY);
+        } else {
+            m_monospaceFontRenderer.renderString(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor);
+        }
     }
 }
 
@@ -1661,6 +1717,14 @@ void SkiaRenderer::drawBufferRaw(float dstX,
     int clipY1 = std::max(0, static_cast<int>(std::floor(dstY)));
     int clipX2 = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(dstX + outW)));
     int clipY2 = std::min(static_cast<int>(m_height), static_cast<int>(std::ceil(dstY + outH)));
+
+    if (m_clipRect) {
+        const SkiaRect deviceClip = scaleRect(*m_clipRect);
+        clipX1 = std::max(clipX1, std::max(0, static_cast<int>(std::floor(deviceClip.x))));
+        clipY1 = std::max(clipY1, std::max(0, static_cast<int>(std::floor(deviceClip.y))));
+        clipX2 = std::min(clipX2, std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width))));
+        clipY2 = std::min(clipY2, std::min(static_cast<int>(m_height), static_cast<int>(std::ceil(deviceClip.y + deviceClip.height))));
+    }
 
     if (clipX1 >= clipX2 || clipY1 >= clipY2) return;
 

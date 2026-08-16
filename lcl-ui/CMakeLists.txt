@@ -33,6 +33,7 @@ add_library(lcl-ui STATIC
     src/widgets/button.cpp
     src/widgets/backdrop_surface.cpp
     src/widgets/filter_group.cpp
+    src/widgets/scroll_view.cpp
 )
 
 target_include_directories(lcl-ui PUBLIC
