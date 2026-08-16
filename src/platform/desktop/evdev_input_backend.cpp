@@ -427,6 +427,22 @@ size_t EvdevInputBackend::dispatchLibinputEvents(int screenWidth, int screenHeig
                 if (m_callback) m_callback(outEv);
                 break;
             }
+            case LIBINPUT_EVENT_POINTER_SCROLL_WHEEL:
+            case LIBINPUT_EVENT_POINTER_AXIS: {
+                auto* p = libinput_event_get_pointer_event(event);
+                outEv.type = RawInputEventType::PointerScroll;
+                outEv.source = PointerSource::Mouse;
+                if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
+                    outEv.dy = libinput_event_pointer_get_axis_value(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL);
+                }
+                if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)) {
+                    outEv.dx = libinput_event_pointer_get_axis_value(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL);
+                }
+                outEv.superPressed = m_superPressed;
+                outEv.modifiers = getActiveModifiers();
+                if (m_callback) m_callback(outEv);
+                break;
+            }
             default:
                 break;
         }
@@ -478,6 +494,28 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     dev.currentRelY += ev.value;
                     dev.relYUpdated = true;
                 }
+                if (ev.code == REL_WHEEL) {
+                    // In evdev, positive value is wheel up, negative is wheel down.
+                    // For UI scrolling, deltaY > 0 scrolls content down, deltaY < 0 scrolls up.
+                    dev.currentWheelY += -static_cast<double>(ev.value);
+                    dev.wheelUpdated = true;
+                }
+#ifdef REL_WHEEL_HI_RES
+                if (ev.code == REL_WHEEL_HI_RES) {
+                    dev.currentWheelY += -static_cast<double>(ev.value) / 120.0;
+                    dev.wheelUpdated = true;
+                }
+#endif
+                if (ev.code == REL_HWHEEL) {
+                    dev.currentWheelX += static_cast<double>(ev.value);
+                    dev.wheelUpdated = true;
+                }
+#ifdef REL_HWHEEL_HI_RES
+                if (ev.code == REL_HWHEEL_HI_RES) {
+                    dev.currentWheelX += static_cast<double>(ev.value) / 120.0;
+                    dev.wheelUpdated = true;
+                }
+#endif
             } else if (ev.type == EV_ABS) {
                 if (ev.code == ABS_X || ev.code == ABS_MT_POSITION_X) {
                     dev.currentAbsX = ev.value;
@@ -605,8 +643,27 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     dev.relXUpdated = false;
                     dev.relYUpdated = false;
                     count++;
-                } else if ((dev.absXUpdated || dev.absYUpdated) &&
-                           (dev.hasAbsX || dev.hasAbsY)) {
+                }
+
+                if (dev.wheelUpdated) {
+                    RawInputEvent outEv{};
+                    outEv.type = RawInputEventType::PointerScroll;
+                    outEv.source = PointerSource::Mouse;
+                    outEv.deviceName = dev.name;
+                    outEv.dx = dev.currentWheelX;
+                    outEv.dy = dev.currentWheelY;
+                    outEv.superPressed = m_superPressed;
+                    outEv.modifiers = getActiveModifiers();
+                    if (m_callback) m_callback(outEv);
+
+                    dev.currentWheelX = 0.0;
+                    dev.currentWheelY = 0.0;
+                    dev.wheelUpdated = false;
+                    count++;
+                }
+
+                if ((dev.absXUpdated || dev.absYUpdated) &&
+                    (dev.hasAbsX || dev.hasAbsY)) {
                     if (dev.isTouchpad) {
                         if (!dev.isTouching && dev.currentAbsX >= 0 && dev.currentAbsY >= 0) {
                             dev.isTouching = true;

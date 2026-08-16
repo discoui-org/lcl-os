@@ -89,6 +89,9 @@ private:
         double currentRelY{0.0};
         bool relXUpdated{false};
         bool relYUpdated{false};
+        double currentWheelX{0.0};
+        double currentWheelY{0.0};
+        bool wheelUpdated{false};
     };
     std::vector<EvdevDevice> m_evdevDevices;
 

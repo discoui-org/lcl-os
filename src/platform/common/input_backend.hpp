@@ -29,7 +29,8 @@ enum class RawInputEventType {
     Unknown,
     PointerMotion,
     PointerButton,
-    KeyboardKey
+    KeyboardKey,
+    PointerScroll
 };
 
 struct RawInputEvent {

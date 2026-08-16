@@ -806,6 +806,8 @@ TEST(LCLProtocolTest, InputEventCodecRoundTripWithPointerSource) {
     input.codepoint = 0;
     input.x = 123.45f;
     input.y = 678.90f;
+    input.deltaX = -1.5f;
+    input.deltaY = 2.5f;
 
     LCLHeader header{};
     header.opcode = LCLOpcode::InputEvent;
@@ -832,5 +834,7 @@ TEST(LCLProtocolTest, InputEventCodecRoundTripWithPointerSource) {
     EXPECT_EQ(decodedInput->source, static_cast<uint8_t>(LCLPointerSource::Touch));
     EXPECT_FLOAT_EQ(decodedInput->x, 123.45f);
     EXPECT_FLOAT_EQ(decodedInput->y, 678.90f);
+    EXPECT_FLOAT_EQ(decodedInput->deltaX, -1.5f);
+    EXPECT_FLOAT_EQ(decodedInput->deltaY, 2.5f);
 }
 

@@ -405,6 +405,11 @@ void WindowApp::pollIPC() {
                     } else {
                         sendPointerUp(inputMsg->x, inputMsg->y, inputMsg->key, source);
                     }
+                } else if (inputMsg->type == 6) { // PointerScroll
+                    const auto source = (inputMsg->source == static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch))
+                        ? PointerSource::Touch
+                        : PointerSource::Mouse;
+                    sendPointerScroll(inputMsg->x, inputMsg->y, inputMsg->deltaX, inputMsg->deltaY, source);
                 } else if (inputMsg->type == 5) { // KeyPress / TextInput
                     if (inputMsg->codepoint > 0) {
                         std::string utf8;
@@ -987,6 +992,15 @@ bool WindowApp::sendPointerUp(float x, float y, int button, PointerSource source
         return true;
     }
     PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Up, source};
+    if (m_onRawPointer && m_onRawPointer(ev)) {
+        return true;
+    }
+    return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
+}
+
+bool WindowApp::sendPointerScroll(float x, float y, float deltaX, float deltaY, PointerSource source) {
+    if (m_morphInputFrozen) return false;
+    PointerEvent ev{x, y, 0, deltaX, deltaY, PointerEventType::Scroll, source};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }

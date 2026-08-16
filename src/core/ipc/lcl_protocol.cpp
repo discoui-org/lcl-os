@@ -424,8 +424,8 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
     }
     case LCLOpcode::InputEvent: {
         LOAD_ONE(LCLMsgInputEvent, msg);
-        if (msg.surfaceId == 0 || msg.type < 1 || msg.type > 5 || msg.pressed > 1 ||
-            !validFloat(msg.x) || !validFloat(msg.y))
+        if (msg.surfaceId == 0 || msg.type < 1 || msg.type > 6 || msg.pressed > 1 ||
+            !validFloat(msg.x) || !validFloat(msg.y) || !validFloat(msg.deltaX) || !validFloat(msg.deltaY))
             return false;
         out.u32(msg.surfaceId);
         out.u32(msg.type);
@@ -436,6 +436,8 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.u32(msg.codepoint);
         out.f32(msg.x);
         out.f32(msg.y);
+        out.f32(msg.deltaX);
+        out.f32(msg.deltaY);
         return true;
     }
     case LCLOpcode::SetDecorationMode: {
@@ -720,10 +722,10 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
         LCLMsgInputEvent m{};
         if (!in.u32(m.surfaceId) || !in.u32(m.type) || !in.u32(m.key) ||
             !in.u8(m.pressed) || !in.u8(m.modifiers) || !in.u8(m.source) || !in.u32(m.codepoint) ||
-            !in.f32(m.x) || !in.f32(m.y))
+            !in.f32(m.x) || !in.f32(m.y) || !in.f32(m.deltaX) || !in.f32(m.deltaY))
             return false;
-        if (m.surfaceId == 0 || m.type < 1 || m.type > 5 || m.pressed > 1 ||
-            !validFloat(m.x) || !validFloat(m.y))
+        if (m.surfaceId == 0 || m.type < 1 || m.type > 6 || m.pressed > 1 ||
+            !validFloat(m.x) || !validFloat(m.y) || !validFloat(m.deltaX) || !validFloat(m.deltaY))
             return false;
         appendNative(payload, m);
         break;

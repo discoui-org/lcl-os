@@ -310,9 +310,20 @@ TEST(LclUiEventsTest, PointerEventSourcePropagation) {
         touchUp.source = static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch);
         ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[0], header, &touchUp));
 
+        // 4. Send Mouse PointerScroll
+        lcl::protocol::LCLMsgInputEvent mouseScroll{};
+        mouseScroll.surfaceId = 1;
+        mouseScroll.type = 6; // PointerScroll
+        mouseScroll.x = 25.0f;
+        mouseScroll.y = 35.0f;
+        mouseScroll.deltaX = 0.0f;
+        mouseScroll.deltaY = 1.0f;
+        mouseScroll.source = static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Mouse);
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[0], header, &mouseScroll));
+
         app.tick();
 
-        ASSERT_EQ(receivedEvents.size(), 3u);
+        ASSERT_EQ(receivedEvents.size(), 4u);
         EXPECT_EQ(receivedEvents[0].type, PointerEventType::Move);
         EXPECT_EQ(receivedEvents[0].source, PointerSource::Mouse);
         EXPECT_FLOAT_EQ(receivedEvents[0].x, 20.0f);
@@ -327,6 +338,12 @@ TEST(LclUiEventsTest, PointerEventSourcePropagation) {
         EXPECT_EQ(receivedEvents[2].source, PointerSource::Touch);
         EXPECT_FLOAT_EQ(receivedEvents[2].x, 50.0f);
         EXPECT_FLOAT_EQ(receivedEvents[2].y, 60.0f);
+
+        EXPECT_EQ(receivedEvents[3].type, PointerEventType::Scroll);
+        EXPECT_EQ(receivedEvents[3].source, PointerSource::Mouse);
+        EXPECT_FLOAT_EQ(receivedEvents[3].x, 25.0f);
+        EXPECT_FLOAT_EQ(receivedEvents[3].y, 35.0f);
+        EXPECT_FLOAT_EQ(receivedEvents[3].deltaY, 1.0f);
     }
 
     close(sockets[0]);

@@ -258,7 +258,9 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
         return;
     }
 
-    if (event.type != InputEventType::PointerMotion && event.type != InputEventType::PointerButton) {
+    if (event.type != InputEventType::PointerMotion &&
+        event.type != InputEventType::PointerButton &&
+        event.type != InputEventType::PointerScroll) {
         return;
     }
 
@@ -275,7 +277,15 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
     const float scale = sanitizeBufferScale(entry.bufferScale);
     protocol::LCLMsgInputEvent input{};
     input.surfaceId = surfaceId;
-    input.type = event.type == InputEventType::PointerMotion ? 3 : 4;
+    if (event.type == InputEventType::PointerMotion) {
+        input.type = 3;
+    } else if (event.type == InputEventType::PointerButton) {
+        input.type = 4;
+    } else if (event.type == InputEventType::PointerScroll) {
+        input.type = 6;
+        input.deltaX = static_cast<float>(event.dx);
+        input.deltaY = static_cast<float>(event.dy);
+    }
     const auto bounds = render::presentedBounds(*windowIt);
     input.x = (static_cast<float>(m_windowManager.getMouseX()) - bounds.x) / scale;
     input.y = (static_cast<float>(m_windowManager.getMouseY()) - bounds.y - titleOffset) / scale;
