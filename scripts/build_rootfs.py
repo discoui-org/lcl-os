@@ -4,9 +4,9 @@ LCL Core Linux - Canonical RootFS Artifact Builder (Stage 4C.2d)
 Canonical LCL Filesystem & Application ABI v1
 
 Builds a single, deterministic, platform-independent ext4 root filesystem artifact:
-    build/rootfs/lcl-rootfs-x86_64.ext4
+    build/rootfs/lcl-rootfs-<arch>.ext4
 from the canonical staging tree:
-    build/rootfs/x86_64/
+    build/rootfs/<arch>/
 
 Canonical Root Namespace:
     /Applications/              # Machine-wide installed applications
@@ -34,6 +34,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import shutil
 import stat
 import subprocess
@@ -44,6 +45,33 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 BUILD_DIR = PROJECT_ROOT / "build"
 ROOTFS_BASE_DIR = BUILD_DIR / "rootfs"
+DOCKERFILE = SCRIPT_DIR / "Dockerfile.qemu"
+
+ARCH_META: dict[str, dict] = {
+    "x86_64": {
+        "triplet": "x86_64-linux-gnu",
+        "loader": "ld-linux-x86-64.so.2",
+        "loader_candidates": [
+            "/lib64/ld-linux-x86-64.so.2",
+            "/usr/lib64/ld-linux-x86-64.so.2",
+            "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "/usr/lib/ld-linux-x86-64.so.2",
+        ],
+        "docker_platform": "linux/amd64",
+    },
+    "aarch64": {
+        "triplet": "aarch64-linux-gnu",
+        "loader": "ld-linux-aarch64.so.1",
+        "loader_candidates": [
+            "/lib/ld-linux-aarch64.so.1",
+            "/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+            "/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+            "/usr/lib/ld-linux-aarch64.so.1",
+        ],
+        "docker_platform": "linux/arm64",
+    },
+}
 
 
 def log(msg: str) -> None:
@@ -52,6 +80,18 @@ def log(msg: str) -> None:
 
 def err(msg: str) -> None:
     print(f"[LCL ROOTFS ERROR] {msg}", file=sys.stderr, flush=True)
+
+
+def normalize_arch(arch_str: str | None) -> str:
+    if not arch_str:
+        host_m = platform.machine().lower()
+        if host_m in ("aarch64", "arm64", "armv8", "armv9"):
+            return "aarch64"
+        return "x86_64"
+    a = arch_str.lower().strip()
+    if a in ("aarch64", "arm64", "arm"):
+        return "aarch64"
+    return "x86_64"
 
 
 def get_sha256(filepath: Path) -> str:
@@ -96,7 +136,28 @@ def copy_ldd_deps(binary: Path, dest_lib: Path) -> None:
                 shutil.copy2(lib_path, target, follow_symlinks=True)
 
 
-def find_built_binary(name: str) -> Path | None:
+def is_binary_matching_arch(binary_path: Path | None, arch: str) -> bool:
+    if not binary_path or not binary_path.is_file():
+        return False
+    try:
+        with open(binary_path, "rb") as f:
+            header = f.read(20)
+            if len(header) < 20 or header[:4] != b"\x7fELF":
+                return False
+            # e_machine is at offset 18 (2 bytes little-endian)
+            import struct
+            e_machine = struct.unpack("<H", header[18:20])[0]
+            norm_arch = normalize_arch(arch)
+            if norm_arch == "aarch64":
+                return e_machine == 183  # EM_AARCH64 (0xB7)
+            elif norm_arch == "x86_64":
+                return e_machine == 62   # EM_X86_64 (0x3E)
+    except Exception:
+        pass
+    return False
+
+
+def find_built_binary(name: str, arch: str | None = None) -> Path | None:
     for cand in [
         BUILD_DIR / name,
         BUILD_DIR / "apps" / "ui_demo" / name,
@@ -104,12 +165,15 @@ def find_built_binary(name: str) -> Path | None:
         BUILD_DIR / "src" / "tools" / name,
     ]:
         if cand.is_file():
+            if arch is not None and not is_binary_matching_arch(cand, arch):
+                continue
             return cand
     return None
 
 
 def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
-    """Ensures that required canonical LCL application and tool binaries exist."""
+    """Ensures that required canonical LCL application and tool binaries exist for the target architecture."""
+    norm_arch = normalize_arch(arch)
     targets = [
         "lcl-desktop-shell",
         "lcl-terminal",
@@ -120,9 +184,9 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
         "lcl_ui_demo",
     ]
 
-    missing = [name for name in targets if not find_built_binary(name)]
+    missing = [name for name in targets if not find_built_binary(name, norm_arch)]
     if missing:
-        log(f"Building missing canonical targets: {missing}...")
+        log(f"Building missing/stale canonical targets for {norm_arch}: {missing}...")
         if not (BUILD_DIR / "CMakeCache.txt").is_file():
             subprocess.run(["cmake", "-B", str(BUILD_DIR), "-S", str(PROJECT_ROOT)], check=True)
         subprocess.run(
@@ -132,9 +196,9 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
 
     binaries: dict[str, Path] = {}
     for name in targets:
-        p = find_built_binary(name)
+        p = find_built_binary(name, norm_arch)
         if not p or not p.is_file():
-            raise RuntimeError(f"Required canonical binary '{name}' was not found after build.")
+            raise RuntimeError(f"Required canonical binary '{name}' was not found or is not {norm_arch} after build.")
         binaries[name] = p
 
     return binaries
@@ -142,7 +206,12 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
 
 def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str, str]:
     """Populates the deterministic canonical userspace filesystem layout."""
-    log(f"Staging canonical LCL userspace at {staging_dir} ({arch})...")
+    norm_arch = normalize_arch(arch)
+    meta = ARCH_META[norm_arch]
+    triplet = meta["triplet"]
+    loader_name = meta["loader"]
+
+    log(f"Staging canonical LCL userspace at {staging_dir} ({norm_arch}, triplet={triplet})...")
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
 
@@ -198,7 +267,6 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
     dest_system_apps = staging_dir / "System" / "Applications"
 
     # 2. Linux Kernel & Compatibility Symlinks
-    # Hardcoded glibc ELF interpreter and driver search paths
     compat_symlinks = [
         ("lib64", "System/Library/Libraries"),
         ("lib", "System/Library/Libraries"),
@@ -222,23 +290,30 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
     (usr_dir / "share" / "fonts").symlink_to("../../System/Library/Fonts")
     (usr_dir / "share" / "wallpapers").symlink_to("../../System/Library/Wallpapers")
 
-    # 3. Dynamic Linker (ld-linux-x86-64.so.2)
+    # 3. Dynamic Linker (Arch-specific)
     loader_found = False
-    for loader_cand in [
-        Path("/lib64/ld-linux-x86-64.so.2"),
-        Path("/usr/lib64/ld-linux-x86-64.so.2"),
-        Path("/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"),
-        Path("/usr/lib/ld-linux-x86-64.so.2"),
-    ]:
-        if loader_cand.is_file():
-            shutil.copy2(loader_cand.resolve(), dest_system_lib / "ld-linux-x86-64.so.2")
+    for loader_cand in meta["loader_candidates"]:
+        cand_p = Path(loader_cand)
+        if cand_p.is_file():
+            shutil.copy2(cand_p.resolve(), dest_system_lib / loader_name)
             loader_found = True
+            log(f"  ✓ Found target dynamic linker: {cand_p} -> {loader_name}")
             break
     if not loader_found:
-        raise RuntimeError("Host dynamic linker ld-linux-x86-64.so.2 not found.")
+        raise RuntimeError(f"Dynamic linker {loader_name} not found for architecture {norm_arch}.")
+
+    # Also make sure standard /lib/ld-linux-* or /lib64/ld-linux-* link resolves
+    if norm_arch == "aarch64":
+        lib_ld = staging_dir / "lib" / loader_name
+        if not lib_ld.exists() and not lib_ld.is_symlink():
+            lib_ld.symlink_to(f"../System/Library/Libraries/{loader_name}")
+    elif norm_arch == "x86_64":
+        lib64_ld = staging_dir / "lib64" / loader_name
+        if not lib64_ld.exists() and not lib64_ld.is_symlink():
+            lib64_ld.symlink_to(f"../System/Library/Libraries/{loader_name}")
 
     # 4. Canonical LCL Core Daemons & Tools
-    binaries = ensure_binaries(arch)
+    binaries = ensure_binaries(norm_arch)
     sha_map: dict[str, str] = {}
     core_daemons = {
         "lcl-desktop-shell": dest_system_core / "lcl-desktop-shell",
@@ -263,7 +338,7 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
     # 5. GNU Bash and System Tools (/System/Tools/)
     bash_src = find_host_bin("bash") or find_host_bin("sh")
     if not bash_src:
-        raise RuntimeError("Host bash binary not found.")
+        raise RuntimeError("Target bash binary not found.")
     bash_dst = dest_system_tools / "bash"
     shutil.copy2(bash_src, bash_dst)
     bash_dst.chmod(0o755)
@@ -294,7 +369,7 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
 
     # 6. Graphics & EGL Drivers (Mesa DRI, GBM, VirGL, libinput)
     dri_dirs = [
-        Path("/usr/lib/x86_64-linux-gnu/dri"),
+        Path(f"/usr/lib/{triplet}/dri"),
         Path("/usr/lib/dri"),
         Path("/usr/lib64/dri"),
     ]
@@ -317,7 +392,7 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
             break
 
     gbm_dirs = [
-        Path("/usr/lib/x86_64-linux-gnu/gbm"),
+        Path(f"/usr/lib/{triplet}/gbm"),
         Path("/usr/lib/gbm"),
         Path("/usr/lib64/gbm"),
     ]
@@ -340,7 +415,7 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
             break
 
     # Copy Mesa backend libraries into dest_system_lib
-    for mesa_cand in [Path("/usr/lib/x86_64-linux-gnu"), Path("/usr/lib64"), Path("/usr/lib")]:
+    for mesa_cand in [Path(f"/usr/lib/{triplet}"), Path("/usr/lib64"), Path("/usr/lib")]:
         if mesa_cand.is_dir():
             for pat in ("libEGL*", "libGL*", "libgbm*", "libglapi*", "libdrm*", "libgallium*", "libLLVM*"):
                 for m_so in mesa_cand.glob(pat):
@@ -353,8 +428,8 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
                             except Exception:
                                 pass
 
-    # Symlink x86_64-linux-gnu -> . inside dest_system_lib
-    triplet_link = dest_system_lib / "x86_64-linux-gnu"
+    # Symlink target triplet -> . inside dest_system_lib
+    triplet_link = dest_system_lib / triplet
     if triplet_link.exists() or triplet_link.is_symlink():
         if triplet_link.is_dir() and not triplet_link.is_symlink():
             shutil.rmtree(triplet_link)
@@ -635,7 +710,6 @@ def validate_app_bundles(staging_dir: Path) -> None:
 
             manifest_file = app_dir / "Manifest.json"
             if not manifest_file.is_file():
-                # Fallback check
                 manifest_file = app_dir / "metadata.json"
                 if not manifest_file.is_file():
                     raise RuntimeError(f"Bundle {app_dir.name} in {parent.name} is missing Manifest.json")
@@ -666,7 +740,6 @@ def validate_app_bundles(staging_dir: Path) -> None:
             if not exec_ref:
                 raise RuntimeError(f"Bundle {app_dir.name} is missing 'executable' field in Manifest.json")
 
-            # Resolve executable target
             if exec_ref.startswith("/"):
                 target_exec = staging_dir / exec_ref.lstrip("/")
             else:
@@ -685,7 +758,6 @@ def validate_app_bundles(staging_dir: Path) -> None:
                 if not os.access(str(interp), os.X_OK):
                     raise RuntimeError(f"JavaScript runtime interpreter {interp} is not executable.")
             else:
-                # Native binary: must have execute bit
                 if not os.access(str(target_exec), os.X_OK):
                     raise RuntimeError(f"Bundle {app_dir.name} executable {target_exec} is not executable (0755).")
 
@@ -696,9 +768,13 @@ def validate_app_bundles(staging_dir: Path) -> None:
         raise RuntimeError("No app bundles were found or validated in the staging tree.")
 
 
-def verify_rootfs_image(ext4_path: Path) -> None:
+def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
     """Verifies that key canonical userspace files exist inside the generated ext4 image."""
-    log(f"Verifying ext4 filesystem contents of {ext4_path.name}...")
+    norm_arch = normalize_arch(arch)
+    meta = ARCH_META[norm_arch]
+    loader_name = meta["loader"]
+
+    log(f"Verifying ext4 filesystem contents of {ext4_path.name} ({norm_arch})...")
     required_files = [
         "/System/Core/lcl-core",
         "/System/Core/lcl-desktop-shell",
@@ -706,6 +782,7 @@ def verify_rootfs_image(ext4_path: Path) -> None:
         "/System/Core/lcl-open",
         "/System/Core/lcl-js",
         "/System/Tools/bash",
+        f"/System/Library/Libraries/{loader_name}",
         "/System/Applications/Terminal.app/Manifest.json",
         "/System/Applications/Terminal.app/Executables/Terminal",
         "/System/Applications/Terminal.app/Resources/Icon.png",
@@ -715,8 +792,6 @@ def verify_rootfs_image(ext4_path: Path) -> None:
         "/System/Applications/UIDemoJS.app/Executables/Main.js",
         "/System/Library/Fonts/inter",
         "/System/Library/Wallpapers/wallpaper.jpg",
-        "/System/Library/Libraries/gbm/dri_gbm.so",
-        "/System/Library/Libraries/dri/virtio_gpu_dri.so",
         "/System/Library/EGL/glvnd/egl_vendor.d/50_mesa.json",
         "/System/Library/Input/libinput",
         "/Users/Rei/.bashrc",
@@ -758,16 +833,75 @@ def verify_rootfs_image(ext4_path: Path) -> None:
     if not first_line.startswith("#!/System/Tools/sh"):
         raise AssertionError(f"/init shebang is not canonical #!/System/Tools/sh: {first_line}")
 
-    log("✓ All required canonical userspace files, manifests, and /init entrypoint verified successfully.")
+    log(f"✓ All required canonical userspace files, {loader_name}, manifests, and /init entrypoint verified successfully.")
 
 
-def build_rootfs_ext4(arch: str = "x86_64", image_size_mb: int = 1024) -> tuple[Path, Path, dict[str, str]]:
+def run_inside_docker(arch: str = "aarch64", image_size_mb: int = 1024) -> tuple[Path, Path, dict[str, str]]:
+    """Dispatches rootfs generation inside multi-arch Docker container."""
+    norm_arch = normalize_arch(arch)
+    plat = ARCH_META[norm_arch]["docker_platform"]
+    image_tag = f"lcl-os-qemu-builder:{norm_arch}"
+
+    log(f"Executing rootfs build inside Docker ({norm_arch}, {plat})...")
+
+    # Build image if missing
+    inspect = subprocess.run(["docker", "image", "inspect", image_tag], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if inspect.returncode != 0:
+        log(f"Building Docker image {image_tag} ({plat})...")
+        subprocess.run([
+            "docker", "build", "--platform", plat, "-t", image_tag, "-f", str(DOCKERFILE), str(SCRIPT_DIR)
+        ], check=True)
+
+    env_args: list[str] = []
+    if hasattr(os, "getuid") and hasattr(os, "getgid"):
+        env_args = ["-e", f"HOST_UID={os.getuid()}", "-e", f"HOST_GID={os.getgid()}"]
+
+    cmd = [
+        "docker", "run", "--rm",
+        "--platform", plat,
+        *env_args,
+        "-v", f"{PROJECT_ROOT}:/src",
+        "-w", "/src",
+        image_tag,
+        "python3", "scripts/build_rootfs.py",
+        "--arch", norm_arch,
+        "--size", str(image_size_mb),
+        "--inside-docker",
+    ]
+    subprocess.run(cmd, check=True)
+
+    staging_dir = ROOTFS_BASE_DIR / norm_arch
+    out_ext4 = ROOTFS_BASE_DIR / f"lcl-rootfs-{norm_arch}.ext4"
+    return staging_dir, out_ext4, {}
+
+
+def fix_permissions() -> None:
+    """Fix ownership and permissions on build/ inside Docker."""
+    if not BUILD_DIR.exists():
+        return
+    uid = os.environ.get("HOST_UID")
+    gid = os.environ.get("HOST_GID")
+    if uid and gid:
+        try:
+            subprocess.run(["chown", "-R", f"{uid}:{gid}", str(BUILD_DIR)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+
+def build_rootfs_ext4(arch: str = "x86_64", image_size_mb: int = 1024, inside_docker: bool = False) -> tuple[Path, Path, dict[str, str]]:
     """Builds the canonical ext4 rootfs image from the staging tree."""
-    ROOTFS_BASE_DIR.mkdir(parents=True, exist_ok=True)
-    staging_dir = ROOTFS_BASE_DIR / arch
-    out_ext4 = ROOTFS_BASE_DIR / f"lcl-rootfs-{arch}.ext4"
+    norm_arch = normalize_arch(arch)
+    host_arch = normalize_arch(platform.machine())
 
-    sha_map = stage_canonical_rootfs(staging_dir, arch)
+    # If cross-building on host machine (e.g. host is x86_64, target is aarch64) and not already inside docker, delegate to Docker
+    if not inside_docker and host_arch != norm_arch:
+        return run_inside_docker(norm_arch, image_size_mb)
+
+    ROOTFS_BASE_DIR.mkdir(parents=True, exist_ok=True)
+    staging_dir = ROOTFS_BASE_DIR / norm_arch
+    out_ext4 = ROOTFS_BASE_DIR / f"lcl-rootfs-{norm_arch}.ext4"
+
+    sha_map = stage_canonical_rootfs(staging_dir, norm_arch)
 
     log(f"Creating ext4 rootfs image at {out_ext4} ({image_size_mb} MB)...")
     if out_ext4.exists():
@@ -793,19 +927,25 @@ def build_rootfs_ext4(arch: str = "x86_64", image_size_mb: int = 1024) -> tuple[
     log(f"✓ Built {out_ext4.name} ({img_size} bytes / {img_size / (1024*1024):.1f} MB)")
 
     # Verify content inside ext4 image using debugfs
-    verify_rootfs_image(out_ext4)
+    verify_rootfs_image(out_ext4, norm_arch)
+
+    if inside_docker:
+        fix_permissions()
 
     return staging_dir, out_ext4, sha_map
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="LCL Core Linux - Canonical RootFS Builder")
-    parser.add_argument("--arch", default="x86_64", help="Target architecture (default: x86_64)")
+    parser.add_argument("--arch", default="x86_64", help="Target architecture (x86_64 or aarch64)")
     parser.add_argument("--size", type=int, default=1024, help="Filesystem size in MB (default: 1024)")
+    parser.add_argument("--inside-docker", action="store_true", help="Internal flag when running inside container")
     args = parser.parse_args()
 
-    staging_dir, out_ext4, sha_map = build_rootfs_ext4(arch=args.arch, image_size_mb=args.size)
+    norm_arch = normalize_arch(args.arch)
+    staging_dir, out_ext4, sha_map = build_rootfs_ext4(arch=norm_arch, image_size_mb=args.size, inside_docker=args.inside_docker)
     print("\n--- Summary ---")
+    print(f"Target architecture: {norm_arch}")
     print(f"Staging tree: {staging_dir}")
     print(f"RootFS image: {out_ext4} ({out_ext4.stat().st_size} bytes)")
     for k, v in sha_map.items():
