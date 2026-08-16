@@ -1,4 +1,5 @@
 #include "render/skia_renderer.hpp"
+#include "render/text_metrics.hpp"
 #include "render/backdrop_filter_geometry.hpp"
 #include "render/dma_buf_crop.hpp"
 #ifndef LCL_SOFTWARE_ONLY
@@ -741,7 +742,7 @@ bool SkiaRenderer::ensureFont(float logicalFontSize) {
     if (!m_fontRenderer.isInitialized() ||
         std::fabs(m_fontRenderer.getFontSize() - deviceFontSize) > 0.01f) {
         m_fontRenderer = FontRenderer{};
-        m_fontRenderer.loadFont("/usr/share/fonts/inter/Inter-Regular.otf", deviceFontSize);
+        text_metrics::loadFont(m_fontRenderer, lcl::ui::FontFamily::Interface, deviceFontSize);
     }
     return m_fontRenderer.isInitialized();
 }
@@ -751,15 +752,8 @@ bool SkiaRenderer::ensureMonospaceFont(float logicalFontSize) {
     if (!m_monospaceFontRenderer.isInitialized() ||
         std::fabs(m_monospaceFontRenderer.getFontSize() - deviceFontSize) > 0.01f) {
         m_monospaceFontRenderer = FontRenderer{};
-        constexpr const char* kFontPaths[] = {
-            "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
-            "assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
-        };
-        for (const char* path : kFontPaths) {
-            if (m_monospaceFontRenderer.loadFont(path, deviceFontSize)) {
-                break;
-            }
-        }
+        text_metrics::loadFont(m_monospaceFontRenderer, lcl::ui::FontFamily::Monospace,
+                               deviceFontSize);
     }
     return m_monospaceFontRenderer.isInitialized();
 }

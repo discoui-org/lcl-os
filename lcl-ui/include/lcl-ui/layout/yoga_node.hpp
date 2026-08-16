@@ -66,6 +66,7 @@ public:
 
     // Measurement callback wrapper
     void setMeasureFunc(MeasureCallback callback);
+    void markDirty();
 
 private:
     YGNodeRef m_node{nullptr};

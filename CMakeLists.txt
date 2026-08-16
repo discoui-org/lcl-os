@@ -66,6 +66,19 @@ add_library(lcl-display-scale STATIC
     src/core/display/display_scale.cpp
 )
 
+# Font selection and glyph-advance metrics are shared by lcl-ui layout and
+# client/compositor rendering. Keeping this below the UI ABI avoids a renderer
+# dependency from widgets while preserving one authoritative measurement path.
+add_library(lcl-font-metrics STATIC
+    src/render/font_renderer.cpp
+    src/render/text_metrics.cpp
+)
+
+target_include_directories(lcl-font-metrics PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+)
+
 # Session lifecycle transport and authority stay independent from compositor
 # surface IPC.  This is the durable boundary between app processes and scenes.
 add_library(lcl-session-protocol STATIC
@@ -117,7 +130,6 @@ add_subdirectory(lcl-motion)
 # Compositor-owned render/present layer.
 # Depends strictly on lcl-platform-common; never on concrete platform layers.
 add_library(lcl-render STATIC
-    src/render/font_renderer.cpp
     src/render/renderer.cpp
     src/render/skia_renderer.cpp
     src/render/window_chrome_widget.cpp
@@ -133,6 +145,7 @@ if(ANDROID)
         lcl-motion
         lcl-protocol
         lcl-display-scale
+        lcl-font-metrics
         lcl-platform-common
         GLESv3
         EGL
@@ -147,6 +160,7 @@ else()
         lcl-motion
         lcl-protocol
         lcl-display-scale
+        lcl-font-metrics
         lcl-platform-common
         ${GLES2_LIBRARIES}
         Threads::Threads
@@ -262,7 +276,6 @@ else()
         src/render/client_egl_context.cpp
         src/render/skia_canvas.cpp
         src/render/skia_renderer.cpp
-        src/render/font_renderer.cpp
     )
 
     target_include_directories(lcl-canvas-skia PUBLIC
@@ -276,6 +289,7 @@ else()
 
     target_link_libraries(lcl-canvas-skia PUBLIC
         lcl-ui
+        lcl-font-metrics
         lcl-protocol
         ${DRM_LIBRARIES}
         ${GBM_LIBRARIES}

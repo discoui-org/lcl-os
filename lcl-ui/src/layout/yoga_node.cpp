@@ -90,4 +90,8 @@ void YogaNode::setMeasureFunc(MeasureCallback callback) {
     }
 }
 
+void YogaNode::markDirty() {
+    if (m_node) YGNodeMarkDirty(m_node);
+}
+
 } // namespace lcl::ui

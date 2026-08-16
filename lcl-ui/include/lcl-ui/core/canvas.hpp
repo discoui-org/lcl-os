@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 
+#include "lcl-ui/core/font_family.hpp"
 #include "lcl-ui/core/rect.hpp"
 
 namespace lcl::ui {
@@ -41,12 +42,6 @@ struct DmaBufFrame {
     uint32_t format{0};
     uint64_t modifier{~uint64_t{0}};
     int fd{-1};
-};
-
-/** Selects the text face without exposing a renderer implementation to widgets. */
-enum class FontFamily : uint8_t {
-    Interface,
-    Monospace,
 };
 
 /**

@@ -47,6 +47,7 @@ target_link_libraries(lcl-ui PUBLIC
     lcl-motion
     lcl-protocol
     lcl-display-scale
+    lcl-font-metrics
     yogacore
     Threads::Threads
 )

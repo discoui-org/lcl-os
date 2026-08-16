@@ -205,6 +205,78 @@ TEST(LclUiTest, WidgetsUseBackendNeutralCanvas) {
     EXPECT_EQ(canvas.texts.front(), "Canvas");
 }
 
+TEST(LclUiTest, TextYogaMeasurementMatchesRendererGlyphAdvances) {
+    std::vector<uint32_t> pixels(512 * 96, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(512, 96, nullptr, pixels.data()));
+
+    for (const std::string& value : {"iiiiiiii", "WWWWWWWW", "ScrollView Test Paneli"}) {
+        Text text(value);
+        text.setFontSize(18.0f);
+        text.getYogaNode().calculateLayout(512.0f, 96.0f);
+
+        EXPECT_NEAR(text.getYogaNode().getLayoutWidth(), renderer.measureString(value, 18.0f), 0.01f)
+            << value;
+    }
+}
+
+TEST(LclUiTest, FlexCenteredTextUsesItsMeasuredGlyphWidthForOrigin) {
+    std::vector<uint32_t> pixels(400 * 96, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(400, 96, nullptr, pixels.data()));
+
+    for (const std::string& value : {"iiiiiiii", "WWWWWWWW", "ScrollView Test Paneli"}) {
+        auto root = std::make_unique<Container>();
+        root->getYogaNode().setWidth(400.0f);
+        root->getYogaNode().setHeight(96.0f);
+        root->getYogaNode().setAlignItems(YGAlignCenter);
+
+        auto label = std::make_unique<Text>(value);
+        label->setFontSize(18.0f);
+        Text* labelPtr = label.get();
+        root->addChild(std::move(label));
+
+        root->getYogaNode().calculateLayout(400.0f, 96.0f);
+        root->syncLayout();
+
+        const float renderedWidth = renderer.measureString(value, 18.0f);
+        EXPECT_NEAR(labelPtr->getAbsoluteBounds().x, (400.0f - renderedWidth) * 0.5f, 0.01f)
+            << value;
+
+        RecordingCanvas canvas;
+        root->draw(canvas, Rect{0.0f, 0.0f, 400.0f, 96.0f});
+        ASSERT_EQ(canvas.textPositions.size(), 1u);
+        EXPECT_NEAR(canvas.textPositions.front().x, labelPtr->getAbsoluteBounds().x, 0.01f)
+            << value;
+    }
+}
+
+TEST(LclUiTest, TextMeasurementUpdatesAfterContentAndFamilyChanges) {
+    std::vector<uint32_t> pixels(512 * 96, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(512, 96, nullptr, pixels.data()));
+
+    Text text("iiiiiiii");
+    text.setFontSize(18.0f);
+    text.getYogaNode().calculateLayout(512.0f, 96.0f);
+    const float narrowWidth = text.getYogaNode().getLayoutWidth();
+
+    text.setText("WWWWWWWW");
+    text.getYogaNode().calculateLayout(512.0f, 96.0f);
+    const float wideWidth = text.getYogaNode().getLayoutWidth();
+    EXPECT_NE(wideWidth, narrowWidth);
+    EXPECT_NEAR(wideWidth, renderer.measureString("WWWWWWWW", 18.0f), 0.01f);
+
+    text.setFontSize(24.0f);
+    text.getYogaNode().calculateLayout(512.0f, 96.0f);
+    EXPECT_NEAR(text.getYogaNode().getLayoutWidth(), renderer.measureString("WWWWWWWW", 24.0f), 0.01f);
+
+    text.setFontFamily(FontFamily::Monospace);
+    text.getYogaNode().calculateLayout(512.0f, 96.0f);
+    EXPECT_NEAR(text.getYogaNode().getLayoutWidth(),
+                renderer.measureMonospaceString("WWWWWWWW", 24.0f), 0.01f);
+}
+
 TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     auto canvas = std::make_unique<RecordingCanvas>();
     RecordingCanvas* recorded = canvas.get();
@@ -1552,5 +1624,3 @@ TEST(LclUiTest, CanvasClipSaveAndRestoreRestoresPreviousClip) {
     canvas.drawRect(Rect{12.0f, 12.0f, 4.0f, 4.0f}, Color{0, 255, 0, 255});
     EXPECT_EQ(pixels[13 + 13 * 32], 0xFF00FF00u); // Drawn successfully
 }
-
-
