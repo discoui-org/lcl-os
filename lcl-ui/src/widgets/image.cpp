@@ -111,6 +111,20 @@ void Image::draw(Canvas& canvas, const Rect& damageRect) {
 
         drawX = boxX + (boxW - drawW) / 2;
         drawY = boxY + (boxH - drawH) / 2;
+    } else if (m_fit == ImageFit::Cover) {
+        const float srcAspect = static_cast<float>(srcW) / static_cast<float>(srcH);
+        const float boxAspect = static_cast<float>(boxW) / static_cast<float>(boxH);
+
+        if (srcAspect > boxAspect) {
+            drawH = boxH;
+            drawW = std::max(1, static_cast<int>(std::round(static_cast<float>(drawH) * srcAspect)));
+        } else {
+            drawW = boxW;
+            drawH = std::max(1, static_cast<int>(std::round(static_cast<float>(drawW) / srcAspect)));
+        }
+
+        drawX = boxX + (boxW - drawW) / 2;
+        drawY = boxY + (boxH - drawH) / 2;
     }
 
     canvas.drawBuffer(drawX, drawY, srcW, srcH, m_sourceImage->pixels.data(), srcW,

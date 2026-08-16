@@ -1610,7 +1610,7 @@ void SkiaRenderer::drawBufferRaw(float dstX,
         if (m_glClientTexture == 0) {
             glGenTextures(1, &m_glClientTexture);
             glBindTexture(GL_TEXTURE_2D, m_glClientTexture);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -1632,6 +1632,7 @@ void SkiaRenderer::drawBufferRaw(float dstX,
                 glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, srcW, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelData + (y * stridePixels));
             }
         }
+        glGenerateMipmap(GL_TEXTURE_2D);
 
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);

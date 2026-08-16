@@ -10,7 +10,8 @@ namespace lcl::ui {
 
 enum class ImageFit {
     Fill,
-    Contain
+    Contain,
+    Cover
 };
 
 class Image : public Widget {

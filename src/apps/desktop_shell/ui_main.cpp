@@ -294,7 +294,7 @@ int main() {
     // assigns the surface to the actual output bounds before it is mapped.
     wallpaper->setInitialBounds(0, 0, width, height);
     auto wallpaperImage = std::make_unique<lcl::ui::Image>(wallpaperPath);
-    wallpaperImage->setFit(lcl::ui::ImageFit::Fill);
+    wallpaperImage->setFit(lcl::ui::ImageFit::Cover);
     wallpaperImage->getYogaNode().setWidth(static_cast<float>(width));
     wallpaperImage->getYogaNode().setHeight(static_cast<float>(height));
     wallpaper->setRootWidget(std::move(wallpaperImage));
