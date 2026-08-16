@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
 """
-LCL Core Linux - Android Bootable Image Builder (Stage 4A)
+LCL Core Linux - Android Bootable Image Builder (Stage 4C.3)
 Builds reproducible bootable custom system.img and ramdisk.img for Android AVD.
+
+Stage 4C.3 Architecture:
+The Android system image contains ONLY platform-specific substrate components:
+- Android init, binder, vendor HALs, Composer3
+- lcl-core-android (Android composition server)
+- lcl.rc and lcl-bootstrap.sh init scripts
+
+All canonical userspace applications (Terminal.app, UIDemo.app, UIDemoJS.app),
+daemons (lcl-sessiond, lcl-desktop-shell), shell (Bash), fonts, and user home (/Users/Rei)
+reside exclusively in the shared, byte-for-byte canonical rootfs:
+    build/rootfs/lcl-rootfs-x86_64.ext4
 """
 
 from __future__ import annotations
@@ -21,6 +32,7 @@ BUILD_DIR = PROJECT_ROOT / "build"
 BUILD_ANDROID_DIR = PROJECT_ROOT / "build-android"
 OUT_ANDROID_DIR = BUILD_DIR / "android"
 STAGE_DIR = OUT_ANDROID_DIR / "stage"
+CANONICAL_ROOTFS_EXT4 = BUILD_DIR / "rootfs" / "lcl-rootfs-x86_64.ext4"
 
 
 def log(msg: str) -> None:
@@ -116,19 +128,19 @@ def parse_gpt_partitions(disk_path: Path) -> list[dict]:
     return partitions
 
 
-def modify_system_image(system_ext4_path: Path, glibc_runtime_dir: Path) -> None:
-    """Modifies the unpacked ext4 system.img using debugfs."""
-    log("Modifying system.img (disabling Android UI, installing LCL userspace & canonical assets)...")
+def modify_system_image(system_ext4_path: Path, android_core: Path) -> None:
+    """Modifies the unpacked ext4 system.img using debugfs for platform substrate only."""
+    log("Modifying system.img (configuring LCL Android substrate & init services)...")
 
-    # 0. Resize system.img to 1060MB to allocate sufficient inodes (new block group) and blocks for LCL runtime and assets
+    # Resize system.img to 1060MB to allocate sufficient inodes and space
     subprocess.run(["e2fsck", "-fy", str(system_ext4_path)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["resize2fs", str(system_ext4_path), "1060M"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # 1. Prepare temporary files for modified init scripts and LCL bootstrap
+    # Prepare temporary files for modified init scripts and LCL bootstrap
     tmp_dir = STAGE_DIR / "init_mods"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    # Disable surfaceflinger in surfaceflinger.rc
+    # 1. Disable surfaceflinger in surfaceflinger.rc
     res = subprocess.run(["debugfs", "-R", "cat /etc/init/surfaceflinger.rc", str(system_ext4_path)],
                          capture_output=True, text=True, check=True)
     sf_rc = res.stdout
@@ -138,13 +150,13 @@ def modify_system_image(system_ext4_path: Path, glibc_runtime_dir: Path) -> None
     sf_rc_path = tmp_dir / "surfaceflinger.rc"
     sf_rc_path.write_text(sf_rc)
 
-    # Disable zygote completely in init.zygote64.rc and init.zygote64_32.rc
+    # 2. Disable zygote completely in init.zygote64.rc and init.zygote64_32.rc
     zygote_rc_path = tmp_dir / "init.zygote64.rc"
     zygote_rc_path.write_text("# Zygote disabled in LCL Core Linux\n")
     zygote64_32_rc_path = tmp_dir / "init.zygote64_32.rc"
     zygote64_32_rc_path.write_text("# Zygote disabled in LCL Core Linux\n")
 
-    # Disable bootanim in bootanim.rc
+    # 3. Disable bootanim in bootanim.rc
     res = subprocess.run(["debugfs", "-R", "cat /etc/init/bootanim.rc", str(system_ext4_path)],
                          capture_output=True, text=True, check=True)
     bootanim_rc = res.stdout
@@ -153,128 +165,343 @@ def modify_system_image(system_ext4_path: Path, glibc_runtime_dir: Path) -> None
     bootanim_rc_path = tmp_dir / "bootanim.rc"
     bootanim_rc_path.write_text(bootanim_rc)
 
-    # Create LCL Android Init configuration
+    # 4. Create LCL Android Init configuration (lcl.rc)
     lcl_rc_content = """# LCL Core Linux - Android Platform Init Script
+on early-init
+    mount tmpfs tmpfs /Runtime mode=0755,uid=0,gid=0
+
 on post-fs-data
-    mount tmpfs tmpfs /run nodev noexec nosuid mode=0755,uid=0,gid=0
-    mkdir /run/user 0755 root root
-    mkdir /run/user/1000 0755 root root
-    mkdir /run/user/0 0755 root root
-    chmod 0755 /run
-    chmod 0755 /run/user
-    chmod 0755 /run/user/1000
-    chmod 0755 /run/user/0
+    mkdir /Runtime/Sessions 0755 root root
+    mkdir /Runtime/Sessions/Rei 0700 root root
+    mkdir /Runtime/Temporary 1777 root root
+    chmod 0755 /Runtime
+    chmod 0755 /mnt/lcl
+    chmod 0755 /mnt/lcl-probe
+    chmod 0755 /Runtime/Sessions
+    chmod 0700 /Runtime/Sessions/Rei
+    chmod 1777 /Runtime/Temporary
 
 on boot
     start lcl-bootstrap
 
-service lcl-bootstrap /system/lcl/bin/lcl-bootstrap.sh
+service lcl-bootstrap /system/bin/lcl-bootstrap.sh
     class main
     user root
     group graphics drmrpc readproc root
     seclabel u:r:su:s0
-    capabilities SYS_NICE
+    capabilities SYS_ADMIN SYS_CHROOT SYS_NICE SETUID SETGID
 """
     lcl_rc_path = tmp_dir / "lcl.rc"
     lcl_rc_path.write_text(lcl_rc_content)
 
-    # Create LCL bootstrap executable script
+    # 5. Create empty fstab to satisfy toybox mount
+    fstab_path = tmp_dir / "fstab"
+    fstab_path.write_text("# LCL Core Linux fstab\n")
+
+    # 6. Create LCL bootstrap executable script (/system/bin/lcl-bootstrap.sh)
+    # Stage 4C.3: Mounts exact canonical rootfs and launches session inside canonical namespace
     lcl_bootstrap_content = """#!/system/bin/sh
-# LCL Core Linux - Direct Boot Execution Script
+# LCL Core Linux - Direct Boot Execution Script (Stage 4C.3 Canonical Userspace)
 
-# 1. Mount writable /run tmpfs if not mounted yet
-if ! mount | grep -q " /run "; then
-    mount -t tmpfs -o mode=0755,uid=0,gid=0 tmpfs /run 2>/dev/null
+BOOT_PID=$$
+CORE_PID=""
+SESSION_RUNNER_PID=""
+
+trap 'EXIT_CODE=$?; echo "[LCL BOOT] BOOTSTRAP EXIT rc=$EXIT_CODE (core_pid=$CORE_PID session_runner_pid=$SESSION_RUNNER_PID)" >> /data/local/tmp/lcl-bootstrap.log; echo "[LCL BOOT] BOOTSTRAP EXIT rc=$EXIT_CODE"' EXIT
+
+log_boot() {
+    echo "[LCL BOOT] $1"
+    echo "[LCL BOOT] $1" >> /data/local/tmp/lcl-bootstrap.log
+}
+
+log_boot "=================================================="
+log_boot "LCL Android Bootstrap Starting (PID=$BOOT_PID)"
+log_boot "=================================================="
+
+# 1. Setup /Runtime tmpfs
+mkdir -p /Runtime 2>/dev/null
+TMPFS_MOUNT_ERR=""
+if ! mount | grep -q " /Runtime "; then
+    TMPFS_MOUNT_ERR=$(mount -t tmpfs -o mode=0755,uid=0,gid=0 tmpfs /Runtime 2>&1)
 fi
-mkdir -p /run/user/1000 /run/user/0 2>/dev/null
-chmod 755 /run /run/user /run/user/1000 2>/dev/null
 
-    # 2. Canonical symlinks & home directory
-[ ! -e /usr ] && ln -s /system/lcl/usr /usr 2>/dev/null
-[ ! -e /bin ] && ln -s /system/lcl/bin /bin 2>/dev/null
-[ ! -e /lib64 ] && ln -s /system/lcl/lib64 /lib64 2>/dev/null
-[ ! -e /home ] && ln -s /system/lcl/home /home 2>/dev/null
-mkdir -p /home/user/Applications /home/user/Desktop /home/user/Documents /home/user/Downloads 2>/dev/null
+if mount | grep -q " /Runtime "; then
+    mkdir -p /Runtime/Sessions/Rei /Runtime/Temporary 2>/dev/null
+    chmod 0755 /Runtime 2>/dev/null
+    chmod 0700 /Runtime/Sessions/Rei 2>/dev/null
+    chmod 1777 /Runtime/Temporary 2>/dev/null
+    rm -f /Runtime/lcl-compositor.sock /Runtime/lcl-sessiond.sock 2>/dev/null
+    : > /Runtime/lcl-core.log 2>/dev/null
+    : > /Runtime/lcl-sessiond.log 2>/dev/null
+    : > /Runtime/lcl-shell.log 2>/dev/null
+    : > /Runtime/lcl-session-runner.log 2>/dev/null
+    ln -sf /Runtime/lcl-core.log /data/local/tmp/lcl-core.log 2>/dev/null
+    ln -sf /Runtime/lcl-sessiond.log /data/local/tmp/lcl-sessiond.log 2>/dev/null
+    ln -sf /Runtime/lcl-shell.log /data/local/tmp/lcl-shell.log 2>/dev/null
+    ln -sf /Runtime/lcl-session-runner.log /data/local/tmp/lcl-session-runner.log 2>/dev/null
+    log_boot "Runtime mount = /Runtime (tmpfs ready, stale sockets purged)"
+else
+    log_boot "ERROR: tmpfs mount on /Runtime failed: $TMPFS_MOUNT_ERR"
+    sleep 2
+    exit 1
+fi
 
-# 3. Export canonical environment
-export PATH="/usr/bin:/bin:/system/lcl/bin:/system/bin:$PATH"
-export HOME="/home/user"
-export LD_LIBRARY_PATH="/system/lib64:/apex/com.android.i18n/lib64:/apex/com.android.art/lib64:/vendor/lib64:/vendor/lib64/hw:/system/lib64/hw:/system/lcl/lib64"
-export LCL_COMPOSITOR_SOCKET="/run/user/1000/lcl-compositor.sock"
-export LCL_SESSION_SOCKET="/run/user/1000/lcl-sessiond.sock"
+# 2. Ensure mountpoints /mnt/lcl and /mnt/lcl-probe exist
+mkdir -p /mnt/lcl /mnt/lcl-probe 2>/dev/null
+chmod 0755 /mnt/lcl /mnt/lcl-probe 2>/dev/null
+umount /mnt/lcl-probe 2>/dev/null || true
 
-# 4. Start LCL Platform Compositor directly on Composer3
-/system/lcl/bin/lcl-core-android > /data/local/tmp/lcl-core.log 2>&1 &
+log_boot "Mount namespace: $(readlink /proc/$BOOT_PID/ns/mnt 2>/dev/null || echo 'unknown')"
+
+# 3. Check if /mnt/lcl already has a valid canonical rootfs
+LCL_BLOCK=""
+
+if [ -f /mnt/lcl/System/Core/lcl-sessiond ]; then
+    log_boot "existing canonical rootfs detected on /mnt/lcl"
+    log_boot "reusing /mnt/lcl"
+    LCL_BLOCK=$(mount | grep " /mnt/lcl " | awk '{print $1}' | head -n 1)
+    if [ -z "$LCL_BLOCK" ]; then
+        LCL_BLOCK="/dev/block/vdf"
+    fi
+    log_boot "rootfs device = $LCL_BLOCK"
+else
+    log_boot "Scanning block candidates..."
+    for attempt in $(seq 1 30); do
+        CANDIDATES=""
+        if [ -f /proc/partitions ]; then
+            while read major minor blocks name; do
+                case "$name" in
+                    name|""|ram*|loop*|dm-*) continue ;;
+                    *)
+                        for prefix in /dev/block /dev; do
+                            if [ -b "$prefix/$name" ]; then
+                                CANDIDATES="$CANDIDATES $prefix/$name"
+                            fi
+                        done
+                        ;;
+                esac
+            done < /proc/partitions
+        fi
+
+        for p in /dev/block/by-label/lcl-rootfs /dev/block/vd* /dev/vd*; do
+            if [ -b "$p" ]; then
+                CANDIDATES="$CANDIDATES $p"
+            fi
+        done
+
+        for dev in $CANDIDATES; do
+            if [ ! -b "$dev" ]; then
+                continue
+            fi
+
+            log_boot "probing candidate: $dev on /mnt/lcl-probe"
+            umount /mnt/lcl-probe 2>/dev/null || true
+            MOUNT_ERR=$(mount -t ext4 -o ro "$dev" /mnt/lcl-probe 2>&1)
+            MOUNT_RC=$?
+
+            if [ $MOUNT_RC -eq 0 ]; then
+                log_boot "  mount $dev -> SUCCESS"
+                if [ -f /mnt/lcl-probe/System/Core/lcl-sessiond ]; then
+                    log_boot "  signature check -> FOUND (/System/Core/lcl-sessiond present)"
+                    LCL_BLOCK="$dev"
+                    umount /mnt/lcl-probe 2>/dev/null || true
+                    break 2
+                else
+                    log_boot "  signature check -> NOT LCL rootfs"
+                    umount /mnt/lcl-probe 2>/dev/null || true
+                fi
+            else
+                log_boot "  mount $dev -> FAILED (rc=$MOUNT_RC): $MOUNT_ERR"
+            fi
+        done
+
+        sleep 0.2
+    done
+
+    umount /mnt/lcl-probe 2>/dev/null || true
+
+    if [ -z "$LCL_BLOCK" ]; then
+        log_boot "ERROR: canonical rootfs block device not found!"
+        sleep 2
+        exit 1
+    fi
+
+    log_boot "rootfs device = $LCL_BLOCK"
+
+    FINAL_MOUNT_ERR=$(mount -t ext4 -o rw,noatime "$LCL_BLOCK" /mnt/lcl 2>&1 || mount -t ext4 "$LCL_BLOCK" /mnt/lcl 2>&1 || mount -t ext4 -o ro "$LCL_BLOCK" /mnt/lcl 2>&1)
+
+    if [ ! -f /mnt/lcl/System/Core/lcl-sessiond ]; then
+        log_boot "ERROR: Final mount failed: $FINAL_MOUNT_ERR"
+        sleep 2
+        exit 1
+    fi
+
+    log_boot "rootfs mounted = /mnt/lcl"
+    log_boot "LCL root = /mnt/lcl"
+fi
+
+# 4. Idempotent Bind-mounts for essential kernel pseudo-filesystems and /Runtime into canonical userspace
+mkdir -p /mnt/lcl/dev /mnt/lcl/dev/pts /mnt/lcl/proc /mnt/lcl/sys /mnt/lcl/Runtime 2>/dev/null
+
+if ! mount | grep -q " /mnt/lcl/dev "; then
+    mount --bind /dev /mnt/lcl/dev 2>>/data/local/tmp/lcl-bootstrap.log || true
+fi
+if ! mount | grep -q " /mnt/lcl/dev/pts "; then
+    mount --bind /dev/pts /mnt/lcl/dev/pts 2>>/data/local/tmp/lcl-bootstrap.log || true
+fi
+if ! mount | grep -q " /mnt/lcl/proc "; then
+    mount --bind /proc /mnt/lcl/proc 2>>/data/local/tmp/lcl-bootstrap.log || true
+fi
+if ! mount | grep -q " /mnt/lcl/sys "; then
+    mount --bind /sys /mnt/lcl/sys 2>>/data/local/tmp/lcl-bootstrap.log || true
+fi
+if ! mount | grep -q " /mnt/lcl/Runtime "; then
+    BIND_RUNTIME_ERR=$(mount --bind /Runtime /mnt/lcl/Runtime 2>&1)
+    if [ $? -eq 0 ]; then
+        log_boot "bind /Runtime -> /mnt/lcl/Runtime = SUCCESS"
+    else
+        log_boot "ERROR: bind /Runtime -> /mnt/lcl/Runtime failed: $BIND_RUNTIME_ERR"
+        sleep 2
+        exit 1
+    fi
+else
+    log_boot "/mnt/lcl/Runtime already bound = REUSED"
+fi
+
+# 5. Start Android Platform Compositor in background
+log_boot "step=core-spawn begin"
+/system/bin/lcl-core-android > /Runtime/lcl-core.log 2>&1 &
 CORE_PID=$!
+log_boot "step=core-spawn pid=$CORE_PID"
 
-# 5. Wait for compositor socket readiness
+# 6. Wait for compositor socket readiness
+log_boot "step=socket-wait begin"
+SOCKET_READY=0
 for i in $(seq 1 100); do
-    if [ -S "$LCL_COMPOSITOR_SOCKET" ]; then
+    if [ -S "/Runtime/lcl-compositor.sock" ] && kill -0 $CORE_PID 2>/dev/null; then
+        SOCKET_READY=1
         break
+    fi
+    if ! kill -0 $CORE_PID 2>/dev/null; then
+        wait $CORE_PID
+        CORE_RC=$?
+        log_boot "ERROR: lcl-core-android exited prematurely (rc=$CORE_RC)!"
+        log_boot "--- /Runtime/lcl-core.log ---"
+        cat /Runtime/lcl-core.log 2>/dev/null | while read -r line; do log_boot "  $line"; done
+        log_boot "-----------------------------"
+        sleep 3
+        exit 1
     fi
     sleep 0.05
 done
 
-# 6. Start LCL Session Daemon (lcl-sessiond)
-/system/lcl/lib64/ld-linux-x86-64.so.2 --library-path /system/lcl/lib64 /system/lcl/bin/lcl-sessiond > /data/local/tmp/lcl-sessiond.log 2>&1 &
+if [ $SOCKET_READY -ne 1 ]; then
+    log_boot "ERROR: compositor socket not ready after 5s!"
+    kill -9 $CORE_PID 2>/dev/null || true
+    sleep 2
+    exit 1
+fi
+
+log_boot "step=socket-wait ready (core_pid=$CORE_PID)"
+
+# 7. Test chroot viability
+CHROOT_TEST=$(chroot /mnt/lcl /System/Tools/bash -c "echo CHROOT_OK" 2>&1)
+log_boot "chroot bash test: $CHROOT_TEST"
+
+# 8. Create canonical session startup script in shared /Runtime
+cat << 'EOF' > /Runtime/lcl-session-start.sh
+#!/System/Tools/bash
+# LCL Core Linux - Canonical Session Startup Script
+
+export PATH=/System/Core:/System/Tools
+export HOME=/Users/Rei
+export USER=Rei
+export TERM=xterm-256color
+
+echo "[LCL SESSION] Starting sessiond..."
+/System/Core/lcl-sessiond > /Runtime/lcl-sessiond.log 2>&1 &
 SESSIOND_PID=$!
+echo "[LCL SESSION] lcl-sessiond spawned (PID=$SESSIOND_PID)"
 
-# 7. Wait for session socket readiness
-for i in $(seq 1 100); do
-    if [ -S "/run/user/1000/lcl-sessiond.sock" ]; then
+# Wait for session daemon socket
+for ((i=0; i<100; i++)); do
+    if [ -S "/Runtime/lcl-sessiond.sock" ]; then
+        echo "[LCL SESSION] lcl-sessiond.sock ready!"
+        break
+    fi
+    if ! kill -0 $SESSIOND_PID 2>/dev/null; then
+        echo "[LCL SESSION] ERROR: lcl-sessiond died prematurely!"
         break
     fi
     sleep 0.05
 done
 
-# 8. Launch canonical desktop shell via dynamic loader
-# lcl-terminal is NOT launched here — lcl-sessiond's launchDefaultProfile() is the sole terminal launch authority
-/system/lcl/lib64/ld-linux-x86-64.so.2 --library-path /system/lcl/lib64 /system/lcl/bin/lcl-desktop-shell > /data/local/tmp/lcl-shell.log 2>&1 &
+echo "[LCL SESSION] Starting desktop shell..."
+/System/Core/lcl-desktop-shell > /Runtime/lcl-shell.log 2>&1 &
+SHELL_PID=$!
+echo "[LCL SESSION] lcl-desktop-shell spawned (PID=$SHELL_PID)"
 
-# 9. Keep bootstrap process alive so init does not kill children
-wait $CORE_PID $SESSIOND_PID
+wait $SESSIOND_PID $SHELL_PID
+EOF
+
+chmod 0755 /Runtime/lcl-session-start.sh
+log_boot "step=session-script-created on /Runtime/lcl-session-start.sh"
+
+# 9. Launch canonical session via chroot executing the script directly
+log_boot "step=session-launch begin"
+chroot /mnt/lcl /System/Tools/bash /Runtime/lcl-session-start.sh > /Runtime/lcl-session-runner.log 2>&1 &
+SESSION_RUNNER_PID=$!
+log_boot "step=session-launch pid=$SESSION_RUNNER_PID"
+
+# 10. Robust process lifecycle monitoring loop
+log_boot "step=monitor-loop begin (core_pid=$CORE_PID session_runner_pid=$SESSION_RUNNER_PID)"
+
+while kill -0 $CORE_PID 2>/dev/null; do
+    if [ -n "$SESSION_RUNNER_PID" ] && ! kill -0 $SESSION_RUNNER_PID 2>/dev/null; then
+        wait $SESSION_RUNNER_PID
+        SESSION_RC=$?
+        log_boot "step=session-runner-exited (rc=$SESSION_RC)"
+        log_boot "--- /Runtime/lcl-session-runner.log ---"
+        cat /Runtime/lcl-session-runner.log 2>/dev/null | while read -r line; do log_boot "  $line"; done
+        log_boot "--- /Runtime/lcl-sessiond.log ---"
+        cat /Runtime/lcl-sessiond.log 2>/dev/null | while read -r line; do log_boot "  $line"; done
+        log_boot "--- /Runtime/lcl-shell.log ---"
+        cat /Runtime/lcl-shell.log 2>/dev/null | while read -r line; do log_boot "  $line"; done
+        log_boot "-------------------------------------"
+        SESSION_RUNNER_PID=""
+    fi
+    sleep 1
+done
+
+wait $CORE_PID
+CORE_RC=$?
+log_boot "step=core-exited (rc=$CORE_RC)"
+log_boot "--- /Runtime/lcl-core.log ---"
+cat /Runtime/lcl-core.log 2>/dev/null | while read -r line; do log_boot "  $line"; done
+log_boot "-----------------------------"
+
+sleep 5
 """
     lcl_bootstrap_path = tmp_dir / "lcl-bootstrap.sh"
     lcl_bootstrap_path.write_text(lcl_bootstrap_content)
     os.chmod(lcl_bootstrap_path, 0o755)
 
-    # Binaries and assets
-    desktop_shell = BUILD_DIR / "lcl-desktop-shell"
-    desktop_term = BUILD_DIR / "lcl-terminal"
-    sessiond_bin = BUILD_DIR / "lcl-sessiond"
-    android_core = BUILD_ANDROID_DIR / "lcl-core-android"
-    bash_bin = Path("/bin/bash") if Path("/bin/bash").is_file() else Path("/usr/bin/bash")
-    wallpaper_jpg = PROJECT_ROOT / "wallpaper.jpg"
-    wallpaper_png = PROJECT_ROOT / "wallpaper.png"
-
-    # Canonical Terminal.app metadata (identical on all platforms)
-    term_meta = PROJECT_ROOT / "src/apps/terminal/metadata.json"
-    term_icon = PROJECT_ROOT / "src/apps/terminal/assets/icon.png"
-    uidemo_meta = PROJECT_ROOT / "apps/ui_demo/metadata.json"
-    uidemo_icon = PROJECT_ROOT / "apps/ui_demo/assets/icon.png"
-    uidemojs_meta = PROJECT_ROOT / "apps/ui_demo_js/metadata.json"
-    uidemojs_icon = PROJECT_ROOT / "apps/ui_demo_js/assets/icon.png"
-
-    # Shell profile and bashrc for canonical /home/user environment
-    bashrc_path = tmp_dir / "bashrc"
-    bashrc_path.write_text("""export PATH=/usr/bin:/bin:/system/lcl/bin:/system/bin:$PATH
-export TERM=xterm-256color
-export PS1='\\[\\033[1;34m\\]\\W\\[\\033[0m\\] ❯ '
-export HISTSIZE=500
-alias ls='ls --color=auto'
-alias ll='ls -la'
-""")
-    profile_path = tmp_dir / "profile"
-    profile_path.write_text("""export PATH=/usr/bin:/bin:/system/lcl/bin:/system/bin:$PATH
-export HOME=/home/user
-export TERM=xterm-256color
-if [ -f /home/user/.bashrc ]; then
-    . /home/user/.bashrc
-fi
-""")
-
     # Assemble debugfs commands
     debugfs_script = []
+
+    # Ensure /Runtime, /mnt/lcl, and /mnt/lcl-probe mountpoints exist in second-stage rootfs
+    debugfs_script.extend([
+        "cd /",
+        "mkdir Runtime",
+        "sif Runtime mode 040755",
+        "mkdir mnt",
+        "sif mnt mode 040755",
+        "cd /mnt",
+        "mkdir lcl",
+        "sif lcl mode 040755",
+        "mkdir lcl-probe",
+        "sif lcl-probe mode 040755",
+    ])
 
     # Write modified .rc files
     debugfs_script.append("cd /system/etc/init")
@@ -293,176 +520,24 @@ fi
     debugfs_script.append(f"write {zygote_rc_path} init.zygote64.rc")
     debugfs_script.append("sif init.zygote64.rc mode 0100644")
     debugfs_script.append("rm init.zygote64_32.rc")
-    debugfs_script.append(f"write {zygote64_32_rc_path} init.zygote64_32.rc")
+    debugfs_script.append(f"write {zygote_rc_path} init.zygote64_32.rc")
     debugfs_script.append("sif init.zygote64_32.rc mode 0100644")
 
-    # Create /system/lcl directories
-    debugfs_script.extend([
-        "cd /system",
-        "mkdir lcl",
-        "cd /system/lcl",
-        "mkdir bin",
-        "mkdir lib64",
-        "mkdir etc",
-        "mkdir home",
-        "mkdir usr",
-        "cd /system/lcl/home",
-        "mkdir user",
-        "cd /system/lcl/home/user",
-        "mkdir Applications",
-        "mkdir Desktop",
-        "mkdir Documents",
-        "mkdir Downloads",
-        f"write {bashrc_path} .bashrc",
-        "sif .bashrc mode 0100644",
-        f"write {profile_path} .profile",
-        "sif .profile mode 0100644",
-        "cd /system/lcl/etc",
-        f"write {profile_path} profile",
-        "sif profile mode 0100644",
-        "cd /system/lcl/usr",
-        "mkdir bin",
-        "mkdir share",
-        "cd /system/lcl/usr/share",
-        "mkdir fonts",
-        "mkdir wallpapers",
-        "mkdir lcl",
-        "cd /system/lcl/usr/share/lcl",
-        "mkdir apps",
-        "cd /system/lcl/usr/share/fonts",
-        "mkdir jetbrains-mono",
-        "mkdir inter",
-        "mkdir liberation-sans",
-        "mkdir liberation-serif",
-    ])
+    # Install fstab in /system/etc
+    debugfs_script.append("cd /system/etc")
+    debugfs_script.append("rm fstab")
+    debugfs_script.append(f"write {fstab_path} fstab")
+    debugfs_script.append("sif fstab mode 0100644")
 
-    # Install binaries into /system/lcl/bin
+    # Install lcl-core-android and lcl-bootstrap.sh in /system/bin
     debugfs_script.extend([
-        "cd /system/lcl/bin",
+        "cd /system/bin",
         "rm lcl-core-android",
         f"write {android_core} lcl-core-android",
         "sif lcl-core-android mode 0100755",
-        "rm lcl-sessiond",
-        f"write {sessiond_bin} lcl-sessiond",
-        "sif lcl-sessiond mode 0100755",
-        "rm lcl-desktop-shell",
-        f"write {desktop_shell} lcl-desktop-shell",
-        "sif lcl-desktop-shell mode 0100755",
-        "rm lcl-terminal",
-        f"write {desktop_term} lcl-terminal",
-        "sif lcl-terminal mode 0100755",
-        "rm bash",
-        f"write {bash_bin} bash",
-        "sif bash mode 0100755",
         "rm lcl-bootstrap.sh",
         f"write {lcl_bootstrap_path} lcl-bootstrap.sh",
         "sif lcl-bootstrap.sh mode 0100755",
-    ])
-
-    # Install glibc runtime into /system/lcl/lib64
-    debugfs_script.append("cd /system/lcl/lib64")
-    runtime_lib_dir = glibc_runtime_dir / "lib" if (glibc_runtime_dir / "lib").is_dir() else glibc_runtime_dir
-    seen_so = set()
-    for so_file in runtime_lib_dir.glob("*.so*"):
-        if so_file.is_file() and so_file.name not in seen_so:
-            seen_so.add(so_file.name)
-            debugfs_script.append(f"rm {so_file.name}")
-            debugfs_script.append(f"write {so_file} {so_file.name}")
-            debugfs_script.append(f"sif {so_file.name} mode 0100755")
-
-    # Install canonical .app bundles into /system/lcl/usr/share/lcl/apps
-    # 1. Terminal.app (canonical metadata.json pointing to /bin/lcl-terminal)
-    debugfs_script.extend([
-        "cd /system/lcl/usr/share/lcl/apps",
-        "mkdir Terminal.app",
-        "cd /system/lcl/usr/share/lcl/apps/Terminal.app",
-        "mkdir assets",
-        "mkdir bin",
-        f"write {term_meta} metadata.json",
-        "sif metadata.json mode 0100644",
-        "cd /system/lcl/usr/share/lcl/apps/Terminal.app/assets",
-        f"write {term_icon} icon.png",
-        "sif icon.png mode 0100644",
-        "cd /system/lcl/usr/share/lcl/apps/Terminal.app/bin",
-        "symlink terminal /system/lcl/bin/lcl-terminal",
-    ])
-
-    # 2. UIDemo.app
-    if uidemo_meta.is_file() and uidemo_icon.is_file():
-        debugfs_script.extend([
-            "cd /system/lcl/usr/share/lcl/apps",
-            "mkdir UIDemo.app",
-            "cd /system/lcl/usr/share/lcl/apps/UIDemo.app",
-            "mkdir assets",
-            "mkdir bin",
-            f"write {uidemo_meta} metadata.json",
-            "sif metadata.json mode 0100644",
-            "cd /system/lcl/usr/share/lcl/apps/UIDemo.app/assets",
-            f"write {uidemo_icon} icon.png",
-            "sif icon.png mode 0100644",
-        ])
-
-    # 3. UIDemoJS.app
-    if uidemojs_meta.is_file() and uidemojs_icon.is_file():
-        debugfs_script.extend([
-            "cd /system/lcl/usr/share/lcl/apps",
-            "mkdir UIDemoJS.app",
-            "cd /system/lcl/usr/share/lcl/apps/UIDemoJS.app",
-            "mkdir assets",
-            "mkdir bin",
-            f"write {uidemojs_meta} metadata.json",
-            "sif metadata.json mode 0100644",
-            "cd /system/lcl/usr/share/lcl/apps/UIDemoJS.app/assets",
-            f"write {uidemojs_icon} icon.png",
-            "sif icon.png mode 0100644",
-        ])
-
-    # Install binary symlinks in /system/bin and /system/lcl/usr/bin
-    debugfs_script.extend([
-        "cd /system/lcl/usr/bin",
-        "symlink lcl-terminal /system/lcl/bin/lcl-terminal",
-        "symlink lcl-sessiond /system/lcl/bin/lcl-sessiond",
-        "symlink lcl-desktop-shell /system/lcl/bin/lcl-desktop-shell",
-        "symlink bash /system/lcl/bin/bash",
-        "cd /system/bin",
-        "symlink lcl-terminal /system/lcl/bin/lcl-terminal",
-        "symlink lcl-sessiond /system/lcl/bin/lcl-sessiond",
-        "symlink lcl-desktop-shell /system/lcl/bin/lcl-desktop-shell",
-        "symlink bash /system/lcl/bin/bash",
-    ])
-
-    # Install fonts into canonical paths
-    fonts_root = PROJECT_ROOT / "assets/fonts"
-    for fam_dir in ["jetbrains-mono", "inter", "liberation-sans", "liberation-serif"]:
-        src_fam = fonts_root / fam_dir
-        if src_fam.is_dir():
-            debugfs_script.append(f"cd /system/lcl/usr/share/fonts/{fam_dir}")
-            for font_file in src_fam.glob("*.[to]tf"):
-                debugfs_script.append(f"write {font_file} {font_file.name}")
-                debugfs_script.append(f"sif {font_file.name} mode 0100644")
-
-    # Install wallpapers
-    debugfs_script.append("cd /system/lcl/usr/share/wallpapers")
-    if wallpaper_jpg.is_file():
-        debugfs_script.append(f"write {wallpaper_jpg} wallpaper.jpg")
-        debugfs_script.append("sif wallpaper.jpg mode 0100644")
-    if wallpaper_png.is_file():
-        debugfs_script.append(f"write {wallpaper_png} wallpaper.png")
-        debugfs_script.append("sif wallpaper.png mode 0100644")
-
-    debugfs_script.append("cd /system/lcl/usr/share")
-    if wallpaper_jpg.is_file():
-        debugfs_script.append(f"write {wallpaper_jpg} wallpaper.jpg")
-        debugfs_script.append("sif wallpaper.jpg mode 0100644")
-
-    # Create root symlinks at /
-    debugfs_script.extend([
-        "cd /",
-        "symlink usr system/lcl/usr",
-        "symlink bin system/lcl/bin",
-        "symlink lib64 system/lcl/lib64",
-        "symlink home system/lcl/home",
-        "mkdir run",
         "quit",
     ])
 
@@ -471,6 +546,14 @@ fi
     if res.returncode != 0:
         err(f"debugfs execution failed:\n{res.stderr}")
         raise RuntimeError("Failed to modify ext4 system.img with debugfs")
+
+
+def make_cpio_dir_entry(path_str: str, mode: int = 0o40755) -> bytes:
+    name_bytes = path_str.encode("utf-8") + b"\x00"
+    namesize = len(name_bytes)
+    header = f"070701{1:08X}{mode:08X}{0:08X}{0:08X}{2:08X}{0:08X}{0:08X}{0:08X}{0:08X}{0:08X}{0:08X}{namesize:08X}{0:08X}".encode("ascii")
+    pad = (4 - ((110 + namesize) % 4)) % 4
+    return header + name_bytes + (b"\x00" * pad)
 
 
 def build_custom_ramdisk(stock_ramdisk_path: Path, out_ramdisk_path: Path) -> None:
@@ -492,7 +575,14 @@ def build_custom_ramdisk(stock_ramdisk_path: Path, out_ramdisk_path: Path) -> No
     raw_cpio[idx2:idx2+len(target_ext4)] = repl_ext4
     log("  ✓ In-place patched first_stage_ramdisk/fstab.ranchu (removed avb=vbmeta for /system only)")
 
-    proc = subprocess.run(["lz4", "-l", "-12", "--favor-decSpeed"], input=raw_cpio, capture_output=True, check=True)
+    # Insert rootfs directory entries for /Runtime, /mnt/lcl, and /mnt/lcl-probe before CPIO TRAILER
+    trailer_idx = raw_cpio.rfind(b"070701")
+    if trailer_idx != -1:
+        extra_entries = make_cpio_dir_entry("Runtime", 0o40755) + make_cpio_dir_entry("mnt/lcl", 0o40755) + make_cpio_dir_entry("mnt/lcl-probe", 0o40755)
+        raw_cpio = raw_cpio[:trailer_idx] + extra_entries + raw_cpio[trailer_idx:]
+        log("  ✓ Injected /Runtime, /mnt/lcl, and /mnt/lcl-probe mountpoints into first_stage_ramdisk")
+
+    proc = subprocess.run(["lz4", "-l", "-12", "--favor-decSpeed"], input=bytes(raw_cpio), capture_output=True, check=True)
     out_ramdisk_path.write_bytes(proc.stdout)
     log(f"  ✓ Packed custom ramdisk {out_ramdisk_path.name} ({out_ramdisk_path.stat().st_size} bytes)")
 
@@ -509,29 +599,23 @@ def build_android_images() -> tuple[Path, Path]:
     out_system_img = OUT_ANDROID_DIR / "lcl-system.img"
     out_ramdisk_img = OUT_ANDROID_DIR / "lcl-ramdisk.img"
 
-    # 1. Check canonical same-binary executables
-    desktop_shell = BUILD_DIR / "lcl-desktop-shell"
-    desktop_term = BUILD_DIR / "lcl-terminal"
-    sessiond_bin = BUILD_DIR / "lcl-sessiond"
+    # 1. Ensure canonical rootfs artifact exists
+    if not CANONICAL_ROOTFS_EXT4.is_file():
+        log("Canonical rootfs ext4 image missing, building...")
+        from build_rootfs import build_rootfs_ext4
+        build_rootfs_ext4()
+
+    rootfs_sha = get_sha256(CANONICAL_ROOTFS_EXT4)
+    log(f"Consuming exact canonical rootfs artifact: {CANONICAL_ROOTFS_EXT4.name}")
+    log(f"  Canonical RootFS SHA-256: {rootfs_sha}")
+
+    # 2. Check Android composition daemon binary
     android_core = BUILD_ANDROID_DIR / "lcl-core-android"
-
-    if not desktop_shell.is_file() or not desktop_term.is_file() or not sessiond_bin.is_file():
-        raise FileNotFoundError("Canonical desktop applications/tools (lcl-desktop-shell, lcl-terminal, lcl-sessiond) not found.")
     if not android_core.is_file():
-        raise FileNotFoundError("Android core composition root (lcl-core-android) not found.")
+        raise FileNotFoundError(f"Android core composition root ({android_core}) not found.")
 
-    shell_sha = get_sha256(desktop_shell)
-    term_sha = get_sha256(desktop_term)
-    sessiond_sha = get_sha256(sessiond_bin)
-    log(f"Canonical Desktop Shell SHA-256:    {shell_sha}")
-    log(f"Canonical Desktop Terminal SHA-256: {term_sha}")
-    log(f"Canonical Session Daemon SHA-256:   {sessiond_sha}")
-
-    # 2. Stage glibc userspace runtime
-    from run_avd import stage_glibc_runtime
-    runtime_dir = BUILD_DIR / "lcl-runtime"
-    bash_bin = Path("/bin/bash") if Path("/bin/bash").is_file() else Path("/usr/bin/bash")
-    stage_glibc_runtime([desktop_shell, desktop_term, sessiond_bin, bash_bin], runtime_dir)
+    core_sha = get_sha256(android_core)
+    log(f"  Android Core Platform Compositor SHA-256: {core_sha}")
 
     # 3. Parse GPT partitions dynamically
     partitions = parse_gpt_partitions(paths.stock_system)
@@ -540,7 +624,7 @@ def build_android_images() -> tuple[Path, Path]:
     if not super_part:
         raise ValueError("Could not find 'super' partition in stock system.img")
 
-    log(f"Found dynamic 'super' partition at offset {super_part['offset']} (size: {super_part['size']} bytes)")
+    log(f"Found dynamic 'super' partition at offset {super_part['offset']} (size: 1895825408 bytes)")
 
     # 4. Extract dynamic super partition
     super_img_path = STAGE_DIR / "super.img"
@@ -565,7 +649,7 @@ def build_android_images() -> tuple[Path, Path]:
 
     # 6. Modify ONLY system.img (vendor.img, product.img, system_ext.img, system_dlkm.img stay 100% stock)
     system_img = unpacked_dir / "system.img"
-    modify_system_image(system_img, runtime_dir)
+    modify_system_image(system_img, android_core)
 
     # 7. Rebuild dynamic super partition with lpmake
     log("Rebuilding dynamic super partition with lpmake...")

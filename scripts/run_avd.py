@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-LCL OS - Android AVD Developer Launcher (Pure Python)
-Builds canonical desktop applications (same-binary) and Android composition root,
-stages the reproducible glibc runtime, boots Android AVD with visible GUI window,
-deploys artifacts via adb, takes DRM/Composer3 display ownership, and launches
-the full LCL desktop session (Wallpaper, MenuBar, Dock, Terminal).
+LCL OS - Android AVD Developer Launcher (Pure Python - Stage 4C.3)
+Builds canonical desktop applications, produces canonical ext4 rootfs,
+builds Android composition root (lcl-core-android), generates bootable Android images,
+attaches the exact canonical ext4 rootfs as a secondary virtio block disk,
+and boots Android AVD with visible GUI window.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent
 BUILD_DIR = ROOT_DIR / "build"
 BUILD_ANDROID_DIR = ROOT_DIR / "build-android"
-STAGING_RUNTIME_DIR = BUILD_DIR / "lcl-runtime"
+CANONICAL_ROOTFS_EXT4 = BUILD_DIR / "rootfs" / "lcl-rootfs-x86_64.ext4"
 
 
 def log(msg: str) -> None:
@@ -95,66 +95,19 @@ class AndroidEnvironment:
         return subprocess.run([str(self.adb), "shell", cmd_str], capture_output=capture_output, text=True, check=check)
 
 
-def stage_glibc_runtime(binaries: list[Path], staging_dir: Path) -> None:
-    """Populates build/lcl-runtime reproducibly from host shared libraries."""
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    lib_dir = staging_dir / "lib"
-    lib_dir.mkdir(parents=True, exist_ok=True)
-
-    # 1. Locate and copy dynamic linker
-    loader_found = False
-    for loader_path in [
-        Path("/lib64/ld-linux-x86-64.so.2"),
-        Path("/usr/lib64/ld-linux-x86-64.so.2"),
-        Path("/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"),
-        Path("/usr/lib/ld-linux-x86-64.so.2"),
-    ]:
-        if loader_path.is_file():
-            resolved = loader_path.resolve()
-            shutil.copy2(resolved, staging_dir / "ld-linux-x86-64.so.2")
-            shutil.copy2(resolved, lib_dir / "ld-linux-x86-64.so.2")
-            loader_found = True
-            break
-    if not loader_found:
-        raise RuntimeError("Host dynamic linker ld-linux-x86-64.so.2 not found.")
-
-    # 2. Parse ldd and copy shared libraries
-    for binary in binaries:
-        if not binary.is_file():
-            continue
-        res = subprocess.run(["ldd", str(binary)], capture_output=True, text=True, check=True)
-        for line in res.stdout.splitlines():
-            line = line.strip()
-            if "=>" in line:
-                parts = line.split("=>")
-                lib_name = parts[0].strip()
-                rest = parts[1].strip()
-                lib_path = rest.split()[0]
-                p = Path(lib_path)
-                if p.is_file():
-                    target = lib_dir / lib_name
-                    if not target.exists():
-                        shutil.copy2(p.resolve(), target)
-
-
 def build_targets(env: AndroidEnvironment, force_rebuild: bool = False) -> None:
-    desktop_shell = BUILD_DIR / "lcl-desktop-shell"
-    desktop_term = BUILD_DIR / "lcl-terminal"
-    sessiond_bin = BUILD_DIR / "lcl-sessiond"
+    # 1. Build canonical rootfs artifact (Stage 4C.3 Single Source of Truth)
+    if force_rebuild or not CANONICAL_ROOTFS_EXT4.is_file():
+        log("Building canonical LCL ext4 root filesystem artifact...")
+        sys.path.insert(0, str(SCRIPT_DIR))
+        from build_rootfs import build_rootfs_ext4
+        build_rootfs_ext4()
+
+    rootfs_sha = get_sha256(CANONICAL_ROOTFS_EXT4)
+    log(f"Canonical ext4 rootfs ready ({CANONICAL_ROOTFS_EXT4.stat().st_size} bytes, SHA-256: {rootfs_sha})")
+
+    # 2. Build Android Platform Composition Root (lcl-core-android)
     android_core = BUILD_ANDROID_DIR / "lcl-core-android"
-
-    # Build Canonical Desktop apps
-    if force_rebuild or not desktop_shell.is_file() or not desktop_term.is_file() or not sessiond_bin.is_file():
-        log("Building canonical LCL desktop applications & session daemon...")
-        if not (BUILD_DIR / "CMakeCache.txt").is_file():
-            subprocess.run(["cmake", "-B", str(BUILD_DIR), "-S", str(ROOT_DIR)], check=True, stdout=subprocess.DEVNULL)
-        subprocess.run([
-            "cmake", "--build", str(BUILD_DIR),
-            "--target", "lcl-desktop-shell", "lcl-terminal", "lcl-sessiond",
-            "-j", str(os.cpu_count() or 4)
-        ], check=True, stdout=subprocess.DEVNULL)
-
-    # Build Android Platform Composition Root
     if force_rebuild or not android_core.is_file():
         log("Building Android platform compositor (lcl-core-android)...")
         if not env.ndk_root:
@@ -173,10 +126,6 @@ def build_targets(env: AndroidEnvironment, force_rebuild: bool = False) -> None:
             "-j", str(os.cpu_count() or 4)
         ], check=True, stdout=subprocess.DEVNULL)
 
-    # Stage glibc runtime
-    bash_bin = Path("/bin/bash") if Path("/bin/bash").is_file() else Path("/usr/bin/bash")
-    stage_glibc_runtime([desktop_shell, desktop_term, sessiond_bin, bash_bin], STAGING_RUNTIME_DIR)
-
 
 def is_device_online(env: AndroidEnvironment) -> bool:
     try:
@@ -190,23 +139,13 @@ def is_device_online(env: AndroidEnvironment) -> bool:
     return False
 
 
-def wait_for_boot(env: AndroidEnvironment, timeout_sec: int = 60) -> None:
-    log("Waiting for Android boot...")
-    env.run_adb("wait-for-device", check=True)
-    start_time = time.time()
-    while time.time() - start_time < timeout_sec:
-        res = env.adb_shell("getprop sys.boot_completed")
-        if res.stdout.strip() == "1":
-            return
-        time.sleep(1)
-    raise TimeoutError("Timed out waiting for sys.boot_completed=1")
-
-
 def clean_stale_avd_locks(avd_name: str) -> None:
+    # Kill any dangling emulator or qemu processes from prior interrupted runs
+    subprocess.run(["killall", "-9", "qemu-system-x86_64", "emulator"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for base in [Path.home() / ".android/avd", Path.home() / ".config/.android/avd"]:
         avd_dir = base / f"{avd_name}.avd"
         if avd_dir.is_dir():
-            for lock_item in avd_dir.glob("*.lock"):
+            for lock_item in avd_dir.rglob("*.lock"):
                 try:
                     if lock_item.is_dir():
                         shutil.rmtree(lock_item)
@@ -217,6 +156,10 @@ def clean_stale_avd_locks(avd_name: str) -> None:
 
 
 def launch_avd(args: argparse.Namespace) -> None:
+    # Ensure Android emulator GUI uses XCB/X11 compatibility on Wayland sessions
+    if "QT_QPA_PLATFORM" not in os.environ and os.environ.get("DISPLAY"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
     env = AndroidEnvironment()
 
     avd_name = args.avd_name or "lcl-phone"
@@ -234,25 +177,37 @@ def launch_avd(args: argparse.Namespace) -> None:
 
     if not args.no_build or not out_system_img.is_file() or not out_ramdisk_img.is_file():
         build_targets(env, force_rebuild=args.rebuild)
+        sys.path.insert(0, str(SCRIPT_DIR))
         from build_android_images import build_android_images
         out_system_img, out_ramdisk_img = build_android_images()
 
-    # 2. Start emulator directly with custom LCL system and ramdisk images
-    emulator_proc = None
+    rootfs_sha = get_sha256(CANONICAL_ROOTFS_EXT4)
+    log(f"Attaching exact canonical rootfs artifact: {CANONICAL_ROOTFS_EXT4.name} (SHA-256: {rootfs_sha})")
+
+    # 2. Start emulator directly with custom LCL system image, ramdisk, and canonical ext4 rootfs disk attachment
     clean_stale_avd_locks(avd_name)
-    log(f"Booting {avd_name} directly with custom LCL system & ramdisk images...")
+    log(f"Booting {avd_name} directly with custom LCL substrate & canonical ext4 rootfs...")
+
     emu_cmd = [
         str(env.emulator),
         "-avd", avd_name,
         "-no-snapshot-load",
         "-no-boot-anim",
         "-selinux", "permissive",
-        "-qemu", "-cpu", "host"
     ]
     if args.show_kernel:
-        emu_cmd.insert(4, "-show-kernel")
+        emu_cmd.append("-show-kernel")
     if args.no_window:
         emu_cmd.append("-no-window")
+
+    # QEMU arguments: Attach canonical rootfs as secondary raw block device via -blockdev
+    emu_cmd.extend([
+        "-qemu",
+        "-cpu", "host",
+        "-blockdev", f"driver=file,filename={CANONICAL_ROOTFS_EXT4},node-name=lcl_rootfs_file",
+        "-blockdev", "driver=raw,file=lcl_rootfs_file,node-name=lcl_rootfs",
+        "-device", "virtio-blk-pci,drive=lcl_rootfs",
+    ])
 
     emulator_proc = subprocess.Popen(
         emu_cmd,
@@ -266,24 +221,33 @@ def launch_avd(args: argparse.Namespace) -> None:
         time.sleep(2)
         env.run_adb("wait-for-device", check=False, quiet=True)
 
-        # Poll for LCL compositor socket readiness
-        log("Waiting for LCL Compositor socket...")
-        socket_ready = False
+        # Poll for LCL Compositor and Session Daemon socket readiness
+        log("Waiting for LCL sockets on /Runtime...")
+        compositor_ready = False
+        session_ready = False
         for _ in range(60):
-            res = env.adb_shell("[ -S /run/user/1000/lcl-compositor.sock -o -S /data/local/tmp/lcl-compositor.sock ] && echo READY")
-            if "READY" in res.stdout:
-                socket_ready = True
+            if not compositor_ready:
+                res_comp = env.adb_shell("[ -S /Runtime/lcl-compositor.sock ] && echo READY")
+                if "READY" in res_comp.stdout:
+                    compositor_ready = True
+            if not session_ready:
+                res_sess = env.adb_shell("[ -S /Runtime/lcl-sessiond.sock ] && echo READY")
+                if "READY" in res_sess.stdout:
+                    session_ready = True
+            if compositor_ready and session_ready:
                 break
             time.sleep(0.5)
 
-        if socket_ready:
+        if compositor_ready and session_ready:
             log("============================================================")
-            log("LCL OS is running directly on Android AVD (Stage 4A Direct Boot)!")
-            log("Active components: Wallpaper, MenuBar, Dock, Terminal")
+            log("LCL OS is running directly on Android AVD (Stage 4C.3 Canonical RootFS)!")
+            log("Active components: Compositor, Session Daemon, Desktop Shell, Terminal")
             log("Press Ctrl+C to stop session.")
             log("============================================================")
+        elif compositor_ready:
+            log("Compositor socket ready. Session Daemon pending. System is running.")
         else:
-            log("Compositor socket pending. System is running.")
+            log("Compositor and Session sockets pending. System is running.")
 
         # Keep-alive monitor loop
         while True:
