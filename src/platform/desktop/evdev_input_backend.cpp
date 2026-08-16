@@ -236,6 +236,15 @@ size_t EvdevInputBackend::rescanEvdevDevices() {
             dev.name = devname;
         }
 
+        // Property bits
+        uint8_t propBits[INPUT_PROP_MAX / 8 + 1] = {};
+        bool hasPropDirect = false;
+        bool hasPropPointer = false;
+        if (ioctl(fd, EVIOCGPROP(sizeof(propBits)), propBits) >= 0) {
+            hasPropDirect = (propBits[INPUT_PROP_DIRECT / 8] >> (INPUT_PROP_DIRECT % 8)) & 1;
+            hasPropPointer = (propBits[INPUT_PROP_POINTER / 8] >> (INPUT_PROP_POINTER % 8)) & 1;
+        }
+
         uint8_t relBits[KEY_MAX / 8 + 1] = {};
         if (ioctl(fd, EVIOCGBIT(EV_REL, sizeof(relBits)), relBits) >= 0) {
             dev.hasRelX = (relBits[REL_X / 8] >> (REL_X % 8)) & 1;
@@ -245,15 +254,17 @@ size_t EvdevInputBackend::rescanEvdevDevices() {
         uint8_t absBits[KEY_MAX / 8 + 1] = {};
         bool hasMTAbsX = false;
         bool hasMTAbsY = false;
+        bool hasMTTrackingId = false;
         if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(absBits)), absBits) >= 0) {
             dev.hasAbsX = (absBits[ABS_X / 8] >> (ABS_X % 8)) & 1;
             dev.hasAbsY = (absBits[ABS_Y / 8] >> (ABS_Y % 8)) & 1;
 
             hasMTAbsX = (absBits[ABS_MT_POSITION_X / 8] >> (ABS_MT_POSITION_X % 8)) & 1;
             hasMTAbsY = (absBits[ABS_MT_POSITION_Y / 8] >> (ABS_MT_POSITION_Y % 8)) & 1;
+            hasMTTrackingId = (absBits[ABS_MT_TRACKING_ID / 8] >> (ABS_MT_TRACKING_ID % 8)) & 1;
 
-            int axisX = dev.hasAbsX ? ABS_X : (hasMTAbsX ? ABS_MT_POSITION_X : -1);
-            int axisY = dev.hasAbsY ? ABS_Y : (hasMTAbsY ? ABS_MT_POSITION_Y : -1);
+            int axisX = hasMTAbsX ? ABS_MT_POSITION_X : (dev.hasAbsX ? ABS_X : -1);
+            int axisY = hasMTAbsY ? ABS_MT_POSITION_Y : (dev.hasAbsY ? ABS_Y : -1);
 
             if (axisX >= 0) {
                 struct input_absinfo absinfo{};
@@ -261,6 +272,12 @@ size_t EvdevInputBackend::rescanEvdevDevices() {
                     dev.absXMin = absinfo.minimum;
                     dev.absXMax = std::max(absinfo.maximum, absinfo.minimum + 1);
                     dev.currentAbsX = absinfo.value;
+                }
+                if (dev.absXMax <= dev.absXMin + 1 && dev.hasAbsX && axisX != ABS_X) {
+                    if (ioctl(fd, EVIOCGABS(ABS_X), &absinfo) >= 0 && absinfo.maximum > absinfo.minimum) {
+                        dev.absXMin = absinfo.minimum;
+                        dev.absXMax = absinfo.maximum;
+                    }
                 }
             }
             if (axisY >= 0) {
@@ -270,13 +287,25 @@ size_t EvdevInputBackend::rescanEvdevDevices() {
                     dev.absYMax = std::max(absinfo.maximum, absinfo.minimum + 1);
                     dev.currentAbsY = absinfo.value;
                 }
+                if (dev.absYMax <= dev.absYMin + 1 && dev.hasAbsY && axisY != ABS_Y) {
+                    if (ioctl(fd, EVIOCGABS(ABS_Y), &absinfo) >= 0 && absinfo.maximum > absinfo.minimum) {
+                        dev.absYMin = absinfo.minimum;
+                        dev.absYMax = absinfo.maximum;
+                    }
+                }
             }
 
             if (hasMTAbsX) dev.hasAbsX = true;
             if (hasMTAbsY) dev.hasAbsY = true;
         }
 
-        if (hasMTAbsX || hasMTAbsY) {
+        const bool isMTTouchscreen = (hasMTAbsX && hasMTAbsY && hasMTTrackingId && !hasPropPointer);
+        const bool isExplicitDirect = (hasPropDirect && (hasMTAbsX || hasMTAbsY || (dev.hasAbsX && dev.hasAbsY)));
+        const bool isSingleTouchscreen = (dev.hasAbsX && dev.hasAbsY && !hasPropPointer && !hasMTAbsX && (hasPropDirect || !dev.hasRelX));
+
+        if (isMTTouchscreen || isExplicitDirect || isSingleTouchscreen) {
+            dev.isDirectTouchscreen = true;
+        } else if (hasMTAbsX || hasMTAbsY || hasPropPointer) {
             dev.isTouchpad = true;
         }
 
@@ -461,14 +490,106 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                 if (ev.code == ABS_MT_TRACKING_ID) {
                     if (ev.value >= 0) {
                         dev.isTouching = true;
+                        if (dev.isDirectTouchscreen) {
+                            dev.touchPressed = true;
+                        }
                     } else {
                         dev.isTouching = false;
+                        if (dev.isDirectTouchscreen) {
+                            dev.touchReleased = true;
+                        }
                         dev.lastTouchX = -1;
                         dev.lastTouchY = -1;
                     }
                 }
             } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
-                if (dev.relXUpdated || dev.relYUpdated) {
+                if (dev.isDirectTouchscreen) {
+                    const double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
+                    const double rangeY = static_cast<double>(dev.absYMax - dev.absYMin);
+
+                    double normX = -1.0;
+                    double normY = -1.0;
+                    if (rangeX > 0.0 && dev.currentAbsX >= 0) {
+                        normX = (static_cast<double>(dev.currentAbsX - dev.absXMin) / rangeX) * screenWidth;
+                        normX = std::clamp(normX, 0.0, static_cast<double>(screenWidth - 1));
+                    } else {
+                        normX = dev.lastNormTouchX;
+                    }
+
+                    if (rangeY > 0.0 && dev.currentAbsY >= 0) {
+                        normY = (static_cast<double>(dev.currentAbsY - dev.absYMin) / rangeY) * screenHeight;
+                        normY = std::clamp(normY, 0.0, static_cast<double>(screenHeight - 1));
+                    } else {
+                        normY = dev.lastNormTouchY;
+                    }
+
+                    if (dev.touchPressed) {
+                        if (normX >= 0.0 && normY >= 0.0) {
+                            RawInputEvent moveEv{};
+                            moveEv.type = RawInputEventType::PointerMotion;
+                            moveEv.source = PointerSource::Touch;
+                            moveEv.absoluteX = normX;
+                            moveEv.absoluteY = normY;
+                            moveEv.deviceName = dev.name;
+                            moveEv.superPressed = m_superPressed;
+                            moveEv.modifiers = getActiveModifiers();
+                            if (m_callback) m_callback(moveEv);
+                        }
+
+                        RawInputEvent downEv{};
+                        downEv.type = RawInputEventType::PointerButton;
+                        downEv.source = PointerSource::Touch;
+                        downEv.button = PointerButton::Left;
+                        downEv.pressed = true;
+                        downEv.absoluteX = normX;
+                        downEv.absoluteY = normY;
+                        downEv.deviceName = dev.name;
+                        downEv.superPressed = m_superPressed;
+                        downEv.modifiers = getActiveModifiers();
+                        if (m_callback) m_callback(downEv);
+
+                        dev.lastNormTouchX = normX;
+                        dev.lastNormTouchY = normY;
+                        dev.touchPressed = false;
+                        count++;
+                    } else if (dev.touchReleased) {
+                        RawInputEvent upEv{};
+                        upEv.type = RawInputEventType::PointerButton;
+                        upEv.source = PointerSource::Touch;
+                        upEv.button = PointerButton::Left;
+                        upEv.pressed = false;
+                        upEv.absoluteX = normX >= 0.0 ? normX : dev.lastNormTouchX;
+                        upEv.absoluteY = normY >= 0.0 ? normY : dev.lastNormTouchY;
+                        upEv.deviceName = dev.name;
+                        upEv.superPressed = m_superPressed;
+                        upEv.modifiers = getActiveModifiers();
+                        if (m_callback) m_callback(upEv);
+
+                        dev.lastNormTouchX = -1.0;
+                        dev.lastNormTouchY = -1.0;
+                        dev.touchReleased = false;
+                        count++;
+                    } else if (dev.isTouching && (dev.absXUpdated || dev.absYUpdated)) {
+                        if (normX >= 0.0 && normY >= 0.0) {
+                            RawInputEvent moveEv{};
+                            moveEv.type = RawInputEventType::PointerMotion;
+                            moveEv.source = PointerSource::Touch;
+                            moveEv.absoluteX = normX;
+                            moveEv.absoluteY = normY;
+                            moveEv.deviceName = dev.name;
+                            moveEv.superPressed = m_superPressed;
+                            moveEv.modifiers = getActiveModifiers();
+                            if (m_callback) m_callback(moveEv);
+
+                            dev.lastNormTouchX = normX;
+                            dev.lastNormTouchY = normY;
+                            count++;
+                        }
+                    }
+
+                    dev.absXUpdated = false;
+                    dev.absYUpdated = false;
+                } else if (dev.relXUpdated || dev.relYUpdated) {
                     RawInputEvent outEv{};
                     outEv.type = RawInputEventType::PointerMotion;
                     outEv.source = PointerSource::Mouse;
@@ -549,7 +670,15 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     count++;
                 }
             } else if (ev.type == EV_KEY) {
-                if (dev.isTouchpad && (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER)) {
+                if (dev.isDirectTouchscreen && ev.code == BTN_TOUCH) {
+                    if (ev.value != 0) {
+                        dev.isTouching = true;
+                        dev.touchPressed = true;
+                    } else {
+                        dev.isTouching = false;
+                        dev.touchReleased = true;
+                    }
+                } else if (dev.isTouchpad && (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER)) {
                     RawInputEvent outEv{};
                     outEv.deviceName = dev.name;
                     outEv.type = RawInputEventType::PointerButton;

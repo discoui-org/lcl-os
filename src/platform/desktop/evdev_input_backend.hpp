@@ -67,16 +67,21 @@ private:
         bool hasAbsX{false};
         bool hasAbsY{false};
         bool isTouchpad{false};
+        bool isDirectTouchscreen{false};
 
         int absXMin{0}, absXMax{1};
         int absYMin{0}, absYMax{1};
         int currentAbsX{-1};
         int currentAbsY{-1};
 
-        // Touchpad tracking
+        // Touchpad / Touchscreen tracking
         int lastTouchX{-1};
         int lastTouchY{-1};
+        double lastNormTouchX{-1.0};
+        double lastNormTouchY{-1.0};
         bool isTouching{false};
+        bool touchPressed{false};
+        bool touchReleased{false};
 
         bool absXUpdated{false};
         bool absYUpdated{false};
