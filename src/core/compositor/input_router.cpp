@@ -283,6 +283,7 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
     // The compositor continues to use raw BTN_* codes for its own shortcuts.
     input.key = toClientPointerButton(event.button);
     input.pressed = event.pressed ? 1 : 0;
+    input.pointerSource = static_cast<uint8_t>(event.pointerSource);
     protocol::sendMsgWithFd(entry.clientFd, header, &input);
 }
 

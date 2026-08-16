@@ -10,6 +10,11 @@ namespace lcl::platform {
 /**
  * @brief Platform-agnostic mouse/pointer button identifiers.
  */
+enum class PointerSource : uint8_t {
+    Mouse = 0,
+    Touch = 1
+};
+
 enum class PointerButton : uint32_t {
     None = 0,
     Left = 1,     // Primary
@@ -21,14 +26,12 @@ enum class RawInputEventType {
     Unknown,
     PointerMotion,
     PointerButton,
-    KeyboardKey,
-    TouchDown,
-    TouchMove,
-    TouchUp
+    KeyboardKey
 };
 
 struct RawInputEvent {
     RawInputEventType type{RawInputEventType::Unknown};
+    PointerSource pointerSource{PointerSource::Mouse};
     double dx{0.0};
     double dy{0.0};
     double absoluteX{-1.0};

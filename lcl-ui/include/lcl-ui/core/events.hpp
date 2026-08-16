@@ -7,6 +7,11 @@
 
 namespace lcl::ui {
 
+enum class PointerSource : uint8_t {
+    Mouse = 0,
+    Touch = 1
+};
+
 enum class PointerEventType {
     Move,
     Down,
@@ -23,6 +28,7 @@ struct PointerEvent {
     float deltaX{0.0f};
     float deltaY{0.0f};
     PointerEventType type{PointerEventType::Move};
+    PointerSource source{PointerSource::Mouse};
 };
 
 enum class KeyEventType {

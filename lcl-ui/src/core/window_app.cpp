@@ -392,12 +392,14 @@ void WindowApp::pollIPC() {
                 } else if (inputMsg->type == 2) { // KeyUp
                     sendKeyUp(inputMsg->key, inputMsg->modifiers);
                 } else if (inputMsg->type == 3) { // PointerMotion
-                    sendPointerMove(inputMsg->x, inputMsg->y);
+                    const auto src = static_cast<PointerSource>(inputMsg->pointerSource);
+                    sendPointerMove(inputMsg->x, inputMsg->y, src);
                 } else if (inputMsg->type == 4) { // PointerButton
+                    const auto src = static_cast<PointerSource>(inputMsg->pointerSource);
                     if (inputMsg->pressed) {
-                        sendPointerDown(inputMsg->x, inputMsg->y, inputMsg->key);
+                        sendPointerDown(inputMsg->x, inputMsg->y, inputMsg->key, src);
                     } else {
-                        sendPointerUp(inputMsg->x, inputMsg->y, inputMsg->key);
+                        sendPointerUp(inputMsg->x, inputMsg->y, inputMsg->key, src);
                     }
                 } else if (inputMsg->type == 5) { // KeyPress / TextInput
                     if (inputMsg->codepoint > 0) {
@@ -934,22 +936,22 @@ int WindowApp::hitCsdControl(float x, float y) const noexcept {
     return -1;
 }
 
-bool WindowApp::sendPointerMove(float x, float y) {
+bool WindowApp::sendPointerMove(float x, float y, PointerSource source) {
     if (m_morphInputFrozen) return false;
-    PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Move};
+    PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Move, source};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
     return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
 }
 
-bool WindowApp::sendPointerDown(float x, float y, int button) {
+bool WindowApp::sendPointerDown(float x, float y, int button, PointerSource source) {
     if (m_morphInputFrozen) return false;
     if (m_csdTitlebarEnabled && button == 0 && y >= 0.0f && y <= m_csdTitlebarHeight) {
         m_csdPressedControl = hitCsdControl(x, y);
         if (m_csdPressedControl >= 0) {
             m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
-                PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down});
+                PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down, source});
             return true;
         }
         m_csdPressedControl = -1;
@@ -959,20 +961,20 @@ bool WindowApp::sendPointerDown(float x, float y, int button) {
 
     m_csdPressedControl = -1;
 
-    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Down};
+    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Down, source};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
     return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
 }
 
-bool WindowApp::sendPointerUp(float x, float y, int button) {
+bool WindowApp::sendPointerUp(float x, float y, int button, PointerSource source) {
     if (m_morphInputFrozen) return false;
     if (button == 0 && m_csdPressedControl >= 0) {
         const int pressedControl = m_csdPressedControl;
         m_csdPressedControl = -1;
         m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
-            PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Up});
+            PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Up, source});
         if (hitCsdControl(x, y) == pressedControl) {
             if (pressedControl == 0) return requestWindowClose();
             if (pressedControl == 1) return requestWindowMinimize();
@@ -980,7 +982,8 @@ bool WindowApp::sendPointerUp(float x, float y, int button) {
         }
         return true;
     }
-    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Up};
+
+    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Up, source};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }

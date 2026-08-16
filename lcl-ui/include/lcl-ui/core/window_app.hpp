@@ -71,9 +71,9 @@ public:
     void setOnRawTextInputEvent(RawTextInputCallback callback) { m_onRawTextInput = callback; }
 
     // Native OS Input Dispatch Forwarders
-    bool sendPointerMove(float x, float y);
-    bool sendPointerDown(float x, float y, int button = 0);
-    bool sendPointerUp(float x, float y, int button = 0);
+    bool sendPointerMove(float x, float y, PointerSource source = PointerSource::Mouse);
+    bool sendPointerDown(float x, float y, int button = 0, PointerSource source = PointerSource::Mouse);
+    bool sendPointerUp(float x, float y, int button = 0, PointerSource source = PointerSource::Mouse);
     bool sendKeyDown(int keyCode, char32_t codepoint = 0, uint8_t modifiers = 0);
     bool sendKeyUp(int keyCode, uint8_t modifiers = 0);
     bool sendTextInput(const std::string& text);
