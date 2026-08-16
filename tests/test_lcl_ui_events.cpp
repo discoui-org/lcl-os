@@ -332,3 +332,46 @@ TEST(LclUiEventsTest, PointerEventSourcePropagation) {
     close(sockets[0]);
     close(sockets[1]);
 }
+
+TEST(LclUiEventsTest, TouchPointerUpClearsHoverState) {
+    EventDispatcher dispatcher;
+
+    auto root = std::make_unique<Container>();
+    root->getYogaNode().setWidth(200.0f);
+    root->getYogaNode().setHeight(200.0f);
+
+    auto btn = std::make_unique<Button>("Touch Test");
+    Button* btnPtr = btn.get();
+    btn->getYogaNode().setWidth(120.0f);
+    btn->getYogaNode().setHeight(40.0f);
+
+    bool clicked = false;
+    btn->setOnClick([&clicked]() {
+        clicked = true;
+    });
+
+    root->addChild(std::move(btn));
+    root->getYogaNode().calculateLayout(200.0f, 200.0f);
+    root->syncLayout(0.0f, 0.0f);
+
+    // 1. Touch move over button
+    PointerEvent moveEv{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Move, PointerSource::Touch};
+    dispatcher.dispatchPointerEvent(root.get(), moveEv);
+    EXPECT_EQ(dispatcher.getHoveredWidget(), btnPtr);
+    EXPECT_EQ(btnPtr->getState(), ButtonState::Hover);
+
+    // 2. Touch down
+    PointerEvent downEv{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down, PointerSource::Touch};
+    dispatcher.dispatchPointerEvent(root.get(), downEv);
+    EXPECT_EQ(btnPtr->getState(), ButtonState::Active);
+
+    // 3. Touch up (lift finger)
+    PointerEvent upEv{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Up, PointerSource::Touch};
+    dispatcher.dispatchPointerEvent(root.get(), upEv);
+
+    EXPECT_TRUE(clicked);
+    // Touch up must clear hover state on widget and in dispatcher
+    EXPECT_EQ(dispatcher.getHoveredWidget(), nullptr);
+    EXPECT_EQ(btnPtr->getState(), ButtonState::Normal);
+}
+

@@ -461,6 +461,22 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                     win.markDirty();
                     stateChanged = true;
                 }
+            }
+
+            if (event.source == lcl::platform::PointerSource::Touch) {
+                m_subpixelX = -10000.0;
+                m_subpixelY = -10000.0;
+                m_mouseX = -10000;
+                m_mouseY = -10000;
+                for (auto& win : m_windows) {
+                    if (win.chrome.cancelPointer()) {
+                        win.markDirty();
+                        stateChanged = true;
+                    }
+                }
+            }
+
+            for (auto& win : m_windows) {
                 if (win.isDragging() || win.isResizing()) {
                     const bool wasResizing = win.isResizing();
                     const bool wasDragging = win.isDragging();

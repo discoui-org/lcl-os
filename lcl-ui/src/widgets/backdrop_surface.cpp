@@ -145,13 +145,16 @@ bool BackdropSurface::onPointerDown(const PointerEvent& event) {
 }
 
 bool BackdropSurface::onPointerUp(const PointerEvent& event) {
-    (void)event;
     if (!m_interactive) return false;
     bool wasPressed = m_pressed;
     m_pressed = false;
-    m_hovered = true;
+    m_hovered = (event.source == PointerSource::Mouse);
     if (m_hasBaseVisuals) {
-        applyHoverVisuals();
+        if (m_hovered) {
+            applyHoverVisuals();
+        } else {
+            restoreBaseVisuals();
+        }
     }
     if (wasPressed && m_onClick) {
         m_onClick();

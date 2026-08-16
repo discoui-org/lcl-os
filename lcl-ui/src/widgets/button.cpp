@@ -104,11 +104,10 @@ bool Button::onPointerDown(const PointerEvent& event) {
 }
 
 bool Button::onPointerUp(const PointerEvent& event) {
-    (void)event;
     if (!m_enabled) return false;
     if (m_pressed) {
         m_pressed = false;
-        m_hovered = true;
+        m_hovered = (event.source == PointerSource::Mouse);
         updateComposedState();
         if (m_onClick) {
             m_onClick();
@@ -116,6 +115,7 @@ bool Button::onPointerUp(const PointerEvent& event) {
         return true;
     }
     m_pressed = false;
+    m_hovered = (event.source == PointerSource::Mouse);
     updateComposedState();
     return true;
 }

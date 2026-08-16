@@ -95,6 +95,17 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& eve
         }
     }
 
+    // Touch input lift (PointerUp) terminates any active hover state
+    if (event.type == PointerEventType::Up && event.source == PointerSource::Touch && m_hoveredWidget) {
+        PointerEvent leaveEv = event;
+        leaveEv.type = PointerEventType::Leave;
+        Widget* hoverCurr = m_hoveredWidget;
+        while (hoverCurr && !hoverCurr->onPointerLeave(leaveEv)) {
+            hoverCurr = hoverCurr->getParent();
+        }
+        m_hoveredWidget = nullptr;
+    }
+
     return handled;
 }
 

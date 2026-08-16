@@ -74,8 +74,9 @@ public:
         return true;
     }
 
-    bool onPointerUp(const PointerEvent&) override {
+    bool onPointerUp(const PointerEvent& event) override {
         m_pressed = false;
+        m_hovered = (event.source == PointerSource::Mouse);
         applyVisual(m_hovered ? m_style.buttonHoverBackground : m_style.buttonBackground,
                     m_hovered ? m_style.buttonHoverBorder : m_style.buttonBorder,
                     m_hovered ? interactionMotionTheme().hoverScale : 1.0f,
