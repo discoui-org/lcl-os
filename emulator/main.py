@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """Standalone PySide6 viewer for the bundled Pixel emulator skins.
 
-This intentionally renders only a green display placeholder. It launches an
-isolated local SPICE QEMU instance, but does not render or forward input yet.
+This renders an isolated local SPICE GL scanout in a Pixel skin display rect.
+It does not forward input.
 """
 
 from __future__ import annotations
 
 import re
+import signal
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
 from qemu_runner import QemuLaunchError, QemuRunner
+from spice_gl_widget import SpiceGlWidget
+from spice_client import SpiceScanoutProbe
 
 
 DEFAULT_SKIN_DIR = Path(__file__).resolve().parent / "skins" / "pixel_8_pro"
@@ -152,9 +155,46 @@ class DeviceViewer(QWidget):
         if layout.foreground_path and self._foreground.isNull():
             raise SkinLayoutError(f"Cannot decode {layout.foreground_path}")
 
+        self._display_widget = SpiceGlWidget(self._display_mask_image(), self)
+
         self.setMinimumSize(260, 480)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAutoFillBackground(False)
+
+    def submit_spice_draw(self, channel, scanout) -> None:
+        self._display_widget.submit_draw(channel, scanout)
+
+    def release_gl_resources(self) -> None:
+        self._display_widget.release_resources()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._update_display_widget_geometry()
+
+    def _display_mask_image(self) -> QImage:
+        display = self._layout.display_rect
+        if self._foreground.isNull():
+            return QImage()
+        if self._foreground.width() == int(display.width()) and self._foreground.height() == int(display.height()):
+            return self._foreground.toImage()
+        origin = self._layout.portrait_origin
+        return self._foreground.copy(
+            int(display.x() - origin.x()),
+            int(display.y() - origin.y()),
+            int(display.width()),
+            int(display.height()),
+        ).toImage()
+
+    def _update_display_widget_geometry(self) -> None:
+        canvas = QRectF(0, 0, self._layout.canvas_width, self._layout.canvas_height)
+        scale = min(self.width() / canvas.width(), self.height() / canvas.height())
+        display = self._layout.display_rect
+        self._display_widget.setGeometry(
+            round((self.width() - canvas.width() * scale) * 0.5 + display.x() * scale),
+            round((self.height() - canvas.height() * scale) * 0.5 + display.y() * scale),
+            round(display.width() * scale),
+            round(display.height() * scale),
+        )
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         del event
@@ -182,44 +222,15 @@ class DeviceViewer(QWidget):
         )
         painter.drawPixmap(background_rect, self._background, QRectF(self._background.rect()))
 
-        display = self._layout.display_rect
-        display_layer = QImage(
-            int(display.width()),
-            int(display.height()),
-            QImage.Format.Format_ARGB32_Premultiplied,
-        )
-        display_layer.fill(Qt.transparent)
-        display_painter = QPainter(display_layer)
-        display_painter.fillRect(display_layer.rect(), Qt.green)
-
-        if not self._foreground.isNull():
-            mask_source = QRectF(self._foreground.rect())
-            if (
-                self._foreground.width() != int(display.width())
-                or self._foreground.height() != int(display.height())
-            ):
-                mask_source = QRectF(
-                    display.x() - portrait_origin.x(),
-                    display.y() - portrait_origin.y(),
-                    display.width(),
-                    display.height(),
-                )
-            display_painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
-            display_painter.drawPixmap(QRectF(display_layer.rect()), self._foreground, mask_source)
-            display_painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-
-        display_painter.end()
-        viewport = QRectF(
-            target.x() + display.x() * scale,
-            target.y() + display.y() * scale,
-            display.width() * scale,
-            display.height() * scale,
-        )
-        painter.drawImage(viewport, display_layer, QRectF(display_layer.rect()))
+        self._update_display_widget_geometry()
 
 
 def main() -> int:
     app = QApplication(sys.argv)
+    signal.signal(signal.SIGINT, lambda _signum, _frame: app.quit())
+    signal_timer = QTimer()
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start(100)
     try:
         layout = parse_pixel_skin_layout(DEFAULT_SKIN_DIR)
         viewer = DeviceViewer(layout)
@@ -236,14 +247,25 @@ def main() -> int:
     window.show()
 
     runner = QemuRunner()
+    spice_probe = SpiceScanoutProbe(runner.spice_socket_path, viewer.submit_spice_draw)
+    spice_timer = QTimer()
+    spice_timer.timeout.connect(spice_probe.pump)
+    spice_timer.setTimerType(Qt.PreciseTimer)
     try:
         runner.start()
     except QemuLaunchError as error:
         print(f"LCL Device Viewer: QEMU launch failed: {error}", file=sys.stderr, flush=True)
+    else:
+        spice_probe.start()
+        spice_timer.start(8)
 
     try:
         return app.exec()
     finally:
+        spice_timer.stop()
+        spice_probe.stop()
+        viewer.release_gl_resources()
+        signal_timer.stop()
         runner.stop()
 
 
