@@ -18,6 +18,7 @@ from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
 from qemu_runner import QemuLaunchError, QemuRunner
+from qmp_client import QmpTouchClient
 from spice_gl_widget import SpiceGlWidget
 from spice_client import SpiceScanoutProbe
 
@@ -247,10 +248,14 @@ def main() -> int:
     window.show()
 
     runner = QemuRunner()
+    qmp_touch = QmpTouchClient(runner.qmp_socket_path)
     spice_probe = SpiceScanoutProbe(runner.spice_socket_path, viewer.submit_spice_draw)
     spice_timer = QTimer()
     spice_timer.timeout.connect(spice_probe.pump)
     spice_timer.setTimerType(Qt.PreciseTimer)
+    qmp_timer = QTimer()
+    qmp_timer.timeout.connect(qmp_touch.pump)
+    qmp_timer.setTimerType(Qt.PreciseTimer)
     try:
         runner.start()
     except QemuLaunchError as error:
@@ -258,11 +263,14 @@ def main() -> int:
     else:
         spice_probe.start()
         spice_timer.start(8)
+        qmp_timer.start(8)
 
     try:
         return app.exec()
     finally:
         spice_timer.stop()
+        qmp_timer.stop()
+        qmp_touch.stop()
         spice_probe.stop()
         viewer.release_gl_resources()
         signal_timer.stop()

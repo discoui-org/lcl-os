@@ -1140,6 +1140,7 @@ def launch_qemu(
     no_build: bool = False,
     rebuild: bool = False,
     spice_unix: Path | None = None,
+    qmp_unix: Path | None = None,
 ) -> None:
     qemu = find_qemu(arch)
     host = detect_host_display()
@@ -1473,6 +1474,12 @@ def launch_qemu(
         ])
 
     input_devices = ["-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci"]
+    qmp: list[str] = []
+    if qmp_unix is not None:
+        # This is viewer-only: host contacts arrive as QMP mtt events and the
+        # guest receives them through a real virtio evdev multitouch device.
+        input_devices.extend(["-device", "virtio-multitouch-pci"])
+        qmp = ["-qmp", f"unix:{qmp_unix},server=on,wait=off"]
     serial = ["-serial", "stdio"]
 
     cmd.extend([
@@ -1485,6 +1492,7 @@ def launch_qemu(
         *spice,
         *extra_qemu,
         *input_devices,
+        *qmp,
         *serial,
         "-no-reboot",
     ])
@@ -1556,6 +1564,12 @@ def main() -> None:
         type=Path,
         metavar="SOCKET",
         help="Expose the display through a local SPICE Unix socket (requires --gpu)",
+    )
+    parser.add_argument(
+        "--qmp-unix",
+        type=Path,
+        metavar="SOCKET",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--trace-frames",
@@ -1663,6 +1677,7 @@ def main() -> None:
             no_build=args.no_build,
             rebuild=args.rebuild,
             spice_unix=args.spice_unix,
+            qmp_unix=args.qmp_unix,
         )
     else:
         log(f"Boot environment ({arch}) ready! Kernel: {kernel}")

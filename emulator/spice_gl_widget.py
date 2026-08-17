@@ -356,7 +356,9 @@ class SpiceGlWidget(QOpenGLWidget):
         self.setAttribute(Qt.WA_NoSystemBackground, False)
         self.setAttribute(Qt.WA_AlwaysStackOnTop)
         self.setAutoFillBackground(False)
-        self.setUpdateBehavior(QOpenGLWidget.PartialUpdate)
+        # We redraw the whole display from the presentation texture each time.
+        # Do not retain a partially composited transparent backing FBO.
+        self.setUpdateBehavior(QOpenGLWidget.NoPartialUpdate)
 
         self._mask_image = mask
         self._pending_draws: deque[PendingDraw] = deque()
@@ -390,7 +392,6 @@ class SpiceGlWidget(QOpenGLWidget):
         self._accepting_draws = True
         self._gpu_rendering_active = False
         self._last_import_signature: tuple[int, int, int, int, bool] | None = None
-
     def submit_draw(self, channel: Any, scanout: ScanoutMetadata) -> None:
         """Queue one SPICE draw; completion happens from paintGL after drawing."""
         pending = PendingDraw(channel, scanout)
@@ -482,6 +483,10 @@ class SpiceGlWidget(QOpenGLWidget):
 
     def paintGL(self) -> None:  # type: ignore[override]
         functions = self.context().functions()
+        # The parent window is translucent, so stale GL state must never keep
+        # the display FBO's alpha channel write-disabled between frames.
+        functions.glColorMask(True, True, True, True)
+        functions.glDisable(GL_BLEND)
         self._paint_count += 1
         if self._paint_count <= 5:
             _safe_log(f"LCL Device Viewer: paintGL #{self._paint_count}")
@@ -497,12 +502,7 @@ class SpiceGlWidget(QOpenGLWidget):
                 self._apply_mask()
                 functions.glFinish()
                 return
-            clear_color = (
-                (0.0, 0.0, 0.0, 1.0)
-                if self._gpu_rendering_active
-                else (0.10, 0.88, 0.18, 1.0)
-            )
-            functions.glClearColor(*clear_color)
+            functions.glClearColor(0.0, 0.0, 0.0, 1.0)
             functions.glClear(GL_COLOR_BUFFER_BIT)
             return
 
@@ -552,12 +552,21 @@ class SpiceGlWidget(QOpenGLWidget):
         profile = fmt.profile()
         physical_width = round(self.width() * self.devicePixelRatioF())
         physical_height = round(self.height() * self.devicePixelRatioF())
+
+        def enum_text(value: Any) -> str:
+            """PySide6 enum wrappers are not necessarily int-convertible."""
+            name = getattr(value, "name", None)
+            numeric_value = getattr(value, "value", None)
+            if name is not None and numeric_value is not None:
+                return f"{name}({numeric_value})"
+            return str(value)
+
         _safe_log(
             "LCL Device Viewer: QOpenGLWidget context "
             f"present={'yes' if context_exists else 'no'} "
             f"valid={'yes' if context_valid else 'no'} "
-            f"renderableType={getattr(renderable_type, 'name', int(renderable_type))}({int(renderable_type)}) "
-            f"profile={getattr(profile, 'name', int(profile))}({int(profile)}) "
+            f"renderableType={enum_text(renderable_type)} "
+            f"profile={enum_text(profile)} "
             f"version={fmt.majorVersion()}.{fmt.minorVersion()} "
             f"alphaBufferSize={fmt.alphaBufferSize()} "
             f"defaultFramebufferObject={self.defaultFramebufferObject()} "
@@ -642,7 +651,12 @@ class SpiceGlWidget(QOpenGLWidget):
             layout(location = 0) in vec2 position;
             layout(location = 1) in vec2 texcoord;
             out vec2 uv;
-            void main() { gl_Position = vec4(position, 0.0, 1.0); uv = texcoord; }
+            void main() {
+                gl_Position = vec4(position, 0.0, 1.0);
+                // QImage rows are top-down while this OpenGL quad's texture
+                // origin is bottom-left. Keep the skin mask in portrait space.
+                uv = vec2(texcoord.x, 1.0 - texcoord.y);
+            }
             """,
             """
             #version 330 core

@@ -30,12 +30,20 @@ class SpiceEndpoint:
     socket_path: Path
 
 
+@dataclass(frozen=True)
+class QmpEndpoint:
+    """Local-only QMP endpoint reserved for one viewer instance."""
+
+    socket_path: Path
+
+
 class QemuRunner:
-    """Own a mobile LCL QEMU process and its private SPICE Unix socket."""
+    """Own a mobile LCL QEMU process and its private viewer sockets."""
 
     def __init__(self) -> None:
         self._runtime_dir = Path(tempfile.mkdtemp(prefix="lcl-viewer-"))
         self.endpoint = SpiceEndpoint(self._runtime_dir / "spice.sock")
+        self.qmp_endpoint = QmpEndpoint(self._runtime_dir / "qmp.sock")
         self._process: subprocess.Popen[bytes] | None = None
         self._stopping = False
 
@@ -43,6 +51,11 @@ class QemuRunner:
     def spice_socket_path(self) -> Path:
         """The endpoint a future display client should connect to."""
         return self.endpoint.socket_path
+
+    @property
+    def qmp_socket_path(self) -> Path:
+        """The private QMP endpoint used only for viewer touch injection."""
+        return self.qmp_endpoint.socket_path
 
     def start(self) -> None:
         if self._process is not None:
@@ -55,7 +68,7 @@ class QemuRunner:
 
         # The directory is private to this runner.  Remove only this exact
         # endpoint in case a previous launch in the same instance left it behind.
-        self._remove_socket()
+        self._remove_sockets()
         self._stopping = False
         command = [
             sys.executable,
@@ -68,6 +81,8 @@ class QemuRunner:
             "--no-build",
             "--spice-unix",
             str(self.spice_socket_path),
+            "--qmp-unix",
+            str(self.qmp_socket_path),
         ]
         try:
             self._process = subprocess.Popen(
@@ -90,6 +105,7 @@ class QemuRunner:
 
         print(f"LCL Device Viewer: QEMU PID {self._process.pid}", flush=True)
         print(f"LCL Device Viewer: SPICE socket {self.spice_socket_path}", flush=True)
+        print(f"LCL Device Viewer: QMP socket {self.qmp_socket_path}", flush=True)
         print("LCL Device Viewer: QEMU launch started", flush=True)
         threading.Thread(
             target=self._report_unexpected_exit,
@@ -108,17 +124,18 @@ class QemuRunner:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-        self._remove_socket()
+        self._remove_sockets()
         try:
             self._runtime_dir.rmdir()
         except OSError:
             pass
 
-    def _remove_socket(self) -> None:
-        try:
-            self.spice_socket_path.unlink()
-        except FileNotFoundError:
-            pass
+    def _remove_sockets(self) -> None:
+        for socket_path in (self.spice_socket_path, self.qmp_socket_path):
+            try:
+                socket_path.unlink()
+            except FileNotFoundError:
+                pass
 
     def _report_unexpected_exit(self, process: subprocess.Popen[bytes]) -> None:
         exit_code = process.wait()
