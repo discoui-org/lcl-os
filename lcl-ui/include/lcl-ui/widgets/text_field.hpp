@@ -8,6 +8,7 @@
 #include <functional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace lcl::ui {
 
@@ -41,10 +42,11 @@ public:
 
 private:
     static std::string sanitizeSingleLine(const std::string& text);
-    static size_t characterCount(const std::string& text);
-    static size_t byteOffsetForCharacter(const std::string& text, size_t index);
 
+    void rebuildCaretAdvances(Canvas& canvas);
+    void invalidateCaretAdvances();
     float measurePrefix(size_t characterIndex) const;
+    float measureTextWidth() const;
     size_t characterIndexForX(float x) const;
     void ensureCaretVisible();
     void valueChanged();
@@ -57,6 +59,8 @@ private:
     bool m_focused{false};
     bool m_touchTapPending{false};
     uint32_t m_touchTapPointerId{0};
+    std::vector<float> m_caretAdvances;
+    bool m_caretAdvancesValid{false};
 
     static constexpr float kHorizontalPadding = 8.0f;
     static constexpr float kFontSize = 14.0f;

@@ -138,8 +138,12 @@ public:
         fontFamilies.push_back(family);
     }
 
-    float measureText(const std::string& text, float fontSize, FontFamily) override {
-        return static_cast<float>(text.size()) * fontSize * 0.6f;
+    float measureText(const std::string& text, float fontSize, FontFamily family) override {
+        if (useSharedTextMetrics) {
+            return lcl::render::text_metrics::measureText(text, fontSize, family) *
+                measurementScale;
+        }
+        return static_cast<float>(text.size()) * fontSize * 0.6f * measurementScale;
     }
 
     void drawBuffer(int, int, int, int, const uint32_t*, int, float,
@@ -148,6 +152,8 @@ public:
     }
 
     bool initialized{false};
+    bool useSharedTextMetrics{false};
+    float measurementScale{1.0f};
     uint32_t* pixels{nullptr};
     uint32_t pixelWidth{0};
     uint32_t pixelHeight{0};
@@ -363,7 +369,7 @@ TEST(LclUiTest, TextFieldPlaceholderAndCaretFollowFocusAndValueState) {
     EXPECT_TRUE(canvas.rects.empty());
 }
 
-TEST(LclUiTest, TextFieldCaretUsesSharedProportionalFontMetrics) {
+TEST(LclUiTest, TextFieldCaretUsesActiveCanvasProportionalMetrics) {
     TextField field;
     field.getYogaNode().setWidth(240.0f);
     field.getYogaNode().calculateLayout(240.0f, 36.0f);
@@ -372,6 +378,8 @@ TEST(LclUiTest, TextFieldCaretUsesSharedProportionalFontMetrics) {
     const Rect damage{-10.0f, -10.0f, 280.0f, 80.0f};
 
     RecordingCanvas canvas;
+    canvas.useSharedTextMetrics = true;
+    canvas.measurementScale = 0.5f;
     field.draw(canvas, damage);
     ASSERT_EQ(canvas.rects.size(), 1u);
     const float emptyCaretX = canvas.rects.back().x;
@@ -383,18 +391,20 @@ TEST(LclUiTest, TextFieldCaretUsesSharedProportionalFontMetrics) {
     field.draw(canvas, damage);
     ASSERT_EQ(canvas.rects.size(), 1u);
     const float expectedAdvance = lcl::render::text_metrics::measureText(
-        "Wi", 14.0f, FontFamily::Interface);
+        "Wi", 14.0f, FontFamily::Interface) * canvas.measurementScale;
     EXPECT_NEAR(canvas.rects.back().x - emptyCaretX, expectedAdvance, 0.01f);
 }
 
 TEST(LclUiTest, TextFieldHorizontallyScrollsLongTextAndClipsCaret) {
-    TextField field("WWWWWWWWWW");
+    const std::string value = "abcçdefşğıİöüǩžʒ";
+    TextField field(value);
     field.getYogaNode().setWidth(56.0f);
     field.getYogaNode().calculateLayout(56.0f, 36.0f);
     field.syncLayout();
     field.onFocusGained(FocusEvent{FocusEventType::Gained});
 
     RecordingCanvas canvas;
+    canvas.useSharedTextMetrics = true;
     field.draw(canvas, {-10.0f, -10.0f, 100.0f, 80.0f});
 
     ASSERT_FALSE(canvas.clips.empty());
@@ -405,6 +415,119 @@ TEST(LclUiTest, TextFieldHorizontallyScrollsLongTextAndClipsCaret) {
     EXPECT_LT(canvas.textPositions.back().x, viewport.x);
     EXPECT_GE(caret.x, viewport.x);
     EXPECT_LE(caret.x + caret.width, viewport.x + viewport.width + 0.01f);
+    EXPECT_NEAR(caret.x - canvas.textPositions.back().x,
+                lcl::render::text_metrics::measureText(
+                    value, 14.0f, FontFamily::Interface),
+                0.01f);
+}
+
+TEST(LclUiTest, TextFieldCaretWalkUsesCodepointPrefixesForAsciiAndUtf8) {
+    const std::vector<std::vector<std::string>> prefixSets{
+        {"", "a", "ab", "abc", "abcd", "abcde", "abcdef"},
+        {"", "a", "ab", "abc", "abcç", "abcçd", "abcçde", "abcçdef"},
+        {"", "ş", "şg", "şğı", "şğıİ", "şğıİö", "şğıİöü"},
+        {"", "ǩ", "ǩž", "ǩžʒ"},
+    };
+    const Rect damage{-10.0f, -10.0f, 700.0f, 80.0f};
+
+    for (const auto& prefixes : prefixSets) {
+        const std::string& value = prefixes.back();
+        SCOPED_TRACE(value);
+        TextField field(value);
+        field.getYogaNode().setWidth(640.0f);
+        field.getYogaNode().calculateLayout(640.0f, 36.0f);
+        field.syncLayout();
+        field.onFocusGained(FocusEvent{FocusEventType::Gained});
+        ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Home,
+                                             static_cast<int>(lcl::platform::PhysicalKey::Home)}));
+
+        RecordingCanvas canvas;
+        canvas.useSharedTextMetrics = true;
+        for (size_t index = 0; index < prefixes.size(); ++index) {
+            SCOPED_TRACE(index);
+            canvas.rects.clear();
+            canvas.textPositions.clear();
+            field.draw(canvas, damage);
+            ASSERT_EQ(canvas.rects.size(), 1u);
+            ASSERT_EQ(canvas.textPositions.size(), 1u);
+            EXPECT_NEAR(canvas.rects.back().x - canvas.textPositions.back().x,
+                        lcl::render::text_metrics::measureText(
+                            prefixes[index], 14.0f, FontFamily::Interface),
+                        0.01f);
+            if (index + 1 < prefixes.size()) {
+                ASSERT_TRUE(field.onKeyDown(KeyEvent{
+                    lcl::platform::PhysicalKey::ArrowRight,
+                    static_cast<int>(lcl::platform::PhysicalKey::ArrowRight)}));
+            }
+        }
+
+        for (size_t index = prefixes.size(); index-- > 1;) {
+            ASSERT_TRUE(field.onKeyDown(KeyEvent{
+                lcl::platform::PhysicalKey::ArrowLeft,
+                static_cast<int>(lcl::platform::PhysicalKey::ArrowLeft)}));
+            canvas.rects.clear();
+            canvas.textPositions.clear();
+            field.draw(canvas, damage);
+            ASSERT_EQ(canvas.rects.size(), 1u);
+            ASSERT_EQ(canvas.textPositions.size(), 1u);
+            EXPECT_NEAR(canvas.rects.back().x - canvas.textPositions.back().x,
+                        lcl::render::text_metrics::measureText(
+                            prefixes[index - 1], 14.0f, FontFamily::Interface),
+                        0.01f);
+        }
+    }
+}
+
+TEST(LclUiTest, TextFieldPointerCaretPositionUsesUtf8CodepointBoundaries) {
+    TextField field("abcçdef");
+    field.getYogaNode().setWidth(300.0f);
+    field.getYogaNode().calculateLayout(300.0f, 36.0f);
+    field.syncLayout();
+    field.onFocusGained(FocusEvent{FocusEventType::Gained});
+    const Rect damage{-10.0f, -10.0f, 340.0f, 80.0f};
+
+    RecordingCanvas canvas;
+    canvas.useSharedTextMetrics = true;
+    field.draw(canvas, damage);
+    ASSERT_EQ(canvas.textPositions.size(), 1u);
+    const float prefixWidth = lcl::render::text_metrics::measureText(
+        "abcç", 14.0f, FontFamily::Interface);
+    const float pointerX = canvas.textPositions.back().x + prefixWidth;
+
+    ASSERT_TRUE(field.onPointerDown(PointerEvent{
+        pointerX, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+        PointerSource::Mouse, 0}));
+    canvas.rects.clear();
+    canvas.textPositions.clear();
+    field.draw(canvas, damage);
+    ASSERT_EQ(canvas.rects.size(), 1u);
+    ASSERT_EQ(canvas.textPositions.size(), 1u);
+    EXPECT_NEAR(canvas.rects.back().x - canvas.textPositions.back().x,
+                prefixWidth, 0.01f);
+}
+
+TEST(LclUiTest, TextFieldUtf8InsertionLeavesCaretAfterInsertedCodepoints) {
+    TextField field("aç");
+    field.getYogaNode().setWidth(300.0f);
+    field.getYogaNode().calculateLayout(300.0f, 36.0f);
+    field.syncLayout();
+    field.onFocusGained(FocusEvent{FocusEventType::Gained});
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Home,
+                                         static_cast<int>(lcl::platform::PhysicalKey::Home)}));
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::ArrowRight,
+                                         static_cast<int>(lcl::platform::PhysicalKey::ArrowRight)}));
+    ASSERT_TRUE(field.onTextInput(TextInputEvent{"ş"}));
+    ASSERT_TRUE(field.onTextInput(TextInputEvent{"ğ"}));
+
+    RecordingCanvas canvas;
+    canvas.useSharedTextMetrics = true;
+    field.draw(canvas, {-10.0f, -10.0f, 340.0f, 80.0f});
+    ASSERT_EQ(canvas.rects.size(), 1u);
+    ASSERT_EQ(canvas.textPositions.size(), 1u);
+    EXPECT_NEAR(canvas.rects.back().x - canvas.textPositions.back().x,
+                lcl::render::text_metrics::measureText(
+                    "aşğ", 14.0f, FontFamily::Interface),
+                0.01f);
 }
 
 TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {

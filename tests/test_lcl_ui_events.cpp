@@ -649,6 +649,37 @@ TEST(LclUiEventsTest, TextFieldSupportsSingleLineNavigationAndEditingKeys) {
     EXPECT_EQ(utf8Field.getText(), "ab");
 }
 
+TEST(LclUiEventsTest, TextFieldEditingPreservesUtf8CodepointBoundaries) {
+    const auto key = [](TextField& field, lcl::platform::PhysicalKey physical) {
+        return field.onKeyDown(KeyEvent{physical, static_cast<int>(physical)});
+    };
+
+    TextField backspaceField("açb");
+    ASSERT_TRUE(key(backspaceField, lcl::platform::PhysicalKey::End));
+    ASSERT_TRUE(key(backspaceField, lcl::platform::PhysicalKey::ArrowLeft));
+    ASSERT_TRUE(key(backspaceField, lcl::platform::PhysicalKey::Backspace));
+    EXPECT_EQ(backspaceField.getText(), "ab");
+    ASSERT_TRUE(backspaceField.onTextInput(TextInputEvent{"ş"}));
+    EXPECT_EQ(backspaceField.getText(), "aşb");
+
+    TextField deleteField("açb");
+    ASSERT_TRUE(key(deleteField, lcl::platform::PhysicalKey::Home));
+    ASSERT_TRUE(key(deleteField, lcl::platform::PhysicalKey::ArrowRight));
+    ASSERT_TRUE(key(deleteField, lcl::platform::PhysicalKey::Delete));
+    EXPECT_EQ(deleteField.getText(), "ab");
+
+    TextField insertionField("aç");
+    ASSERT_TRUE(key(insertionField, lcl::platform::PhysicalKey::Home));
+    ASSERT_TRUE(key(insertionField, lcl::platform::PhysicalKey::ArrowRight));
+    ASSERT_TRUE(insertionField.onTextInput(TextInputEvent{"ş"}));
+    ASSERT_TRUE(insertionField.onTextInput(TextInputEvent{"ğ"}));
+    EXPECT_EQ(insertionField.getText(), "aşğç");
+    ASSERT_TRUE(key(insertionField, lcl::platform::PhysicalKey::Backspace));
+    EXPECT_EQ(insertionField.getText(), "aşç");
+    ASSERT_TRUE(key(insertionField, lcl::platform::PhysicalKey::Delete));
+    EXPECT_EQ(insertionField.getText(), "aş");
+}
+
 TEST(LclUiEventsTest, TextFieldSetTextClampsCaretAndOnChangeRequiresAValueChange) {
     TextField field("abcd");
     int changes = 0;
