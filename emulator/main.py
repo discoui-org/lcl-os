@@ -12,8 +12,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
 
@@ -28,6 +28,7 @@ class SkinLayoutError(ValueError):
 class PixelSkinLayout:
     canvas_width: int
     canvas_height: int
+    portrait_origin: QPointF
     display_rect: QRectF
     background_path: Path
     foreground_path: Path | None
@@ -125,14 +126,13 @@ def parse_pixel_skin_layout(skin_dir: Path) -> PixelSkinLayout:
     if foreground_path is not None and not foreground_path.is_file():
         raise SkinLayoutError(f"Missing portrait foreground: {foreground_path}")
 
-    # Pixel portrait artwork normally starts at (0, 0).  Reject a format that
-    # needs a separate composition model rather than silently misplacing it.
-    if _integer_property(portrait_part, "x") != 0 or _integer_property(portrait_part, "y") != 0:
-        raise SkinLayoutError("Only zero-origin Pixel portrait artwork is supported")
-
     return PixelSkinLayout(
         canvas_width=_integer_property(portrait_layout, "width"),
         canvas_height=_integer_property(portrait_layout, "height"),
+        portrait_origin=QPointF(
+            _integer_property(portrait_part, "x"),
+            _integer_property(portrait_part, "y"),
+        ),
         display_rect=display_rect,
         background_path=background_path,
         foreground_path=foreground_path,
@@ -171,21 +171,49 @@ class DeviceViewer(QWidget):
             canvas.height() * scale,
         )
 
-        painter.drawPixmap(target, self._background, canvas)
+        portrait_origin = self._layout.portrait_origin
+        background_rect = QRectF(
+            target.x() + portrait_origin.x() * scale,
+            target.y() + portrait_origin.y() * scale,
+            self._background.width() * scale,
+            self._background.height() * scale,
+        )
+        painter.drawPixmap(background_rect, self._background, QRectF(self._background.rect()))
 
         display = self._layout.display_rect
+        display_layer = QImage(
+            int(display.width()),
+            int(display.height()),
+            QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        display_layer.fill(Qt.transparent)
+        display_painter = QPainter(display_layer)
+        display_painter.fillRect(display_layer.rect(), Qt.green)
+
+        if not self._foreground.isNull():
+            mask_source = QRectF(self._foreground.rect())
+            if (
+                self._foreground.width() != int(display.width())
+                or self._foreground.height() != int(display.height())
+            ):
+                mask_source = QRectF(
+                    display.x() - portrait_origin.x(),
+                    display.y() - portrait_origin.y(),
+                    display.width(),
+                    display.height(),
+                )
+            display_painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
+            display_painter.drawPixmap(QRectF(display_layer.rect()), self._foreground, mask_source)
+            display_painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+
+        display_painter.end()
         viewport = QRectF(
             target.x() + display.x() * scale,
             target.y() + display.y() * scale,
             display.width() * scale,
             display.height() * scale,
         )
-        painter.fillRect(viewport, Qt.black)
-
-        if not self._foreground.isNull():
-            painter.setCompositionMode(QPainter.CompositionMode_DestinationOut)
-            painter.drawPixmap(target, self._foreground, canvas)
-            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.drawImage(viewport, display_layer, QRectF(display_layer.rect()))
 
 
 def main() -> int:
