@@ -93,12 +93,13 @@ def qcode_for_key_event(event: QKeyEvent) -> str | None:
     native_scan_code = int(event.nativeScanCode())
     if native_scan_code > 0:
         platform_name = QApplication.platformName().lower()
-        if platform_name == "xcb":
-            # X11 keycodes use the evdev value plus the historical offset 8.
+        if platform_name == "xcb" or platform_name.startswith("wayland"):
+            # XKB keycodes used by Qt's XCB and Wayland plugins carry the
+            # historical evdev offset 8.
             candidates = (native_scan_code - 8, native_scan_code)
         else:
-            # Wayland normally exposes the evdev value directly. Keep the
-            # offset form as a fallback for other XKB-backed Qt plugins.
+            # Other Qt plugins may expose the evdev value directly. Keep the
+            # XKB-offset form as a fallback.
             candidates = (native_scan_code, native_scan_code - 8)
         for candidate in candidates:
             qcode = _EVDEV_TO_QCODE.get(candidate)

@@ -287,8 +287,19 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
         input.deltaY = static_cast<float>(event.dy);
     }
     const auto bounds = render::presentedBounds(*windowIt);
-    input.x = (static_cast<float>(m_windowManager.getMouseX()) - bounds.x) / scale;
-    input.y = (static_cast<float>(m_windowManager.getMouseY()) - bounds.y - titleOffset) / scale;
+    // Touch release clears WindowManager's hover cursor before this client
+    // forwarding step. Prefer the immutable event coordinates when the input
+    // backend supplied them so CSD receives the actual release position.
+    const float globalPointerX =
+        std::isfinite(event.absoluteX) && event.absoluteX >= 0.0
+            ? static_cast<float>(event.absoluteX)
+            : static_cast<float>(m_windowManager.getMouseX());
+    const float globalPointerY =
+        std::isfinite(event.absoluteY) && event.absoluteY >= 0.0
+            ? static_cast<float>(event.absoluteY)
+            : static_cast<float>(m_windowManager.getMouseY());
+    input.x = (globalPointerX - bounds.x) / scale;
+    input.y = (globalPointerY - bounds.y - titleOffset) / scale;
     input.key = toClientPointerButton(event.button);
     input.pressed = event.pressed ? 1 : 0;
     input.source = static_cast<uint8_t>(event.source == lcl::platform::PointerSource::Touch

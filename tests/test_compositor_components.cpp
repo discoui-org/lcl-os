@@ -480,6 +480,81 @@ TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     close(sockets[1]);
 }
 
+TEST(InputRouterTest, TouchReleaseKeepsEventCoordinatesAfterCursorReset) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t windowId = manager.createWindow("CSD", 80, 90, 320, 200);
+    manager.setDecorationMode(windowId, lcl::render::DecorationMode::CSD);
+
+    SurfaceRegistry registry;
+    const auto surfaceKey = SurfaceRegistry::makeKey(sockets[0], 102, 1);
+    auto& surface = registry[surfaceKey];
+    surface.windowId = windowId;
+    surface.clientFd = sockets[0];
+    surface.hasCommittedBuffer = true;
+    surface.bufferScale = 1.0f;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+
+    InputEvent motion{};
+    motion.type = InputEventType::PointerMotion;
+    motion.source = lcl::platform::PointerSource::Touch;
+    motion.absoluteX = 100.0;
+    motion.absoluteY = 100.0;
+    router.route(motion);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.source = lcl::platform::PointerSource::Touch;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.absoluteX = 100.0;
+    down.absoluteY = 100.0;
+    router.route(down);
+
+    InputEvent up = down;
+    up.pressed = false;
+    router.route(up);
+
+    EXPECT_EQ(manager.getMouseX(), -10000);
+    EXPECT_EQ(manager.getMouseY(), -10000);
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    for (uint8_t expectedType : {3u, 4u, 4u}) {
+        bool receivedInput = false;
+        for (int packet = 0; packet < 4; ++packet) {
+            ASSERT_TRUE(protocol::recvMsgWithFd(
+                sockets[1], header, payload, receivedFd));
+            if (receivedFd >= 0) {
+                close(receivedFd);
+                receivedFd = -1;
+            }
+            if (header.opcode == protocol::LCLOpcode::InputEvent) {
+                receivedInput = true;
+                break;
+            }
+        }
+        ASSERT_TRUE(receivedInput);
+        ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+        const auto* input =
+            reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+        EXPECT_EQ(input->type, expectedType);
+        EXPECT_EQ(input->source,
+                  static_cast<uint8_t>(protocol::LCLPointerSource::Touch));
+        EXPECT_FLOAT_EQ(input->x, 20.0f);
+        EXPECT_FLOAT_EQ(input->y, 10.0f);
+    }
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(InputRouterTest, ManualGestureCancelsOutstandingGeometryRollback) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
