@@ -24,6 +24,8 @@ public:
     bool releasePointerCapture(uint32_t pointerId, const Widget* owner = nullptr);
     bool hasPointerCapture(uint32_t pointerId, const Widget* owner = nullptr) const;
     Widget* getPointerCapture(uint32_t pointerId) const;
+    bool cancelPointerDownTarget(uint32_t pointerId, Widget* newOwner,
+                                 const PointerEvent& sourceEvent);
     void cancelPointerCaptures();
 
     void setFocus(Widget* widget);
@@ -37,15 +39,26 @@ private:
         PointerSource source{PointerSource::Mouse};
     };
 
+    struct PointerDownTarget {
+        Widget* target{nullptr};
+        std::weak_ptr<uint8_t> lifetime;
+        PointerSource source{PointerSource::Mouse};
+    };
+
     static bool isEventCapableInTree(Widget* root, const Widget* target,
                                      bool ancestorsVisible = true);
     static bool dispatchToTarget(Widget* target, const PointerEvent& event);
+    static void dispatchPreviewToTarget(Widget* target, const PointerEvent& event);
+    static bool dispatchCancelUntil(Widget* target, Widget* stopBefore,
+                                    const PointerEvent& event);
+    Widget* getPointerDownTarget(uint32_t pointerId, Widget* root);
     Widget* validatePointerCapture(Widget* root, const PointerEvent& event);
     void clearPointerCapture(uint32_t pointerId);
 
     Widget* m_hoveredWidget{nullptr};
     Widget* m_focusedWidget{nullptr};
     std::unordered_map<uint32_t, PointerCapture> m_pointerCaptures;
+    std::unordered_map<uint32_t, PointerDownTarget> m_pointerDownTargets;
 };
 
 } // namespace lcl::ui

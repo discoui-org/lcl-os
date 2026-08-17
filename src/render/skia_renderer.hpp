@@ -83,6 +83,18 @@ public:
     void setExternalFrameTarget(uint32_t framebuffer, uint32_t texture = 0,
                                 uint32_t backingWidth = 0, uint32_t backingHeight = 0);
     void clearExternalFrameTarget();
+    /** Allocate one same-context RGBA texture/FBO for a widget cache. */
+    bool createCachedLayerTarget(uint32_t width, uint32_t height,
+                                 uint32_t& framebuffer, uint32_t& texture);
+    void destroyCachedLayerTarget(uint32_t framebuffer, uint32_t texture);
+    /** Temporarily redirect primitive drawing into a cached layer. */
+    bool beginCachedLayerTarget(uint32_t framebuffer, uint32_t texture,
+                                uint32_t width, uint32_t height,
+                                uint32_t* softwarePixels,
+                                float logicalOriginX, float logicalOriginY);
+    void endCachedLayerTarget();
+    void drawCachedLayerTexture(uint32_t texture, const SkiaRect& destination,
+                                float opacity = 1.0f);
 
     /**
      * Applies a logical-pixel to raster-pixel transform to client drawing calls.
@@ -204,6 +216,19 @@ public:
     uint32_t* getRasterBuffer() { return m_targetPixels ? m_targetPixels : m_rasterPixels.data(); }
 
 private:
+    struct CachedLayerTargetState {
+        uint32_t width{0};
+        uint32_t height{0};
+        uint32_t* targetPixels{nullptr};
+        float contentOriginX{0.0f};
+        float contentOriginY{0.0f};
+        std::optional<SkiaRect> clip;
+        uint32_t externalFrameFBO{0};
+        uint32_t externalFrameTexture{0};
+        uint32_t externalBackingWidth{0};
+        uint32_t externalBackingHeight{0};
+    };
+
     bool initGLShader();
     SkiaRect scaleRect(const SkiaRect& rect) const;
     int scaleCoord(int value) const;
@@ -258,6 +283,7 @@ private:
     uint32_t m_glExternalFrameTexture{0};
     uint32_t m_glExternalBackingWidth{0};
     uint32_t m_glExternalBackingHeight{0};
+    std::optional<CachedLayerTargetState> m_cachedLayerTargetState;
 
     uint32_t m_glBlurProgram{0};
     int32_t m_aBlurPosLoc{-1};

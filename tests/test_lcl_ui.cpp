@@ -22,6 +22,7 @@
 #include <cerrno>
 #include <cstring>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 using namespace lcl::ui;
@@ -74,6 +75,25 @@ public:
                            lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888, ~uint64_t{0}, fd};
     }
     void releaseDmaBufFrame(uint32_t bufferId) override { releasedBufferIds.push_back(bufferId); }
+    void clipRect(const Rect& rect) override { clips.push_back(rect); }
+    bool beginCachedLayer(CachedLayerId id, const Rect& bounds) override {
+        ++cachedLayerBeginCount;
+        activeCachedLayer = id;
+        cachedLayerBounds.push_back(bounds);
+        return true;
+    }
+    void endCachedLayer() override {
+        ++cachedLayerEndCount;
+        cachedLayers.insert(activeCachedLayer);
+        activeCachedLayer = 0;
+    }
+    bool drawCachedLayer(CachedLayerId id, const Rect& destination,
+                         float) override {
+        if (!cachedLayers.contains(id)) return false;
+        ++cachedLayerDrawCount;
+        cachedLayerDestinations.push_back(destination);
+        return true;
+    }
 
     void drawRect(const Rect& rect, Color color) override {
         rects.push_back(rect);
@@ -134,6 +154,10 @@ public:
     int endCount{0};
     int bufferDrawCount{0};
     int targetSetCount{0};
+    int cachedLayerBeginCount{0};
+    int cachedLayerEndCount{0};
+    int cachedLayerDrawCount{0};
+    CachedLayerId activeCachedLayer{0};
     bool dmaBufAvailable{false};
     bool dmaBufEnabled{false};
     uint32_t dmaContentWidth{0};
@@ -151,6 +175,9 @@ public:
     std::vector<Rect> topRoundedRects;
     std::vector<Rect> textPositions;
     std::vector<Rect> rasterTextPositions;
+    std::vector<Rect> clips;
+    std::vector<Rect> cachedLayerBounds;
+    std::vector<Rect> cachedLayerDestinations;
     std::vector<float> roundedRadii;
     std::vector<float> borderWidths;
     std::vector<float> roundnesses;
@@ -160,6 +187,27 @@ public:
     std::vector<Color> borders;
     std::vector<std::string> texts;
     std::vector<std::string> rasterTexts;
+    std::unordered_set<CachedLayerId> cachedLayers;
+};
+
+class CountingLayoutContainer final : public Container {
+public:
+    void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f) override {
+        ++syncLayoutCount;
+        Container::syncLayout(parentAbsX, parentAbsY);
+    }
+
+    int syncLayoutCount{0};
+};
+
+class CountingPaintWidget final : public Widget {
+public:
+    void draw(Canvas& canvas, const Rect&) override {
+        ++paintCount;
+        canvas.drawRect(m_absoluteBounds, {20, 40, 60, 255});
+    }
+
+    int paintCount{0};
 };
 
 } // namespace
@@ -295,6 +343,38 @@ TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     ASSERT_EQ(recorded->rects.size(), 1u);
     EXPECT_EQ(recorded->rects.front().width, 64.0f);
     EXPECT_EQ(recorded->rects.front().height, 48.0f);
+}
+
+TEST(LclUiTest, WindowAppGatesYogaLayoutToLayoutAffectingMutations) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 64, 48, "Layout dirty gating");
+
+    auto root = std::make_unique<CountingLayoutContainer>();
+    CountingLayoutContainer* rootPointer = root.get();
+    root->setWidth(64.0f);
+    root->setHeight(48.0f);
+    app.setRootWidget(std::move(root));
+
+    EXPECT_TRUE(rootPointer->isLayoutDirty());
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_FALSE(rootPointer->isLayoutDirty());
+    EXPECT_EQ(rootPointer->syncLayoutCount, 1);
+
+    rootPointer->markDirty();
+    EXPECT_FALSE(rootPointer->isLayoutDirty());
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_EQ(rootPointer->syncLayoutCount, 1);
+
+    rootPointer->setTranslationY(3.0f);
+    EXPECT_FALSE(rootPointer->isLayoutDirty());
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_EQ(rootPointer->syncLayoutCount, 1);
+
+    rootPointer->getYogaNode().setWidth(60.0f);
+    EXPECT_TRUE(rootPointer->isLayoutDirty());
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_FALSE(rootPointer->isLayoutDirty());
+    EXPECT_EQ(rootPointer->syncLayoutCount, 2);
 }
 
 TEST(LclUiTest, WindowAppWaitsForInitialConfigureBeforeAttachingBuffer) {
@@ -1449,6 +1529,122 @@ TEST(LclUiTest, ScrollViewClampsOffsetWhenContentLargerThanViewport) {
 
     scrollView->setScrollY(500.0f);
     EXPECT_FLOAT_EQ(scrollView->getScrollY(), 200.0f);
+}
+
+TEST(LclUiTest, ScrollViewSkipsDirtyWorkWhenClampedOffsetDoesNotChange) {
+    RenderPass pass;
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setRenderPass(&pass);
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(100.0f);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    content->setHeight(300.0f);
+    scrollView->setContent(std::move(content));
+    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->syncLayout();
+    pass.clear();
+
+    scrollView->setScrollY(-20.0f);
+    EXPECT_FALSE(pass.hasDamage());
+
+    scrollView->setScrollY(80.0f);
+    EXPECT_TRUE(pass.hasDamage());
+    EXPECT_FLOAT_EQ(scrollView->getScrollY(), 80.0f);
+
+    pass.clear();
+    scrollView->setScrollY(80.0f);
+    EXPECT_FALSE(pass.hasDamage());
+
+    scrollView->setScrollY(500.0f);
+    EXPECT_TRUE(pass.hasDamage());
+    EXPECT_FLOAT_EQ(scrollView->getScrollY(), 200.0f);
+
+    pass.clear();
+    scrollView->setScrollY(600.0f);
+    EXPECT_FALSE(pass.hasDamage());
+}
+
+TEST(LclUiTest, ScrollViewCachesContentUntilPaintOrGeometryChanges) {
+    RecordingCanvas canvas;
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(100.0f);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    auto paintedChild = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* paintedChildPointer = paintedChild.get();
+    paintedChild->setWidth(200.0f);
+    paintedChild->setHeight(300.0f);
+    content->addChild(std::move(paintedChild));
+    scrollView->setContent(std::move(content));
+    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->syncLayout();
+
+    const Rect fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
+    scrollView->draw(canvas, fullDamage);
+    EXPECT_EQ(paintedChildPointer->paintCount, 1);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_EQ(canvas.cachedLayerDrawCount, 1);
+
+    scrollView->setScrollY(40.0f);
+    scrollView->draw(canvas, fullDamage);
+    EXPECT_EQ(paintedChildPointer->paintCount, 1);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_EQ(canvas.cachedLayerDrawCount, 2);
+    ASSERT_FALSE(canvas.cachedLayerDestinations.empty());
+    EXPECT_FLOAT_EQ(canvas.cachedLayerDestinations.back().y, -40.0f);
+
+    paintedChildPointer->markDirty();
+    scrollView->draw(canvas, fullDamage);
+    EXPECT_EQ(paintedChildPointer->paintCount, 2);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 2);
+
+    paintedChildPointer->getYogaNode().setHeight(340.0f);
+    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->syncLayout();
+    scrollView->draw(canvas, fullDamage);
+    EXPECT_EQ(paintedChildPointer->paintCount, 3);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 3);
+
+    scrollView->getYogaNode().setHeight(120.0f);
+    scrollView->getYogaNode().calculateLayout(200.0f, 120.0f);
+    scrollView->syncLayout();
+    scrollView->draw(canvas, fullDamage);
+    EXPECT_EQ(paintedChildPointer->paintCount, 4);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 4);
+    ASSERT_FALSE(canvas.clips.empty());
+    EXPECT_FLOAT_EQ(canvas.clips.back().width, 200.0f);
+    EXPECT_FLOAT_EQ(canvas.clips.back().height, 120.0f);
+}
+
+TEST(LclUiTest, ScrollViewCachedLayerRespectsViewportClip) {
+    std::vector<uint32_t> pixels(64 * 64, 0x00000000u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(64, 64, nullptr, pixels.data()));
+    lcl::render::SkiaCanvas canvas(renderer);
+
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(32.0f);
+    scrollView->setHeight(16.0f);
+    auto content = std::make_unique<Container>();
+    content->setWidth(32.0f);
+    auto paintedChild = std::make_unique<CountingPaintWidget>();
+    paintedChild->setWidth(32.0f);
+    paintedChild->setHeight(40.0f);
+    content->addChild(std::move(paintedChild));
+    scrollView->setContent(std::move(content));
+    scrollView->getYogaNode().calculateLayout(32.0f, 16.0f);
+    scrollView->syncLayout();
+
+    canvas.beginFrame();
+    scrollView->draw(canvas, {-100.0f, -100.0f, 300.0f, 300.0f});
+    canvas.endFrame();
+
+    EXPECT_EQ(pixels[4 + 4 * 64], 0xFF14283Cu);
+    EXPECT_EQ(pixels[4 + 20 * 64], 0xFF14161Du);
 }
 
 TEST(LclUiTest, ScrollViewHandlesWheelScroll) {

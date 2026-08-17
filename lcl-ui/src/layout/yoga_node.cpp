@@ -22,7 +22,8 @@ YogaNode::~YogaNode() {
 
 YogaNode::YogaNode(YogaNode&& other) noexcept
     : m_node(std::exchange(other.m_node, nullptr)),
-      m_measureCallback(std::move(other.m_measureCallback)) {
+      m_measureCallback(std::move(other.m_measureCallback)),
+      m_layoutInvalidationCallback(std::move(other.m_layoutInvalidationCallback)) {
     if (m_node) {
         YGNodeSetContext(m_node, this);
     }
@@ -35,6 +36,7 @@ YogaNode& YogaNode::operator=(YogaNode&& other) noexcept {
         }
         m_node = std::exchange(other.m_node, nullptr);
         m_measureCallback = std::move(other.m_measureCallback);
+        m_layoutInvalidationCallback = std::move(other.m_layoutInvalidationCallback);
         if (m_node) {
             YGNodeSetContext(m_node, this);
         }
@@ -45,6 +47,7 @@ YogaNode& YogaNode::operator=(YogaNode&& other) noexcept {
 void YogaNode::insertChild(YogaNode* child, uint32_t index) {
     if (m_node && child && child->m_node) {
         YGNodeInsertChild(m_node, child->m_node, index);
+        notifyLayoutMutation();
     }
 }
 
@@ -52,18 +55,21 @@ void YogaNode::appendChild(YogaNode* child) {
     if (m_node && child && child->m_node) {
         uint32_t childCount = YGNodeGetChildCount(m_node);
         YGNodeInsertChild(m_node, child->m_node, childCount);
+        notifyLayoutMutation();
     }
 }
 
 void YogaNode::removeChild(YogaNode* child) {
     if (m_node && child && child->m_node) {
         YGNodeRemoveChild(m_node, child->m_node);
+        notifyLayoutMutation();
     }
 }
 
 void YogaNode::removeAllChildren() {
     if (m_node) {
         YGNodeRemoveAllChildren(m_node);
+        notifyLayoutMutation();
     }
 }
 
@@ -87,11 +93,15 @@ void YogaNode::setMeasureFunc(MeasureCallback callback) {
     m_measureCallback = callback;
     if (m_node) {
         YGNodeSetMeasureFunc(m_node, callback ? &YogaNode::staticMeasureFunc : nullptr);
+        notifyLayoutMutation();
     }
 }
 
 void YogaNode::markDirty() {
-    if (m_node) YGNodeMarkDirty(m_node);
+    if (m_node) {
+        YGNodeMarkDirty(m_node);
+        notifyLayoutMutation();
+    }
 }
 
 } // namespace lcl::ui

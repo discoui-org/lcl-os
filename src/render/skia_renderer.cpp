@@ -637,7 +637,144 @@ void SkiaRenderer::clearExternalFrameTarget() {
 #endif
 }
 
+bool SkiaRenderer::createCachedLayerTarget(uint32_t width, uint32_t height,
+                                           uint32_t& framebuffer, uint32_t& texture) {
+    framebuffer = 0;
+    texture = 0;
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend ||
+        width == 0 || height == 0) return false;
+    m_eglBackend->makeCurrent();
+
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, static_cast<GLsizei>(width),
+                 static_cast<GLsizei>(height), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           texture, 0);
+    const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+    glViewport(0, 0, m_width, m_height);
+    if (!complete) {
+        glDeleteFramebuffers(1, &framebuffer);
+        glDeleteTextures(1, &texture);
+        framebuffer = 0;
+        texture = 0;
+    }
+    return complete;
+#else
+    (void)width;
+    (void)height;
+    return false;
+#endif
+}
+
+void SkiaRenderer::destroyCachedLayerTarget(uint32_t framebuffer, uint32_t texture) {
+#ifndef LCL_SOFTWARE_ONLY
+    if (!m_eglBackend) return;
+    m_eglBackend->makeCurrent();
+    if (framebuffer != 0) glDeleteFramebuffers(1, &framebuffer);
+    if (texture != 0) glDeleteTextures(1, &texture);
+#else
+    (void)framebuffer;
+    (void)texture;
+#endif
+}
+
+bool SkiaRenderer::beginCachedLayerTarget(uint32_t framebuffer, uint32_t texture,
+                                          uint32_t width, uint32_t height,
+                                          uint32_t* softwarePixels,
+                                          float logicalOriginX, float logicalOriginY) {
+    if (!m_initialized || m_cachedLayerTargetState || width == 0 || height == 0) return false;
+    const bool gpu = m_backendType == SkiaBackendType::OpenGL_EGL;
+    if ((gpu && (framebuffer == 0 || texture == 0 || !m_eglBackend)) ||
+        (!gpu && !softwarePixels)) return false;
+
+    m_cachedLayerTargetState = CachedLayerTargetState{
+        m_width, m_height, m_targetPixels, m_contentOriginX, m_contentOriginY,
+        m_clipRect, m_glExternalFrameFBO, m_glExternalFrameTexture,
+        m_glExternalBackingWidth, m_glExternalBackingHeight};
+    m_width = width;
+    m_height = height;
+    m_targetPixels = softwarePixels;
+    m_contentOriginX = -logicalOriginX * m_contentScale;
+    m_contentOriginY = -logicalOriginY * m_contentScale;
+    m_clipRect.reset();
+
+#ifndef LCL_SOFTWARE_ONLY
+    if (gpu) {
+        m_glExternalFrameFBO = framebuffer;
+        m_glExternalFrameTexture = texture;
+        m_glExternalBackingWidth = width;
+        m_glExternalBackingHeight = height;
+        m_eglBackend->makeCurrent();
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glViewport(0, 0, width, height);
+        glDisable(GL_SCISSOR_TEST);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    } else
+#endif
+    {
+        std::fill_n(softwarePixels, static_cast<size_t>(width) * height, 0x00000000u);
+    }
+    return true;
+}
+
+void SkiaRenderer::endCachedLayerTarget() {
+    if (!m_cachedLayerTargetState) return;
+    const CachedLayerTargetState state = *m_cachedLayerTargetState;
+    m_cachedLayerTargetState.reset();
+    m_width = state.width;
+    m_height = state.height;
+    m_targetPixels = state.targetPixels;
+    m_contentOriginX = state.contentOriginX;
+    m_contentOriginY = state.contentOriginY;
+    m_clipRect = state.clip;
+    m_glExternalFrameFBO = state.externalFrameFBO;
+    m_glExternalFrameTexture = state.externalFrameTexture;
+    m_glExternalBackingWidth = state.externalBackingWidth;
+    m_glExternalBackingHeight = state.externalBackingHeight;
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+        m_eglBackend->makeCurrent();
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+        glViewport(0, 0, m_width, m_height);
+    }
+#endif
+    applyScissorState();
+}
+
+void SkiaRenderer::drawCachedLayerTexture(uint32_t texture,
+                                          const SkiaRect& destination,
+                                          float opacity) {
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend || texture == 0) return;
+    const SkiaRect deviceRect = scaleRect(destination);
+    m_eglBackend->makeCurrent();
+    glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+    glViewport(0, 0, m_width, m_height);
+    drawTextureQuad(texture, deviceRect.x, deviceRect.y,
+                    deviceRect.width, deviceRect.height, opacity);
+#else
+    (void)texture;
+    (void)destination;
+    (void)opacity;
+#endif
+}
+
 void SkiaRenderer::shutdown() {
+    // A Canvas normally balances cached-target redirection before shutdown.
+    // Drop any saved target state defensively so a reinitialized renderer can
+    // never restore dimensions or pointers owned by its previous lifetime.
+    m_cachedLayerTargetState.reset();
 #ifndef LCL_SOFTWARE_ONLY
     if (m_glClientTexture > 0) {
         glDeleteTextures(1, &m_glClientTexture);

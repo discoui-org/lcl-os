@@ -149,6 +149,7 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     m_rootWidget = std::move(root);
     m_rootWidget->setRenderPass(&m_renderPass);
     m_rootWidget->setMotionCoordinator(&m_motionCoordinator);
+    m_rootWidget->markLayoutDirty();
     m_rootWidget->markDirty();
     // A newly mounted tree has not been through Yoga/syncLayout yet, so its
     // absolute bounds are still empty and markDirty() cannot produce damage.
@@ -1056,6 +1057,10 @@ bool WindowApp::sendTextInput(const std::string& text) {
 void WindowApp::updateLayout() {
     if (m_rootWidget) {
         const auto started = std::chrono::steady_clock::now();
+        // Clear the request being serviced before calculation. A widget that
+        // performs a genuine Yoga mutation from syncLayout() will set it again
+        // and receive another layout pass on the next frame.
+        m_rootWidget->clearLayoutDirty();
         m_rootWidget->getYogaNode().calculateLayout(static_cast<float>(m_width), static_cast<float>(m_height));
         m_rootWidget->syncLayout(0.0f, 0.0f);
         if (m_frameTraceEnabled) {
@@ -1074,7 +1079,7 @@ bool WindowApp::renderFrame() {
     if (m_liveResizeFramePacing && m_canvas->hasDmaBufTransport() &&
         !m_liveFrameGateOpen) return false;
 
-    updateLayout();
+    if (m_rootWidget && m_rootWidget->isLayoutDirty()) updateLayout();
 
     // A resize can leave old-layout damage queued before Yoga computes the
     // new child positions. Always include the complete post-layout root extent

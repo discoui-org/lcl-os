@@ -7,7 +7,15 @@
 namespace lcl::ui {
 
 class ScrollView : public Widget {
+    enum class TouchPanState {
+        Idle,
+        Pending,
+        Dragging,
+    };
+
 public:
+    static constexpr float kTouchDragThreshold = 8.0f;
+
     ScrollView();
     ~ScrollView() override = default;
 
@@ -21,17 +29,35 @@ public:
 
     void setScrollSpeed(float speed) { m_scrollSpeed = speed; }
     float getScrollSpeed() const noexcept { return m_scrollSpeed; }
+    bool isTouchPanActive() const noexcept { return m_touchPanState != TouchPanState::Idle; }
+    bool isTouchDragging() const noexcept { return m_touchPanState == TouchPanState::Dragging; }
 
     void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f) override;
+    void draw(Canvas& canvas, const Rect& damageRect) override;
+    void onPointerEventPreview(const PointerEvent& event) override;
+    bool onPointerMove(const PointerEvent& event) override;
+    bool onPointerUp(const PointerEvent& event) override;
+    bool onPointerCancel(const PointerEvent& event) override;
     bool onScroll(const PointerEvent& event) override;
 
 private:
     void clampScrollOffset();
+    void resetTouchPan() noexcept;
 
     Widget* m_contentWidget{nullptr};
     float m_scrollY{0.0f};
     float m_contentHeight{0.0f};
     float m_scrollSpeed{24.0f};
+    TouchPanState m_touchPanState{TouchPanState::Idle};
+    uint32_t m_touchPointerId{0};
+    float m_touchStartY{0.0f};
+    float m_touchStartScrollY{0.0f};
+    bool m_cacheValid{false};
+    uint64_t m_cachedContentPaintRevision{0};
+    float m_cachedContentWidth{0.0f};
+    float m_cachedContentHeight{0.0f};
+    float m_cachedViewportWidth{0.0f};
+    float m_cachedViewportHeight{0.0f};
 };
 
 } // namespace lcl::ui

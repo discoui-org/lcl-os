@@ -1,5 +1,6 @@
 #include "lcl-ui/core/event_dispatcher.hpp"
 #include <utility>
+#include <vector>
 
 namespace lcl::ui {
 
@@ -13,6 +14,11 @@ bool PointerEvent::releasePointerCapture(Widget& owner) const {
 
 bool PointerEvent::hasPointerCapture(const Widget& owner) const {
     return m_dispatcher && m_dispatcher->hasPointerCapture(pointerId, &owner);
+}
+
+bool PointerEvent::cancelPointerDownTarget(Widget& newOwner) const {
+    return m_dispatcher &&
+        m_dispatcher->cancelPointerDownTarget(pointerId, &newOwner, *this);
 }
 
 Widget* EventDispatcher::hitTest(Widget* root, float x, float y) {
@@ -58,6 +64,33 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& eve
     Widget* target = routeToCapture
         ? captured
         : hitTest(root, dispatchEvent.x, dispatchEvent.y);
+
+    if (dispatchEvent.type == PointerEventType::Down && target) {
+        m_pointerDownTargets[dispatchEvent.pointerId] =
+            PointerDownTarget{target, target->getLifetimeToken(), dispatchEvent.source};
+    }
+
+    Widget* previewTarget = target;
+    if (!captured &&
+        (dispatchEvent.type == PointerEventType::Move ||
+         dispatchEvent.type == PointerEventType::Up ||
+         dispatchEvent.type == PointerEventType::Cancel)) {
+        if (Widget* downTarget = getPointerDownTarget(dispatchEvent.pointerId, root)) {
+            previewTarget = downTarget;
+            if (dispatchEvent.type == PointerEventType::Cancel) target = downTarget;
+        }
+    }
+    if (previewTarget) dispatchPreviewToTarget(previewTarget, dispatchEvent);
+
+    // Preview handlers may claim the pointer after a drag threshold. Re-target
+    // this same event immediately so the former child does not receive it.
+    if (dispatchEvent.type == PointerEventType::Move ||
+        dispatchEvent.type == PointerEventType::Up ||
+        dispatchEvent.type == PointerEventType::Cancel) {
+        if (Widget* previewCapture = getPointerCapture(dispatchEvent.pointerId)) {
+            target = previewCapture;
+        }
+    }
 
     // Hover State Management
     if (dispatchEvent.type == PointerEventType::Move) {
@@ -137,6 +170,7 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& eve
     if (dispatchEvent.type == PointerEventType::Up ||
         dispatchEvent.type == PointerEventType::Cancel) {
         clearPointerCapture(dispatchEvent.pointerId);
+        m_pointerDownTargets.erase(dispatchEvent.pointerId);
     }
 
     return handled;
@@ -169,19 +203,46 @@ Widget* EventDispatcher::getPointerCapture(uint32_t pointerId) const {
     return it->second.owner;
 }
 
+bool EventDispatcher::cancelPointerDownTarget(uint32_t pointerId, Widget* newOwner,
+                                              const PointerEvent& sourceEvent) {
+    const auto it = m_pointerDownTargets.find(pointerId);
+    if (it == m_pointerDownTargets.end()) return false;
+    const PointerDownTarget downTarget = it->second;
+    m_pointerDownTargets.erase(it);
+    if (downTarget.lifetime.expired() || downTarget.target == newOwner) return false;
+
+    PointerEvent cancelEvent = sourceEvent;
+    cancelEvent.type = PointerEventType::Cancel;
+    cancelEvent.m_dispatcher = this;
+    return dispatchCancelUntil(downTarget.target, newOwner, cancelEvent);
+}
+
 void EventDispatcher::cancelPointerCaptures() {
     auto captures = std::move(m_pointerCaptures);
+    auto downTargets = std::move(m_pointerDownTargets);
     m_pointerCaptures.clear();
+    m_pointerDownTargets.clear();
     for (const auto& [pointerId, capture] : captures) {
+        downTargets.erase(pointerId);
         if (capture.lifetime.expired()) continue;
         PointerEvent cancelEvent{0.0f, 0.0f, 0, 0.0f, 0.0f,
                                  PointerEventType::Cancel, capture.source, pointerId};
         cancelEvent.m_dispatcher = this;
         dispatchToTarget(capture.owner, cancelEvent);
     }
+    for (const auto& [pointerId, downTarget] : downTargets) {
+        if (downTarget.lifetime.expired()) continue;
+        PointerEvent cancelEvent{0.0f, 0.0f, 0, 0.0f, 0.0f,
+                                 PointerEventType::Cancel,
+                                 downTarget.source, pointerId};
+        cancelEvent.m_dispatcher = this;
+        dispatchPreviewToTarget(downTarget.target, cancelEvent);
+        dispatchToTarget(downTarget.target, cancelEvent);
+    }
     // Cancellation is terminal; callbacks cannot establish a replacement
     // capture while the owning tree/input lifecycle is being torn down.
     m_pointerCaptures.clear();
+    m_pointerDownTargets.clear();
 }
 
 bool EventDispatcher::isEventCapableInTree(Widget* root, const Widget* target,
@@ -202,6 +263,38 @@ bool EventDispatcher::dispatchToTarget(Widget* target, const PointerEvent& event
         handled = curr->onPointerCancel(event);
     }
     return handled;
+}
+
+void EventDispatcher::dispatchPreviewToTarget(Widget* target,
+                                               const PointerEvent& event) {
+    std::vector<Widget*> path;
+    for (Widget* curr = target; curr; curr = curr->getParent()) {
+        path.push_back(curr);
+    }
+    for (auto it = path.rbegin(); it != path.rend(); ++it) {
+        (*it)->onPointerEventPreview(event);
+    }
+}
+
+bool EventDispatcher::dispatchCancelUntil(Widget* target, Widget* stopBefore,
+                                          const PointerEvent& event) {
+    bool handled = false;
+    for (Widget* curr = target; curr && curr != stopBefore && !handled;
+         curr = curr->getParent()) {
+        handled = curr->onPointerCancel(event);
+    }
+    return handled;
+}
+
+Widget* EventDispatcher::getPointerDownTarget(uint32_t pointerId, Widget* root) {
+    const auto it = m_pointerDownTargets.find(pointerId);
+    if (it == m_pointerDownTargets.end()) return nullptr;
+    if (it->second.lifetime.expired() ||
+        !isEventCapableInTree(root, it->second.target)) {
+        m_pointerDownTargets.erase(it);
+        return nullptr;
+    }
+    return it->second.target;
 }
 
 Widget* EventDispatcher::validatePointerCapture(Widget* root, const PointerEvent& event) {

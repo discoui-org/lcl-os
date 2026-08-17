@@ -49,6 +49,8 @@ struct PointerEvent {
     /** Release this pointer only when the caller currently owns its capture. */
     bool releasePointerCapture(Widget& owner) const;
     bool hasPointerCapture(const Widget& owner) const;
+    /** Cancel the widget path that received PointerDown before a new owner captures. */
+    bool cancelPointerDownTarget(Widget& newOwner) const;
 
 private:
     friend class EventDispatcher;

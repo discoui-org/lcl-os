@@ -6,7 +6,9 @@ namespace lcl::ui {
 
 std::atomic<uint64_t> Widget::s_nextObjectId{1};
 
-Widget::Widget() : m_objectId(s_nextObjectId.fetch_add(1, std::memory_order_relaxed)) {}
+Widget::Widget() : m_objectId(s_nextObjectId.fetch_add(1, std::memory_order_relaxed)) {
+    m_yogaNode.setLayoutInvalidationCallback([this] { invalidateLayout(); });
+}
 
 Widget::~Widget() {
     if (m_destructionCallback) m_destructionCallback();
@@ -189,12 +191,33 @@ void Widget::removeChild(Widget* child) {
 }
 
 void Widget::markDirty() {
+    ++m_paintRevision;
     if (m_renderPass && m_visible) {
         m_renderPass->addDirtyRect(m_absoluteBounds.unionWith(getPresentationBounds()));
     }
     if (m_parent) {
         m_parent->markDirty();
     }
+}
+
+void Widget::invalidateLayout() {
+    markLayoutDirty();
+    markDirty();
+}
+
+void Widget::markLayoutDirty() {
+    m_layoutDirty = true;
+    if (m_parent) m_parent->markLayoutDirty();
+}
+
+void Widget::clearLayoutDirty() {
+    m_layoutDirty = false;
+    for (auto& child : m_children) child->clearLayoutDirty();
+}
+
+void Widget::setParentControlledTranslationY(float value) {
+    m_modelTransform.translationY = value;
+    m_presentation.translationY = value;
 }
 
 void Widget::setOpacity(float value) {

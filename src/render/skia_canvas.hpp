@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "lcl-ui/core/canvas.hpp"
@@ -16,6 +17,7 @@ class SkiaCanvas final : public lcl::ui::Canvas {
 public:
     SkiaCanvas();
     explicit SkiaCanvas(SkiaRenderer& renderer);
+    ~SkiaCanvas() override;
 
     bool initialize(uint32_t width, uint32_t height, uint32_t* targetPixels) override;
     void setTargetPixels(uint32_t* targetPixels, uint32_t width, uint32_t height) override;
@@ -39,6 +41,10 @@ public:
     void concatTransform(const lcl::ui::AffineTransform& transform) override;
     void beginLayer(float opacity) override;
     void endLayer() override;
+    bool beginCachedLayer(CachedLayerId id, const lcl::ui::Rect& sourceBounds) override;
+    void endCachedLayer() override;
+    bool drawCachedLayer(CachedLayerId id, const lcl::ui::Rect& destination,
+                         float opacity = 1.0f) override;
 
     void drawRect(const lcl::ui::Rect& rect, lcl::ui::Color color) override;
     void drawRoundedRect(const lcl::ui::Rect& rect, float radius, lcl::ui::Color color,
@@ -76,11 +82,20 @@ private:
         std::vector<uint32_t> pixels;
     };
 
+    struct CachedLayer {
+        uint32_t pixelWidth{0};
+        uint32_t pixelHeight{0};
+        uint32_t framebuffer{0};
+        uint32_t texture{0};
+        std::vector<uint32_t> pixels;
+    };
+
     static SkiaColor toSkia(lcl::ui::Color color);
     lcl::ui::Rect mapRect(const lcl::ui::Rect& rect) const;
     std::pair<float, float> mapPoint(float x, float y) const;
     lcl::ui::Color mapColor(lcl::ui::Color color) const;
     void syncRendererClip();
+    void clearCachedLayers();
     SkiaRenderer& renderer() { return *m_renderer; }
 
     std::unique_ptr<ClientEGLContext> m_clientEglContext;
@@ -92,6 +107,8 @@ private:
     std::vector<CanvasState> m_stack;
     std::vector<float> m_layerOpacityStack;
     std::vector<TextLayer> m_textLayers;
+    std::unordered_map<CachedLayerId, CachedLayer> m_cachedLayers;
+    std::optional<CanvasState> m_cachedLayerCanvasState;
     uint64_t m_textLayerUseCounter{0};
     float m_contentScale{1.0f};
     bool m_dmaBufFrameActive{false};

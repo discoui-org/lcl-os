@@ -4,6 +4,7 @@
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "render/skia_canvas.hpp"
@@ -218,6 +219,152 @@ TEST(LclUiEventsTest, InvalidCaptureOwnerReceivesCancelWhenStillAlive) {
     EXPECT_EQ(tree.left->cancelPointerIds, std::vector<uint32_t>{pointerId});
     EXPECT_EQ(tree.right->movePointerIds, std::vector<uint32_t>{pointerId});
     EXPECT_FALSE(tree.dispatcher.hasPointerCapture(pointerId));
+}
+
+class TouchPanButton : public Button {
+public:
+    using Button::Button;
+
+    bool onPointerCancel(const PointerEvent& event) override {
+        ++cancelCount;
+        return Button::onPointerCancel(event);
+    }
+
+    int cancelCount{0};
+};
+
+class ScrollViewTouchPanTree {
+public:
+    ScrollViewTouchPanTree() {
+        root = std::make_unique<ScrollView>();
+        scrollView = root.get();
+        root->setWidth(200.0f);
+        root->setHeight(100.0f);
+
+        auto content = std::make_unique<Container>();
+        content->setWidth(200.0f);
+
+        auto child = std::make_unique<TouchPanButton>("Touch target");
+        button = child.get();
+        child->setWidth(200.0f);
+        child->setHeight(400.0f);
+        child->setOnClick([this]() { ++clickCount; });
+        content->addChild(std::move(child));
+        root->setContent(std::move(content));
+
+        root->getYogaNode().calculateLayout(200.0f, 100.0f);
+        root->syncLayout(0.0f, 0.0f);
+    }
+
+    void dispatch(PointerEventType type, float y, uint32_t pointerId = 0) {
+        dispatcher.dispatchPointerEvent(
+            root.get(),
+            PointerEvent{40.0f, y, 0, 0.0f, 0.0f, type,
+                         PointerSource::Touch, pointerId});
+    }
+
+    EventDispatcher dispatcher;
+    std::unique_ptr<ScrollView> root;
+    ScrollView* scrollView{nullptr};
+    TouchPanButton* button{nullptr};
+    int clickCount{0};
+};
+
+TEST(LclUiEventsTest, ScrollViewSmallTouchMovePreservesChildClick) {
+    ScrollViewTouchPanTree tree;
+
+    tree.dispatch(PointerEventType::Down, 40.0f);
+    tree.dispatch(PointerEventType::Move,
+                  40.0f - ScrollView::kTouchDragThreshold * 0.5f);
+    EXPECT_FALSE(tree.dispatcher.hasPointerCapture(0));
+    EXPECT_FALSE(tree.scrollView->isTouchDragging());
+
+    tree.dispatch(PointerEventType::Up,
+                  40.0f - ScrollView::kTouchDragThreshold * 0.5f);
+
+    EXPECT_EQ(tree.clickCount, 1);
+    EXPECT_EQ(tree.button->cancelCount, 0);
+    EXPECT_FALSE(tree.scrollView->isTouchPanActive());
+}
+
+TEST(LclUiEventsTest, ScrollViewCapturesTouchAfterDragThreshold) {
+    ScrollViewTouchPanTree tree;
+
+    tree.dispatch(PointerEventType::Down, 40.0f);
+    EXPECT_FALSE(tree.dispatcher.hasPointerCapture(0));
+    tree.dispatch(PointerEventType::Move,
+                  40.0f - ScrollView::kTouchDragThreshold);
+
+    EXPECT_TRUE(tree.scrollView->isTouchDragging());
+    EXPECT_TRUE(tree.dispatcher.hasPointerCapture(0, tree.scrollView));
+}
+
+TEST(LclUiEventsTest, ScrollViewTouchDragTracksFingerInScrollDirection) {
+    ScrollViewTouchPanTree tree;
+    tree.scrollView->setScrollY(80.0f);
+
+    tree.dispatch(PointerEventType::Down, 50.0f);
+    tree.dispatch(PointerEventType::Move, 30.0f);
+
+    EXPECT_FLOAT_EQ(tree.scrollView->getScrollY(), 100.0f);
+}
+
+TEST(LclUiEventsTest, ScrollViewDragCancelsPressedChildAndSuppressesClick) {
+    ScrollViewTouchPanTree tree;
+
+    tree.dispatch(PointerEventType::Down, 40.0f);
+    tree.dispatch(PointerEventType::Move, 20.0f);
+    ASSERT_EQ(tree.button->cancelCount, 1);
+
+    tree.dispatch(PointerEventType::Up, 20.0f);
+
+    EXPECT_EQ(tree.clickCount, 0);
+    EXPECT_EQ(tree.button->getState(), ButtonState::Normal);
+}
+
+TEST(LclUiEventsTest, ScrollViewPointerUpClearsGestureAndCapture) {
+    ScrollViewTouchPanTree tree;
+
+    tree.dispatch(PointerEventType::Down, 40.0f);
+    tree.dispatch(PointerEventType::Move, 20.0f);
+    ASSERT_TRUE(tree.scrollView->isTouchPanActive());
+    ASSERT_TRUE(tree.dispatcher.hasPointerCapture(0, tree.scrollView));
+
+    tree.dispatch(PointerEventType::Up, 20.0f);
+
+    EXPECT_FALSE(tree.scrollView->isTouchPanActive());
+    EXPECT_FALSE(tree.dispatcher.hasPointerCapture(0));
+}
+
+TEST(LclUiEventsTest, ScrollViewPointerCancelClearsGestureAndCapture) {
+    ScrollViewTouchPanTree tree;
+
+    tree.dispatch(PointerEventType::Down, 40.0f);
+    tree.dispatch(PointerEventType::Move, 20.0f);
+    ASSERT_TRUE(tree.scrollView->isTouchPanActive());
+    ASSERT_TRUE(tree.dispatcher.hasPointerCapture(0, tree.scrollView));
+
+    tree.dispatch(PointerEventType::Cancel, 20.0f);
+
+    EXPECT_FALSE(tree.scrollView->isTouchPanActive());
+    EXPECT_FALSE(tree.dispatcher.hasPointerCapture(0));
+}
+
+TEST(LclUiEventsTest, ScrollViewTouchDragClampsAtContentBounds) {
+    ScrollViewTouchPanTree tree;
+    constexpr uint32_t firstPointer = 7;
+    constexpr uint32_t secondPointer = 8;
+
+    tree.scrollView->setScrollY(100.0f);
+    tree.dispatch(PointerEventType::Down, 50.0f, firstPointer);
+    tree.dispatch(PointerEventType::Move, -500.0f, firstPointer);
+    EXPECT_FLOAT_EQ(tree.scrollView->getScrollY(), tree.scrollView->getMaxScrollY());
+    tree.dispatch(PointerEventType::Up, -500.0f, firstPointer);
+
+    tree.scrollView->setScrollY(100.0f);
+    tree.dispatch(PointerEventType::Down, 50.0f, secondPointer);
+    tree.dispatch(PointerEventType::Move, 500.0f, secondPointer);
+    EXPECT_FLOAT_EQ(tree.scrollView->getScrollY(), 0.0f);
 }
 
 TEST(LclUiEventsTest, DepthFirstHitTesting) {

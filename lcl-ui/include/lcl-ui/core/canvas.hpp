@@ -50,6 +50,8 @@ struct DmaBufFrame {
  */
 class Canvas {
 public:
+    using CachedLayerId = uint64_t;
+
     virtual ~Canvas() = default;
 
     virtual bool initialize(uint32_t width, uint32_t height, uint32_t* targetPixels) = 0;
@@ -84,6 +86,15 @@ public:
     virtual void concatTransform(const AffineTransform&) {}
     virtual void beginLayer(float) {}
     virtual void endLayer() {}
+
+    /**
+     * Rasterize a widget subtree into a backend-owned cache. The source bounds
+     * use the same logical coordinate space as ordinary draw calls. Backends
+     * without cached-layer support return false so the caller can draw normally.
+     */
+    virtual bool beginCachedLayer(CachedLayerId, const Rect&) { return false; }
+    virtual void endCachedLayer() {}
+    virtual bool drawCachedLayer(CachedLayerId, const Rect&, float = 1.0f) { return false; }
 
     virtual void drawRect(const Rect& rect, Color color) = 0;
     virtual void drawRoundedRect(const Rect& rect, float radius, Color color,

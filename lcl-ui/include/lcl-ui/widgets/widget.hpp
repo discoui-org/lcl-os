@@ -16,6 +16,9 @@
 
 namespace lcl::ui {
 
+class WindowApp;
+class ScrollView;
+
 class Canvas;
 
 class Widget {
@@ -77,6 +80,8 @@ public:
     bool isFocusable() const { return m_focusable; }
 
     void markDirty();
+    uint64_t getPaintRevision() const noexcept { return m_paintRevision; }
+    bool isLayoutDirty() const noexcept { return m_layoutDirty; }
     void setRenderPass(RenderPass* pass);
     void setMotionCoordinator(MotionCoordinator* coordinator);
     MotionCoordinator* getMotionCoordinator() const noexcept { return m_motionCoordinator; }
@@ -104,6 +109,9 @@ public:
     virtual void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f);
     virtual void draw(Canvas& canvas, const Rect& damageRect);
     virtual void collectEffects(std::vector<EffectRegion>& outEffects) const;
+
+    // Ancestor observation phase. It cannot consume normal target/bubble dispatch.
+    virtual void onPointerEventPreview(const PointerEvent& event) { (void)event; }
 
     // Polymorphic Event Handlers (Return true if handled, false to bubble to parent)
     virtual bool onPointerEnter(const PointerEvent& event);
@@ -164,9 +172,17 @@ protected:
     bool m_declarativeFocused{false};
 
 private:
+    friend class WindowApp;
+    friend class ScrollView;
+    void invalidateLayout();
+    void markLayoutDirty();
+    void clearLayoutDirty();
+    void setParentControlledTranslationY(float value);
     bool hasDeclarativeInteraction() const;
     void applyDeclarativeInteractionState();
     static std::atomic<uint64_t> s_nextObjectId;
+    uint64_t m_paintRevision{0};
+    bool m_layoutDirty{true};
 };
 
 } // namespace lcl::ui

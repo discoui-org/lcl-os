@@ -13,6 +13,11 @@ SkiaCanvas::SkiaCanvas()
 
 SkiaCanvas::SkiaCanvas(SkiaRenderer& renderer) : m_renderer(&renderer) {}
 
+SkiaCanvas::~SkiaCanvas() {
+    if (m_cachedLayerCanvasState) endCachedLayer();
+    clearCachedLayers();
+}
+
 SkiaColor SkiaCanvas::toSkia(lcl::ui::Color color) {
     return {color.r, color.g, color.b, color.a};
 }
@@ -37,6 +42,7 @@ void SkiaCanvas::setContentScale(float scale) {
     if (std::fabs(m_contentScale - sanitized) > 0.0001f) {
         m_contentScale = sanitized;
         m_textLayers.clear();
+        clearCachedLayers();
     }
 }
 void SkiaCanvas::beginFrame() {
@@ -160,6 +166,84 @@ void SkiaCanvas::endLayer() {
     if (m_layerOpacityStack.empty()) return;
     m_state.opacity = m_layerOpacityStack.back();
     m_layerOpacityStack.pop_back();
+}
+
+bool SkiaCanvas::beginCachedLayer(CachedLayerId id,
+                                  const lcl::ui::Rect& sourceBounds) {
+    if (m_cachedLayerCanvasState || sourceBounds.width <= 0.0f ||
+        sourceBounds.height <= 0.0f) return false;
+    const uint32_t pixelWidth = std::max(
+        1u, static_cast<uint32_t>(std::ceil(sourceBounds.width * m_contentScale)));
+    const uint32_t pixelHeight = std::max(
+        1u, static_cast<uint32_t>(std::ceil(sourceBounds.height * m_contentScale)));
+
+    auto& layer = m_cachedLayers[id];
+    if (layer.pixelWidth != pixelWidth || layer.pixelHeight != pixelHeight) {
+        renderer().destroyCachedLayerTarget(layer.framebuffer, layer.texture);
+        layer = CachedLayer{};
+        layer.pixelWidth = pixelWidth;
+        layer.pixelHeight = pixelHeight;
+    }
+
+    const bool gpu = renderer().getBackendType() == SkiaBackendType::OpenGL_EGL;
+    if (gpu && layer.framebuffer == 0 &&
+        !renderer().createCachedLayerTarget(pixelWidth, pixelHeight,
+                                            layer.framebuffer, layer.texture)) {
+        m_cachedLayers.erase(id);
+        return false;
+    }
+    if (!gpu && layer.pixels.size() != static_cast<size_t>(pixelWidth) * pixelHeight) {
+        layer.pixels.resize(static_cast<size_t>(pixelWidth) * pixelHeight);
+    }
+
+    uint32_t* softwarePixels = gpu ? nullptr : layer.pixels.data();
+    if (!renderer().beginCachedLayerTarget(
+            layer.framebuffer, layer.texture, pixelWidth, pixelHeight,
+            softwarePixels, sourceBounds.x, sourceBounds.y)) {
+        return false;
+    }
+
+    m_cachedLayerCanvasState = m_state;
+    m_state = CanvasState{};
+    return true;
+}
+
+void SkiaCanvas::endCachedLayer() {
+    if (!m_cachedLayerCanvasState) return;
+    renderer().endCachedLayerTarget();
+    m_state = *m_cachedLayerCanvasState;
+    m_cachedLayerCanvasState.reset();
+    syncRendererClip();
+}
+
+bool SkiaCanvas::drawCachedLayer(CachedLayerId id,
+                                 const lcl::ui::Rect& destination,
+                                 float opacity) {
+    const auto found = m_cachedLayers.find(id);
+    if (found == m_cachedLayers.end()) return false;
+    const auto& layer = found->second;
+    const lcl::ui::Rect mapped = mapRect(destination);
+    if (m_state.clip && !m_state.clip->intersects(mapped)) return true;
+    opacity = std::clamp(opacity * m_state.opacity, 0.0f, 1.0f);
+    if (layer.texture != 0) {
+        renderer().drawCachedLayerTexture(
+            layer.texture, {mapped.x, mapped.y, mapped.width, mapped.height}, opacity);
+        return true;
+    }
+    if (layer.pixels.empty()) return false;
+    renderer().drawBufferTransformed(
+        mapped.x, mapped.y, static_cast<int>(layer.pixelWidth),
+        static_cast<int>(layer.pixelHeight), layer.pixels.data(),
+        static_cast<int>(layer.pixelWidth), opacity, 0.0f, 2.0f, false,
+        mapped.width, mapped.height);
+    return true;
+}
+
+void SkiaCanvas::clearCachedLayers() {
+    for (const auto& [_, layer] : m_cachedLayers) {
+        renderer().destroyCachedLayerTarget(layer.framebuffer, layer.texture);
+    }
+    m_cachedLayers.clear();
 }
 
 std::pair<float, float> SkiaCanvas::mapPoint(float x, float y) const {
