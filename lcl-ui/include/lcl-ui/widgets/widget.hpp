@@ -121,6 +121,10 @@ public:
     virtual bool onPointerCancel(const PointerEvent& event);
     virtual bool onPointerMove(const PointerEvent& event) { (void)event; return false; }
     virtual bool onScroll(const PointerEvent& event) { (void)event; return false; }
+    virtual bool shouldFocusOnPointerDown(const PointerEvent& event) const {
+        (void)event;
+        return true;
+    }
     virtual bool onKeyDown(const KeyEvent& event) { (void)event; return false; }
     virtual bool onKeyUp(const KeyEvent& event) { (void)event; return false; }
     virtual bool onTextInput(const TextInputEvent& event) { (void)event; return false; }

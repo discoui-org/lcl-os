@@ -21,6 +21,13 @@ bool PointerEvent::cancelPointerDownTarget(Widget& newOwner) const {
         m_dispatcher->cancelPointerDownTarget(pointerId, &newOwner, *this);
 }
 
+bool PointerEvent::requestFocus(Widget& owner) const {
+    if (!m_dispatcher || !owner.isFocusable() || !owner.isVisible() ||
+        !owner.isInteractionEnabled()) return false;
+    m_dispatcher->setFocus(&owner);
+    return true;
+}
+
 Widget* EventDispatcher::hitTest(Widget* root, float x, float y) {
     if (!root || !root->isVisible() || !root->containsPresentationPoint(x, y)) {
         return nullptr;
@@ -116,7 +123,8 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& eve
     }
 
     // Focus Management
-    if (dispatchEvent.type == PointerEventType::Down && target && target->isFocusable()) {
+    if (dispatchEvent.type == PointerEventType::Down && target && target->isFocusable() &&
+        target->shouldFocusOnPointerDown(dispatchEvent)) {
         setFocus(target);
     }
 

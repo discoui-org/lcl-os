@@ -51,6 +51,8 @@ struct PointerEvent {
     bool hasPointerCapture(const Widget& owner) const;
     /** Cancel the widget path that received PointerDown before a new owner captures. */
     bool cancelPointerDownTarget(Widget& newOwner) const;
+    /** Request general widget focus from the active pointer dispatch. */
+    bool requestFocus(Widget& owner) const;
 
 private:
     friend class EventDispatcher;

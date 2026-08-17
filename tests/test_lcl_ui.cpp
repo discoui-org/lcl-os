@@ -11,9 +11,11 @@
 #include "lcl-ui/widgets/window_chrome.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
+#include "lcl-ui/widgets/text_field.hpp"
 #include "render/skia_renderer.hpp"
 #include "render/skia_canvas.hpp"
 #include "render/backdrop_filter_geometry.hpp"
+#include "render/text_metrics.hpp"
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -323,6 +325,86 @@ TEST(LclUiTest, TextMeasurementUpdatesAfterContentAndFamilyChanges) {
     text.getYogaNode().calculateLayout(512.0f, 96.0f);
     EXPECT_NEAR(text.getYogaNode().getLayoutWidth(),
                 renderer.measureMonospaceString("WWWWWWWW", 24.0f), 0.01f);
+}
+
+TEST(LclUiTest, TextFieldPlaceholderAndCaretFollowFocusAndValueState) {
+    TextField field;
+    field.setPlaceholder("Search");
+    field.getYogaNode().setWidth(180.0f);
+    field.getYogaNode().calculateLayout(180.0f, 36.0f);
+    field.syncLayout();
+    const Rect damage{-10.0f, -10.0f, 220.0f, 80.0f};
+
+    RecordingCanvas canvas;
+    field.draw(canvas, damage);
+    ASSERT_EQ(canvas.texts.size(), 1u);
+    EXPECT_EQ(canvas.texts.back(), "Search");
+    EXPECT_TRUE(canvas.rects.empty());
+
+    field.onFocusGained(FocusEvent{FocusEventType::Gained});
+    canvas.texts.clear();
+    canvas.rects.clear();
+    field.draw(canvas, damage);
+    ASSERT_EQ(canvas.texts.size(), 1u);
+    EXPECT_EQ(canvas.texts.back(), "Search");
+    ASSERT_EQ(canvas.rects.size(), 1u);
+    EXPECT_FLOAT_EQ(canvas.rects.back().width, 1.0f);
+
+    field.setText("Value");
+    canvas.texts.clear();
+    canvas.rects.clear();
+    field.draw(canvas, damage);
+    ASSERT_EQ(canvas.texts.size(), 1u);
+    EXPECT_EQ(canvas.texts.back(), "Value");
+
+    field.onFocusLost(FocusEvent{FocusEventType::Lost});
+    canvas.rects.clear();
+    field.draw(canvas, damage);
+    EXPECT_TRUE(canvas.rects.empty());
+}
+
+TEST(LclUiTest, TextFieldCaretUsesSharedProportionalFontMetrics) {
+    TextField field;
+    field.getYogaNode().setWidth(240.0f);
+    field.getYogaNode().calculateLayout(240.0f, 36.0f);
+    field.syncLayout();
+    field.onFocusGained(FocusEvent{FocusEventType::Gained});
+    const Rect damage{-10.0f, -10.0f, 280.0f, 80.0f};
+
+    RecordingCanvas canvas;
+    field.draw(canvas, damage);
+    ASSERT_EQ(canvas.rects.size(), 1u);
+    const float emptyCaretX = canvas.rects.back().x;
+
+    field.setText("Wi");
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::End,
+                                         static_cast<int>(lcl::platform::PhysicalKey::End)}));
+    canvas.rects.clear();
+    field.draw(canvas, damage);
+    ASSERT_EQ(canvas.rects.size(), 1u);
+    const float expectedAdvance = lcl::render::text_metrics::measureText(
+        "Wi", 14.0f, FontFamily::Interface);
+    EXPECT_NEAR(canvas.rects.back().x - emptyCaretX, expectedAdvance, 0.01f);
+}
+
+TEST(LclUiTest, TextFieldHorizontallyScrollsLongTextAndClipsCaret) {
+    TextField field("WWWWWWWWWW");
+    field.getYogaNode().setWidth(56.0f);
+    field.getYogaNode().calculateLayout(56.0f, 36.0f);
+    field.syncLayout();
+    field.onFocusGained(FocusEvent{FocusEventType::Gained});
+
+    RecordingCanvas canvas;
+    field.draw(canvas, {-10.0f, -10.0f, 100.0f, 80.0f});
+
+    ASSERT_FALSE(canvas.clips.empty());
+    ASSERT_FALSE(canvas.textPositions.empty());
+    ASSERT_EQ(canvas.rects.size(), 1u);
+    const Rect viewport = canvas.clips.back();
+    const Rect caret = canvas.rects.back();
+    EXPECT_LT(canvas.textPositions.back().x, viewport.x);
+    EXPECT_GE(caret.x, viewport.x);
+    EXPECT_LE(caret.x + caret.width, viewport.x + viewport.width + 0.01f);
 }
 
 TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {

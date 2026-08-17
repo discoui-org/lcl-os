@@ -29,6 +29,7 @@ add_library(lcl-ui STATIC
     src/widgets/widget.cpp
     src/widgets/container.cpp
     src/widgets/text.cpp
+    src/widgets/text_field.cpp
     src/widgets/image.cpp
     src/widgets/button.cpp
     src/widgets/backdrop_surface.cpp

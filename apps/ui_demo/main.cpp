@@ -7,6 +7,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "lcl-ui/widgets/text_field.hpp"
 #include "render/skia_canvas.hpp"
 
 using namespace lcl::ui;
@@ -137,6 +138,53 @@ int main() {
   scrollContent->setBorderColor(Color{45, 52, 64, 255});
   scrollContent->setBorderWidth(1.0f);
   scrollContent->setBorderRadius(12.0f);
+
+  // TextField Widget Lab section
+  auto textFieldTitle = std::make_unique<Text>("TextField");
+  textFieldTitle->setFontSize(15.0f);
+  textFieldTitle->setTextColor(Color{236, 239, 244, 255});
+
+  auto textFieldStatus =
+      std::make_unique<Text>("Son değişiklik: Henüz yok");
+  Text *textFieldStatusPtr = textFieldStatus.get();
+  textFieldStatus->setFontSize(13.0f);
+  textFieldStatus->setTextColor(Color{160, 174, 192, 255});
+  textFieldStatus->getYogaNode().setWidth(300.0f);
+  textFieldStatus->getYogaNode().setHeight(18.0f);
+  textFieldStatus->setClipsToBounds(true);
+
+  const auto makeTextField = [textFieldStatusPtr](
+                                 const std::string &name,
+                                 const std::string &value) {
+    auto field = std::make_unique<TextField>(value);
+    field->setOnChange([textFieldStatusPtr, name](const std::string &next) {
+      textFieldStatusPtr->setText("Son değişiklik — " + name + ": " +
+                                  (next.empty() ? "<boş>" : next));
+      std::cout << "[lcl_ui_demo] TextField " << name << " changed: "
+                << next << std::endl;
+    });
+    return field;
+  };
+
+  auto emptyTextField = makeTextField("Boş", "");
+  emptyTextField->setPlaceholder("Buraya yazın...");
+
+  auto prefilledTextField =
+      makeTextField("Dolu", "Önceden girilmiş metin");
+
+  auto longTextField = makeTextField(
+      "Uzun",
+      "Bu çok uzun TextField metni yatay kaydırma ve caret görünürlüğünü test eder.");
+
+  auto utf8TextField =
+      makeTextField("UTF-8", "Türkçe ığüşöç — Lazca ǩ ž ʒ");
+
+  scrollContent->addChild(std::move(textFieldTitle));
+  scrollContent->addChild(std::move(emptyTextField));
+  scrollContent->addChild(std::move(prefilledTextField));
+  scrollContent->addChild(std::move(longTextField));
+  scrollContent->addChild(std::move(utf8TextField));
+  scrollContent->addChild(std::move(textFieldStatus));
 
   // Add 18 Interactive Row Buttons
   static int clickCounter = 0;

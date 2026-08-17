@@ -6,6 +6,7 @@
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "lcl-ui/widgets/text_field.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "render/skia_canvas.hpp"
 #include <fcntl.h>
@@ -48,6 +49,31 @@ public:
     bool left{false};
     int lastKeyCode{-1};
     std::string lastTextInput;
+};
+
+class TextFieldFocusTree {
+public:
+    TextFieldFocusTree() {
+        root = std::make_unique<Container>();
+        root->getYogaNode().setWidth(240.0f);
+        root->getYogaNode().setHeight(80.0f);
+
+        auto textField = std::make_unique<TextField>();
+        field = textField.get();
+        textField->getYogaNode().setWidth(200.0f);
+        root->addChild(std::move(textField));
+        root->getYogaNode().calculateLayout(240.0f, 80.0f);
+        root->syncLayout();
+    }
+
+    bool pointer(PointerEventType type, PointerSource source, uint32_t pointerId) {
+        return dispatcher.dispatchPointerEvent(root.get(),
+            PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, type, source, pointerId});
+    }
+
+    EventDispatcher dispatcher;
+    std::unique_ptr<Container> root;
+    TextField* field{nullptr};
 };
 
 class PointerCaptureWidget : public Widget {
@@ -511,6 +537,145 @@ TEST(LclUiEventsTest, KeyboardEventRouting) {
     bool textHandled = dispatcher.dispatchTextInputEvent(textEv);
     EXPECT_TRUE(textHandled);
     EXPECT_EQ(widgetPtr->lastTextInput, "Hello");
+}
+
+TEST(LclUiEventsTest, TextFieldMouseDownTakesFocus) {
+    TextFieldFocusTree tree;
+
+    EXPECT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.field);
+    EXPECT_TRUE(tree.dispatcher.dispatchTextInputEvent(TextInputEvent{"Mouse"}));
+    EXPECT_EQ(tree.field->getText(), "Mouse");
+}
+
+TEST(LclUiEventsTest, TextFieldTouchFocusWaitsForMatchingPointerUp) {
+    TextFieldFocusTree tree;
+    constexpr uint32_t pointerId = 7;
+
+    EXPECT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, pointerId));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), nullptr);
+
+    EXPECT_TRUE(tree.pointer(PointerEventType::Up, PointerSource::Touch, pointerId));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.field);
+}
+
+TEST(LclUiEventsTest, TextFieldTouchCancelDoesNotTakeFocus) {
+    TextFieldFocusTree tree;
+    constexpr uint32_t pointerId = 11;
+
+    EXPECT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, pointerId));
+    EXPECT_TRUE(tree.pointer(PointerEventType::Cancel, PointerSource::Touch, pointerId));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), nullptr);
+
+    EXPECT_FALSE(tree.pointer(PointerEventType::Up, PointerSource::Touch, pointerId));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), nullptr);
+}
+
+TEST(LclUiEventsTest, TextFieldTouchUpFromDifferentPointerDoesNotTakeFocus) {
+    TextFieldFocusTree tree;
+
+    EXPECT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 17));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 18));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), nullptr);
+}
+
+TEST(LclUiEventsTest, ScrollViewDragCancelsPendingTextFieldTouchFocus) {
+    EventDispatcher dispatcher;
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->getYogaNode().setWidth(200.0f);
+    scrollView->getYogaNode().setHeight(100.0f);
+
+    auto content = std::make_unique<Container>();
+    content->getYogaNode().setDirection(YGFlexDirectionColumn);
+    auto field = std::make_unique<TextField>();
+    field->getYogaNode().setWidth(200.0f);
+    auto filler = std::make_unique<Container>();
+    filler->getYogaNode().setWidth(200.0f);
+    filler->getYogaNode().setHeight(300.0f);
+    content->addChild(std::move(field));
+    content->addChild(std::move(filler));
+    scrollView->setContent(std::move(content));
+    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->syncLayout();
+
+    constexpr uint32_t pointerId = 23;
+    EXPECT_TRUE(dispatcher.dispatchPointerEvent(scrollView.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Touch, pointerId}));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), nullptr);
+
+    EXPECT_TRUE(dispatcher.dispatchPointerEvent(scrollView.get(),
+        PointerEvent{10.0f, 30.0f, 0, 0.0f, 0.0f, PointerEventType::Move,
+                     PointerSource::Touch, pointerId}));
+    EXPECT_TRUE(scrollView->isTouchDragging());
+    EXPECT_EQ(dispatcher.getFocusedWidget(), nullptr);
+
+    EXPECT_TRUE(dispatcher.dispatchPointerEvent(scrollView.get(),
+        PointerEvent{10.0f, 30.0f, 0, 0.0f, 0.0f, PointerEventType::Up,
+                     PointerSource::Touch, pointerId}));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), nullptr);
+}
+
+TEST(LclUiEventsTest, TextFieldSupportsSingleLineNavigationAndEditingKeys) {
+    TextField field("abcd");
+    const auto key = [&field](lcl::platform::PhysicalKey physical) {
+        return field.onKeyDown(KeyEvent{physical, static_cast<int>(physical)});
+    };
+
+    EXPECT_TRUE(key(lcl::platform::PhysicalKey::End));
+    EXPECT_TRUE(key(lcl::platform::PhysicalKey::ArrowLeft));
+    EXPECT_TRUE(key(lcl::platform::PhysicalKey::ArrowLeft));
+    EXPECT_TRUE(key(lcl::platform::PhysicalKey::Backspace));
+    EXPECT_EQ(field.getText(), "acd");
+
+    EXPECT_TRUE(key(lcl::platform::PhysicalKey::Delete));
+    EXPECT_EQ(field.getText(), "ad");
+    EXPECT_TRUE(key(lcl::platform::PhysicalKey::ArrowRight));
+    EXPECT_TRUE(field.onTextInput(TextInputEvent{"X"}));
+    EXPECT_EQ(field.getText(), "adX");
+
+    EXPECT_TRUE(key(lcl::platform::PhysicalKey::Home));
+    EXPECT_TRUE(field.onTextInput(TextInputEvent{"H"}));
+    EXPECT_EQ(field.getText(), "HadX");
+    EXPECT_TRUE(key(lcl::platform::PhysicalKey::End));
+    EXPECT_TRUE(field.onTextInput(TextInputEvent{"E\n"}));
+    EXPECT_EQ(field.getText(), "HadXE");
+
+    TextField utf8Field("açb");
+    ASSERT_TRUE(utf8Field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::ArrowLeft,
+                                             static_cast<int>(lcl::platform::PhysicalKey::ArrowLeft)}));
+    ASSERT_TRUE(utf8Field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Backspace,
+                                             static_cast<int>(lcl::platform::PhysicalKey::Backspace)}));
+    EXPECT_EQ(utf8Field.getText(), "ab");
+}
+
+TEST(LclUiEventsTest, TextFieldSetTextClampsCaretAndOnChangeRequiresAValueChange) {
+    TextField field("abcd");
+    int changes = 0;
+    std::string lastValue;
+    field.setOnChange([&](const std::string& value) {
+        ++changes;
+        lastValue = value;
+    });
+
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::End,
+                                         static_cast<int>(lcl::platform::PhysicalKey::End)}));
+    field.setText("q");
+    EXPECT_EQ(changes, 1);
+    EXPECT_EQ(lastValue, "q");
+
+    field.setText("q");
+    EXPECT_EQ(changes, 1);
+    ASSERT_TRUE(field.onTextInput(TextInputEvent{"X"}));
+    EXPECT_EQ(field.getText(), "qX");
+    EXPECT_EQ(changes, 2);
+
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Home,
+                                         static_cast<int>(lcl::platform::PhysicalKey::Home)}));
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Backspace,
+                                         static_cast<int>(lcl::platform::PhysicalKey::Backspace)}));
+    EXPECT_EQ(field.getText(), "qX");
+    EXPECT_EQ(changes, 2);
 }
 
 TEST(LclUiEventsTest, WindowAppDirectEventCallbacks) {
