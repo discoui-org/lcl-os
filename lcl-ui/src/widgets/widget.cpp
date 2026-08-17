@@ -150,6 +150,15 @@ bool Widget::onPointerUp(const PointerEvent& event) {
     return true;
 }
 
+bool Widget::onPointerCancel(const PointerEvent& event) {
+    (void)event;
+    if (!hasDeclarativeInteraction()) return false;
+    m_declarativePressed = false;
+    m_declarativeHovered = false;
+    applyDeclarativeInteractionState();
+    return true;
+}
+
 bool Widget::onFocusGained(const FocusEvent& event) {
     (void)event;
     if (!hasDeclarativeInteraction()) return false;

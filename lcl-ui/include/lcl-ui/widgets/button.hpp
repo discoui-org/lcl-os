@@ -36,6 +36,7 @@ public:
     bool onPointerLeave(const PointerEvent& event) override;
     bool onPointerDown(const PointerEvent& event) override;
     bool onPointerUp(const PointerEvent& event) override;
+    bool onPointerCancel(const PointerEvent& event) override;
     bool onFocusGained(const FocusEvent& event) override;
     bool onFocusLost(const FocusEvent& event) override;
 

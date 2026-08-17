@@ -110,6 +110,7 @@ public:
     virtual bool onPointerLeave(const PointerEvent& event);
     virtual bool onPointerDown(const PointerEvent& event);
     virtual bool onPointerUp(const PointerEvent& event);
+    virtual bool onPointerCancel(const PointerEvent& event);
     virtual bool onPointerMove(const PointerEvent& event) { (void)event; return false; }
     virtual bool onScroll(const PointerEvent& event) { (void)event; return false; }
     virtual bool onKeyDown(const KeyEvent& event) { (void)event; return false; }

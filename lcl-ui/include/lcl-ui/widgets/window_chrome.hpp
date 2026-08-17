@@ -84,6 +84,14 @@ public:
         return true;
     }
 
+    bool onPointerCancel(const PointerEvent&) override {
+        m_pressed = false;
+        m_hovered = false;
+        applyVisual(m_style.buttonBackground, m_style.buttonBorder, 1.0f,
+                    interactionMotionTheme().release);
+        return true;
+    }
+
 private:
     void applyVisual(Color background, Color border, float scale,
                      const lcl::motion::Motion& scaleMotion) {

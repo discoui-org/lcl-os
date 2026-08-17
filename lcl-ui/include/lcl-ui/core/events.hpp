@@ -7,6 +7,9 @@
 
 namespace lcl::ui {
 
+class EventDispatcher;
+class Widget;
+
 enum class PointerSource {
     Mouse,
     Touch
@@ -18,10 +21,20 @@ enum class PointerEventType {
     Up,
     Enter,
     Leave,
-    Scroll
+    Scroll,
+    Cancel
 };
 
 struct PointerEvent {
+    PointerEvent() = default;
+    PointerEvent(float eventX, float eventY, int eventButton, float eventDeltaX,
+                 float eventDeltaY, PointerEventType eventType,
+                 PointerSource eventSource = PointerSource::Mouse,
+                 uint32_t eventPointerId = 0)
+        : x(eventX), y(eventY), button(eventButton), deltaX(eventDeltaX),
+          deltaY(eventDeltaY), type(eventType), source(eventSource),
+          pointerId(eventPointerId) {}
+
     float x{0.0f};
     float y{0.0f};
     int button{0}; // 0: Left, 1: Right, 2: Middle
@@ -29,6 +42,17 @@ struct PointerEvent {
     float deltaY{0.0f};
     PointerEventType type{PointerEventType::Move};
     PointerSource source{PointerSource::Mouse};
+    uint32_t pointerId{0};
+
+    /** Request capture for this pointer while handling the event. */
+    bool capturePointer(Widget& owner) const;
+    /** Release this pointer only when the caller currently owns its capture. */
+    bool releasePointerCapture(Widget& owner) const;
+    bool hasPointerCapture(const Widget& owner) const;
+
+private:
+    friend class EventDispatcher;
+    EventDispatcher* m_dispatcher{nullptr};
 };
 
 enum class KeyEventType {

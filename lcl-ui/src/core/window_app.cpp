@@ -145,6 +145,7 @@ uint32_t WindowApp::getPixelHeight() const {
 
 void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     if (!root) return;
+    m_dispatcher.cancelPointerCaptures();
     m_rootWidget = std::move(root);
     m_rootWidget->setRenderPass(&m_renderPass);
     m_rootWidget->setMotionCoordinator(&m_motionCoordinator);
@@ -154,6 +155,12 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     // Force one full frame after layout; runtime root replacement must not
     // leave old pixels in the client buffer.
     m_firstFrame = true;
+}
+
+void WindowApp::setInputEnabled(bool enabled) {
+    if (m_inputEnabled == enabled) return;
+    if (!enabled) m_dispatcher.cancelPointerCaptures();
+    m_inputEnabled = enabled;
 }
 
 void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
@@ -716,6 +723,7 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
         startMorphs(m_rootWidget.get(), oldBounds, m_motionCoordinator, motion, anyMorph);
         startMorphCrossfade(std::move(oldPixels), snapshotWidth, snapshotHeight, motion);
         m_morphInputFrozen = anyMorph || m_morphBlendEngine.hasActiveAnimations();
+        if (m_morphInputFrozen) m_dispatcher.cancelPointerCaptures();
     }
 }
 
@@ -945,22 +953,24 @@ int WindowApp::hitCsdControl(float x, float y) const noexcept {
     return -1;
 }
 
-bool WindowApp::sendPointerMove(float x, float y, PointerSource source) {
+bool WindowApp::sendPointerMove(float x, float y, PointerSource source, uint32_t pointerId) {
     if (m_morphInputFrozen) return false;
-    PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Move, source};
-    if (m_onRawPointer && m_onRawPointer(ev)) {
+    PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Move, source, pointerId};
+    if (!m_dispatcher.hasPointerCapture(pointerId) &&
+        m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
     return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
 }
 
-bool WindowApp::sendPointerDown(float x, float y, int button, PointerSource source) {
+bool WindowApp::sendPointerDown(float x, float y, int button, PointerSource source,
+                                uint32_t pointerId) {
     if (m_morphInputFrozen) return false;
     if (m_csdTitlebarEnabled && button == 0 && y >= 0.0f && y <= m_csdTitlebarHeight) {
         m_csdPressedControl = hitCsdControl(x, y);
         if (m_csdPressedControl >= 0) {
             m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
-                PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down, source});
+                PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down, source, pointerId});
             return true;
         }
         m_csdPressedControl = -1;
@@ -970,20 +980,21 @@ bool WindowApp::sendPointerDown(float x, float y, int button, PointerSource sour
 
     m_csdPressedControl = -1;
 
-    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Down, source};
+    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Down, source, pointerId};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
     return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
 }
 
-bool WindowApp::sendPointerUp(float x, float y, int button, PointerSource source) {
+bool WindowApp::sendPointerUp(float x, float y, int button, PointerSource source,
+                              uint32_t pointerId) {
     if (m_morphInputFrozen) return false;
     if (button == 0 && m_csdPressedControl >= 0) {
         const int pressedControl = m_csdPressedControl;
         m_csdPressedControl = -1;
         m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
-            PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Up, source});
+            PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Up, source, pointerId});
         if (hitCsdControl(x, y) == pressedControl) {
             if (pressedControl == 0) return requestWindowClose();
             if (pressedControl == 1) return requestWindowMinimize();
@@ -991,8 +1002,19 @@ bool WindowApp::sendPointerUp(float x, float y, int button, PointerSource source
         }
         return true;
     }
-    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Up, source};
-    if (m_onRawPointer && m_onRawPointer(ev)) {
+    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Up, source, pointerId};
+    if (!m_dispatcher.hasPointerCapture(pointerId) &&
+        m_onRawPointer && m_onRawPointer(ev)) {
+        return true;
+    }
+    return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
+}
+
+bool WindowApp::sendPointerCancel(float x, float y, PointerSource source,
+                                  uint32_t pointerId) {
+    PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Cancel, source, pointerId};
+    if (!m_dispatcher.hasPointerCapture(pointerId) &&
+        m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
     return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);

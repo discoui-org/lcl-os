@@ -120,6 +120,15 @@ bool Button::onPointerUp(const PointerEvent& event) {
     return true;
 }
 
+bool Button::onPointerCancel(const PointerEvent& event) {
+    (void)event;
+    if (!m_enabled) return false;
+    m_pressed = false;
+    m_hovered = false;
+    updateComposedState();
+    return true;
+}
+
 bool Button::onFocusGained(const FocusEvent& event) {
     (void)event;
     m_focused = true;

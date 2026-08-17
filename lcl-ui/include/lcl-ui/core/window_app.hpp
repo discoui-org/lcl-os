@@ -71,9 +71,14 @@ public:
     void setOnRawTextInputEvent(RawTextInputCallback callback) { m_onRawTextInput = callback; }
 
     // Native OS Input Dispatch Forwarders
-    bool sendPointerMove(float x, float y, PointerSource source = PointerSource::Mouse);
-    bool sendPointerDown(float x, float y, int button = 0, PointerSource source = PointerSource::Mouse);
-    bool sendPointerUp(float x, float y, int button = 0, PointerSource source = PointerSource::Mouse);
+    bool sendPointerMove(float x, float y, PointerSource source = PointerSource::Mouse,
+                         uint32_t pointerId = 0);
+    bool sendPointerDown(float x, float y, int button = 0,
+                         PointerSource source = PointerSource::Mouse, uint32_t pointerId = 0);
+    bool sendPointerUp(float x, float y, int button = 0,
+                       PointerSource source = PointerSource::Mouse, uint32_t pointerId = 0);
+    bool sendPointerCancel(float x, float y, PointerSource source = PointerSource::Mouse,
+                           uint32_t pointerId = 0);
     bool sendPointerScroll(float x, float y, float deltaX, float deltaY, PointerSource source = PointerSource::Mouse);
     bool sendKeyDown(int keyCode, char32_t codepoint = 0, uint8_t modifiers = 0);
     bool sendKeyUp(int keyCode, uint8_t modifiers = 0);
@@ -104,7 +109,7 @@ public:
         return m_resizePresentationMode;
     }
     /** Disable widget-event dispatch for visual-only surfaces such as shell panels. */
-    void setInputEnabled(bool enabled) { m_inputEnabled = enabled; }
+    void setInputEnabled(bool enabled);
     bool isInputEnabled() const { return m_inputEnabled; }
     void setOnIpcMessage(IpcMessageCallback callback) { m_onIpcMessage = std::move(callback); }
     /** Runs after a logical configure has allocated its new SHM buffer. */

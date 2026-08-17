@@ -162,6 +162,15 @@ bool BackdropSurface::onPointerUp(const PointerEvent& event) {
     return true;
 }
 
+bool BackdropSurface::onPointerCancel(const PointerEvent& event) {
+    (void)event;
+    if (!m_interactive) return false;
+    m_pressed = false;
+    m_hovered = false;
+    restoreBaseVisuals();
+    return true;
+}
+
 void BackdropSurface::applyHoverVisuals() {
     const auto& theme = interactionMotionTheme();
     const Color background = adjustColor(m_baseBackground, 8, 8, 9);

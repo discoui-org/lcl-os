@@ -49,6 +49,177 @@ public:
     std::string lastTextInput;
 };
 
+class PointerCaptureWidget : public Widget {
+public:
+    bool onPointerDown(const PointerEvent& event) override {
+        downPointerIds.push_back(event.pointerId);
+        captureSucceeded = event.capturePointer(*this);
+        return true;
+    }
+
+    bool onPointerMove(const PointerEvent& event) override {
+        movePointerIds.push_back(event.pointerId);
+        return true;
+    }
+
+    bool onPointerUp(const PointerEvent& event) override {
+        upPointerIds.push_back(event.pointerId);
+        return true;
+    }
+
+    bool onPointerCancel(const PointerEvent& event) override {
+        cancelPointerIds.push_back(event.pointerId);
+        return true;
+    }
+
+    bool captureSucceeded{false};
+    std::vector<uint32_t> downPointerIds;
+    std::vector<uint32_t> movePointerIds;
+    std::vector<uint32_t> upPointerIds;
+    std::vector<uint32_t> cancelPointerIds;
+};
+
+class PointerCaptureTree {
+public:
+    PointerCaptureTree() {
+        root = std::make_unique<Container>();
+        root->getYogaNode().setDirection(YGFlexDirectionRow);
+        root->getYogaNode().setWidth(200.0f);
+        root->getYogaNode().setHeight(100.0f);
+
+        auto leftWidget = std::make_unique<PointerCaptureWidget>();
+        left = leftWidget.get();
+        leftWidget->getYogaNode().setWidth(100.0f);
+        leftWidget->getYogaNode().setHeight(100.0f);
+
+        auto rightWidget = std::make_unique<PointerCaptureWidget>();
+        right = rightWidget.get();
+        rightWidget->getYogaNode().setWidth(100.0f);
+        rightWidget->getYogaNode().setHeight(100.0f);
+
+        root->addChild(std::move(leftWidget));
+        root->addChild(std::move(rightWidget));
+        root->getYogaNode().calculateLayout(200.0f, 100.0f);
+        root->syncLayout(0.0f, 0.0f);
+    }
+
+    EventDispatcher dispatcher;
+    std::unique_ptr<Container> root;
+    PointerCaptureWidget* left{nullptr};
+    PointerCaptureWidget* right{nullptr};
+};
+
+TEST(LclUiEventsTest, CapturedPointerMoveIgnoresHitTestTarget) {
+    PointerCaptureTree tree;
+    constexpr uint32_t pointerId = 17;
+
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Touch, pointerId});
+    ASSERT_TRUE(tree.left->captureSucceeded);
+    ASSERT_TRUE(tree.dispatcher.hasPointerCapture(pointerId, tree.left));
+
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{150.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Move,
+                     PointerSource::Touch, pointerId});
+
+    EXPECT_EQ(tree.left->movePointerIds, std::vector<uint32_t>{pointerId});
+    EXPECT_TRUE(tree.right->movePointerIds.empty());
+}
+
+TEST(LclUiEventsTest, CapturedPointerUpRoutesToOwnerAndAutomaticallyReleases) {
+    PointerCaptureTree tree;
+    constexpr uint32_t pointerId = 23;
+
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Mouse, pointerId});
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{150.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Up,
+                     PointerSource::Mouse, pointerId});
+
+    EXPECT_EQ(tree.left->upPointerIds, std::vector<uint32_t>{pointerId});
+    EXPECT_TRUE(tree.right->upPointerIds.empty());
+    EXPECT_FALSE(tree.dispatcher.hasPointerCapture(pointerId));
+}
+
+TEST(LclUiEventsTest, ExplicitPointerReleaseRestoresHitTesting) {
+    PointerCaptureTree tree;
+    constexpr uint32_t pointerId = 31;
+
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Touch, pointerId});
+    ASSERT_TRUE(tree.dispatcher.releasePointerCapture(pointerId, tree.left));
+
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{150.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Move,
+                     PointerSource::Touch, pointerId});
+
+    EXPECT_TRUE(tree.left->movePointerIds.empty());
+    EXPECT_EQ(tree.right->movePointerIds, std::vector<uint32_t>{pointerId});
+}
+
+TEST(LclUiEventsTest, PointerCapturesAreIndependentPerPointerId) {
+    PointerCaptureTree tree;
+    constexpr uint32_t leftPointerId = 41;
+    constexpr uint32_t rightPointerId = 42;
+
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Touch, leftPointerId});
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{150.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Touch, rightPointerId});
+
+    ASSERT_TRUE(tree.dispatcher.hasPointerCapture(leftPointerId, tree.left));
+    ASSERT_TRUE(tree.dispatcher.hasPointerCapture(rightPointerId, tree.right));
+
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{150.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Move,
+                     PointerSource::Touch, leftPointerId});
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Move,
+                     PointerSource::Touch, rightPointerId});
+
+    EXPECT_EQ(tree.left->movePointerIds, std::vector<uint32_t>{leftPointerId});
+    EXPECT_EQ(tree.right->movePointerIds, std::vector<uint32_t>{rightPointerId});
+}
+
+TEST(LclUiEventsTest, PointerCancelRoutesToOwnerAndClearsCapture) {
+    PointerCaptureTree tree;
+    constexpr uint32_t pointerId = 53;
+
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Touch, pointerId});
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{150.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Cancel,
+                     PointerSource::Touch, pointerId});
+
+    EXPECT_EQ(tree.left->cancelPointerIds, std::vector<uint32_t>{pointerId});
+    EXPECT_TRUE(tree.right->cancelPointerIds.empty());
+    EXPECT_FALSE(tree.dispatcher.hasPointerCapture(pointerId));
+}
+
+TEST(LclUiEventsTest, InvalidCaptureOwnerReceivesCancelWhenStillAlive) {
+    PointerCaptureTree tree;
+    constexpr uint32_t pointerId = 61;
+
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Touch, pointerId});
+    tree.left->setVisible(false);
+
+    tree.dispatcher.dispatchPointerEvent(tree.root.get(),
+        PointerEvent{150.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Move,
+                     PointerSource::Touch, pointerId});
+
+    EXPECT_EQ(tree.left->cancelPointerIds, std::vector<uint32_t>{pointerId});
+    EXPECT_EQ(tree.right->movePointerIds, std::vector<uint32_t>{pointerId});
+    EXPECT_FALSE(tree.dispatcher.hasPointerCapture(pointerId));
+}
+
 TEST(LclUiEventsTest, DepthFirstHitTesting) {
     EventDispatcher dispatcher;
 
@@ -391,4 +562,3 @@ TEST(LclUiEventsTest, TouchPointerUpClearsHoverState) {
     EXPECT_EQ(dispatcher.getHoveredWidget(), nullptr);
     EXPECT_EQ(btnPtr->getState(), ButtonState::Normal);
 }
-
