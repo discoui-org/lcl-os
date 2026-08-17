@@ -227,8 +227,12 @@ void EventDispatcher::updateTouchTapEligibility(uint32_t pointerId,
         return;
     }
 
-    it->second.tapEligible = !touch_interaction::exceedsSlop(
-        event.x - it->second.downX, event.y - it->second.downY);
+    // Measure total displacement from PointerDown, never an incremental move
+    // delta. Once invalid, the early return above prevents re-validation.
+    if (touch_interaction::exceedsSlop(event.x - it->second.downX,
+                                       event.y - it->second.downY)) {
+        it->second.tapEligible = false;
+    }
 }
 
 void EventDispatcher::invalidateTouchTapForCapture(uint32_t pointerId) {

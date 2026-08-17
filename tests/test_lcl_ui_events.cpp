@@ -688,6 +688,14 @@ TEST(LclUiEventsTest, TouchTapSlopUsesAnInclusiveSharedThreshold) {
     ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 10.0f));
     ASSERT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
 
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 47, 10.0f, 46.0f));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Move, PointerSource::Touch, 47,
+                              12.0f, 46.0f));
+    ASSERT_TRUE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 47,
+                             12.0f, 46.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.second);
+
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 10.0f));
     ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 48, 10.0f, 46.0f));
     EXPECT_FALSE(tree.pointer(PointerEventType::Move, PointerSource::Touch, 48,
                               10.0f + slop - 0.01f, 46.0f));
@@ -706,8 +714,10 @@ TEST(LclUiEventsTest, TouchTapSlopUsesAnInclusiveSharedThreshold) {
     ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 50, 10.0f, 46.0f));
     EXPECT_FALSE(tree.pointer(PointerEventType::Move, PointerSource::Touch, 50,
                               10.0f + slop + 0.01f, 46.0f));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Move, PointerSource::Touch, 50,
+                              10.0f, 46.0f));
     EXPECT_FALSE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 50,
-                              10.0f + slop + 0.01f, 46.0f));
+                              10.0f, 46.0f));
     EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
 }
 
@@ -742,6 +752,18 @@ TEST(LclUiEventsTest, TouchDragWithoutScrollDoesNotDismissOrCompleteTextFieldTap
     ASSERT_TRUE(dispatcher.dispatchPointerEvent(root.get(),
         PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Up,
                      PointerSource::Touch, 52}));
+    EXPECT_TRUE(fieldPtr->sawTouchTapCompletion);
+
+    fieldPtr->sawTouchTapCompletion = false;
+    ASSERT_TRUE(dispatcher.dispatchPointerEvent(root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Touch, 54}));
+    EXPECT_FALSE(dispatcher.dispatchPointerEvent(root.get(),
+        PointerEvent{12.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Move,
+                     PointerSource::Touch, 54}));
+    ASSERT_TRUE(dispatcher.dispatchPointerEvent(root.get(),
+        PointerEvent{12.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Up,
+                     PointerSource::Touch, 54}));
     EXPECT_TRUE(fieldPtr->sawTouchTapCompletion);
 
     fieldPtr->sawTouchTapCompletion = false;

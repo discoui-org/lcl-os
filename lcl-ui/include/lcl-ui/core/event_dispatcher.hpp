@@ -45,6 +45,9 @@ private:
         PointerSource source{PointerSource::Mouse};
         float downX{0.0f};
         float downY{0.0f};
+        // Touch-only, one-way state. It starts true and becomes false only
+        // after total displacement reaches the shared touch slop or ownership
+        // leaves the original down-target sequence.
         bool tapEligible{true};
     };
 
