@@ -1,4 +1,4 @@
-"""Non-blocking private QMP client for viewer-originated multitouch events."""
+"""Non-blocking private QMP client for viewer-originated input events."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Any
 QEMU_ABSOLUTE_MAX = 0x7FFF
 
 
-class QmpTouchClient:
+class QmpInputClient:
     """Pump the viewer's private QMP socket from Qt's existing event loop."""
 
     def __init__(self, socket_path: Path) -> None:
@@ -22,7 +22,7 @@ class QmpTouchClient:
         self._socket: socket.socket | None = None
         self._receive_buffer = bytearray()
         self._send_buffer = bytearray()
-        self._pending_touch_messages: deque[dict[str, Any]] = deque()
+        self._pending_input_messages: deque[dict[str, Any]] = deque()
         self._ready = False
         self._capabilities_requested = False
         self._connect_error_logged = False
@@ -44,10 +44,12 @@ class QmpTouchClient:
         self._socket = None
         self._ready = False
         self._send_buffer.clear()
-        self._pending_touch_messages.clear()
+        self._receive_buffer.clear()
+        self._pending_input_messages.clear()
+        self._capabilities_requested = False
 
-    def send_contacts(self, events: list[dict[str, Any]]) -> None:
-        """Queue one atomic QMP input-send-event contact batch."""
+    def send_events(self, events: list[dict[str, Any]]) -> None:
+        """Queue one atomic QMP ``input-send-event`` batch."""
         if not events:
             return
         message = {
@@ -55,11 +57,91 @@ class QmpTouchClient:
             "arguments": {"events": events},
         }
         if not self._ready:
-            self._pending_touch_messages.append(message)
+            self._pending_input_messages.append(message)
             return
         self._queue(message)
         if self._socket is not None:
             self._flush()
+
+    def send_key(self, qcode: str, down: bool) -> None:
+        """Send one physical keyboard transition through virtio-keyboard."""
+        self.send_events([
+            {
+                "type": "key",
+                "data": {
+                    "down": down,
+                    "key": {"type": "qcode", "data": qcode},
+                },
+            }
+        ])
+
+    def send_touch(self, phase: str, x: int, y: int) -> None:
+        """Send one single-contact phase through virtio-multitouch."""
+        if phase not in {"begin", "update", "end", "cancel"}:
+            raise ValueError(f"Unsupported touch phase: {phase}")
+
+        x = max(0, min(QEMU_ABSOLUTE_MAX, int(x)))
+        y = max(0, min(QEMU_ABSOLUTE_MAX, int(y)))
+        tracking_id = -1 if phase in {"end", "cancel"} else 0
+        events: list[dict[str, Any]] = []
+        if phase == "begin":
+            events.extend([
+                {
+                    "type": "mtt",
+                    "data": {
+                        "type": "begin",
+                        "slot": 0,
+                        "tracking-id": tracking_id,
+                        # QMP requires these fields for every mtt variant.
+                        # QEMU ignores them for begin/end transitions.
+                        "axis": "x",
+                        "value": x,
+                    },
+                },
+                {
+                    "type": "btn",
+                    "data": {"button": "touch", "down": True},
+                },
+            ])
+        elif phase in {"end", "cancel"}:
+            events.append({
+                "type": "mtt",
+                "data": {
+                    "type": phase,
+                    "slot": 0,
+                    "tracking-id": tracking_id,
+                    "axis": "x",
+                    "value": x,
+                },
+            })
+
+        if phase in {"begin", "update"}:
+            # An active contact moves by reporting position data only. Sending
+            # another tracking-id on every move would make LCL's evdev backend
+            # interpret each frame as a fresh touch-down.
+            events.extend([
+                {
+                    "type": "mtt",
+                    "data": {
+                        "type": "data",
+                        "slot": 0,
+                        "tracking-id": tracking_id,
+                        "axis": "x",
+                        "value": x,
+                    },
+                },
+                {
+                    "type": "mtt",
+                    "data": {
+                        "type": "data",
+                        "slot": 0,
+                        "tracking-id": tracking_id,
+                        "axis": "y",
+                        "value": y,
+                    },
+                },
+            ])
+        self.send_events(events)
 
     def _connect(self) -> None:
         if not self._socket_path.exists():
@@ -103,9 +185,9 @@ class QmpTouchClient:
                 continue
             if self._capabilities_requested and "return" in message and not self._ready:
                 self._ready = True
-                print("LCL Device Viewer: QMP touch channel ready", flush=True)
-                while self._pending_touch_messages:
-                    self._queue(self._pending_touch_messages.popleft())
+                print("LCL Device Viewer: QMP input channel ready", flush=True)
+                while self._pending_input_messages:
+                    self._queue(self._pending_input_messages.popleft())
             elif "error" in message and not self._protocol_error_logged:
                 self._protocol_error_logged = True
                 print(f"LCL Device Viewer: QMP command failed: {message['error']}", file=sys.stderr, flush=True)
@@ -130,3 +212,7 @@ class QmpTouchClient:
             self._connect_error_logged = True
             print(f"LCL Device Viewer: QMP connection failed: {detail}", file=sys.stderr, flush=True)
         self.stop()
+
+
+# Kept for compatibility with the first viewer-only QMP client revision.
+QmpTouchClient = QmpInputClient

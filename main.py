@@ -5,6 +5,7 @@ Provides a clean, cross-platform CLI for building, running QEMU, ISO generation,
 
 Usage:
   ./main.py qemu [--native] [--gpu] [--arch aarch64|x86_64]
+  ./main.py qemu --mobile [--skin pixel_8_pro]
   ./main.py avd [--avd-name lcl-phone] [--no-window] [--rebuild]
   ./main.py build [--arch ...]
   ./main.py iso [--arch ...]
@@ -50,6 +51,27 @@ def normalize_arch(arch_str: str | None) -> str:
 
 
 def cmd_qemu(args: argparse.Namespace) -> None:
+    if getattr(args, "mobile", False):
+        if args.utm:
+            err("--mobile uses the LCL Device Viewer and cannot be combined with --utm.")
+            sys.exit(2)
+        if args.iso or args.uefi or args.usb:
+            err("--mobile Device Viewer does not support --iso, --uefi, or --usb.")
+            sys.exit(2)
+        if normalize_arch(args.arch) != "x86_64":
+            err("--mobile Device Viewer currently supports only x86_64.")
+            sys.exit(2)
+
+        viewer_args = [sys.executable, str(ROOT_DIR / "emulator" / "main.py")]
+        if args.skin:
+            viewer_args.extend(["--skin", args.skin])
+        if not args.no_build:
+            viewer_args.append("--build")
+        if args.rebuild:
+            viewer_args.append("--rebuild")
+        subprocess.check_call(viewer_args, cwd=ROOT_DIR)
+        return
+
     if getattr(args, "utm", False) or (platform.system().lower() == "darwin" and (Path("/Applications/UTM.app").is_dir() or (Path.home() / "Applications/UTM.app").is_dir())):
         cmd_utm(args)
         return
@@ -214,6 +236,7 @@ def main() -> None:
     p_qemu.add_argument("--gpu", "-g", action="store_true", help="Enable 3D VirGL GPU acceleration")
     p_qemu.add_argument("--retina", action="store_true", help="13\" MacBook Air Retina (2560x1600 @ 2.0x)")
     p_qemu.add_argument("--mobile", action="store_true", help="Portrait iPhone-like display (1179x2556 @ 3.0x)")
+    p_qemu.add_argument("--skin", metavar="PIXEL_SKIN", help="Pixel skin for --mobile Device Viewer (e.g. pixel_8_pro)")
     p_qemu.add_argument("--scale", type=float, metavar="FACTOR", help="UI scale factor (e.g. 1.5, 2.0)")
     p_qemu.add_argument("--width", type=int, metavar="PX", help="Display width in pixels")
     p_qemu.add_argument("--height", type=int, metavar="PX", help="Display height in pixels")

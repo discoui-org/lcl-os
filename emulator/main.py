@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Standalone PySide6 viewer for the bundled Pixel emulator skins.
 
-This renders an isolated local SPICE GL scanout in a Pixel skin display rect.
-It does not forward input.
+This renders an isolated local SPICE GL scanout in a Pixel skin display rect
+and forwards keyboard plus single-contact touch input to its private QEMU.
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import signal
 import sys
@@ -17,17 +18,37 @@ from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
+from input_bridge import ViewerInputBridge
 from qemu_runner import QemuLaunchError, QemuRunner
-from qmp_client import QmpTouchClient
+from qmp_client import QmpInputClient
 from spice_gl_widget import SpiceGlWidget
 from spice_client import SpiceScanoutProbe
 
 
-DEFAULT_SKIN_DIR = Path(__file__).resolve().parent / "skins" / "pixel_8_pro"
+SKINS_DIR = Path(__file__).resolve().parent / "skins"
+DEFAULT_SKIN_NAME = "pixel_8_pro"
 
 
 class SkinLayoutError(ValueError):
     """The selected skin is not in the supported Pixel layout format."""
+
+
+def pixel_skin_dir(name: str) -> Path:
+    """Resolve one bundled Pixel skin without permitting paths outside skins/."""
+    if Path(name).name != name:
+        raise SkinLayoutError(f"Skin name must be a directory name, got {name!r}")
+    skin_dir = SKINS_DIR / name
+    supported_skins = sorted(
+        path.name
+        for path in SKINS_DIR.glob("pixel_*")
+        if path.is_dir()
+        and (path / "back.webp").is_file()
+        and "layouts {\n  portrait {" in (path / "layout").read_text(encoding="utf-8")
+    )
+    if name not in supported_skins:
+        available = ", ".join(supported_skins)
+        raise SkinLayoutError(f"Unknown Pixel skin {name!r}. Available: {available}")
+    return skin_dir
 
 
 @dataclass(frozen=True)
@@ -168,6 +189,10 @@ class DeviceViewer(QWidget):
     def release_gl_resources(self) -> None:
         self._display_widget.release_resources()
 
+    @property
+    def input_widget(self) -> QWidget:
+        return self._display_widget
+
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._update_display_widget_geometry()
@@ -227,34 +252,56 @@ class DeviceViewer(QWidget):
 
 
 def main() -> int:
-    app = QApplication(sys.argv)
+    parser = argparse.ArgumentParser(description="LCL Device Viewer")
+    parser.add_argument(
+        "--skin",
+        default=DEFAULT_SKIN_NAME,
+        metavar="PIXEL_SKIN",
+        help=f"Bundled Pixel skin directory (default: {DEFAULT_SKIN_NAME})",
+    )
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="Build/package LCL artifacts before starting the viewer QEMU process",
+    )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Force the viewer QEMU process to rebuild its LCL artifacts",
+    )
+    args = parser.parse_args()
+    if args.rebuild and not args.build:
+        parser.error("--rebuild requires --build")
+
+    app = QApplication([sys.argv[0]])
     signal.signal(signal.SIGINT, lambda _signum, _frame: app.quit())
     signal_timer = QTimer()
     signal_timer.timeout.connect(lambda: None)
     signal_timer.start(100)
     try:
-        layout = parse_pixel_skin_layout(DEFAULT_SKIN_DIR)
+        layout = parse_pixel_skin_layout(pixel_skin_dir(args.skin))
         viewer = DeviceViewer(layout)
     except SkinLayoutError as error:
         print(f"LCL Device Viewer: {error}", file=sys.stderr)
         return 1
 
     window = QMainWindow()
-    window.setWindowTitle("LCL Device Viewer — Pixel 8 Pro")
+    window.setWindowTitle(f"LCL Device Viewer — {args.skin.replace('_', ' ').title()}")
     window.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
     window.setAttribute(Qt.WA_TranslucentBackground)
     window.setCentralWidget(viewer)
     window.setFixedSize(460, 940)
     window.show()
 
-    runner = QemuRunner()
-    qmp_touch = QmpTouchClient(runner.qmp_socket_path)
+    runner = QemuRunner(build=args.build, rebuild=args.rebuild)
+    qmp_input = QmpInputClient(runner.qmp_socket_path)
+    input_bridge = ViewerInputBridge(viewer.input_widget, qmp_input)
     spice_probe = SpiceScanoutProbe(runner.spice_socket_path, viewer.submit_spice_draw)
     spice_timer = QTimer()
     spice_timer.timeout.connect(spice_probe.pump)
     spice_timer.setTimerType(Qt.PreciseTimer)
     qmp_timer = QTimer()
-    qmp_timer.timeout.connect(qmp_touch.pump)
+    qmp_timer.timeout.connect(qmp_input.pump)
     qmp_timer.setTimerType(Qt.PreciseTimer)
     try:
         runner.start()
@@ -270,7 +317,8 @@ def main() -> int:
     finally:
         spice_timer.stop()
         qmp_timer.stop()
-        qmp_touch.stop()
+        input_bridge.release_all()
+        qmp_input.stop()
         spice_probe.stop()
         viewer.release_gl_resources()
         signal_timer.stop()

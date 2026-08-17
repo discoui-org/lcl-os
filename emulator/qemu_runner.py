@@ -40,12 +40,14 @@ class QmpEndpoint:
 class QemuRunner:
     """Own a mobile LCL QEMU process and its private viewer sockets."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, build: bool = False, rebuild: bool = False) -> None:
         self._runtime_dir = Path(tempfile.mkdtemp(prefix="lcl-viewer-"))
         self.endpoint = SpiceEndpoint(self._runtime_dir / "spice.sock")
         self.qmp_endpoint = QmpEndpoint(self._runtime_dir / "qmp.sock")
         self._process: subprocess.Popen[bytes] | None = None
         self._stopping = False
+        self._build = build
+        self._rebuild = rebuild
 
     @property
     def spice_socket_path(self) -> Path:
@@ -62,7 +64,7 @@ class QemuRunner:
             raise QemuLaunchError("Viewer QEMU is already running")
 
         missing = [str(path) for path in REQUIRED_ARTIFACTS if not path.is_file()]
-        if missing:
+        if missing and not self._build:
             self.stop()
             raise QemuLaunchError("Missing required LCL artifacts: " + ", ".join(missing))
 
@@ -78,12 +80,16 @@ class QemuRunner:
             "x86_64",
             "--mobile",
             "--gpu",
-            "--no-build",
             "--spice-unix",
             str(self.spice_socket_path),
             "--qmp-unix",
             str(self.qmp_socket_path),
         ]
+        if self._build:
+            if self._rebuild:
+                command.append("--rebuild")
+        else:
+            command.append("--no-build")
         try:
             self._process = subprocess.Popen(
                 command,

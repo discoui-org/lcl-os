@@ -44,7 +44,7 @@ class SpiceScanoutProbe:
         self._socket_path = socket_path
         self._submit_draw = submit_draw
         self._session: Any | None = None
-        self._deadline: float | None = None
+        self._socket_wait_warning_logged = False
         self._pump_diagnostics_until: float | None = None
         self._next_pump_diagnostic: float | None = None
         self._connection_attempted = False
@@ -59,7 +59,6 @@ class SpiceScanoutProbe:
             print(f"LCL Device Viewer: SPICE unavailable: {_DEPENDENCY_ERROR}", file=sys.stderr, flush=True)
             return
         now = time.monotonic()
-        self._deadline = now + 10.0
         self._pump_diagnostics_until = now + 3.0
         self._next_pump_diagnostic = now
         print(f"LCL Device Viewer: SPICE unix-path {self._socket_path}", flush=True)
@@ -70,14 +69,17 @@ class SpiceScanoutProbe:
             return
         if not self._connection_attempted:
             if not self._socket_path.exists():
-                if self._deadline is not None and time.monotonic() >= self._deadline:
+                # `main.py qemu --mobile` may be packaging artifacts in Docker
+                # before it execs QEMU. The viewer process is still healthy;
+                # do not permanently abandon its private endpoint after an
+                # arbitrary short timeout.
+                if not self._socket_wait_warning_logged and self._pump_diagnostics_until is not None and time.monotonic() >= self._pump_diagnostics_until:
                     print(
-                        "LCL Device Viewer: SPICE connection failed: "
-                        f"socket did not appear: {self._socket_path}",
-                        file=sys.stderr,
+                        "LCL Device Viewer: waiting for QEMU SPICE socket: "
+                        f"{self._socket_path}",
                         flush=True,
                     )
-                    self._connection_attempted = True
+                    self._socket_wait_warning_logged = True
                 self._log_pump_diagnostic()
                 return
             self._connect()
