@@ -54,9 +54,17 @@ struct PointerEvent {
     /** Request general widget focus from the active pointer dispatch. */
     bool requestFocus(Widget& owner) const;
 
+    /**
+     * True only for a validated touch PointerUp: the same live pointer's tap
+     * candidate survived cancellation, capture transfer, and touch slop, and
+     * finishes on the same logical focus target.
+     */
+    bool isTouchTapCompletion() const noexcept { return m_touchTapCompletion; }
+
 private:
     friend class EventDispatcher;
     EventDispatcher* m_dispatcher{nullptr};
+    bool m_touchTapCompletion{false};
 };
 
 enum class KeyEventType {

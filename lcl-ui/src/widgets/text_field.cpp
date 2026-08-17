@@ -149,12 +149,9 @@ void TextField::draw(Canvas& canvas, const Rect& damageRect) {
 
 bool TextField::onPointerDown(const PointerEvent& event) {
     if (event.source == PointerSource::Touch) {
-        m_touchTapPending = true;
-        m_touchTapPointerId = event.pointerId;
         return true;
     }
     if (event.button != 0) return false;
-    m_touchTapPending = false;
     const float contentX = event.x - (m_absoluteBounds.x + kHorizontalPadding) +
         m_horizontalScroll;
     m_caretIndex = characterIndexForX(std::max(0.0f, contentX));
@@ -164,23 +161,20 @@ bool TextField::onPointerDown(const PointerEvent& event) {
 }
 
 bool TextField::onPointerUp(const PointerEvent& event) {
-    if (event.source != PointerSource::Touch || !m_touchTapPending ||
-        event.pointerId != m_touchTapPointerId) return false;
-
-    m_touchTapPending = false;
+    if (event.source != PointerSource::Touch || !event.isTouchTapCompletion()) return false;
     const float contentX = event.x - (m_absoluteBounds.x + kHorizontalPadding) +
         m_horizontalScroll;
     m_caretIndex = characterIndexForX(std::max(0.0f, contentX));
     ensureCaretVisible();
     markDirty();
-    return event.requestFocus(*this);
+    return true;
 }
 
 bool TextField::onPointerCancel(const PointerEvent& event) {
-    if (event.source != PointerSource::Touch || !m_touchTapPending ||
-        event.pointerId != m_touchTapPointerId) return false;
-    m_touchTapPending = false;
-    return true;
+    // Tap ownership belongs to EventDispatcher. Cancellation therefore has no
+    // TextField-local focus state to clear; retaining this handler keeps the
+    // control's pointer contract explicit.
+    return event.source == PointerSource::Touch;
 }
 
 bool TextField::shouldFocusOnPointerDown(const PointerEvent& event) const {

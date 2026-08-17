@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lcl-ui/core/touch_interaction.hpp"
 #include "lcl-ui/widgets/widget.hpp"
 #include <algorithm>
 #include <memory>
@@ -14,7 +15,9 @@ class ScrollView : public Widget {
     };
 
 public:
-    static constexpr float kTouchDragThreshold = 8.0f;
+    // Compatibility alias; the interaction policy is shared with dispatcher
+    // tap validation.
+    static constexpr float kTouchDragThreshold = touch_interaction::kTouchSlop;
 
     ScrollView();
     ~ScrollView() override = default;

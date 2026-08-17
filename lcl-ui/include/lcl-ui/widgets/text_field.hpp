@@ -57,8 +57,6 @@ private:
     size_t m_caretIndex{0};
     float m_horizontalScroll{0.0f};
     bool m_focused{false};
-    bool m_touchTapPending{false};
-    uint32_t m_touchTapPointerId{0};
     std::vector<float> m_caretAdvances;
     bool m_caretAdvancesValid{false};
 

@@ -43,6 +43,9 @@ private:
         Widget* target{nullptr};
         std::weak_ptr<uint8_t> lifetime;
         PointerSource source{PointerSource::Mouse};
+        float downX{0.0f};
+        float downY{0.0f};
+        bool tapEligible{true};
     };
 
     static bool isEventCapableInTree(Widget* root, const Widget* target,
@@ -51,7 +54,14 @@ private:
     static void dispatchPreviewToTarget(Widget* target, const PointerEvent& event);
     static bool dispatchCancelUntil(Widget* target, Widget* stopBefore,
                                     const PointerEvent& event);
+    static Widget* findFocusableTarget(Widget* target);
     Widget* getPointerDownTarget(uint32_t pointerId, Widget* root);
+    void updateTouchTapEligibility(uint32_t pointerId, const PointerEvent& event);
+    void invalidateTouchTapForCapture(uint32_t pointerId);
+    bool isTouchTapEligible(uint32_t pointerId) const;
+    void applyPointerDownFocus(Widget* target, const PointerEvent& event);
+    void applyTouchTapFocus(Widget* downTarget, Widget* upTarget,
+                            const PointerEvent& event);
     Widget* validatePointerCapture(Widget* root, const PointerEvent& event);
     void clearPointerCapture(uint32_t pointerId);
 

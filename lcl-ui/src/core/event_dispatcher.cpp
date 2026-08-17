@@ -1,4 +1,5 @@
 #include "lcl-ui/core/event_dispatcher.hpp"
+#include "lcl-ui/core/touch_interaction.hpp"
 #include <utility>
 #include <vector>
 
@@ -68,13 +69,20 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& eve
         (dispatchEvent.type == PointerEventType::Move ||
          dispatchEvent.type == PointerEventType::Up ||
          dispatchEvent.type == PointerEventType::Cancel);
+    Widget* hitTarget = hitTest(root, dispatchEvent.x, dispatchEvent.y);
     Widget* target = routeToCapture
         ? captured
-        : hitTest(root, dispatchEvent.x, dispatchEvent.y);
+        : hitTarget;
 
     if (dispatchEvent.type == PointerEventType::Down && target) {
         m_pointerDownTargets[dispatchEvent.pointerId] =
-            PointerDownTarget{target, target->getLifetimeToken(), dispatchEvent.source};
+            PointerDownTarget{target, target->getLifetimeToken(), dispatchEvent.source,
+                              dispatchEvent.x, dispatchEvent.y};
+    }
+
+    if (dispatchEvent.type == PointerEventType::Move &&
+        dispatchEvent.source == PointerSource::Touch) {
+        updateTouchTapEligibility(dispatchEvent.pointerId, dispatchEvent);
     }
 
     Widget* previewTarget = target;
@@ -122,10 +130,19 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& eve
         }
     }
 
-    // Focus Management
-    if (dispatchEvent.type == PointerEventType::Down && target && target->isFocusable() &&
-        target->shouldFocusOnPointerDown(dispatchEvent)) {
-        setFocus(target);
+    // Mouse focus changes on down. Touch focus is deferred until its matching
+    // PointerUp, so a later gesture owner can cancel the shared down record.
+    if (dispatchEvent.type == PointerEventType::Down) {
+        applyPointerDownFocus(target, dispatchEvent);
+    } else if (dispatchEvent.type == PointerEventType::Up &&
+               dispatchEvent.source == PointerSource::Touch) {
+        if (isTouchTapEligible(dispatchEvent.pointerId)) {
+            if (Widget* downTarget = getPointerDownTarget(dispatchEvent.pointerId, root)) {
+                const Widget* downFocusTarget = findFocusableTarget(downTarget);
+                const Widget* upFocusTarget = findFocusableTarget(hitTarget);
+                dispatchEvent.m_touchTapCompletion = downFocusTarget == upFocusTarget;
+            }
+        }
     }
 
     // Dispatch & Event Bubbling to target
@@ -162,6 +179,14 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& eve
         }
     }
 
+    if (dispatchEvent.type == PointerEventType::Up &&
+        dispatchEvent.source == PointerSource::Touch &&
+        dispatchEvent.m_touchTapCompletion &&
+        isTouchTapEligible(dispatchEvent.pointerId)) {
+        applyTouchTapFocus(getPointerDownTarget(dispatchEvent.pointerId, root),
+                           hitTarget, dispatchEvent);
+    }
+
     // Touch input lift (PointerUp) terminates any active hover state
     if ((dispatchEvent.type == PointerEventType::Up ||
          dispatchEvent.type == PointerEventType::Cancel) &&
@@ -184,9 +209,74 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& eve
     return handled;
 }
 
+Widget* EventDispatcher::findFocusableTarget(Widget* target) {
+    for (Widget* current = target; current; current = current->getParent()) {
+        if (current->isFocusable() && current->isVisible() &&
+            current->isInteractionEnabled()) {
+            return current;
+        }
+    }
+    return nullptr;
+}
+
+void EventDispatcher::updateTouchTapEligibility(uint32_t pointerId,
+                                                const PointerEvent& event) {
+    const auto it = m_pointerDownTargets.find(pointerId);
+    if (it == m_pointerDownTargets.end() ||
+        it->second.source != PointerSource::Touch || !it->second.tapEligible) {
+        return;
+    }
+
+    it->second.tapEligible = !touch_interaction::exceedsSlop(
+        event.x - it->second.downX, event.y - it->second.downY);
+}
+
+void EventDispatcher::invalidateTouchTapForCapture(uint32_t pointerId) {
+    const auto it = m_pointerDownTargets.find(pointerId);
+    if (it == m_pointerDownTargets.end() ||
+        it->second.source != PointerSource::Touch) {
+        return;
+    }
+
+    // Capture changes routing/ownership for this interaction. A focus-changing
+    // tap remains valid only for an uncaptured down-target sequence.
+    it->second.tapEligible = false;
+}
+
+bool EventDispatcher::isTouchTapEligible(uint32_t pointerId) const {
+    const auto it = m_pointerDownTargets.find(pointerId);
+    return it != m_pointerDownTargets.end() &&
+        it->second.source == PointerSource::Touch &&
+        it->second.tapEligible && !it->second.lifetime.expired();
+}
+
+void EventDispatcher::applyPointerDownFocus(Widget* target, const PointerEvent& event) {
+    if (event.source != PointerSource::Mouse || event.button != 0) return;
+
+    Widget* focusTarget = findFocusableTarget(target);
+    if (!focusTarget) {
+        setFocus(nullptr);
+    } else if (focusTarget->shouldFocusOnPointerDown(event)) {
+        setFocus(focusTarget);
+    }
+}
+
+void EventDispatcher::applyTouchTapFocus(Widget* downTarget, Widget* upTarget,
+                                         const PointerEvent& event) {
+    if (!downTarget || findFocusableTarget(downTarget) != findFocusableTarget(upTarget)) {
+        return;
+    }
+
+    Widget* focusTarget = findFocusableTarget(downTarget);
+    if (!focusTarget || focusTarget->shouldFocusOnTouchTap(event)) {
+        setFocus(focusTarget);
+    }
+}
+
 bool EventDispatcher::capturePointer(uint32_t pointerId, Widget* owner,
                                      PointerSource source) {
     if (!owner || !owner->isVisible() || !owner->isInteractionEnabled()) return false;
+    invalidateTouchTapForCapture(pointerId);
     m_pointerCaptures[pointerId] =
         PointerCapture{owner, owner->getLifetimeToken(), source};
     return true;

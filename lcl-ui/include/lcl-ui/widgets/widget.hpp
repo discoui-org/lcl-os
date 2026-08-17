@@ -125,6 +125,12 @@ public:
         (void)event;
         return true;
     }
+    // Touch focus is committed by EventDispatcher only after a matching tap
+    // completes. Widgets may opt out without implementing pointer tracking.
+    virtual bool shouldFocusOnTouchTap(const PointerEvent& event) const {
+        (void)event;
+        return true;
+    }
     virtual bool onKeyDown(const KeyEvent& event) { (void)event; return false; }
     virtual bool onKeyUp(const KeyEvent& event) { (void)event; return false; }
     virtual bool onTextInput(const TextInputEvent& event) { (void)event; return false; }

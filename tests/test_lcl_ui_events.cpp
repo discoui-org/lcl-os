@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "lcl-ui/core/events.hpp"
 #include "lcl-ui/core/event_dispatcher.hpp"
+#include "lcl-ui/core/touch_interaction.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
@@ -74,6 +75,59 @@ public:
     EventDispatcher dispatcher;
     std::unique_ptr<Container> root;
     TextField* field{nullptr};
+};
+
+class FocusTransferTree {
+public:
+    FocusTransferTree() {
+        root = std::make_unique<Container>();
+        root->getYogaNode().setDirection(YGFlexDirectionColumn);
+        root->getYogaNode().setWidth(240.0f);
+        root->getYogaNode().setHeight(180.0f);
+
+        auto firstField = std::make_unique<TextField>("A");
+        first = firstField.get();
+        firstField->getYogaNode().setWidth(200.0f);
+        firstField->getYogaNode().setHeight(36.0f);
+
+        auto secondField = std::make_unique<TextField>("B");
+        second = secondField.get();
+        secondField->getYogaNode().setWidth(200.0f);
+        secondField->getYogaNode().setHeight(36.0f);
+
+        auto nonFocusableChild = std::make_unique<Container>();
+        nonFocusableChild->getYogaNode().setWidth(200.0f);
+        nonFocusableChild->getYogaNode().setHeight(36.0f);
+
+        root->addChild(std::move(firstField));
+        root->addChild(std::move(secondField));
+        root->addChild(std::move(nonFocusableChild));
+        root->getYogaNode().calculateLayout(240.0f, 180.0f);
+        root->syncLayout();
+    }
+
+    bool pointer(PointerEventType type, PointerSource source, uint32_t pointerId,
+                 float x, float y) {
+        return dispatcher.dispatchPointerEvent(root.get(),
+            PointerEvent{x, y, 0, 0.0f, 0.0f, type, source, pointerId});
+    }
+
+    EventDispatcher dispatcher;
+    std::unique_ptr<Container> root;
+    TextField* first{nullptr};
+    TextField* second{nullptr};
+};
+
+class TapCompletionTextField : public TextField {
+public:
+    using TextField::TextField;
+
+    bool onPointerUp(const PointerEvent& event) override {
+        sawTouchTapCompletion = event.isTouchTapCompletion();
+        return TextField::onPointerUp(event);
+    }
+
+    bool sawTouchTapCompletion{false};
 };
 
 class PointerCaptureWidget : public Widget {
@@ -310,6 +364,7 @@ TEST(LclUiEventsTest, ScrollViewSmallTouchMovePreservesChildClick) {
 
     EXPECT_EQ(tree.clickCount, 1);
     EXPECT_EQ(tree.button->cancelCount, 0);
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.button);
     EXPECT_FALSE(tree.scrollView->isTouchPanActive());
 }
 
@@ -579,6 +634,144 @@ TEST(LclUiEventsTest, TextFieldTouchUpFromDifferentPointerDoesNotTakeFocus) {
     EXPECT_EQ(tree.dispatcher.getFocusedWidget(), nullptr);
 }
 
+TEST(LclUiEventsTest, MouseFocusTransfersAndDismissesAtDispatcherLevel) {
+    FocusTransferTree tree;
+
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 10.0f));
+    ASSERT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+
+    EXPECT_FALSE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 140.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), nullptr);
+
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 10.0f));
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 46.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.second);
+
+    EXPECT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 46.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.second);
+}
+
+TEST(LclUiEventsTest, TouchFocusWaitsForCompletedTapAndDismissesBackground) {
+    FocusTransferTree tree;
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 10.0f));
+    ASSERT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+
+    EXPECT_FALSE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 41, 10.0f, 140.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+    EXPECT_FALSE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 41, 10.0f, 140.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), nullptr);
+}
+
+TEST(LclUiEventsTest, TouchTapTransfersFocusAndIgnoresPointerIdMismatch) {
+    FocusTransferTree tree;
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 10.0f));
+    ASSERT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 42, 10.0f, 46.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+    EXPECT_FALSE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 43, 10.0f, 46.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+
+    ASSERT_TRUE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 42, 10.0f, 46.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.second);
+}
+
+TEST(LclUiEventsTest, TouchTapSlopUsesAnInclusiveSharedThreshold) {
+    using touch_interaction::exceedsSlop;
+    constexpr float slop = touch_interaction::kTouchSlop;
+    EXPECT_FALSE(exceedsSlop(slop - 0.01f, 0.0f));
+    EXPECT_TRUE(exceedsSlop(slop, 0.0f));
+    EXPECT_TRUE(exceedsSlop(slop + 0.01f, 0.0f));
+    EXPECT_FLOAT_EQ(ScrollView::kTouchDragThreshold, slop);
+
+    FocusTransferTree tree;
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 10.0f));
+    ASSERT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 48, 10.0f, 46.0f));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Move, PointerSource::Touch, 48,
+                              10.0f + slop - 0.01f, 46.0f));
+    ASSERT_TRUE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 48,
+                             10.0f + slop - 0.01f, 46.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.second);
+
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 10.0f));
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 49, 10.0f, 46.0f));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Move, PointerSource::Touch, 49,
+                              10.0f + slop, 46.0f));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 49,
+                              10.0f + slop, 46.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 50, 10.0f, 46.0f));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Move, PointerSource::Touch, 50,
+                              10.0f + slop + 0.01f, 46.0f));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 50,
+                              10.0f + slop + 0.01f, 46.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+}
+
+TEST(LclUiEventsTest, TouchDragWithoutScrollDoesNotDismissOrCompleteTextFieldTap) {
+    constexpr float beyondSlop = touch_interaction::kTouchSlop + 1.0f;
+    FocusTransferTree tree;
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 10.0f));
+    ASSERT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+
+    EXPECT_FALSE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 51, 10.0f, 140.0f));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Move, PointerSource::Touch, 51,
+                              10.0f + beyondSlop, 140.0f));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 51,
+                              10.0f + beyondSlop, 140.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+
+    EventDispatcher dispatcher;
+    auto root = std::make_unique<Container>();
+    root->getYogaNode().setWidth(200.0f);
+    root->getYogaNode().setHeight(80.0f);
+    auto field = std::make_unique<TapCompletionTextField>();
+    TapCompletionTextField* fieldPtr = field.get();
+    field->getYogaNode().setWidth(200.0f);
+    root->addChild(std::move(field));
+    root->getYogaNode().calculateLayout(200.0f, 80.0f);
+    root->syncLayout();
+    dispatcher.setFocus(fieldPtr);
+
+    ASSERT_TRUE(dispatcher.dispatchPointerEvent(root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Touch, 52}));
+    ASSERT_TRUE(dispatcher.dispatchPointerEvent(root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Up,
+                     PointerSource::Touch, 52}));
+    EXPECT_TRUE(fieldPtr->sawTouchTapCompletion);
+
+    fieldPtr->sawTouchTapCompletion = false;
+    ASSERT_TRUE(dispatcher.dispatchPointerEvent(root.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Touch, 53}));
+    EXPECT_FALSE(dispatcher.dispatchPointerEvent(root.get(),
+        PointerEvent{10.0f + beyondSlop, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Move,
+                     PointerSource::Touch, 53}));
+    EXPECT_FALSE(dispatcher.dispatchPointerEvent(root.get(),
+        PointerEvent{10.0f + beyondSlop, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Up,
+                     PointerSource::Touch, 53}));
+    EXPECT_FALSE(fieldPtr->sawTouchTapCompletion);
+    EXPECT_EQ(dispatcher.getFocusedWidget(), fieldPtr);
+}
+
+TEST(LclUiEventsTest, TouchCancelAndNonFocusableTapUseGenericFocusSemantics) {
+    FocusTransferTree tree;
+    ASSERT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Mouse, 0, 10.0f, 10.0f));
+    ASSERT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+
+    EXPECT_TRUE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 44, 10.0f, 46.0f));
+    EXPECT_TRUE(tree.pointer(PointerEventType::Cancel, PointerSource::Touch, 44, 10.0f, 46.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), tree.first);
+
+    EXPECT_FALSE(tree.pointer(PointerEventType::Down, PointerSource::Touch, 45, 10.0f, 82.0f));
+    EXPECT_FALSE(tree.pointer(PointerEventType::Up, PointerSource::Touch, 45, 10.0f, 82.0f));
+    EXPECT_EQ(tree.dispatcher.getFocusedWidget(), nullptr);
+}
+
 TEST(LclUiEventsTest, ScrollViewDragCancelsPendingTextFieldTouchFocus) {
     EventDispatcher dispatcher;
     auto scrollView = std::make_unique<ScrollView>();
@@ -614,6 +807,48 @@ TEST(LclUiEventsTest, ScrollViewDragCancelsPendingTextFieldTouchFocus) {
         PointerEvent{10.0f, 30.0f, 0, 0.0f, 0.0f, PointerEventType::Up,
                      PointerSource::Touch, pointerId}));
     EXPECT_EQ(dispatcher.getFocusedWidget(), nullptr);
+}
+
+TEST(LclUiEventsTest, ScrollViewTouchDragPreservesExistingFocus) {
+    EventDispatcher dispatcher;
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->getYogaNode().setWidth(200.0f);
+    scrollView->getYogaNode().setHeight(100.0f);
+
+    auto content = std::make_unique<Container>();
+    content->getYogaNode().setDirection(YGFlexDirectionColumn);
+    auto field = std::make_unique<TextField>();
+    TextField* fieldPtr = field.get();
+    field->getYogaNode().setWidth(200.0f);
+    auto filler = std::make_unique<Container>();
+    filler->getYogaNode().setWidth(200.0f);
+    filler->getYogaNode().setHeight(300.0f);
+    content->addChild(std::move(field));
+    content->addChild(std::move(filler));
+    scrollView->setContent(std::move(content));
+    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->syncLayout();
+
+    ASSERT_TRUE(dispatcher.dispatchPointerEvent(scrollView.get(),
+        PointerEvent{10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+                     PointerSource::Mouse, 0}));
+    ASSERT_EQ(dispatcher.getFocusedWidget(), fieldPtr);
+
+    const auto drag = [&](uint32_t pointerId, float startY) {
+        ASSERT_TRUE(dispatcher.dispatchPointerEvent(scrollView.get(),
+            PointerEvent{10.0f, startY, 0, 0.0f, 0.0f, PointerEventType::Down,
+                         PointerSource::Touch, pointerId}));
+        ASSERT_TRUE(dispatcher.dispatchPointerEvent(scrollView.get(),
+            PointerEvent{10.0f, startY + 20.0f, 0, 0.0f, 0.0f, PointerEventType::Move,
+                         PointerSource::Touch, pointerId}));
+        ASSERT_TRUE(dispatcher.dispatchPointerEvent(scrollView.get(),
+            PointerEvent{10.0f, startY + 20.0f, 0, 0.0f, 0.0f, PointerEventType::Up,
+                         PointerSource::Touch, pointerId}));
+        EXPECT_EQ(dispatcher.getFocusedWidget(), fieldPtr);
+    };
+
+    drag(46, 10.0f);  // Starts on the focused TextField.
+    drag(47, 60.0f);  // Starts on a non-focusable content child.
 }
 
 TEST(LclUiEventsTest, TextFieldSupportsSingleLineNavigationAndEditingKeys) {

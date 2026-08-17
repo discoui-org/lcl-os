@@ -1,5 +1,4 @@
 #include "lcl-ui/widgets/scroll_view.hpp"
-#include <cmath>
 
 namespace lcl::ui {
 
@@ -141,7 +140,7 @@ void ScrollView::onPointerEventPreview(const PointerEvent& event) {
     if (event.type == PointerEventType::Move) {
         const float dragDistance = event.y - m_touchStartY;
         if (m_touchPanState == TouchPanState::Pending &&
-            std::abs(dragDistance) >= kTouchDragThreshold) {
+            touch_interaction::exceedsSlop(0.0f, dragDistance)) {
             if (!event.capturePointer(*this)) {
                 resetTouchPan();
                 return;
