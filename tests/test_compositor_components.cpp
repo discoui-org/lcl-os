@@ -67,6 +67,26 @@ TEST(SurfaceRegistryTest, PopupChildrenKeepStableParentLocalStackOrder) {
     ASSERT_EQ(registry.popupChildren(parentKey).size(), 1u);
 }
 
+TEST(SurfaceRegistryTest, KeyboardSurfaceFocusReturnsToParentAndNeverStaysStale) {
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(7, 42, 1);
+    const auto popupKey = SurfaceRegistry::makeKey(8, 42, 2);
+    registry[parentKey].windowId = 11;
+    registry[popupKey].parentSurfaceKey = parentKey;
+
+    ASSERT_TRUE(registry.focusKeyboardSurface(popupKey));
+    EXPECT_EQ(registry.keyboardFocusSurface(), popupKey);
+    registry.releaseKeyboardFocus(popupKey);
+    EXPECT_EQ(registry.keyboardFocusSurface(), parentKey);
+
+    ASSERT_TRUE(registry.focusKeyboardSurface(popupKey));
+    registry.erase(popupKey);
+    EXPECT_EQ(registry.keyboardFocusSurface(), parentKey);
+    registry.erase(parentKey);
+    EXPECT_EQ(registry.keyboardFocusSurface(), 0u);
+    EXPECT_FALSE(registry.focusKeyboardSurface(popupKey));
+}
+
 TEST(PopupSurfaceTest, GeometryFollowsParentAndCanExtendPastWindowBounds) {
     render::Window parentWindow{};
     parentWindow.x = 100;
@@ -303,6 +323,61 @@ TEST(InputRouterTest, PopupOutsideParentBoundsReceivesParentLocalInput) {
     EXPECT_EQ(input->type, 1u);
 
     popup.pixels = nullptr;
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(InputRouterTest, KeyboardUsesSelectedPopupSurfaceThenItsParentOnRelease) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t windowId = manager.createWindow("Parent", 100, 80, 200, 140);
+    manager.setDecorationMode(windowId, render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(sockets[0], 504, 1);
+    const auto popupKey = SurfaceRegistry::makeKey(sockets[0], 504, 2);
+    auto& parent = registry[parentKey];
+    parent.windowId = windowId;
+    parent.clientFd = sockets[0];
+    parent.hasCommittedBuffer = true;
+    auto& popup = registry[popupKey];
+    popup.parentSurfaceKey = parentKey;
+    popup.clientFd = sockets[0];
+    popup.hasCommittedBuffer = true;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    ASSERT_TRUE(registry.focusKeyboardSurface(popupKey));
+
+    InputEvent key{};
+    key.type = InputEventType::KeyboardKey;
+    key.key = lcl::platform::PhysicalKey::Tab;
+    key.pressed = true;
+    EXPECT_FALSE(router.route(key));
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    EXPECT_EQ(reinterpret_cast<const protocol::LCLMsgInputEvent*>(
+                  payload.data())->surfaceId,
+              2u);
+
+    registry.releaseKeyboardFocus(popupKey);
+    EXPECT_FALSE(router.route(key));
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    EXPECT_EQ(reinterpret_cast<const protocol::LCLMsgInputEvent*>(
+                  payload.data())->surfaceId,
+              1u);
+
     close(sockets[0]);
     close(sockets[1]);
 }

@@ -70,7 +70,11 @@ rectangle also fits inside the parent window. `TransientController` owns its
 stable handle, owner teardown, outside mouse dismissal, and validated touch-tap
 dismissal. `Popover::close(handle)` closes it programmatically. The constructor
 accepts a backend-neutral popup `Canvas` factory, preserving the same explicit
-Canvas injection contract as every other `WindowApp`.
+Canvas injection contract as every other `WindowApp`. The hosted content root
+is a `FocusScope`: opening clears the parent dispatcher focus and selects the
+first eligible popup descendant, while close restores the weakly tracked anchor
+when it is still interaction-eligible. Compositor keyboard routing tracks only
+the active surface; it has no Popover or widget-focus policy.
 
 ### `FocusScope` v1
 
@@ -81,7 +85,9 @@ The nearest ancestor `FocusScope` of the focused widget is the active context;
 forward and backward traversal wrap inside it. Without an explicit scope, the
 window root is the implicit scope. Hidden, non-focusable, or
 interaction-disabled widgets are skipped. Each hosted PopupSurface has its own
-`WindowApp` and therefore its own independent traversal context.
+`WindowApp` and therefore its own independent traversal context. Popover uses
+this boundary for its transient Tab trap; ordinary form groups should remain
+plain `Container` trees so window traversal can continue past them.
 
 ---
 

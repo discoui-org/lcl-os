@@ -68,10 +68,12 @@ private:
     struct ActiveState;
 
     PopoverOpenResult showImpl(const Rect& anchorRect,
+                               Widget* restoreTarget,
                                std::weak_ptr<uint8_t> ownerLifetime,
                                bool trackOwnerLifetime,
                                std::unique_ptr<Widget> content,
                                PopoverOptions options);
+    static void restoreFocus(const std::shared_ptr<ActiveState>& state);
     void closeActive();
 
     WindowApp& m_window;

@@ -38,6 +38,8 @@ public:
     void cancelWidgetSubtree(Widget* subtree);
 
     void setFocus(Widget* widget);
+    /** Move focus in tree order, respecting the nearest active FocusScope. */
+    bool moveFocus(Widget* root, bool backwards = false);
     Widget* getFocusedWidget() const noexcept {
         return m_focusedWidget && !m_focusedLifetime.expired()
             ? m_focusedWidget

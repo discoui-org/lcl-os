@@ -96,9 +96,9 @@ bool InputRouter::route(const InputEvent& event) {
             result.stateChanged = true;
         }
         m_activePopupSurface = popupTarget;
-        m_focusedPopupSurface = popupTarget;
+        m_surfaces.focusKeyboardSurface(popupTarget);
     } else if (event.type == InputEventType::PointerButton && event.pressed) {
-        m_focusedPopupSurface = 0;
+        m_surfaces.focusKeyboardSurface(0);
     }
     if (result.interaction) {
         for (auto& [_, entry] : m_surfaces) {
@@ -125,11 +125,12 @@ bool InputRouter::route(const InputEvent& event) {
         processCloseRequests();
     }
 
-    const auto focusedPopup = m_surfaces.find(m_focusedPopupSurface);
+    const auto keyboardSurfaceKey = m_surfaces.keyboardFocusSurface();
+    const auto keyboardSurface = m_surfaces.find(keyboardSurfaceKey);
     if (event.type == InputEventType::KeyboardKey &&
-        m_focusedPopupSurface != 0 && focusedPopup != m_surfaces.end() &&
-        !focusedPopup->second.pendingDestroy) {
-        forwardToSurface(event, m_focusedPopupSurface);
+        keyboardSurfaceKey != 0 && keyboardSurface != m_surfaces.end() &&
+        !keyboardSurface->second.pendingDestroy) {
+        forwardToSurface(event, keyboardSurfaceKey);
     } else if (popupTarget != 0) {
         forwardToSurface(event, popupTarget);
     } else {
@@ -254,6 +255,7 @@ void InputRouter::processCloseRequests() {
 
         const auto surfaceId = static_cast<uint32_t>(surfaceIt->first & 0xFFFFFFFFu);
         destroyPopupChildren(surfaceIt->first);
+        m_surfaces.releaseKeyboardFocus(surfaceIt->first);
         auto& entry = surfaceIt->second;
         if (entry.clientFd >= 0) {
             protocol::LCLHeader header{};
@@ -452,7 +454,7 @@ void InputRouter::destroyPopupChildren(SurfaceRegistry::Key parentSurfaceKey) {
         child->second.ignoreBufferCommits = true;
         child->second.pendingDestroy = true;
         if (m_activePopupSurface == childKey) m_activePopupSurface = 0;
-        if (m_focusedPopupSurface == childKey) m_focusedPopupSurface = 0;
+        m_surfaces.releaseKeyboardFocus(childKey);
     }
 }
 

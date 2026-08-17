@@ -195,6 +195,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
             child->second.ignoreBufferCommits = true;
             child->second.pendingDestroy = true;
+            m_surfaces.releaseKeyboardFocus(childKey);
             changed = true;
         }
     };
@@ -216,6 +217,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             lcl::protocol::sendMsgWithFd(it->second.clientFd, destroyHeader, &destroyMsg);
         }
 
+        m_surfaces.releaseKeyboardFocus(surfaceKey);
         if (it->second.isPopup()) {
             it->second.ignoreBufferCommits = true;
             it->second.pendingDestroy = true;
@@ -253,6 +255,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 // surface sharing that PID; process exit closes each socket
                 // and therefore still cleans all of them deterministically.
                 if (SurfaceRegistry::isOwnedByClientConnection(entry, msg.clientFd)) {
+                    m_surfaces.releaseKeyboardFocus(surfKey);
                     entry.clientFd = -1;
                     if (entry.isPopup()) {
                         entry.ignoreBufferCommits = true;
@@ -326,6 +329,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 requestAck.error(7, "popup parent surface is unavailable");
                 continue;
             }
+            const uint32_t parentWindowId = parent->second.windowId;
             if (m_surfaces.contains(surfaceKey)) {
                 requestAck.error(8, "popup surface ID is already registered");
                 continue;
@@ -347,6 +351,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             entry.insetBorderEnabled = true;
             entry.suppressInitialTransition = true;
             m_surfaces[surfaceKey] = std::move(entry);
+            if (parentWindowId != 0) {
+                m_windowManager.focusWindow(parentWindowId);
+            }
+            m_surfaces.focusKeyboardSurface(surfaceKey);
 
             protocol::LCLHeader header{};
             header.opcode = protocol::LCLOpcode::ConfigureBounds;

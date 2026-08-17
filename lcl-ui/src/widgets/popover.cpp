@@ -2,7 +2,7 @@
 
 #include "lcl-ui/core/canvas.hpp"
 #include "lcl-ui/core/window_app.hpp"
-#include "lcl-ui/widgets/container.hpp"
+#include "lcl-ui/widgets/focus_scope.hpp"
 #include "lcl-ui/widgets/widget.hpp"
 
 #include <atomic>
@@ -22,9 +22,9 @@ uint32_t allocatePopupSurfaceId(uint32_t parentSurfaceId) noexcept {
     return candidate == 0 ? 1 : candidate;
 }
 
-std::unique_ptr<Container> makePanel(std::unique_ptr<Widget> content,
-                                     const Rect& geometry) {
-    auto panel = std::make_unique<Container>();
+std::unique_ptr<FocusScope> makePanel(std::unique_ptr<Widget> content,
+                                      const Rect& geometry) {
+    auto panel = std::make_unique<FocusScope>();
     panel->setWidth(geometry.width);
     panel->setHeight(geometry.height);
     panel->getYogaNode().setDirection(YGFlexDirectionColumn);
@@ -45,6 +45,12 @@ struct Popover::ActiveState {
     TransientHandle transientHandle{0};
     HostedSurfaceHandle hostedSurfaceHandle{0};
     PopoverPresentation presentation{PopoverPresentation::PopupSurface};
+    Widget* restoreTarget{nullptr};
+    std::weak_ptr<uint8_t> restoreTargetLifetime;
+    WindowApp* popupWindow{nullptr};
+    std::weak_ptr<uint8_t> popupWindowLifetime;
+    bool focusHandedOff{false};
+    bool focusRestored{false};
 };
 
 Popover::Popover(WindowApp& window, PopupCanvasFactory popupCanvasFactory,
@@ -65,20 +71,22 @@ Rect Popover::placeBelowLeft(const Rect& anchorRect,
 PopoverOpenResult Popover::show(Widget& anchor,
                                 std::unique_ptr<Widget> content,
                                 PopoverOptions options) {
-    return showImpl(anchor.getAbsoluteBounds(), anchor.getLifetimeToken(), true,
-                    std::move(content), std::move(options));
+    return showImpl(anchor.getAbsoluteBounds(), &anchor,
+                    anchor.getLifetimeToken(), true, std::move(content),
+                    std::move(options));
 }
 
 PopoverOpenResult Popover::show(const Rect& anchorRect,
                                 std::unique_ptr<Widget> content,
                                 PopoverOptions options) {
-    return showImpl(anchorRect, {}, false, std::move(content), std::move(options));
+    return showImpl(anchorRect, nullptr, {}, false, std::move(content),
+                    std::move(options));
 }
 
 PopoverOpenResult Popover::showImpl(
-        const Rect& anchorRect, std::weak_ptr<uint8_t> ownerLifetime,
-        bool trackOwnerLifetime, std::unique_ptr<Widget> content,
-        PopoverOptions options) {
+        const Rect& anchorRect, Widget* restoreTarget,
+        std::weak_ptr<uint8_t> ownerLifetime, bool trackOwnerLifetime,
+        std::unique_ptr<Widget> content, PopoverOptions options) {
     closeActive();
     if (m_windowLifetime.expired() || !content ||
         !std::isfinite(options.width) || !std::isfinite(options.height) ||
@@ -95,11 +103,13 @@ PopoverOpenResult Popover::showImpl(
     state->window = &m_window;
     state->windowLifetime = m_windowLifetime;
     state->presentation = PopoverPresentation::PopupSurface;
+    state->restoreTarget = restoreTarget;
+    state->restoreTargetLifetime = ownerLifetime;
 
     TransientOptions transientOptions{};
     transientOptions.dismissOnOutsidePointer = options.dismissOnOutsidePointer;
     transientOptions.trackOwnerLifetime = trackOwnerLifetime;
-    transientOptions.ownerLifetime = std::move(ownerLifetime);
+    transientOptions.ownerLifetime = ownerLifetime;
     transientOptions.onDismiss = [weak = std::weak_ptr<ActiveState>(state),
                                   callback = std::move(options.onDismissed)] {
         if (auto active = weak.lock()) active->transientHandle = 0;
@@ -126,6 +136,9 @@ PopoverOpenResult Popover::showImpl(
     popup->setWindowCornerStyle(10.0f, 2.0f);
     popup->setRootWidget(makePanel(
         std::move(content), {0.0f, 0.0f, geometry.width, geometry.height}));
+    WindowApp* popupWindow = popup.get();
+    state->popupWindow = popupWindow;
+    state->popupWindowLifetime = popupWindow->getLifetimeToken();
 
     const bool connected = m_popupConnector
         ? m_popupConnector(*popup)
@@ -136,6 +149,7 @@ PopoverOpenResult Popover::showImpl(
         std::move(popup), [weak = std::weak_ptr<ActiveState>(state)] {
             auto active = weak.lock();
             if (!active) return;
+            Popover::restoreFocus(active);
             const TransientHandle handle = active->transientHandle;
             active->transientHandle = 0;
             active->hostedSurfaceHandle = 0;
@@ -150,6 +164,7 @@ PopoverOpenResult Popover::showImpl(
         [weak = std::weak_ptr<ActiveState>(state)] {
             auto active = weak.lock();
             if (!active) return;
+            Popover::restoreFocus(active);
             const HostedSurfaceHandle hosted = active->hostedSurfaceHandle;
             active->hostedSurfaceHandle = 0;
             active->transientHandle = 0;
@@ -164,10 +179,30 @@ PopoverOpenResult Popover::showImpl(
     }
 
     m_active = state;
+    popupWindow->getDispatcher().moveFocus(popupWindow->getRootWidget());
+    if (m_active != state || state->popupWindowLifetime.expired()) return {};
+    state->focusHandedOff = true;
+    m_window.getDispatcher().setFocus(nullptr);
+    if (m_active != state) return {};
+
     const PopoverOpenResult result{
         state->transientHandle, state->presentation, geometry};
     if (options.onOpened) options.onOpened(result.presentation);
     return result;
+}
+
+void Popover::restoreFocus(const std::shared_ptr<ActiveState>& state) {
+    if (!state || !state->focusHandedOff || state->focusRestored) return;
+    state->focusRestored = true;
+
+    if (state->popupWindow && !state->popupWindowLifetime.expired()) {
+        state->popupWindow->getDispatcher().setFocus(nullptr);
+    }
+    if (!state->window || state->windowLifetime.expired()) return;
+
+    Widget* target = state->restoreTarget;
+    if (!target || state->restoreTargetLifetime.expired()) target = nullptr;
+    state->window->getDispatcher().setFocus(target);
 }
 
 bool Popover::close(TransientHandle handle) {

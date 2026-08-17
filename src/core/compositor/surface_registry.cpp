@@ -36,8 +36,36 @@ std::vector<SurfaceRegistry::Key> SurfaceRegistry::popupChildren(
     return result;
 }
 
+bool SurfaceRegistry::focusKeyboardSurface(Key key) noexcept {
+    if (key != 0 && !m_entries.contains(key)) return false;
+    m_keyboardFocusSurface = key;
+    return true;
+}
+
+void SurfaceRegistry::releaseKeyboardFocus(Key key) noexcept {
+    if (key == 0 || m_keyboardFocusSurface == 0) return;
+
+    const auto focused = m_entries.find(m_keyboardFocusSurface);
+    if (m_keyboardFocusSurface != key) {
+        if (focused != m_entries.end() && focused->second.parentSurfaceKey == key) {
+            m_keyboardFocusSurface = 0;
+        }
+        return;
+    }
+
+    const Key parentKey = focused == m_entries.end()
+        ? 0
+        : focused->second.parentSurfaceKey;
+    const auto parent = m_entries.find(parentKey);
+    m_keyboardFocusSurface = parentKey != 0 && parent != m_entries.end() &&
+            !parent->second.pendingDestroy && !parent->second.ignoreBufferCommits
+        ? parentKey
+        : 0;
+}
+
 SurfaceRegistry::iterator SurfaceRegistry::erase(iterator position) {
     if (position != m_entries.end()) {
+        releaseKeyboardFocus(position->first);
         releaseBuffer(position->second);
     }
     return m_entries.erase(position);
@@ -53,6 +81,7 @@ size_t SurfaceRegistry::erase(Key key) {
 }
 
 void SurfaceRegistry::clear() noexcept {
+    m_keyboardFocusSurface = 0;
     for (auto& [_, entry] : m_entries) {
         releaseBuffer(entry);
     }

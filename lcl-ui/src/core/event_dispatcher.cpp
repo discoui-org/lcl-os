@@ -548,52 +548,9 @@ bool EventDispatcher::dispatchKeyEvent(Widget* root, const KeyEvent& event) {
         // Consume both phases centrally. Traversal happens only on KeyDown so
         // KeyUp cannot leak to the newly focused widget.
         if (event.type == KeyEventType::KeyUp) return true;
-
-        Widget* focused = getFocusedWidget();
-        Widget* scope = activeFocusScope(root, focused);
-        std::vector<FocusTraversalEntry> entries;
-        collectFocusTraversalEntries(scope, entries);
         const bool backwards =
             (event.modifiers & lcl::platform::kModShift) != 0;
-
-        if (entries.empty()) {
-            setFocus(nullptr);
-            return true;
-        }
-
-        const auto current = std::find_if(
-            entries.begin(), entries.end(), [focused](const auto& entry) {
-                return entry.widget == focused;
-        });
-        if (!focused || current == entries.end()) {
-            if (backwards) {
-                const auto candidate = std::find_if(
-                    entries.rbegin(), entries.rend(),
-                    [](const auto& entry) { return entry.eligible; });
-                if (candidate != entries.rend()) setFocus(candidate->widget);
-                else setFocus(nullptr);
-            } else {
-                const auto candidate = std::find_if(
-                    entries.begin(), entries.end(),
-                    [](const auto& entry) { return entry.eligible; });
-                if (candidate != entries.end()) setFocus(candidate->widget);
-                else setFocus(nullptr);
-            }
-            return true;
-        }
-
-        const size_t count = entries.size();
-        const size_t currentIndex = static_cast<size_t>(current - entries.begin());
-        for (size_t step = 1; step <= count; ++step) {
-            const size_t index = backwards
-                ? (currentIndex + count - (step % count)) % count
-                : (currentIndex + step) % count;
-            if (!entries[index].eligible) continue;
-            setFocus(entries[index].widget);
-            return true;
-        }
-
-        setFocus(nullptr);
+        moveFocus(root, backwards);
         return true;
     }
 
@@ -618,6 +575,59 @@ bool EventDispatcher::dispatchKeyEvent(Widget* root, const KeyEvent& event) {
         }
     }
     return handled;
+}
+
+bool EventDispatcher::moveFocus(Widget* root, bool backwards) {
+    if (!root) return false;
+
+    Widget* focused = getFocusedWidget();
+    Widget* scope = activeFocusScope(root, focused);
+    std::vector<FocusTraversalEntry> entries;
+    collectFocusTraversalEntries(scope, entries);
+    if (entries.empty()) {
+        setFocus(nullptr);
+        return false;
+    }
+
+    const auto current = std::find_if(
+        entries.begin(), entries.end(), [focused](const auto& entry) {
+            return entry.widget == focused;
+    });
+    if (!focused || current == entries.end()) {
+        if (backwards) {
+            const auto candidate = std::find_if(
+                entries.rbegin(), entries.rend(),
+                [](const auto& entry) { return entry.eligible; });
+            if (candidate != entries.rend()) {
+                setFocus(candidate->widget);
+                return true;
+            }
+        } else {
+            const auto candidate = std::find_if(
+                entries.begin(), entries.end(),
+                [](const auto& entry) { return entry.eligible; });
+            if (candidate != entries.end()) {
+                setFocus(candidate->widget);
+                return true;
+            }
+        }
+        setFocus(nullptr);
+        return false;
+    }
+
+    const size_t count = entries.size();
+    const size_t currentIndex = static_cast<size_t>(current - entries.begin());
+    for (size_t step = 1; step <= count; ++step) {
+        const size_t index = backwards
+            ? (currentIndex + count - (step % count)) % count
+            : (currentIndex + step) % count;
+        if (!entries[index].eligible) continue;
+        setFocus(entries[index].widget);
+        return true;
+    }
+
+    setFocus(nullptr);
+    return false;
 }
 
 bool EventDispatcher::dispatchKeyEvent(const KeyEvent& event) {

@@ -183,6 +183,12 @@ public:
     std::vector<Key> popupChildren(Key parentSurfaceKey) const;
     uint64_t allocatePopupOrder() noexcept { return m_nextPopupOrder++; }
 
+    /** Keyboard routing target within the currently focused WindowGroup. */
+    Key keyboardFocusSurface() const noexcept { return m_keyboardFocusSurface; }
+    bool focusKeyboardSurface(Key key) noexcept;
+    /** Return focus from a closing surface to its live parent, when present. */
+    void releaseKeyboardFocus(Key key) noexcept;
+
     iterator erase(iterator position);
     size_t erase(Key key);
     void clear() noexcept;
@@ -217,6 +223,7 @@ public:
 private:
     Entries m_entries;
     uint64_t m_nextPopupOrder{1};
+    Key m_keyboardFocusSurface{0};
 };
 
 } // namespace lcl::core

@@ -44,7 +44,6 @@ private:
     SurfaceRegistry& m_surfaces;
     SceneRegistry& m_scenes;
     SurfaceRegistry::Key m_activePopupSurface{0};
-    SurfaceRegistry::Key m_focusedPopupSurface{0};
     std::chrono::nanoseconds m_refreshInterval{std::chrono::nanoseconds(16666667)};
 };
 

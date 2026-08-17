@@ -692,6 +692,46 @@ TEST(LclUiEventsTest, KeyboardTraversalUsesDepthFirstInsertionOrderAndWraps) {
     EXPECT_EQ(dispatcher.getFocusedWidget(), nestedFirstPtr);
 }
 
+TEST(LclUiEventsTest, NormalContainerDoesNotCreateATraversalTrap) {
+    EventDispatcher dispatcher;
+    auto root = std::make_unique<Container>();
+    auto before = std::make_unique<FocusProbe>();
+    FocusProbe* beforePtr = before.get();
+    auto formGroup = std::make_unique<Container>();
+    auto field = std::make_unique<FocusProbe>();
+    FocusProbe* fieldPtr = field.get();
+    formGroup->addChild(std::move(field));
+    auto after = std::make_unique<FocusProbe>();
+    FocusProbe* afterPtr = after.get();
+    root->addChild(std::move(before));
+    root->addChild(std::move(formGroup));
+    root->addChild(std::move(after));
+
+    dispatcher.setFocus(beforePtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), fieldPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), afterPtr);
+}
+
+TEST(LclUiEventsTest, MoveFocusSelectsFirstEligibleWithoutSynthesizingFocus) {
+    EventDispatcher dispatcher;
+    auto root = std::make_unique<Container>();
+    auto disabled = std::make_unique<FocusProbe>();
+    disabled->setInteractionEnabled(false);
+    auto first = std::make_unique<FocusProbe>();
+    FocusProbe* firstPtr = first.get();
+    root->addChild(std::move(disabled));
+    root->addChild(std::move(first));
+
+    EXPECT_TRUE(dispatcher.moveFocus(root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), firstPtr);
+
+    firstPtr->setInteractionEnabled(false);
+    EXPECT_FALSE(dispatcher.moveFocus(root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), nullptr);
+}
+
 TEST(LclUiEventsTest, KeyboardTraversalSkipsDisabledAndInputDisabledWidgets) {
     EventDispatcher dispatcher;
     auto root = std::make_unique<Container>();

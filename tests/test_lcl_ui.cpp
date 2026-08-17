@@ -1185,6 +1185,141 @@ TEST(LclUiTest, PopoverPlacesBelowLeftAndAlwaysUsesPopupSurface) {
     close(popupSockets[1]);
 }
 
+TEST(LclUiTest, PopoverHandsFocusToScopedContentAndRestoresAnchor) {
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                         popupSockets), 0);
+    WindowApp app(std::make_unique<RecordingCanvas>(), 300, 200,
+                  "Popover focus handoff");
+    auto root = std::make_unique<Container>();
+    root->setWidth(300.0f);
+    root->setHeight(200.0f);
+    auto anchor = std::make_unique<Button>("Anchor");
+    anchor->setWidth(80.0f);
+    anchor->setHeight(30.0f);
+    Button* anchorPtr = anchor.get();
+    root->addChild(std::move(anchor));
+    app.setRootWidget(std::move(root));
+    app.updateLayout();
+    app.getDispatcher().setFocus(anchorPtr);
+
+    WindowApp* popupWindow = nullptr;
+    Popover popover(
+        app, [] { return std::make_unique<RecordingCanvas>(); },
+        [&](WindowApp& popup) {
+            popupWindow = &popup;
+            popup.setExternalIpcSocket(popupSockets[0]);
+            return true;
+        });
+    auto popupContent = std::make_unique<Container>();
+    auto disabled = std::make_unique<Button>("Disabled");
+    Button* disabledPtr = disabled.get();
+    disabled->setEnabled(false);
+    auto first = std::make_unique<TextField>();
+    TextField* firstPtr = first.get();
+    auto last = std::make_unique<Button>("Last");
+    Button* lastPtr = last.get();
+    popupContent->addChild(std::move(disabled));
+    popupContent->addChild(std::move(first));
+    popupContent->addChild(std::move(last));
+
+    const auto opened = popover.show(
+        *anchorPtr, std::move(popupContent),
+        PopoverOptions{.width = 160.0f, .height = 120.0f});
+    ASSERT_TRUE(opened);
+    ASSERT_NE(popupWindow, nullptr);
+    ASSERT_NE(popupWindow->getRootWidget(), nullptr);
+    EXPECT_TRUE(popupWindow->getRootWidget()->isFocusScope());
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), firstPtr);
+    EXPECT_NE(popupWindow->getDispatcher().getFocusedWidget(), disabledPtr);
+
+    EXPECT_TRUE(popupWindow->sendKeyDown(
+        static_cast<int>(lcl::platform::PhysicalKey::Tab)));
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), lastPtr);
+    EXPECT_TRUE(popupWindow->sendKeyDown(
+        static_cast<int>(lcl::platform::PhysicalKey::Tab)));
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), firstPtr);
+    EXPECT_TRUE(popupWindow->sendKeyDown(
+        static_cast<int>(lcl::platform::PhysicalKey::Tab), 0,
+        lcl::platform::kModShift));
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), lastPtr);
+
+    EXPECT_TRUE(popover.close(opened.handle));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), anchorPtr);
+
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
+TEST(LclUiTest, PopoverWithoutFocusableContentKeepsPopupFocusEmpty) {
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                         popupSockets), 0);
+    WindowApp app(std::make_unique<RecordingCanvas>(), 300, 200,
+                  "Popover empty focus");
+    auto root = std::make_unique<Container>();
+    auto anchor = std::make_unique<Button>("Anchor");
+    Button* anchorPtr = anchor.get();
+    root->addChild(std::move(anchor));
+    app.setRootWidget(std::move(root));
+    app.updateLayout();
+    app.getDispatcher().setFocus(anchorPtr);
+
+    WindowApp* popupWindow = nullptr;
+    Popover popover(
+        app, [] { return std::make_unique<RecordingCanvas>(); },
+        [&](WindowApp& popup) {
+            popupWindow = &popup;
+            popup.setExternalIpcSocket(popupSockets[0]);
+            return true;
+        });
+    const auto opened = popover.show(
+        *anchorPtr, std::make_unique<Text>("No focus target"),
+        PopoverOptions{.width = 140.0f, .height = 70.0f});
+    ASSERT_TRUE(opened);
+    ASSERT_NE(popupWindow, nullptr);
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), nullptr);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
+    EXPECT_TRUE(popover.close(opened.handle));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), anchorPtr);
+
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
+TEST(LclUiTest, PopoverDoesNotRestoreAnIneligibleAnchor) {
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                         popupSockets), 0);
+    WindowApp app(std::make_unique<RecordingCanvas>(), 300, 200,
+                  "Popover ineligible restore target");
+    auto root = std::make_unique<Container>();
+    auto anchor = std::make_unique<Button>("Anchor");
+    Button* anchorPtr = anchor.get();
+    root->addChild(std::move(anchor));
+    app.setRootWidget(std::move(root));
+    app.updateLayout();
+    app.getDispatcher().setFocus(anchorPtr);
+
+    Popover popover(
+        app, [] { return std::make_unique<RecordingCanvas>(); },
+        [&](WindowApp& popup) {
+            popup.setExternalIpcSocket(popupSockets[0]);
+            return true;
+        });
+    const auto opened = popover.show(
+        *anchorPtr, std::make_unique<Button>("Popup child"),
+        PopoverOptions{.width = 140.0f, .height = 70.0f});
+    ASSERT_TRUE(opened);
+    anchorPtr->setInteractionEnabled(false);
+    EXPECT_TRUE(popover.close(opened.handle));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
+
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
 TEST(LclUiTest, PopupPopoverContentReceivesInputAndOutsideMouseDismisses) {
     int popupSockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
@@ -1198,16 +1333,17 @@ TEST(LclUiTest, PopupPopoverContentReceivesInputAndOutsideMouseDismisses) {
     background->setWidth(300.0f);
     background->setHeight(200.0f);
     root->addChild(std::move(background));
-    auto anchor = std::make_unique<Widget>();
+    auto anchor = std::make_unique<Button>("Anchor");
     anchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
     anchor->setPosition(YGEdgeLeft, 20.0f);
     anchor->setPosition(YGEdgeTop, 20.0f);
     anchor->setWidth(60.0f);
     anchor->setHeight(20.0f);
-    Widget* anchorPtr = anchor.get();
+    Button* anchorPtr = anchor.get();
     root->addChild(std::move(anchor));
     app.setRootWidget(std::move(root));
     app.updateLayout();
+    app.getDispatcher().setFocus(anchorPtr);
 
     int insideClicks = 0;
     int dismissals = 0;
@@ -1230,6 +1366,7 @@ TEST(LclUiTest, PopupPopoverContentReceivesInputAndOutsideMouseDismisses) {
         });
     ASSERT_TRUE(opened);
     ASSERT_EQ(opened.presentation, PopoverPresentation::PopupSurface);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
     app.tick();
 
     const auto sendPopupPointer = [&](bool pressed) {
@@ -1250,10 +1387,12 @@ TEST(LclUiTest, PopupPopoverContentReceivesInputAndOutsideMouseDismisses) {
     sendPopupPointer(false);
     EXPECT_EQ(insideClicks, 1);
     EXPECT_TRUE(popover.isOpen(opened.handle));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
 
     EXPECT_TRUE(app.sendPointerDown(250.0f, 160.0f));
     EXPECT_FALSE(popover.isOpen(opened.handle));
     EXPECT_EQ(dismissals, 1);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), anchorPtr);
 
     close(popupSockets[0]);
     close(popupSockets[1]);
@@ -1272,24 +1411,27 @@ TEST(LclUiTest, PopoverTouchDismissRequiresValidatedOutsideTap) {
     background->setWidth(300.0f);
     background->setHeight(200.0f);
     root->addChild(std::move(background));
-    auto anchor = std::make_unique<Widget>();
+    auto anchor = std::make_unique<Button>("Anchor");
     anchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
     anchor->setPosition(YGEdgeLeft, 20.0f);
     anchor->setPosition(YGEdgeTop, 20.0f);
     anchor->setWidth(60.0f);
     anchor->setHeight(20.0f);
-    Widget* anchorPtr = anchor.get();
+    Button* anchorPtr = anchor.get();
     root->addChild(std::move(anchor));
     app.setRootWidget(std::move(root));
     app.updateLayout();
 
+    WindowApp* popupWindow = nullptr;
     Popover popover(
         app, [] { return std::make_unique<RecordingCanvas>(); },
         [&](WindowApp& popup) {
+            popupWindow = &popup;
             popup.setExternalIpcSocket(popupSockets[0]);
             return true;
         });
     const auto open = [&] {
+        app.getDispatcher().setFocus(anchorPtr);
         const auto result = popover.show(
             *anchorPtr, std::make_unique<Button>("Touch content"),
             PopoverOptions{.width = 120.0f, .height = 70.0f});
@@ -1299,21 +1441,33 @@ TEST(LclUiTest, PopoverTouchDismissRequiresValidatedOutsideTap) {
 
     auto opened = open();
     ASSERT_TRUE(opened);
+    ASSERT_NE(popupWindow, nullptr);
+    Widget* popupFocus = popupWindow->getDispatcher().getFocusedWidget();
+    ASSERT_NE(popupFocus, nullptr);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
     app.sendPointerDown(250.0f, 160.0f, 0, PointerSource::Touch, 41);
     EXPECT_TRUE(popover.isOpen(opened.handle));
     app.sendPointerUp(250.0f, 160.0f, 0, PointerSource::Touch, 41);
     EXPECT_FALSE(popover.isOpen(opened.handle));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), anchorPtr);
 
     opened = open();
+    popupFocus = popupWindow->getDispatcher().getFocusedWidget();
+    ASSERT_NE(popupFocus, nullptr);
     app.sendPointerDown(250.0f, 150.0f, 0, PointerSource::Touch, 42);
     app.sendPointerMove(250.0f, 164.0f, PointerSource::Touch, 42);
     app.sendPointerUp(250.0f, 164.0f, 0, PointerSource::Touch, 42);
     EXPECT_TRUE(popover.isOpen(opened.handle));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), popupFocus);
 
     app.sendPointerDown(250.0f, 150.0f, 0, PointerSource::Touch, 43);
     app.sendPointerCancel(250.0f, 150.0f, PointerSource::Touch, 43);
     EXPECT_TRUE(popover.isOpen(opened.handle));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), popupFocus);
     EXPECT_TRUE(popover.close(opened.handle));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), anchorPtr);
 
     close(popupSockets[0]);
     close(popupSockets[1]);
@@ -1329,13 +1483,14 @@ TEST(LclUiTest, PopoverAnchorDestructionPrunesItsTransient) {
     root->setWidth(300.0f);
     root->setHeight(200.0f);
     Container* rootPtr = root.get();
-    auto anchor = std::make_unique<Widget>();
+    auto anchor = std::make_unique<Button>("Anchor");
     anchor->setWidth(60.0f);
     anchor->setHeight(20.0f);
-    Widget* anchorPtr = anchor.get();
+    Button* anchorPtr = anchor.get();
     root->addChild(std::move(anchor));
     app.setRootWidget(std::move(root));
     app.updateLayout();
+    app.getDispatcher().setFocus(anchorPtr);
 
     Popover popover(
         app, [] { return std::make_unique<RecordingCanvas>(); },
@@ -1347,11 +1502,13 @@ TEST(LclUiTest, PopoverAnchorDestructionPrunesItsTransient) {
         *anchorPtr, std::make_unique<Button>("Owned content"),
         PopoverOptions{.width = 120.0f, .height = 70.0f});
     ASSERT_TRUE(opened);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
     rootPtr->removeChild(anchorPtr);
     app.tick();
     EXPECT_FALSE(popover.isOpen(opened.handle));
     EXPECT_EQ(app.getTransientController().size(), 0u);
     EXPECT_EQ(app.hostedSurfaceCount(), 0u);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
 
     close(popupSockets[0]);
     close(popupSockets[1]);
@@ -1367,16 +1524,17 @@ TEST(LclUiTest, PopupPopoverUsesWidgetInputAndDropsStaleHandleOnSurfaceDestroy) 
     auto root = std::make_unique<Container>();
     root->setWidth(300.0f);
     root->setHeight(200.0f);
-    auto anchor = std::make_unique<Widget>();
+    auto anchor = std::make_unique<Button>("Anchor");
     anchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
     anchor->setPosition(YGEdgeLeft, 260.0f);
     anchor->setPosition(YGEdgeTop, 160.0f);
     anchor->setWidth(30.0f);
     anchor->setHeight(20.0f);
-    Widget* anchorPtr = anchor.get();
+    Button* anchorPtr = anchor.get();
     root->addChild(std::move(anchor));
     app.setRootWidget(std::move(root));
     app.updateLayout();
+    app.getDispatcher().setFocus(anchorPtr);
 
     uint32_t popupSurfaceId = 0;
     int insideClicks = 0;
@@ -1394,6 +1552,7 @@ TEST(LclUiTest, PopupPopoverUsesWidgetInputAndDropsStaleHandleOnSurfaceDestroy) 
         PopoverOptions{.width = 120.0f, .height = 70.0f});
     ASSERT_TRUE(opened);
     ASSERT_EQ(opened.presentation, PopoverPresentation::PopupSurface);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
     app.tick();
 
     const auto sendPointer = [&](bool pressed) {
@@ -1427,6 +1586,7 @@ TEST(LclUiTest, PopupPopoverUsesWidgetInputAndDropsStaleHandleOnSurfaceDestroy) 
     EXPECT_FALSE(popover.isOpen(opened.handle));
     EXPECT_EQ(app.getTransientController().size(), 0u);
     EXPECT_EQ(app.hostedSurfaceCount(), 0u);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), anchorPtr);
 
     close(popupSockets[0]);
     close(popupSockets[1]);
@@ -1503,8 +1663,14 @@ TEST(LclUiTest, WindowDestructionCleansPopupPopoverAndPopoverHandleSafely) {
     auto root = std::make_unique<Container>();
     root->setWidth(300.0f);
     root->setHeight(200.0f);
+    auto anchor = std::make_unique<Button>("Anchor");
+    anchor->setWidth(80.0f);
+    anchor->setHeight(30.0f);
+    Button* anchorPtr = anchor.get();
+    root->addChild(std::move(anchor));
     app->setRootWidget(std::move(root));
     app->updateLayout();
+    app->getDispatcher().setFocus(anchorPtr);
 
     int contentDestructions = 0;
     auto popover = std::make_unique<Popover>(
@@ -1516,7 +1682,7 @@ TEST(LclUiTest, WindowDestructionCleansPopupPopoverAndPopoverHandleSafely) {
     auto content = std::make_unique<Widget>();
     content->setDestructionCallback([&] { ++contentDestructions; });
     const auto opened = popover->show(
-        Rect{260.0f, 160.0f, 30.0f, 20.0f}, std::move(content),
+        *anchorPtr, std::move(content),
         PopoverOptions{.width = 120.0f, .height = 70.0f});
     ASSERT_TRUE(opened);
     ASSERT_EQ(opened.presentation, PopoverPresentation::PopupSurface);
