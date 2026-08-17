@@ -950,7 +950,7 @@ JSValue js_effect_addFilter(JSContext* ctx, JSValueConst this_val, int argc, JSV
             blurSurface->addFilter(
                 filterType,
                 static_cast<float>(std::max(0.0, value)),
-                static_cast<float>(std::max(1.0, refractionFactor)),
+                static_cast<float>(std::max(0.0, refractionFactor)),
                 static_cast<float>(std::max(0.0, dispersionGain)));
         } else {
             blurSurface->addFilter(filterType, static_cast<float>(value));

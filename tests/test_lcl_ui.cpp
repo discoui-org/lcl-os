@@ -27,6 +27,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 using namespace lcl::ui;
@@ -2345,6 +2346,146 @@ TEST(LclUiTest, GlassUsesTheGenericAddFilterChain) {
     EXPECT_FLOAT_EQ(tint.params[0], 15.0f);
     EXPECT_FLOAT_EQ(tint.params[1], 23.0f);
     EXPECT_FLOAT_EQ(tint.params[2], 42.0f);
+}
+
+TEST(LclUiTest, GlassPreservesZeroControlsInsteadOfSynthesizingDefaults) {
+    BackdropSurface surface;
+    surface.getYogaNode().setWidth(32.0f);
+    surface.getYogaNode().setHeight(24.0f);
+    surface.addFilter(lcl::protocol::FilterType::Glass, 0.0f, 0.0f, 0.0f);
+    surface.getYogaNode().calculateLayout(32.0f, 24.0f);
+    surface.syncLayout();
+
+    std::vector<EffectRegion> effects;
+    surface.collectEffects(effects);
+
+    ASSERT_EQ(effects.size(), 1u);
+    ASSERT_EQ(effects.front().filters.size(), 1u);
+    const auto& glass = effects.front().filters.front();
+    EXPECT_EQ(glass.type, lcl::protocol::FilterType::Glass);
+    EXPECT_FLOAT_EQ(glass.params[0], 0.0f);
+    EXPECT_FLOAT_EQ(glass.params[1], 0.0f);
+    EXPECT_FLOAT_EQ(glass.params[2], 0.0f);
+}
+
+TEST(LclUiTest, WindowAppScalesOnlyPixelBasedGlassAndBlurControls) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 64, 48, "Scaled effect graph");
+    auto surface = std::make_unique<BackdropSurface>();
+    surface->setWidth(64.0f);
+    surface->setHeight(48.0f);
+    surface->addFilter(lcl::protocol::FilterType::Blur, 8.0f);
+    surface->addFilter(lcl::protocol::FilterType::Glass, 30.0f, 3.0f, 0.0f);
+    app.setRootWidget(std::move(surface));
+    app.setExternalIpcSocket(sockets[0]);
+
+    lcl::protocol::LCLMsgConfigureBounds configure{};
+    configure.surfaceId = app.getSurfaceId();
+    configure.configureSerial = 7;
+    configure.width = 64;
+    configure.height = 48;
+    configure.backingWidth = 64;
+    configure.backingHeight = 48;
+    configure.bufferScale = 2.0f;
+    configure.resizeReason = lcl::protocol::LCLConfigureResizeReason::Initial;
+    lcl::protocol::LCLHeader configureHeader{};
+    configureHeader.opcode = lcl::protocol::LCLOpcode::ConfigureBounds;
+    configureHeader.payloadSize = sizeof(configure);
+    ASSERT_TRUE(lcl::protocol::sendMsgWithFd(
+        sockets[1], configureHeader, &configure));
+
+    ASSERT_TRUE(app.tick());
+
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, lcl::protocol::LCLOpcode::SetEffectGraph);
+    ASSERT_GE(payload.size(),
+              sizeof(lcl::protocol::LCLMsgSetEffectGraphHeader) +
+                  sizeof(lcl::protocol::EffectRegion) +
+                  2u * sizeof(lcl::protocol::FilterOp));
+    const auto* graph = reinterpret_cast<const lcl::protocol::LCLMsgSetEffectGraphHeader*>(
+        payload.data());
+    ASSERT_EQ(graph->regionCount, 1u);
+    ASSERT_EQ(graph->filterCount, 2u);
+    const auto* filters = reinterpret_cast<const lcl::protocol::FilterOp*>(
+        payload.data() + sizeof(lcl::protocol::LCLMsgSetEffectGraphHeader) +
+        sizeof(lcl::protocol::EffectRegion));
+    EXPECT_EQ(filters[0].type, lcl::protocol::FilterType::Blur);
+    EXPECT_FLOAT_EQ(filters[0].value, 16.0f);
+    EXPECT_EQ(filters[1].type, lcl::protocol::FilterType::Glass);
+    EXPECT_FLOAT_EQ(filters[1].params[0], 60.0f);
+    EXPECT_FLOAT_EQ(filters[1].params[1], 3.0f);
+    EXPECT_FLOAT_EQ(filters[1].params[2], 0.0f);
+    if (receivedFd >= 0) close(receivedFd);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(LclUiTest, SoftwareGlassZeroThicknessOrRefractionLeavesPixelsUntouched) {
+    const auto render = [](float thickness, float refraction) {
+        std::vector<uint32_t> pixels(8 * 8);
+        for (int y = 0; y < 8; ++y) {
+            for (int x = 0; x < 8; ++x) {
+                const uint8_t r = static_cast<uint8_t>(x * 29);
+                const uint8_t g = static_cast<uint8_t>(y * 31);
+                const uint8_t b = static_cast<uint8_t>((x + y) * 15);
+                pixels[static_cast<size_t>(y) * 8u + static_cast<size_t>(x)] =
+                    0xFF000000u | (static_cast<uint32_t>(r) << 16) |
+                    (static_cast<uint32_t>(g) << 8) | b;
+            }
+        }
+        const auto original = pixels;
+        lcl::protocol::FilterOp glass{};
+        glass.type = lcl::protocol::FilterType::Glass;
+        glass.params[0] = thickness;
+        glass.params[1] = refraction;
+        glass.params[2] = 7.0f;
+        lcl::render::SkiaRenderer renderer;
+        EXPECT_TRUE(renderer.initialize(8, 8, nullptr, pixels.data()));
+        renderer.applyBackdropFilter(0, 0, 8, 8, 0.0f, 2.0f, 1.0f, {glass});
+        return std::pair{std::move(pixels), original};
+    };
+
+    const auto [zeroThickness, originalThickness] = render(0.0f, 3.0f);
+    EXPECT_EQ(zeroThickness, originalThickness);
+    const auto [zeroRefraction, originalRefraction] = render(6.0f, 0.0f);
+    EXPECT_EQ(zeroRefraction, originalRefraction);
+}
+
+TEST(LclUiTest, SoftwareGlassZeroDispersionDoesNotSplitColorChannels) {
+    std::vector<uint32_t> pixels(16 * 16);
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            const uint8_t gray = static_cast<uint8_t>((x * 11 + y * 7) & 0xFF);
+            pixels[static_cast<size_t>(y) * 16u + static_cast<size_t>(x)] =
+                0xFF000000u | (static_cast<uint32_t>(gray) << 16) |
+                (static_cast<uint32_t>(gray) << 8) | gray;
+        }
+    }
+
+    lcl::protocol::FilterOp glass{};
+    glass.type = lcl::protocol::FilterType::Glass;
+    glass.params[0] = 6.0f;
+    glass.params[1] = 3.0f;
+    glass.params[2] = 0.0f;
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(16, 16, nullptr, pixels.data()));
+    renderer.applyBackdropFilter(0, 0, 16, 16, 0.0f, 2.0f, 1.0f, {glass});
+
+    for (uint32_t pixel : pixels) {
+        const uint8_t r = static_cast<uint8_t>((pixel >> 16) & 0xFFu);
+        const uint8_t g = static_cast<uint8_t>((pixel >> 8) & 0xFFu);
+        const uint8_t b = static_cast<uint8_t>(pixel & 0xFFu);
+        EXPECT_EQ(r, g);
+        EXPECT_EQ(g, b);
+    }
 }
 
 TEST(LclUiTest, PassiveBackdropEffectDoesNotRequireAFullWindowRoundedRaster) {

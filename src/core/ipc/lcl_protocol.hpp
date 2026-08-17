@@ -164,9 +164,9 @@ struct FilterOp {
 
     // Optional custom parameters (used by advanced filters like Glass and Tint).
     // Glass mapping:
-    // params[0] = thicknessPx
-    // params[1] = refractionFactor
-    // params[2] = dispersionGain
+    // params[0] = thicknessPx (zero disables Glass)
+    // params[1] = refractionFactor (zero disables Glass)
+    // params[2] = dispersionGain (zero keeps refraction without RGB separation)
     // Tint mapping:
     // value = alpha in [0, 1]
     // params[0..2] = red, green, blue in [0, 255]

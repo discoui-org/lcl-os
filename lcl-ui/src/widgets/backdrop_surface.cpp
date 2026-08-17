@@ -53,7 +53,7 @@ void BackdropSurface::addFilter(lcl::protocol::FilterType type, float value,
         op.value = 1.0f;
         op.profile = static_cast<uint8_t>(lcl::protocol::GlassProfile::Auto);
         op.params[0] = std::max(0.0f, value);
-        op.params[1] = std::max(1.0f, parameter1);
+        op.params[1] = std::max(0.0f, parameter1);
         op.params[2] = std::max(0.0f, parameter2);
     }
 

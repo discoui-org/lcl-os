@@ -56,6 +56,7 @@
 - `bool setEdgeToEdge(bool enabled)`: Extends the surface material beneath compositor-owned system insets. Desktop window controls or mobile system indicators remain foreground chrome while the client widget tree stays inside its safe content area.
 - `BackdropSurface::setEffectBounds(EffectBounds::OuterSurface)`: Uses the compositor-owned outer surface rather than the local safe content rect.
 - `BackdropSurface::setTint(Color color)`: Adds the tint to the same compositor filter chain as blur and color adjustment, preventing separate inset and content shades.
+- `BackdropSurface::addFilter(FilterType::Glass, thicknessPx, refractionFactor, dispersionGain)`: Uses logical pixels for thickness, which follows the surface buffer scale. Zero thickness or refraction disables Glass; zero dispersion preserves refraction without RGB color separation.
 - `void runEventLoop()`: Executes the non-blocking main event loop at **144 Hz target frame pacing** (~6.9ms target period).
 - `uint32_t* getPixelBuffer()`: Returns raw pointer to the SHM pixel buffer (`uint32_t` ARGB format).
 

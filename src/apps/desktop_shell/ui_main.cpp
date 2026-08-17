@@ -245,7 +245,8 @@ std::unique_ptr<lcl::ui::Container> makeDockView(DockView &view, uint32_t width,
   backdrop->setBorderRadius(26.0f);
   backdrop->setBorderRoundness(2.0f);
   backdrop->addFilter(lcl::protocol::FilterType::Blur, 0.0f);
-  backdrop->addFilter(lcl::protocol::FilterType::Glass, 0.0f, 0.0f, 0.0f);
+  // Glass thickness is logical px and follows the surface buffer scale.
+  backdrop->addFilter(lcl::protocol::FilterType::Glass, 20.0f, 1.4f, 7.0f);
   panel->addChild(std::move(backdrop));
 
   auto innerBorder = std::make_unique<lcl::ui::Container>();

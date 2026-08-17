@@ -2149,9 +2149,9 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
                                   float& outThicknessPx,
                                   float& outRefractionFactor,
                                   float& outDispersionGain) {
-        outThicknessPx = (op.params[0] > 0.0f) ? op.params[0] : 20.0f;
-        outRefractionFactor = (op.params[1] > 1.0f) ? op.params[1] : 1.4f;
-        outDispersionGain = (op.params[2] > 0.0f) ? op.params[2] : 7.0f;
+        outThicknessPx = std::max(0.0f, op.params[0]);
+        outRefractionFactor = std::max(0.0f, op.params[1]);
+        outDispersionGain = std::max(0.0f, op.params[2]);
     };
 
 #ifndef LCL_SOFTWARE_ONLY
@@ -2356,7 +2356,8 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
         };
 
         auto runRefractionPass = [&](float thicknessPx, float refractionFactor, float dispersionGain) {
-            if (thicknessPx <= 0.01f || m_glRefractionProgram == 0) {
+            if (thicknessPx <= 0.01f || refractionFactor <= 0.0f ||
+                m_glRefractionProgram == 0) {
                 return;
             }
 
@@ -2438,7 +2439,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
                 case protocol::FilterType::Glass: {
                     renderColorPass();
                     float thicknessPx = 0.0f;
-                    float refractionFactor = 1.4f;
+                    float refractionFactor = 0.0f;
                     float dispersionGain = 0.0f;
                     resolveGlassValues(op, thicknessPx, refractionFactor, dispersionGain);
                     runRefractionPass(thicknessPx, refractionFactor, dispersionGain);
@@ -2516,7 +2517,8 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
                                 float thicknessPx,
                                 float refractionFactor,
                                 float dispersionGain) {
-        if (thicknessPx <= 0.01f || pxW <= 1 || pxH <= 1) return;
+        if (thicknessPx <= 0.01f || refractionFactor <= 0.0f ||
+            pxW <= 1 || pxH <= 1) return;
         std::vector<uint32_t> src = pixels;
 
         const float halfW = static_cast<float>(pxW) * 0.5f;
@@ -2619,7 +2621,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
                     pendingColorMatrix.reset();
                 }
                 float thicknessPx = 0.0f;
-                float refractionFactor = 1.4f;
+                float refractionFactor = 0.0f;
                 float dispersionGain = 0.0f;
                 resolveGlassValues(op, thicknessPx, refractionFactor, dispersionGain);
                 runCpuRefraction(crop, w, h, thicknessPx, refractionFactor, dispersionGain);
