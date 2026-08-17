@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "core/compositor/frame_scheduler.hpp"
+#include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/input_router.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
@@ -992,6 +993,37 @@ TEST(CompositorRendererTest, EdgeToEdgeRemovesOnlyTheOpaqueSsdBackground) {
     EXPECT_EQ(kOpaqueSsdTitlebarMaterial.a, 255u);
     EXPECT_TRUE(paintsOpaqueSsdTitlebar(false));
     EXPECT_FALSE(paintsOpaqueSsdTitlebar(true));
+}
+
+TEST(CompositorRendererTest, DoubleInsetBorderGeometryTracksDisplayAndPresentationScale) {
+    const render::SkiaRect bounds{10.0f, 20.0f, 100.0f, 60.0f};
+
+    const auto scale1 = resolveDoubleInsetBorderGeometry(
+        bounds, 10.0f, 1.0f, 1.0f);
+    EXPECT_FLOAT_EQ(scale1.strokeWidth, 1.0f);
+    EXPECT_FLOAT_EQ(scale1.outerRadius, 10.0f);
+    EXPECT_FLOAT_EQ(scale1.innerBounds.x, 11.0f);
+    EXPECT_FLOAT_EQ(scale1.innerBounds.y, 21.0f);
+    EXPECT_FLOAT_EQ(scale1.innerBounds.width, 98.0f);
+    EXPECT_FLOAT_EQ(scale1.innerBounds.height, 58.0f);
+    EXPECT_FLOAT_EQ(scale1.innerRadius, 9.0f);
+    EXPECT_TRUE(scale1.hasInnerBorder);
+
+    const auto scale2 = resolveDoubleInsetBorderGeometry(
+        bounds, 20.0f, 2.0f, 1.0f);
+    EXPECT_FLOAT_EQ(scale2.strokeWidth, 2.0f);
+    EXPECT_FLOAT_EQ(scale2.outerRadius, 20.0f);
+    EXPECT_FLOAT_EQ(scale2.innerBounds.x, 12.0f);
+    EXPECT_FLOAT_EQ(scale2.innerBounds.y, 22.0f);
+    EXPECT_FLOAT_EQ(scale2.innerBounds.width, 96.0f);
+    EXPECT_FLOAT_EQ(scale2.innerBounds.height, 56.0f);
+    EXPECT_FLOAT_EQ(scale2.innerRadius, 18.0f);
+
+    const auto transitioning = resolveDoubleInsetBorderGeometry(
+        bounds, 20.0f, 2.0f, 0.9f);
+    EXPECT_FLOAT_EQ(transitioning.strokeWidth, 1.8f);
+    EXPECT_FLOAT_EQ(transitioning.outerRadius, 18.0f);
+    EXPECT_FLOAT_EQ(transitioning.innerRadius, 16.2f);
 }
 
 TEST(FrameSchedulerTest, AdvancesEnteringAndClosingTransitionsAtBoundedDelta) {

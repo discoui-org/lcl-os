@@ -70,6 +70,7 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, TransientController* tr
 
     PointerEvent dispatchEvent = event;
     dispatchEvent.m_dispatcher = this;
+    TransientHandle outsideDismissCandidate = 0;
 
     Widget* captured = validatePointerCapture(root, dispatchEvent);
     const bool routeToCapture = captured &&
@@ -141,6 +142,10 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, TransientController* tr
     // PointerUp, so a later gesture owner can cancel the shared down record.
     if (dispatchEvent.type == PointerEventType::Down) {
         applyPointerDownFocus(target, dispatchEvent);
+        if (transients) {
+            outsideDismissCandidate =
+                transients->outsideDismissCandidate(hitTarget, dispatchEvent);
+        }
     } else if (dispatchEvent.type == PointerEventType::Up &&
                dispatchEvent.source == PointerSource::Touch) {
         if (isTouchTapEligible(dispatchEvent.pointerId)) {
@@ -149,6 +154,10 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, TransientController* tr
                 const Widget* upFocusTarget = findFocusableTarget(hitTarget);
                 dispatchEvent.m_touchTapCompletion = downFocusTarget == upFocusTarget;
             }
+        }
+        if (transients) {
+            outsideDismissCandidate =
+                transients->outsideDismissCandidate(hitTarget, dispatchEvent);
         }
     }
 
@@ -186,20 +195,19 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, TransientController* tr
         }
     }
 
-    // Dismiss only after the current target has received the event. A dismiss
-    // callback may remove another transient, so running it earlier could leave
-    // the remainder of this dispatch holding a stale Widget pointer.
-    if (dispatchEvent.type == PointerEventType::Down && transients) {
-        transients->dismissTopmostOnOutsidePointer(hitTarget, dispatchEvent);
-    }
-
     if (dispatchEvent.type == PointerEventType::Up &&
         dispatchEvent.source == PointerSource::Touch &&
         dispatchEvent.m_touchTapCompletion &&
         isTouchTapEligible(dispatchEvent.pointerId)) {
         applyTouchTapFocus(getPointerDownTarget(dispatchEvent.pointerId, root),
                            hitTarget, dispatchEvent);
-        if (transients) transients->dismissTopmostOnOutsidePointer(hitTarget, dispatchEvent);
+    }
+
+    // Dismiss only after the current target and touch-focus path have finished.
+    // The snapshotted handle also prevents a callback from dismissing a
+    // transient that was opened by this very event.
+    if (outsideDismissCandidate != 0 && transients) {
+        transients->dismissOutsideCandidate(outsideDismissCandidate);
     }
 
     // Touch input lift (PointerUp) terminates any active hover state

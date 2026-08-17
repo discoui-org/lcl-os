@@ -776,27 +776,38 @@ void SkiaRenderer::shutdown() {
     // never restore dimensions or pointers owned by its previous lifetime.
     m_cachedLayerTargetState.reset();
 #ifndef LCL_SOFTWARE_ONLY
+    // Several WindowApps may interleave independent EGL contexts on one
+    // thread. Resource names are context-local, so deleting this renderer's
+    // numeric handles while another WindowApp is current can delete that
+    // renderer's textures/FBOs/programs instead.
+    const bool canDeleteGlResources =
+        m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend &&
+        m_eglBackend->makeCurrent();
     if (m_glClientTexture > 0) {
-        glDeleteTextures(1, &m_glClientTexture);
+        if (canDeleteGlResources) glDeleteTextures(1, &m_glClientTexture);
         m_glClientTexture = 0;
         m_glClientTextureWidth = 0;
         m_glClientTextureHeight = 0;
     }
     if (m_glBgraProgram > 0) {
-        glDeleteProgram(m_glBgraProgram);
+        if (canDeleteGlResources) glDeleteProgram(m_glBgraProgram);
         m_glBgraProgram = 0;
     }
     if (m_glSceneFBO > 0) {
-        glDeleteFramebuffers(1, &m_glSceneFBO);
-        glDeleteTextures(1, &m_glSceneTexture);
+        if (canDeleteGlResources) {
+            glDeleteFramebuffers(1, &m_glSceneFBO);
+            glDeleteTextures(1, &m_glSceneTexture);
+        }
         m_glSceneFBO = 0;
         m_glSceneTexture = 0;
     }
     m_glExternalFrameFBO = 0;
     m_glExternalFrameTexture = 0;
     if (m_glFBOReady) {
-        glDeleteFramebuffers(2, m_glFBO);
-        glDeleteTextures(2, m_glFBOTexture);
+        if (canDeleteGlResources) {
+            glDeleteFramebuffers(2, m_glFBO);
+            glDeleteTextures(2, m_glFBOTexture);
+        }
         m_glFBO[0] = m_glFBO[1] = 0;
         m_glFBOTexture[0] = m_glFBOTexture[1] = 0;
         m_glFBOReady = false;
@@ -804,35 +815,35 @@ void SkiaRenderer::shutdown() {
         m_glFBOCapacityHeight = 0;
     }
     if (m_glBlurProgram > 0) {
-        glDeleteProgram(m_glBlurProgram);
+        if (canDeleteGlResources) glDeleteProgram(m_glBlurProgram);
         m_glBlurProgram = 0;
     }
     if (m_glColorMatrixProgram > 0) {
-        glDeleteProgram(m_glColorMatrixProgram);
+        if (canDeleteGlResources) glDeleteProgram(m_glColorMatrixProgram);
         m_glColorMatrixProgram = 0;
     }
     if (m_glMaskProgram > 0) {
-        glDeleteProgram(m_glMaskProgram);
+        if (canDeleteGlResources) glDeleteProgram(m_glMaskProgram);
         m_glMaskProgram = 0;
     }
     if (m_glMaskBgraProgram > 0) {
-        glDeleteProgram(m_glMaskBgraProgram);
+        if (canDeleteGlResources) glDeleteProgram(m_glMaskBgraProgram);
         m_glMaskBgraProgram = 0;
     }
     if (m_glRoundRectProgram > 0) {
-        glDeleteProgram(m_glRoundRectProgram);
+        if (canDeleteGlResources) glDeleteProgram(m_glRoundRectProgram);
         m_glRoundRectProgram = 0;
     }
     if (m_glRefractionProgram > 0) {
-        glDeleteProgram(m_glRefractionProgram);
+        if (canDeleteGlResources) glDeleteProgram(m_glRefractionProgram);
         m_glRefractionProgram = 0;
     }
     if (m_glTexture > 0) {
-        glDeleteTextures(1, &m_glTexture);
+        if (canDeleteGlResources) glDeleteTextures(1, &m_glTexture);
         m_glTexture = 0;
     }
     if (m_glProgram > 0) {
-        glDeleteProgram(m_glProgram);
+        if (canDeleteGlResources) glDeleteProgram(m_glProgram);
         m_glProgram = 0;
     }
 #endif

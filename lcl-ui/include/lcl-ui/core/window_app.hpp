@@ -23,6 +23,7 @@ using RawTextInputCallback = std::function<bool(const TextInputEvent&)>;
 using IpcMessageCallback = std::function<void(const lcl::protocol::LCLHeader&, const std::vector<uint8_t>&)>;
 using ResizeCallback = std::function<void(uint32_t width, uint32_t height)>;
 using FrameCallback = std::function<void()>;
+using HostedSurfaceHandle = uint64_t;
 using ResizeTransform = std::function<std::pair<uint32_t, uint32_t>(
     uint32_t width, uint32_t height, lcl::protocol::LCLConfigureResizeReason reason)>;
 
@@ -42,6 +43,14 @@ public:
     uint32_t getPixelWidth() const;
     uint32_t getPixelHeight() const;
     const std::string& getTitle() const { return m_title; }
+    const std::string& getAppId() const noexcept { return m_appId; }
+    const std::string& getCompositorSocketPath() const noexcept {
+        return m_compositorSocketPath;
+    }
+    bool isIpcConnected() const noexcept { return m_ipcConnected; }
+    std::weak_ptr<uint8_t> getLifetimeToken() const noexcept {
+        return m_lifetimeToken;
+    }
 
     void setRootWidget(std::unique_ptr<Widget> root);
     Widget* getRootWidget() const { return m_rootWidget; }
@@ -56,6 +65,13 @@ public:
                                              TransientOptions options = {});
     bool removeTransient(TransientHandle handle);
     void clearTransients();
+
+    /** Own and tick another generic surface from this app's event loop. */
+    HostedSurfaceHandle hostSurface(std::unique_ptr<WindowApp> surface,
+                                    std::function<void()> onClosed = {});
+    bool removeHostedSurface(HostedSurfaceHandle handle);
+    WindowApp* getHostedSurface(HostedSurfaceHandle handle) const noexcept;
+    size_t hostedSurfaceCount() const noexcept { return m_hostedSurfaces.size(); }
 
     EventDispatcher& getDispatcher() { return m_dispatcher; }
     RenderPass& getRenderPass() { return m_renderPass; }
@@ -192,12 +208,21 @@ private:
     bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
                              uint32_t payloadSize, int passedFd = -1);
     void logFrameTraceIfDue();
+    void collectClosedHostedSurfaces();
+
+    struct HostedSurfaceEntry {
+        HostedSurfaceHandle handle{0};
+        std::unique_ptr<WindowApp> surface;
+        std::function<void()> onClosed;
+        bool pendingRemoval{false};
+    };
 
     uint32_t m_width;
     uint32_t m_height;
     // Public layout/input coordinates remain logical. SHM is rasterized at this DPR.
     float m_bufferScale{1.0f};
     std::string m_title;
+    std::shared_ptr<uint8_t> m_lifetimeToken{std::make_shared<uint8_t>(0)};
 
     std::unique_ptr<Container> m_windowRoot;
     Widget* m_rootWidget{nullptr};
@@ -224,6 +249,7 @@ private:
     bool m_ownsSocketFd{true};
     uint32_t m_surfaceId{1};
     std::string m_appId;
+    std::string m_compositorSocketPath{"/Runtime/lcl-compositor.sock"};
     lcl::protocol::LCLSystemSurfaceKind m_systemSurfaceKind{lcl::protocol::LCLSystemSurfaceKind::None};
     lcl::protocol::LCLResizePresentationMode m_resizePresentationMode{
         lcl::protocol::LCLResizePresentationMode::CompositorMorph};
@@ -260,6 +286,10 @@ private:
     uint32_t m_liveSubmittedBufferId{0};
     std::chrono::steady_clock::time_point m_lastResizeApply{};
     bool m_running{false};
+    bool m_surfaceEnded{false};
+    bool m_tickingHostedSurfaces{false};
+    std::vector<HostedSurfaceEntry> m_hostedSurfaces;
+    HostedSurfaceHandle m_nextHostedSurfaceHandle{1};
     bool m_morphInputFrozen{false};
     lcl::motion::AnimationEngine m_morphBlendEngine;
     lcl::motion::ChannelId m_morphBlendChannel{0};

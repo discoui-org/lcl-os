@@ -162,7 +162,9 @@ Guest display boot args (when `NATIVE=1`):
 2. **Window Manager (WM):** Pencere geometrisi, odak yönetimi, sürükleme/boyutlandırma durum makinelerinin (`WM Drag/Resize State`) tek sahibidir. Sürüklenen kenara (`ResizeEdge`) göre sabit kalacak anchor noktasını korur. Client'tan gelen gerçek tampon boyutunu (\(frameW, frameH\)) kabul eder, `commitSurfaceGeometry` metodu üzerinden offset hesabını yapar ve pencerenin nihai dünya koordinatlarını (\(X_{final}, Y_{final}\)) belirler. Uygulamaya özel kod barındıramaz.
 3. **Compositor (Presentation Engine):** "Kör Çizici" (Blind Renderer) olarak çalışır. Tamponların ekrana çizimi, z-index harmanlaması (blending) ve vSync eşzamanlamasını üstlenir. Pencere durum makinelerinden veya kenar hesaplarından bağımsızdır. WM'in onayladığı geometriyi ve Client'ın sunduğu tamponu vSync anında atomic olarak ekrana çeker.
 
-Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı değildir. `WindowApp` içindeki widget-olmayan `TransientController` yalnız stable handle, dismissal ve teardown policy'sini yönetir; local transient'ler tek normal WindowRoot ağacında absolute Widget sibling olarak çizilir. Yalnız pencere sınırını aşması gereken sunumlar `PopupSurface v1` kullanır.
+Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı değildir. `WindowApp` içindeki widget-olmayan `TransientController` yalnız stable handle, dismissal ve teardown policy'sini yönetir; local transient primitive gerektiğinde tek normal WindowRoot ağacında absolute Widget sibling olarak çizilir. `Popover v1` ise her zaman parent-bound `PopupSurface v1` kullanır.
+
+`Popover v1`, generic content'i hosted `WindowApp` üzerinden anchor-altı ve left-aligned bir `PopupSurface` içinde sunar; pencere içine sığma durumuna göre ikinci bir presentation yolu seçmez. Generic content sahipliği yalnız lcl-ui Popover katmanındadır; compositor Popover kavramını bilmez.
 
 ### Compositor içi sorumluluklar
 

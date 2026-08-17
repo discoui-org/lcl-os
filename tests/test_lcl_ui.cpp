@@ -9,6 +9,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/popover.hpp"
 #include "lcl-ui/widgets/window_chrome.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
@@ -1088,6 +1089,446 @@ TEST(LclUiTest, TransientControllerUsesTheSameStableLifecycleForSurfaceEntries) 
     EXPECT_EQ(dismissCount, 1);
 }
 
+TEST(LclUiTest, PopoverPlacesBelowLeftAndAlwaysUsesPopupSurface) {
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                         popupSockets), 0);
+
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* mainCanvas = canvas.get();
+    WindowApp app(std::move(canvas), 300, 200, "Popover presentation choice");
+    app.setAppId("org.lcl.test.popover");
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(300.0f);
+    root->setHeight(200.0f);
+    Container* rootPtr = root.get();
+    auto localAnchor = std::make_unique<Widget>();
+    localAnchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    localAnchor->setPosition(YGEdgeLeft, 20.0f);
+    localAnchor->setPosition(YGEdgeTop, 30.0f);
+    localAnchor->setWidth(50.0f);
+    localAnchor->setHeight(20.0f);
+    Widget* localAnchorPtr = localAnchor.get();
+    auto edgeAnchor = std::make_unique<Widget>();
+    edgeAnchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    edgeAnchor->setPosition(YGEdgeLeft, 260.0f);
+    edgeAnchor->setPosition(YGEdgeTop, 160.0f);
+    edgeAnchor->setWidth(30.0f);
+    edgeAnchor->setHeight(20.0f);
+    Widget* edgeAnchorPtr = edgeAnchor.get();
+    root->addChild(std::move(localAnchor));
+    root->addChild(std::move(edgeAnchor));
+    app.setRootWidget(std::move(root));
+    app.updateLayout();
+    ASSERT_TRUE(app.renderFrame());
+
+    uint32_t popupSurfaceId = 0;
+    Popover popover(
+        app, [] { return std::make_unique<RecordingCanvas>(); },
+        [&](WindowApp& popup) {
+            popupSurfaceId = popup.getSurfaceId();
+            popup.setExternalIpcSocket(popupSockets[0]);
+            return true;
+        });
+
+    const auto insideWindow = popover.show(
+        *localAnchorPtr, std::make_unique<Button>("Inside-window content"),
+        PopoverOptions{.width = 100.0f, .height = 60.0f});
+    ASSERT_TRUE(insideWindow);
+    EXPECT_EQ(insideWindow.presentation, PopoverPresentation::PopupSurface);
+    EXPECT_FLOAT_EQ(insideWindow.geometry.x, 20.0f);
+    EXPECT_FLOAT_EQ(insideWindow.geometry.y, 50.0f);
+    EXPECT_TRUE(popover.isOpen(insideWindow.handle));
+    EXPECT_NE(popupSurfaceId, 0u);
+    EXPECT_EQ(app.hostedSurfaceCount(), 1u);
+    EXPECT_TRUE(popover.close(insideWindow.handle));
+    EXPECT_EQ(app.hostedSurfaceCount(), 0u);
+
+    const auto popup = popover.show(
+        *edgeAnchorPtr, std::make_unique<Button>("Popup content"),
+        PopoverOptions{.width = 100.0f, .height = 60.0f});
+    ASSERT_TRUE(popup);
+    EXPECT_EQ(popup.presentation, PopoverPresentation::PopupSurface);
+    EXPECT_FLOAT_EQ(popup.geometry.x, 260.0f);
+    EXPECT_FLOAT_EQ(popup.geometry.y, 180.0f);
+    EXPECT_NE(popupSurfaceId, 0u);
+    EXPECT_NE(popupSurfaceId, app.getSurfaceId());
+    EXPECT_TRUE(popover.isOpen(popup.handle));
+    EXPECT_EQ(app.hostedSurfaceCount(), 1u);
+
+    // Match the runtime failure ordering: the popup is idle while the main
+    // WindowApp renders and therefore leaves its own backend current.
+    rootPtr->markDirty();
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_TRUE(popover.close(popup.handle));
+    EXPECT_FALSE(popover.isOpen(popup.handle));
+    EXPECT_EQ(app.hostedSurfaceCount(), 0u);
+
+    const int mainFramesBeforePostPopupRender = mainCanvas->beginCount;
+    rootPtr->markDirty();
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_EQ(mainCanvas->beginCount, mainFramesBeforePostPopupRender + 1);
+
+    const auto ownerBoundPopup = popover.show(
+        *edgeAnchorPtr, std::make_unique<Button>("Owner-bound popup"),
+        PopoverOptions{.width = 100.0f, .height = 60.0f});
+    ASSERT_TRUE(ownerBoundPopup);
+    rootPtr->removeChild(edgeAnchorPtr);
+    app.tick();
+    EXPECT_FALSE(popover.isOpen(ownerBoundPopup.handle));
+    EXPECT_EQ(app.getTransientController().size(), 0u);
+    EXPECT_EQ(app.hostedSurfaceCount(), 0u);
+
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
+TEST(LclUiTest, PopupPopoverContentReceivesInputAndOutsideMouseDismisses) {
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                         popupSockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 300, 200, "Popup popover input");
+    auto root = std::make_unique<Container>();
+    root->setWidth(300.0f);
+    root->setHeight(200.0f);
+    auto background = std::make_unique<PointerProbeWidget>();
+    background->setWidth(300.0f);
+    background->setHeight(200.0f);
+    root->addChild(std::move(background));
+    auto anchor = std::make_unique<Widget>();
+    anchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    anchor->setPosition(YGEdgeLeft, 20.0f);
+    anchor->setPosition(YGEdgeTop, 20.0f);
+    anchor->setWidth(60.0f);
+    anchor->setHeight(20.0f);
+    Widget* anchorPtr = anchor.get();
+    root->addChild(std::move(anchor));
+    app.setRootWidget(std::move(root));
+    app.updateLayout();
+
+    int insideClicks = 0;
+    int dismissals = 0;
+    uint32_t popupSurfaceId = 0;
+    auto inside = std::make_unique<Button>("Inside");
+    inside->setOnClick([&] { ++insideClicks; });
+    Popover popover(
+        app, [] { return std::make_unique<RecordingCanvas>(); },
+        [&](WindowApp& popup) {
+            popupSurfaceId = popup.getSurfaceId();
+            popup.setExternalIpcSocket(popupSockets[0]);
+            return true;
+        });
+    const auto opened = popover.show(
+        *anchorPtr, std::move(inside),
+        PopoverOptions{
+            .width = 120.0f,
+            .height = 70.0f,
+            .onDismissed = [&] { ++dismissals; },
+        });
+    ASSERT_TRUE(opened);
+    ASSERT_EQ(opened.presentation, PopoverPresentation::PopupSurface);
+    app.tick();
+
+    const auto sendPopupPointer = [&](bool pressed) {
+        lcl::protocol::LCLMsgInputEvent input{};
+        input.surfaceId = popupSurfaceId;
+        input.type = 4;
+        input.x = 20.0f;
+        input.y = 20.0f;
+        input.pressed = pressed ? 1 : 0;
+        input.source = static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Mouse);
+        lcl::protocol::LCLHeader header{};
+        header.opcode = lcl::protocol::LCLOpcode::InputEvent;
+        header.payloadSize = sizeof(input);
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(popupSockets[1], header, &input));
+        app.tick();
+    };
+    sendPopupPointer(true);
+    sendPopupPointer(false);
+    EXPECT_EQ(insideClicks, 1);
+    EXPECT_TRUE(popover.isOpen(opened.handle));
+
+    EXPECT_TRUE(app.sendPointerDown(250.0f, 160.0f));
+    EXPECT_FALSE(popover.isOpen(opened.handle));
+    EXPECT_EQ(dismissals, 1);
+
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
+TEST(LclUiTest, PopoverTouchDismissRequiresValidatedOutsideTap) {
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                         popupSockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 300, 200, "Popover touch dismissal");
+    auto root = std::make_unique<Container>();
+    root->setWidth(300.0f);
+    root->setHeight(200.0f);
+    auto background = std::make_unique<PointerProbeWidget>();
+    background->setWidth(300.0f);
+    background->setHeight(200.0f);
+    root->addChild(std::move(background));
+    auto anchor = std::make_unique<Widget>();
+    anchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    anchor->setPosition(YGEdgeLeft, 20.0f);
+    anchor->setPosition(YGEdgeTop, 20.0f);
+    anchor->setWidth(60.0f);
+    anchor->setHeight(20.0f);
+    Widget* anchorPtr = anchor.get();
+    root->addChild(std::move(anchor));
+    app.setRootWidget(std::move(root));
+    app.updateLayout();
+
+    Popover popover(
+        app, [] { return std::make_unique<RecordingCanvas>(); },
+        [&](WindowApp& popup) {
+            popup.setExternalIpcSocket(popupSockets[0]);
+            return true;
+        });
+    const auto open = [&] {
+        const auto result = popover.show(
+            *anchorPtr, std::make_unique<Button>("Touch content"),
+            PopoverOptions{.width = 120.0f, .height = 70.0f});
+        app.updateLayout();
+        return result;
+    };
+
+    auto opened = open();
+    ASSERT_TRUE(opened);
+    app.sendPointerDown(250.0f, 160.0f, 0, PointerSource::Touch, 41);
+    EXPECT_TRUE(popover.isOpen(opened.handle));
+    app.sendPointerUp(250.0f, 160.0f, 0, PointerSource::Touch, 41);
+    EXPECT_FALSE(popover.isOpen(opened.handle));
+
+    opened = open();
+    app.sendPointerDown(250.0f, 150.0f, 0, PointerSource::Touch, 42);
+    app.sendPointerMove(250.0f, 164.0f, PointerSource::Touch, 42);
+    app.sendPointerUp(250.0f, 164.0f, 0, PointerSource::Touch, 42);
+    EXPECT_TRUE(popover.isOpen(opened.handle));
+
+    app.sendPointerDown(250.0f, 150.0f, 0, PointerSource::Touch, 43);
+    app.sendPointerCancel(250.0f, 150.0f, PointerSource::Touch, 43);
+    EXPECT_TRUE(popover.isOpen(opened.handle));
+    EXPECT_TRUE(popover.close(opened.handle));
+
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
+TEST(LclUiTest, PopoverAnchorDestructionPrunesItsTransient) {
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                         popupSockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 300, 200, "Popover anchor lifetime");
+    auto root = std::make_unique<Container>();
+    root->setWidth(300.0f);
+    root->setHeight(200.0f);
+    Container* rootPtr = root.get();
+    auto anchor = std::make_unique<Widget>();
+    anchor->setWidth(60.0f);
+    anchor->setHeight(20.0f);
+    Widget* anchorPtr = anchor.get();
+    root->addChild(std::move(anchor));
+    app.setRootWidget(std::move(root));
+    app.updateLayout();
+
+    Popover popover(
+        app, [] { return std::make_unique<RecordingCanvas>(); },
+        [&](WindowApp& popup) {
+            popup.setExternalIpcSocket(popupSockets[0]);
+            return true;
+        });
+    const auto opened = popover.show(
+        *anchorPtr, std::make_unique<Button>("Owned content"),
+        PopoverOptions{.width = 120.0f, .height = 70.0f});
+    ASSERT_TRUE(opened);
+    rootPtr->removeChild(anchorPtr);
+    app.tick();
+    EXPECT_FALSE(popover.isOpen(opened.handle));
+    EXPECT_EQ(app.getTransientController().size(), 0u);
+    EXPECT_EQ(app.hostedSurfaceCount(), 0u);
+
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
+TEST(LclUiTest, PopupPopoverUsesWidgetInputAndDropsStaleHandleOnSurfaceDestroy) {
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                         popupSockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 300, 200, "Popup popover input");
+    app.setAppId("org.lcl.test.popover-input");
+    auto root = std::make_unique<Container>();
+    root->setWidth(300.0f);
+    root->setHeight(200.0f);
+    auto anchor = std::make_unique<Widget>();
+    anchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    anchor->setPosition(YGEdgeLeft, 260.0f);
+    anchor->setPosition(YGEdgeTop, 160.0f);
+    anchor->setWidth(30.0f);
+    anchor->setHeight(20.0f);
+    Widget* anchorPtr = anchor.get();
+    root->addChild(std::move(anchor));
+    app.setRootWidget(std::move(root));
+    app.updateLayout();
+
+    uint32_t popupSurfaceId = 0;
+    int insideClicks = 0;
+    Popover popover(
+        app, [] { return std::make_unique<RecordingCanvas>(); },
+        [&](WindowApp& popup) {
+            popupSurfaceId = popup.getSurfaceId();
+            popup.setExternalIpcSocket(popupSockets[0]);
+            return true;
+        });
+    auto button = std::make_unique<Button>("Popup inside");
+    button->setOnClick([&] { ++insideClicks; });
+    const auto opened = popover.show(
+        *anchorPtr, std::move(button),
+        PopoverOptions{.width = 120.0f, .height = 70.0f});
+    ASSERT_TRUE(opened);
+    ASSERT_EQ(opened.presentation, PopoverPresentation::PopupSurface);
+    app.tick();
+
+    const auto sendPointer = [&](bool pressed) {
+        lcl::protocol::LCLMsgInputEvent input{};
+        input.surfaceId = popupSurfaceId;
+        input.type = 4;
+        input.x = 20.0f;
+        input.y = 20.0f;
+        input.key = 0;
+        input.pressed = pressed ? 1 : 0;
+        input.source = static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Mouse);
+        lcl::protocol::LCLHeader header{};
+        header.opcode = lcl::protocol::LCLOpcode::InputEvent;
+        header.payloadSize = sizeof(input);
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(popupSockets[1], header, &input));
+        app.tick();
+    };
+    sendPointer(true);
+    sendPointer(false);
+    EXPECT_EQ(insideClicks, 1);
+    EXPECT_TRUE(popover.isOpen(opened.handle));
+
+    lcl::protocol::LCLMsgSurfaceDestroy destroy{};
+    destroy.surfaceId = popupSurfaceId;
+    lcl::protocol::LCLHeader destroyHeader{};
+    destroyHeader.opcode = lcl::protocol::LCLOpcode::SurfaceDestroy;
+    destroyHeader.payloadSize = sizeof(destroy);
+    ASSERT_TRUE(lcl::protocol::sendMsgWithFd(
+        popupSockets[1], destroyHeader, &destroy));
+    app.tick();
+    EXPECT_FALSE(popover.isOpen(opened.handle));
+    EXPECT_EQ(app.getTransientController().size(), 0u);
+    EXPECT_EQ(app.hostedSurfaceCount(), 0u);
+
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
+TEST(LclUiTest, PopupPopoverUsesTheSameOutsideDismissPolicy) {
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                         popupSockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 300, 200, "Popup popover dismissal");
+    auto root = std::make_unique<PointerProbeWidget>();
+    root->setWidth(300.0f);
+    root->setHeight(200.0f);
+    app.setRootWidget(std::move(root));
+    app.updateLayout();
+
+    int dismissals = 0;
+    Popover popover(
+        app, [] { return std::make_unique<RecordingCanvas>(); },
+        [&](WindowApp& popup) {
+            popup.setExternalIpcSocket(popupSockets[0]);
+            return true;
+        });
+    const auto openPopup = [&] {
+        return popover.show(
+            Rect{260.0f, 160.0f, 30.0f, 20.0f},
+            std::make_unique<Button>("Popup"),
+            PopoverOptions{
+                .width = 120.0f,
+                .height = 70.0f,
+                .onDismissed = [&] { ++dismissals; },
+            });
+    };
+
+    auto opened = openPopup();
+    ASSERT_TRUE(opened);
+    ASSERT_EQ(opened.presentation, PopoverPresentation::PopupSurface);
+    EXPECT_TRUE(app.sendPointerDown(10.0f, 10.0f));
+    EXPECT_FALSE(popover.isOpen(opened.handle));
+    EXPECT_EQ(dismissals, 1);
+    EXPECT_EQ(app.hostedSurfaceCount(), 0u);
+
+    opened = openPopup();
+    ASSERT_TRUE(opened);
+    app.sendPointerDown(10.0f, 10.0f, 0, PointerSource::Touch, 51);
+    EXPECT_TRUE(popover.isOpen(opened.handle));
+    app.sendPointerUp(10.0f, 10.0f, 0, PointerSource::Touch, 51);
+    EXPECT_FALSE(popover.isOpen(opened.handle));
+    EXPECT_EQ(dismissals, 2);
+
+    opened = openPopup();
+    ASSERT_TRUE(opened);
+    app.sendPointerDown(10.0f, 10.0f, 0, PointerSource::Touch, 52);
+    app.sendPointerMove(24.0f, 10.0f, PointerSource::Touch, 52);
+    app.sendPointerUp(24.0f, 10.0f, 0, PointerSource::Touch, 52);
+    EXPECT_TRUE(popover.isOpen(opened.handle));
+    app.sendPointerDown(10.0f, 10.0f, 0, PointerSource::Touch, 53);
+    app.sendPointerCancel(10.0f, 10.0f, PointerSource::Touch, 53);
+    EXPECT_TRUE(popover.isOpen(opened.handle));
+    EXPECT_TRUE(popover.close(opened.handle));
+
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
+TEST(LclUiTest, WindowDestructionCleansPopupPopoverAndPopoverHandleSafely) {
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                         popupSockets), 0);
+    auto app = std::make_unique<WindowApp>(
+        std::make_unique<RecordingCanvas>(), 300, 200,
+        "Popover window lifetime");
+    auto root = std::make_unique<Container>();
+    root->setWidth(300.0f);
+    root->setHeight(200.0f);
+    app->setRootWidget(std::move(root));
+    app->updateLayout();
+
+    int contentDestructions = 0;
+    auto popover = std::make_unique<Popover>(
+        *app, [] { return std::make_unique<RecordingCanvas>(); },
+        [&](WindowApp& popup) {
+            popup.setExternalIpcSocket(popupSockets[0]);
+            return true;
+        });
+    auto content = std::make_unique<Widget>();
+    content->setDestructionCallback([&] { ++contentDestructions; });
+    const auto opened = popover->show(
+        Rect{260.0f, 160.0f, 30.0f, 20.0f}, std::move(content),
+        PopoverOptions{.width = 120.0f, .height = 70.0f});
+    ASSERT_TRUE(opened);
+    ASSERT_EQ(opened.presentation, PopoverPresentation::PopupSurface);
+
+    app.reset();
+    EXPECT_EQ(contentDestructions, 1);
+    EXPECT_FALSE(popover->isOpen(opened.handle));
+    popover.reset();
+
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
 TEST(LclUiTest, WindowAppSurfaceTransientRemovalRequestsPopupDestroy) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
@@ -1227,6 +1668,7 @@ TEST(LclUiTest, WindowAppCreatesPopupWithParentLocalGeometry) {
     popup.setAppId("org.lcl.test.popup");
     popup.setSurfaceId(2);
     popup.configurePopupSurface(1, lcl::protocol::LCLPopupRole::Transient, 250, -8);
+    ASSERT_TRUE(popup.setWindowCornerStyle(10.0f, 2.0f));
     ASSERT_TRUE(popup.connectCompositor(socketPath));
 
     const int peer = accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
@@ -1245,6 +1687,16 @@ TEST(LclUiTest, WindowAppCreatesPopupWithParentLocalGeometry) {
     EXPECT_EQ(request->y, -8);
     EXPECT_EQ(request->width, 120u);
     EXPECT_EQ(request->height, 70u);
+    if (receivedFd >= 0) close(receivedFd);
+
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(peer, header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, lcl::protocol::LCLOpcode::SetWindowCornerStyle);
+    ASSERT_EQ(payload.size(), sizeof(lcl::protocol::LCLMsgSetWindowCornerStyle));
+    const auto* cornerStyle =
+        reinterpret_cast<const lcl::protocol::LCLMsgSetWindowCornerStyle*>(payload.data());
+    EXPECT_EQ(cornerStyle->surfaceId, 2u);
+    EXPECT_FLOAT_EQ(cornerStyle->radiusPx, 10.0f);
+    EXPECT_FLOAT_EQ(cornerStyle->roundness, 2.0f);
     if (receivedFd >= 0) close(receivedFd);
 
     close(peer);

@@ -16,6 +16,8 @@ using TransientHandle = uint64_t;
 
 struct TransientOptions {
     bool dismissOnOutsidePointer{false};
+    bool trackOwnerLifetime{false};
+    std::weak_ptr<uint8_t> ownerLifetime;
     std::function<void()> onDismiss;
 };
 
@@ -44,13 +46,16 @@ public:
                                     TransientOptions options = {});
     bool remove(TransientHandle handle);
     void clear();
+    void pruneExpiredOwners();
 
     size_t size() const noexcept { return m_entries.size(); }
+    bool contains(TransientHandle handle) const noexcept;
     bool containsLocalTarget(const Widget* target) const;
 
-    /** Called after mouse-down or a validated touch tap has been established. */
-    bool dismissTopmostOnOutsidePointer(Widget* hitTarget,
-                                        const PointerEvent& event);
+    /** Snapshot before dispatch so callbacks cannot dismiss a newly opened transient. */
+    TransientHandle outsideDismissCandidate(Widget* hitTarget,
+                                            const PointerEvent& event) const;
+    bool dismissOutsideCandidate(TransientHandle handle);
 
 private:
     enum class Presentation { LocalWidget, PopupSurface };

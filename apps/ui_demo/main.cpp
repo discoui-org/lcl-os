@@ -1,10 +1,13 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
+#include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/popover.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
@@ -71,6 +74,7 @@ int main() {
   app.setAppId("org.lcl.uidemo");
   app.setWindowCornerStyle(20.0f, 2.0f);
   app.setEdgeToEdge(true);
+  Popover popover(app, [] { return lcl::render::makeSkiaCanvas(); });
 
   // 2. Build Centered Flexbox Layout Tree in User-Space App
   auto rootContainer = std::make_unique<Container>();
@@ -123,6 +127,65 @@ int main() {
   Text *textPtr = statusText.get();
   statusText->setFontSize(14.0f);
   statusText->setTextColor(Color{160, 174, 192, 255});
+
+  auto popoverTitle = std::make_unique<Text>("Popover v1");
+  popoverTitle->setFontSize(15.0f);
+  popoverTitle->setTextColor(Color{236, 239, 244, 255});
+
+  auto popoverStatus = std::make_unique<Text>("Popover: kapalı");
+  Text *popoverStatusPtr = popoverStatus.get();
+  popoverStatus->setFontSize(13.0f);
+  popoverStatus->setTextColor(Color{160, 174, 192, 255});
+  popoverStatus->getYogaNode().setWidth(300.0f);
+  popoverStatus->getYogaNode().setHeight(18.0f);
+
+  auto makePopoverContent = [&popover, popoverStatusPtr](
+                                const std::string &message) {
+    auto handleSlot = std::make_shared<TransientHandle>(0);
+    auto panelContent = std::make_unique<Container>();
+    panelContent->getYogaNode().setDirection(YGFlexDirectionColumn);
+    panelContent->getYogaNode().setGap(YGGutterAll, 10.0f);
+
+    auto messageText = std::make_unique<Text>(message);
+    messageText->setFontSize(14.0f);
+    messageText->setTextColor(Color{236, 239, 244, 255});
+
+    auto closeButton = std::make_unique<Button>("Kapat");
+    closeButton->setHeight(38.0f);
+    closeButton->setOnClick([&popover, popoverStatusPtr, handleSlot] {
+      if (popover.close(*handleSlot)) {
+        popoverStatusPtr->setText("Popover: dismissed");
+      }
+    });
+
+    panelContent->addChild(std::move(messageText));
+    panelContent->addChild(std::move(closeButton));
+    return std::pair{std::move(panelContent), std::move(handleSlot)};
+  };
+
+  auto localPopoverButton = std::make_unique<DemoButton>("Popover aç");
+  DemoButton *localPopoverButtonPtr = localPopoverButton.get();
+  localPopoverButton->setWidth(220.0f);
+  localPopoverButton->setHeight(40.0f);
+  localPopoverButton->setOnClick(
+      [&popover, localPopoverButtonPtr, popoverStatusPtr,
+       &makePopoverContent] {
+        auto [panel, handleSlot] =
+            makePopoverContent("Parent-bound transient surface içerik");
+        const auto result = popover.show(
+            *localPopoverButtonPtr, std::move(panel),
+            PopoverOptions{
+                .width = 240.0f,
+                .height = 120.0f,
+                .onDismissed = [popoverStatusPtr] {
+                  popoverStatusPtr->setText("Popover: dismissed");
+                },
+            });
+        *handleSlot = result.handle;
+        popoverStatusPtr->setText(
+            !result ? "Popover: açılamadı"
+                    : "Popover: opened popup-surface");
+      });
 
   // ScrollView Viewport (340x280)
   auto scrollView = std::make_unique<ScrollView>();
@@ -210,10 +273,42 @@ int main() {
 
   cardContainer->addChild(std::move(titleText));
   cardContainer->addChild(std::move(statusText));
+  cardContainer->addChild(std::move(popoverTitle));
+  cardContainer->addChild(std::move(popoverStatus));
+  cardContainer->addChild(std::move(localPopoverButton));
   cardContainer->addChild(std::move(scrollView));
   content->addChild(std::move(cardContainer));
   rootContainer->addChild(std::move(backdrop));
   rootContainer->addChild(std::move(content));
+
+  auto edgePopoverButton =
+      std::make_unique<DemoButton>("Edge popover");
+  DemoButton *edgePopoverButtonPtr = edgePopoverButton.get();
+  edgePopoverButton->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+  edgePopoverButton->setPosition(YGEdgeLeft, 670.0f);
+  edgePopoverButton->setPosition(YGEdgeTop, 530.0f);
+  edgePopoverButton->setWidth(120.0f);
+  edgePopoverButton->setHeight(40.0f);
+  edgePopoverButton->setOnClick(
+      [&popover, edgePopoverButtonPtr, popoverStatusPtr,
+       &makePopoverContent] {
+        auto [panel, handleSlot] =
+            makePopoverContent("Window dışına taşan PopupSurface içerik");
+        const auto result = popover.show(
+            *edgePopoverButtonPtr, std::move(panel),
+            PopoverOptions{
+                .width = 240.0f,
+                .height = 130.0f,
+                .onDismissed = [popoverStatusPtr] {
+                  popoverStatusPtr->setText("Popover: dismissed");
+                },
+            });
+        *handleSlot = result.handle;
+        popoverStatusPtr->setText(
+            !result ? "Popover: açılamadı"
+                    : "Popover: opened popup-surface");
+      });
+  rootContainer->addChild(std::move(edgePopoverButton));
 
   app.setRootWidget(std::move(rootContainer));
 

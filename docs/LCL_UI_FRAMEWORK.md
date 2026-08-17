@@ -52,11 +52,24 @@
 - `bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v12 normal or configured popup surface.
 - `registerLocalTransient(...)`: Registers an ordinary absolute-positioned Widget in the single WindowRoot tree with generic lifecycle/dismissal policy.
 - `configurePopupSurface(parentSurfaceId, role, x, y)`: Configures this `WindowApp` as a compositor-level popup that reuses the normal configure and buffer path.
+- `hostSurface(...)`: Owns and ticks an additional generic `WindowApp` surface from the same event loop; it contains no Popover-specific policy.
 - `bool setEdgeToEdge(bool enabled)`: Extends the surface material beneath compositor-owned system insets. Desktop window controls or mobile system indicators remain foreground chrome while the client widget tree stays inside its safe content area.
 - `BackdropSurface::setEffectBounds(EffectBounds::OuterSurface)`: Uses the compositor-owned outer surface rather than the local safe content rect.
 - `BackdropSurface::setTint(Color color)`: Adds the tint to the same compositor filter chain as blur and color adjustment, preventing separate inset and content shades.
 - `void runEventLoop()`: Executes the non-blocking main event loop at **144 Hz target frame pacing** (~6.9ms target period).
 - `uint32_t* getPixelBuffer()`: Returns raw pointer to the SHM pixel buffer (`uint32_t` ARGB format).
+
+### `Popover` v1
+
+`Popover::show(anchor, content, options)` accepts any Widget subtree and returns
+`PopoverOpenResult { handle, presentation, geometry }`. Placement is directly
+below the anchor and left-aligned. Presentation is always a parent-bound hosted
+`WindowApp` configured as `PopupSurface`, regardless of whether the desired
+rectangle also fits inside the parent window. `TransientController` owns its
+stable handle, owner teardown, outside mouse dismissal, and validated touch-tap
+dismissal. `Popover::close(handle)` closes it programmatically. The constructor
+accepts a backend-neutral popup `Canvas` factory, preserving the same explicit
+Canvas injection contract as every other `WindowApp`.
 
 ---
 

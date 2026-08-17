@@ -117,10 +117,12 @@ WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t he
 
 WindowApp::~WindowApp() {
     m_running = false;
+    m_lifetimeToken.reset();
     // Widgets unregister their channels on destruction. Detach while the
     // coordinator member is still alive (member teardown runs in reverse).
     m_transients.clear();
     m_transients.setWindowRoot(nullptr);
+    m_hostedSurfaces.clear();
     if (m_windowRoot) m_windowRoot->setMotionCoordinator(nullptr);
     if (m_shmPixels) {
         munmap(m_shmPixels, m_shmSize);
@@ -202,6 +204,34 @@ void WindowApp::clearTransients() {
     m_transients.clear();
 }
 
+HostedSurfaceHandle WindowApp::hostSurface(
+        std::unique_ptr<WindowApp> surface, std::function<void()> onClosed) {
+    if (!surface || surface.get() == this) return 0;
+    const HostedSurfaceHandle handle = m_nextHostedSurfaceHandle++;
+    m_hostedSurfaces.push_back(HostedSurfaceEntry{
+        handle, std::move(surface), std::move(onClosed), false});
+    return handle;
+}
+
+bool WindowApp::removeHostedSurface(HostedSurfaceHandle handle) {
+    const auto found = std::find_if(
+        m_hostedSurfaces.begin(), m_hostedSurfaces.end(),
+        [handle](const HostedSurfaceEntry& entry) { return entry.handle == handle; });
+    if (found == m_hostedSurfaces.end()) return false;
+    if (found->pendingRemoval) return true;
+    found->pendingRemoval = true;
+    if (found->surface) found->surface->requestWindowClose();
+    if (!m_tickingHostedSurfaces) collectClosedHostedSurfaces();
+    return true;
+}
+
+WindowApp* WindowApp::getHostedSurface(HostedSurfaceHandle handle) const noexcept {
+    const auto found = std::find_if(
+        m_hostedSurfaces.begin(), m_hostedSurfaces.end(),
+        [handle](const HostedSurfaceEntry& entry) { return entry.handle == handle; });
+    return found == m_hostedSurfaces.end() ? nullptr : found->surface.get();
+}
+
 void WindowApp::setInputEnabled(bool enabled) {
     if (m_inputEnabled == enabled) return;
     if (!enabled) m_dispatcher.cancelPointerCaptures();
@@ -277,6 +307,8 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         std::cerr << "[lcl-ui ERROR] Could not connect to compositor IPC socket: " << effectiveSocketPath << "\n";
         return false;
     }
+    m_compositorSocketPath = effectiveSocketPath;
+    m_surfaceEnded = false;
 
     // WindowApp exposes CSS-like logical pixels. The process-local boot scale is
     // its device pixel ratio; raw-pixel clients do not use this class and retain 1x.
@@ -360,7 +392,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     if (!isPopupSurface() && m_hasRequestedEdgeToEdge) {
         setEdgeToEdge(m_requestedEdgeToEdge);
     }
-    if (!isPopupSurface() && m_hasRequestedCornerRadius) {
+    if (m_hasRequestedCornerRadius) {
         setWindowCornerStyle(m_requestedCornerRadius, m_requestedCornerRoundness);
     }
     if (m_windowRoot) m_windowRoot->markDirty();
@@ -571,7 +603,10 @@ void WindowApp::pollIPC() {
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
                 if (payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceDestroy)) {
                     auto* destroy = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceDestroy*>(payload.data());
-                    if (destroy->surfaceId == m_surfaceId) m_running = false;
+                    if (destroy->surfaceId == m_surfaceId) {
+                        m_running = false;
+                        m_surfaceEnded = true;
+                    }
                 }
             }
             if (m_onIpcMessage) m_onIpcMessage(header, payload);
@@ -581,6 +616,7 @@ void WindowApp::pollIPC() {
             std::cerr << "[lcl-ui ERROR] Compositor v12 connection closed or rejected\n";
             m_ipcConnected = false;
             m_running = false;
+            m_surfaceEnded = true;
             break;
         }
     }
@@ -700,6 +736,7 @@ void WindowApp::runEventLoop() {
 }
 
 bool WindowApp::tick() {
+    m_transients.pruneExpiredOwners();
     pollIPC();
     if (m_onFrame) {
         m_onFrame();
@@ -708,9 +745,33 @@ bool WindowApp::tick() {
     const float dtSec = std::chrono::duration<float>(now - m_lastAnimationTick).count();
     m_lastAnimationTick = now;
     advanceAnimations(dtSec);
-    const bool rendered = renderFrame();
+    bool rendered = renderFrame();
+    m_tickingHostedSurfaces = true;
+    for (auto& entry : m_hostedSurfaces) {
+        if (!entry.pendingRemoval && entry.surface) {
+            rendered = entry.surface->tick() || rendered;
+            if (entry.surface->m_surfaceEnded) entry.pendingRemoval = true;
+        }
+    }
+    m_tickingHostedSurfaces = false;
+    collectClosedHostedSurfaces();
     logFrameTraceIfDue();
     return rendered;
+}
+
+void WindowApp::collectClosedHostedSurfaces() {
+    for (size_t index = 0; index < m_hostedSurfaces.size();) {
+        if (!m_hostedSurfaces[index].pendingRemoval) {
+            ++index;
+            continue;
+        }
+        auto surface = std::move(m_hostedSurfaces[index].surface);
+        auto onClosed = std::move(m_hostedSurfaces[index].onClosed);
+        m_hostedSurfaces.erase(m_hostedSurfaces.begin() +
+                               static_cast<std::ptrdiff_t>(index));
+        surface.reset();
+        if (onClosed) onClosed();
+    }
 }
 
 namespace {
@@ -882,6 +943,7 @@ void WindowApp::setExternalIpcSocket(int socketFd) {
     if (socketFd < 0) return;
     m_socketFd = socketFd;
     m_ipcConnected = true;
+    m_surfaceEnded = false;
     m_ownsSocketFd = false;
     m_canvas->setDmaBufTransportEnabled(true);
 }

@@ -35,6 +35,7 @@ add_library(lcl-ui STATIC
     src/widgets/backdrop_surface.cpp
     src/widgets/filter_group.cpp
     src/widgets/scroll_view.cpp
+    src/widgets/popover.cpp
     src/core/transient_controller.cpp
 )
 

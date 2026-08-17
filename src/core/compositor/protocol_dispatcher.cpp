@@ -344,7 +344,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             entry.clientFd = msg.clientFd;
             entry.bufferScale = popup->bufferScale;
             entry.decorationMode = protocol::LCLDecorationMode::None;
-            entry.insetBorderEnabled = false;
+            entry.insetBorderEnabled = true;
             entry.suppressInitialTransition = true;
             m_surfaces[surfaceKey] = std::move(entry);
 

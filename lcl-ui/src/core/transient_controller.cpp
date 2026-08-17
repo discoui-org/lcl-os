@@ -62,6 +62,22 @@ void TransientController::clear() {
     }
 }
 
+void TransientController::pruneExpiredOwners() {
+    std::vector<TransientHandle> expired;
+    for (const auto& entry : m_entries) {
+        if (entry.options.trackOwnerLifetime &&
+            entry.options.ownerLifetime.expired()) {
+            expired.push_back(entry.handle);
+        }
+    }
+    for (const auto handle : expired) removeInternal(handle, false);
+}
+
+bool TransientController::contains(TransientHandle handle) const noexcept {
+    return std::any_of(m_entries.begin(), m_entries.end(),
+        [handle](const Entry& entry) { return entry.handle == handle; });
+}
+
 bool TransientController::containsLocalTarget(const Widget* target) const {
     return std::any_of(m_entries.begin(), m_entries.end(), [target](const Entry& entry) {
         return entry.presentation == Presentation::LocalWidget &&
@@ -69,24 +85,29 @@ bool TransientController::containsLocalTarget(const Widget* target) const {
     });
 }
 
-bool TransientController::dismissTopmostOnOutsidePointer(
-        Widget* hitTarget, const PointerEvent& event) {
-    if (m_entries.empty()) return false;
+TransientHandle TransientController::outsideDismissCandidate(
+        Widget* hitTarget, const PointerEvent& event) const {
+    if (m_entries.empty()) return 0;
     if (event.source == PointerSource::Mouse) {
-        if (event.type != PointerEventType::Down || event.button != 0) return false;
+        if (event.type != PointerEventType::Down || event.button != 0) return 0;
     } else if (event.source == PointerSource::Touch) {
-        if (event.type != PointerEventType::Up || !event.isTouchTapCompletion()) return false;
+        if (event.type != PointerEventType::Up || !event.isTouchTapCompletion()) return 0;
     } else {
-        return false;
+        return 0;
     }
 
     const Entry& topmost = m_entries.back();
-    if (!topmost.options.dismissOnOutsidePointer) return false;
+    if (!topmost.options.dismissOnOutsidePointer) return 0;
     if (topmost.presentation == Presentation::LocalWidget &&
         containsWidget(topmost.widget, hitTarget)) {
-        return false;
+        return 0;
     }
-    return removeInternal(topmost.handle, true);
+    return topmost.handle;
+}
+
+bool TransientController::dismissOutsideCandidate(TransientHandle handle) {
+    if (handle == 0) return false;
+    return removeInternal(handle, true);
 }
 
 bool TransientController::containsWidget(const Widget* ancestor,

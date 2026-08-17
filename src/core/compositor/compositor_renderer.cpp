@@ -1,4 +1,5 @@
 #include "core/compositor/compositor_renderer.hpp"
+#include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/window_chrome_material.hpp"
 #include "core/compositor/window_group_transform.hpp"
@@ -133,39 +134,6 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 title,
                 (static_cast<uint32_t>(applyOpacityToAlpha(245, chromeOpacity)) << 24) | 0x00F0F8FFu,
                 fontSize);
-        }
-    };
-
-    auto drawForcedInsetBorder = [&](const render::Window& win, const WindowGroupTransform& group,
-                                     float opacity, float scale) {
-        const uint8_t outerA = applyOpacityToAlpha(120, opacity);
-        const uint8_t innerA = applyOpacityToAlpha(86, opacity);
-        float baseRadius = resolveWindowCornerRadiusPx(win);
-        if (baseRadius <= 0.001f) {
-            baseRadius = DisplayScale::pxF(kWindowCornerRadiusLogical);
-        }
-        const float radius = std::max(0.0f, baseRadius * scale);
-
-        auto* sr = renderer.getSkiaRenderer();
-        sr->drawRoundedRect(
-            {group.x, group.y, group.width, group.height},
-            radius,
-            {0, 0, 0, 0},
-            {10, 12, 16, outerA},
-            1.0f,
-            resolveWindowCornerRoundness(win));
-
-        const float inset = 1.0f;
-        const float innerW = std::max(0.0f, group.width - inset * 2.0f);
-        const float innerH = std::max(0.0f, group.height - inset * 2.0f);
-        if (innerW > 0.0f && innerH > 0.0f) {
-            sr->drawRoundedRect(
-                {group.x + inset, group.y + inset, innerW, innerH},
-                std::max(0.0f, radius - 1.0f),
-                {0, 0, 0, 0},
-                {245, 248, 252, innerA},
-                1.0f,
-                resolveWindowCornerRoundness(win));
         }
     };
 
@@ -351,7 +319,18 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
         // Forced compositor-owned inset border for every window, independent from app UI.
         if (win.drawInsetBorder) {
-            drawForcedInsetBorder(win, group, windowOpacity, windowScale);
+            float borderRadius = resolveWindowCornerRadiusPx(win);
+            if (borderRadius <= 0.001f) {
+                borderRadius = DisplayScale::pxF(kWindowCornerRadiusLogical);
+            }
+            drawDoubleInsetBorder(
+                *skia,
+                {group.x, group.y, group.width, group.height},
+                borderRadius,
+                resolveWindowCornerRoundness(win),
+                windowOpacity,
+                DisplayScale::factor(),
+                windowScale);
         }
 
         // PopupSurface entries are not windows. Compose them immediately above
@@ -392,6 +371,22 @@ void CompositorRenderer::render(render::Renderer& renderer,
                         popup->dmaBufTexture, opacity,
                         0.0f, 2.0f, false,
                         popupBounds.width, popupBounds.height);
+                }
+
+                if (popup->insetBorderEnabled) {
+                    constexpr float kPopupCornerRadiusLogical = 10.0f;
+                    const float borderRadius = popup->cornerRadiusPx >= 0.0f
+                        ? popup->cornerRadiusPx
+                        : DisplayScale::pxF(kPopupCornerRadiusLogical);
+                    drawDoubleInsetBorder(
+                        *skia,
+                        {popupBounds.x, popupBounds.y,
+                         popupBounds.width, popupBounds.height},
+                        borderRadius,
+                        std::clamp(popup->cornerRoundness, 2.0f, 8.0f),
+                        opacity,
+                        DisplayScale::factor(),
+                        windowScale);
                 }
             }
         }
