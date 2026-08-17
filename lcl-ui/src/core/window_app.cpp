@@ -1182,7 +1182,7 @@ bool WindowApp::sendKeyDown(int keyCode, char32_t codepoint, uint8_t modifiers) 
     if (m_onRawKey && m_onRawKey(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchKeyEvent(ev);
+    return m_dispatcher.dispatchKeyEvent(m_windowRoot.get(), ev);
 }
 
 bool WindowApp::sendKeyUp(int keyCode, uint8_t modifiers) {
@@ -1190,7 +1190,7 @@ bool WindowApp::sendKeyUp(int keyCode, uint8_t modifiers) {
     if (m_onRawKey && m_onRawKey(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchKeyEvent(ev);
+    return m_dispatcher.dispatchKeyEvent(m_windowRoot.get(), ev);
 }
 
 bool WindowApp::sendTextInput(const std::string& text) {

@@ -20,6 +20,9 @@ public:
     bool dispatchPointerEvent(Widget* root, const PointerEvent& event);
     bool dispatchPointerEvent(Widget* root, TransientController* transients,
                               const PointerEvent& event);
+    /** Root-aware dispatch enables deterministic Tab traversal for a WindowApp. */
+    bool dispatchKeyEvent(Widget* root, const KeyEvent& event);
+    /** Compatibility path for embedders that only need focused-widget routing. */
     bool dispatchKeyEvent(const KeyEvent& event);
     bool dispatchTextInputEvent(const TextInputEvent& event);
 
@@ -35,7 +38,11 @@ public:
     void cancelWidgetSubtree(Widget* subtree);
 
     void setFocus(Widget* widget);
-    Widget* getFocusedWidget() const { return m_focusedWidget; }
+    Widget* getFocusedWidget() const noexcept {
+        return m_focusedWidget && !m_focusedLifetime.expired()
+            ? m_focusedWidget
+            : nullptr;
+    }
     Widget* getHoveredWidget() const { return m_hoveredWidget; }
 
 private:
@@ -77,6 +84,7 @@ private:
 
     Widget* m_hoveredWidget{nullptr};
     Widget* m_focusedWidget{nullptr};
+    std::weak_ptr<uint8_t> m_focusedLifetime;
     std::unordered_map<uint32_t, PointerCapture> m_pointerCaptures;
     std::unordered_map<uint32_t, PointerDownTarget> m_pointerDownTargets;
 };

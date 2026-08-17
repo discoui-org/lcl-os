@@ -72,6 +72,17 @@ dismissal. `Popover::close(handle)` closes it programmatically. The constructor
 accepts a backend-neutral popup `Canvas` factory, preserving the same explicit
 Canvas injection contract as every other `WindowApp`.
 
+### `FocusScope` v1
+
+`FocusScope` is a normal `Container` that also marks a keyboard
+traversal boundary without receiving focus itself. `WindowApp` routes Tab and
+Shift+Tab centrally through `EventDispatcher` in depth-first insertion order.
+The nearest ancestor `FocusScope` of the focused widget is the active context;
+forward and backward traversal wrap inside it. Without an explicit scope, the
+window root is the implicit scope. Hidden, non-focusable, or
+interaction-disabled widgets are skipped. Each hosted PopupSurface has its own
+`WindowApp` and therefore its own independent traversal context.
+
 ---
 
 ### `lcl::ui::Widget`

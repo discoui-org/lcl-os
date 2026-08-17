@@ -5,6 +5,7 @@
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/focus_scope.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
@@ -51,6 +52,43 @@ public:
     int lastKeyCode{-1};
     std::string lastTextInput;
 };
+
+class FocusProbe : public Widget {
+public:
+    FocusProbe() { setFocusable(true); }
+
+    bool onFocusGained(const FocusEvent& event) override {
+        (void)event;
+        ++focusGainedCount;
+        return false;
+    }
+
+    bool onFocusLost(const FocusEvent& event) override {
+        (void)event;
+        ++focusLostCount;
+        return false;
+    }
+
+    bool onKeyDown(const KeyEvent& event) override {
+        if (event.key == lcl::platform::PhysicalKey::Tab) ++tabKeyDownCount;
+        return true;
+    }
+
+    int focusGainedCount{0};
+    int focusLostCount{0};
+    int tabKeyDownCount{0};
+};
+
+bool dispatchTab(EventDispatcher& dispatcher, Widget* root,
+                 bool backwards = false,
+                 KeyEventType type = KeyEventType::KeyDown) {
+    return dispatcher.dispatchKeyEvent(
+        root,
+        KeyEvent{lcl::platform::PhysicalKey::Tab,
+                 static_cast<int>(lcl::platform::PhysicalKey::Tab), 0,
+                 static_cast<uint8_t>(
+                     backwards ? lcl::platform::kModShift : 0), type});
+}
 
 class TextFieldFocusTree {
 public:
@@ -592,6 +630,222 @@ TEST(LclUiEventsTest, KeyboardEventRouting) {
     bool textHandled = dispatcher.dispatchTextInputEvent(textEv);
     EXPECT_TRUE(textHandled);
     EXPECT_EQ(widgetPtr->lastTextInput, "Hello");
+}
+
+TEST(LclUiEventsTest, KeyboardTraversalStartsAtScopeEndsWithoutFocus) {
+    EventDispatcher dispatcher;
+    auto root = std::make_unique<Container>();
+
+    auto first = std::make_unique<FocusProbe>();
+    FocusProbe* firstPtr = first.get();
+    auto nonFocusable = std::make_unique<Container>();
+    auto last = std::make_unique<FocusProbe>();
+    FocusProbe* lastPtr = last.get();
+    root->addChild(std::move(first));
+    root->addChild(std::move(nonFocusable));
+    root->addChild(std::move(last));
+
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), firstPtr);
+    EXPECT_EQ(firstPtr->focusGainedCount, 1);
+
+    dispatcher.setFocus(nullptr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get(), true));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), lastPtr);
+    EXPECT_EQ(lastPtr->focusGainedCount, 1);
+}
+
+TEST(LclUiEventsTest, KeyboardTraversalUsesDepthFirstInsertionOrderAndWraps) {
+    EventDispatcher dispatcher;
+    auto root = std::make_unique<Container>();
+
+    auto first = std::make_unique<FocusProbe>();
+    FocusProbe* firstPtr = first.get();
+    auto group = std::make_unique<Container>();
+    auto nestedFirst = std::make_unique<FocusProbe>();
+    FocusProbe* nestedFirstPtr = nestedFirst.get();
+    auto nestedSecond = std::make_unique<FocusProbe>();
+    FocusProbe* nestedSecondPtr = nestedSecond.get();
+    group->addChild(std::move(nestedFirst));
+    group->addChild(std::move(nestedSecond));
+    auto last = std::make_unique<FocusProbe>();
+    FocusProbe* lastPtr = last.get();
+    root->addChild(std::move(first));
+    root->addChild(std::move(group));
+    root->addChild(std::move(last));
+
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), firstPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), nestedFirstPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), nestedSecondPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), lastPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), firstPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get(), true));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), lastPtr);
+
+    dispatcher.setFocus(nestedSecondPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get(), true));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), nestedFirstPtr);
+}
+
+TEST(LclUiEventsTest, KeyboardTraversalSkipsDisabledAndInputDisabledWidgets) {
+    EventDispatcher dispatcher;
+    auto root = std::make_unique<Container>();
+
+    auto nonFocusable = std::make_unique<Container>();
+    auto disabledButton = std::make_unique<Button>("Disabled");
+    Button* disabledButtonPtr = disabledButton.get();
+    disabledButton->setEnabled(false);
+    auto inputDisabled = std::make_unique<FocusProbe>();
+    FocusProbe* inputDisabledPtr = inputDisabled.get();
+    inputDisabled->setInteractionEnabled(false);
+    auto active = std::make_unique<FocusProbe>();
+    FocusProbe* activePtr = active.get();
+    auto tail = std::make_unique<FocusProbe>();
+    FocusProbe* tailPtr = tail.get();
+    root->addChild(std::move(nonFocusable));
+    root->addChild(std::move(disabledButton));
+    root->addChild(std::move(inputDisabled));
+    root->addChild(std::move(active));
+    root->addChild(std::move(tail));
+
+    EXPECT_FALSE(disabledButtonPtr->isInteractionEnabled());
+    EXPECT_FALSE(inputDisabledPtr->isInteractionEnabled());
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), activePtr);
+
+    activePtr->setInteractionEnabled(false);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), tailPtr);
+    EXPECT_EQ(activePtr->focusLostCount, 1);
+}
+
+TEST(LclUiEventsTest, FocusScopeTrapsForwardAndBackwardTraversal) {
+    EventDispatcher dispatcher;
+    auto root = std::make_unique<Container>();
+
+    auto before = std::make_unique<FocusProbe>();
+    FocusProbe* beforePtr = before.get();
+    auto scope = std::make_unique<FocusScope>();
+    auto first = std::make_unique<FocusProbe>();
+    FocusProbe* firstPtr = first.get();
+    auto last = std::make_unique<FocusProbe>();
+    FocusProbe* lastPtr = last.get();
+    scope->addChild(std::move(first));
+    scope->addChild(std::move(last));
+    auto after = std::make_unique<FocusProbe>();
+    FocusProbe* afterPtr = after.get();
+    root->addChild(std::move(before));
+    root->addChild(std::move(scope));
+    root->addChild(std::move(after));
+
+    dispatcher.setFocus(beforePtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), firstPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), lastPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), firstPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get(), true));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), lastPtr);
+    EXPECT_NE(dispatcher.getFocusedWidget(), afterPtr);
+}
+
+TEST(LclUiEventsTest, NestedFocusScopeUsesNearestFocusedAncestor) {
+    EventDispatcher dispatcher;
+    auto root = std::make_unique<Container>();
+    auto outer = std::make_unique<FocusScope>();
+
+    auto outerFirst = std::make_unique<FocusProbe>();
+    FocusProbe* outerFirstPtr = outerFirst.get();
+    auto inner = std::make_unique<FocusScope>();
+    auto innerFirst = std::make_unique<FocusProbe>();
+    FocusProbe* innerFirstPtr = innerFirst.get();
+    auto innerLast = std::make_unique<FocusProbe>();
+    FocusProbe* innerLastPtr = innerLast.get();
+    inner->addChild(std::move(innerFirst));
+    inner->addChild(std::move(innerLast));
+    auto outerLast = std::make_unique<FocusProbe>();
+    FocusProbe* outerLastPtr = outerLast.get();
+    outer->addChild(std::move(outerFirst));
+    outer->addChild(std::move(inner));
+    outer->addChild(std::move(outerLast));
+    root->addChild(std::move(outer));
+
+    dispatcher.setFocus(outerFirstPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), innerFirstPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), innerLastPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), innerFirstPtr);
+    EXPECT_NE(dispatcher.getFocusedWidget(), outerLastPtr);
+}
+
+TEST(LclUiEventsTest, DestroyedFocusedWidgetAndScopeLeaveNoStaleFocus) {
+    EventDispatcher dispatcher;
+    auto root = std::make_unique<Container>();
+    auto fallback = std::make_unique<FocusProbe>();
+    FocusProbe* fallbackPtr = fallback.get();
+    auto scope = std::make_unique<FocusScope>();
+    FocusScope* scopePtr = scope.get();
+    auto focused = std::make_unique<FocusProbe>();
+    FocusProbe* focusedPtr = focused.get();
+    scope->addChild(std::move(focused));
+    root->addChild(std::move(fallback));
+    root->addChild(std::move(scope));
+
+    dispatcher.setFocus(focusedPtr);
+    ASSERT_EQ(dispatcher.getFocusedWidget(), focusedPtr);
+    root->removeChild(scopePtr);
+    EXPECT_EQ(dispatcher.getFocusedWidget(), nullptr);
+
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), fallbackPtr);
+}
+
+TEST(LclUiEventsTest, TabIsConsumedBeforeFocusedTextFieldKeyRouting) {
+    EventDispatcher dispatcher;
+    auto root = std::make_unique<Container>();
+    auto field = std::make_unique<TextField>("unchanged");
+    TextField* fieldPtr = field.get();
+    auto next = std::make_unique<FocusProbe>();
+    FocusProbe* nextPtr = next.get();
+    root->addChild(std::move(field));
+    root->addChild(std::move(next));
+
+    dispatcher.setFocus(fieldPtr);
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get()));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), nextPtr);
+    EXPECT_EQ(fieldPtr->getText(), "unchanged");
+    EXPECT_EQ(nextPtr->tabKeyDownCount, 0);
+
+    EXPECT_TRUE(dispatchTab(dispatcher, root.get(), false, KeyEventType::KeyUp));
+    EXPECT_EQ(dispatcher.getFocusedWidget(), nextPtr);
+    EXPECT_EQ(nextPtr->tabKeyDownCount, 0);
+}
+
+TEST(LclUiEventsTest, WindowAppOwnsItsRootTraversalContext) {
+    WindowApp app(lcl::render::makeSkiaCanvas(), 200, 100,
+                  "Focus traversal owner");
+    auto root = std::make_unique<Container>();
+    auto first = std::make_unique<FocusProbe>();
+    FocusProbe* firstPtr = first.get();
+    auto second = std::make_unique<FocusProbe>();
+    FocusProbe* secondPtr = second.get();
+    root->addChild(std::move(first));
+    root->addChild(std::move(second));
+    app.setRootWidget(std::move(root));
+
+    const int tabKey = static_cast<int>(lcl::platform::PhysicalKey::Tab);
+    EXPECT_TRUE(app.sendKeyDown(tabKey));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), firstPtr);
+    EXPECT_TRUE(app.sendKeyDown(tabKey));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), secondPtr);
 }
 
 TEST(LclUiEventsTest, TextFieldMouseDownTakesFocus) {

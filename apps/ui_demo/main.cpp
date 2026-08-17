@@ -7,6 +7,7 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/focus_scope.hpp"
 #include "lcl-ui/widgets/popover.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text.hpp"
@@ -248,6 +249,41 @@ int main() {
   scrollContent->addChild(std::move(longTextField));
   scrollContent->addChild(std::move(utf8TextField));
   scrollContent->addChild(std::move(textFieldStatus));
+
+  // FocusScope v1 runtime area. Click any control, then use Tab/Shift+Tab;
+  // traversal stays within these four controls and wraps in tree order.
+  auto focusScope = std::make_unique<FocusScope>();
+  focusScope->getYogaNode().setDirection(YGFlexDirectionColumn);
+  focusScope->getYogaNode().setGap(YGGutterAll, 8.0f);
+  focusScope->setPadding(YGEdgeAll, 8.0f);
+  focusScope->setBackgroundColor(Color{22, 27, 34, 255});
+  focusScope->setBorderColor(Color{52, 61, 74, 200});
+  focusScope->setBorderWidth(1.0f);
+  focusScope->setBorderRadius(10.0f);
+
+  auto focusTitle = std::make_unique<Text>("Focus Traversal");
+  focusTitle->setFontSize(15.0f);
+  focusTitle->setTextColor(Color{236, 239, 244, 255});
+  auto focusHint = std::make_unique<Text>("Tab / Shift+Tab (scope içinde wrap)");
+  focusHint->setFontSize(12.0f);
+  focusHint->setTextColor(Color{160, 174, 192, 255});
+
+  auto focusButtonA = std::make_unique<Button>("Button A");
+  focusButtonA->setHeight(38.0f);
+  auto focusFieldA = std::make_unique<TextField>();
+  focusFieldA->setPlaceholder("TextField A");
+  auto focusButtonB = std::make_unique<Button>("Button B");
+  focusButtonB->setHeight(38.0f);
+  auto focusFieldB = std::make_unique<TextField>();
+  focusFieldB->setPlaceholder("TextField B");
+
+  focusScope->addChild(std::move(focusTitle));
+  focusScope->addChild(std::move(focusHint));
+  focusScope->addChild(std::move(focusButtonA));
+  focusScope->addChild(std::move(focusFieldA));
+  focusScope->addChild(std::move(focusButtonB));
+  focusScope->addChild(std::move(focusFieldB));
+  scrollContent->addChild(std::move(focusScope));
 
   // Add 18 Interactive Row Buttons
   static int clickCounter = 0;

@@ -78,6 +78,8 @@ public:
 
     void setFocusable(bool focusable) { m_focusable = focusable; }
     bool isFocusable() const { return m_focusable; }
+    /** Marks a traversal boundary without making the widget a focus target. */
+    virtual bool isFocusScope() const noexcept { return false; }
     void markDirty();
     uint64_t getPaintRevision() const noexcept { return m_paintRevision; }
     bool isLayoutDirty() const noexcept { return m_layoutDirty; }

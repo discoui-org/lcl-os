@@ -40,6 +40,9 @@ void Button::setState(ButtonState newState) {
 void Button::setEnabled(bool enabled) {
     if (m_enabled == enabled) return;
     m_enabled = enabled;
+    // Keep the generic input/focus eligibility contract authoritative so
+    // EventDispatcher does not need Button-specific disabled logic.
+    setInteractionEnabled(enabled);
     if (!enabled) { m_pressed = false; m_hovered = false; }
     updateComposedState();
 }

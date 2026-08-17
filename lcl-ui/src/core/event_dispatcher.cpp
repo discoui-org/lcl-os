@@ -1,11 +1,56 @@
 #include "lcl-ui/core/event_dispatcher.hpp"
 #include "lcl-ui/core/touch_interaction.hpp"
 #include "lcl-ui/core/transient_controller.hpp"
+#include <algorithm>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace lcl::ui {
+namespace {
+
+struct FocusTraversalEntry {
+    Widget* widget{nullptr};
+    bool eligible{false};
+};
+
+bool isFocusEligible(const Widget* widget) {
+    if (!widget || !widget->isFocusable()) return false;
+    for (const Widget* current = widget; current; current = current->getParent()) {
+        if (!current->isVisible() || !current->isInteractionEnabled()) return false;
+    }
+    return true;
+}
+
+void collectFocusTraversalEntries(Widget* parent,
+                                  std::vector<FocusTraversalEntry>& entries) {
+    if (!parent) return;
+    for (const auto& child : parent->getChildren()) {
+        Widget* widget = child.get();
+        entries.push_back(FocusTraversalEntry{widget, isFocusEligible(widget)});
+        collectFocusTraversalEntries(widget, entries);
+    }
+}
+
+Widget* activeFocusScope(Widget* root, Widget* focused) {
+    if (!root || !focused) return root;
+    bool belongsToRoot = false;
+    for (Widget* current = focused; current; current = current->getParent()) {
+        if (current == root) {
+            belongsToRoot = true;
+            break;
+        }
+    }
+    if (!belongsToRoot) return root;
+
+    for (Widget* current = focused->getParent(); current; current = current->getParent()) {
+        if (current->isFocusScope()) return current;
+        if (current == root) break;
+    }
+    return root;
+}
+
+} // namespace
 
 bool PointerEvent::capturePointer(Widget& owner) const {
     return m_dispatcher && m_dispatcher->capturePointer(pointerId, &owner, source);
@@ -47,17 +92,23 @@ Widget* EventDispatcher::hitTest(Widget* root, float x, float y) {
 }
 
 void EventDispatcher::setFocus(Widget* widget) {
-    if (m_focusedWidget != widget) {
-        if (m_focusedWidget) {
-            FocusEvent lostEv{FocusEventType::Lost};
-            m_focusedWidget->onFocusLost(lostEv);
-        }
-        m_focusedWidget = widget;
-        if (m_focusedWidget) {
-            FocusEvent gainedEv{FocusEventType::Gained};
-            m_focusedWidget->onFocusGained(gainedEv);
-        }
+    if (widget && !isFocusEligible(widget)) widget = nullptr;
+
+    Widget* previous = getFocusedWidget();
+    if (previous == widget) return;
+
+    m_focusedWidget = nullptr;
+    m_focusedLifetime.reset();
+    if (previous) {
+        FocusEvent lostEv{FocusEventType::Lost};
+        previous->onFocusLost(lostEv);
     }
+
+    if (!widget) return;
+    m_focusedWidget = widget;
+    m_focusedLifetime = widget->getLifetimeToken();
+    FocusEvent gainedEv{FocusEventType::Gained};
+    widget->onFocusGained(gainedEv);
 }
 
 bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& event) {
@@ -234,8 +285,7 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, TransientController* tr
 
 Widget* EventDispatcher::findFocusableTarget(Widget* target) {
     for (Widget* current = target; current; current = current->getParent()) {
-        if (current->isFocusable() && current->isVisible() &&
-            current->isInteractionEnabled()) {
+        if (isFocusEligible(current)) {
             return current;
         }
     }
@@ -373,7 +423,7 @@ void EventDispatcher::cancelPointerCaptures() {
 void EventDispatcher::cancelWidgetSubtree(Widget* subtree) {
     if (!subtree) return;
 
-    if (isDescendantOf(m_focusedWidget, subtree)) setFocus(nullptr);
+    if (isDescendantOf(getFocusedWidget(), subtree)) setFocus(nullptr);
     if (isDescendantOf(m_hoveredWidget, subtree)) m_hoveredWidget = nullptr;
 
     std::unordered_set<uint32_t> canceledCapturePointers;
@@ -493,10 +543,68 @@ void EventDispatcher::clearPointerCapture(uint32_t pointerId) {
     m_pointerCaptures.erase(pointerId);
 }
 
-bool EventDispatcher::dispatchKeyEvent(const KeyEvent& event) {
-    if (!m_focusedWidget) return false;
+bool EventDispatcher::dispatchKeyEvent(Widget* root, const KeyEvent& event) {
+    if (root && event.key == lcl::platform::PhysicalKey::Tab) {
+        // Consume both phases centrally. Traversal happens only on KeyDown so
+        // KeyUp cannot leak to the newly focused widget.
+        if (event.type == KeyEventType::KeyUp) return true;
 
-    Widget* curr = m_focusedWidget;
+        Widget* focused = getFocusedWidget();
+        Widget* scope = activeFocusScope(root, focused);
+        std::vector<FocusTraversalEntry> entries;
+        collectFocusTraversalEntries(scope, entries);
+        const bool backwards =
+            (event.modifiers & lcl::platform::kModShift) != 0;
+
+        if (entries.empty()) {
+            setFocus(nullptr);
+            return true;
+        }
+
+        const auto current = std::find_if(
+            entries.begin(), entries.end(), [focused](const auto& entry) {
+                return entry.widget == focused;
+        });
+        if (!focused || current == entries.end()) {
+            if (backwards) {
+                const auto candidate = std::find_if(
+                    entries.rbegin(), entries.rend(),
+                    [](const auto& entry) { return entry.eligible; });
+                if (candidate != entries.rend()) setFocus(candidate->widget);
+                else setFocus(nullptr);
+            } else {
+                const auto candidate = std::find_if(
+                    entries.begin(), entries.end(),
+                    [](const auto& entry) { return entry.eligible; });
+                if (candidate != entries.end()) setFocus(candidate->widget);
+                else setFocus(nullptr);
+            }
+            return true;
+        }
+
+        const size_t count = entries.size();
+        const size_t currentIndex = static_cast<size_t>(current - entries.begin());
+        for (size_t step = 1; step <= count; ++step) {
+            const size_t index = backwards
+                ? (currentIndex + count - (step % count)) % count
+                : (currentIndex + step) % count;
+            if (!entries[index].eligible) continue;
+            setFocus(entries[index].widget);
+            return true;
+        }
+
+        setFocus(nullptr);
+        return true;
+    }
+
+    Widget* focused = getFocusedWidget();
+    if (!focused) return false;
+    if (!isFocusEligible(focused)) {
+        setFocus(nullptr);
+        return false;
+    }
+
+    Widget* curr = focused;
     bool handled = false;
 
     while (curr && !handled) {
@@ -512,10 +620,19 @@ bool EventDispatcher::dispatchKeyEvent(const KeyEvent& event) {
     return handled;
 }
 
-bool EventDispatcher::dispatchTextInputEvent(const TextInputEvent& event) {
-    if (!m_focusedWidget) return false;
+bool EventDispatcher::dispatchKeyEvent(const KeyEvent& event) {
+    return dispatchKeyEvent(nullptr, event);
+}
 
-    Widget* curr = m_focusedWidget;
+bool EventDispatcher::dispatchTextInputEvent(const TextInputEvent& event) {
+    Widget* focused = getFocusedWidget();
+    if (!focused) return false;
+    if (!isFocusEligible(focused)) {
+        setFocus(nullptr);
+        return false;
+    }
+
+    Widget* curr = focused;
     bool handled = false;
 
     while (curr && !handled) {
