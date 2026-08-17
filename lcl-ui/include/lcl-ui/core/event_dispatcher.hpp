@@ -8,6 +8,8 @@
 
 namespace lcl::ui {
 
+class TransientController;
+
 class EventDispatcher {
 public:
     EventDispatcher() = default;
@@ -16,6 +18,8 @@ public:
     Widget* hitTest(Widget* root, float x, float y);
 
     bool dispatchPointerEvent(Widget* root, const PointerEvent& event);
+    bool dispatchPointerEvent(Widget* root, TransientController* transients,
+                              const PointerEvent& event);
     bool dispatchKeyEvent(const KeyEvent& event);
     bool dispatchTextInputEvent(const TextInputEvent& event);
 
@@ -27,6 +31,8 @@ public:
     bool cancelPointerDownTarget(uint32_t pointerId, Widget* newOwner,
                                  const PointerEvent& sourceEvent);
     void cancelPointerCaptures();
+    /** Clears focus, hover, captures, and down-target records below a subtree. */
+    void cancelWidgetSubtree(Widget* subtree);
 
     void setFocus(Widget* widget);
     Widget* getFocusedWidget() const { return m_focusedWidget; }
@@ -53,6 +59,7 @@ private:
 
     static bool isEventCapableInTree(Widget* root, const Widget* target,
                                      bool ancestorsVisible = true);
+    static bool isDescendantOf(const Widget* target, const Widget* ancestor);
     static bool dispatchToTarget(Widget* target, const PointerEvent& event);
     static void dispatchPreviewToTarget(Widget* target, const PointerEvent& event);
     static bool dispatchCancelUntil(Widget* target, Widget* stopBefore,

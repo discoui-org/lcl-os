@@ -38,6 +38,11 @@ public:
         enum class ResizeTransitionPhase { None, AwaitingBuffer, Crossfading };
 
         uint32_t windowId{0};
+        uint64_t parentSurfaceKey{0};
+        protocol::LCLPopupRole popupRole{protocol::LCLPopupRole::Transient};
+        int popupX{0};
+        int popupY{0};
+        uint64_t popupOrder{0};
         int clientFd{-1};
         int shmFd{-1};
         void* pixels{nullptr};
@@ -136,6 +141,7 @@ public:
         bool hasRenderableBuffer() const noexcept {
             return pixels != nullptr || dmaBufTexture != 0;
         }
+        bool isPopup() const noexcept { return parentSurfaceKey != 0; }
     };
 
     using Key = uint64_t;
@@ -174,6 +180,8 @@ public:
     bool empty() const noexcept { return m_entries.empty(); }
 
     Snapshot snapshot() const;
+    std::vector<Key> popupChildren(Key parentSurfaceKey) const;
+    uint64_t allocatePopupOrder() noexcept { return m_nextPopupOrder++; }
 
     iterator erase(iterator position);
     size_t erase(Key key);
@@ -208,6 +216,7 @@ public:
 
 private:
     Entries m_entries;
+    uint64_t m_nextPopupOrder{1};
 };
 
 } // namespace lcl::core

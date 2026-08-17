@@ -510,16 +510,6 @@ void Widget::draw(Canvas& canvas, const Rect& damageRect) {
     endPresentation(canvas);
 }
 
-void Widget::advancePresentation(float deltaSec) {
-    for (auto& child : m_children) child->advancePresentation(deltaSec);
-}
-
-bool Widget::hasActivePresentation() const {
-    return std::any_of(m_children.begin(), m_children.end(), [](const auto& child) {
-        return child->hasActivePresentation();
-    });
-}
-
 void Widget::collectEffects(std::vector<EffectRegion>& outEffects) const {
     if (!m_visible) return;
     for (const auto& child : m_children) {

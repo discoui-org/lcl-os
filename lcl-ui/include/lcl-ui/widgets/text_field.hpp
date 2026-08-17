@@ -31,8 +31,6 @@ public:
 
     void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f) override;
     void draw(Canvas& canvas, const Rect& damageRect) override;
-    void advancePresentation(float deltaSec) override;
-    bool hasActivePresentation() const override;
 
     bool onPointerDown(const PointerEvent& event) override;
     bool onPointerUp(const PointerEvent& event) override;
@@ -52,6 +50,9 @@ private:
     float measureTextWidth() const;
     size_t characterIndexForX(float x) const;
     void ensureCaretVisible();
+    void registerCaretPresentation();
+    void unregisterCaretPresentation();
+    void tickCaretPresentation(float deltaSec);
     void resetCaretPresentation();
     void valueChanged();
 

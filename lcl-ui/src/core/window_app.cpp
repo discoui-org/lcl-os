@@ -119,7 +119,9 @@ WindowApp::~WindowApp() {
     m_running = false;
     // Widgets unregister their channels on destruction. Detach while the
     // coordinator member is still alive (member teardown runs in reverse).
-    if (m_rootWidget) m_rootWidget->setMotionCoordinator(nullptr);
+    m_transients.clear();
+    m_transients.setWindowRoot(nullptr);
+    if (m_windowRoot) m_windowRoot->setMotionCoordinator(nullptr);
     if (m_shmPixels) {
         munmap(m_shmPixels, m_shmSize);
         m_shmPixels = nullptr;
@@ -146,16 +148,58 @@ uint32_t WindowApp::getPixelHeight() const {
 void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     if (!root) return;
     m_dispatcher.cancelPointerCaptures();
-    m_rootWidget = std::move(root);
-    m_rootWidget->setRenderPass(&m_renderPass);
-    m_rootWidget->setMotionCoordinator(&m_motionCoordinator);
-    m_rootWidget->markLayoutDirty();
-    m_rootWidget->markDirty();
+    m_transients.setWindowRoot(nullptr);
+
+    auto windowRoot = std::make_unique<Container>();
+    windowRoot->getYogaNode().setWidth(static_cast<float>(m_width));
+    windowRoot->getYogaNode().setHeight(static_cast<float>(m_height));
+    root->getYogaNode().setFlexGrow(1.0f);
+    root->getYogaNode().setFlexShrink(1.0f);
+    Widget* contentRoot = root.get();
+    windowRoot->addChild(std::move(root));
+    windowRoot->setRenderPass(&m_renderPass);
+    windowRoot->setMotionCoordinator(&m_motionCoordinator);
+
+    m_windowRoot = std::move(windowRoot);
+    m_rootWidget = contentRoot;
+    m_transients.setWindowRoot(m_windowRoot.get());
+    m_windowRoot->markLayoutDirty();
+    m_windowRoot->markDirty();
     // A newly mounted tree has not been through Yoga/syncLayout yet, so its
     // absolute bounds are still empty and markDirty() cannot produce damage.
     // Force one full frame after layout; runtime root replacement must not
     // leave old pixels in the client buffer.
     m_firstFrame = true;
+}
+
+TransientHandle WindowApp::registerLocalTransient(std::unique_ptr<Widget> widget,
+                                                  TransientOptions options) {
+    if (!widget) return 0;
+    widget->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    return m_transients.registerLocal(std::move(widget), std::move(options));
+}
+
+TransientHandle WindowApp::registerSurfaceTransient(
+        uint32_t surfaceId, std::function<void()> destroySurface,
+        TransientOptions options) {
+    return m_transients.registerSurface(surfaceId, std::move(destroySurface),
+                                        std::move(options));
+}
+
+TransientHandle WindowApp::registerSurfaceTransient(
+        uint32_t surfaceId, TransientOptions options) {
+    return m_transients.registerSurface(
+        surfaceId,
+        [this, surfaceId] { requestSurfaceDestroy(surfaceId); },
+        std::move(options));
+}
+
+bool WindowApp::removeTransient(TransientHandle handle) {
+    return m_transients.remove(handle);
+}
+
+void WindowApp::clearTransients() {
+    m_transients.clear();
 }
 
 void WindowApp::setInputEnabled(bool enabled) {
@@ -248,7 +292,8 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // 1. System-surface policy is declared separately. The compositor verifies
     // the declaration against the trusted shell peer; normal clients have no
     // role-selection protocol.
-    if (m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::None) {
+    if (!isPopupSurface() &&
+        m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::None) {
         lcl::protocol::LCLMsgSetSystemSurfaceKind systemSurface{};
         systemSurface.kind = m_systemSurfaceKind;
         if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SetSystemSurfaceKind,
@@ -258,21 +303,39 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         }
     }
 
-    // 2. Request Surface Creation
-    lcl::protocol::LCLMsgSurfaceCreate surfMsg{};
-    surfMsg.surfaceId = m_surfaceId;
-    surfMsg.x = m_initialX;
-    surfMsg.y = m_initialY;
-    surfMsg.width = m_width;
-    surfMsg.height = m_height;
-    surfMsg.bufferScale = m_bufferScale;
-    surfMsg.resizePresentation = m_resizePresentationMode;
-    std::strncpy(surfMsg.title, m_title.c_str(), sizeof(surfMsg.title) - 1);
-    std::strncpy(surfMsg.appId, m_appId.c_str(), sizeof(surfMsg.appId) - 1);
+    // 2. Request normal or parent-bound popup surface creation. Both continue
+    // through the same configure, buffer transport, render, and input paths.
     m_waitingForInitialConfigure = true;
-    if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate, &surfMsg, sizeof(surfMsg))) {
+    bool createSent = false;
+    if (isPopupSurface()) {
+        lcl::protocol::LCLMsgPopupSurfaceCreate popup{};
+        popup.surfaceId = m_surfaceId;
+        popup.parentSurfaceId = m_popupParentSurfaceId;
+        popup.role = m_popupRole;
+        popup.x = m_popupX;
+        popup.y = m_popupY;
+        popup.width = m_width;
+        popup.height = m_height;
+        popup.bufferScale = m_bufferScale;
+        createSent = sendProtocolMessage(lcl::protocol::LCLOpcode::PopupSurfaceCreate,
+                                         &popup, sizeof(popup));
+    } else {
+        lcl::protocol::LCLMsgSurfaceCreate surface{};
+        surface.surfaceId = m_surfaceId;
+        surface.x = m_initialX;
+        surface.y = m_initialY;
+        surface.width = m_width;
+        surface.height = m_height;
+        surface.bufferScale = m_bufferScale;
+        surface.resizePresentation = m_resizePresentationMode;
+        std::strncpy(surface.title, m_title.c_str(), sizeof(surface.title) - 1);
+        std::strncpy(surface.appId, m_appId.c_str(), sizeof(surface.appId) - 1);
+        createSent = sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate,
+                                         &surface, sizeof(surface));
+    }
+    if (!createSent) {
         m_waitingForInitialConfigure = false;
-        std::cerr << "[lcl-ui ERROR] Failed to create v11 surface\n";
+        std::cerr << "[lcl-ui ERROR] Failed to create v12 surface\n";
         return false;
     }
 
@@ -291,18 +354,16 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // Decoration state belongs to the surface contract, not to a later frame.
     // Send preconfigured values before the first effect graph/buffer attach so a
     // CSD client never flashes the compositor's default title chrome.
-    if (m_hasRequestedDecorationMode) {
+    if (!isPopupSurface() && m_hasRequestedDecorationMode) {
         setDecorationMode(m_requestedDecorationMode);
     }
-    if (m_hasRequestedEdgeToEdge) {
+    if (!isPopupSurface() && m_hasRequestedEdgeToEdge) {
         setEdgeToEdge(m_requestedEdgeToEdge);
     }
-    if (m_hasRequestedCornerRadius) {
+    if (!isPopupSurface() && m_hasRequestedCornerRadius) {
         setWindowCornerStyle(m_requestedCornerRadius, m_requestedCornerRoundness);
     }
-    if (m_rootWidget) {
-        m_rootWidget->markDirty();
-    }
+    if (m_windowRoot) m_windowRoot->markDirty();
     m_firstFrame = true;
 
     std::cout << "[lcl-ui] Connected to Compositor IPC socket successfully (" << m_title << ").\n";
@@ -317,10 +378,10 @@ void WindowApp::resize(uint32_t width, uint32_t height) {
     m_height = height;
     clearMorphCrossfade();
 
-    if (m_rootWidget) {
-        m_rootWidget->getYogaNode().setWidth(static_cast<float>(width));
-        m_rootWidget->getYogaNode().setHeight(static_cast<float>(height));
-        m_rootWidget->markDirty();
+    if (m_windowRoot) {
+        m_windowRoot->getYogaNode().setWidth(static_cast<float>(width));
+        m_windowRoot->getYogaNode().setHeight(static_cast<float>(height));
+        m_windowRoot->markDirty();
     }
 
     if (m_ipcConnected) {
@@ -356,11 +417,21 @@ void WindowApp::setInitialBounds(int32_t x, int32_t y, uint32_t width, uint32_t 
     m_height = height;
     m_pixelBuffer.resize(static_cast<size_t>(width) * height, 0xFF000000);
     m_canvas->setTargetPixels(m_pixelBuffer.data(), width, height);
-    if (m_rootWidget) {
-        m_rootWidget->getYogaNode().setWidth(static_cast<float>(width));
-        m_rootWidget->getYogaNode().setHeight(static_cast<float>(height));
-        m_rootWidget->markDirty();
+    if (m_windowRoot) {
+        m_windowRoot->getYogaNode().setWidth(static_cast<float>(width));
+        m_windowRoot->getYogaNode().setHeight(static_cast<float>(height));
+        m_windowRoot->markDirty();
     }
+}
+
+void WindowApp::configurePopupSurface(uint32_t parentSurfaceId,
+                                      lcl::protocol::LCLPopupRole role,
+                                      int32_t x, int32_t y) {
+    if (m_ipcConnected || parentSurfaceId == 0) return;
+    m_popupParentSurfaceId = parentSurfaceId;
+    m_popupRole = role;
+    m_popupX = x;
+    m_popupY = y;
 }
 
 void WindowApp::pollIPC() {
@@ -507,7 +578,7 @@ void WindowApp::pollIPC() {
         } else if (receiveStatus == lcl::protocol::ReceiveStatus::WouldBlock) {
             break;
         } else {
-            std::cerr << "[lcl-ui ERROR] Compositor v11 connection closed or rejected\n";
+            std::cerr << "[lcl-ui ERROR] Compositor v12 connection closed or rejected\n";
             m_ipcConnected = false;
             m_running = false;
             break;
@@ -708,7 +779,7 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
             const size_t pixelCount = static_cast<size_t>(snapshotWidth) * snapshotHeight;
             oldPixels.assign(pixels, pixels + pixelCount);
         }
-        collectWidgetBounds(m_rootWidget.get(), oldBounds);
+        collectWidgetBounds(m_windowRoot.get(), oldBounds);
     }
     m_motionCoordinator.beginTransaction(motion, options);
     try {
@@ -721,7 +792,7 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
     if (options.layout == LayoutMode::Morph) {
         updateLayout();
         bool anyMorph = false;
-        startMorphs(m_rootWidget.get(), oldBounds, m_motionCoordinator, motion, anyMorph);
+        startMorphs(m_windowRoot.get(), oldBounds, m_motionCoordinator, motion, anyMorph);
         startMorphCrossfade(std::move(oldPixels), snapshotWidth, snapshotHeight, motion);
         m_morphInputFrozen = anyMorph || m_morphBlendEngine.hasActiveAnimations();
         if (m_morphInputFrozen) m_dispatcher.cancelPointerCaptures();
@@ -732,14 +803,11 @@ bool WindowApp::advanceAnimations(float dtSec) {
     const bool motionActive = m_motionCoordinator.tick(dtSec);
     const bool morphBlendActive = advanceMorphCrossfade(dtSec);
     if (m_morphInputFrozen && !motionActive && !morphBlendActive) m_morphInputFrozen = false;
-    if (m_rootWidget) m_rootWidget->advancePresentation(dtSec);
-    return motionActive || morphBlendActive ||
-        (m_rootWidget && m_rootWidget->hasActivePresentation());
+    return motionActive || morphBlendActive;
 }
 
 bool WindowApp::hasActiveAnimations() const noexcept {
-    return m_motionCoordinator.hasActiveAnimations() || m_morphBlendEngine.hasActiveAnimations() ||
-        (m_rootWidget && m_rootWidget->hasActivePresentation());
+    return m_motionCoordinator.hasActiveAnimations() || m_morphBlendEngine.hasActiveAnimations();
 }
 
 void WindowApp::startMorphCrossfade(std::vector<uint32_t> snapshot,
@@ -820,7 +888,7 @@ void WindowApp::setExternalIpcSocket(int socketFd) {
 
 bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
                                     float localX, float localY) {
-    if (!m_ipcConnected || m_socketFd < 0) return false;
+    if (!m_ipcConnected || m_socketFd < 0 || isPopupSurface()) return false;
 
     lcl::protocol::LCLMsgRequestWindowAction msg{};
     msg.surfaceId = m_surfaceId;
@@ -830,6 +898,14 @@ bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
 
     return sendProtocolMessage(lcl::protocol::LCLOpcode::RequestWindowAction,
                                &msg, sizeof(msg));
+}
+
+bool WindowApp::requestSurfaceDestroy(uint32_t surfaceId) {
+    if (!m_ipcConnected || m_socketFd < 0 || surfaceId == 0) return false;
+    lcl::protocol::LCLMsgRequestSurfaceClose close{};
+    close.surfaceId = surfaceId;
+    return sendProtocolMessage(lcl::protocol::LCLOpcode::RequestSurfaceClose,
+                               &close, sizeof(close));
 }
 
 bool WindowApp::sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
@@ -864,6 +940,9 @@ bool WindowApp::requestWindowToggleMaximize() {
 }
 
 bool WindowApp::requestWindowClose() {
+    if (isPopupSurface()) {
+        return requestSurfaceDestroy(m_surfaceId);
+    }
     return requestWindowAction(lcl::protocol::LCLWindowAction::Close);
 }
 
@@ -964,16 +1043,19 @@ bool WindowApp::sendPointerMove(float x, float y, PointerSource source, uint32_t
         m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
+    return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
 }
 
 bool WindowApp::sendPointerDown(float x, float y, int button, PointerSource source,
                                 uint32_t pointerId) {
     if (m_morphInputFrozen) return false;
-    if (m_csdTitlebarEnabled && button == 0 && y >= 0.0f && y <= m_csdTitlebarHeight) {
+    Widget* hitTarget = m_dispatcher.hitTest(m_windowRoot.get(), x, y);
+    const bool transientHit = m_transients.containsLocalTarget(hitTarget);
+    if (m_csdTitlebarEnabled && !transientHit && button == 0 &&
+        y >= 0.0f && y <= m_csdTitlebarHeight) {
         m_csdPressedControl = hitCsdControl(x, y);
         if (m_csdPressedControl >= 0) {
-            m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
+            m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients,
                 PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down, source, pointerId});
             return true;
         }
@@ -988,7 +1070,7 @@ bool WindowApp::sendPointerDown(float x, float y, int button, PointerSource sour
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
+    return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
 }
 
 bool WindowApp::sendPointerUp(float x, float y, int button, PointerSource source,
@@ -997,7 +1079,7 @@ bool WindowApp::sendPointerUp(float x, float y, int button, PointerSource source
     if (button == 0 && m_csdPressedControl >= 0) {
         const int pressedControl = m_csdPressedControl;
         m_csdPressedControl = -1;
-        m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
+        m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients,
             PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Up, source, pointerId});
         if (hitCsdControl(x, y) == pressedControl) {
             if (pressedControl == 0) return requestWindowClose();
@@ -1011,7 +1093,7 @@ bool WindowApp::sendPointerUp(float x, float y, int button, PointerSource source
         m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
+    return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
 }
 
 bool WindowApp::sendPointerCancel(float x, float y, PointerSource source,
@@ -1021,7 +1103,7 @@ bool WindowApp::sendPointerCancel(float x, float y, PointerSource source,
         m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
+    return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
 }
 
 bool WindowApp::sendPointerScroll(float x, float y, float deltaX, float deltaY, PointerSource source) {
@@ -1030,7 +1112,7 @@ bool WindowApp::sendPointerScroll(float x, float y, float deltaX, float deltaY, 
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
+    return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
 }
 
 bool WindowApp::sendKeyDown(int keyCode, char32_t codepoint, uint8_t modifiers) {
@@ -1058,14 +1140,14 @@ bool WindowApp::sendTextInput(const std::string& text) {
 }
 
 void WindowApp::updateLayout() {
-    if (m_rootWidget) {
+    if (m_windowRoot) {
         const auto started = std::chrono::steady_clock::now();
         // Clear the request being serviced before calculation. A widget that
         // performs a genuine Yoga mutation from syncLayout() will set it again
         // and receive another layout pass on the next frame.
-        m_rootWidget->clearLayoutDirty();
-        m_rootWidget->getYogaNode().calculateLayout(static_cast<float>(m_width), static_cast<float>(m_height));
-        m_rootWidget->syncLayout(0.0f, 0.0f);
+        m_windowRoot->clearLayoutDirty();
+        m_windowRoot->getYogaNode().calculateLayout(static_cast<float>(m_width), static_cast<float>(m_height));
+        m_windowRoot->syncLayout(0.0f, 0.0f);
         if (m_frameTraceEnabled) {
             ++m_traceLayoutPasses;
             m_traceLayoutMs += std::chrono::duration<double, std::milli>(
@@ -1082,13 +1164,15 @@ bool WindowApp::renderFrame() {
     if (m_liveResizeFramePacing && m_canvas->hasDmaBufTransport() &&
         !m_liveFrameGateOpen) return false;
 
-    if (m_rootWidget && m_rootWidget->isLayoutDirty()) updateLayout();
+    if (m_windowRoot && m_windowRoot->isLayoutDirty()) {
+        updateLayout();
+    }
 
     // A resize can leave old-layout damage queued before Yoga computes the
     // new child positions. Always include the complete post-layout root extent
     // on the first frame so children moved outside the old damage are painted.
-    if (m_firstFrame && m_rootWidget) {
-        m_renderPass.addDirtyRect(m_rootWidget->getAbsoluteBounds());
+    if (m_firstFrame) {
+        if (m_windowRoot) m_renderPass.addDirtyRect(m_windowRoot->getAbsoluteBounds());
     }
     if (!m_renderPass.hasDamage()) return false;
     m_firstFrame = false;
@@ -1128,19 +1212,17 @@ bool WindowApp::renderFrame() {
     const auto drawStarted = std::chrono::steady_clock::now();
     m_renderPass.begin(*m_canvas);
 
-    if (m_rootWidget && m_rootWidget->isVisible()) {
-        m_rootWidget->draw(*m_canvas, damageRect);
+    if (m_windowRoot && m_windowRoot->isVisible()) {
+        m_windowRoot->draw(*m_canvas, damageRect);
     }
-    if (m_layoutOverlayEnabled && m_rootWidget) {
-        drawLayoutOverlay(*m_rootWidget, *m_canvas);
+    if (m_layoutOverlayEnabled && m_windowRoot) {
+        drawLayoutOverlay(*m_windowRoot, *m_canvas);
         m_canvas->drawRoundedRect(damageRect, 0.0f, {0, 0, 0, 0},
                                   {239, 68, 68, 255}, 1.0f, 2.0f);
     }
 
     std::vector<EffectRegion> uiEffects;
-    if (m_rootWidget) {
-        m_rootWidget->collectEffects(uiEffects);
-    }
+    if (m_windowRoot) m_windowRoot->collectEffects(uiEffects);
 
     m_renderPass.end(*m_canvas);
     m_canvas->endFrame();

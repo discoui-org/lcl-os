@@ -5,6 +5,7 @@
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/event_dispatcher.hpp"
 #include "lcl-ui/core/motion.hpp"
+#include "lcl-ui/core/transient_controller.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include <memory>
@@ -43,7 +44,18 @@ public:
     const std::string& getTitle() const { return m_title; }
 
     void setRootWidget(std::unique_ptr<Widget> root);
-    Widget* getRootWidget() const { return m_rootWidget.get(); }
+    Widget* getRootWidget() const { return m_rootWidget; }
+    TransientController& getTransientController() { return m_transients; }
+    const TransientController& getTransientController() const { return m_transients; }
+    TransientHandle registerLocalTransient(std::unique_ptr<Widget> widget,
+                                           TransientOptions options = {});
+    TransientHandle registerSurfaceTransient(uint32_t surfaceId,
+                                             std::function<void()> destroySurface,
+                                             TransientOptions options = {});
+    TransientHandle registerSurfaceTransient(uint32_t surfaceId,
+                                             TransientOptions options = {});
+    bool removeTransient(TransientHandle handle);
+    void clearTransients();
 
     EventDispatcher& getDispatcher() { return m_dispatcher; }
     RenderPass& getRenderPass() { return m_renderPass; }
@@ -92,6 +104,11 @@ public:
     void resize(uint32_t width, uint32_t height);
     /** Set logical surface bounds before connectCompositor(). */
     void setInitialBounds(int32_t x, int32_t y, uint32_t width, uint32_t height);
+    /** Configure this WindowApp as a parent-bound popup before connecting. */
+    void configurePopupSurface(uint32_t parentSurfaceId,
+                               lcl::protocol::LCLPopupRole role,
+                               int32_t x, int32_t y);
+    bool isPopupSurface() const noexcept { return m_popupParentSurfaceId != 0; }
 
     void setSurfaceId(uint32_t surfaceId) { if (!m_ipcConnected && surfaceId > 0) m_surfaceId = surfaceId; }
     uint32_t getSurfaceId() const { return m_surfaceId; }
@@ -170,6 +187,7 @@ private:
     void clearMorphCrossfade();
     bool requestWindowAction(lcl::protocol::LCLWindowAction action,
                              float localX = 0.0f, float localY = 0.0f);
+    bool requestSurfaceDestroy(uint32_t surfaceId);
     int hitCsdControl(float x, float y) const noexcept;
     bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
                              uint32_t payloadSize, int passedFd = -1);
@@ -181,9 +199,11 @@ private:
     float m_bufferScale{1.0f};
     std::string m_title;
 
-    std::unique_ptr<Widget> m_rootWidget;
+    std::unique_ptr<Container> m_windowRoot;
+    Widget* m_rootWidget{nullptr};
     RenderPass m_renderPass;
     EventDispatcher m_dispatcher;
+    TransientController m_transients{m_dispatcher};
     MotionCoordinator m_motionCoordinator;
     std::unique_ptr<Canvas> m_canvas;
 
@@ -218,6 +238,10 @@ private:
     bool m_inputEnabled{true};
     int32_t m_initialX{80};
     int32_t m_initialY{60};
+    uint32_t m_popupParentSurfaceId{0};
+    lcl::protocol::LCLPopupRole m_popupRole{lcl::protocol::LCLPopupRole::Transient};
+    int32_t m_popupX{0};
+    int32_t m_popupY{0};
 
     bool m_initialized{false};
     bool m_firstFrame{true};

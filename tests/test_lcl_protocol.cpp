@@ -76,6 +76,62 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     close(sv[1]);
 }
 
+TEST(LCLProtocolTest, PopupSurfaceCreateRoundTripsParentRoleAndGeometry) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    LCLMsgPopupSurfaceCreate popup{};
+    popup.surfaceId = 9;
+    popup.parentSurfaceId = 3;
+    popup.role = LCLPopupRole::Transient;
+    popup.x = 280;
+    popup.y = -12;
+    popup.width = 220;
+    popup.height = 96;
+    popup.bufferScale = 1.5f;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::PopupSurfaceCreate;
+    header.payloadSize = sizeof(popup);
+    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &popup));
+
+    LCLHeader received{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sockets[1], received, payload, receivedFd));
+    ASSERT_EQ(received.opcode, LCLOpcode::PopupSurfaceCreate);
+    ASSERT_EQ(payload.size(), sizeof(LCLMsgPopupSurfaceCreate));
+    const auto* decoded = reinterpret_cast<const LCLMsgPopupSurfaceCreate*>(payload.data());
+    EXPECT_EQ(decoded->surfaceId, 9u);
+    EXPECT_EQ(decoded->parentSurfaceId, 3u);
+    EXPECT_EQ(decoded->role, LCLPopupRole::Transient);
+    EXPECT_EQ(decoded->x, 280);
+    EXPECT_EQ(decoded->y, -12);
+    EXPECT_EQ(decoded->width, 220u);
+    EXPECT_EQ(decoded->height, 96u);
+    EXPECT_FLOAT_EQ(decoded->bufferScale, 1.5f);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(LCLProtocolTest, PopupSurfaceRejectsSelfParentAndUnknownRole) {
+    LCLMsgPopupSurfaceCreate popup{};
+    popup.surfaceId = 4;
+    popup.parentSurfaceId = 4;
+    popup.width = 100;
+    popup.height = 50;
+    popup.bufferScale = 1.0f;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::PopupSurfaceCreate;
+    header.payloadSize = sizeof(popup);
+    std::vector<uint8_t> packet;
+    EXPECT_FALSE(encodePacket(header, &popup, packet));
+
+    popup.parentSurfaceId = 1;
+    popup.role = static_cast<LCLPopupRole>(99);
+    EXPECT_FALSE(encodePacket(header, &popup, packet));
+}
+
 TEST(LCLProtocolTest, ConfigureAndAttachRoundTripTheSameSerial) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
@@ -837,4 +893,3 @@ TEST(LCLProtocolTest, InputEventCodecRoundTripWithPointerSource) {
     EXPECT_FLOAT_EQ(decodedInput->deltaX, -1.5f);
     EXPECT_FLOAT_EQ(decodedInput->deltaY, 2.5f);
 }
-

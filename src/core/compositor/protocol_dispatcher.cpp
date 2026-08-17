@@ -116,7 +116,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         }
     };
     auto mapSurface = [&](SurfaceRegistry::Key surfaceKey, SurfaceEntry& entry, pid_t clientPid) {
-        if (entry.windowId != 0 || !entry.hasRenderableBuffer() || entry.width == 0 || entry.height == 0) {
+        if (entry.isPopup() || entry.windowId != 0 || !entry.hasRenderableBuffer() ||
+            entry.width == 0 || entry.height == 0) {
             return false;
         }
 
@@ -180,9 +181,29 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         return true;
     };
 
+    auto destroyPopupChildren = [&](uint64_t parentSurfaceKey) {
+        for (const auto childKey : m_surfaces.popupChildren(parentSurfaceKey)) {
+            auto child = m_surfaces.find(childKey);
+            if (child == m_surfaces.end()) continue;
+            if (child->second.clientFd >= 0) {
+                lcl::protocol::LCLHeader header{};
+                header.opcode = lcl::protocol::LCLOpcode::SurfaceDestroy;
+                header.payloadSize = sizeof(lcl::protocol::LCLMsgSurfaceDestroy);
+                lcl::protocol::LCLMsgSurfaceDestroy destroy{};
+                destroy.surfaceId = static_cast<uint32_t>(childKey & 0xFFFFFFFFu);
+                lcl::protocol::sendMsgWithFd(child->second.clientFd, header, &destroy);
+            }
+            child->second.ignoreBufferCommits = true;
+            child->second.pendingDestroy = true;
+            changed = true;
+        }
+    };
+
     auto requestSurfaceClose = [&](uint64_t surfaceKey, uint32_t surfaceId) {
         auto it = m_surfaces.find(surfaceKey);
         if (it == m_surfaces.end()) return;
+
+        destroyPopupChildren(surfaceKey);
 
         // Ask the client to stop its loop while compositor animates its frozen
         // last frame.  All close entry points use this same transition path.
@@ -195,7 +216,11 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             lcl::protocol::sendMsgWithFd(it->second.clientFd, destroyHeader, &destroyMsg);
         }
 
-        if (beginClosingTransition(it->second)) {
+        if (it->second.isPopup()) {
+            it->second.ignoreBufferCommits = true;
+            it->second.pendingDestroy = true;
+            changed = true;
+        } else if (beginClosingTransition(it->second)) {
             if (it->second.windowId > 0) {
                 m_windowManager.removeWindow(it->second.windowId);
             }
@@ -212,6 +237,16 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             m_pendingSystemSurfaceKinds.erase(msg.clientFd);
             m_shellSubscriptions.erase(msg.clientFd);
             std::vector<uint64_t> surfacesToRemove;
+            std::vector<uint64_t> ownedParentSurfaces;
+            for (const auto& [surfKey, entry] : m_surfaces) {
+                if (SurfaceRegistry::isOwnedByClientConnection(entry, msg.clientFd) &&
+                    !entry.isPopup()) {
+                    ownedParentSurfaces.push_back(surfKey);
+                }
+            }
+            for (const auto parentKey : ownedParentSurfaces) {
+                destroyPopupChildren(parentKey);
+            }
             for (auto& [surfKey, entry] : m_surfaces) {
                 // One process can own wallpaper, menu and Dock over separate
                 // sockets. Closing one WindowApp must not tear down every
@@ -219,7 +254,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 // and therefore still cleans all of them deterministically.
                 if (SurfaceRegistry::isOwnedByClientConnection(entry, msg.clientFd)) {
                     entry.clientFd = -1;
-                    if (beginClosingTransition(entry)) {
+                    if (entry.isPopup()) {
+                        entry.ignoreBufferCommits = true;
+                        entry.pendingDestroy = true;
+                    } else if (beginClosingTransition(entry)) {
                         if (entry.windowId > 0) m_windowManager.removeWindow(entry.windowId);
                         surfacesToRemove.push_back(surfKey);
                     } else {
@@ -240,6 +278,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 
         // --- SURFACE_CREATE: register a window on the compositor canvas ---
         const bool isSurfaceCreate = msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceCreate;
+        const bool isPopupSurfaceCreate =
+            msg.header.opcode == lcl::protocol::LCLOpcode::PopupSurfaceCreate;
         const bool isAttachBuffer = msg.header.opcode == lcl::protocol::LCLOpcode::AttachBuffer;
         const bool isAttachDmaBuf = msg.header.opcode == lcl::protocol::LCLOpcode::AttachDmaBuf;
 
@@ -273,7 +313,68 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             continue;
         }
 
-        if (isSurfaceCreate) {
+        if (isPopupSurfaceCreate) {
+            const auto* popup = reinterpret_cast<const lcl::protocol::LCLMsgPopupSurfaceCreate*>(
+                msg.payload.data());
+            const auto owner = static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd);
+            const uint64_t surfaceKey = (owner << 32) | popup->surfaceId;
+            const uint64_t parentKey = (owner << 32) | popup->parentSurfaceId;
+            const auto parent = m_surfaces.find(parentKey);
+            if (parent == m_surfaces.end() || parent->second.isPopup() ||
+                parent->second.pendingDestroy || parent->second.ignoreBufferCommits ||
+                parent->second.transitionPhase == SurfaceEntry::TransitionPhase::Closing) {
+                requestAck.error(7, "popup parent surface is unavailable");
+                continue;
+            }
+            if (m_surfaces.contains(surfaceKey)) {
+                requestAck.error(8, "popup surface ID is already registered");
+                continue;
+            }
+
+            SurfaceEntry entry{};
+            entry.parentSurfaceKey = parentKey;
+            entry.popupRole = popup->role;
+            entry.popupX = logicalToPhysical(popup->x, parent->second.bufferScale);
+            entry.popupY = logicalToPhysical(popup->y, parent->second.bufferScale);
+            entry.popupOrder = m_surfaces.allocatePopupOrder();
+            entry.initialWidth = static_cast<uint32_t>(
+                logicalToPhysical(static_cast<int>(popup->width), popup->bufferScale));
+            entry.initialHeight = static_cast<uint32_t>(
+                logicalToPhysical(static_cast<int>(popup->height), popup->bufferScale));
+            entry.clientFd = msg.clientFd;
+            entry.bufferScale = popup->bufferScale;
+            entry.decorationMode = protocol::LCLDecorationMode::None;
+            entry.insetBorderEnabled = false;
+            entry.suppressInitialTransition = true;
+            m_surfaces[surfaceKey] = std::move(entry);
+
+            protocol::LCLHeader header{};
+            header.opcode = protocol::LCLOpcode::ConfigureBounds;
+            header.payloadSize = sizeof(protocol::LCLMsgConfigureBounds);
+            protocol::LCLMsgConfigureBounds configure{};
+            auto& configured = m_surfaces[surfaceKey];
+            configure.surfaceId = popup->surfaceId;
+            configure.configureSerial = configured.nextConfigureSerial++;
+            configure.x = popup->x;
+            configure.y = popup->y;
+            configure.width = popup->width;
+            configure.height = popup->height;
+            configure.backingWidth = popup->width;
+            configure.backingHeight = popup->height;
+            configure.bufferScale = popup->bufferScale;
+            configure.resizeReason = protocol::LCLConfigureResizeReason::Initial;
+            configure.isFocused = 1;
+            configured.pendingConfigureSerial = configure.configureSerial;
+            configured.configuredX = configured.popupX;
+            configured.configuredY = configured.popupY;
+            configured.configuredWidth = configured.initialWidth;
+            configured.configuredHeight = configured.initialHeight;
+            configured.configuredFocused = configure.isFocused;
+            protocol::sendMsgWithFd(msg.clientFd, header, &configure);
+            m_pendingSystemSurfaceKinds.erase(msg.clientFd);
+            changed = true;
+
+        } else if (isSurfaceCreate) {
             uint32_t surfId = 1;
             std::string title = "LCL Application";
             int winX = DisplayScale::px(80);
@@ -469,7 +570,17 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.resizeCrossfadeElapsedSec = 0.0f;
                 entry.resizeCrossfadeProgress = 0.0f;
             }
-            if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) continue;
+            if (entry.isPopup()) {
+                entry.hasCommittedBuffer = true;
+            } else if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) {
+                continue;
+            }
+
+            if (entry.isPopup()) {
+                SurfaceRegistry::queueLivePresentation(entry, bufferMessage->configureSerial);
+                changed = true;
+                continue;
+            }
 
             int titleOffset = 0;
             for (const auto& win : m_windowManager.getWindows()) {
@@ -624,8 +735,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             // successfully mapped SHM buffer while retrying its first commit;
             // the surface must then become visible as soon as that buffer is
             // known to be valid.
-            if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) {
+            if (entry.isPopup()) {
+                entry.hasCommittedBuffer = true;
+            } else if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) {
                 // The first visible commit must include a real shared buffer.
+                continue;
+            }
+
+            if (entry.isPopup()) {
+                changed = true;
                 continue;
             }
 

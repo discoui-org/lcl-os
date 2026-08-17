@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 #include "lcl-ui/widgets/widget.hpp"
 
@@ -129,11 +130,13 @@ bool MotionCoordinator::tick(float dtSec) {
             m_damageCallback(binding->second.widget->getPresentationBounds());
     }
     m_timeline.tick(dtSec);
+    tickPresentations(dtSec);
     return hasActiveAnimations();
 }
 
 bool MotionCoordinator::hasActiveAnimations() const noexcept {
-    return m_engine.hasActiveAnimations() || m_timeline.hasActiveAnimations();
+    return m_engine.hasActiveAnimations() || m_timeline.hasActiveAnimations() ||
+        !m_presentationBindings.empty();
 }
 
 bool MotionCoordinator::isObjectAnimating(uint64_t objectId) const {
@@ -143,13 +146,49 @@ bool MotionCoordinator::isObjectAnimating(uint64_t objectId) const {
     return false;
 }
 
+void MotionCoordinator::registerPresentation(Widget& widget,
+                                             PresentationCallback callback) {
+    if (!callback) return;
+    const uint64_t objectId = widget.getObjectId();
+    m_presentationBindings[objectId] = PresentationBinding{
+        widget.getLifetimeToken(), std::move(callback)};
+}
+
+void MotionCoordinator::unregisterPresentation(uint64_t objectId) {
+    m_presentationBindings.erase(objectId);
+}
+
+void MotionCoordinator::tickPresentations(float dtSec) {
+    // Snapshot IDs so callbacks may safely change registration without
+    // invalidating this pass. The registry stays proportional to active
+    // presentation owners, never the entire widget tree.
+    std::vector<uint64_t> objectIds;
+    objectIds.reserve(m_presentationBindings.size());
+    for (const auto& [objectId, binding] : m_presentationBindings) {
+        (void)binding;
+        objectIds.push_back(objectId);
+    }
+    for (const uint64_t objectId : objectIds) {
+        const auto it = m_presentationBindings.find(objectId);
+        if (it == m_presentationBindings.end()) continue;
+        if (it->second.lifetime.expired()) {
+            m_presentationBindings.erase(it);
+            continue;
+        }
+        PresentationCallback update = it->second.update;
+        update(dtSec);
+    }
+}
+
 void MotionCoordinator::unregisterObject(uint64_t objectId) {
     m_engine.clearObjectChannels(objectId);
     std::erase_if(m_bindings, [objectId](const auto& item) { return item.second.objectId == objectId; });
+    unregisterPresentation(objectId);
 }
 
 void MotionCoordinator::clear() {
     m_bindings.clear();
+    m_presentationBindings.clear();
     m_engine.clearAll();
     m_timeline.clear();
     m_transactionActive = false;

@@ -34,11 +34,17 @@ private:
     void sendPendingConfigures();
     void processCloseRequests();
     void forwardToFocusedSurface(const InputEvent& event) const;
+    void forwardToSurface(const InputEvent& event,
+                          SurfaceRegistry::Key surfaceKey) const;
+    SurfaceRegistry::Key findPopupAt(float globalX, float globalY) const;
+    void destroyPopupChildren(SurfaceRegistry::Key parentSurfaceKey);
     static bool startClosingTransition(SurfaceRegistry::SurfaceEntry& entry) noexcept;
 
     render::WindowManager& m_windowManager;
     SurfaceRegistry& m_surfaces;
     SceneRegistry& m_scenes;
+    SurfaceRegistry::Key m_activePopupSurface{0};
+    SurfaceRegistry::Key m_focusedPopupSurface{0};
     std::chrono::nanoseconds m_refreshInterval{std::chrono::nanoseconds(16666667)};
 };
 

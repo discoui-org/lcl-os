@@ -162,6 +162,9 @@ bool validShellDeltaKind(LCLShellStateDeltaKind value) {
 bool validSystemSurfaceKind(LCLSystemSurfaceKind value) {
     return value >= LCLSystemSurfaceKind::None && value <= LCLSystemSurfaceKind::Dock;
 }
+bool validPopupRole(LCLPopupRole value) {
+    return value == LCLPopupRole::Transient;
+}
 bool validFilter(FilterType value) {
     return value >= FilterType::None && value <= FilterType::Tint;
 }
@@ -206,6 +209,7 @@ bool validOpcode(LCLOpcode value) {
     case LCLOpcode::SetSystemSurfaceKind:
     case LCLOpcode::SetWindowCornerStyle:
     case LCLOpcode::SetEdgeToEdge:
+    case LCLOpcode::PopupSurfaceCreate:
         return true;
     }
     return false;
@@ -332,6 +336,23 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.fixed(msg.appId, sizeof(msg.appId));
         out.f32(msg.bufferScale);
         out.u8(static_cast<uint8_t>(msg.resizePresentation));
+        return true;
+    }
+    case LCLOpcode::PopupSurfaceCreate: {
+        LOAD_ONE(LCLMsgPopupSurfaceCreate, msg);
+        if (msg.surfaceId == 0 || msg.parentSurfaceId == 0 ||
+            msg.surfaceId == msg.parentSurfaceId || msg.width == 0 ||
+            msg.height == 0 || !validPopupRole(msg.role) ||
+            !validScale(msg.bufferScale))
+            return false;
+        out.u32(msg.surfaceId);
+        out.u32(msg.parentSurfaceId);
+        out.u32(static_cast<uint32_t>(msg.role));
+        out.i32(msg.x);
+        out.i32(msg.y);
+        out.u32(msg.width);
+        out.u32(msg.height);
+        out.f32(msg.bufferScale);
         return true;
     }
     case LCLOpcode::SurfaceDestroy: {
@@ -634,6 +655,23 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !validScale(m.bufferScale) || !validString(m.title, sizeof(m.title)) ||
             !validString(m.appId, sizeof(m.appId)) || m.appId[0] == '\0' ||
             !validResizePresentation(m.resizePresentation))
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::PopupSurfaceCreate: {
+        LCLMsgPopupSurfaceCreate m{};
+        uint32_t role = 0;
+        if (!in.u32(m.surfaceId) || !in.u32(m.parentSurfaceId) ||
+            !in.u32(role) || !in.i32(m.x) || !in.i32(m.y) ||
+            !in.u32(m.width) || !in.u32(m.height) ||
+            !in.f32(m.bufferScale))
+            return false;
+        m.role = static_cast<LCLPopupRole>(role);
+        if (m.surfaceId == 0 || m.parentSurfaceId == 0 ||
+            m.surfaceId == m.parentSurfaceId || m.width == 0 ||
+            m.height == 0 || !validPopupRole(m.role) ||
+            !validScale(m.bufferScale))
             return false;
         appendNative(payload, m);
         break;

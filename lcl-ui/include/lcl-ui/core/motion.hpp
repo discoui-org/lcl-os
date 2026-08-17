@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 
@@ -101,6 +102,11 @@ public:
     using ApplyFloat = std::function<void(float)>;
     using LayoutCallback = std::function<void()>;
     using DamageCallback = std::function<void(const Rect&)>;
+    /**
+     * A presentation-only callback owned by an active widget. Unlike a
+     * property animation, it controls its own discrete presentation state.
+     */
+    using PresentationCallback = std::function<void(float)>;
 
     MotionCoordinator() = default;
 
@@ -132,6 +138,9 @@ public:
     bool tick(float dtSec);
     bool hasActiveAnimations() const noexcept;
     bool isObjectAnimating(uint64_t objectId) const;
+    /** Registers an active presentation owner; Widget teardown removes it. */
+    void registerPresentation(Widget& widget, PresentationCallback callback);
+    void unregisterPresentation(uint64_t objectId);
     void unregisterObject(uint64_t objectId);
     void clear();
 
@@ -143,9 +152,17 @@ private:
         bool affectsLayout{false};
     };
 
+    struct PresentationBinding {
+        std::weak_ptr<uint8_t> lifetime;
+        PresentationCallback update;
+    };
+
+    void tickPresentations(float dtSec);
+
     lcl::motion::AnimationEngine m_engine;
     lcl::motion::Timeline m_timeline;
     std::unordered_map<lcl::motion::ChannelId, Binding> m_bindings;
+    std::unordered_map<uint64_t, PresentationBinding> m_presentationBindings;
     lcl::motion::Motion m_motion{lcl::motion::Motion::spring(0.18f, 0.0f)};
     AnimationTransactionOptions m_options{};
     bool m_transactionActive{false};

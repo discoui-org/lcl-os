@@ -1,5 +1,7 @@
 #include "lcl-ui/core/event_dispatcher.hpp"
 #include "lcl-ui/core/touch_interaction.hpp"
+#include "lcl-ui/core/transient_controller.hpp"
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -59,6 +61,11 @@ void EventDispatcher::setFocus(Widget* widget) {
 }
 
 bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& event) {
+    return dispatchPointerEvent(root, nullptr, event);
+}
+
+bool EventDispatcher::dispatchPointerEvent(Widget* root, TransientController* transients,
+                                           const PointerEvent& event) {
     if (!root) return false;
 
     PointerEvent dispatchEvent = event;
@@ -179,12 +186,20 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, const PointerEvent& eve
         }
     }
 
+    // Dismiss only after the current target has received the event. A dismiss
+    // callback may remove another transient, so running it earlier could leave
+    // the remainder of this dispatch holding a stale Widget pointer.
+    if (dispatchEvent.type == PointerEventType::Down && transients) {
+        transients->dismissTopmostOnOutsidePointer(hitTarget, dispatchEvent);
+    }
+
     if (dispatchEvent.type == PointerEventType::Up &&
         dispatchEvent.source == PointerSource::Touch &&
         dispatchEvent.m_touchTapCompletion &&
         isTouchTapEligible(dispatchEvent.pointerId)) {
         applyTouchTapFocus(getPointerDownTarget(dispatchEvent.pointerId, root),
                            hitTarget, dispatchEvent);
+        if (transients) transients->dismissTopmostOnOutsidePointer(hitTarget, dispatchEvent);
     }
 
     // Touch input lift (PointerUp) terminates any active hover state
@@ -347,6 +362,47 @@ void EventDispatcher::cancelPointerCaptures() {
     m_pointerDownTargets.clear();
 }
 
+void EventDispatcher::cancelWidgetSubtree(Widget* subtree) {
+    if (!subtree) return;
+
+    if (isDescendantOf(m_focusedWidget, subtree)) setFocus(nullptr);
+    if (isDescendantOf(m_hoveredWidget, subtree)) m_hoveredWidget = nullptr;
+
+    std::unordered_set<uint32_t> canceledCapturePointers;
+    for (auto it = m_pointerCaptures.begin(); it != m_pointerCaptures.end();) {
+        if (!isDescendantOf(it->second.owner, subtree)) {
+            ++it;
+            continue;
+        }
+        const uint32_t pointerId = it->first;
+        const PointerCapture capture = it->second;
+        it = m_pointerCaptures.erase(it);
+        canceledCapturePointers.insert(pointerId);
+        m_pointerDownTargets.erase(pointerId);
+        if (capture.lifetime.expired()) continue;
+        PointerEvent cancelEvent{0.0f, 0.0f, 0, 0.0f, 0.0f,
+                                 PointerEventType::Cancel, capture.source, pointerId};
+        cancelEvent.m_dispatcher = this;
+        dispatchToTarget(capture.owner, cancelEvent);
+    }
+
+    for (auto it = m_pointerDownTargets.begin(); it != m_pointerDownTargets.end();) {
+        if (!isDescendantOf(it->second.target, subtree)) {
+            ++it;
+            continue;
+        }
+        const uint32_t pointerId = it->first;
+        const PointerDownTarget downTarget = it->second;
+        it = m_pointerDownTargets.erase(it);
+        if (canceledCapturePointers.contains(pointerId) || downTarget.lifetime.expired()) continue;
+        PointerEvent cancelEvent{0.0f, 0.0f, 0, 0.0f, 0.0f,
+                                 PointerEventType::Cancel, downTarget.source, pointerId};
+        cancelEvent.m_dispatcher = this;
+        dispatchPreviewToTarget(downTarget.target, cancelEvent);
+        dispatchToTarget(downTarget.target, cancelEvent);
+    }
+}
+
 bool EventDispatcher::isEventCapableInTree(Widget* root, const Widget* target,
                                            bool ancestorsVisible) {
     if (!root) return false;
@@ -355,6 +411,13 @@ bool EventDispatcher::isEventCapableInTree(Widget* root, const Widget* target,
     if (!visible) return false;
     for (const auto& child : root->getChildren()) {
         if (isEventCapableInTree(child.get(), target, visible)) return true;
+    }
+    return false;
+}
+
+bool EventDispatcher::isDescendantOf(const Widget* target, const Widget* ancestor) {
+    for (const Widget* current = target; current; current = current->getParent()) {
+        if (current == ancestor) return true;
     }
     return false;
 }
@@ -399,7 +462,8 @@ Widget* EventDispatcher::getPointerDownTarget(uint32_t pointerId, Widget* root) 
     return it->second.target;
 }
 
-Widget* EventDispatcher::validatePointerCapture(Widget* root, const PointerEvent& event) {
+Widget* EventDispatcher::validatePointerCapture(Widget* root,
+                                                 const PointerEvent& event) {
     const auto it = m_pointerCaptures.find(event.pointerId);
     if (it == m_pointerCaptures.end()) return nullptr;
     if (it->second.lifetime.expired()) {

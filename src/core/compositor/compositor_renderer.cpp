@@ -2,6 +2,7 @@
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/window_chrome_material.hpp"
 #include "core/compositor/window_group_transform.hpp"
+#include "core/compositor/popup_surface_geometry.hpp"
 #include "core/display/display_scale.hpp"
 #include "theme/palette.hpp"
 
@@ -233,10 +234,13 @@ void CompositorRenderer::render(render::Renderer& renderer,
         }
         // A. Find matching client SHM surface buffer for this window
         const SurfaceEntry* matchingSurface = nullptr;
+        SurfaceRegistry::Key matchingSurfaceKey = 0;
         for (const auto& surface : surfaces) {
             const auto* entry = surface.entry;
-            if (entry && entry->windowId == win.id && entry->hasRenderableBuffer()) {
+            if (entry && !entry->isPopup() && entry->windowId == win.id &&
+                entry->hasRenderableBuffer()) {
                 matchingSurface = entry;
+                matchingSurfaceKey = surface.key;
                 break;
             }
         }
@@ -348,6 +352,48 @@ void CompositorRenderer::render(render::Renderer& renderer,
         // Forced compositor-owned inset border for every window, independent from app UI.
         if (win.drawInsetBorder) {
             drawForcedInsetBorder(win, group, windowOpacity, windowScale);
+        }
+
+        // PopupSurface entries are not windows. Compose them immediately above
+        // their parent WindowGroup and before the next unrelated window.
+        if (matchingSurfaceKey != 0) {
+            std::vector<const SurfaceEntry*> popups;
+            for (const auto& surface : surfaces) {
+                const auto* popup = surface.entry;
+                if (popup && popup->parentSurfaceKey == matchingSurfaceKey &&
+                    popup->hasCommittedBuffer && popup->hasRenderableBuffer() &&
+                    !popup->pendingDestroy) {
+                    popups.push_back(popup);
+                }
+            }
+            std::sort(popups.begin(), popups.end(), [](const auto* lhs, const auto* rhs) {
+                return lhs->popupOrder < rhs->popupOrder;
+            });
+
+            for (const auto* popup : popups) {
+                const auto popupBounds = resolvePopupSurfaceBounds(
+                    win, *matchingSurface, *popup);
+                const float opacity = windowOpacity *
+                    std::clamp(popup->transitionOpacity, 0.0f, 1.0f);
+                if (popup->pixels) {
+                    renderer.getSkiaRenderer()->drawBufferTransformed(
+                        popupBounds.x, popupBounds.y,
+                        static_cast<int>(popup->width), static_cast<int>(popup->height),
+                        reinterpret_cast<const uint32_t*>(popup->pixels),
+                        static_cast<int>(popup->stride / 4), opacity,
+                        0.0f, 2.0f, false,
+                        popupBounds.width, popupBounds.height);
+                } else {
+                    renderer.getSkiaRenderer()->drawDmaBufTextureTransformed(
+                        popupBounds.x, popupBounds.y,
+                        static_cast<int>(popup->width), static_cast<int>(popup->height),
+                        static_cast<int>(popup->backingWidth),
+                        static_cast<int>(popup->backingHeight),
+                        popup->dmaBufTexture, opacity,
+                        0.0f, 2.0f, false,
+                        popupBounds.width, popupBounds.height);
+                }
+            }
         }
     }
 

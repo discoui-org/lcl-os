@@ -219,6 +219,36 @@ public:
     int paintCount{0};
 };
 
+class PointerProbeWidget final : public Widget {
+public:
+    explicit PointerProbeWidget(Color color = {0, 0, 0, 0}) : m_color(color) {}
+
+    void draw(Canvas& canvas, const Rect&) override {
+        ++paintCount;
+        canvas.drawRect(m_absoluteBounds, m_color);
+    }
+
+    bool onPointerDown(const PointerEvent& event) override {
+        ++pointerDownCount;
+        if (captureOnDown) event.capturePointer(*this);
+        return true;
+    }
+    bool onPointerUp(const PointerEvent&) override { ++pointerUpCount; return true; }
+    bool onPointerCancel(const PointerEvent&) override {
+        ++pointerCancelCount;
+        if (cancelCountSink) ++*cancelCountSink;
+        return true;
+    }
+
+    Color m_color;
+    bool captureOnDown{false};
+    int* cancelCountSink{nullptr};
+    int paintCount{0};
+    int pointerDownCount{0};
+    int pointerUpCount{0};
+    int pointerCancelCount{0};
+};
+
 } // namespace
 
 TEST(LclUiTest, RectMath) {
@@ -399,8 +429,37 @@ TEST(LclUiTest, CaretPresentationControllerUsesDeterministicHardBlinkPhases) {
     EXPECT_FALSE(caret.update(1.0f));
 }
 
+TEST(LclUiTest, MotionCoordinatorPresentationRegistryTicksOnlyLiveEntries) {
+    MotionCoordinator coordinator;
+    int firstUpdates = 0;
+    int secondUpdates = 0;
+
+    auto first = std::make_unique<Widget>();
+    auto second = std::make_unique<Widget>();
+    first->setMotionCoordinator(&coordinator);
+    second->setMotionCoordinator(&coordinator);
+    coordinator.registerPresentation(*first, [&](float) { ++firstUpdates; });
+    coordinator.registerPresentation(*second, [&](float) { ++secondUpdates; });
+
+    EXPECT_TRUE(coordinator.hasActiveAnimations());
+    EXPECT_TRUE(coordinator.tick(0.1f));
+    EXPECT_EQ(firstUpdates, 1);
+    EXPECT_EQ(secondUpdates, 1);
+
+    coordinator.unregisterPresentation(second->getObjectId());
+    EXPECT_TRUE(coordinator.tick(0.1f));
+    EXPECT_EQ(firstUpdates, 2);
+    EXPECT_EQ(secondUpdates, 1);
+
+    first.reset();
+    EXPECT_FALSE(coordinator.hasActiveAnimations());
+    EXPECT_FALSE(coordinator.tick(0.1f));
+}
+
 TEST(LclUiTest, TextFieldCaretPresentationResetsForEditingAndCaretActivity) {
     TextField field("abc");
+    MotionCoordinator coordinator;
+    field.setMotionCoordinator(&coordinator);
     field.getYogaNode().setWidth(180.0f);
     field.getYogaNode().calculateLayout(180.0f, 36.0f);
     field.syncLayout();
@@ -423,42 +482,42 @@ TEST(LclUiTest, TextFieldCaretPresentationResetsForEditingAndCaretActivity) {
     };
 
     expectVisibleCaret();
-    field.advancePresentation(0.5f);
+    EXPECT_TRUE(coordinator.tick(0.5f));
     expectHiddenCaret();
 
     ASSERT_TRUE(field.onTextInput(TextInputEvent{"ç"}));
     expectVisibleCaret();
-    field.advancePresentation(0.5f);
+    EXPECT_TRUE(coordinator.tick(0.5f));
     expectHiddenCaret();
 
     ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::ArrowLeft,
                                          static_cast<int>(lcl::platform::PhysicalKey::ArrowLeft)}));
     expectVisibleCaret();
-    field.advancePresentation(0.5f);
+    EXPECT_TRUE(coordinator.tick(0.5f));
     expectHiddenCaret();
 
     ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::ArrowRight,
                                          static_cast<int>(lcl::platform::PhysicalKey::ArrowRight)}));
     expectVisibleCaret();
-    field.advancePresentation(0.5f);
+    EXPECT_TRUE(coordinator.tick(0.5f));
     expectHiddenCaret();
 
     ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Home,
                                          static_cast<int>(lcl::platform::PhysicalKey::Home)}));
     expectVisibleCaret();
-    field.advancePresentation(0.5f);
+    EXPECT_TRUE(coordinator.tick(0.5f));
     expectHiddenCaret();
 
     ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::End,
                                          static_cast<int>(lcl::platform::PhysicalKey::End)}));
     expectVisibleCaret();
-    field.advancePresentation(0.5f);
+    EXPECT_TRUE(coordinator.tick(0.5f));
     expectHiddenCaret();
 
     ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Backspace,
                                          static_cast<int>(lcl::platform::PhysicalKey::Backspace)}));
     expectVisibleCaret();
-    field.advancePresentation(0.5f);
+    EXPECT_TRUE(coordinator.tick(0.5f));
     expectHiddenCaret();
 
     ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Home,
@@ -466,20 +525,21 @@ TEST(LclUiTest, TextFieldCaretPresentationResetsForEditingAndCaretActivity) {
     ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Delete,
                                          static_cast<int>(lcl::platform::PhysicalKey::Delete)}));
     expectVisibleCaret();
-    field.advancePresentation(0.5f);
+    EXPECT_TRUE(coordinator.tick(0.5f));
     expectHiddenCaret();
 
     ASSERT_TRUE(field.onPointerDown(PointerEvent{
         18.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
         PointerSource::Mouse, 0}));
     expectVisibleCaret();
-    field.advancePresentation(0.5f);
+    EXPECT_TRUE(coordinator.tick(0.5f));
     expectHiddenCaret();
 
     field.setText("reset");
     expectVisibleCaret();
     field.onFocusLost(FocusEvent{FocusEventType::Lost});
     expectHiddenCaret();
+    EXPECT_FALSE(coordinator.hasActiveAnimations());
 }
 
 TEST(LclUiTest, WindowAppSchedulesCaretPresentationOnlyWhileFieldIsFocused) {
@@ -513,6 +573,64 @@ TEST(LclUiTest, WindowAppSchedulesCaretPresentationOnlyWhileFieldIsFocused) {
 
     app.getDispatcher().setFocus(nullptr);
     EXPECT_FALSE(app.hasActiveAnimations());
+}
+
+TEST(LclUiTest, TextFieldFocusTransferMovesTheActiveCaretPresentation) {
+    MotionCoordinator coordinator;
+    TextField first("first");
+    TextField second("second");
+    first.setMotionCoordinator(&coordinator);
+    second.setMotionCoordinator(&coordinator);
+    for (TextField* field : {&first, &second}) {
+        field->getYogaNode().setWidth(180.0f);
+        field->getYogaNode().calculateLayout(180.0f, 36.0f);
+        field->syncLayout();
+    }
+
+    EventDispatcher dispatcher;
+    const Rect damage{-10.0f, -10.0f, 220.0f, 80.0f};
+    RecordingCanvas canvas;
+    dispatcher.setFocus(&first);
+    EXPECT_TRUE(coordinator.hasActiveAnimations());
+    EXPECT_TRUE(coordinator.tick(0.5f));
+    first.draw(canvas, damage);
+    EXPECT_TRUE(canvas.rects.empty());
+
+    dispatcher.setFocus(&second);
+    canvas.rects.clear();
+    second.draw(canvas, damage);
+    ASSERT_EQ(canvas.rects.size(), 1u);
+    EXPECT_TRUE(coordinator.tick(0.5f));
+    canvas.rects.clear();
+    second.draw(canvas, damage);
+    EXPECT_TRUE(canvas.rects.empty());
+
+    dispatcher.setFocus(nullptr);
+    EXPECT_FALSE(coordinator.hasActiveAnimations());
+}
+
+TEST(LclUiTest, CaretPhaseChangesProduceDamageButIntermediateTicksDoNot) {
+    MotionCoordinator coordinator;
+    RenderPass pass;
+    TextField field;
+    field.setMotionCoordinator(&coordinator);
+    field.setRenderPass(&pass);
+    field.getYogaNode().setWidth(180.0f);
+    field.getYogaNode().calculateLayout(180.0f, 36.0f);
+    field.syncLayout();
+    field.onFocusGained(FocusEvent{FocusEventType::Gained});
+    pass.clear();
+
+    EXPECT_TRUE(coordinator.tick(0.49f));
+    EXPECT_FALSE(pass.hasDamage());
+    EXPECT_TRUE(coordinator.tick(0.02f));
+    EXPECT_TRUE(pass.hasDamage());
+    pass.clear();
+
+    EXPECT_TRUE(coordinator.tick(0.1f));
+    EXPECT_FALSE(pass.hasDamage());
+    EXPECT_TRUE(coordinator.tick(0.4f));
+    EXPECT_TRUE(pass.hasDamage());
 }
 
 TEST(LclUiTest, TextFieldCaretUsesActiveCanvasProportionalMetrics) {
@@ -696,6 +814,305 @@ TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     EXPECT_EQ(recorded->rects.front().height, 48.0f);
 }
 
+TEST(LclUiTest, LocalTransientRendersAboveContentInSingleWindowRootLayout) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    WindowApp app(std::move(canvas), 64, 48, "Overlay render order");
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(64.0f);
+    root->setHeight(48.0f);
+    root->setBackgroundColor({10, 20, 30, 255});
+    root->getYogaNode().setAlignItems(YGAlignCenter);
+    root->getYogaNode().setJustifyContent(YGJustifyCenter);
+    auto content = std::make_unique<Widget>();
+    content->setWidth(10.0f);
+    content->setHeight(10.0f);
+    Widget* contentPtr = content.get();
+    root->addChild(std::move(content));
+    app.setRootWidget(std::move(root));
+
+    auto overlay = std::make_unique<PointerProbeWidget>(Color{40, 50, 60, 255});
+    overlay->setWidth(24.0f);
+    overlay->setHeight(18.0f);
+    overlay->setPosition(YGEdgeLeft, 8.0f);
+    overlay->setPosition(YGEdgeTop, 6.0f);
+    PointerProbeWidget* overlayPtr = overlay.get();
+    const TransientHandle handle = app.registerLocalTransient(std::move(overlay));
+    ASSERT_NE(handle, 0u);
+
+    ASSERT_TRUE(app.renderFrame());
+    ASSERT_GE(recorded->colors.size(), 2u);
+    EXPECT_EQ(recorded->colors[recorded->colors.size() - 2].r, 10);
+    EXPECT_EQ(recorded->colors.back().r, 40);
+    EXPECT_FLOAT_EQ(overlayPtr->getAbsoluteBounds().x, 8.0f);
+    EXPECT_FLOAT_EQ(overlayPtr->getAbsoluteBounds().y, 6.0f);
+    EXPECT_FLOAT_EQ(contentPtr->getAbsoluteBounds().x, 27.0f);
+    EXPECT_FLOAT_EQ(contentPtr->getAbsoluteBounds().y, 19.0f);
+    EXPECT_FLOAT_EQ(app.getRootWidget()->getAbsoluteBounds().width, 64.0f);
+}
+
+TEST(LclUiTest, LocalTransientPrioritizesTopmostHitWithoutBlockingEmptySpace) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 100, 80, "Overlay hit testing");
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(100.0f);
+    root->setHeight(80.0f);
+    auto content = std::make_unique<PointerProbeWidget>();
+    content->setWidth(100.0f);
+    content->setHeight(80.0f);
+    PointerProbeWidget* contentPtr = content.get();
+    root->addChild(std::move(content));
+    app.setRootWidget(std::move(root));
+
+    auto first = std::make_unique<PointerProbeWidget>();
+    first->setWidth(40.0f);
+    first->setHeight(30.0f);
+    first->setPosition(YGEdgeLeft, 10.0f);
+    first->setPosition(YGEdgeTop, 10.0f);
+    PointerProbeWidget* firstPtr = first.get();
+    const TransientHandle firstHandle = app.registerLocalTransient(std::move(first));
+
+    auto second = std::make_unique<PointerProbeWidget>();
+    second->setWidth(40.0f);
+    second->setHeight(30.0f);
+    second->setPosition(YGEdgeLeft, 10.0f);
+    second->setPosition(YGEdgeTop, 10.0f);
+    PointerProbeWidget* secondPtr = second.get();
+    const TransientHandle secondHandle = app.registerLocalTransient(std::move(second));
+    ASSERT_NE(firstHandle, 0u);
+    ASSERT_NE(secondHandle, 0u);
+    app.updateLayout();
+
+    ASSERT_TRUE(app.sendPointerDown(20.0f, 20.0f));
+    EXPECT_EQ(secondPtr->pointerDownCount, 1);
+    EXPECT_EQ(firstPtr->pointerDownCount, 0);
+
+    ASSERT_TRUE(app.removeTransient(secondHandle));
+    ASSERT_TRUE(app.sendPointerDown(20.0f, 20.0f));
+    EXPECT_EQ(firstPtr->pointerDownCount, 1);
+    ASSERT_TRUE(app.removeTransient(firstHandle));
+    ASSERT_TRUE(app.sendPointerDown(20.0f, 20.0f));
+    EXPECT_EQ(contentPtr->pointerDownCount, 1);
+}
+
+TEST(LclUiTest, TransientControllerMouseDismissAndRemovalAreLifecycleSafe) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 100, 80, "Overlay dismissal");
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(100.0f);
+    root->setHeight(80.0f);
+    auto content = std::make_unique<PointerProbeWidget>();
+    content->setWidth(100.0f);
+    content->setHeight(80.0f);
+    PointerProbeWidget* contentPtr = content.get();
+    root->addChild(std::move(content));
+    app.setRootWidget(std::move(root));
+
+    int overlayCancelCount = 0;
+    auto insideOverlay = std::make_unique<PointerProbeWidget>();
+    insideOverlay->setFocusable(true);
+    insideOverlay->captureOnDown = true;
+    insideOverlay->cancelCountSink = &overlayCancelCount;
+    insideOverlay->setWidth(40.0f);
+    insideOverlay->setHeight(30.0f);
+    insideOverlay->setPosition(YGEdgeLeft, 10.0f);
+    insideOverlay->setPosition(YGEdgeTop, 10.0f);
+    PointerProbeWidget* insidePtr = insideOverlay.get();
+    const TransientHandle insideHandle = app.registerLocalTransient(
+        std::move(insideOverlay), TransientOptions{.dismissOnOutsidePointer = true});
+    app.updateLayout();
+
+    ASSERT_TRUE(app.sendPointerDown(20.0f, 20.0f));
+    EXPECT_EQ(app.getTransientController().size(), 1u);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), insidePtr);
+    EXPECT_TRUE(app.getDispatcher().hasPointerCapture(0, insidePtr));
+    ASSERT_TRUE(app.removeTransient(insideHandle));
+    EXPECT_EQ(app.getTransientController().size(), 0u);
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), nullptr);
+    EXPECT_FALSE(app.getDispatcher().hasPointerCapture(0));
+    EXPECT_EQ(overlayCancelCount, 1);
+
+    int dismissCount = 0;
+    auto outsideOverlay = std::make_unique<PointerProbeWidget>();
+    outsideOverlay->setWidth(40.0f);
+    outsideOverlay->setHeight(30.0f);
+    outsideOverlay->setPosition(YGEdgeLeft, 10.0f);
+    outsideOverlay->setPosition(YGEdgeTop, 10.0f);
+    app.registerLocalTransient(std::move(outsideOverlay), TransientOptions{
+        .dismissOnOutsidePointer = true,
+        .onDismiss = [&] { ++dismissCount; },
+    });
+    app.updateLayout();
+
+    ASSERT_TRUE(app.sendPointerDown(90.0f, 70.0f));
+    EXPECT_EQ(app.getTransientController().size(), 0u);
+    EXPECT_EQ(dismissCount, 1);
+    EXPECT_EQ(contentPtr->pointerDownCount, 1);
+
+    auto nonDismissable = std::make_unique<PointerProbeWidget>();
+    nonDismissable->setWidth(20.0f);
+    nonDismissable->setHeight(20.0f);
+    app.registerLocalTransient(std::move(nonDismissable));
+    app.updateLayout();
+    ASSERT_TRUE(app.sendPointerDown(90.0f, 70.0f));
+    EXPECT_EQ(app.getTransientController().size(), 1u);
+
+    // A non-dismissible topmost overlay blocks dismissal of older entries.
+    app.clearTransients();
+    app.registerLocalTransient(std::make_unique<PointerProbeWidget>(),
+                    TransientOptions{.dismissOnOutsidePointer = true});
+    app.registerLocalTransient(std::make_unique<PointerProbeWidget>());
+    app.updateLayout();
+    ASSERT_TRUE(app.sendPointerDown(90.0f, 70.0f));
+    EXPECT_EQ(app.getTransientController().size(), 2u);
+
+    app.clearTransients();
+    const TransientHandle lowerHandle = app.registerLocalTransient(std::make_unique<PointerProbeWidget>());
+    const TransientHandle topHandle = app.registerLocalTransient(
+        std::make_unique<PointerProbeWidget>(), TransientOptions{
+            .dismissOnOutsidePointer = true,
+            .onDismiss = [&] { app.removeTransient(lowerHandle); },
+        });
+    ASSERT_NE(lowerHandle, 0u);
+    ASSERT_NE(topHandle, 0u);
+    app.updateLayout();
+    ASSERT_TRUE(app.sendPointerDown(90.0f, 70.0f));
+    EXPECT_EQ(app.getTransientController().size(), 0u);
+}
+
+TEST(LclUiTest, TransientControllerTouchDismissRequiresValidatedTap) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 100, 80, "Overlay touch dismissal");
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(100.0f);
+    root->setHeight(80.0f);
+    auto content = std::make_unique<PointerProbeWidget>();
+    content->setWidth(100.0f);
+    content->setHeight(80.0f);
+    root->addChild(std::move(content));
+    app.setRootWidget(std::move(root));
+
+    auto addDismissable = [&] {
+        auto overlay = std::make_unique<PointerProbeWidget>();
+        overlay->setWidth(20.0f);
+        overlay->setHeight(20.0f);
+        app.registerLocalTransient(std::move(overlay), TransientOptions{.dismissOnOutsidePointer = true});
+        app.updateLayout();
+    };
+
+    addDismissable();
+    ASSERT_TRUE(app.sendPointerDown(80.0f, 60.0f, 0, PointerSource::Touch, 11));
+    EXPECT_EQ(app.getTransientController().size(), 1u);
+    ASSERT_TRUE(app.sendPointerUp(80.0f, 60.0f, 0, PointerSource::Touch, 11));
+    EXPECT_EQ(app.getTransientController().size(), 0u);
+
+    addDismissable();
+    ASSERT_TRUE(app.sendPointerDown(80.0f, 60.0f, 0, PointerSource::Touch, 12));
+    app.sendPointerMove(81.0f, 61.0f, PointerSource::Touch, 12);
+    ASSERT_TRUE(app.sendPointerUp(81.0f, 61.0f, 0, PointerSource::Touch, 12));
+    EXPECT_EQ(app.getTransientController().size(), 0u);
+
+    addDismissable();
+    ASSERT_TRUE(app.sendPointerDown(80.0f, 60.0f, 0, PointerSource::Touch, 13));
+    app.sendPointerMove(88.0f, 60.0f, PointerSource::Touch, 13);
+    ASSERT_TRUE(app.sendPointerUp(88.0f, 60.0f, 0, PointerSource::Touch, 13));
+    EXPECT_EQ(app.getTransientController().size(), 1u);
+
+    app.clearTransients();
+    addDismissable();
+    ASSERT_TRUE(app.sendPointerDown(80.0f, 60.0f, 0, PointerSource::Touch, 14));
+    ASSERT_TRUE(app.sendPointerCancel(80.0f, 60.0f, PointerSource::Touch, 14));
+    EXPECT_EQ(app.getTransientController().size(), 1u);
+}
+
+TEST(LclUiTest, TransientControllerDoesNotDismissForScrollViewTouchGesture) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 100, 80, "Overlay scroll gesture");
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(100.0f);
+    root->setHeight(80.0f);
+    auto scroll = std::make_unique<ScrollView>();
+    scroll->setWidth(100.0f);
+    scroll->setHeight(80.0f);
+    auto content = std::make_unique<Container>();
+    content->setWidth(100.0f);
+    content->setHeight(240.0f);
+    scroll->setContent(std::move(content));
+    root->addChild(std::move(scroll));
+    app.setRootWidget(std::move(root));
+
+    auto overlay = std::make_unique<PointerProbeWidget>();
+    overlay->setWidth(10.0f);
+    overlay->setHeight(10.0f);
+    app.registerLocalTransient(std::move(overlay), TransientOptions{.dismissOnOutsidePointer = true});
+    app.updateLayout();
+
+    app.sendPointerDown(50.0f, 40.0f, 0, PointerSource::Touch, 21);
+    ASSERT_TRUE(app.sendPointerMove(50.0f, 52.0f, PointerSource::Touch, 21));
+    ASSERT_TRUE(app.sendPointerUp(50.0f, 52.0f, 0, PointerSource::Touch, 21));
+    EXPECT_EQ(app.getTransientController().size(), 1u);
+}
+
+TEST(LclUiTest, TransientControllerUsesTheSameStableLifecycleForSurfaceEntries) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 100, 80, "Surface transient lifecycle");
+    auto root = std::make_unique<Container>();
+    root->setWidth(100.0f);
+    root->setHeight(80.0f);
+    app.setRootWidget(std::move(root));
+
+    int destroyCount = 0;
+    int dismissCount = 0;
+    const TransientHandle handle = app.registerSurfaceTransient(
+        7, [&] { ++destroyCount; }, TransientOptions{
+            .dismissOnOutsidePointer = true,
+            .onDismiss = [&] { ++dismissCount; },
+        });
+    ASSERT_NE(handle, 0u);
+    EXPECT_EQ(app.getTransientController().size(), 1u);
+
+    app.sendPointerDown(40.0f, 30.0f);
+    EXPECT_EQ(app.getTransientController().size(), 0u);
+    EXPECT_EQ(destroyCount, 1);
+    EXPECT_EQ(dismissCount, 1);
+
+    const TransientHandle explicitHandle = app.registerSurfaceTransient(
+        8, [&] { ++destroyCount; });
+    ASSERT_TRUE(app.removeTransient(explicitHandle));
+    EXPECT_EQ(destroyCount, 2);
+    EXPECT_EQ(dismissCount, 1);
+}
+
+TEST(LclUiTest, WindowAppSurfaceTransientRemovalRequestsPopupDestroy) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 100, 80, "Popup teardown request");
+    app.setExternalIpcSocket(sockets[0]);
+
+    const TransientHandle handle = app.registerSurfaceTransient(7);
+    ASSERT_NE(handle, 0u);
+    ASSERT_TRUE(app.removeTransient(handle));
+
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, lcl::protocol::LCLOpcode::RequestSurfaceClose);
+    ASSERT_EQ(payload.size(), sizeof(lcl::protocol::LCLMsgRequestSurfaceClose));
+    EXPECT_EQ(reinterpret_cast<const lcl::protocol::LCLMsgRequestSurfaceClose*>(
+                  payload.data())->surfaceId,
+              7u);
+    if (receivedFd >= 0) close(receivedFd);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(LclUiTest, WindowAppGatesYogaLayoutToLayoutAffectingMutations) {
     auto canvas = std::make_unique<RecordingCanvas>();
     WindowApp app(std::move(canvas), 64, 48, "Layout dirty gating");
@@ -785,6 +1202,49 @@ TEST(LclUiTest, WindowAppWaitsForInitialConfigureBeforeAttachingBuffer) {
     EXPECT_EQ(attach->width, configure.width);
     EXPECT_EQ(attach->height, configure.height);
     EXPECT_GE(receivedFd, 0);
+    if (receivedFd >= 0) close(receivedFd);
+
+    close(peer);
+    close(listener);
+    unlink(socketPath.c_str());
+}
+
+TEST(LclUiTest, WindowAppCreatesPopupWithParentLocalGeometry) {
+    const std::string socketPath = "/tmp/lcl-ui-popup-create-" +
+        std::to_string(getpid()) + ".sock";
+    unlink(socketPath.c_str());
+
+    const int listener = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    ASSERT_GE(listener, 0);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, socketPath.c_str(), sizeof(address.sun_path) - 1);
+    ASSERT_EQ(bind(listener, reinterpret_cast<const sockaddr*>(&address), sizeof(address)), 0);
+    ASSERT_EQ(listen(listener, 1), 0);
+
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp popup(std::move(canvas), 120, 70, "Popup");
+    popup.setAppId("org.lcl.test.popup");
+    popup.setSurfaceId(2);
+    popup.configurePopupSurface(1, lcl::protocol::LCLPopupRole::Transient, 250, -8);
+    ASSERT_TRUE(popup.connectCompositor(socketPath));
+
+    const int peer = accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
+    ASSERT_GE(peer, 0);
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(peer, header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, lcl::protocol::LCLOpcode::PopupSurfaceCreate);
+    ASSERT_EQ(payload.size(), sizeof(lcl::protocol::LCLMsgPopupSurfaceCreate));
+    const auto* request = reinterpret_cast<const lcl::protocol::LCLMsgPopupSurfaceCreate*>(payload.data());
+    EXPECT_EQ(request->surfaceId, 2u);
+    EXPECT_EQ(request->parentSurfaceId, 1u);
+    EXPECT_EQ(request->role, lcl::protocol::LCLPopupRole::Transient);
+    EXPECT_EQ(request->x, 250);
+    EXPECT_EQ(request->y, -8);
+    EXPECT_EQ(request->width, 120u);
+    EXPECT_EQ(request->height, 70u);
     if (receivedFd >= 0) close(receivedFd);
 
     close(peer);

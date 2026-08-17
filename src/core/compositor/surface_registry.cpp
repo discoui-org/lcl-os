@@ -1,5 +1,6 @@
 #include "core/compositor/surface_registry.hpp"
 
+#include <algorithm>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -20,6 +21,18 @@ SurfaceRegistry::Snapshot SurfaceRegistry::snapshot() const {
     for (const auto& [key, entry] : m_entries) {
         result.push_back(SnapshotEntry{key, &entry});
     }
+    return result;
+}
+
+std::vector<SurfaceRegistry::Key> SurfaceRegistry::popupChildren(
+        Key parentSurfaceKey) const {
+    std::vector<Key> result;
+    for (const auto& [key, entry] : m_entries) {
+        if (entry.parentSurfaceKey == parentSurfaceKey) result.push_back(key);
+    }
+    std::sort(result.begin(), result.end(), [this](Key lhs, Key rhs) {
+        return m_entries.at(lhs).popupOrder < m_entries.at(rhs).popupOrder;
+    });
     return result;
 }
 

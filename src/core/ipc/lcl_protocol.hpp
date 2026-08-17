@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 11;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 12;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
@@ -46,7 +46,13 @@ enum class LCLOpcode : uint32_t {
     // Presentation timing is separate from DMA-BUF ownership. A release makes
     // a pool slot writable; this callback paces the next interactive frame.
     FramePresented = 26,
-    SetEdgeToEdge = 27
+    SetEdgeToEdge = 27,
+    PopupSurfaceCreate = 28
+};
+
+/** Minimal v1 popup role. Feature semantics remain in client-side UI policy. */
+enum class LCLPopupRole : uint32_t {
+    Transient = 1,
 };
 
 enum class LCLSystemSurfaceKind : uint32_t {
@@ -201,6 +207,21 @@ struct LCLMsgSurfaceCreate {
     char appId[64]{0};
     float bufferScale{1.0f}; // Required v3 logical-to-buffer scale.
     LCLResizePresentationMode resizePresentation{LCLResizePresentationMode::CompositorMorph};
+};
+
+/**
+ * Creates a surface bound to a same-process parent surface. Position is in
+ * parent-window logical coordinates; width/height are popup logical pixels.
+ */
+struct LCLMsgPopupSurfaceCreate {
+    uint32_t surfaceId{0};
+    uint32_t parentSurfaceId{0};
+    LCLPopupRole role{LCLPopupRole::Transient};
+    int32_t x{0};
+    int32_t y{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    float bufferScale{1.0f};
 };
 
 struct LCLMsgSurfaceDestroy {

@@ -2,6 +2,7 @@
 #include "lcl-motion/motion.hpp"
 
 #include "core/display/display_scale.hpp"
+#include "core/compositor/popup_surface_geometry.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -33,6 +34,29 @@ uint32_t toClientPointerButton(lcl::platform::PointerButton button) {
 } // namespace
 
 bool InputRouter::route(const InputEvent& event) {
+    const bool pointerEvent = event.type == InputEventType::PointerMotion ||
+        event.type == InputEventType::PointerButton ||
+        event.type == InputEventType::PointerScroll;
+    auto pointerX = [&] {
+        return std::isfinite(event.absoluteX) && event.absoluteX >= 0.0
+            ? static_cast<float>(event.absoluteX)
+            : static_cast<float>(m_windowManager.getMouseX());
+    };
+    auto pointerY = [&] {
+        return std::isfinite(event.absoluteY) && event.absoluteY >= 0.0
+            ? static_cast<float>(event.absoluteY)
+            : static_cast<float>(m_windowManager.getMouseY());
+    };
+
+    SurfaceRegistry::Key popupTarget = 0;
+    const auto activePopup = m_surfaces.find(m_activePopupSurface);
+    if (pointerEvent && m_activePopupSurface != 0 &&
+        activePopup != m_surfaces.end() && !activePopup->second.pendingDestroy) {
+        popupTarget = m_activePopupSurface;
+    } else if (pointerEvent) {
+        popupTarget = findPopupAt(pointerX(), pointerY());
+    }
+
     bool visibilityInputBlocked = false;
     if (event.type == InputEventType::PointerButton && event.pressed) {
         const uint32_t focusedWindowId = m_windowManager.getFocusedWindowId();
@@ -47,9 +71,35 @@ bool InputRouter::route(const InputEvent& event) {
             });
         visibilityInputBlocked = surface != m_surfaces.end();
     }
-    const auto result = visibilityInputBlocked
+    const bool popupButtonEvent = event.type == InputEventType::PointerButton &&
+        popupTarget != 0;
+    auto result = (visibilityInputBlocked || popupButtonEvent)
         ? render::WindowInputResult{}
         : m_windowManager.processInputEvent(event);
+
+    if (event.type == InputEventType::PointerMotion) {
+        const auto active = m_surfaces.find(m_activePopupSurface);
+        popupTarget = m_activePopupSurface != 0 && active != m_surfaces.end() &&
+                !active->second.pendingDestroy
+            ? m_activePopupSurface
+            : findPopupAt(pointerX(), pointerY());
+    }
+
+    if (event.type == InputEventType::PointerButton && event.pressed &&
+        popupTarget != 0) {
+        const auto popup = m_surfaces.find(popupTarget);
+        const auto parent = popup == m_surfaces.end()
+            ? m_surfaces.end()
+            : m_surfaces.find(popup->second.parentSurfaceKey);
+        if (parent != m_surfaces.end() && parent->second.windowId != 0) {
+            m_windowManager.focusWindow(parent->second.windowId);
+            result.stateChanged = true;
+        }
+        m_activePopupSurface = popupTarget;
+        m_focusedPopupSurface = popupTarget;
+    } else if (event.type == InputEventType::PointerButton && event.pressed) {
+        m_focusedPopupSurface = 0;
+    }
     if (result.interaction) {
         for (auto& [_, entry] : m_surfaces) {
             if (entry.windowId == result.interaction.windowId) {
@@ -75,7 +125,19 @@ bool InputRouter::route(const InputEvent& event) {
         processCloseRequests();
     }
 
-    forwardToFocusedSurface(event);
+    const auto focusedPopup = m_surfaces.find(m_focusedPopupSurface);
+    if (event.type == InputEventType::KeyboardKey &&
+        m_focusedPopupSurface != 0 && focusedPopup != m_surfaces.end() &&
+        !focusedPopup->second.pendingDestroy) {
+        forwardToSurface(event, m_focusedPopupSurface);
+    } else if (popupTarget != 0) {
+        forwardToSurface(event, popupTarget);
+    } else {
+        forwardToFocusedSurface(event);
+    }
+    if (event.type == InputEventType::PointerButton && !event.pressed) {
+        m_activePopupSurface = 0;
+    }
     return stateChanged;
 }
 
@@ -182,7 +244,7 @@ void InputRouter::processCloseRequests() {
         }
 
         auto surfaceIt = std::find_if(m_surfaces.begin(), m_surfaces.end(), [windowId](const auto& item) {
-            return item.second.windowId == windowId;
+            return !item.second.isPopup() && item.second.windowId == windowId;
         });
         if (surfaceIt == m_surfaces.end()) {
             m_windowManager.removeWindow(windowId);
@@ -191,6 +253,7 @@ void InputRouter::processCloseRequests() {
         }
 
         const auto surfaceId = static_cast<uint32_t>(surfaceIt->first & 0xFFFFFFFFu);
+        destroyPopupChildren(surfaceIt->first);
         auto& entry = surfaceIt->second;
         if (entry.clientFd >= 0) {
             protocol::LCLHeader header{};
@@ -217,19 +280,28 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
         return;
     }
 
-    auto surfaceIt = std::find_if(m_surfaces.begin(), m_surfaces.end(), [focusedWindowId](const auto& item) {
-        return item.second.windowId == focusedWindowId && item.second.clientFd >= 0;
+    const auto surfaceIt = std::find_if(m_surfaces.begin(), m_surfaces.end(), [focusedWindowId](const auto& item) {
+        return !item.second.isPopup() && item.second.windowId == focusedWindowId &&
+            item.second.clientFd >= 0;
     });
     if (surfaceIt == m_surfaces.end()) {
         return;
     }
+
+    forwardToSurface(event, surfaceIt->first);
+}
+
+void InputRouter::forwardToSurface(const InputEvent& event,
+                                   SurfaceRegistry::Key surfaceKey) const {
+    const auto surfaceIt = m_surfaces.find(surfaceKey);
+    if (surfaceIt == m_surfaces.end()) return;
 
     const auto surfaceId = static_cast<uint32_t>(surfaceIt->first & 0xFFFFFFFFu);
     const auto& entry = surfaceIt->second;
     // System panels and surfaces that have not committed a complete frame are
     // never normal client input targets, even if focus state was stale. Geometry
     // morphs deliberately remain interactive while their presentation catches up.
-    if (entry.unfocusable || !entry.hasCommittedBuffer) {
+    if (entry.unfocusable || !entry.hasCommittedBuffer || entry.pendingDestroy) {
         return;
     }
     if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing ||
@@ -264,17 +336,24 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
         return;
     }
 
-    const auto windowIt = std::find_if(m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(), [focusedWindowId](const render::Window& window) {
-        return window.id == focusedWindowId;
+    uint32_t targetWindowId = entry.windowId;
+    if (entry.isPopup()) {
+        const auto parent = m_surfaces.find(entry.parentSurfaceKey);
+        if (parent == m_surfaces.end()) return;
+        targetWindowId = parent->second.windowId;
+    }
+    const auto windowIt = std::find_if(m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(), [targetWindowId](const render::Window& window) {
+        return window.id == targetWindowId;
     });
     if (windowIt == m_windowManager.getWindows().end()) {
         return;
     }
 
-    const int titleOffset = (windowIt->decorationMode == render::DecorationMode::SSD)
-        ? DisplayScale::titleBarHeight()
-        : 0;
-    const float scale = sanitizeBufferScale(entry.bufferScale);
+    const int titleOffset = !entry.isPopup() &&
+        windowIt->decorationMode == render::DecorationMode::SSD
+            ? DisplayScale::titleBarHeight()
+            : 0;
+    float scale = sanitizeBufferScale(entry.bufferScale);
     protocol::LCLMsgInputEvent input{};
     input.surfaceId = surfaceId;
     if (event.type == InputEventType::PointerMotion) {
@@ -298,14 +377,83 @@ void InputRouter::forwardToFocusedSurface(const InputEvent& event) const {
         std::isfinite(event.absoluteY) && event.absoluteY >= 0.0
             ? static_cast<float>(event.absoluteY)
             : static_cast<float>(m_windowManager.getMouseY());
-    input.x = (globalPointerX - bounds.x) / scale;
-    input.y = (globalPointerY - bounds.y - titleOffset) / scale;
+    float surfaceX = bounds.x;
+    float surfaceY = bounds.y + titleOffset;
+    if (entry.isPopup()) {
+        const auto parent = m_surfaces.find(entry.parentSurfaceKey);
+        if (parent == m_surfaces.end()) return;
+        const auto popupBounds = resolvePopupSurfaceBounds(*windowIt, parent->second, entry);
+        surfaceX = popupBounds.x;
+        surfaceY = popupBounds.y;
+        if (entry.width > 0) {
+            scale *= popupBounds.width / static_cast<float>(entry.width);
+        }
+    }
+    input.x = (globalPointerX - surfaceX) / scale;
+    input.y = (globalPointerY - surfaceY) / scale;
     input.key = toClientPointerButton(event.button);
     input.pressed = event.pressed ? 1 : 0;
     input.source = static_cast<uint8_t>(event.source == lcl::platform::PointerSource::Touch
         ? protocol::LCLPointerSource::Touch
         : protocol::LCLPointerSource::Mouse);
     protocol::sendMsgWithFd(entry.clientFd, header, &input);
+}
+
+SurfaceRegistry::Key InputRouter::findPopupAt(float globalX, float globalY) const {
+    for (auto window = m_windowManager.getWindows().rbegin();
+         window != m_windowManager.getWindows().rend(); ++window) {
+        if (window->isMinimized) continue;
+        const auto bounds = render::presentedBounds(*window);
+        const auto parent = std::find_if(m_surfaces.begin(), m_surfaces.end(),
+            [&window](const auto& item) {
+                return !item.second.isPopup() && item.second.windowId == window->id;
+            });
+        if (parent != m_surfaces.end()) {
+            const auto children = m_surfaces.popupChildren(parent->first);
+            for (auto childKey = children.rbegin(); childKey != children.rend(); ++childKey) {
+                const auto child = m_surfaces.find(*childKey);
+                if (child == m_surfaces.end() || !child->second.hasCommittedBuffer ||
+                    !child->second.hasRenderableBuffer() || child->second.pendingDestroy) {
+                    continue;
+                }
+                const auto popupBounds = resolvePopupSurfaceBounds(
+                    *window, parent->second, child->second);
+                if (globalX >= popupBounds.x &&
+                    globalX < popupBounds.x + popupBounds.width &&
+                    globalY >= popupBounds.y &&
+                    globalY < popupBounds.y + popupBounds.height) {
+                    return child->first;
+                }
+            }
+        }
+
+        // A higher unrelated WindowGroup occludes popups belonging to groups
+        // below it, exactly matching compositor render order.
+        if (globalX >= bounds.x && globalX < bounds.x + bounds.width &&
+            globalY >= bounds.y && globalY < bounds.y + bounds.height) {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+void InputRouter::destroyPopupChildren(SurfaceRegistry::Key parentSurfaceKey) {
+    for (const auto childKey : m_surfaces.popupChildren(parentSurfaceKey)) {
+        auto child = m_surfaces.find(childKey);
+        if (child == m_surfaces.end()) continue;
+        if (child->second.clientFd >= 0) {
+            protocol::LCLHeader header{};
+            header.opcode = protocol::LCLOpcode::SurfaceDestroy;
+            header.payloadSize = sizeof(protocol::LCLMsgSurfaceDestroy);
+            protocol::LCLMsgSurfaceDestroy destroy{};
+            destroy.surfaceId = static_cast<uint32_t>(childKey & 0xFFFFFFFFu);
+            protocol::sendMsgWithFd(child->second.clientFd, header, &destroy);
+        }
+        child->second.ignoreBufferCommits = true;
+        child->second.pendingDestroy = true;
+        if (m_activePopupSurface == childKey) m_activePopupSurface = 0;
+        if (m_focusedPopupSurface == childKey) m_focusedPopupSurface = 0;
+    }
 }
 
 bool InputRouter::startClosingTransition(SurfaceRegistry::SurfaceEntry& entry) noexcept {

@@ -269,6 +269,7 @@ bool TextField::onFocusGained(const FocusEvent& event) {
     if (!m_focused) {
         m_focused = true;
         m_caretPresentation.setActive(true);
+        registerCaretPresentation();
         ensureCaretVisible();
         markDirty();
     }
@@ -280,6 +281,7 @@ bool TextField::onFocusLost(const FocusEvent& event) {
     if (m_focused) {
         m_focused = false;
         m_caretPresentation.setActive(false);
+        unregisterCaretPresentation();
         markDirty();
     }
     return false;
@@ -360,13 +362,19 @@ void TextField::ensureCaretVisible() {
     m_horizontalScroll = std::clamp(m_horizontalScroll, 0.0f, maxScroll);
 }
 
-void TextField::advancePresentation(float deltaSec) {
-    Widget::advancePresentation(deltaSec);
-    if (m_caretPresentation.update(deltaSec)) markDirty();
+void TextField::registerCaretPresentation() {
+    if (!m_motionCoordinator || !m_caretPresentation.isActive()) return;
+    m_motionCoordinator->registerPresentation(*this, [this](float deltaSec) {
+        tickCaretPresentation(deltaSec);
+    });
 }
 
-bool TextField::hasActivePresentation() const {
-    return m_caretPresentation.isActive() || Widget::hasActivePresentation();
+void TextField::unregisterCaretPresentation() {
+    if (m_motionCoordinator) m_motionCoordinator->unregisterPresentation(getObjectId());
+}
+
+void TextField::tickCaretPresentation(float deltaSec) {
+    if (m_caretPresentation.update(deltaSec)) markDirty();
 }
 
 void TextField::resetCaretPresentation() {
