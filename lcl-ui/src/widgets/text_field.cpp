@@ -4,6 +4,7 @@
 #include "render/text_metrics.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -80,8 +81,10 @@ TextField::TextField(const std::string& text)
 void TextField::setText(const std::string& text) {
     std::string sanitized = sanitizeSingleLine(text);
     if (sanitized == m_text) {
+        const size_t previousCaretIndex = m_caretIndex;
         m_caretIndex = std::min(m_caretIndex, Utf8CodepointMap(m_text).count());
         ensureCaretVisible();
+        if (m_caretIndex != previousCaretIndex) resetCaretPresentation();
         return;
     }
 
@@ -137,11 +140,12 @@ void TextField::draw(Canvas& canvas, const Rect& damageRect) {
                         {241, 245, 249, 255}, kFontSize, kFontFamily);
     }
 
-    if (m_focused) {
+    const float caretOpacity = m_caretPresentation.opacity();
+    if (m_focused && caretOpacity > 0.0f) {
         const float caretX = viewport.x + measurePrefix(m_caretIndex) - m_horizontalScroll;
         const float caretHeight = kFontSize * 1.2f;
         canvas.drawRect({caretX, textY, kCaretWidth, caretHeight},
-                        {226, 232, 240, 255});
+                        {226, 232, 240, static_cast<uint8_t>(std::lround(255.0f * caretOpacity))});
     }
 
     endPresentation(canvas);
@@ -156,6 +160,7 @@ bool TextField::onPointerDown(const PointerEvent& event) {
         m_horizontalScroll;
     m_caretIndex = characterIndexForX(std::max(0.0f, contentX));
     ensureCaretVisible();
+    resetCaretPresentation();
     markDirty();
     return true;
 }
@@ -166,6 +171,7 @@ bool TextField::onPointerUp(const PointerEvent& event) {
         m_horizontalScroll;
     m_caretIndex = characterIndexForX(std::max(0.0f, contentX));
     ensureCaretVisible();
+    resetCaretPresentation();
     markDirty();
     return true;
 }
@@ -197,6 +203,8 @@ bool TextField::onKeyDown(const KeyEvent& event) {
                 invalidateCaretAdvances();
                 ensureCaretVisible();
                 valueChanged();
+            } else {
+                resetCaretPresentation();
             }
             return true;
         case PhysicalKey::Delete:
@@ -207,6 +215,8 @@ bool TextField::onKeyDown(const KeyEvent& event) {
                 invalidateCaretAdvances();
                 ensureCaretVisible();
                 valueChanged();
+            } else {
+                resetCaretPresentation();
             }
             return true;
         case PhysicalKey::ArrowLeft:
@@ -237,6 +247,7 @@ bool TextField::onKeyDown(const KeyEvent& event) {
         ensureCaretVisible();
         markDirty();
     }
+    resetCaretPresentation();
     return true;
 }
 
@@ -257,6 +268,7 @@ bool TextField::onFocusGained(const FocusEvent& event) {
     (void)event;
     if (!m_focused) {
         m_focused = true;
+        m_caretPresentation.setActive(true);
         ensureCaretVisible();
         markDirty();
     }
@@ -267,6 +279,7 @@ bool TextField::onFocusLost(const FocusEvent& event) {
     (void)event;
     if (m_focused) {
         m_focused = false;
+        m_caretPresentation.setActive(false);
         markDirty();
     }
     return false;
@@ -347,7 +360,21 @@ void TextField::ensureCaretVisible() {
     m_horizontalScroll = std::clamp(m_horizontalScroll, 0.0f, maxScroll);
 }
 
+void TextField::advancePresentation(float deltaSec) {
+    Widget::advancePresentation(deltaSec);
+    if (m_caretPresentation.update(deltaSec)) markDirty();
+}
+
+bool TextField::hasActivePresentation() const {
+    return m_caretPresentation.isActive() || Widget::hasActivePresentation();
+}
+
+void TextField::resetCaretPresentation() {
+    if (m_caretPresentation.resetActivity()) markDirty();
+}
+
 void TextField::valueChanged() {
+    resetCaretPresentation();
     markDirty();
     if (!m_onChange) return;
     ChangeCallback callback = m_onChange;

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "lcl-ui/core/canvas.hpp"
+#include "lcl-ui/core/caret_presentation_controller.hpp"
 #include "lcl-ui/core/rect.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/window_app.hpp"
@@ -367,6 +368,151 @@ TEST(LclUiTest, TextFieldPlaceholderAndCaretFollowFocusAndValueState) {
     canvas.rects.clear();
     field.draw(canvas, damage);
     EXPECT_TRUE(canvas.rects.empty());
+}
+
+TEST(LclUiTest, CaretPresentationControllerUsesDeterministicHardBlinkPhases) {
+    CaretPresentationController caret;
+    EXPECT_FALSE(caret.isActive());
+    EXPECT_FLOAT_EQ(caret.opacity(), 0.0f);
+
+    EXPECT_TRUE(caret.setActive(true));
+    EXPECT_TRUE(caret.isActive());
+    EXPECT_FLOAT_EQ(caret.opacity(), 1.0f);
+    EXPECT_FALSE(caret.update(0.49f));
+    EXPECT_FLOAT_EQ(caret.opacity(), 1.0f);
+    EXPECT_TRUE(caret.update(0.02f));
+    EXPECT_FLOAT_EQ(caret.opacity(), 0.0f);
+    EXPECT_TRUE(caret.update(CaretPresentationController::kHiddenPhaseDurationSec));
+    EXPECT_FLOAT_EQ(caret.opacity(), 1.0f);
+    EXPECT_TRUE(caret.update(CaretPresentationController::kVisiblePhaseDurationSec));
+    EXPECT_FLOAT_EQ(caret.opacity(), 0.0f);
+
+    EXPECT_TRUE(caret.resetActivity());
+    EXPECT_FLOAT_EQ(caret.opacity(), 1.0f);
+    EXPECT_FALSE(caret.update(0.49f));
+    EXPECT_TRUE(caret.update(0.02f));
+    EXPECT_FLOAT_EQ(caret.opacity(), 0.0f);
+
+    EXPECT_TRUE(caret.setActive(false));
+    EXPECT_FALSE(caret.isActive());
+    EXPECT_FLOAT_EQ(caret.opacity(), 0.0f);
+    EXPECT_FALSE(caret.update(1.0f));
+}
+
+TEST(LclUiTest, TextFieldCaretPresentationResetsForEditingAndCaretActivity) {
+    TextField field("abc");
+    field.getYogaNode().setWidth(180.0f);
+    field.getYogaNode().calculateLayout(180.0f, 36.0f);
+    field.syncLayout();
+    field.onFocusGained(FocusEvent{FocusEventType::Gained});
+    const Rect damage{-10.0f, -10.0f, 220.0f, 80.0f};
+    RecordingCanvas canvas;
+
+    auto expectVisibleCaret = [&] {
+        canvas.rects.clear();
+        canvas.colors.clear();
+        field.draw(canvas, damage);
+        ASSERT_EQ(canvas.rects.size(), 1u);
+        ASSERT_FALSE(canvas.colors.empty());
+        EXPECT_EQ(canvas.colors.back().a, 255);
+    };
+    auto expectHiddenCaret = [&] {
+        canvas.rects.clear();
+        field.draw(canvas, damage);
+        EXPECT_TRUE(canvas.rects.empty());
+    };
+
+    expectVisibleCaret();
+    field.advancePresentation(0.5f);
+    expectHiddenCaret();
+
+    ASSERT_TRUE(field.onTextInput(TextInputEvent{"ç"}));
+    expectVisibleCaret();
+    field.advancePresentation(0.5f);
+    expectHiddenCaret();
+
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::ArrowLeft,
+                                         static_cast<int>(lcl::platform::PhysicalKey::ArrowLeft)}));
+    expectVisibleCaret();
+    field.advancePresentation(0.5f);
+    expectHiddenCaret();
+
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::ArrowRight,
+                                         static_cast<int>(lcl::platform::PhysicalKey::ArrowRight)}));
+    expectVisibleCaret();
+    field.advancePresentation(0.5f);
+    expectHiddenCaret();
+
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Home,
+                                         static_cast<int>(lcl::platform::PhysicalKey::Home)}));
+    expectVisibleCaret();
+    field.advancePresentation(0.5f);
+    expectHiddenCaret();
+
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::End,
+                                         static_cast<int>(lcl::platform::PhysicalKey::End)}));
+    expectVisibleCaret();
+    field.advancePresentation(0.5f);
+    expectHiddenCaret();
+
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Backspace,
+                                         static_cast<int>(lcl::platform::PhysicalKey::Backspace)}));
+    expectVisibleCaret();
+    field.advancePresentation(0.5f);
+    expectHiddenCaret();
+
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Home,
+                                         static_cast<int>(lcl::platform::PhysicalKey::Home)}));
+    ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Delete,
+                                         static_cast<int>(lcl::platform::PhysicalKey::Delete)}));
+    expectVisibleCaret();
+    field.advancePresentation(0.5f);
+    expectHiddenCaret();
+
+    ASSERT_TRUE(field.onPointerDown(PointerEvent{
+        18.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down,
+        PointerSource::Mouse, 0}));
+    expectVisibleCaret();
+    field.advancePresentation(0.5f);
+    expectHiddenCaret();
+
+    field.setText("reset");
+    expectVisibleCaret();
+    field.onFocusLost(FocusEvent{FocusEventType::Lost});
+    expectHiddenCaret();
+}
+
+TEST(LclUiTest, WindowAppSchedulesCaretPresentationOnlyWhileFieldIsFocused) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    WindowApp app(std::move(canvas), 180, 36, "Caret Presentation Test");
+
+    auto field = std::make_unique<TextField>();
+    field->setWidth(180.0f);
+    TextField* fieldPtr = field.get();
+    app.setRootWidget(std::move(field));
+    app.updateLayout();
+
+    EXPECT_FALSE(app.hasActiveAnimations());
+    ASSERT_TRUE(app.sendPointerDown(10.0f, 10.0f));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), fieldPtr);
+    EXPECT_TRUE(app.hasActiveAnimations());
+    EXPECT_TRUE(app.advanceAnimations(0.5f));
+
+    recorded->rects.clear();
+    fieldPtr->draw(*recorded, {-10.0f, -10.0f, 220.0f, 80.0f});
+    EXPECT_TRUE(recorded->rects.empty());
+
+    ASSERT_TRUE(app.sendPointerDown(10.0f, 10.0f, 0, PointerSource::Touch, 7));
+    ASSERT_TRUE(app.sendPointerUp(10.0f, 10.0f, 0, PointerSource::Touch, 7));
+    recorded->rects.clear();
+    recorded->colors.clear();
+    fieldPtr->draw(*recorded, {-10.0f, -10.0f, 220.0f, 80.0f});
+    ASSERT_EQ(recorded->rects.size(), 1u);
+    EXPECT_EQ(recorded->colors.back().a, 255);
+
+    app.getDispatcher().setFocus(nullptr);
+    EXPECT_FALSE(app.hasActiveAnimations());
 }
 
 TEST(LclUiTest, TextFieldCaretUsesActiveCanvasProportionalMetrics) {

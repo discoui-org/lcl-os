@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lcl-ui/core/caret_presentation_controller.hpp"
 #include "lcl-ui/core/font_family.hpp"
 #include "lcl-ui/widgets/widget.hpp"
 
@@ -30,6 +31,8 @@ public:
 
     void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f) override;
     void draw(Canvas& canvas, const Rect& damageRect) override;
+    void advancePresentation(float deltaSec) override;
+    bool hasActivePresentation() const override;
 
     bool onPointerDown(const PointerEvent& event) override;
     bool onPointerUp(const PointerEvent& event) override;
@@ -49,6 +52,7 @@ private:
     float measureTextWidth() const;
     size_t characterIndexForX(float x) const;
     void ensureCaretVisible();
+    void resetCaretPresentation();
     void valueChanged();
 
     std::string m_text;
@@ -57,6 +61,7 @@ private:
     size_t m_caretIndex{0};
     float m_horizontalScroll{0.0f};
     bool m_focused{false};
+    CaretPresentationController m_caretPresentation;
     std::vector<float> m_caretAdvances;
     bool m_caretAdvancesValid{false};
 

@@ -109,6 +109,11 @@ public:
     virtual void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f);
     virtual void draw(Canvas& canvas, const Rect& damageRect);
     virtual void collectEffects(std::vector<EffectRegion>& outEffects) const;
+    // Presentation-only controllers advance from WindowApp's frame clock.
+    // The base implementation keeps traversal generic without making layout
+    // or semantic state depend on the scheduler.
+    virtual void advancePresentation(float deltaSec);
+    virtual bool hasActivePresentation() const;
 
     // Ancestor observation phase. It cannot consume normal target/bubble dispatch.
     virtual void onPointerEventPreview(const PointerEvent& event) { (void)event; }

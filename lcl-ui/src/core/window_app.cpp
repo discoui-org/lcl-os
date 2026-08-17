@@ -732,11 +732,14 @@ bool WindowApp::advanceAnimations(float dtSec) {
     const bool motionActive = m_motionCoordinator.tick(dtSec);
     const bool morphBlendActive = advanceMorphCrossfade(dtSec);
     if (m_morphInputFrozen && !motionActive && !morphBlendActive) m_morphInputFrozen = false;
-    return motionActive || morphBlendActive;
+    if (m_rootWidget) m_rootWidget->advancePresentation(dtSec);
+    return motionActive || morphBlendActive ||
+        (m_rootWidget && m_rootWidget->hasActivePresentation());
 }
 
 bool WindowApp::hasActiveAnimations() const noexcept {
-    return m_motionCoordinator.hasActiveAnimations() || m_morphBlendEngine.hasActiveAnimations();
+    return m_motionCoordinator.hasActiveAnimations() || m_morphBlendEngine.hasActiveAnimations() ||
+        (m_rootWidget && m_rootWidget->hasActivePresentation());
 }
 
 void WindowApp::startMorphCrossfade(std::vector<uint32_t> snapshot,
