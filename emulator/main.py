@@ -33,6 +33,32 @@ class SkinLayoutError(ValueError):
     """The selected skin is not in the supported Pixel layout format."""
 
 
+def smooth_downsample_image(source: QImage, width: int, height: int) -> QImage:
+    """Downsample translucent skin artwork without bilinear minification aliasing."""
+    target_width = max(1, width)
+    target_height = max(1, height)
+    image = source.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+
+    # Repeated half-size passes approximate a proper low-pass filter before
+    # the final resize. A single bilinear pass aliases the high-resolution
+    # Pixel skin when the viewer is only around one third of its source size.
+    while image.width() > target_width * 2 or image.height() > target_height * 2:
+        image = image.scaled(
+            max(target_width, (image.width() + 1) // 2),
+            max(target_height, (image.height() + 1) // 2),
+            Qt.IgnoreAspectRatio,
+            Qt.SmoothTransformation,
+        )
+    if image.width() != target_width or image.height() != target_height:
+        image = image.scaled(
+            target_width,
+            target_height,
+            Qt.IgnoreAspectRatio,
+            Qt.SmoothTransformation,
+        )
+    return image
+
+
 def pixel_skin_dir(name: str) -> Path:
     """Resolve one bundled Pixel skin without permitting paths outside skins/."""
     if Path(name).name != name:
@@ -177,11 +203,14 @@ class DeviceViewer(QWidget):
         if layout.foreground_path and self._foreground.isNull():
             raise SkinLayoutError(f"Cannot decode {layout.foreground_path}")
 
+        self._background_source = self._background.toImage()
+        self._filtered_background = QImage()
+        self._filtered_background_size = (0, 0)
+
         self._display_widget = SpiceGlWidget(self._display_mask_image(), self)
 
         self.setMinimumSize(260, 480)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAutoFillBackground(False)
+        self.setAutoFillBackground(True)
 
     def submit_spice_draw(self, channel, scanout) -> None:
         self._display_widget.submit_draw(channel, scanout)
@@ -226,8 +255,9 @@ class DeviceViewer(QWidget):
         del event
         painter = QPainter(self)
         painter.setCompositionMode(QPainter.CompositionMode_Source)
-        painter.fillRect(self.rect(), Qt.transparent)
+        painter.fillRect(self.rect(), self.palette().window())
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.setRenderHint(QPainter.Antialiasing)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
 
         canvas = QRectF(0, 0, self._layout.canvas_width, self._layout.canvas_height)
@@ -246,7 +276,16 @@ class DeviceViewer(QWidget):
             self._background.width() * scale,
             self._background.height() * scale,
         )
-        painter.drawPixmap(background_rect, self._background, QRectF(self._background.rect()))
+        dpr = max(1.0, self.devicePixelRatioF())
+        filtered_size = (
+            max(1, round(background_rect.width() * dpr)),
+            max(1, round(background_rect.height() * dpr)),
+        )
+        if filtered_size != self._filtered_background_size:
+            self._filtered_background = smooth_downsample_image(
+                self._background_source, *filtered_size)
+            self._filtered_background_size = filtered_size
+        painter.drawImage(background_rect, self._filtered_background)
 
         self._update_display_widget_geometry()
 
@@ -287,10 +326,8 @@ def main() -> int:
 
     window = QMainWindow()
     window.setWindowTitle(f"LCL Device Viewer — {args.skin.replace('_', ' ').title()}")
-    window.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
-    window.setAttribute(Qt.WA_TranslucentBackground)
     window.setCentralWidget(viewer)
-    window.setFixedSize(460, 940)
+    window.resize(460, 940)
     window.show()
 
     runner = QemuRunner(build=args.build, rebuild=args.rebuild)

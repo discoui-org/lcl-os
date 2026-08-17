@@ -640,7 +640,24 @@ class SpiceGlWidget(QOpenGLWidget):
             uniform sampler2D image;
             out vec4 color;
             void main() {
-                vec3 guest_rgb = texture(image, uv).rgb;
+                vec2 uv_footprint = fwidth(uv);
+                vec2 source_footprint =
+                    uv_footprint * vec2(textureSize(image, 0));
+                vec3 guest_rgb;
+                if (max(source_footprint.x, source_footprint.y) > 1.0) {
+                    // The mobile guest is usually much larger than the viewer.
+                    // Average four subpixel samples to suppress minification
+                    // shimmer while leaving 1:1 presentation untouched.
+                    vec2 offset = uv_footprint * 0.25;
+                    guest_rgb = (
+                        texture(image, uv + vec2(-offset.x, -offset.y)).rgb +
+                        texture(image, uv + vec2( offset.x, -offset.y)).rgb +
+                        texture(image, uv + vec2(-offset.x,  offset.y)).rgb +
+                        texture(image, uv + vec2( offset.x,  offset.y)).rgb
+                    ) * 0.25;
+                } else {
+                    guest_rgb = texture(image, uv).rgb;
+                }
                 color = vec4(guest_rgb, 1.0);
             }
             """,
@@ -663,7 +680,24 @@ class SpiceGlWidget(QOpenGLWidget):
             in vec2 uv;
             uniform sampler2D mask_image;
             out vec4 color;
-            void main() { color = vec4(0.0, 0.0, 0.0, texture(mask_image, uv).r); }
+            void main() {
+                vec2 uv_footprint = fwidth(uv);
+                vec2 source_footprint =
+                    uv_footprint * vec2(textureSize(mask_image, 0));
+                float mask_alpha;
+                if (max(source_footprint.x, source_footprint.y) > 1.0) {
+                    vec2 offset = uv_footprint * 0.25;
+                    mask_alpha = (
+                        texture(mask_image, uv + vec2(-offset.x, -offset.y)).r +
+                        texture(mask_image, uv + vec2( offset.x, -offset.y)).r +
+                        texture(mask_image, uv + vec2(-offset.x,  offset.y)).r +
+                        texture(mask_image, uv + vec2( offset.x,  offset.y)).r
+                    ) * 0.25;
+                } else {
+                    mask_alpha = texture(mask_image, uv).r;
+                }
+                color = vec4(0.0, 0.0, 0.0, mask_alpha);
+            }
             """,
         )
         self._flip_y_uniform_location = self._program.uniformLocation("flip_y")
