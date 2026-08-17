@@ -9,11 +9,13 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/menu.hpp"
 #include "lcl-ui/widgets/popover.hpp"
 #include "lcl-ui/widgets/window_chrome.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
+#include "lcl-ui/widgets/toggle.hpp"
 #include "render/skia_renderer.hpp"
 #include "render/skia_canvas.hpp"
 #include "render/backdrop_filter_geometry.hpp"
@@ -1090,6 +1092,256 @@ TEST(LclUiTest, TransientControllerUsesTheSameStableLifecycleForSurfaceEntries) 
     EXPECT_EQ(dismissCount, 1);
 }
 
+class MenuTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
+                             popupSockets), 0);
+        app = std::make_unique<WindowApp>(
+            std::make_unique<RecordingCanvas>(), 300, 220, "Menu test");
+        auto root = std::make_unique<Container>();
+        root->setWidth(300.0f);
+        root->setHeight(220.0f);
+        auto anchorWidget = std::make_unique<Button>("Menu anchor");
+        anchorWidget->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+        anchorWidget->setPosition(YGEdgeLeft, 20.0f);
+        anchorWidget->setPosition(YGEdgeTop, 20.0f);
+        anchorWidget->setWidth(100.0f);
+        anchorWidget->setHeight(32.0f);
+        anchor = anchorWidget.get();
+        root->addChild(std::move(anchorWidget));
+        app->setRootWidget(std::move(root));
+        app->updateLayout();
+        menu = std::make_unique<Menu>(
+            *app, [] { return std::make_unique<RecordingCanvas>(); },
+            [this](WindowApp& popup) {
+                popupWindow = &popup;
+                popupSurfaceId = popup.getSurfaceId();
+                popup.setExternalIpcSocket(popupSockets[0]);
+                return true;
+            });
+    }
+
+    void TearDown() override {
+        menu.reset();
+        app.reset();
+        close(popupSockets[0]);
+        close(popupSockets[1]);
+    }
+
+    PopoverOpenResult open(std::vector<MenuItem> items,
+                           std::function<void()> onDismissed = {}) {
+        app->getDispatcher().setFocus(anchor);
+        auto result = menu->show(
+            *anchor, std::move(items),
+            MenuOptions{.width = 180.0f,
+                        .itemHeight = 36.0f,
+                        .onDismissed = std::move(onDismissed)});
+        app->tick();
+        return result;
+    }
+
+    std::vector<Button*> popupItems() const {
+        std::vector<Button*> result;
+        if (!popupWindow || !popupWindow->getRootWidget()) return result;
+        const auto& roots = popupWindow->getRootWidget()->getChildren();
+        if (roots.empty()) return result;
+        for (const auto& child : roots.front()->getChildren()) {
+            if (auto* button = dynamic_cast<Button*>(child.get())) {
+                result.push_back(button);
+            }
+        }
+        return result;
+    }
+
+    void sendKey(lcl::platform::PhysicalKey key) {
+        lcl::protocol::LCLMsgInputEvent input{};
+        input.surfaceId = popupSurfaceId;
+        input.type = 1;
+        input.key = static_cast<uint32_t>(key);
+        input.pressed = 1;
+        lcl::protocol::LCLHeader header{};
+        header.opcode = lcl::protocol::LCLOpcode::InputEvent;
+        header.payloadSize = sizeof(input);
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(
+            popupSockets[1], header, &input));
+        app->tick();
+    }
+
+    void sendPointer(PointerEventType type, float x, float y,
+                     PointerSource source = PointerSource::Mouse) {
+        lcl::protocol::LCLMsgInputEvent input{};
+        input.surfaceId = popupSurfaceId;
+        input.type = type == PointerEventType::Move ? 3 : 4;
+        input.x = x;
+        input.y = y;
+        input.key = 0;
+        input.pressed = type == PointerEventType::Down ? 1 : 0;
+        input.source = static_cast<uint8_t>(
+            source == PointerSource::Touch
+                ? lcl::protocol::LCLPointerSource::Touch
+                : lcl::protocol::LCLPointerSource::Mouse);
+        lcl::protocol::LCLHeader header{};
+        header.opcode = lcl::protocol::LCLOpcode::InputEvent;
+        header.payloadSize = sizeof(input);
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(
+            popupSockets[1], header, &input));
+        app->tick();
+    }
+
+    int popupSockets[2]{-1, -1};
+    std::unique_ptr<WindowApp> app;
+    std::unique_ptr<Menu> menu;
+    Button* anchor{nullptr};
+    WindowApp* popupWindow{nullptr};
+    uint32_t popupSurfaceId{0};
+};
+
+TEST_F(MenuTest, OpeningAndArrowNavigationSkipDisabledItemsAndWrap) {
+    const auto opened = open({
+        MenuItem{"Disabled first", false, {}},
+        MenuItem{"First", true, {}},
+        MenuItem{"Disabled middle", false, {}},
+        MenuItem{"Last", true, {}},
+    });
+    ASSERT_TRUE(opened);
+    const auto items = popupItems();
+    ASSERT_EQ(items.size(), 4u);
+    EXPECT_EQ(app->getDispatcher().getFocusedWidget(), nullptr);
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), items[1]);
+
+    sendKey(lcl::platform::PhysicalKey::ArrowDown);
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), items[3]);
+    sendKey(lcl::platform::PhysicalKey::ArrowDown);
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), items[1]);
+    sendKey(lcl::platform::PhysicalKey::ArrowUp);
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), items[3]);
+    sendKey(lcl::platform::PhysicalKey::ArrowUp);
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), items[1]);
+}
+
+TEST_F(MenuTest, EnterAndSpaceActivateThenCloseAndRestoreAnchor) {
+    int enterActivations = 0;
+    auto opened = open({MenuItem{"Enter", true,
+                                [&] { ++enterActivations; }}});
+    ASSERT_TRUE(opened);
+    sendKey(lcl::platform::PhysicalKey::Enter);
+    EXPECT_EQ(enterActivations, 1);
+    EXPECT_FALSE(menu->isOpen(opened.handle));
+    EXPECT_EQ(app->getDispatcher().getFocusedWidget(), anchor);
+
+    int spaceActivations = 0;
+    opened = open({MenuItem{"Space", true,
+                           [&] { ++spaceActivations; }}});
+    ASSERT_TRUE(opened);
+    sendKey(lcl::platform::PhysicalKey::Space);
+    EXPECT_EQ(spaceActivations, 1);
+    EXPECT_FALSE(menu->isOpen(opened.handle));
+    EXPECT_EQ(app->getDispatcher().getFocusedWidget(), anchor);
+}
+
+TEST_F(MenuTest, MouseAndValidatedTouchActivateButDragCancelAndDisabledDoNot) {
+    int activations = 0;
+    auto opened = open({MenuItem{"Mouse", true, [&] { ++activations; }}});
+    ASSERT_TRUE(opened);
+    auto items = popupItems();
+    ASSERT_EQ(items.size(), 1u);
+    Rect bounds = items[0]->getAbsoluteBounds();
+    sendPointer(PointerEventType::Down, bounds.x + 8.0f, bounds.y + 8.0f);
+    sendPointer(PointerEventType::Up, bounds.x + 8.0f, bounds.y + 8.0f);
+    EXPECT_EQ(activations, 1);
+    EXPECT_FALSE(menu->isOpen(opened.handle));
+
+    opened = open({MenuItem{"Touch", true, [&] { ++activations; }}});
+    ASSERT_TRUE(opened);
+    items = popupItems();
+    bounds = items[0]->getAbsoluteBounds();
+    sendPointer(PointerEventType::Down, bounds.x + 8.0f, bounds.y + 8.0f,
+                PointerSource::Touch);
+    sendPointer(PointerEventType::Up, bounds.x + 8.0f, bounds.y + 8.0f,
+                PointerSource::Touch);
+    EXPECT_EQ(activations, 2);
+    EXPECT_FALSE(menu->isOpen(opened.handle));
+
+    opened = open({MenuItem{"Gesture", true, [&] { ++activations; }},
+                   MenuItem{"Disabled", false, [&] { ++activations; }}});
+    ASSERT_TRUE(opened);
+    items = popupItems();
+    ASSERT_EQ(items.size(), 2u);
+    bounds = items[0]->getAbsoluteBounds();
+    sendPointer(PointerEventType::Down, bounds.x + 8.0f, bounds.y + 8.0f,
+                PointerSource::Touch);
+    sendPointer(PointerEventType::Move, bounds.x + 24.0f, bounds.y + 8.0f,
+                PointerSource::Touch);
+    sendPointer(PointerEventType::Up, bounds.x + 24.0f, bounds.y + 8.0f,
+                PointerSource::Touch);
+    EXPECT_EQ(activations, 2);
+    EXPECT_TRUE(menu->isOpen(opened.handle));
+
+    popupWindow->sendPointerDown(bounds.x + 8.0f, bounds.y + 8.0f, 0,
+                                 PointerSource::Touch, 9);
+    popupWindow->sendPointerCancel(bounds.x + 8.0f, bounds.y + 8.0f,
+                                   PointerSource::Touch, 9);
+    EXPECT_EQ(activations, 2);
+    EXPECT_TRUE(menu->isOpen(opened.handle));
+
+    const Rect disabledBounds = items[1]->getAbsoluteBounds();
+    sendPointer(PointerEventType::Down, disabledBounds.x + 8.0f,
+                disabledBounds.y + 8.0f);
+    sendPointer(PointerEventType::Up, disabledBounds.x + 8.0f,
+                disabledBounds.y + 8.0f);
+    EXPECT_EQ(activations, 2);
+    EXPECT_TRUE(menu->isOpen(opened.handle));
+}
+
+TEST_F(MenuTest, EscapeAndOutsideDismissCloseWithoutActivation) {
+    int activations = 0;
+    auto opened = open({MenuItem{"Action", true, [&] { ++activations; }}});
+    ASSERT_TRUE(opened);
+    sendKey(lcl::platform::PhysicalKey::Escape);
+    EXPECT_EQ(activations, 0);
+    EXPECT_FALSE(menu->isOpen(opened.handle));
+    EXPECT_EQ(app->getDispatcher().getFocusedWidget(), anchor);
+
+    int dismissals = 0;
+    opened = open({MenuItem{"Action", true, [&] { ++activations; }}},
+                  [&] { ++dismissals; });
+    ASSERT_TRUE(opened);
+    EXPECT_TRUE(app->sendPointerDown(260.0f, 180.0f));
+    EXPECT_EQ(dismissals, 1);
+    EXPECT_EQ(activations, 0);
+    EXPECT_FALSE(menu->isOpen(opened.handle));
+    EXPECT_EQ(app->getDispatcher().getFocusedWidget(), anchor);
+}
+
+TEST_F(MenuTest, CallbackMayCloseItsOwnTransientAndZeroEnabledItemsStaySafe) {
+    int activations = 0;
+    auto handleSlot = std::make_shared<TransientHandle>(0);
+    auto opened = open({MenuItem{
+        "Self close", true,
+        [&, handleSlot] {
+            ++activations;
+            menu->close(*handleSlot);
+        }}});
+    ASSERT_TRUE(opened);
+    *handleSlot = opened.handle;
+    sendKey(lcl::platform::PhysicalKey::Enter);
+    EXPECT_EQ(activations, 1);
+    EXPECT_FALSE(menu->isOpen(opened.handle));
+    EXPECT_EQ(app->getDispatcher().getFocusedWidget(), anchor);
+
+    opened = open({MenuItem{"Disabled A", false, [&] { ++activations; }},
+                   MenuItem{"Disabled B", false, [&] { ++activations; }}});
+    ASSERT_TRUE(opened);
+    EXPECT_EQ(popupWindow->getDispatcher().getFocusedWidget(), nullptr);
+    sendKey(lcl::platform::PhysicalKey::ArrowDown);
+    sendKey(lcl::platform::PhysicalKey::ArrowUp);
+    EXPECT_EQ(activations, 1);
+    EXPECT_TRUE(menu->isOpen(opened.handle));
+    EXPECT_TRUE(menu->close(opened.handle));
+    EXPECT_EQ(app->getDispatcher().getFocusedWidget(), anchor);
+}
+
 TEST(LclUiTest, PopoverPlacesBelowLeftAndAlwaysUsesPopupSurface) {
     int popupSockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0,
@@ -2141,6 +2393,228 @@ TEST(LclUiTest, ExplicitKeyframesArePresentationOnlyUntilCommittedAndSurviveClea
     replacement->setHeight(100.0f);
     app.setRootWidget(std::move(replacement));
     EXPECT_NO_THROW(app.advanceAnimations(0.1f));
+}
+
+TEST(LclUiTest, ToggleDefaultsProgrammaticValueAndNotificationsAreDeterministic) {
+    Toggle toggle;
+    EXPECT_FALSE(toggle.value());
+    EXPECT_TRUE(toggle.isEnabled());
+    EXPECT_TRUE(toggle.isFocusable());
+
+    std::vector<bool> changes;
+    toggle.setOnChange([&](bool value) { changes.push_back(value); });
+    toggle.setValue(false);
+    EXPECT_TRUE(changes.empty());
+
+    toggle.setValue(true);
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_TRUE(changes.back());
+    EXPECT_TRUE(toggle.value());
+
+    toggle.setValue(true);
+    EXPECT_EQ(changes.size(), 1u);
+
+    toggle.setValue(false);
+    ASSERT_EQ(changes.size(), 2u);
+    EXPECT_FALSE(changes.back());
+
+    Toggle initiallyOn(true);
+    EXPECT_TRUE(initiallyOn.value());
+}
+
+TEST(LclUiTest, ToggleMouseAndTouchUseOneValueTransitionPath) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 100, 70, "Toggle pointer input");
+    auto toggle = std::make_unique<Toggle>();
+    Toggle* pointer = toggle.get();
+    int changes = 0;
+    toggle->setOnChange([&](bool) { ++changes; });
+    app.setRootWidget(std::move(toggle));
+    app.updateLayout();
+
+    EXPECT_FALSE(app.sendPointerDown(20.0f, 22.0f, 1));
+    EXPECT_FALSE(app.sendPointerUp(20.0f, 22.0f, 1));
+    EXPECT_FALSE(pointer->value());
+    EXPECT_EQ(changes, 0);
+
+    EXPECT_TRUE(app.sendPointerDown(20.0f, 22.0f));
+    EXPECT_FALSE(pointer->value());
+    EXPECT_TRUE(app.sendPointerUp(20.0f, 22.0f));
+    EXPECT_TRUE(pointer->value());
+    EXPECT_EQ(changes, 1);
+
+    EXPECT_TRUE(app.sendPointerDown(
+        20.0f, 22.0f, 0, PointerSource::Touch, 7));
+    EXPECT_TRUE(pointer->value());
+    EXPECT_TRUE(app.sendPointerUp(
+        20.0f, 22.0f, 0, PointerSource::Touch, 7));
+    EXPECT_FALSE(pointer->value());
+    EXPECT_EQ(changes, 2);
+
+    EXPECT_TRUE(app.sendPointerDown(
+        20.0f, 22.0f, 0, PointerSource::Touch, 8));
+    EXPECT_FALSE(app.sendPointerMove(
+        35.0f, 22.0f, PointerSource::Touch, 8));
+    EXPECT_TRUE(app.sendPointerUp(
+        35.0f, 22.0f, 0, PointerSource::Touch, 8));
+    EXPECT_FALSE(pointer->value());
+    EXPECT_EQ(changes, 2);
+
+    EXPECT_TRUE(app.sendPointerDown(
+        20.0f, 22.0f, 0, PointerSource::Touch, 9));
+    EXPECT_TRUE(app.sendPointerCancel(
+        20.0f, 22.0f, PointerSource::Touch, 9));
+    EXPECT_FALSE(pointer->value());
+    EXPECT_EQ(changes, 2);
+
+    pointer->setEnabled(false);
+    EXPECT_FALSE(app.sendPointerDown(20.0f, 22.0f));
+    EXPECT_FALSE(app.sendPointerUp(20.0f, 22.0f));
+    EXPECT_FALSE(app.sendPointerDown(
+        20.0f, 22.0f, 0, PointerSource::Touch, 10));
+    EXPECT_FALSE(app.sendPointerUp(
+        20.0f, 22.0f, 0, PointerSource::Touch, 10));
+    EXPECT_FALSE(pointer->value());
+    EXPECT_EQ(changes, 2);
+}
+
+TEST(LclUiTest, ToggleFocusedSpaceAndWindowTraversalRespectEligibility) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 180, 160, "Toggle keyboard input");
+    auto root = std::make_unique<Container>();
+    root->setWidth(180.0f);
+    root->setHeight(160.0f);
+    root->getYogaNode().setDirection(YGFlexDirectionColumn);
+
+    auto before = std::make_unique<Button>("Before");
+    Button* beforePtr = before.get();
+    before->setHeight(40.0f);
+    auto toggle = std::make_unique<Toggle>();
+    Toggle* togglePtr = toggle.get();
+    auto after = std::make_unique<TextField>();
+    TextField* afterPtr = after.get();
+    after->setHeight(40.0f);
+
+    root->addChild(std::move(before));
+    root->addChild(std::move(toggle));
+    root->addChild(std::move(after));
+    app.setRootWidget(std::move(root));
+    app.updateLayout();
+
+    const int tab = static_cast<int>(lcl::platform::PhysicalKey::Tab);
+    const int space = static_cast<int>(lcl::platform::PhysicalKey::Space);
+    const int enter = static_cast<int>(lcl::platform::PhysicalKey::Enter);
+
+    EXPECT_FALSE(app.sendKeyDown(space));
+    EXPECT_FALSE(togglePtr->value());
+    app.getDispatcher().setFocus(beforePtr);
+    EXPECT_TRUE(app.sendKeyDown(tab));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), togglePtr);
+    EXPECT_TRUE(app.sendKeyDown(space));
+    EXPECT_TRUE(togglePtr->value());
+    EXPECT_FALSE(app.sendKeyDown(enter));
+    EXPECT_TRUE(togglePtr->value());
+    EXPECT_TRUE(app.sendKeyDown(tab));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), afterPtr);
+
+    togglePtr->setEnabled(false);
+    app.getDispatcher().setFocus(beforePtr);
+    EXPECT_TRUE(app.sendKeyDown(tab));
+    EXPECT_EQ(app.getDispatcher().getFocusedWidget(), afterPtr);
+    app.getDispatcher().setFocus(togglePtr);
+    EXPECT_NE(app.getDispatcher().getFocusedWidget(), togglePtr);
+    EXPECT_FALSE(togglePtr->onKeyDown(KeyEvent{
+        lcl::platform::PhysicalKey::Space, space}));
+    EXPECT_TRUE(togglePtr->value());
+}
+
+TEST(LclUiTest, ToggleValueIsImmediateWhileThumbAnimationRetargetsOneChannel) {
+    MotionCoordinator coordinator;
+    Toggle toggle;
+    toggle.setMotionCoordinator(&coordinator);
+    toggle.getYogaNode().calculateLayout(60.0f, 44.0f);
+    toggle.syncLayout();
+    const uint64_t objectId = toggle.getObjectId();
+
+    toggle.setValue(true);
+    EXPECT_TRUE(toggle.value());
+    EXPECT_TRUE(coordinator.isObjectAnimating(objectId));
+
+    RecordingCanvas canvas;
+    const Rect damage{-10.0f, -10.0f, 100.0f, 80.0f};
+    toggle.draw(canvas, damage);
+    ASSERT_EQ(canvas.roundedRects.size(), 3u);
+    const float offX = canvas.roundedRects.back().x;
+
+    coordinator.tick(0.08f);
+    canvas.roundedRects.clear();
+    toggle.draw(canvas, damage);
+    ASSERT_EQ(canvas.roundedRects.size(), 3u);
+    EXPECT_GT(canvas.roundedRects.back().x, offX);
+
+    toggle.setValue(false);
+    EXPECT_FALSE(toggle.value());
+    EXPECT_TRUE(coordinator.isObjectAnimating(objectId));
+    coordinator.tick(1.0f);
+
+    canvas.roundedRects.clear();
+    toggle.draw(canvas, damage);
+    ASSERT_EQ(canvas.roundedRects.size(), 3u);
+    EXPECT_NEAR(canvas.roundedRects.back().x, offX, 0.01f);
+}
+
+TEST(LclUiTest, ToggleThumbTargetsAndLogicalGeometryStayStableAcrossCanvasScale) {
+    Toggle toggle;
+    toggle.getYogaNode().calculateLayout(60.0f, 44.0f);
+    toggle.syncLayout();
+    const Rect damage{-10.0f, -10.0f, 100.0f, 80.0f};
+
+    RecordingCanvas canvas;
+    canvas.setContentScale(1.0f);
+    toggle.draw(canvas, damage);
+    ASSERT_EQ(canvas.roundedRects.size(), 3u);
+    const Rect offTrack = canvas.roundedRects.front();
+    const Rect offThumb = canvas.roundedRects.back();
+    EXPECT_FLOAT_EQ(offTrack.width, 52.0f);
+    EXPECT_FLOAT_EQ(offTrack.height, 32.0f);
+    EXPECT_FLOAT_EQ(offThumb.x, 7.0f);
+    EXPECT_FLOAT_EQ(offThumb.width, 26.0f);
+
+    toggle.setValue(true);
+    canvas.roundedRects.clear();
+    canvas.setContentScale(2.0f);
+    toggle.draw(canvas, damage);
+    ASSERT_EQ(canvas.roundedRects.size(), 3u);
+    const Rect onTrack = canvas.roundedRects.front();
+    const Rect onThumb = canvas.roundedRects.back();
+    EXPECT_FLOAT_EQ(onTrack.x, offTrack.x);
+    EXPECT_FLOAT_EQ(onTrack.y, offTrack.y);
+    EXPECT_FLOAT_EQ(onTrack.width, offTrack.width);
+    EXPECT_FLOAT_EQ(onTrack.height, offTrack.height);
+    EXPECT_FLOAT_EQ(onThumb.x, 27.0f);
+    EXPECT_FLOAT_EQ(onThumb.width, offThumb.width);
+}
+
+TEST(LclUiTest, ToggleInteractionPresentationAndActiveAnimationCleanUpSafely) {
+    MotionCoordinator coordinator;
+    auto toggle = std::make_unique<Toggle>();
+    toggle->setMotionCoordinator(&coordinator);
+    const uint64_t objectId = toggle->getObjectId();
+
+    toggle->onPointerEnter(PointerEvent{
+        10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Enter});
+    coordinator.tick(1.0f);
+    EXPECT_NEAR(toggle->getPresentationState().scaleX, 1.015f, 0.001f);
+    toggle->onPointerDown(PointerEvent{
+        10.0f, 10.0f, 0, 0.0f, 0.0f, PointerEventType::Down});
+    coordinator.tick(1.0f);
+    EXPECT_NEAR(toggle->getPresentationState().scaleX, 0.965f, 0.001f);
+
+    toggle->setValue(true);
+    EXPECT_TRUE(coordinator.isObjectAnimating(objectId));
+    toggle.reset();
+    EXPECT_FALSE(coordinator.isObjectAnimating(objectId));
+    EXPECT_NO_THROW(coordinator.tick(1.0f));
 }
 
 TEST(LclUiTest, ButtonInteractionMotionComposesHoverPressFocusDisabledAndThemeOverride) {

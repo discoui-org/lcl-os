@@ -59,6 +59,8 @@ enum class AnimatableProperty : uint32_t {
     BorderAlpha,
     BorderWidth,
     BorderRadius,
+    /** Generic selected/unselected control presentation channel. */
+    SelectionProgress,
 };
 
 struct PresentationState {

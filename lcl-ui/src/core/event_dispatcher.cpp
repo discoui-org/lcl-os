@@ -76,6 +76,12 @@ bool PointerEvent::requestFocus(Widget& owner) const {
     return true;
 }
 
+bool KeyEvent::requestFocus(Widget& owner) const {
+    if (!m_dispatcher) return false;
+    m_dispatcher->setFocus(&owner);
+    return m_dispatcher->getFocusedWidget() == &owner;
+}
+
 Widget* EventDispatcher::hitTest(Widget* root, float x, float y) {
     if (!root || !root->isVisible() || !root->containsPresentationPoint(x, y)) {
         return nullptr;
@@ -544,12 +550,14 @@ void EventDispatcher::clearPointerCapture(uint32_t pointerId) {
 }
 
 bool EventDispatcher::dispatchKeyEvent(Widget* root, const KeyEvent& event) {
-    if (root && event.key == lcl::platform::PhysicalKey::Tab) {
+    KeyEvent dispatchEvent = event;
+    dispatchEvent.m_dispatcher = this;
+    if (root && dispatchEvent.key == lcl::platform::PhysicalKey::Tab) {
         // Consume both phases centrally. Traversal happens only on KeyDown so
         // KeyUp cannot leak to the newly focused widget.
-        if (event.type == KeyEventType::KeyUp) return true;
+        if (dispatchEvent.type == KeyEventType::KeyUp) return true;
         const bool backwards =
-            (event.modifiers & lcl::platform::kModShift) != 0;
+            (dispatchEvent.modifiers & lcl::platform::kModShift) != 0;
         moveFocus(root, backwards);
         return true;
     }
@@ -565,10 +573,10 @@ bool EventDispatcher::dispatchKeyEvent(Widget* root, const KeyEvent& event) {
     bool handled = false;
 
     while (curr && !handled) {
-        if (event.type == KeyEventType::KeyDown) {
-            handled = curr->onKeyDown(event);
-        } else if (event.type == KeyEventType::KeyUp) {
-            handled = curr->onKeyUp(event);
+        if (dispatchEvent.type == KeyEventType::KeyDown) {
+            handled = curr->onKeyDown(dispatchEvent);
+        } else if (dispatchEvent.type == KeyEventType::KeyUp) {
+            handled = curr->onKeyUp(dispatchEvent);
         }
         if (!handled) {
             curr = curr->getParent();

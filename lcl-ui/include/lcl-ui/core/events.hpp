@@ -84,6 +84,13 @@ struct KeyEvent {
         : key(static_cast<lcl::platform::PhysicalKey>(code)), keyCode(code), codepoint(cp), modifiers(mods), type(t) {}
     KeyEvent(lcl::platform::PhysicalKey k, int code, char32_t cp = 0, uint8_t mods = 0, KeyEventType t = KeyEventType::KeyDown)
         : key(k), keyCode(code), codepoint(cp), modifiers(mods), type(t) {}
+
+    /** Request focus from the EventDispatcher currently routing this key. */
+    bool requestFocus(Widget& owner) const;
+
+private:
+    friend class EventDispatcher;
+    EventDispatcher* m_dispatcher{nullptr};
 };
 
 struct TextInputEvent {

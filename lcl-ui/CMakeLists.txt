@@ -36,6 +36,8 @@ add_library(lcl-ui STATIC
     src/widgets/filter_group.cpp
     src/widgets/scroll_view.cpp
     src/widgets/popover.cpp
+    src/widgets/menu.cpp
+    src/widgets/toggle.cpp
     src/core/transient_controller.cpp
 )
 

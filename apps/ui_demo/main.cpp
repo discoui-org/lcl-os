@@ -7,10 +7,12 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/menu.hpp"
 #include "lcl-ui/widgets/popover.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
+#include "lcl-ui/widgets/toggle.hpp"
 #include "render/skia_canvas.hpp"
 
 using namespace lcl::ui;
@@ -75,6 +77,7 @@ int main() {
   app.setWindowCornerStyle(20.0f, 2.0f);
   app.setEdgeToEdge(true);
   Popover popover(app, [] { return lcl::render::makeSkiaCanvas(); });
+  Menu menu(app, [] { return lcl::render::makeSkiaCanvas(); });
 
   // 2. Build Centered Flexbox Layout Tree in User-Space App
   auto rootContainer = std::make_unique<Container>();
@@ -253,6 +256,86 @@ int main() {
   scrollContent->addChild(std::move(longTextField));
   scrollContent->addChild(std::move(utf8TextField));
   scrollContent->addChild(std::move(textFieldStatus));
+
+  auto toggleTitle = std::make_unique<Text>("Toggle v1");
+  toggleTitle->setFontSize(15.0f);
+  toggleTitle->setTextColor(Color{236, 239, 244, 255});
+  auto toggleStatus = std::make_unique<Text>("Toggle: henüz değişiklik yok");
+  Text *toggleStatusPtr = toggleStatus.get();
+  toggleStatus->setFontSize(13.0f);
+  toggleStatus->setTextColor(Color{160, 174, 192, 255});
+  toggleStatus->setHeight(18.0f);
+
+  const auto makeToggleRow = [toggleStatusPtr](const std::string &label,
+                                                bool initialValue,
+                                                bool enabled) {
+    auto row = std::make_unique<Container>();
+    row->setWidth(300.0f);
+    row->setHeight(44.0f);
+    row->getYogaNode().setDirection(YGFlexDirectionRow);
+    row->getYogaNode().setAlignItems(YGAlignCenter);
+    row->getYogaNode().setJustifyContent(YGJustifySpaceBetween);
+
+    auto rowLabel = std::make_unique<Text>(label);
+    rowLabel->setFontSize(14.0f);
+    rowLabel->setTextColor(enabled ? Color{226, 232, 240, 255}
+                                   : Color{126, 137, 153, 210});
+
+    auto toggle = std::make_unique<Toggle>(initialValue);
+    toggle->setEnabled(enabled);
+    toggle->setOnChange([toggleStatusPtr, label](bool value) {
+      toggleStatusPtr->setText("Toggle — " + label + ": " +
+                               (value ? "On" : "Off"));
+    });
+
+    row->addChild(std::move(rowLabel));
+    row->addChild(std::move(toggle));
+    return row;
+  };
+
+  scrollContent->addChild(std::move(toggleTitle));
+  scrollContent->addChild(std::move(toggleStatus));
+  scrollContent->addChild(makeToggleRow("Normal", false, true));
+  scrollContent->addChild(makeToggleRow("Initially ON", true, true));
+  scrollContent->addChild(makeToggleRow("Disabled", false, false));
+
+  auto menuTitle = std::make_unique<Text>("Menu v1");
+  menuTitle->setFontSize(15.0f);
+  menuTitle->setTextColor(Color{236, 239, 244, 255});
+  auto menuStatus = std::make_unique<Text>("Menu: henüz seçim yok");
+  Text *menuStatusPtr = menuStatus.get();
+  menuStatus->setFontSize(13.0f);
+  menuStatus->setTextColor(Color{160, 174, 192, 255});
+  menuStatus->setHeight(18.0f);
+  auto menuButton = std::make_unique<Button>("Open Menu");
+  Button *menuButtonPtr = menuButton.get();
+  menuButton->setHeight(38.0f);
+  menuButton->setOnClick([&menu, menuButtonPtr, menuStatusPtr] {
+    const auto setStatus = [menuStatusPtr](const std::string &item) {
+      menuStatusPtr->setText("Menu: " + item);
+    };
+    const auto result = menu.show(
+        *menuButtonPtr,
+        {
+            MenuItem{"New", true, [setStatus] { setStatus("New"); }},
+            MenuItem{"Open", true, [setStatus] { setStatus("Open"); }},
+            MenuItem{"Save", true, [setStatus] { setStatus("Save"); }},
+            MenuItem{"Disabled Item", false,
+                     [setStatus] { setStatus("Disabled Item"); }},
+            MenuItem{"Quit", true, [setStatus] { setStatus("Quit"); }},
+        },
+        MenuOptions{
+            .width = 220.0f,
+            .itemHeight = 38.0f,
+            .onDismissed = [menuStatusPtr] {
+              menuStatusPtr->setText("Menu: dismissed");
+            },
+        });
+    if (!result) menuStatusPtr->setText("Menu: açılamadı");
+  });
+  scrollContent->addChild(std::move(menuTitle));
+  scrollContent->addChild(std::move(menuStatus));
+  scrollContent->addChild(std::move(menuButton));
 
   // Normal form traversal area. FocusScope is reserved for transient traps.
   auto focusGroup = std::make_unique<Container>();
