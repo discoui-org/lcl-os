@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Standalone PySide6 viewer for the bundled Pixel emulator skins.
 
-This intentionally renders only a black display placeholder.  It does not
-launch a guest or forward input; those integrations belong to a later layer.
+This intentionally renders only a green display placeholder. It launches an
+isolated local SPICE QEMU instance, but does not render or forward input yet.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ from pathlib import Path
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
+
+from qemu_runner import QemuLaunchError, QemuRunner
 
 
 DEFAULT_SKIN_DIR = Path(__file__).resolve().parent / "skins" / "pixel_8_pro"
@@ -232,7 +234,17 @@ def main() -> int:
     window.setCentralWidget(viewer)
     window.setFixedSize(460, 940)
     window.show()
-    return app.exec()
+
+    runner = QemuRunner()
+    try:
+        runner.start()
+    except QemuLaunchError as error:
+        print(f"LCL Device Viewer: QEMU launch failed: {error}", file=sys.stderr, flush=True)
+
+    try:
+        return app.exec()
+    finally:
+        runner.stop()
 
 
 if __name__ == "__main__":

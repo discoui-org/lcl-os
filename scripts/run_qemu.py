@@ -1139,6 +1139,7 @@ def launch_qemu(
     height_override: int | None = None,
     no_build: bool = False,
     rebuild: bool = False,
+    spice_unix: Path | None = None,
 ) -> None:
     qemu = find_qemu(arch)
     host = detect_host_display()
@@ -1283,6 +1284,13 @@ def launch_qemu(
     has_virtio_gpu_gl = "virtio-gpu-gl" in dev_help or "virtio-gpu-gl-pci" in dev_help
     has_virtio_vga = "virtio-vga" in dev_help
 
+    if spice_unix is not None and (
+        (arch == "x86_64" and not has_virtio_vga_gl)
+        or (arch == "aarch64" and not has_virtio_gpu_gl)
+    ):
+        err("SPICE Unix display requires a VirGL virtio GPU; no framebuffer fallback is enabled.")
+        sys.exit(1)
+
     if arch == "aarch64":
         # On aarch64 virt machine, set explicit resolution on virtio-gpu-pci to initialize FB immediately
         if want_gl and has_virtio_gpu_gl:
@@ -1300,7 +1308,22 @@ def launch_qemu(
         else:
             gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else f"virtio-gpu-pci,xres={width},yres={height}"]
 
-    if host_os() == "darwin":
+    spice: list[str] = []
+    if spice_unix is not None:
+        rendernode = Path("/dev/dri/renderD128")
+        if not want_gl:
+            err("SPICE Unix display requires --gpu (VirGL/EGL path).")
+            sys.exit(1)
+        if not rendernode.exists():
+            err(f"SPICE Unix display requires a render node: {rendernode}")
+            sys.exit(1)
+
+        display = ["-display", "none"]
+        spice = [
+            "-spice",
+            f"unix=on,addr={spice_unix},disable-ticketing=on,gl=on,rendernode={rendernode}",
+        ]
+    elif host_os() == "darwin":
         if native:
             disp = "cocoa,full-screen=on,zoom-to-fit=on"
             extra_qemu = ["-full-screen"]
@@ -1360,6 +1383,8 @@ def launch_qemu(
     print(f"  - Accelerator: {' '.join(accel)}")
     print(f"  - GPU: {' '.join(gpu)}{'  (LCL_QEMU_GL=1 for VirGL)' if not want_gl else ''}")
     print(f"  - Display: {display[1]}")
+    if spice_unix is not None:
+        print(f"  - SPICE Unix socket: {spice_unix}")
     if iso_mode:
         iso_name = f"lcl-os-{arch}.iso"
         iso_file = BUILD_DIR / iso_name if (BUILD_DIR / iso_name).is_file() else BUILD_DIR / "lcl-os.iso"
@@ -1448,6 +1473,7 @@ def launch_qemu(
         ])
 
     input_devices = ["-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci"]
+    serial = ["-serial", "stdio"]
 
     cmd.extend([
         "-m",
@@ -1456,10 +1482,10 @@ def launch_qemu(
         cpus,
         *gpu,
         *display,
+        *spice,
         *extra_qemu,
         *input_devices,
-        "-serial",
-        "stdio",
+        *serial,
         "-no-reboot",
     ])
     log("QEMU cmdline: " + " ".join(cmd))
@@ -1524,6 +1550,12 @@ def main() -> None:
         "-g",
         action="store_true",
         help="Enable 3D VirGL GPU acceleration in QEMU",
+    )
+    parser.add_argument(
+        "--spice-unix",
+        type=Path,
+        metavar="SOCKET",
+        help="Expose the display through a local SPICE Unix socket (requires --gpu)",
     )
     parser.add_argument(
         "--trace-frames",
@@ -1630,6 +1662,7 @@ def main() -> None:
             height_override=args.height,
             no_build=args.no_build,
             rebuild=args.rebuild,
+            spice_unix=args.spice_unix,
         )
     else:
         log(f"Boot environment ({arch}) ready! Kernel: {kernel}")
