@@ -21,7 +21,6 @@ endif()
 add_library(lcl-ui STATIC
     src/core/image_loader.cpp
     src/core/motion.cpp
-    src/core/rect.cpp
     src/core/render_pass.cpp
     src/core/event_dispatcher.cpp
     src/core/window_app.cpp
@@ -51,9 +50,9 @@ target_include_directories(lcl-ui PUBLIC
 target_link_libraries(lcl-ui PUBLIC
     lcl-platform-common
     lcl-motion
+    lcl-graphics
     lcl-window-chrome
     lcl-protocol
-    lcl-display-scale
     lcl-font-metrics
     yogacore
     Threads::Threads

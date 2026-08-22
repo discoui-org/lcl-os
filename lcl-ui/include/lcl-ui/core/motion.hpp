@@ -7,7 +7,7 @@
 #include <unordered_map>
 
 #include "lcl-motion/motion.hpp"
-#include "lcl-ui/core/canvas.hpp"
+#include "lcl-graphics/canvas.hpp"
 
 namespace lcl::ui {
 
@@ -103,7 +103,7 @@ class MotionCoordinator {
 public:
     using ApplyFloat = std::function<void(float)>;
     using LayoutCallback = std::function<void()>;
-    using DamageCallback = std::function<void(const Rect&)>;
+    using DamageCallback = std::function<void(const graphics::RectF&)>;
     /**
      * A presentation-only callback owned by an active widget. Unlike a
      * property animation, it controls its own discrete presentation state.
@@ -130,8 +130,8 @@ public:
                       const lcl::motion::Motion& motion,
                       ApplyFloat applyPresentation, bool affectsLayout = false);
     void setColor(Widget& widget, AnimatableProperty firstChannel,
-                  Color presentation, Color target,
-                  std::function<void(Color)> applyPresentation,
+                  graphics::Color presentation, graphics::Color target,
+                  std::function<void(graphics::Color)> applyPresentation,
                   const lcl::motion::Motion* overrideMotion = nullptr);
     lcl::motion::AnimationHandle animate(Widget& widget, AnimatableProperty property,
                                          std::vector<lcl::motion::Keyframe> keyframes,

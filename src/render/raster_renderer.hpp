@@ -7,13 +7,14 @@
 #include <vector>
 
 #include "core/ipc/lcl_protocol.hpp"
+#include "lcl-graphics/display_list.hpp"
 #include "render/font_renderer.hpp"
 
 #include "platform/common/graphics_context.hpp"
 
 namespace lcl::render {
 
-struct SkiaColor {
+struct RasterColor {
     uint8_t r{0};
     uint8_t g{0};
     uint8_t b{0};
@@ -34,35 +35,35 @@ struct SkiaColor {
     }
 };
 
-struct SkiaRect {
+struct RasterRect {
     float x{0.0f};
     float y{0.0f};
     float width{0.0f};
     float height{0.0f};
 };
 
-struct SkiaGradient {
-    SkiaColor startColor;
-    SkiaColor endColor;
+struct RasterGradient {
+    RasterColor startColor;
+    RasterColor endColor;
     bool isVertical{true};
 };
 
-enum class SkiaBackendType {
+enum class RasterBackend {
     OpenGL_EGL,
     SoftwareRaster
 };
 
-class SkiaRenderer {
+class RasterRenderer {
 public:
-    SkiaRenderer() = default;
-    ~SkiaRenderer();
+    RasterRenderer() = default;
+    ~RasterRenderer();
 
     // Non-copyable
-    SkiaRenderer(const SkiaRenderer&) = delete;
-    SkiaRenderer& operator=(const SkiaRenderer&) = delete;
+    RasterRenderer(const RasterRenderer&) = delete;
+    RasterRenderer& operator=(const RasterRenderer&) = delete;
 
     /**
-     * @brief Initialize Skia rendering engine (GL hardware acceleration or CPU raster fallback).
+     * @brief Initialize LCL raster rendering engine (GL hardware acceleration or CPU raster fallback).
      * @param width Surface width
      * @param height Surface height
      * @param eglBackend Optional EGL context for OpenGL GPU rendering
@@ -93,17 +94,18 @@ public:
     bool beginCachedLayerTarget(uint32_t framebuffer, uint32_t texture,
                                 uint32_t width, uint32_t height,
                                 uint32_t* softwarePixels,
-                                float logicalOriginX, float logicalOriginY);
+                                float logicalOriginX, float logicalOriginY,
+                                float effectiveScale);
     void endCachedLayerTarget();
-    void drawCachedLayerTexture(uint32_t texture, const SkiaRect& destination,
+    void drawCachedLayerTexture(uint32_t texture, const RasterRect& destination,
                                 float opacity = 1.0f);
 
     /**
      * Applies a logical-pixel to raster-pixel transform to client drawing calls.
      * The compositor leaves this at 1.0; lcl-ui WindowApp sets it to its DPR.
      */
-    void setContentScale(float scale);
-    float getContentScale() const { return m_contentScale; }
+    void setDeviceScale(float scale);
+    float getDeviceScale() const { return m_deviceScale; }
     /** Client canvases retain scene pixels; compositor frames remain clearing. */
     void setRetainsFrameBacking(bool enabled) { m_retainsFrameBacking = enabled; }
 
@@ -112,17 +114,17 @@ public:
     float getContentOriginX() const { return m_contentOriginX; }
     float getContentOriginY() const { return m_contentOriginY; }
 
-    void setClipRect(const std::optional<SkiaRect>& clip);
-    const std::optional<SkiaRect>& getClipRect() const { return m_clipRect; }
+    void setClipRect(const std::optional<RasterRect>& clip);
+    const std::optional<RasterRect>& getClipRect() const { return m_clipRect; }
 
     /**
      * @brief Clear whole canvas or subregion with specific background color.
      */
-    void clear(const SkiaColor& color);
-    void clearRect(const SkiaRect& rect, const SkiaColor& color);
+    void clear(const RasterColor& color);
+    void clearRect(const RasterRect& rect, const RasterColor& color);
 
     /**
-     * @brief Shutdown Skia renderer.
+     * @brief Shutdown LCL raster renderer.
      */
     void shutdown();
 
@@ -130,29 +132,41 @@ public:
     void beginFrame();
 
     /**
-     * @brief End frame drawing sequence. Flushes Skia canvas commands.
+     * @brief End frame drawing sequence. Flushes LCL raster canvas commands.
      */
     void endFrame();
 
-    // --- Skia 2D Canvas Primitives ---
-    void drawBackgroundGradient(const SkiaColor& topColor, const SkiaColor& bottomColor);
-    void drawRect(const SkiaRect& rect, const SkiaColor& color);
-    void drawRoundedRect(const SkiaRect& rect,
+    /** Replay logical drawing commands; target DPR is applied only here. */
+    void replayDisplayList(const lcl::graphics::DisplayList& displayList,
+                           const lcl::graphics::RenderTarget& target,
+                           const lcl::graphics::Matrix3& rootTransform = {});
+
+    /** Draw one logical path. GPU backends keep recognized primitives on-GPU;
+     * software and generic paths share the CPU raster fallback. */
+    void drawPath(const lcl::graphics::Path& path,
+                  const lcl::graphics::Paint& paint,
+                  const lcl::graphics::Matrix3& logicalTransform = {},
+                  float inheritedOpacity = 1.0f);
+
+    // --- LCL raster 2D Canvas Primitives ---
+    void drawBackgroundGradient(const RasterColor& topColor, const RasterColor& bottomColor);
+    void drawRect(const RasterRect& rect, const RasterColor& color);
+    void drawRoundedRect(const RasterRect& rect,
                          float radius,
-                         const SkiaColor& color,
-                         const SkiaColor& borderColor = {0,0,0,0},
+                         const RasterColor& color,
+                         const RasterColor& borderColor = {0,0,0,0},
                          float borderWidth = 0.0f,
                          float roundness = 2.0f);
     // Filled shape with rounded upper corners and square lower corners.
     // Title bars are shorter than twice their window radius, so a full rounded
     // rect cannot represent the outer window silhouette without a leaky patch.
-    void drawTopRoundedRect(const SkiaRect& rect,
+    void drawTopRoundedRect(const RasterRect& rect,
                             float radius,
-                            const SkiaColor& color,
+                            const RasterColor& color,
                             float roundness = 2.0f);
-    void drawDropShadow(const SkiaRect& rect, float radius, float blur, const SkiaColor& shadowColor);
-    void drawCircle(float cx, float cy, float radius, const SkiaColor& color);
-    void drawLine(float x1, float y1, float x2, float y2, const SkiaColor& color, float strokeWidth = 1.0f);
+    void drawDropShadow(const RasterRect& rect, float radius, float blur, const RasterColor& shadowColor);
+    void drawCircle(float cx, float cy, float radius, const RasterColor& color);
+    void drawLine(float x1, float y1, float x2, float y2, const RasterColor& color, float strokeWidth = 1.0f);
     void drawString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize = 15.0f);
     /** Draw text with the packaged JetBrains Mono face. */
     void drawMonospaceString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize = 15.0f);
@@ -192,7 +206,7 @@ public:
                                bool squareTopCorners,
                                float drawWidth,
                                float drawHeight);
-    void applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
+    void applyBackdropFilter(float dstX, float dstY, float srcW, float srcH,
                              float cornerRadius, float cornerRoundness,
                              float opacity, const std::vector<protocol::FilterOp>& filters);
     /** Imports and composites compositor-owned native textures without CPU upload. */
@@ -214,7 +228,7 @@ public:
     // Accessors
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
-    SkiaBackendType getBackendType() const { return m_backendType; }
+    RasterBackend getBackendType() const { return m_backendType; }
     uint32_t* getRasterBuffer() { return m_targetPixels ? m_targetPixels : m_rasterPixels.data(); }
 
 private:
@@ -224,7 +238,8 @@ private:
         uint32_t* targetPixels{nullptr};
         float contentOriginX{0.0f};
         float contentOriginY{0.0f};
-        std::optional<SkiaRect> clip;
+        float deviceScale{1.0f};
+        std::optional<RasterRect> clip;
         uint32_t externalFrameFBO{0};
         uint32_t externalFrameTexture{0};
         uint32_t externalBackingWidth{0};
@@ -232,7 +247,7 @@ private:
     };
 
     bool initGLShader();
-    SkiaRect scaleRect(const SkiaRect& rect) const;
+    RasterRect scaleRect(const RasterRect& rect) const;
     int scaleCoord(int value) const;
     int scaleLength(int value) const;
     bool ensureFont(float logicalFontSize);
@@ -253,14 +268,14 @@ private:
 
     uint32_t m_width{0};
     uint32_t m_height{0};
-    SkiaBackendType m_backendType{SkiaBackendType::SoftwareRaster};
+    RasterBackend m_backendType{RasterBackend::SoftwareRaster};
     lcl::platform::IGraphicsContext* m_eglBackend{nullptr};
 
     std::vector<uint32_t> m_rasterPixels;
     uint32_t* m_targetPixels{nullptr};
     FontRenderer m_fontRenderer;
     FontRenderer m_monospaceFontRenderer;
-    float m_contentScale{1.0f};
+    float m_deviceScale{1.0f};
     float m_contentOriginX{0.0f};
     float m_contentOriginY{0.0f};
     bool m_initialized{false};
@@ -396,8 +411,8 @@ private:
                             float radius,
                             float roundness,
                             float borderWidth,
-                            const SkiaColor& fill,
-                            const SkiaColor& border);
+                            const RasterColor& fill,
+                            const RasterColor& border);
     uint32_t activeSceneFBO() const {
         return m_glExternalFrameFBO ? m_glExternalFrameFBO : m_glSceneFBO;
     }
@@ -405,7 +420,7 @@ private:
         return m_glExternalFrameTexture ? m_glExternalFrameTexture : m_glSceneTexture;
     }
 
-    std::optional<SkiaRect> m_clipRect;
+    std::optional<RasterRect> m_clipRect;
     void applyScissorState();
 };
 

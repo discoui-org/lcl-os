@@ -15,17 +15,17 @@ bool loadFirstAvailable(FontRenderer& renderer, const char* const (&paths)[N], f
     return false;
 }
 
-FontRenderer& cachedRenderer(lcl::ui::FontFamily family) {
+FontRenderer& cachedRenderer(lcl::graphics::FontFamily family) {
     thread_local FontRenderer interfaceFont;
     thread_local FontRenderer monospaceFont;
-    return family == lcl::ui::FontFamily::Monospace ? monospaceFont : interfaceFont;
+    return family == lcl::graphics::FontFamily::Monospace ? monospaceFont : interfaceFont;
 }
 
 } // namespace
 
-bool loadFont(FontRenderer& renderer, lcl::ui::FontFamily family, float pixelFontSize) {
+bool loadFont(FontRenderer& renderer, lcl::graphics::FontFamily family, float pixelFontSize) {
     const float sanitizedSize = std::max(1.0f, pixelFontSize);
-    if (family == lcl::ui::FontFamily::Monospace) {
+    if (family == lcl::graphics::FontFamily::Monospace) {
         constexpr const char* kMonospacePaths[] = {
             "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
             "assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
@@ -40,7 +40,7 @@ bool loadFont(FontRenderer& renderer, lcl::ui::FontFamily family, float pixelFon
     return loadFirstAvailable(renderer, kInterfacePaths, sanitizedSize);
 }
 
-float measureText(const std::string& text, float fontSize, lcl::ui::FontFamily family) {
+float measureText(const std::string& text, float fontSize, lcl::graphics::FontFamily family) {
     if (text.empty() || !std::isfinite(fontSize)) return 0.0f;
 
     FontRenderer& renderer = cachedRenderer(family);

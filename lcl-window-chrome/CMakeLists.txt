@@ -11,4 +11,5 @@ target_include_directories(lcl-window-chrome PUBLIC
 
 target_link_libraries(lcl-window-chrome PUBLIC
     lcl-motion
+    lcl-graphics
 )

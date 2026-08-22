@@ -7,7 +7,7 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "platform/common/keyboard_types.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_canvas.hpp"
 
 namespace {
 
@@ -55,7 +55,7 @@ int main() {
     return 1;
   }
 
-  lcl::ui::WindowApp window(lcl::render::makeSkiaCanvas(), kSurfaceWidth,
+  lcl::ui::WindowApp window(lcl::render::makeRasterCanvas(), kSurfaceWidth,
                             kSurfaceHeight, "LCL Terminal");
   window.setAppId("org.lcl.terminal");
   window.setInitialBounds(80, 60, kSurfaceWidth, kSurfaceHeight);

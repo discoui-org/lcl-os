@@ -1,7 +1,9 @@
-#include "render/skia_renderer.hpp"
+#include "render/raster_renderer.hpp"
+#include "render/path_rasterizer.hpp"
 #include "render/text_metrics.hpp"
 #include "render/backdrop_filter_geometry.hpp"
 #include "render/dma_buf_crop.hpp"
+#include "render/raster_destination.hpp"
 #ifndef LCL_SOFTWARE_ONLY
 #include <GLES2/gl2.h>
 #endif
@@ -9,6 +11,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <type_traits>
 
 namespace lcl::render {
 
@@ -31,7 +34,7 @@ void endStraightAlphaSourceOver() {
     glDisable(GL_BLEND);
 }
 
-bool SkiaRenderer::initGLShader() {
+bool RasterRenderer::initGLShader() {
     const char* vSrc =
         "attribute vec2 aPosition;\n"
         "attribute vec2 aTexCoord;\n"
@@ -532,16 +535,16 @@ bool SkiaRenderer::initGLShader() {
     return true;
 }
 #else
-bool SkiaRenderer::initGLShader() {
+bool RasterRenderer::initGLShader() {
     return false;
 }
 #endif
 
-SkiaRenderer::~SkiaRenderer() {
+RasterRenderer::~RasterRenderer() {
     shutdown();
 }
 
-bool SkiaRenderer::initialize(uint32_t width, uint32_t height,
+bool RasterRenderer::initialize(uint32_t width, uint32_t height,
                               lcl::platform::IGraphicsContext* eglBackend,
                               uint32_t* targetPixels) {
     if (targetPixels) {
@@ -558,7 +561,7 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height,
 #else
     m_eglBackend = eglBackend;
     if (m_eglBackend && m_eglBackend->isInitialized()) {
-        m_backendType = SkiaBackendType::OpenGL_EGL;
+        m_backendType = RasterBackend::OpenGL_EGL;
         m_eglBackend->makeCurrent();
 
         initGLShader();
@@ -567,17 +570,17 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height,
         glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        std::cout << "[LCL Skia] Skia OpenGL/EGL Hardware Accelerated Backend Active ("
+        std::cout << "[LCL Raster] LCL raster OpenGL/EGL Hardware Accelerated Backend Active ("
                   << m_width << "x" << m_height << ")!\n";
     } else
 #endif
     {
-        m_backendType = SkiaBackendType::SoftwareRaster;
+        m_backendType = RasterBackend::SoftwareRaster;
         if (!m_targetPixels) {
             m_rasterPixels.resize(m_width * m_height, 0xFF14161D); // Dark theme default
             m_targetPixels = m_rasterPixels.data();
         }
-        std::cout << "[LCL Skia] Skia Raster Software Backend Active ("
+        std::cout << "[LCL Raster] LCL raster Raster Software Backend Active ("
                   << m_width << "x" << m_height << ").\n";
     }
 
@@ -585,13 +588,13 @@ bool SkiaRenderer::initialize(uint32_t width, uint32_t height,
     return true;
 }
 
-void SkiaRenderer::setTargetPixels(uint32_t* targetPixels, uint32_t width, uint32_t height) {
+void RasterRenderer::setTargetPixels(uint32_t* targetPixels, uint32_t width, uint32_t height) {
     const uint32_t nextWidth = width > 0 ? width : m_width;
     const uint32_t nextHeight = height > 0 ? height : m_height;
     const bool sizeChanged = nextWidth != m_width || nextHeight != m_height;
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (sizeChanged && m_initialized && m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+    if (sizeChanged && m_initialized && m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend) {
         auto* eglBackend = m_eglBackend;
         if (eglBackend->resize(nextWidth, nextHeight)) {
             eglBackend->makeCurrent();
@@ -602,7 +605,7 @@ void SkiaRenderer::setTargetPixels(uint32_t* targetPixels, uint32_t width, uint3
         // A failed client-context resize falls back to the established SHM CPU
         // renderer rather than risking a stale GPU surface.
         m_eglBackend = nullptr;
-        m_backendType = SkiaBackendType::SoftwareRaster;
+        m_backendType = RasterBackend::SoftwareRaster;
     }
 #endif
 
@@ -611,17 +614,17 @@ void SkiaRenderer::setTargetPixels(uint32_t* targetPixels, uint32_t width, uint3
     m_height = nextHeight;
 }
 
-void SkiaRenderer::setFrameExtent(uint32_t width, uint32_t height) {
+void RasterRenderer::setFrameExtent(uint32_t width, uint32_t height) {
     if (width == 0 || height == 0) return;
     m_width = width;
     m_height = height;
 }
 
-bool SkiaRenderer::ensureFrameBackingCapacity(uint32_t width, uint32_t height) {
+bool RasterRenderer::ensureFrameBackingCapacity(uint32_t width, uint32_t height) {
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend ||
+    if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend ||
         m_glSceneTexture == 0 || width == 0 || height == 0) {
-        return m_backendType != SkiaBackendType::OpenGL_EGL;
+        return m_backendType != RasterBackend::OpenGL_EGL;
     }
     if (width <= m_glSceneCapacityWidth && height <= m_glSceneCapacityHeight) {
         return true;
@@ -650,7 +653,7 @@ bool SkiaRenderer::ensureFrameBackingCapacity(uint32_t width, uint32_t height) {
 #endif
 }
 
-void SkiaRenderer::setExternalFrameTarget(uint32_t framebuffer, uint32_t texture,
+void RasterRenderer::setExternalFrameTarget(uint32_t framebuffer, uint32_t texture,
                                           uint32_t backingWidth, uint32_t backingHeight) {
 #ifndef LCL_SOFTWARE_ONLY
     m_glOutputFrameFBO = framebuffer;
@@ -663,18 +666,18 @@ void SkiaRenderer::setExternalFrameTarget(uint32_t framebuffer, uint32_t texture
 #endif
 }
 
-void SkiaRenderer::clearExternalFrameTarget() {
+void RasterRenderer::clearExternalFrameTarget() {
 #ifndef LCL_SOFTWARE_ONLY
     m_glOutputFrameFBO = 0;
 #endif
 }
 
-bool SkiaRenderer::createCachedLayerTarget(uint32_t width, uint32_t height,
+bool RasterRenderer::createCachedLayerTarget(uint32_t width, uint32_t height,
                                            uint32_t& framebuffer, uint32_t& texture) {
     framebuffer = 0;
     texture = 0;
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend ||
+    if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend ||
         width == 0 || height == 0) return false;
     m_eglBackend->makeCurrent();
 
@@ -708,7 +711,7 @@ bool SkiaRenderer::createCachedLayerTarget(uint32_t width, uint32_t height,
 #endif
 }
 
-void SkiaRenderer::destroyCachedLayerTarget(uint32_t framebuffer, uint32_t texture) {
+void RasterRenderer::destroyCachedLayerTarget(uint32_t framebuffer, uint32_t texture) {
 #ifndef LCL_SOFTWARE_ONLY
     if (!m_eglBackend) return;
     m_eglBackend->makeCurrent();
@@ -720,24 +723,27 @@ void SkiaRenderer::destroyCachedLayerTarget(uint32_t framebuffer, uint32_t textu
 #endif
 }
 
-bool SkiaRenderer::beginCachedLayerTarget(uint32_t framebuffer, uint32_t texture,
+bool RasterRenderer::beginCachedLayerTarget(uint32_t framebuffer, uint32_t texture,
                                           uint32_t width, uint32_t height,
                                           uint32_t* softwarePixels,
-                                          float logicalOriginX, float logicalOriginY) {
+                                          float logicalOriginX, float logicalOriginY,
+                                          float effectiveScale) {
     if (!m_initialized || m_cachedLayerTargetState || width == 0 || height == 0) return false;
-    const bool gpu = m_backendType == SkiaBackendType::OpenGL_EGL;
+    const bool gpu = m_backendType == RasterBackend::OpenGL_EGL;
     if ((gpu && (framebuffer == 0 || texture == 0 || !m_eglBackend)) ||
         (!gpu && !softwarePixels)) return false;
 
     m_cachedLayerTargetState = CachedLayerTargetState{
         m_width, m_height, m_targetPixels, m_contentOriginX, m_contentOriginY,
+        m_deviceScale,
         m_clipRect, m_glExternalFrameFBO, m_glExternalFrameTexture,
         m_glExternalBackingWidth, m_glExternalBackingHeight};
+    setDeviceScale(effectiveScale);
     m_width = width;
     m_height = height;
     m_targetPixels = softwarePixels;
-    m_contentOriginX = -logicalOriginX * m_contentScale;
-    m_contentOriginY = -logicalOriginY * m_contentScale;
+    m_contentOriginX = -logicalOriginX * m_deviceScale;
+    m_contentOriginY = -logicalOriginY * m_deviceScale;
     m_clipRect.reset();
 
 #ifndef LCL_SOFTWARE_ONLY
@@ -760,7 +766,7 @@ bool SkiaRenderer::beginCachedLayerTarget(uint32_t framebuffer, uint32_t texture
     return true;
 }
 
-void SkiaRenderer::endCachedLayerTarget() {
+void RasterRenderer::endCachedLayerTarget() {
     if (!m_cachedLayerTargetState) return;
     const CachedLayerTargetState state = *m_cachedLayerTargetState;
     m_cachedLayerTargetState.reset();
@@ -769,13 +775,14 @@ void SkiaRenderer::endCachedLayerTarget() {
     m_targetPixels = state.targetPixels;
     m_contentOriginX = state.contentOriginX;
     m_contentOriginY = state.contentOriginY;
+    setDeviceScale(state.deviceScale);
     m_clipRect = state.clip;
     m_glExternalFrameFBO = state.externalFrameFBO;
     m_glExternalFrameTexture = state.externalFrameTexture;
     m_glExternalBackingWidth = state.externalBackingWidth;
     m_glExternalBackingHeight = state.externalBackingHeight;
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend) {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
@@ -784,12 +791,12 @@ void SkiaRenderer::endCachedLayerTarget() {
     applyScissorState();
 }
 
-void SkiaRenderer::drawCachedLayerTexture(uint32_t texture,
-                                          const SkiaRect& destination,
+void RasterRenderer::drawCachedLayerTexture(uint32_t texture,
+                                          const RasterRect& destination,
                                           float opacity) {
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend || texture == 0) return;
-    const SkiaRect deviceRect = scaleRect(destination);
+    if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend || texture == 0) return;
+    const RasterRect deviceRect = scaleRect(destination);
     m_eglBackend->makeCurrent();
     glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
     glViewport(0, 0, m_width, m_height);
@@ -802,7 +809,7 @@ void SkiaRenderer::drawCachedLayerTexture(uint32_t texture,
 #endif
 }
 
-void SkiaRenderer::shutdown() {
+void RasterRenderer::shutdown() {
     // A Canvas normally balances cached-target redirection before shutdown.
     // Drop any saved target state defensively so a reinitialized renderer can
     // never restore dimensions or pointers owned by its previous lifetime.
@@ -813,7 +820,7 @@ void SkiaRenderer::shutdown() {
     // numeric handles while another WindowApp is current can delete that
     // renderer's textures/FBOs/programs instead.
     const bool canDeleteGlResources =
-        m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend &&
+        m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend &&
         m_eglBackend->makeCurrent();
     if (m_glClientTexture > 0) {
         if (canDeleteGlResources) glDeleteTextures(1, &m_glClientTexture);
@@ -888,61 +895,303 @@ void SkiaRenderer::shutdown() {
     m_initialized = false;
 }
 
-void SkiaRenderer::setContentScale(float scale) {
+void RasterRenderer::setDeviceScale(float scale) {
     const float sanitized = (std::isfinite(scale) && scale >= 0.5f && scale <= 4.0f)
         ? scale
         : 1.0f;
-    if (std::fabs(m_contentScale - sanitized) < 0.0001f) {
+    if (std::fabs(m_deviceScale - sanitized) < 0.0001f) {
         return;
     }
 
-    m_contentScale = sanitized;
+    m_deviceScale = sanitized;
     // Glyph bitmaps are raster assets, so rebuilding the cache prevents a scaled
     // client surface from reusing 1x text.
     m_fontRenderer = FontRenderer{};
     m_monospaceFontRenderer = FontRenderer{};
 }
 
-SkiaRect SkiaRenderer::scaleRect(const SkiaRect& rect) const {
+void RasterRenderer::drawPath(const lcl::graphics::Path& path,
+                              const lcl::graphics::Paint& paint,
+                              const lcl::graphics::Matrix3& logicalTransform,
+                              float inheritedOpacity) {
+    if (path.empty() || paint.color.a == 0 || paint.opacity <= 0.0f ||
+        inheritedOpacity <= 0.0f) return;
+
+#ifndef LCL_SOFTWARE_ONLY
+    const auto* primitive = path.primitive();
+    const float scaleX = std::hypot(logicalTransform.a, logicalTransform.b);
+    const float scaleY = std::hypot(logicalTransform.c, logicalTransform.d);
+    const bool axisAligned = std::fabs(logicalTransform.b) < 0.0001f &&
+                             std::fabs(logicalTransform.c) < 0.0001f;
+    const bool uniformScale = std::fabs(scaleX - scaleY) < 0.0001f;
+    const bool roundPrimitive = primitive &&
+        (primitive->kind == lcl::graphics::PathPrimitiveKind::RRect ||
+         primitive->kind == lcl::graphics::PathPrimitiveKind::Ellipse ||
+         primitive->kind == lcl::graphics::PathPrimitiveKind::TopRRect);
+    const bool compatibleRadii = primitive &&
+        std::fabs(primitive->radiusX - primitive->radiusY) < 0.0001f;
+
+    if (m_backendType == RasterBackend::OpenGL_EGL && primitive && axisAligned &&
+        (!roundPrimitive || (uniformScale && compatibleRadii))) {
+        const auto mapped = logicalTransform.mapRect(primitive->bounds);
+        RasterRect bounds{mapped.x, mapped.y, mapped.width, mapped.height};
+        RasterColor color{paint.color.r, paint.color.g, paint.color.b,
+            static_cast<uint8_t>(std::clamp(std::lround(
+                static_cast<float>(paint.color.a) *
+                std::clamp(paint.opacity * inheritedOpacity, 0.0f, 1.0f)),
+                0l, 255l))};
+        if (color.a == 0) return;
+
+        const float logicalScale = std::max(scaleX, scaleY);
+        float radius = primitive->radiusX * logicalScale;
+        const float roundness = primitive->roundness;
+        if (paint.style == lcl::graphics::PaintStyle::Fill) {
+            switch (primitive->kind) {
+                case lcl::graphics::PathPrimitiveKind::Rect:
+                    drawRect(bounds, color);
+                    break;
+                case lcl::graphics::PathPrimitiveKind::TopRRect:
+                    drawTopRoundedRect(bounds, radius, color, roundness);
+                    break;
+                case lcl::graphics::PathPrimitiveKind::RRect:
+                case lcl::graphics::PathPrimitiveKind::Ellipse:
+                    drawRoundedRect(bounds, radius, color, {0, 0, 0, 0},
+                                    0.0f, roundness);
+                    break;
+            }
+            return;
+        }
+
+        if (primitive->kind != lcl::graphics::PathPrimitiveKind::TopRRect) {
+            const float strokeWidth =
+                paint.stroke.scaling == lcl::graphics::StrokeScaling::Hairline
+                    ? 1.0f / std::max(0.001f, m_deviceScale)
+                    : paint.stroke.width * logicalScale;
+            if (strokeWidth <= 0.0f) return;
+            // The rounded-rect shader paints its border inward. Expand by half
+            // the width so the result remains a centered path stroke.
+            const float halfStroke = strokeWidth * 0.5f;
+            bounds.x -= halfStroke;
+            bounds.y -= halfStroke;
+            bounds.width += strokeWidth;
+            bounds.height += strokeWidth;
+            if (primitive->kind != lcl::graphics::PathPrimitiveKind::Rect) {
+                radius += halfStroke;
+            }
+            drawRoundedRect(bounds, radius, {0, 0, 0, 0}, color,
+                            strokeWidth, roundness);
+            return;
+        }
+    }
+#endif
+
+    const auto deviceTransform = logicalTransform.followedBy(
+        lcl::graphics::Matrix3::scale(m_deviceScale, m_deviceScale));
+    const auto rasterized = rasterizePath(path, paint, deviceTransform,
+                                          inheritedOpacity);
+    if (rasterized.empty()) return;
+    drawBufferTransformed(
+        static_cast<float>(rasterized.x) / m_deviceScale,
+        static_cast<float>(rasterized.y) / m_deviceScale,
+        rasterized.width, rasterized.height, rasterized.pixels.data(),
+        rasterized.width, 1.0f, 0.0f, 2.0f, false,
+        static_cast<float>(rasterized.width) / m_deviceScale,
+        static_cast<float>(rasterized.height) / m_deviceScale);
+}
+
+void RasterRenderer::replayDisplayList(
+        const lcl::graphics::DisplayList& displayList,
+        const lcl::graphics::RenderTarget& target,
+        const lcl::graphics::Matrix3& rootTransform) {
+    struct ReplayState {
+        lcl::graphics::Matrix3 transform{};
+        float opacity{1.0f};
+        std::optional<lcl::graphics::RectF> clip{};
+        std::vector<RasterizedPath> pathClips;
+    };
+
+    const float previousScale = m_deviceScale;
+    const auto previousClip = m_clipRect;
+    setDeviceScale(target.deviceScale);
+    ReplayState state{};
+    state.transform = rootTransform;
+    std::vector<ReplayState> stack;
+    std::vector<float> layerOpacityStack;
+
+    const auto concat = [](const lcl::graphics::Matrix3& old,
+                           const lcl::graphics::Matrix3& value) {
+        return lcl::graphics::Matrix3{
+            old.a * value.a + old.c * value.b,
+            old.b * value.a + old.d * value.b,
+            old.a * value.c + old.c * value.d,
+            old.b * value.c + old.d * value.d,
+            old.a * value.tx + old.c * value.ty + old.tx,
+            old.b * value.tx + old.d * value.ty + old.ty,
+        };
+    };
+    const auto syncClip = [&] {
+        if (state.clip) {
+            setClipRect(RasterRect{state.clip->x, state.clip->y,
+                                   state.clip->width, state.clip->height});
+        } else {
+            setClipRect(std::nullopt);
+        }
+    };
+
+    for (const auto& command : displayList.commands()) {
+        std::visit([&](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, lcl::graphics::SaveCommand>) {
+                stack.push_back(state);
+            } else if constexpr (std::is_same_v<T, lcl::graphics::RestoreCommand>) {
+                if (!stack.empty()) {
+                    state = stack.back();
+                    stack.pop_back();
+                    syncClip();
+                }
+            } else if constexpr (std::is_same_v<T, lcl::graphics::ConcatCommand>) {
+                state.transform = concat(state.transform, op.transform);
+            } else if constexpr (std::is_same_v<T, lcl::graphics::BeginLayerCommand>) {
+                layerOpacityStack.push_back(state.opacity);
+                state.opacity *= std::clamp(op.opacity, 0.0f, 1.0f);
+            } else if constexpr (std::is_same_v<T, lcl::graphics::EndLayerCommand>) {
+                if (!layerOpacityStack.empty()) {
+                    state.opacity = layerOpacityStack.back();
+                    layerOpacityStack.pop_back();
+                }
+            } else if constexpr (std::is_same_v<T, lcl::graphics::ClipRectCommand>) {
+                const auto mapped = state.transform.mapRect(op.rect);
+                state.clip = state.clip ? state.clip->intersection(mapped) : mapped;
+                syncClip();
+            } else if constexpr (std::is_same_v<T, lcl::graphics::ClipPathCommand>) {
+                lcl::graphics::Paint clipPaint;
+                clipPaint.color = {255, 255, 255, 255};
+                clipPaint.fillRule = op.fillRule;
+                const auto deviceTransform = state.transform.followedBy(
+                    lcl::graphics::Matrix3::scale(target.deviceScale, target.deviceScale));
+                auto mask = rasterizePath(op.path, clipPaint, deviceTransform);
+                if (!mask.empty()) {
+                    const lcl::graphics::RectF bounds{
+                        static_cast<float>(mask.x) / target.deviceScale,
+                        static_cast<float>(mask.y) / target.deviceScale,
+                        static_cast<float>(mask.width) / target.deviceScale,
+                        static_cast<float>(mask.height) / target.deviceScale};
+                    state.clip = state.clip ? state.clip->intersection(bounds) : bounds;
+                    state.pathClips.push_back(std::move(mask));
+                    syncClip();
+                }
+            } else if constexpr (std::is_same_v<T, lcl::graphics::DrawPathCommand>) {
+                if (state.pathClips.empty()) {
+                    drawPath(op.path, op.paint, state.transform, state.opacity);
+                } else {
+                    const auto deviceTransform = state.transform.followedBy(
+                        lcl::graphics::Matrix3::scale(target.deviceScale,
+                                                     target.deviceScale));
+                    auto image = rasterizePath(op.path, op.paint, deviceTransform,
+                                               state.opacity);
+                    for (const auto& mask : state.pathClips) {
+                        for (int y = 0; y < image.height; ++y) {
+                            for (int x = 0; x < image.width; ++x) {
+                                auto& pixel = image.pixels[
+                                    static_cast<size_t>(y) * image.width + x];
+                                if ((pixel >> 24) == 0) continue;
+                                const int maskX = image.x + x - mask.x;
+                                const int maskY = image.y + y - mask.y;
+                                uint32_t maskAlpha = 0;
+                                if (maskX >= 0 && maskX < mask.width &&
+                                    maskY >= 0 && maskY < mask.height) {
+                                    maskAlpha = mask.pixels[
+                                        static_cast<size_t>(maskY) * mask.width + maskX] >> 24;
+                                }
+                                const uint32_t alpha =
+                                    (pixel >> 24) * maskAlpha / 255u;
+                                pixel = (pixel & 0x00FFFFFFu) | (alpha << 24);
+                            }
+                        }
+                    }
+                    if (!image.empty()) {
+                        drawBufferTransformed(
+                            static_cast<float>(image.x) / target.deviceScale,
+                            static_cast<float>(image.y) / target.deviceScale,
+                            image.width, image.height, image.pixels.data(), image.width,
+                            1.0f, 0.0f, 2.0f, false,
+                            static_cast<float>(image.width) / target.deviceScale,
+                            static_cast<float>(image.height) / target.deviceScale);
+                    }
+                }
+            } else if constexpr (std::is_same_v<T, lcl::graphics::DrawTextCommand>) {
+                const auto origin = state.transform.mapPoint(op.origin);
+                const float fontSize = op.fontSize * state.transform.maxScale();
+                const uint8_t alpha = static_cast<uint8_t>(std::clamp(
+                    std::lround(static_cast<float>(op.color.a) * state.opacity), 0l, 255l));
+                const uint32_t packed = (static_cast<uint32_t>(alpha) << 24) |
+                    (static_cast<uint32_t>(op.color.r) << 16) |
+                    (static_cast<uint32_t>(op.color.g) << 8) | op.color.b;
+                if (op.fontFamily == lcl::graphics::FontFamily::Monospace) {
+                    drawMonospaceString(static_cast<int>(std::lround(origin.x)),
+                                        static_cast<int>(std::lround(origin.y)),
+                                        op.text, packed, fontSize);
+                } else {
+                    drawString(static_cast<int>(std::lround(origin.x)),
+                               static_cast<int>(std::lround(origin.y)),
+                               op.text, packed, fontSize);
+                }
+            } else if constexpr (std::is_same_v<T, lcl::graphics::DrawImageCommand>) {
+                const auto mapped = state.transform.mapRect(op.destination);
+                const auto* pixels = reinterpret_cast<const uint32_t*>(op.resourceKey);
+                drawBufferTransformed(mapped.x, mapped.y, op.sourceWidth, op.sourceHeight,
+                                      pixels, op.sourceWidth, op.opacity * state.opacity,
+                                      op.cornerRadius * state.transform.maxScale(),
+                                      op.cornerRoundness, op.squareTopCorners,
+                                      mapped.width, mapped.height);
+            }
+        }, command);
+    }
+
+    setClipRect(previousClip);
+    setDeviceScale(previousScale);
+}
+
+RasterRect RasterRenderer::scaleRect(const RasterRect& rect) const {
     return {
-        rect.x * m_contentScale + m_contentOriginX,
-        rect.y * m_contentScale + m_contentOriginY,
-        rect.width * m_contentScale,
-        rect.height * m_contentScale,
+        rect.x * m_deviceScale + m_contentOriginX,
+        rect.y * m_deviceScale + m_contentOriginY,
+        rect.width * m_deviceScale,
+        rect.height * m_deviceScale,
     };
 }
 
-int SkiaRenderer::scaleCoord(int value) const {
-    return static_cast<int>(std::lround(static_cast<float>(value) * m_contentScale + m_contentOriginX));
+int RasterRenderer::scaleCoord(int value) const {
+    return static_cast<int>(std::lround(static_cast<float>(value) * m_deviceScale + m_contentOriginX));
 }
 
-int SkiaRenderer::scaleLength(int value) const {
-    return static_cast<int>(std::lround(static_cast<float>(value) * m_contentScale));
+int RasterRenderer::scaleLength(int value) const {
+    return static_cast<int>(std::lround(static_cast<float>(value) * m_deviceScale));
 }
 
-bool SkiaRenderer::ensureFont(float logicalFontSize) {
-    const float deviceFontSize = std::max(1.0f, logicalFontSize * m_contentScale);
+bool RasterRenderer::ensureFont(float logicalFontSize) {
+    const float deviceFontSize = std::max(1.0f, logicalFontSize * m_deviceScale);
     if (!m_fontRenderer.isInitialized() ||
         std::fabs(m_fontRenderer.getFontSize() - deviceFontSize) > 0.01f) {
         m_fontRenderer = FontRenderer{};
-        text_metrics::loadFont(m_fontRenderer, lcl::ui::FontFamily::Interface, deviceFontSize);
+        text_metrics::loadFont(m_fontRenderer, lcl::graphics::FontFamily::Interface, deviceFontSize);
     }
     return m_fontRenderer.isInitialized();
 }
 
-bool SkiaRenderer::ensureMonospaceFont(float logicalFontSize) {
-    const float deviceFontSize = std::max(1.0f, logicalFontSize * m_contentScale);
+bool RasterRenderer::ensureMonospaceFont(float logicalFontSize) {
+    const float deviceFontSize = std::max(1.0f, logicalFontSize * m_deviceScale);
     if (!m_monospaceFontRenderer.isInitialized() ||
         std::fabs(m_monospaceFontRenderer.getFontSize() - deviceFontSize) > 0.01f) {
         m_monospaceFontRenderer = FontRenderer{};
-        text_metrics::loadFont(m_monospaceFontRenderer, lcl::ui::FontFamily::Monospace,
+        text_metrics::loadFont(m_monospaceFontRenderer, lcl::graphics::FontFamily::Monospace,
                                deviceFontSize);
     }
     return m_monospaceFontRenderer.isInitialized();
 }
 
 #ifndef LCL_SOFTWARE_ONLY
-void SkiaRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w, float h,
+void RasterRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w, float h,
                                    float opacity, float uMax, float vMax) {
     if (textureId == 0 || m_glProgram == 0) return;
 
@@ -978,7 +1227,7 @@ void SkiaRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w
     glDisableVertexAttribArray(m_aTexLoc);
 }
 
-void SkiaRenderer::drawMaskedTextureQuad(uint32_t textureId,
+void RasterRenderer::drawMaskedTextureQuad(uint32_t textureId,
                                          float x,
                                          float y,
                                          float w,
@@ -1030,7 +1279,7 @@ void SkiaRenderer::drawMaskedTextureQuad(uint32_t textureId,
     glDisableVertexAttribArray(m_aMaskTexLoc);
 }
 
-void SkiaRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity) {
+void RasterRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity) {
     if (textureId == 0 || m_glBgraProgram == 0) return;
 
     float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
@@ -1065,7 +1314,7 @@ void SkiaRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y, flo
     glDisableVertexAttribArray(m_aBgraTexLoc);
 }
 
-void SkiaRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
+void RasterRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
                                              float x,
                                              float y,
                                              float w,
@@ -1124,15 +1373,15 @@ void SkiaRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
     glDisableVertexAttribArray(m_aMaskBgraTexLoc);
 }
 
-void SkiaRenderer::drawGpuRoundedRect(float x,
+void RasterRenderer::drawGpuRoundedRect(float x,
                                       float y,
                                       float w,
                                       float h,
                                       float radius,
                                       float roundness,
                                       float borderWidth,
-                                      const SkiaColor& fill,
-                                      const SkiaColor& border) {
+                                      const RasterColor& fill,
+                                      const RasterColor& border) {
     if (m_glRoundRectProgram == 0 || w <= 0.0f || h <= 0.0f) return;
 
     float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
@@ -1178,11 +1427,11 @@ void SkiaRenderer::drawGpuRoundedRect(float x,
 }
 #endif
 
-void SkiaRenderer::applyScissorState() {
+void RasterRenderer::applyScissorState() {
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend) return;
+    if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend) return;
     if (m_clipRect.has_value()) {
-        const SkiaRect deviceClip = scaleRect(*m_clipRect);
+        const RasterRect deviceClip = scaleRect(*m_clipRect);
         int sx = std::max(0, static_cast<int>(std::floor(deviceClip.x)));
         int syTop = std::max(0, static_cast<int>(std::floor(deviceClip.y)));
         int sRight = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width)));
@@ -1201,10 +1450,10 @@ void SkiaRenderer::applyScissorState() {
 #endif
 }
 
-void SkiaRenderer::clear(const SkiaColor& color) {
+void RasterRenderer::clear(const RasterColor& color) {
     if (!m_initialized) return;
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend &&
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend &&
         activeSceneFBO() > 0) {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
@@ -1225,10 +1474,10 @@ void SkiaRenderer::clear(const SkiaColor& color) {
     }
 }
 
-void SkiaRenderer::clearRect(const SkiaRect& rect, const SkiaColor& color) {
+void RasterRenderer::clearRect(const RasterRect& rect, const RasterColor& color) {
     if (!m_initialized || rect.width <= 0.0f || rect.height <= 0.0f) return;
 
-    const SkiaRect deviceRect = scaleRect(rect);
+    const RasterRect deviceRect = scaleRect(rect);
     const int left = std::clamp(static_cast<int>(std::floor(deviceRect.x)),
                                 0, static_cast<int>(m_width));
     const int top = std::clamp(static_cast<int>(std::floor(deviceRect.y)),
@@ -1242,7 +1491,7 @@ void SkiaRenderer::clearRect(const SkiaRect& rect, const SkiaColor& color) {
     if (left >= right || top >= bottom) return;
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend &&
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend &&
         activeSceneFBO() > 0) {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
@@ -1269,18 +1518,18 @@ void SkiaRenderer::clearRect(const SkiaRect& rect, const SkiaColor& color) {
     }
 }
 
-void SkiaRenderer::setClipRect(const std::optional<SkiaRect>& clip) {
+void RasterRenderer::setClipRect(const std::optional<RasterRect>& clip) {
     m_clipRect = clip;
     applyScissorState();
 }
 
-void SkiaRenderer::beginFrame() {
+void RasterRenderer::beginFrame() {
     if (!m_initialized) return;
     m_clipRect = std::nullopt;
     applyScissorState();
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && activeSceneFBO() > 0) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend && activeSceneFBO() > 0) {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
@@ -1297,7 +1546,7 @@ void SkiaRenderer::beginFrame() {
 
     if (!m_retainsFrameBacking && m_targetPixels && m_glExternalFrameFBO == 0) {
         const uint32_t clearColor =
-            (m_backendType == SkiaBackendType::OpenGL_EGL)
+            (m_backendType == RasterBackend::OpenGL_EGL)
                 ? 0x00000000u
                 : 0xFF14161Du;
         std::fill_n(m_targetPixels, static_cast<size_t>(m_width) * m_height,
@@ -1305,11 +1554,11 @@ void SkiaRenderer::beginFrame() {
     }
 }
 
-void SkiaRenderer::endFrame() {
+void RasterRenderer::endFrame() {
     if (!m_initialized) return;
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend) {
         m_eglBackend->makeCurrent();
 
         if (m_eglBackend->presentsToDisplay()) {
@@ -1351,9 +1600,9 @@ void SkiaRenderer::endFrame() {
 #endif
 }
 
-uint32_t SkiaRenderer::importTexture(const lcl::platform::INativeBuffer& buffer) {
+uint32_t RasterRenderer::importTexture(const lcl::platform::INativeBuffer& buffer) {
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend) {
         return m_eglBackend->importTexture(buffer);
     }
 #else
@@ -1362,9 +1611,9 @@ uint32_t SkiaRenderer::importTexture(const lcl::platform::INativeBuffer& buffer)
     return 0;
 }
 
-uint32_t SkiaRenderer::importDmaBuf(const lcl::platform::DmaBufDescriptor& descriptor) {
+uint32_t RasterRenderer::importDmaBuf(const lcl::platform::DmaBufDescriptor& descriptor) {
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend) {
         return m_eglBackend->importDmaBuf(descriptor);
     }
 #else
@@ -1373,7 +1622,7 @@ uint32_t SkiaRenderer::importDmaBuf(const lcl::platform::DmaBufDescriptor& descr
     return 0;
 }
 
-void SkiaRenderer::releaseTexture(uint32_t texture) {
+void RasterRenderer::releaseTexture(uint32_t texture) {
 #ifndef LCL_SOFTWARE_ONLY
     if (m_eglBackend) m_eglBackend->releaseTexture(texture);
 #else
@@ -1381,28 +1630,33 @@ void SkiaRenderer::releaseTexture(uint32_t texture) {
 #endif
 }
 
-void SkiaRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int srcW, int srcH,
+void RasterRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int srcW, int srcH,
                                                 int backingW, int backingH,
                                                 uint32_t texture, float opacity,
                                                 float cornerRadius, float cornerRoundness,
                                                 bool squareTopCorners, float drawWidth,
                                                 float drawHeight) {
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend || texture == 0) return;
+    if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend || texture == 0) return;
     m_eglBackend->makeCurrent();
     glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
     glViewport(0, 0, m_width, m_height);
+    const auto destination = mapLogicalRasterDestination(
+        dstX, dstY, drawWidth, drawHeight, cornerRadius,
+        m_deviceScale, m_contentOriginX, m_contentOriginY);
     const auto crop = makeDmaBufCrop(static_cast<uint32_t>(std::max(0, srcW)),
                                     static_cast<uint32_t>(std::max(0, srcH)),
                                     static_cast<uint32_t>(std::max(0, backingW)),
                                     static_cast<uint32_t>(std::max(0, backingH)));
-    if (cornerRadius > 0.001f) {
-        drawMaskedTextureQuad(texture, dstX, dstY, drawWidth, drawHeight,
-                              cornerRadius, cornerRoundness, opacity,
+    if (destination.cornerRadius > 0.001f) {
+        drawMaskedTextureQuad(texture, destination.x, destination.y,
+                              destination.width, destination.height,
+                              destination.cornerRadius, cornerRoundness, opacity,
                               squareTopCorners, crop.uMax, crop.vMax);
     } else {
-        drawTextureQuad(texture, dstX, dstY, drawWidth, drawHeight, opacity,
-                        crop.uMax, crop.vMax);
+        drawTextureQuad(texture, destination.x, destination.y,
+                        destination.width, destination.height,
+                        opacity, crop.uMax, crop.vMax);
     }
 #else
     (void)dstX;
@@ -1421,7 +1675,7 @@ void SkiaRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int srcW
 #endif
 }
 
-void SkiaRenderer::drawBackgroundGradient(const SkiaColor& topColor, const SkiaColor& bottomColor) {
+void RasterRenderer::drawBackgroundGradient(const RasterColor& topColor, const RasterColor& bottomColor) {
     if (!m_initialized || !m_targetPixels || m_height == 0 || m_width == 0) return;
 
     if (m_height == 1) {
@@ -1455,13 +1709,13 @@ void SkiaRenderer::drawBackgroundGradient(const SkiaColor& topColor, const SkiaC
     }
 }
 
-void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
+void RasterRenderer::drawRect(const RasterRect& rect, const RasterColor& color) {
     if (!m_initialized) return;
 
-    const SkiaRect deviceRect = scaleRect(rect);
+    const RasterRect deviceRect = scaleRect(rect);
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend) {
         int x1 = std::clamp(static_cast<int>(deviceRect.x), 0, static_cast<int>(m_width));
         int y1 = std::clamp(static_cast<int>(deviceRect.y), 0, static_cast<int>(m_height));
         int x2 = std::clamp(static_cast<int>(deviceRect.x + deviceRect.width), 0, static_cast<int>(m_width));
@@ -1495,7 +1749,7 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
     int y2 = std::clamp(static_cast<int>(deviceRect.y + deviceRect.height), 0, static_cast<int>(m_height));
 
     if (m_clipRect) {
-        const SkiaRect deviceClip = scaleRect(*m_clipRect);
+        const RasterRect deviceClip = scaleRect(*m_clipRect);
         x1 = std::max(x1, std::max(0, static_cast<int>(std::floor(deviceClip.x))));
         y1 = std::max(y1, std::max(0, static_cast<int>(std::floor(deviceClip.y))));
         x2 = std::min(x2, std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width))));
@@ -1544,20 +1798,20 @@ void SkiaRenderer::drawRect(const SkiaRect& rect, const SkiaColor& color) {
     }
 }
 
-void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
+void RasterRenderer::drawRoundedRect(const RasterRect& rect,
                                    float radius,
-                                   const SkiaColor& color,
-                                   const SkiaColor& borderColor,
+                                   const RasterColor& color,
+                                   const RasterColor& borderColor,
                                    float borderWidth,
                                    float roundness) {
     if (!m_initialized) return;
 
-    const SkiaRect deviceRect = scaleRect(rect);
-    radius *= m_contentScale;
-    borderWidth *= m_contentScale;
+    const RasterRect deviceRect = scaleRect(rect);
+    radius *= m_deviceScale;
+    borderWidth *= m_deviceScale;
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend && m_glRoundRectProgram > 0) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_glFBOReady && m_eglBackend && m_glRoundRectProgram > 0) {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
@@ -1709,13 +1963,13 @@ void SkiaRenderer::drawRoundedRect(const SkiaRect& rect,
     drawBufferRaw(dstX, dstY, w, h, pixels.data(), w, 1.0f, 0.0f, 2.0f, false, false, 0, 0);
 }
 
-void SkiaRenderer::drawTopRoundedRect(const SkiaRect& rect,
+void RasterRenderer::drawTopRoundedRect(const RasterRect& rect,
                                       float radius,
-                                      const SkiaColor& color,
+                                      const RasterColor& color,
                                       float roundness) {
     if (!m_initialized || color.a == 0) return;
 
-    const SkiaRect deviceRect = scaleRect(rect);
+    const RasterRect deviceRect = scaleRect(rect);
     const int width = std::max(1, static_cast<int>(std::lround(deviceRect.width)));
     const int height = std::max(1, static_cast<int>(std::lround(deviceRect.height)));
     const int dstX = static_cast<int>(std::lround(deviceRect.x));
@@ -1723,44 +1977,44 @@ void SkiaRenderer::drawTopRoundedRect(const SkiaRect& rect,
     const uint32_t pixel = color.toARGB();
 
     drawBufferRaw(dstX, dstY, 1, 1, &pixel, 1, 1.0f,
-                  radius * m_contentScale, roundness,
+                  radius * m_deviceScale, roundness,
                   false, true, width, height);
 }
 
-void SkiaRenderer::drawDropShadow(const SkiaRect& rect, float radius, float blur, const SkiaColor& shadowColor) {
+void RasterRenderer::drawDropShadow(const RasterRect& rect, float radius, float blur, const RasterColor& shadowColor) {
     (void)radius;
     if (shadowColor.a == 0) return;
-    SkiaRect shadowRect = {
+    RasterRect shadowRect = {
         rect.x - blur,
         rect.y - blur + 4.0f,
         rect.width + blur * 2.0f,
         rect.height + blur * 2.0f
     };
-    SkiaColor softShadow = shadowColor;
+    RasterColor softShadow = shadowColor;
     softShadow.a = static_cast<uint8_t>(shadowColor.a * 0.4f);
     drawRect(shadowRect, softShadow);
 }
 
-void SkiaRenderer::drawCircle(float cx, float cy, float radius, const SkiaColor& color) {
-    SkiaRect rect = { cx - radius, cy - radius, radius * 2.0f, radius * 2.0f };
+void RasterRenderer::drawCircle(float cx, float cy, float radius, const RasterColor& color) {
+    RasterRect rect = { cx - radius, cy - radius, radius * 2.0f, radius * 2.0f };
     drawRect(rect, color);
 }
 
-void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, const SkiaColor& color, float strokeWidth) {
+void RasterRenderer::drawLine(float x1, float y1, float x2, float y2, const RasterColor& color, float strokeWidth) {
     (void)y2;
-    SkiaRect rect = { x1, y1, std::abs(x2 - x1) + strokeWidth, strokeWidth };
+    RasterRect rect = { x1, y1, std::abs(x2 - x1) + strokeWidth, strokeWidth };
     drawRect(rect, color);
 }
 
-void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize) {
+void RasterRenderer::drawString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize) {
     if (!m_initialized || text.empty()) return;
     ensureFont(fontSize);
 
     const int deviceX = scaleCoord(x);
-    const int deviceY = static_cast<int>(std::lround(static_cast<float>(y) * m_contentScale + m_contentOriginY));
+    const int deviceY = static_cast<int>(std::lround(static_cast<float>(y) * m_deviceScale + m_contentOriginY));
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend && m_fontRenderer.isInitialized()) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend && m_fontRenderer.isInitialized()) {
         int textW = std::max(1, m_fontRenderer.getTextWidth(text));
         int textH = std::max(1, m_fontRenderer.getCellHeight() + 2);
         std::vector<uint32_t> glyphPixels(static_cast<size_t>(textW) * static_cast<size_t>(textH), 0x00000000);
@@ -1772,7 +2026,7 @@ void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fg
 
     if (m_fontRenderer.isInitialized() && m_targetPixels) {
         if (m_clipRect) {
-            const SkiaRect deviceClip = scaleRect(*m_clipRect);
+            const RasterRect deviceClip = scaleRect(*m_clipRect);
             int minX = std::max(0, static_cast<int>(std::floor(deviceClip.x)));
             int minY = std::max(0, static_cast<int>(std::floor(deviceClip.y)));
             int maxX = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width)));
@@ -1784,15 +2038,15 @@ void SkiaRenderer::drawString(int x, int y, const std::string& text, uint32_t fg
     }
 }
 
-void SkiaRenderer::drawMonospaceString(int x, int y, const std::string& text,
+void RasterRenderer::drawMonospaceString(int x, int y, const std::string& text,
                                        uint32_t fgColor, float fontSize) {
     if (!m_initialized || text.empty() || !ensureMonospaceFont(fontSize)) return;
 
     const int deviceX = scaleCoord(x);
-    const int deviceY = static_cast<int>(std::lround(static_cast<float>(y) * m_contentScale + m_contentOriginY));
+    const int deviceY = static_cast<int>(std::lround(static_cast<float>(y) * m_deviceScale + m_contentOriginY));
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend) {
         const int textW = std::max(1, m_monospaceFontRenderer.getTextWidth(text));
         const int textH = std::max(1, m_monospaceFontRenderer.getCellHeight() + 2);
         std::vector<uint32_t> glyphPixels(static_cast<size_t>(textW) * static_cast<size_t>(textH), 0x00000000);
@@ -1804,7 +2058,7 @@ void SkiaRenderer::drawMonospaceString(int x, int y, const std::string& text,
 
     if (m_targetPixels) {
         if (m_clipRect) {
-            const SkiaRect deviceClip = scaleRect(*m_clipRect);
+            const RasterRect deviceClip = scaleRect(*m_clipRect);
             int minX = std::max(0, static_cast<int>(std::floor(deviceClip.x)));
             int minY = std::max(0, static_cast<int>(std::floor(deviceClip.y)));
             int maxX = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width)));
@@ -1816,17 +2070,17 @@ void SkiaRenderer::drawMonospaceString(int x, int y, const std::string& text,
     }
 }
 
-float SkiaRenderer::measureString(const std::string& text, float fontSize) {
+float RasterRenderer::measureString(const std::string& text, float fontSize) {
     if (text.empty() || !ensureFont(fontSize)) return 0.0f;
-    return static_cast<float>(m_fontRenderer.getTextWidth(text)) / m_contentScale;
+    return static_cast<float>(m_fontRenderer.getTextWidth(text)) / m_deviceScale;
 }
 
-float SkiaRenderer::measureMonospaceString(const std::string& text, float fontSize) {
+float RasterRenderer::measureMonospaceString(const std::string& text, float fontSize) {
     if (text.empty() || !ensureMonospaceFont(fontSize)) return 0.0f;
-    return static_cast<float>(m_monospaceFontRenderer.getTextWidth(text)) / m_contentScale;
+    return static_cast<float>(m_monospaceFontRenderer.getTextWidth(text)) / m_deviceScale;
 }
 
-bool SkiaRenderer::rasterizeString(const std::string& text,
+bool RasterRenderer::rasterizeString(const std::string& text,
                                    uint32_t fgColor,
                                    float fontSize,
                                    bool monospace,
@@ -1855,7 +2109,7 @@ bool SkiaRenderer::rasterizeString(const std::string& text,
     return true;
 }
 
-void SkiaRenderer::drawBuffer(int dstX,
+void RasterRenderer::drawBuffer(int dstX,
                               int dstY,
                               int srcW,
                               int srcH,
@@ -1868,16 +2122,16 @@ void SkiaRenderer::drawBuffer(int dstX,
                               int drawWidth,
                               int drawHeight) {
     const int deviceX = scaleCoord(dstX);
-    const int deviceY = static_cast<int>(std::lround(static_cast<float>(dstY) * m_contentScale + m_contentOriginY));
+    const int deviceY = static_cast<int>(std::lround(static_cast<float>(dstY) * m_deviceScale + m_contentOriginY));
     const int deviceW = (drawWidth > 0) ? scaleLength(drawWidth) : 0;
     const int deviceH = (drawHeight > 0) ? scaleLength(drawHeight) : 0;
     drawBufferRaw(static_cast<float>(deviceX), static_cast<float>(deviceY),
                   srcW, srcH, pixelData, stridePixels, opacity,
-                  cornerRadius * m_contentScale, cornerRoundness, squareTopCorners,
+                  cornerRadius * m_deviceScale, cornerRoundness, squareTopCorners,
                   false, static_cast<float>(deviceW), static_cast<float>(deviceH));
 }
 
-void SkiaRenderer::drawBufferTransformed(float dstX,
+void RasterRenderer::drawBufferTransformed(float dstX,
                                          float dstY,
                                          int srcW,
                                          int srcH,
@@ -1889,15 +2143,17 @@ void SkiaRenderer::drawBufferTransformed(float dstX,
                                          bool squareTopCorners,
                                          float drawWidth,
                                          float drawHeight) {
+    const auto destination = mapLogicalRasterDestination(
+        dstX, dstY, drawWidth, drawHeight, cornerRadius,
+        m_deviceScale, m_contentOriginX, m_contentOriginY);
     drawBufferRaw(
-        dstX * m_contentScale + m_contentOriginX,
-        dstY * m_contentScale + m_contentOriginY,
+        destination.x, destination.y,
         srcW, srcH, pixelData, stridePixels, opacity,
-        cornerRadius * m_contentScale, cornerRoundness, squareTopCorners,
-        false, drawWidth * m_contentScale, drawHeight * m_contentScale);
+        destination.cornerRadius, cornerRoundness, squareTopCorners,
+        false, destination.width, destination.height);
 }
 
-void SkiaRenderer::drawBufferRaw(float dstX,
+void RasterRenderer::drawBufferRaw(float dstX,
                                  float dstY,
                                  int srcW,
                                  int srcH,
@@ -1919,7 +2175,7 @@ void SkiaRenderer::drawBufferRaw(float dstX,
     if (outW <= 0.0f || outH <= 0.0f) return;
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
         m_eglBackend->makeCurrent();
 
         if (m_glClientTexture == 0) {
@@ -1978,7 +2234,7 @@ void SkiaRenderer::drawBufferRaw(float dstX,
     int clipY2 = std::min(static_cast<int>(m_height), static_cast<int>(std::ceil(dstY + outH)));
 
     if (m_clipRect) {
-        const SkiaRect deviceClip = scaleRect(*m_clipRect);
+        const RasterRect deviceClip = scaleRect(*m_clipRect);
         clipX1 = std::max(clipX1, std::max(0, static_cast<int>(std::floor(deviceClip.x))));
         clipY1 = std::max(clipY1, std::max(0, static_cast<int>(std::floor(deviceClip.y))));
         clipX2 = std::min(clipX2, std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width))));
@@ -2246,9 +2502,32 @@ void applyColorMatrixToPixels(std::vector<uint32_t>& pixels, int w, int h, const
 
 } // namespace
 
-void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
+void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
+                                       float logicalWidth, float logicalHeight,
                                        float cornerRadius, float cornerRoundness,
-                                       float opacity, const std::vector<protocol::FilterOp>& filters) {
+                                       float opacity, const std::vector<protocol::FilterOp>& logicalFilters) {
+    // Damage/effect bounds remain fractional until this raster boundary. The
+    // enclosing device rect must never drop a partially covered edge.
+    const int dstX = static_cast<int>(std::floor(
+        logicalX * m_deviceScale + m_contentOriginX));
+    const int dstY = static_cast<int>(std::floor(
+        logicalY * m_deviceScale + m_contentOriginY));
+    const int right = static_cast<int>(std::ceil(
+        (logicalX + logicalWidth) * m_deviceScale + m_contentOriginX));
+    const int bottom = static_cast<int>(std::ceil(
+        (logicalY + logicalHeight) * m_deviceScale + m_contentOriginY));
+    const int srcW = right - dstX;
+    const int srcH = bottom - dstY;
+    cornerRadius *= m_deviceScale;
+    std::vector<protocol::FilterOp> scaledFilters = logicalFilters;
+    for (auto& filter : scaledFilters) {
+        if (filter.type == protocol::FilterType::Blur) {
+            filter.value *= m_deviceScale;
+        } else if (filter.type == protocol::FilterType::Glass) {
+            filter.params[0] *= m_deviceScale;
+        }
+    }
+    const auto& filters = scaledFilters;
     if (!m_initialized || srcW <= 0 || srcH <= 0 || filters.empty()) return;
 
     int clipX1 = std::max(0, dstX);
@@ -2272,7 +2551,7 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
     };
 
 #ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
         m_eglBackend->makeCurrent();
         const bool gpuBlurAvailable = m_eglBackend->isHardwareAccelerated();
 

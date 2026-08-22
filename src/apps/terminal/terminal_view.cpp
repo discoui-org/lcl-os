@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "lcl-ui/core/canvas.hpp"
+#include "lcl-graphics/canvas.hpp"
 
 namespace lcl::apps {
 
@@ -12,8 +12,8 @@ namespace {
 constexpr float kFontSize = 15.0f;
 constexpr float kLineHeight = 18.0f;
 constexpr float kPadding = 8.0f;
-constexpr lcl::ui::Color kTextColor{236, 239, 244, 255};
-constexpr lcl::ui::Color kCursorColor{196, 202, 211, 255};
+constexpr lcl::graphics::Color kTextColor{236, 239, 244, 255};
+constexpr lcl::graphics::Color kCursorColor{196, 202, 211, 255};
 
 size_t utf8CodepointLength(unsigned char firstByte) {
     if ((firstByte & 0x80) == 0) return 1;
@@ -61,7 +61,7 @@ std::string TerminalView::clippedLine(const std::string& line, float availableWi
     return line.substr(0, byte);
 }
 
-void TerminalView::draw(lcl::ui::Canvas& canvas, const lcl::ui::Rect& damageRect) {
+void TerminalView::draw(lcl::graphics::Canvas& canvas, const lcl::graphics::RectF& damageRect) {
     if (!m_visible || !m_absoluteBounds.intersects(damageRect)) return;
 
     const auto& lines = m_terminal.getLines();
@@ -75,7 +75,7 @@ void TerminalView::draw(lcl::ui::Canvas& canvas, const lcl::ui::Rect& damageRect
         (contentBottom - contentTop) / kLineHeight)));
     const int startLine = std::max(0, static_cast<int>(lines.size()) - maxRows);
     const float cellWidth = std::max(1.0f, canvas.measureText(
-        "M", kFontSize, lcl::ui::FontFamily::Monospace));
+        "M", kFontSize, lcl::graphics::FontFamily::Monospace));
     const float availableWidth = contentRight - contentLeft;
 
     float y = contentTop;
@@ -85,7 +85,7 @@ void TerminalView::draw(lcl::ui::Canvas& canvas, const lcl::ui::Rect& damageRect
         const std::string text = clippedLine(lines[index], availableWidth, cellWidth);
         if (!text.empty()) {
             canvas.drawText(contentLeft, y, text, kTextColor, kFontSize,
-                            lcl::ui::FontFamily::Monospace);
+                            lcl::graphics::FontFamily::Monospace);
         }
     }
 
@@ -98,7 +98,7 @@ void TerminalView::draw(lcl::ui::Canvas& canvas, const lcl::ui::Rect& damageRect
     const std::string cursorPrefix = clippedLine(finalLine.substr(0, cursorByte),
                                                   availableWidth, cellWidth);
     const float cursorX = std::min(contentRight - cellWidth,
-        contentLeft + canvas.measureText(cursorPrefix, kFontSize, lcl::ui::FontFamily::Monospace));
+        contentLeft + canvas.measureText(cursorPrefix, kFontSize, lcl::graphics::FontFamily::Monospace));
     if (cursorX >= contentLeft && cursorY + kFontSize <= contentBottom) {
         canvas.drawRect({cursorX, cursorY, cellWidth, kFontSize}, kCursorColor);
     }

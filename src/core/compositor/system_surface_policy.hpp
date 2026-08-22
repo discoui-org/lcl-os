@@ -36,8 +36,8 @@ public:
     static SystemSurfacePolicy policyFor(protocol::LCLSystemSurfaceKind kind) noexcept;
     /** Apply compositor-owned initial placement for system surfaces. */
     static void applyInitialPlacement(const SystemSurfacePolicy& policy,
-                                      uint32_t outputWidth, uint32_t outputHeight,
-                                      int& x, int& y, int& width, int& height) noexcept;
+                                      float outputWidth, float outputHeight,
+                                      float& x, float& y, float& width, float& height) noexcept;
     static bool isTrustedShellPeer(pid_t pid) noexcept;
 };
 

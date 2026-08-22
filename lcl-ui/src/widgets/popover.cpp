@@ -1,6 +1,6 @@
 #include "lcl-ui/widgets/popover.hpp"
 
-#include "lcl-ui/core/canvas.hpp"
+#include "lcl-graphics/canvas.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/focus_scope.hpp"
 #include "lcl-ui/widgets/widget.hpp"
@@ -23,13 +23,13 @@ uint32_t allocatePopupSurfaceId(uint32_t parentSurfaceId) noexcept {
 }
 
 std::unique_ptr<FocusScope> makePanel(std::unique_ptr<Widget> content,
-                                      const Rect& geometry) {
+                                      const graphics::RectF& geometry) {
     auto panel = std::make_unique<FocusScope>();
     panel->setWidth(geometry.width);
     panel->setHeight(geometry.height);
     panel->getYogaNode().setDirection(YGFlexDirectionColumn);
     panel->setPadding(YGEdgeAll, 12.0f);
-    panel->setBackgroundColor(Color{27, 32, 41, 255});
+    panel->setBackgroundColor(graphics::Color{27, 32, 41, 255});
     panel->setBorderRadius(10.0f);
     if (content) {
         panel->addChild(std::move(content));
@@ -63,7 +63,7 @@ Popover::~Popover() {
     closeActive();
 }
 
-Rect Popover::placeBelowLeft(const Rect& anchorRect,
+graphics::RectF Popover::placeBelowLeft(const graphics::RectF& anchorRect,
                              float width, float height) noexcept {
     return {anchorRect.x, anchorRect.y + anchorRect.height, width, height};
 }
@@ -76,7 +76,7 @@ PopoverOpenResult Popover::show(Widget& anchor,
                     std::move(options));
 }
 
-PopoverOpenResult Popover::show(const Rect& anchorRect,
+PopoverOpenResult Popover::show(const graphics::RectF& anchorRect,
                                 std::unique_ptr<Widget> content,
                                 PopoverOptions options) {
     return showImpl(anchorRect, nullptr, {}, false, std::move(content),
@@ -84,7 +84,7 @@ PopoverOpenResult Popover::show(const Rect& anchorRect,
 }
 
 PopoverOpenResult Popover::showImpl(
-        const Rect& anchorRect, Widget* restoreTarget,
+        const graphics::RectF& anchorRect, Widget* restoreTarget,
         std::weak_ptr<uint8_t> ownerLifetime, bool trackOwnerLifetime,
         std::unique_ptr<Widget> content, PopoverOptions options) {
     closeActive();
@@ -98,7 +98,7 @@ PopoverOpenResult Popover::showImpl(
         return {};
     }
 
-    const Rect geometry = placeBelowLeft(anchorRect, options.width, options.height);
+    const graphics::RectF geometry = placeBelowLeft(anchorRect, options.width, options.height);
     auto state = std::make_shared<ActiveState>();
     state->window = &m_window;
     state->windowLifetime = m_windowLifetime;
@@ -120,10 +120,8 @@ PopoverOpenResult Popover::showImpl(
     auto canvas = m_popupCanvasFactory();
     if (!canvas) return {};
 
-    const auto popupWidth = static_cast<uint32_t>(std::ceil(geometry.width));
-    const auto popupHeight = static_cast<uint32_t>(std::ceil(geometry.height));
     auto popup = std::make_unique<WindowApp>(
-        std::move(canvas), popupWidth, popupHeight, "LCL Popover");
+        std::move(canvas), geometry.width, geometry.height, "LCL Popover");
     const uint32_t popupSurfaceId = allocatePopupSurfaceId(m_window.getSurfaceId());
     popup->setSurfaceId(popupSurfaceId);
     popup->setAppId(m_window.getAppId().empty()
@@ -131,8 +129,7 @@ PopoverOpenResult Popover::showImpl(
         : m_window.getAppId());
     popup->configurePopupSurface(
         m_window.getSurfaceId(), lcl::protocol::LCLPopupRole::Transient,
-        static_cast<int32_t>(std::lround(geometry.x)),
-        static_cast<int32_t>(std::lround(geometry.y)));
+        geometry.x, geometry.y);
     popup->setWindowCornerStyle(10.0f, 2.0f);
     popup->setRootWidget(makePanel(
         std::move(content), {0.0f, 0.0f, geometry.width, geometry.height}));

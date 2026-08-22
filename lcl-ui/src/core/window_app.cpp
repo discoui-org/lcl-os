@@ -1,5 +1,4 @@
 #include "lcl-ui/core/window_app.hpp"
-#include "core/display/display_scale.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include <iostream>
 #include <unistd.h>
@@ -48,8 +47,8 @@ float sanitizeBufferScale(float scale) {
     return scale;
 }
 
-uint32_t toBufferPixels(uint32_t logical, float scale) {
-    return std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(logical) * scale)));
+uint32_t toBufferPixels(float logical, float scale) {
+    return std::max(1u, static_cast<uint32_t>(std::ceil(logical * scale)));
 }
 
 uint32_t crossfadePixel(uint32_t oldPixel, uint32_t newPixel, float progress) {
@@ -75,12 +74,12 @@ bool layoutOverlayEnabled() {
     return value && value[0] != '\0' && value[0] != '0';
 }
 
-void drawLayoutOverlay(const Widget& widget, Canvas& canvas, uint32_t depth = 0) {
-    static constexpr Color kPalette[] = {
+void drawLayoutOverlay(const Widget& widget, graphics::Canvas& canvas, uint32_t depth = 0) {
+    static constexpr graphics::Color kPalette[] = {
         {56, 189, 248, 220}, {74, 222, 128, 220}, {250, 204, 21, 220},
         {244, 114, 182, 220}, {167, 139, 250, 220},
     };
-    const Rect bounds = widget.getAbsoluteBounds();
+    const graphics::RectF bounds = widget.getAbsoluteBounds();
     if (!bounds.isEmpty()) {
         canvas.drawRoundedRect(bounds, 0.0f, {0, 0, 0, 0},
                                kPalette[depth % (sizeof(kPalette) / sizeof(kPalette[0]))],
@@ -93,7 +92,7 @@ void drawLayoutOverlay(const Widget& widget, Canvas& canvas, uint32_t depth = 0)
 
 } // namespace
 
-WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height,
+WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height,
                      const std::string& title)
     : m_width(width), m_height(height), m_title(title), m_canvas(std::move(canvas)) {
     setupAppSignalHandlers();
@@ -101,11 +100,14 @@ WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t he
     m_frameTraceEnabled = frameTraceEnabled();
     m_layoutOverlayEnabled = layoutOverlayEnabled();
     m_traceLastLog = std::chrono::steady_clock::now();
-    m_pixelBuffer.resize(width * height, 0xFF000000);
-    m_initialized = m_canvas->initialize(width, height, m_pixelBuffer.data());
+    const uint32_t pixelWidth = toBufferPixels(width, m_bufferScale);
+    const uint32_t pixelHeight = toBufferPixels(height, m_bufferScale);
+    m_pixelBuffer.resize(static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF000000);
+    m_initialized = m_canvas->initialize(pixelWidth, pixelHeight, m_pixelBuffer.data());
+    updateCanvasRenderTarget();
     m_motionCoordinator.setCallbacks(
         [this] { updateLayout(); },
-        [this](const Rect& rect) { if (!rect.isEmpty()) m_renderPass.addDirtyRect(rect); });
+        [this](const graphics::RectF& rect) { if (!rect.isEmpty()) m_renderPass.addDirtyRect(rect); });
 
     auto defaultRoot = std::make_unique<Container>();
     defaultRoot->getYogaNode().setWidth(static_cast<float>(width));
@@ -145,6 +147,15 @@ uint32_t WindowApp::getPixelWidth() const {
 
 uint32_t WindowApp::getPixelHeight() const {
     return toBufferPixels(m_height, m_bufferScale);
+}
+
+void WindowApp::updateCanvasRenderTarget() {
+    if (!m_canvas) return;
+    m_canvas->setRenderTarget({
+        {static_cast<float>(m_width), static_cast<float>(m_height)},
+        {getPixelWidth(), getPixelHeight()},
+        m_bufferScale,
+    });
 }
 
 void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
@@ -249,7 +260,7 @@ void WindowApp::setInputEnabled(bool enabled) {
     m_inputEnabled = enabled;
 }
 
-void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
+void WindowApp::allocateSHM(float width, float height) {
     const auto started = std::chrono::steady_clock::now();
     if (m_shmPixels) {
         munmap(m_shmPixels, m_shmSize);
@@ -280,6 +291,7 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
     // Resize path: keep existing renderer instance and only retarget the backing pixels.
     // Re-initializing renderer every configure event causes heavy stalls while dragging.
     m_canvas->setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
+    updateCanvasRenderTarget();
     m_shmNeedsAttach = true;
     if (m_frameTraceEnabled) {
         ++m_traceShmAllocations;
@@ -321,10 +333,10 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     m_compositorSocketPath = effectiveSocketPath;
     m_surfaceEnded = false;
 
-    // WindowApp exposes CSS-like logical pixels. The process-local boot scale is
-    // its device pixel ratio; raw-pixel clients do not use this class and retain 1x.
-    m_bufferScale = sanitizeBufferScale(lcl::core::DisplayScale::factor());
-    m_canvas->setContentScale(m_bufferScale);
+    // The compositor is the output-scale authority. Initial creation is purely
+    // logical; ConfigureBounds supplies the buffer mapping scale.
+    m_bufferScale = 1.0f;
+    updateCanvasRenderTarget();
 
     // Set non-blocking socket reads
     int flags = fcntl(m_socketFd, F_GETFL, 0);
@@ -359,7 +371,6 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         popup.y = m_popupY;
         popup.width = m_width;
         popup.height = m_height;
-        popup.bufferScale = m_bufferScale;
         createSent = sendProtocolMessage(lcl::protocol::LCLOpcode::PopupSurfaceCreate,
                                          &popup, sizeof(popup));
     } else {
@@ -369,7 +380,6 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         surface.y = m_initialY;
         surface.width = m_width;
         surface.height = m_height;
-        surface.bufferScale = m_bufferScale;
         surface.resizePresentation = m_resizePresentationMode;
         std::strncpy(surface.title, m_title.c_str(), sizeof(surface.title) - 1);
         std::strncpy(surface.appId, m_appId.c_str(), sizeof(surface.appId) - 1);
@@ -378,7 +388,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     }
     if (!createSent) {
         m_waitingForInitialConfigure = false;
-        std::cerr << "[lcl-ui ERROR] Failed to create v12 surface\n";
+        std::cerr << "[lcl-ui ERROR] Failed to create v13 surface\n";
         return false;
     }
 
@@ -413,7 +423,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     return true;
 }
 
-void WindowApp::resize(uint32_t width, uint32_t height) {
+void WindowApp::resize(float width, float height) {
     if (width == 0 || height == 0) return;
     if (width == m_width && height == m_height) return;
 
@@ -451,15 +461,18 @@ void WindowApp::resize(uint32_t width, uint32_t height) {
     }
 }
 
-void WindowApp::setInitialBounds(int32_t x, int32_t y, uint32_t width, uint32_t height) {
+void WindowApp::setInitialBounds(float x, float y, float width, float height) {
     if (m_ipcConnected || width == 0 || height == 0) return;
 
     m_initialX = x;
     m_initialY = y;
     m_width = width;
     m_height = height;
-    m_pixelBuffer.resize(static_cast<size_t>(width) * height, 0xFF000000);
-    m_canvas->setTargetPixels(m_pixelBuffer.data(), width, height);
+    const uint32_t pixelWidth = toBufferPixels(width, m_bufferScale);
+    const uint32_t pixelHeight = toBufferPixels(height, m_bufferScale);
+    m_pixelBuffer.resize(static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF000000);
+    m_canvas->setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
+    updateCanvasRenderTarget();
     if (m_windowRoot) {
         m_windowRoot->getYogaNode().setWidth(static_cast<float>(width));
         m_windowRoot->getYogaNode().setHeight(static_cast<float>(height));
@@ -469,7 +482,7 @@ void WindowApp::setInitialBounds(int32_t x, int32_t y, uint32_t width, uint32_t 
 
 void WindowApp::configurePopupSurface(uint32_t parentSurfaceId,
                                       lcl::protocol::LCLPopupRole role,
-                                      int32_t x, int32_t y) {
+                                      float x, float y) {
     if (m_ipcConnected || parentSurfaceId == 0) return;
     m_popupParentSurfaceId = parentSurfaceId;
     m_popupRole = role;
@@ -480,10 +493,10 @@ void WindowApp::configurePopupSurface(uint32_t parentSurfaceId,
 void WindowApp::pollIPC() {
     if (!m_ipcConnected || m_socketFd < 0) return;
 
-    uint32_t latestWidth = 0;
-    uint32_t latestHeight = 0;
-    uint32_t latestBackingWidth = 0;
-    uint32_t latestBackingHeight = 0;
+    float latestWidth = 0.0f;
+    float latestHeight = 0.0f;
+    float latestBackingWidth = 0.0f;
+    float latestBackingHeight = 0.0f;
     float latestScale = m_bufferScale;
     lcl::protocol::LCLConfigureResizeReason latestResizeReason =
         lcl::protocol::LCLConfigureResizeReason::Initial;
@@ -624,7 +637,7 @@ void WindowApp::pollIPC() {
         } else if (receiveStatus == lcl::protocol::ReceiveStatus::WouldBlock) {
             break;
         } else {
-            std::cerr << "[lcl-ui ERROR] Compositor v12 connection closed or rejected\n";
+            std::cerr << "[lcl-ui ERROR] Compositor v13 connection closed or rejected\n";
             m_ipcConnected = false;
             m_running = false;
             m_surfaceEnded = true;
@@ -651,9 +664,10 @@ void WindowApp::pollIPC() {
              latestResizeReason == lcl::protocol::LCLConfigureResizeReason::WindowStateTransition) &&
             m_canvas->hasDmaBufTransport();
 
+        latestScale = sanitizeBufferScale(latestScale);
         if (std::fabs(latestScale - m_bufferScale) > 0.0001f) {
             m_bufferScale = latestScale;
-            m_canvas->setContentScale(m_bufferScale);
+            updateCanvasRenderTarget();
             // A scale-only configure has identical logical bounds but needs a new buffer.
             if (latestWidth == m_width && latestHeight == m_height && m_ipcConnected) {
                 if (m_canvas->hasDmaBufTransport()) {
@@ -679,14 +693,10 @@ void WindowApp::pollIPC() {
         const auto now = std::chrono::steady_clock::now();
         constexpr auto kMinResizeInterval = std::chrono::milliseconds(22);
 
-        const uint32_t dx = (m_pendingResizeWidth > m_width)
-            ? (m_pendingResizeWidth - m_width)
-            : (m_width - m_pendingResizeWidth);
-        const uint32_t dy = (m_pendingResizeHeight > m_height)
-            ? (m_pendingResizeHeight - m_height)
-            : (m_height - m_pendingResizeHeight);
+        const float dx = std::fabs(m_pendingResizeWidth - m_width);
+        const float dy = std::fabs(m_pendingResizeHeight - m_height);
 
-        const bool largeJump = (dx >= 48u) || (dy >= 48u);
+        const bool largeJump = (dx >= 48.0f) || (dy >= 48.0f);
         const bool intervalElapsed = (now - m_lastResizeApply) >= kMinResizeInterval;
 
         // The first configure establishes the only serial eligible for an
@@ -786,20 +796,20 @@ void WindowApp::collectClosedHostedSurfaces() {
 }
 
 namespace {
-void collectWidgetBounds(Widget* widget, std::unordered_map<uint64_t, Rect>& bounds) {
+void collectWidgetBounds(Widget* widget, std::unordered_map<uint64_t, graphics::RectF>& bounds) {
     if (!widget) return;
     bounds[widget->getObjectId()] = widget->getAbsoluteBounds();
     for (const auto& child : widget->getChildren()) collectWidgetBounds(child.get(), bounds);
 }
 
-void startMorphs(Widget* widget, const std::unordered_map<uint64_t, Rect>& oldBounds,
+void startMorphs(Widget* widget, const std::unordered_map<uint64_t, graphics::RectF>& oldBounds,
                  MotionCoordinator& coordinator, const lcl::motion::Motion& motion,
                  bool& anyMorph) {
     if (!widget) return;
     const auto found = oldBounds.find(widget->getObjectId());
     if (found != oldBounds.end()) {
-        const Rect before = found->second;
-        const Rect after = widget->getAbsoluteBounds();
+        const graphics::RectF before = found->second;
+        const graphics::RectF after = widget->getAbsoluteBounds();
         if (!before.isEmpty() && !after.isEmpty() &&
             (std::fabs(before.x - after.x) > 0.01f || std::fabs(before.y - after.y) > 0.01f ||
              std::fabs(before.width - after.width) > 0.01f || std::fabs(before.height - after.height) > 0.01f)) {
@@ -837,7 +847,7 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
                         AnimationTransactionOptions options,
                         const std::function<void()>& changes) {
     if (!changes) return;
-    std::unordered_map<uint64_t, Rect> oldBounds;
+    std::unordered_map<uint64_t, graphics::RectF> oldBounds;
     std::vector<uint32_t> oldPixels;
     uint32_t snapshotWidth = 0;
     uint32_t snapshotHeight = 0;
@@ -1055,36 +1065,36 @@ bool WindowApp::setWindowLayer(lcl::protocol::LCLWindowLayer layer, bool unfocus
                                &msg, sizeof(msg));
 }
 
-bool WindowApp::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right) {
+bool WindowApp::setReservedZone(float top, float bottom, float left, float right) {
     if (!m_ipcConnected || m_socketFd < 0) return false;
 
     lcl::protocol::LCLMsgSetReservedZone msg{};
     msg.surfaceId = m_surfaceId;
-    msg.top = static_cast<uint32_t>(std::lround(static_cast<float>(top) * m_bufferScale));
-    msg.bottom = static_cast<uint32_t>(std::lround(static_cast<float>(bottom) * m_bufferScale));
-    msg.left = static_cast<uint32_t>(std::lround(static_cast<float>(left) * m_bufferScale));
-    msg.right = static_cast<uint32_t>(std::lround(static_cast<float>(right) * m_bufferScale));
+    msg.top = top;
+    msg.bottom = bottom;
+    msg.left = left;
+    msg.right = right;
     return sendProtocolMessage(lcl::protocol::LCLOpcode::SetReservedZone,
                                &msg, sizeof(msg));
 }
 
-bool WindowApp::setWindowCornerStyle(float radiusPx, float roundness) {
-    m_requestedCornerRadius = std::max(0.0f, radiusPx);
+bool WindowApp::setWindowCornerStyle(float radius, float roundness) {
+    m_requestedCornerRadius = std::max(0.0f, radius);
     m_requestedCornerRoundness = std::clamp(roundness, 2.0f, 8.0f);
     m_hasRequestedCornerRadius = true;
     if (!m_ipcConnected || m_socketFd < 0) return true;
 
     lcl::protocol::LCLMsgSetWindowCornerStyle msg{};
     msg.surfaceId = m_surfaceId;
-    msg.radiusPx = m_requestedCornerRadius;
+    msg.radius = m_requestedCornerRadius;
     msg.roundness = m_requestedCornerRoundness;
 
     return sendProtocolMessage(lcl::protocol::LCLOpcode::SetWindowCornerStyle,
                                &msg, sizeof(msg));
 }
 
-bool WindowApp::setWindowCornerRadius(float radiusPx) {
-    return setWindowCornerStyle(radiusPx, m_requestedCornerRoundness);
+bool WindowApp::setWindowCornerRadius(float radius) {
+    return setWindowCornerStyle(radius, m_requestedCornerRoundness);
 }
 
 bool WindowApp::sendPointerMove(float x, float y, PointerSource source, uint32_t pointerId) {
@@ -1203,12 +1213,12 @@ bool WindowApp::renderFrame() {
     if (!m_renderPass.hasDamage()) return false;
     m_firstFrame = false;
 
-    const Rect surfaceBounds{0.0f, 0.0f, static_cast<float>(m_width),
+    const graphics::RectF surfaceBounds{0.0f, 0.0f, static_cast<float>(m_width),
                              static_cast<float>(m_height)};
-    std::vector<Rect> damageRects;
+    std::vector<graphics::RectF> damageRects;
     damageRects.reserve(m_renderPass.getDirtyRects().size());
-    for (const Rect& dirty : m_renderPass.getDirtyRects()) {
-        const Rect clipped = dirty.intersection(surfaceBounds);
+    for (const graphics::RectF& dirty : m_renderPass.getDirtyRects()) {
+        const graphics::RectF clipped = dirty.intersection(surfaceBounds);
         if (!clipped.isEmpty()) damageRects.push_back(clipped);
     }
     m_renderPass.clear();
@@ -1218,7 +1228,7 @@ bool WindowApp::renderFrame() {
         // Keep the last compositor-owned DMA-BUF visible until a release
         // arrives. Requeue the exact damage instead of CPU-rendering it into
         // SHM during configure/transition pressure.
-        for (const Rect& damage : damageRects) {
+        for (const graphics::RectF& damage : damageRects) {
             m_renderPass.addDirtyRect(damage);
         }
         return false;
@@ -1227,7 +1237,7 @@ bool WindowApp::renderFrame() {
     const auto paintStarted = std::chrono::steady_clock::now();
     if (m_frameTraceEnabled) {
         ++m_traceRenderedFrames;
-        for (const Rect& damage : damageRects) {
+        for (const graphics::RectF& damage : damageRects) {
             m_traceDamagePixels +=
                 static_cast<uint64_t>(std::max(0.0f, damage.width)) *
                 static_cast<uint64_t>(std::max(0.0f, damage.height));
@@ -1236,7 +1246,7 @@ bool WindowApp::renderFrame() {
 
     const auto clearStarted = paintStarted;
     const bool dmaBufFrame = m_canvas->isDmaBufFrameActive();
-    for (const Rect& damage : damageRects) {
+    for (const graphics::RectF& damage : damageRects) {
         m_canvas->clearRect(damage, {0, 0, 0, 0});
         if (m_frameTraceEnabled) {
             m_traceClearedBytes +=
@@ -1253,7 +1263,7 @@ bool WindowApp::renderFrame() {
     const auto drawStarted = std::chrono::steady_clock::now();
     m_renderPass.begin(*m_canvas);
 
-    for (const Rect& damage : damageRects) {
+    for (const graphics::RectF& damage : damageRects) {
         m_canvas->saveState();
         m_canvas->clipRect(damage);
         if (m_windowRoot && m_windowRoot->isVisible()) {
@@ -1304,22 +1314,19 @@ bool WindowApp::renderFrame() {
         for (const auto& effect : uiEffects) {
             if (effect.bounds.isEmpty() || effect.filters.empty()) continue;
 
-            int x = std::max(0, static_cast<int>(std::lround(effect.bounds.x * m_bufferScale)));
-            int y = std::max(0, static_cast<int>(std::lround(effect.bounds.y * m_bufferScale)));
-            int w = std::max(0, static_cast<int>(std::lround(effect.bounds.width * m_bufferScale)));
-            int h = std::max(0, static_cast<int>(std::lround(effect.bounds.height * m_bufferScale)));
-
-            if (x >= static_cast<int>(getPixelWidth()) || y >= static_cast<int>(getPixelHeight())) continue;
-            w = std::min(w, static_cast<int>(getPixelWidth()) - x);
-            h = std::min(h, static_cast<int>(getPixelHeight()) - y);
-            if (w <= 0 || h <= 0) continue;
+            const float x = std::max(0.0f, effect.bounds.x);
+            const float y = std::max(0.0f, effect.bounds.y);
+            if (x >= m_width || y >= m_height) continue;
+            const float w = std::min(std::max(0.0f, effect.bounds.width), m_width - x);
+            const float h = std::min(std::max(0.0f, effect.bounds.height), m_height - y);
+            if (w <= 0.0f || h <= 0.0f) continue;
 
             lcl::protocol::EffectRegion region{};
             region.x = x;
             region.y = y;
-            region.width = static_cast<uint32_t>(w);
-            region.height = static_cast<uint32_t>(h);
-            region.cornerRadius = std::max(0.0f, effect.cornerRadius * m_bufferScale);
+            region.width = w;
+            region.height = h;
+            region.cornerRadius = std::max(0.0f, effect.cornerRadius);
             region.cornerRoundness = std::clamp(effect.cornerRoundness, 2.0f, 8.0f);
             region.boundsPolicy = toProtoBounds(effect.boundsPolicy);
             region.source = toProtoSource(effect.source);
@@ -1330,12 +1337,6 @@ bool WindowApp::renderFrame() {
 
             for (uint16_t i = 0; i < region.filterCount; ++i) {
                 auto filter = effect.filters[i];
-                // These values are specified by widgets in logical px as well.
-                if (filter.type == lcl::protocol::FilterType::Blur) {
-                    filter.value *= m_bufferScale;
-                } else if (filter.type == lcl::protocol::FilterType::Glass) {
-                    filter.params[0] *= m_bufferScale; // thicknessPx
-                }
                 flatFilters.push_back(filter);
             }
             protoRegions.push_back(region);
@@ -1389,7 +1390,7 @@ bool WindowApp::renderFrame() {
     if (!dmaBufFrame && m_shmPixels && !m_pixelBuffer.empty()) {
         const uint32_t pixelWidth = getPixelWidth();
         const uint32_t pixelHeight = getPixelHeight();
-        for (const Rect& damage : damageRects) {
+        for (const graphics::RectF& damage : damageRects) {
             const uint32_t left = std::min(
                 pixelWidth, static_cast<uint32_t>(std::floor(
                     std::max(0.0f, damage.x * m_bufferScale))));

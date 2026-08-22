@@ -50,26 +50,26 @@ SystemSurfacePolicy SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSu
 }
 
 void SystemSurfacePolicyRegistry::applyInitialPlacement(const SystemSurfacePolicy& policy,
-                                                        uint32_t outputWidth, uint32_t outputHeight,
-                                                        int& x, int& y, int& width, int& height) noexcept {
+                                                        float outputWidth, float outputHeight,
+                                                        float& x, float& y, float& width, float& height) noexcept {
     switch (policy.placement) {
         case SystemSurfacePlacement::OutputBounds:
             x = 0;
             y = 0;
-            width = static_cast<int>(outputWidth);
-            height = static_cast<int>(outputHeight);
+            width = outputWidth;
+            height = outputHeight;
             break;
         case SystemSurfacePlacement::OutputTopEdge:
             x = 0;
             y = 0;
-            width = static_cast<int>(outputWidth);
-            height = std::min(height, static_cast<int>(outputHeight));
+            width = outputWidth;
+            height = std::min(height, outputHeight);
             break;
         case SystemSurfacePlacement::OutputBottomEdge:
             x = 0;
-            width = static_cast<int>(outputWidth);
-            height = std::min(height, static_cast<int>(outputHeight));
-            y = std::max(0, static_cast<int>(outputHeight) - height);
+            width = outputWidth;
+            height = std::min(height, outputHeight);
+            y = std::max(0.0f, outputHeight - height);
             break;
         case SystemSurfacePlacement::ClientBounds:
             break;

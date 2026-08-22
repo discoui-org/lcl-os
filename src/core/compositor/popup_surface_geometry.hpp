@@ -24,10 +24,10 @@ inline PopupSurfaceBounds resolvePopupSurfaceBounds(
     const float groupX = parentBounds.x + parentBounds.width * (1.0f - scale) * 0.5f;
     const float groupY = parentBounds.y + parentBounds.height * (1.0f - scale) * 0.5f;
     return {
-        groupX + static_cast<float>(popup.popupX) * scale,
-        groupY + static_cast<float>(popup.popupY) * scale,
-        static_cast<float>(popup.width) * scale,
-        static_cast<float>(popup.height) * scale,
+        groupX + popup.popupX * scale,
+        groupY + popup.popupY * scale,
+        popup.initialWidth * scale,
+        popup.initialHeight * scale,
     };
 }
 

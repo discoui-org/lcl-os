@@ -36,7 +36,7 @@ public:
     bool isTouchDragging() const noexcept { return m_touchPanState == TouchPanState::Dragging; }
 
     void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f) override;
-    void draw(Canvas& canvas, const Rect& damageRect) override;
+    void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
     void onPointerEventPreview(const PointerEvent& event) override;
     bool onPointerMove(const PointerEvent& event) override;
     bool onPointerUp(const PointerEvent& event) override;

@@ -16,12 +16,14 @@ void ScrollView::setContent(std::unique_ptr<Widget> content) {
     if (!content) return;
     m_contentWidget = content.get();
     m_contentWidget->getYogaNode().setFlexShrink(0.0f);
-    m_contentWidget->getYogaNode().setHeightAuto();
+    if (!m_contentWidget->m_hasHeight) {
+        m_contentWidget->getYogaNode().setHeightAuto();
+    }
     addChild(std::move(content));
     clampScrollOffset();
 }
 
-void ScrollView::draw(Canvas& canvas, const Rect& damageRect) {
+void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
 
     beginPresentation(canvas);
@@ -30,8 +32,8 @@ void ScrollView::draw(Canvas& canvas, const Rect& damageRect) {
         return;
     }
 
-    const Rect contentBounds = m_contentWidget->getAbsoluteBounds();
-    const Rect presentedContentBounds{
+    const graphics::RectF contentBounds = m_contentWidget->getAbsoluteBounds();
+    const graphics::RectF presentedContentBounds{
         contentBounds.x,
         contentBounds.y - m_scrollY,
         contentBounds.width,
@@ -122,7 +124,9 @@ void ScrollView::syncLayout(float parentAbsX, float parentAbsY) {
 
     if (m_contentWidget) {
         m_contentWidget->getYogaNode().setFlexShrink(0.0f);
-        m_contentWidget->getYogaNode().setHeightAuto();
+        if (!m_contentWidget->m_hasHeight) {
+            m_contentWidget->getYogaNode().setHeightAuto();
+        }
     }
 
     Widget::syncLayout(parentAbsX, parentAbsY);

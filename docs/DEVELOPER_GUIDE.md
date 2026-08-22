@@ -65,7 +65,7 @@ LCL OS features a comprehensive GoogleTest CTest suite (**167 passing test cases
 - Unix Domain Socket permission (`0600`) and kernel peer credentials (`SO_PEERCRED`)
 - Dynamic Input Hotplug (`AF_NETLINK` uevent) and Touchpad `EV_ABS` delta math
 - Yoga Flexbox layout engine tree hierarchy and layout passes
-- Skia 2D canvas rendering and backdrop blur filter chain
+- LCL raster 2D canvas rendering and backdrop blur filter chain
 - Hit-testing and declarative event routing
 - JavaScript ES2022+ runtime bindings, widget hierarchy, and animations
 
@@ -131,12 +131,12 @@ Create `apps/my_custom_app/` containing `CMakeLists.txt` and `main.cpp`.
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_canvas.hpp"
 
 using namespace lcl::ui;
 
 int main() {
-    WindowApp app(lcl::render::makeSkiaCanvas(), 600, 400, "My Custom App");
+    WindowApp app(lcl::render::makeRasterCanvas(), 600, 400, "My Custom App");
     app.setAppId("org.example.my-custom-app");
 
     auto root = std::make_unique<Container>();
@@ -170,7 +170,7 @@ target_include_directories(lcl_my_custom_app PRIVATE
 
 target_link_libraries(lcl_my_custom_app PRIVATE
     lcl-ui
-    lcl-canvas-skia
+    lcl-raster
     Threads::Threads
 )
 ```

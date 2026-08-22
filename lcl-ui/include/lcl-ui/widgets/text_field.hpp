@@ -1,7 +1,7 @@
 #pragma once
 
 #include "lcl-ui/core/caret_presentation_controller.hpp"
-#include "lcl-ui/core/font_family.hpp"
+#include "lcl-graphics/font.hpp"
 #include "lcl-ui/widgets/widget.hpp"
 
 #include <cstddef>
@@ -30,7 +30,7 @@ public:
     void setOnChange(ChangeCallback callback) { m_onChange = std::move(callback); }
 
     void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f) override;
-    void draw(Canvas& canvas, const Rect& damageRect) override;
+    void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
 
     bool onPointerDown(const PointerEvent& event) override;
     bool onPointerUp(const PointerEvent& event) override;
@@ -44,7 +44,7 @@ public:
 private:
     static std::string sanitizeSingleLine(const std::string& text);
 
-    void rebuildCaretAdvances(Canvas& canvas);
+    void rebuildCaretAdvances(graphics::Canvas& canvas);
     void invalidateCaretAdvances();
     float measurePrefix(size_t characterIndex) const;
     float measureTextWidth() const;
@@ -69,7 +69,7 @@ private:
     static constexpr float kHorizontalPadding = 8.0f;
     static constexpr float kFontSize = 14.0f;
     static constexpr float kCaretWidth = 1.0f;
-    static constexpr FontFamily kFontFamily = FontFamily::Interface;
+    static constexpr graphics::FontFamily kFontFamily = graphics::FontFamily::Interface;
 };
 
 } // namespace lcl::ui

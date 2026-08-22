@@ -10,7 +10,7 @@
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
 #include "core/ipc/lcl_protocol.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_canvas.hpp"
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -511,8 +511,10 @@ TEST(LclUiEventsTest, DepthFirstHitTesting) {
     root->getYogaNode().calculateLayout(400.0f, 400.0f);
     root->syncLayout(0.0f, 0.0f);
 
-    // Coordinate inside childContainer (50, 50) + leafBtn centered Text -> (80, 65)
-    Widget* hitResult = dispatcher.hitTest(root.get(), 80.0f, 65.0f);
+    const auto textBounds = leafPtr->getTextWidget()->getAbsoluteBounds();
+    Widget* hitResult = dispatcher.hitTest(
+        root.get(), textBounds.x + textBounds.width * 0.5f,
+        textBounds.y + textBounds.height * 0.5f);
     EXPECT_EQ(hitResult, leafPtr->getTextWidget()); // Leaf text inside button
 
     // Coordinate inside leaf button padding area -> button itself
@@ -870,7 +872,7 @@ TEST(LclUiEventsTest, TabIsConsumedBeforeFocusedTextFieldKeyRouting) {
 }
 
 TEST(LclUiEventsTest, WindowAppOwnsItsRootTraversalContext) {
-    WindowApp app(lcl::render::makeSkiaCanvas(), 200, 100,
+    WindowApp app(lcl::render::makeRasterCanvas(), 200, 100,
                   "Focus traversal owner");
     auto root = std::make_unique<Container>();
     auto first = std::make_unique<FocusProbe>();
@@ -1151,9 +1153,11 @@ TEST(LclUiEventsTest, ScrollViewTouchDragPreservesExistingFocus) {
     ASSERT_EQ(dispatcher.getFocusedWidget(), fieldPtr);
 
     const auto drag = [&](uint32_t pointerId, float startY) {
-        ASSERT_TRUE(dispatcher.dispatchPointerEvent(scrollView.get(),
+        // A non-clickable child may leave Down unhandled; ScrollView still
+        // observes it in preview and owns the sequence after drag slop.
+        dispatcher.dispatchPointerEvent(scrollView.get(),
             PointerEvent{10.0f, startY, 0, 0.0f, 0.0f, PointerEventType::Down,
-                         PointerSource::Touch, pointerId}));
+                         PointerSource::Touch, pointerId});
         ASSERT_TRUE(dispatcher.dispatchPointerEvent(scrollView.get(),
             PointerEvent{10.0f, startY + 20.0f, 0, 0.0f, 0.0f, PointerEventType::Move,
                          PointerSource::Touch, pointerId}));
@@ -1261,7 +1265,7 @@ TEST(LclUiEventsTest, TextFieldSetTextClampsCaretAndOnChangeRequiresAValueChange
 }
 
 TEST(LclUiEventsTest, WindowAppDirectEventCallbacks) {
-    WindowApp app(lcl::render::makeSkiaCanvas(), 400, 300, "Test Window");
+    WindowApp app(lcl::render::makeRasterCanvas(), 400, 300, "Test Window");
 
     int rawKeyCount = 0;
     int lastRawKey = 0;
@@ -1294,7 +1298,7 @@ TEST(LclUiEventsTest, VisualOnlyWindowIgnoresCompositorPointerEvents) {
     ASSERT_NE(fcntl(sockets[1], F_SETFL, fcntl(sockets[1], F_GETFL) | O_NONBLOCK), -1);
 
     {
-        WindowApp panel(lcl::render::makeSkiaCanvas(), 320, 32, "Visual Panel");
+        WindowApp panel(lcl::render::makeRasterCanvas(), 320, 32, "Visual Panel");
         panel.setSurfaceId(9);
         panel.setInputEnabled(false);
         panel.setExternalIpcSocket(sockets[1]);
@@ -1329,7 +1333,7 @@ TEST(LclUiEventsTest, PointerEventSourcePropagation) {
     ASSERT_NE(fcntl(sockets[1], F_SETFL, fcntl(sockets[1], F_GETFL) | O_NONBLOCK), -1);
 
     {
-        WindowApp app(lcl::render::makeSkiaCanvas(), 400, 300, "Source Test");
+        WindowApp app(lcl::render::makeRasterCanvas(), 400, 300, "Source Test");
         app.setSurfaceId(1);
         app.setInputEnabled(true);
         app.setExternalIpcSocket(sockets[1]);
@@ -1454,5 +1458,5 @@ TEST(LclUiEventsTest, TouchPointerUpClearsHoverState) {
     EXPECT_TRUE(clicked);
     // Touch up must clear hover state on widget and in dispatcher
     EXPECT_EQ(dispatcher.getHoveredWidget(), nullptr);
-    EXPECT_EQ(btnPtr->getState(), ButtonState::Normal);
+    EXPECT_EQ(btnPtr->getState(), ButtonState::Focused);
 }

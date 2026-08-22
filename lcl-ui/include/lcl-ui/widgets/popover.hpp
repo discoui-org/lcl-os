@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lcl-ui/core/rect.hpp"
+#include "lcl-graphics/canvas.hpp"
 #include "lcl-ui/core/transient_controller.hpp"
 
 #include <functional>
@@ -9,7 +9,6 @@
 
 namespace lcl::ui {
 
-class Canvas;
 class Widget;
 class WindowApp;
 
@@ -28,7 +27,7 @@ struct PopoverOptions {
 struct PopoverOpenResult {
     TransientHandle handle{0};
     PopoverPresentation presentation{PopoverPresentation::PopupSurface};
-    Rect geometry{};
+    graphics::RectF geometry{};
 
     explicit operator bool() const noexcept { return handle != 0; }
 };
@@ -40,7 +39,7 @@ struct PopoverOpenResult {
  */
 class Popover final {
 public:
-    using PopupCanvasFactory = std::function<std::unique_ptr<Canvas>()>;
+    using PopupCanvasFactory = std::function<std::unique_ptr<graphics::Canvas>()>;
     using PopupConnector = std::function<bool(WindowApp&)>;
 
     explicit Popover(WindowApp& window,
@@ -53,7 +52,7 @@ public:
 
     PopoverOpenResult show(Widget& anchor, std::unique_ptr<Widget> content,
                            PopoverOptions options = {});
-    PopoverOpenResult show(const Rect& anchorRect,
+    PopoverOpenResult show(const graphics::RectF& anchorRect,
                            std::unique_ptr<Widget> content,
                            PopoverOptions options = {});
 
@@ -61,13 +60,13 @@ public:
     bool isOpen(TransientHandle handle) const;
     std::optional<PopoverPresentation> presentation(TransientHandle handle) const;
 
-    static Rect placeBelowLeft(const Rect& anchorRect,
+    static graphics::RectF placeBelowLeft(const graphics::RectF& anchorRect,
                                float width, float height) noexcept;
 
 private:
     struct ActiveState;
 
-    PopoverOpenResult showImpl(const Rect& anchorRect,
+    PopoverOpenResult showImpl(const graphics::RectF& anchorRect,
                                Widget* restoreTarget,
                                std::weak_ptr<uint8_t> ownerLifetime,
                                bool trackOwnerLifetime,

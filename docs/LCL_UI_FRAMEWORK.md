@@ -1,6 +1,6 @@
 # `lcl-ui` Application Development Framework & API Guide
 
-`lcl-ui` is the official C++20 user-space GUI application framework for **LCL Core Linux (LCL OS)**. It is decoupled from display-server dependencies and provides flexbox layout, polymorphic widgets, damage tracking, and a backend-neutral Canvas contract. The standard client raster backend is selected separately through `lcl-canvas-skia`.
+`lcl-ui` is the official C++20 user-space GUI application framework for **LCL Core Linux (LCL OS)**. It is decoupled from display-server dependencies and provides flexbox layout, polymorphic widgets, damage tracking, and a backend-neutral Canvas contract. The standard client raster backend is selected separately through `lcl-raster`.
 
 ---
 
@@ -20,7 +20,7 @@
 
 ## 1. Architecture Overview
 
-`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v12 Unix Domain `SOCK_SEQPACKET` IPC (`/run/user/1000/lcl-compositor.sock`), DMA-BUF, and lazy shared-memory (`memfd`) fallback.
+`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v13 Unix Domain `SOCK_SEQPACKET` IPC (`/run/user/1000/lcl-compositor.sock`), DMA-BUF, and lazy shared-memory (`memfd`) fallback.
 
 ```text
 +-----------------------------------------------------------+
@@ -31,7 +31,7 @@
                               v
 +-----------------------------------------------------------+
 |                      LCL Core Compositor                  |
-|          (Direct DRM/KMS Scanout & EGL Skia Renderer)     |
+|          (Direct DRM/KMS Scanout & EGL LCL raster Renderer)     |
 +-----------------------------------------------------------+
 ```
 
@@ -45,11 +45,11 @@
 `WindowApp` is the top-level application container. It handles window surface creation, SHM pixel allocation, IPC message dispatching, and 144Hz frame pacing.
 
 #### Public Methods
-- `WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height, const std::string& title = "lcl-ui Application")`: Constructs a window with an explicitly selected drawing backend.
+- `WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height, const std::string& title = "lcl-ui Application")`: Constructs a logical-size window with an explicitly selected drawing backend.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Binds the top-level Flexbox widget container.
 - `Widget* getRootWidget() const`: Returns the root widget pointer.
 - `void setAppId(std::string appId)`: Sets the required canonical application identity before connecting.
-- `bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v12 normal or configured popup surface.
+- `bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v13 normal or configured popup surface.
 - `registerLocalTransient(...)`: Registers an ordinary absolute-positioned Widget in the single WindowRoot tree with generic lifecycle/dismissal policy.
 - `configurePopupSurface(parentSurfaceId, role, x, y)`: Configures this `WindowApp` as a compositor-level popup that reuses the normal configure and buffer path.
 - `hostSurface(...)`: Owns and ticks an additional generic `WindowApp` surface from the same event loop; it contains no Popover-specific policy.
@@ -135,7 +135,7 @@ label->setTextColor(0xFF38BDF8); // Sky Cyan
 ---
 
 ### `lcl::ui::Canvas`
-*Header:* [`lcl-ui/include/lcl-ui/core/canvas.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/core/canvas.hpp)
+*Header:* [`lcl-ui/include/lcl-graphics/canvas.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-graphics/canvas.hpp)
 
 The backend-neutral 2D drawing contract available inside `Widget::draw(...)`:
 - `drawRect(rect, color)`
@@ -144,8 +144,8 @@ The backend-neutral 2D drawing contract available inside `Widget::draw(...)`:
 - `drawText(x, y, text, color, fontSize)`
 - `drawBuffer(...)`
 
-`SkiaCanvas` is the standard client SHM raster adapter. Applications select it
-explicitly with `lcl::render::makeSkiaCanvas()` and link `lcl-canvas-skia`.
+`RasterCanvas` is the standard client SHM raster adapter. Applications select it
+explicitly with `lcl::render::makeRasterCanvas()` and link `lcl-raster`.
 Widgets themselves depend only on `Canvas`; `lcl-ui` does not link EGL, DRM,
 GBM, or GLES.
 
@@ -162,13 +162,13 @@ Create `main.cpp` inside `apps/my_app/`:
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/text.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_canvas.hpp"
 
 using namespace lcl::ui;
 
 int main() {
     // 1. Initialize WindowApp (600x400)
-    WindowApp app(lcl::render::makeSkiaCanvas(), 600, 400, "My Application");
+    WindowApp app(lcl::render::makeRasterCanvas(), 600, 400, "My Application");
 
     // 2. Build Centered Flexbox Layout Tree
     auto rootContainer = std::make_unique<Container>();

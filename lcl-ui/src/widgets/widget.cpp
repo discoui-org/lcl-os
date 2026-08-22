@@ -202,7 +202,7 @@ void Widget::markPresentationDirty() {
     markPresentationDirty(getPresentationBounds());
 }
 
-void Widget::markPresentationDirty(const Rect& previousBounds) {
+void Widget::markPresentationDirty(const graphics::RectF& previousBounds) {
     ++m_presentationRevision;
     if (m_renderPass) {
         m_renderPass->addDirtyRect(previousBounds);
@@ -381,7 +381,7 @@ float Widget::getPresentationValue(AnimatableProperty property) const {
 }
 
 void Widget::applyPresentationValue(AnimatableProperty property, float value) {
-    const Rect previousBounds = getPresentationBounds();
+    const graphics::RectF previousBounds = getPresentationBounds();
     switch (property) {
         case AnimatableProperty::Opacity: m_presentation.opacity = std::clamp(value, 0.0f, 1.0f); break;
         case AnimatableProperty::TranslationX: m_presentation.translationX = value; break;
@@ -425,14 +425,14 @@ lcl::motion::AnimationHandle Widget::animate(
 }
 
 void Widget::syncLayout(float parentAbsX, float parentAbsY) {
-    m_bounds = Rect{
+    m_bounds = graphics::RectF{
         m_yogaNode.getLayoutX(),
         m_yogaNode.getLayoutY(),
         m_yogaNode.getLayoutWidth(),
         m_yogaNode.getLayoutHeight()
     };
 
-    m_absoluteBounds = Rect{
+    m_absoluteBounds = graphics::RectF{
         parentAbsX + m_bounds.x,
         parentAbsY + m_bounds.y,
         m_bounds.width,
@@ -444,12 +444,12 @@ void Widget::syncLayout(float parentAbsX, float parentAbsY) {
     }
 }
 
-Rect Widget::getPresentationBounds() const {
-    Rect result = m_absoluteBounds;
+graphics::RectF Widget::getPresentationBounds() const {
+    graphics::RectF result = m_absoluteBounds;
     const Widget* current = this;
     while (current) {
         const auto& p = current->m_presentation;
-        const Rect basis = current->m_absoluteBounds;
+        const graphics::RectF basis = current->m_absoluteBounds;
         const float ox = basis.x + basis.width * p.originX;
         const float oy = basis.y + basis.height * p.originY;
         const float cosine = std::cos(p.rotationRadians);
@@ -515,7 +515,7 @@ bool Widget::hasActiveAnimationInSubtree() const {
     return false;
 }
 
-void Widget::beginPresentation(Canvas& canvas) const {
+void Widget::beginPresentation(graphics::Canvas& canvas) const {
     canvas.saveState();
     const float ox = m_absoluteBounds.x + m_absoluteBounds.width * m_presentation.originX;
     const float oy = m_absoluteBounds.y + m_absoluteBounds.height * m_presentation.originY;
@@ -533,18 +533,18 @@ void Widget::beginPresentation(Canvas& canvas) const {
     canvas.beginLayer(m_presentation.opacity);
 }
 
-void Widget::endPresentation(Canvas& canvas) const {
+void Widget::endPresentation(graphics::Canvas& canvas) const {
     canvas.endLayer();
     canvas.restoreState();
 }
 
-void Widget::drawChildren(Canvas& canvas, const Rect& damageRect) {
+void Widget::drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     for (auto& child : m_children) {
         if (child->isVisible() && child->getPresentationBounds().intersects(damageRect)) child->draw(canvas, damageRect);
     }
 }
 
-void Widget::draw(Canvas& canvas, const Rect& damageRect) {
+void Widget::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible) return;
     beginPresentation(canvas);
     drawChildren(canvas, damageRect);

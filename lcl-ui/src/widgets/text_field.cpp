@@ -1,6 +1,6 @@
 #include "lcl-ui/widgets/text_field.hpp"
 
-#include "lcl-ui/core/canvas.hpp"
+#include "lcl-graphics/canvas.hpp"
 #include "render/text_metrics.hpp"
 
 #include <algorithm>
@@ -107,21 +107,21 @@ void TextField::syncLayout(float parentAbsX, float parentAbsY) {
     ensureCaretVisible();
 }
 
-void TextField::draw(Canvas& canvas, const Rect& damageRect) {
+void TextField::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
 
     rebuildCaretAdvances(canvas);
     ensureCaretVisible();
     beginPresentation(canvas);
 
-    const Rect field = m_absoluteBounds;
-    const Color border = m_focused
-        ? Color{96, 165, 250, 255}
-        : Color{100, 116, 139, 220};
+    const graphics::RectF field = m_absoluteBounds;
+    const graphics::Color border = m_focused
+        ? graphics::Color{96, 165, 250, 255}
+        : graphics::Color{100, 116, 139, 220};
     canvas.drawRoundedRect(field, 6.0f, {24, 31, 42, 255}, border,
                            1.0f, 3.2f);
 
-    const Rect viewport{
+    const graphics::RectF viewport{
         field.x + kHorizontalPadding,
         field.y + 1.0f,
         std::max(0.0f, field.width - kHorizontalPadding * 2.0f),
@@ -297,7 +297,7 @@ std::string TextField::sanitizeSingleLine(const std::string& text) {
     return result;
 }
 
-void TextField::rebuildCaretAdvances(Canvas& canvas) {
+void TextField::rebuildCaretAdvances(graphics::Canvas& canvas) {
     const Utf8CodepointMap codepoints(m_text);
     m_caretAdvances.clear();
     m_caretAdvances.reserve(codepoints.count() + 1);

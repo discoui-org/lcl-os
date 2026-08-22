@@ -7,15 +7,9 @@
 #include <utility>
 
 #include "lcl-motion/motion.hpp"
+#include "lcl-graphics/display_list.hpp"
 
 namespace lcl::chrome {
-
-struct Color {
-    uint8_t r{0};
-    uint8_t g{0};
-    uint8_t b{0};
-    uint8_t a{0};
-};
 
 struct WindowChromeStyle {
     float controlSize{16.0f};
@@ -29,14 +23,14 @@ struct WindowChromeStyle {
     float titleBarCornerRadiusAdjust{0.0f};
     float titleBarRoundness{2.0f};
 
-    Color buttonBackground{235, 241, 248, 56};
-    Color buttonBorder{230, 238, 248, 120};
-    Color buttonHoverBackground{245, 249, 255, 84};
-    Color buttonHoverBorder{242, 248, 255, 168};
-    Color buttonPressedBackground{218, 226, 238, 112};
-    Color buttonPressedBorder{250, 252, 255, 208};
-    Color titleColor{240, 248, 255, 245};
-    Color titleBarBackground{0, 0, 0, 0};
+    lcl::graphics::Color buttonBackground{235, 241, 248, 56};
+    lcl::graphics::Color buttonBorder{230, 238, 248, 120};
+    lcl::graphics::Color buttonHoverBackground{245, 249, 255, 84};
+    lcl::graphics::Color buttonHoverBorder{242, 248, 255, 168};
+    lcl::graphics::Color buttonPressedBackground{218, 226, 238, 112};
+    lcl::graphics::Color buttonPressedBorder{250, 252, 255, 208};
+    lcl::graphics::Color titleColor{240, 248, 255, 245};
+    lcl::graphics::Color titleBarBackground{0, 0, 0, 0};
 
     float buttonBorderWidth{1.0f};
     float buttonRoundness{2.0f};
@@ -57,8 +51,18 @@ struct WindowControlPresentation {
 
 struct WindowControlVisual {
     float scale{1.0f};
-    Color background{};
-    Color border{};
+    lcl::graphics::Color background{};
+    lcl::graphics::Color border{};
+};
+
+struct WindowChromePaintOptions {
+    lcl::graphics::RectF bounds{};
+    float titleHeight{32.0f};
+    float cornerRadius{20.0f};
+    float fontSize{15.0f};
+    float opacity{1.0f};
+    bool drawTitlebar{true};
+    lcl::graphics::Color titlebarColor{0, 0, 0, 0};
 };
 
 enum class WindowChromeAction : uint8_t {
@@ -81,9 +85,11 @@ public:
     const WindowChromeStyle& style() const noexcept { return m_style; }
 
     WindowChromeLayout layout(float width, float titleHeight, float cornerRadius,
-                              float fontSize, float displayScale = 1.0f) const;
+                              float fontSize) const;
     int hitTest(float localX, float localY, float width, float titleHeight,
-                float cornerRadius, float displayScale = 1.0f) const;
+                float cornerRadius) const;
+    lcl::graphics::DisplayList buildDisplayList(
+        const WindowChromePaintOptions& options) const;
 
     bool pointerMove(int controlIndex);
     bool pointerDown(int controlIndex);

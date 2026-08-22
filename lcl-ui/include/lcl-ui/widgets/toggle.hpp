@@ -35,18 +35,18 @@ public:
     bool onFocusGained(const FocusEvent& event) override;
     bool onFocusLost(const FocusEvent& event) override;
 
-    void draw(Canvas& canvas, const Rect& damageRect) override;
+    void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
 
 private:
     struct VisualColors {
-        Color track;
-        Color trackBorder;
-        Color thumb;
-        Color thumbBorder;
+        graphics::Color track;
+        graphics::Color trackBorder;
+        graphics::Color thumb;
+        graphics::Color thumbBorder;
     };
 
-    Rect trackRect() const noexcept;
-    Rect thumbRect() const noexcept;
+    graphics::RectF trackRect() const noexcept;
+    graphics::RectF thumbRect() const noexcept;
     VisualColors visualColors() const noexcept;
     void setThumbPresentation(float progress);
     void retargetThumb();

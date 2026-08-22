@@ -22,8 +22,10 @@ uint8_t mixedByte(uint8_t normal, uint8_t hover, uint8_t pressed,
         0l, 255l));
 }
 
-Color mixedColor(const Color& normal, const Color& hover,
-                 const Color& pressed, float emphasis) {
+lcl::graphics::Color mixedColor(const lcl::graphics::Color& normal,
+                                const lcl::graphics::Color& hover,
+                                const lcl::graphics::Color& pressed,
+                                float emphasis) {
     return {
         mixedByte(normal.r, hover.r, pressed.r, emphasis),
         mixedByte(normal.g, hover.g, pressed.g, emphasis),
@@ -38,17 +40,16 @@ WindowChromeWidget::WindowChromeWidget(std::string title,
     : m_title(std::move(title)), m_style(std::move(style)) {}
 
 WindowChromeLayout WindowChromeWidget::layout(float width, float titleHeight,
-                                               float cornerRadius, float fontSize,
-                                               float displayScale) const {
-    displayScale = std::max(0.0f, displayScale);
-    const float controlSize = m_style.controlSize * displayScale;
-    const float controlGap = m_style.controlGap * displayScale;
-    const float inset = std::max({m_style.minControlLeft * displayScale,
-        cornerRadius - m_style.controlLeftRadiusOffset * displayScale,
-        m_style.minControlTop * displayScale});
-    const float titleLeft = std::max(m_style.titleMinLeft * displayScale,
+                                               float cornerRadius,
+                                               float fontSize) const {
+    const float controlSize = m_style.controlSize;
+    const float controlGap = m_style.controlGap;
+    const float inset = std::max({m_style.minControlLeft,
+        cornerRadius - m_style.controlLeftRadiusOffset,
+        m_style.minControlTop});
+    const float titleLeft = std::max(m_style.titleMinLeft,
         inset + controlSize * 3.0f + controlGap * 2.0f +
-            m_style.titleGapAfterControls * displayScale);
+            m_style.titleGapAfterControls);
     return {
         inset,
         inset,
@@ -56,17 +57,16 @@ WindowChromeLayout WindowChromeWidget::layout(float width, float titleHeight,
         std::clamp(inset + (controlSize - fontSize) * 0.5f, 0.0f,
                    std::max(0.0f, titleHeight - fontSize)),
         std::max(0.0f, width - titleLeft -
-            m_style.titleRightPadding * displayScale),
+            m_style.titleRightPadding),
     };
 }
 
 int WindowChromeWidget::hitTest(float localX, float localY, float width,
-                                float titleHeight, float cornerRadius,
-                                float displayScale) const {
+                                float titleHeight, float cornerRadius) const {
     const auto chromeLayout = layout(width, titleHeight, cornerRadius,
-                                     15.0f * displayScale, displayScale);
-    const float controlSize = m_style.controlSize * displayScale;
-    const float controlGap = m_style.controlGap * displayScale;
+                                     15.0f);
+    const float controlSize = m_style.controlSize;
+    const float controlGap = m_style.controlGap;
     if (localY < chromeLayout.controlTop ||
         localY > chromeLayout.controlTop + controlSize) {
         return -1;
@@ -77,6 +77,74 @@ int WindowChromeWidget::hitTest(float localX, float localY, float width,
         if (localX >= left && localX <= left + controlSize) return index;
     }
     return -1;
+}
+
+lcl::graphics::DisplayList WindowChromeWidget::buildDisplayList(
+        const WindowChromePaintOptions& options) const {
+    lcl::graphics::DisplayListBuilder builder;
+    const auto chromeLayout = layout(options.bounds.width, options.titleHeight,
+                                     options.cornerRadius, options.fontSize);
+    auto withOpacity = [&](lcl::graphics::Color color) {
+        color.a = static_cast<uint8_t>(std::clamp(std::lround(
+            static_cast<float>(color.a) * std::clamp(options.opacity, 0.0f, 1.0f)),
+            0l, 255l));
+        return color;
+    };
+
+    if (options.drawTitlebar && options.titlebarColor.a > 0) {
+        lcl::graphics::Path titlebar;
+        const float r = std::clamp(options.cornerRadius, 0.0f, options.titleHeight);
+        titlebar.addTopRRect({options.bounds.x, options.bounds.y,
+                              options.bounds.width, options.titleHeight},
+                             r, 2.0f);
+        builder.drawPath(titlebar, {{withOpacity(options.titlebarColor)},
+                                    lcl::graphics::PaintStyle::Fill});
+    }
+
+    for (size_t index = 0; index < m_controls.size(); ++index) {
+        const auto visualState = visual(index);
+        const float cx = options.bounds.x + chromeLayout.controlLeft +
+            static_cast<float>(index) * (m_style.controlSize + m_style.controlGap) +
+            m_style.controlSize * 0.5f;
+        const float cy = options.bounds.y + chromeLayout.controlTop +
+            m_style.controlSize * 0.5f;
+        builder.save();
+        builder.concat(lcl::graphics::Matrix3::translation(cx, cy));
+        builder.concat(lcl::graphics::Matrix3::scale(visualState.scale,
+                                                      visualState.scale));
+        builder.concat(lcl::graphics::Matrix3::translation(-cx, -cy));
+        lcl::graphics::Path controlPath;
+        controlPath.addEllipse({cx - m_style.controlSize * 0.5f,
+                                cy - m_style.controlSize * 0.5f,
+                                m_style.controlSize, m_style.controlSize});
+        builder.drawPath(controlPath, {{withOpacity(visualState.background)},
+                                       lcl::graphics::PaintStyle::Fill});
+        lcl::graphics::Paint stroke{};
+        stroke.color = withOpacity(visualState.border);
+        stroke.style = lcl::graphics::PaintStyle::Stroke;
+        stroke.stroke.width = m_style.buttonBorderWidth;
+        stroke.stroke.join = lcl::graphics::StrokeJoin::Round;
+        builder.drawPath(controlPath, stroke);
+        builder.restore();
+    }
+
+    if (options.drawTitlebar) {
+        const int maxCharacters = static_cast<int>(
+            chromeLayout.titleWidth / std::max(1.0f, options.fontSize * 0.6f));
+        std::string visibleTitle = m_title;
+        if (maxCharacters <= 0) {
+            visibleTitle.clear();
+        } else if (static_cast<int>(visibleTitle.size()) > maxCharacters) {
+            visibleTitle = maxCharacters <= 3
+                ? visibleTitle.substr(0, static_cast<size_t>(maxCharacters))
+                : visibleTitle.substr(0, static_cast<size_t>(maxCharacters - 3)) + "...";
+        }
+        builder.drawText(
+            {options.bounds.x + chromeLayout.titleLeft,
+             options.bounds.y + chromeLayout.titleTop},
+            std::move(visibleTitle), withOpacity(m_style.titleColor), options.fontSize);
+    }
+    return builder.build();
 }
 
 void WindowChromeWidget::animateControl(size_t index, float targetScale,

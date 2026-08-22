@@ -53,7 +53,10 @@ public:
     bool isInitialized() const override { return m_initialized; }
     const DisplayMode& activeMode() const override { return m_mode; }
 
-    bool initHardwareCursor(uint32_t, uint32_t) override { m_cursorActive = true; return true; }
+    bool initHardwareCursor(uint32_t, uint32_t, float = 1.0f) override {
+        m_cursorActive = true;
+        return true;
+    }
     bool moveHardwareCursor(int x, int y) override { m_cursorX = x; m_cursorY = y; return true; }
     bool isHardwareCursorActive() const override { return m_cursorActive; }
 
@@ -322,5 +325,3 @@ TEST(AndroidPlatformTest, AndroidInputBackendReinitializesWithCallback) {
     EXPECT_FALSE(iface.isInitialized());
     (void)callbackCalled;
 }
-
-

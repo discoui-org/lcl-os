@@ -1,5 +1,4 @@
 #include "platform/desktop/drm_display_backend.hpp"
-#include "core/display/display_scale.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -393,7 +392,8 @@ bool DrmDisplayBackend::probeLinuxFramebuffer() {
     return true;
 }
 
-bool DrmDisplayBackend::initHardwareCursor(uint32_t width, uint32_t height) {
+bool DrmDisplayBackend::initHardwareCursor(uint32_t width, uint32_t height,
+                                           float deviceScale) {
     if (!m_initialized || m_displayType != DesktopDisplayType::DRM_KMS || m_drmDevice.fd < 0) return false;
     if (!m_drmDevice.crtc) return false;
 
@@ -428,7 +428,8 @@ bool DrmDisplayBackend::initHardwareCursor(uint32_t width, uint32_t height) {
     m_drmDevice.cursorPixels = static_cast<uint32_t*>(mapPtr);
     std::memset(m_drmDevice.cursorPixels, 0, creq.size);
 
-    // Rasterize default cursor arrow (ARGB), scaled by UI DPR
+    // Rasterize the logical cursor at the output RenderTarget scale supplied by
+    // the compositor. The backend never consults process-global UI scale.
     static const char* cursorShape[] = {
         "X           ",
         "XX          ",
@@ -448,11 +449,18 @@ bool DrmDisplayBackend::initHardwareCursor(uint32_t width, uint32_t height) {
         "      XX    "
     };
 
-    const int s = std::max(1, core::DisplayScale::px(1));
+    const float scale = std::clamp(
+        std::isfinite(deviceScale) ? deviceScale : 1.0f, 0.5f, 4.0f);
     const int pitch = static_cast<int>(width);
-    for (int r = 0; r < 16; ++r) {
-        for (int c = 0; c < 12; ++c) {
-            char ch = cursorShape[r][c];
+    const int drawnWidth = std::min(
+        static_cast<int>(width), static_cast<int>(std::ceil(12.0f * scale)));
+    const int drawnHeight = std::min(
+        static_cast<int>(height), static_cast<int>(std::ceil(16.0f * scale)));
+    for (int py = 0; py < drawnHeight; ++py) {
+        const int r = std::min(15, static_cast<int>(std::floor(py / scale)));
+        for (int px = 0; px < drawnWidth; ++px) {
+            const int c = std::min(11, static_cast<int>(std::floor(px / scale)));
+            const char ch = cursorShape[r][c];
             uint32_t color = 0;
             if (ch == 'X') {
                 color = 0xFF000000;
@@ -461,16 +469,7 @@ bool DrmDisplayBackend::initHardwareCursor(uint32_t width, uint32_t height) {
             } else {
                 continue;
             }
-            for (int dy = 0; dy < s; ++dy) {
-                for (int dx = 0; dx < s; ++dx) {
-                    const int px = c * s + dx;
-                    const int py = r * s + dy;
-                    if (px >= 0 && py >= 0 &&
-                        px < static_cast<int>(width) && py < static_cast<int>(height)) {
-                        m_drmDevice.cursorPixels[py * pitch + px] = color;
-                    }
-                }
-            }
+            m_drmDevice.cursorPixels[py * pitch + px] = color;
         }
     }
 

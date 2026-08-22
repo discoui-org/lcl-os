@@ -53,7 +53,7 @@ paths received equivalent revisioned-state coverage:
   process owner.
 - EGL/DRM/GBM/GLES and renderer sources compiled directly into `lcl-ui`.
 - The old `Renderer`/VGA path and the current combined client/compositor
-  `SkiaRenderer` implementation.
+  `RasterRenderer` implementation.
 
 ## Behavioral contract
 
@@ -136,7 +136,7 @@ Step 2 separates build ownership without changing protocol or shell behavior:
 - `lcl-ui` now contains only widgets, Yoga layout, event/render-pass logic,
   `WindowApp`, image loading, and IPC/SHM client lifecycle.
 - `lcl-display-scale` owns the shared logical-pixel policy.
-- `lcl-canvas-skia` owns the client Canvas and font renderer. It first tries a
+- `lcl-raster` owns the client Canvas and font renderer. It first tries a
   render-node-only EGL/GLES context for GPU drawing, then reads that frame into
   the existing SHM staging buffer. If no audited hardware renderer is available
   it falls back to the software raster path. It never opens a KMS scanout card
@@ -144,10 +144,10 @@ Step 2 separates build ownership without changing protocol or shell behavior:
 - `lcl-render` owns compositor rendering, window management, EGL, DRM, GBM,
   GLES, and presentation.
 - `WindowApp` requires an injected Canvas. Native clients and the JS binding
-  explicitly inject `makeSkiaCanvas()`.
+  explicitly inject `makeRasterCanvas()`.
 
 The boundary gate proves that `liblcl-ui.a` has no EGL/DRM/GBM/GLES dependency.
-Client executables may link those libraries solely through `lcl-canvas-skia`;
+Client executables may link those libraries solely through `lcl-raster`;
 the client context must use `/dev/dri/renderD*`, while KMS scanout and display
 presentation remain exclusively in `lcl-render`.
 

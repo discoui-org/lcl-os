@@ -1,6 +1,6 @@
 #include "lcl-ui/widgets/toggle.hpp"
 
-#include "lcl-ui/core/canvas.hpp"
+#include "lcl-graphics/canvas.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -15,7 +15,7 @@ constexpr float kTrackHeight = 32.0f;
 constexpr float kThumbInset = 3.0f;
 constexpr float kFocusInset = 3.0f;
 
-Color mix(Color from, Color to, float amount) {
+graphics::Color mix(graphics::Color from, graphics::Color to, float amount) {
     const auto channel = [amount](uint8_t a, uint8_t b) {
         return static_cast<uint8_t>(std::clamp(
             std::lround(static_cast<float>(a) +
@@ -101,7 +101,8 @@ bool Toggle::onPointerDown(const PointerEvent& event) {
 bool Toggle::onPointerUp(const PointerEvent& event) {
     if (!m_enabled) return false;
 
-    const bool activate = m_pointerArmed &&
+    const bool wasArmed = m_pointerArmed;
+    const bool activate = wasArmed &&
         (event.source == PointerSource::Mouse
             ? event.button == 0
             : event.isTouchTapCompletion());
@@ -118,7 +119,7 @@ bool Toggle::onPointerUp(const PointerEvent& event) {
     }
     markDirty();
     if (activate) setValue(!m_value);
-    return true;
+    return wasArmed;
 }
 
 bool Toggle::onPointerCancel(const PointerEvent& event) {
@@ -154,7 +155,7 @@ bool Toggle::onFocusLost(const FocusEvent& event) {
     return false;
 }
 
-Rect Toggle::trackRect() const noexcept {
+graphics::RectF Toggle::trackRect() const noexcept {
     const float width = std::min(kTrackWidth, std::max(0.0f, m_absoluteBounds.width));
     const float height = std::min(kTrackHeight, std::max(0.0f, m_absoluteBounds.height));
     return {
@@ -165,8 +166,8 @@ Rect Toggle::trackRect() const noexcept {
     };
 }
 
-Rect Toggle::thumbRect() const noexcept {
-    const Rect track = trackRect();
+graphics::RectF Toggle::thumbRect() const noexcept {
+    const graphics::RectF track = trackRect();
     const float diameter = std::max(0.0f, track.height - kThumbInset * 2.0f);
     const float offX = track.x + kThumbInset;
     const float onX = track.x + track.width - kThumbInset - diameter;
@@ -179,19 +180,19 @@ Rect Toggle::thumbRect() const noexcept {
 }
 
 Toggle::VisualColors Toggle::visualColors() const noexcept {
-    const Color offTrack{55, 61, 72, 235};
-    const Color onTrack{46, 126, 246, 245};
-    const Color hoverLift{255, 255, 255, 255};
-    const Color pressedShade{10, 14, 22, 255};
+    const graphics::Color offTrack{55, 61, 72, 235};
+    const graphics::Color onTrack{46, 126, 246, 245};
+    const graphics::Color hoverLift{255, 255, 255, 255};
+    const graphics::Color pressedShade{10, 14, 22, 255};
 
-    Color track = m_value ? onTrack : offTrack;
+    graphics::Color track = m_value ? onTrack : offTrack;
     if (m_hovered) track = mix(track, hoverLift, 0.07f);
     if (m_pressed) track = mix(track, pressedShade, 0.10f);
     return {
         track,
-        m_value ? Color{126, 177, 255, 190} : Color{111, 121, 137, 180},
-        Color{248, 250, 253, 255},
-        Color{207, 215, 226, 210},
+        m_value ? graphics::Color{126, 177, 255, 190} : graphics::Color{111, 121, 137, 180},
+        graphics::Color{248, 250, 253, 255},
+        graphics::Color{207, 215, 226, 210},
     };
 }
 
@@ -215,31 +216,31 @@ void Toggle::retargetThumb() {
         [this](float progress) { setThumbPresentation(progress); });
 }
 
-void Toggle::draw(Canvas& canvas, const Rect& damageRect) {
+void Toggle::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
 
     beginPresentation(canvas);
-    const Rect track = trackRect();
-    const Rect thumb = thumbRect();
+    const graphics::RectF track = trackRect();
+    const graphics::RectF thumb = thumbRect();
     const VisualColors colors = visualColors();
 
     if (m_focused && m_enabled) {
-        const Rect focus{
+        const graphics::RectF focus{
             track.x - kFocusInset, track.y - kFocusInset,
             track.width + kFocusInset * 2.0f,
             track.height + kFocusInset * 2.0f,
         };
         canvas.drawRoundedRect(focus, focus.height * 0.5f,
-                               Color{0, 0, 0, 0}, Color{112, 174, 255, 220},
+                               graphics::Color{0, 0, 0, 0}, graphics::Color{112, 174, 255, 220},
                                2.0f, 1.0f);
     }
 
     canvas.drawRoundedRect(track, track.height * 0.5f, colors.track,
                            colors.trackBorder, 1.0f, 1.0f);
 
-    const Rect shadow{thumb.x, thumb.y + 1.5f, thumb.width, thumb.height};
+    const graphics::RectF shadow{thumb.x, thumb.y + 1.5f, thumb.width, thumb.height};
     canvas.drawRoundedRect(shadow, shadow.height * 0.5f,
-                           Color{0, 0, 0, 68}, Color{0, 0, 0, 0}, 0.0f, 1.0f);
+                           graphics::Color{0, 0, 0, 68}, graphics::Color{0, 0, 0, 0}, 0.0f, 1.0f);
     canvas.drawRoundedRect(thumb, thumb.height * 0.5f, colors.thumb,
                            colors.thumbBorder, 0.75f, 1.0f);
 

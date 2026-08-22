@@ -16,7 +16,7 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/image.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_canvas.hpp"
 
 namespace lcl::binding {
 
@@ -327,7 +327,7 @@ JSValue js_window_app_constructor(JSContext* ctx, JSValueConst new_target, int a
 
     auto* wrapper = new JsWindowAppWrapper();
     wrapper->app = new lcl::ui::WindowApp(
-        lcl::render::makeSkiaCanvas(), width, height, title);
+        lcl::render::makeRasterCanvas(), width, height, title);
     JS_SetOpaque(obj, wrapper);
     return obj;
 }
@@ -780,7 +780,7 @@ JSValue js_widget_setBackgroundColor(JSContext* ctx, JSValueConst this_val, int 
     JS_ToInt32(ctx, &b, argv[2]);
     if (argc >= 4) JS_ToInt32(ctx, &a, argv[3]);
 
-    container->setBackgroundColor(lcl::ui::Color{
+    container->setBackgroundColor(lcl::graphics::Color{
         static_cast<uint8_t>(std::clamp(r, 0, 255)),
         static_cast<uint8_t>(std::clamp(g, 0, 255)),
         static_cast<uint8_t>(std::clamp(b, 0, 255)),
@@ -802,7 +802,7 @@ JSValue js_widget_setBorderColor(JSContext* ctx, JSValueConst this_val, int argc
     JS_ToInt32(ctx, &b, argv[2]);
     if (argc >= 4) JS_ToInt32(ctx, &a, argv[3]);
 
-    container->setBorderColor(lcl::ui::Color{
+    container->setBorderColor(lcl::graphics::Color{
         static_cast<uint8_t>(std::clamp(r, 0, 255)),
         static_cast<uint8_t>(std::clamp(g, 0, 255)),
         static_cast<uint8_t>(std::clamp(b, 0, 255)),
@@ -870,7 +870,7 @@ JSValue js_text_setTextColor(JSContext* ctx, JSValueConst this_val, int argc, JS
     JS_ToInt32(ctx, &b, argv[2]);
     if (argc >= 4) JS_ToInt32(ctx, &a, argv[3]);
 
-    txt->setTextColor(lcl::ui::Color{
+    txt->setTextColor(lcl::graphics::Color{
         static_cast<uint8_t>(std::clamp(r, 0, 255)),
         static_cast<uint8_t>(std::clamp(g, 0, 255)),
         static_cast<uint8_t>(std::clamp(b, 0, 255)),

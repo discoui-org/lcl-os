@@ -1,7 +1,6 @@
 #include "core/compositor/input_router.hpp"
 #include "lcl-motion/motion.hpp"
 
-#include "core/display/display_scale.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
 
 #include <algorithm>
@@ -11,19 +10,6 @@
 namespace lcl::core {
 
 namespace {
-
-float sanitizeBufferScale(float scale) {
-    return (std::isfinite(scale) && scale >= 0.5f && scale <= 4.0f) ? scale : 1.0f;
-}
-
-int logicalToPhysical(int value, float scale) {
-    return static_cast<int>(std::lround(static_cast<float>(value) * scale));
-}
-
-uint32_t physicalToLogical(uint32_t value, float scale) {
-    return std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(value) / scale)));
-}
-
 uint32_t toClientPointerButton(lcl::platform::PointerButton button) {
     if (button == lcl::platform::PointerButton::Left) return 0; // Primary / Left
     if (button == lcl::platform::PointerButton::Middle) return 1; // Middle
@@ -33,7 +19,21 @@ uint32_t toClientPointerButton(lcl::platform::PointerButton button) {
 
 } // namespace
 
-bool InputRouter::route(const InputEvent& event) {
+bool InputRouter::route(const InputEvent& physicalEvent) {
+    InputEvent event = physicalEvent;
+    const float outputScale = m_outputScale;
+    if (event.type == InputEventType::PointerMotion ||
+        event.type == InputEventType::PointerButton ||
+        event.type == InputEventType::PointerScroll) {
+        if (std::isfinite(event.absoluteX) && event.absoluteX >= 0.0) {
+            event.absoluteX /= outputScale;
+        }
+        if (std::isfinite(event.absoluteY) && event.absoluteY >= 0.0) {
+            event.absoluteY /= outputScale;
+        }
+        event.dx /= outputScale;
+        event.dy /= outputScale;
+    }
     const bool pointerEvent = event.type == InputEventType::PointerMotion ||
         event.type == InputEventType::PointerButton ||
         event.type == InputEventType::PointerScroll;
@@ -171,16 +171,18 @@ void InputRouter::sendPendingConfigures() {
                 break;
             }
 
-            const int titleOffset = (window.decorationMode == render::DecorationMode::SSD)
-                ? DisplayScale::titleBarHeight()
-                : 0;
-            const int configuredX = window.isLiveTransitioning() ? window.pendingX : window.x;
-            const int configuredY = window.isLiveTransitioning() ? window.pendingY : window.y;
-            const uint32_t physicalContentW = static_cast<uint32_t>(window.pendingWidth > 0 ? window.pendingWidth : window.width);
-            const uint32_t physicalContentH = static_cast<uint32_t>(std::max(1, (window.pendingHeight > 0 ? window.pendingHeight : window.height) - titleOffset));
+            const float titleOffset = (window.decorationMode == render::DecorationMode::SSD)
+                ? 32.0f
+                : 0.0f;
+            const float configuredX = window.isLiveTransitioning() ? window.pendingX : window.x;
+            const float configuredY = window.isLiveTransitioning() ? window.pendingY : window.y;
+            const float logicalContentW = window.pendingWidth > 0.0f
+                ? window.pendingWidth : window.width;
+            const float logicalContentH = std::max(1.0f,
+                (window.pendingHeight > 0.0f ? window.pendingHeight : window.height) - titleOffset);
             const bool livePositionChanged = window.isLiveTransitioning() &&
                 (configuredX != entry.configuredX || configuredY != entry.configuredY);
-            if (physicalContentW == entry.configuredWidth && physicalContentH == entry.configuredHeight &&
+            if (logicalContentW == entry.configuredWidth && logicalContentH == entry.configuredHeight &&
                 !entry.forceConfigure &&
                 !livePositionChanged) {
                 break;
@@ -192,10 +194,10 @@ void InputRouter::sendPendingConfigures() {
             protocol::LCLMsgConfigureBounds configure{};
             configure.surfaceId = static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu);
             configure.configureSerial = entry.nextConfigureSerial++;
-            configure.x = logicalToPhysical(configuredX, 1.0f / entry.bufferScale);
-            configure.y = logicalToPhysical(configuredY, 1.0f / entry.bufferScale);
-            configure.width = physicalToLogical(physicalContentW, entry.bufferScale);
-            configure.height = physicalToLogical(physicalContentH, entry.bufferScale);
+            configure.x = configuredX;
+            configure.y = configuredY;
+            configure.width = logicalContentW;
+            configure.height = logicalContentH;
             configure.bufferScale = entry.bufferScale;
             configure.resizeReason = (!window.isMaximized &&
                                       (window.isResizing() || window.activeResizeEdge != render::ResizeEdge::None))
@@ -206,10 +208,8 @@ void InputRouter::sendPendingConfigures() {
             if (live &&
                 (configure.resizeReason == protocol::LCLConfigureResizeReason::Interactive ||
                  configure.resizeReason == protocol::LCLConfigureResizeReason::WindowStateTransition)) {
-                configure.backingWidth = physicalToLogical(
-                    m_windowManager.getScreenWidth(), entry.bufferScale);
-                configure.backingHeight = physicalToLogical(
-                    m_windowManager.getScreenHeight(), entry.bufferScale);
+                configure.backingWidth = m_windowManager.getScreenWidth();
+                configure.backingHeight = m_windowManager.getScreenHeight();
             }
             configure.isFocused = window.isFocused ? 1 : 0;
             if (protocol::sendMsgWithFd(entry.clientFd, header, &configure)) {
@@ -217,8 +217,8 @@ void InputRouter::sendPendingConfigures() {
                 entry.configuredGeometryGeneration = window.geometryGeneration;
                 entry.configuredX = configuredX;
                 entry.configuredY = configuredY;
-                entry.configuredWidth = physicalContentW;
-                entry.configuredHeight = physicalContentH;
+                entry.configuredWidth = logicalContentW;
+                entry.configuredHeight = logicalContentH;
                 entry.configuredFocused = configure.isFocused;
                 entry.lastConfigureSent = now;
                 entry.forceConfigure = false;
@@ -351,11 +351,10 @@ void InputRouter::forwardToSurface(const InputEvent& event,
         return;
     }
 
-    const int titleOffset = !entry.isPopup() &&
+    const float titleOffset = !entry.isPopup() &&
         windowIt->decorationMode == render::DecorationMode::SSD
-            ? DisplayScale::titleBarHeight()
-            : 0;
-    float scale = sanitizeBufferScale(entry.bufferScale);
+            ? 32.0f
+            : 0.0f;
     protocol::LCLMsgInputEvent input{};
     input.surfaceId = surfaceId;
     if (event.type == InputEventType::PointerMotion) {
@@ -388,11 +387,11 @@ void InputRouter::forwardToSurface(const InputEvent& event,
         surfaceX = popupBounds.x;
         surfaceY = popupBounds.y;
         if (entry.width > 0) {
-            scale *= popupBounds.width / static_cast<float>(entry.width);
+            // Popup transition scaling is already represented by popupBounds.
         }
     }
-    input.x = (globalPointerX - surfaceX) / scale;
-    input.y = (globalPointerY - surfaceY) / scale;
+    input.x = globalPointerX - surfaceX;
+    input.y = globalPointerY - surfaceY;
     input.key = toClientPointerButton(event.button);
     input.pressed = event.pressed ? 1 : 0;
     input.source = static_cast<uint8_t>(event.source == lcl::platform::PointerSource::Touch

@@ -8,27 +8,25 @@
 namespace lcl::core {
 
 struct LocalEffectGeometry {
-    int x{0};
-    int y{0};
-    int width{0};
-    int height{0};
+    float x{0.0f};
+    float y{0.0f};
+    float width{0.0f};
+    float height{0.0f};
 };
 
 inline LocalEffectGeometry resolveLocalEffectGeometry(
-    int windowX,
-    int windowY,
-    int titleOffset,
-    uint32_t surfaceWidth,
-    uint32_t surfaceHeight,
+    float windowX,
+    float windowY,
+    float titleOffset,
+    float surfaceWidth,
+    float surfaceHeight,
     const protocol::EffectRegion& region,
     bool followSurfaceBounds) {
     return {
-        windowX + (followSurfaceBounds ? 0 : region.x),
-        windowY + titleOffset + (followSurfaceBounds ? 0 : region.y),
-        followSurfaceBounds ? static_cast<int>(surfaceWidth)
-                            : static_cast<int>(region.width),
-        followSurfaceBounds ? static_cast<int>(surfaceHeight)
-                            : static_cast<int>(region.height),
+        windowX + (followSurfaceBounds ? 0.0f : region.x),
+        windowY + titleOffset + (followSurfaceBounds ? 0.0f : region.y),
+        followSurfaceBounds ? surfaceWidth : region.width,
+        followSurfaceBounds ? surfaceHeight : region.height,
     };
 }
 

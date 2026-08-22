@@ -11,8 +11,8 @@ static uint8_t addClamped(uint8_t v, int delta) {
     return static_cast<uint8_t>(std::clamp(static_cast<int>(v) + delta, 0, 255));
 }
 
-static Color adjustColor(const Color& c, int dr, int dg, int db) {
-    return Color{
+static graphics::Color adjustColor(const graphics::Color& c, int dr, int dg, int db) {
+    return graphics::Color{
         addClamped(c.r, dr),
         addClamped(c.g, dg),
         addClamped(c.b, db),
@@ -24,7 +24,7 @@ static Color adjustColor(const Color& c, int dr, int dg, int db) {
 
 BackdropSurface::BackdropSurface() {
     // Keep default fully transparent; demos/apps can opt in to tint explicitly.
-    setBackgroundColor(Color{255, 255, 255, 0});
+    setBackgroundColor(graphics::Color{255, 255, 255, 0});
     setFocusable(true);
 }
 
@@ -71,7 +71,7 @@ void BackdropSurface::clearFilters() {
     markDirty();
 }
 
-void BackdropSurface::setTint(const Color& color) {
+void BackdropSurface::setTint(const graphics::Color& color) {
     m_filters.erase(
         std::remove_if(m_filters.begin(), m_filters.end(), [](const auto& filter) {
             return filter.type == lcl::protocol::FilterType::Tint;
@@ -173,8 +173,8 @@ bool BackdropSurface::onPointerCancel(const PointerEvent& event) {
 
 void BackdropSurface::applyHoverVisuals() {
     const auto& theme = interactionMotionTheme();
-    const Color background = adjustColor(m_baseBackground, 8, 8, 9);
-    const Color border = adjustColor(m_baseBorder, 24, 27, 31);
+    const graphics::Color background = adjustColor(m_baseBackground, 8, 8, 9);
+    const graphics::Color border = adjustColor(m_baseBorder, 24, 27, 31);
     if (!theme.enabled || !m_motionCoordinator) {
         setBackgroundColor(background); setBorderColor(border); setScale(theme.hoverScale); return;
     }
@@ -188,8 +188,8 @@ void BackdropSurface::applyHoverVisuals() {
 
 void BackdropSurface::applyPressedVisuals() {
     const auto& theme = interactionMotionTheme();
-    const Color background = adjustColor(m_baseBackground, 16, 16, 20);
-    const Color border = adjustColor(m_baseBorder, 50, 53, 60);
+    const graphics::Color background = adjustColor(m_baseBackground, 16, 16, 20);
+    const graphics::Color border = adjustColor(m_baseBorder, 50, 53, 60);
     if (!theme.enabled || !m_motionCoordinator) {
         setBackgroundColor(background); setBorderColor(border); setScale(theme.pressedScale); return;
     }
@@ -231,7 +231,7 @@ bool BackdropSurface::onFocusLost(const FocusEvent& event) {
 
 void BackdropSurface::collectEffects(std::vector<EffectRegion>& outEffects) const {
     if (isVisible() && !m_filters.empty()) {
-        const Rect abs = getAbsoluteBounds();
+        const graphics::RectF abs = getAbsoluteBounds();
         if (!abs.isEmpty()) {
             EffectRegion region;
             region.bounds = abs;

@@ -11,7 +11,7 @@ constexpr TextureHandle kInvalidTextureHandle = 0;
 /**
  * @brief Platform-agnostic graphics context & presentation contract.
  *
- * Consumed by Renderer and SkiaRenderer. Deliberately free of any EGL,
+ * Consumed by Renderer and RasterRenderer. Deliberately free of any EGL,
  * GBM, DRM, or Android types.
  */
 class IGraphicsContext {

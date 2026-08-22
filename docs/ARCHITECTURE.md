@@ -18,7 +18,7 @@ The LCL architecture consists of 5 main decoupled layers:
 +-----------------------------------------------------------------------+
 |  Application & IPC Layer (lcl-ui clients, compositor AF_UNIX IPC)    |
 +-----------------------------------------------------------------------+
-|  Graphics & Window Manager (Skia/stb_truetype, FontRenderer, PTY)     |
+|  Graphics & Window Manager (LCL raster/stb_truetype, FontRenderer, PTY)     |
 +-----------------------------------------------------------------------+
 |  Linux Kernel & Hardware Layer (DRM/KMS, virtio_gpu, evdev, io_uring) |
 +-----------------------------------------------------------------------+
@@ -50,8 +50,8 @@ The LCL architecture consists of 5 main decoupled layers:
 * **Session RPC:** `lcl-sessiond` exposes an owner-only `SOCK_SEQPACKET`
   endpoint at `/run/user/1000/lcl-sessiond.sock`. Its explicit little-endian
   requests cover catalog snapshots and launch/process-exit lifecycle; this is
-  distinct from compositor protocol v12 surface IPC.
-* **Secure Unix Domain Socket IPC:** Compositor protocol v12 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`. Live GPU resize carries independent content/backing extents and compositor presentation timestamps. Edge-to-edge is a platform-neutral surface policy: one outer-surface effect chain can extend beneath desktop or mobile system insets while client widgets remain inside the safe content rect. `PopupSurface v1` reuses the same buffer infrastructure while binding a popup to a same-process parent surface; it is composed and hit-tested inside that parent's WindowGroup rather than entering the normal window stack.
+  distinct from compositor protocol v13 surface IPC.
+* **Secure Unix Domain Socket IPC:** Compositor protocol v13 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`. Live GPU resize carries independent logical content/backing extents and compositor presentation timestamps. Edge-to-edge is a platform-neutral surface policy: one outer-surface effect chain can extend beneath desktop or mobile system insets while client widgets remain inside the safe content rect. `PopupSurface v1` reuses the same buffer infrastructure while binding a popup to a same-process parent surface; it is composed and hit-tested inside that parent's WindowGroup rather than entering the normal window stack.
 * **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`. Manifests declare a stable `id`; older bundles receive a deterministic `bundle.<name>` compatibility ID.
 * **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ session client. It sends `LaunchRequest` to sessiond and optionally waits for `ProcessExited`; it never forks or execs applications itself.
 
@@ -150,7 +150,7 @@ Guest display boot args (when `NATIVE=1`):
 - 1x displays: `video=` = host resolution, `lcl.scale=1`
 - QEMU cocoa: `full-screen=on,zoom-to-fit=on` (fill screen if mode list is inexact)
 
-`DisplayManager` prefers boot-requested mode. `DisplayScale` multiplies fonts/chrome/windows by `lcl.scale`.
+`DisplayManager` prefers the boot-requested mode. Output initialization turns `lcl.scale` into `RenderTarget.deviceScale`; widgets, chrome, paths, strokes and effects remain in logical units and receive that scale only during raster replay.
 
 ---
 
@@ -206,8 +206,8 @@ Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı deği
 
 ## 7. Unix Domain Socket IPC & Disconnect Detection
 
-1. **Secure Domain Socket Protocol:** Compositor IPC v12 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
-2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v12 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
+1. **Secure Domain Socket Protocol:** Compositor IPC v13 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
+2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v13 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
 3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits a typed disconnect event upon socket EOF. `ProtocolDispatcher` ilgili pencereyi `WindowManager`dan kaldırır; `SurfaceRegistry` SHM eşlemesini ve memfd'yi tek sahip olarak serbest bırakır.
 
 ---

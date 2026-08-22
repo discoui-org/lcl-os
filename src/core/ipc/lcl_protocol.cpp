@@ -216,7 +216,10 @@ bool validOpcode(LCLOpcode value) {
 }
 
 bool validShellScene(const LCLMsgShellScene& scene) {
-    return scene.sceneId != 0 && validSceneVisibility(scene.visibility) &&
+    return scene.sceneId != 0 && validFloat(scene.x) && validFloat(scene.y) &&
+           validFloat(scene.width) && scene.width >= 0.0f &&
+           validFloat(scene.height) && scene.height >= 0.0f &&
+           validSceneVisibility(scene.visibility) &&
            validString(scene.appId, sizeof(scene.appId)) &&
            validString(scene.title, sizeof(scene.title));
 }
@@ -228,10 +231,10 @@ void encodeShellScene(Writer& out, const LCLMsgShellScene& scene) {
     out.i32(scene.clientPid);
     out.u32(scene.displayId);
     out.u32(scene.workspaceId);
-    out.i32(scene.x);
-    out.i32(scene.y);
-    out.i32(scene.width);
-    out.i32(scene.height);
+    out.f32(scene.x);
+    out.f32(scene.y);
+    out.f32(scene.width);
+    out.f32(scene.height);
     out.u8(static_cast<uint8_t>(scene.visibility));
     out.fixed(scene.appId, sizeof(scene.appId));
     out.fixed(scene.title, sizeof(scene.title));
@@ -242,13 +245,16 @@ bool decodeShellScene(Reader& in, LCLMsgShellScene& scene, bool requireIdentity 
     if (!in.u64(scene.sceneId) || !in.u64(scene.appInstanceId) ||
         !in.u32(scene.windowId) || !in.i32(scene.clientPid) ||
         !in.u32(scene.displayId) || !in.u32(scene.workspaceId) ||
-        !in.i32(scene.x) || !in.i32(scene.y) || !in.i32(scene.width) ||
-        !in.i32(scene.height) || !in.u8(visibility) ||
+        !in.f32(scene.x) || !in.f32(scene.y) || !in.f32(scene.width) ||
+        !in.f32(scene.height) || !in.u8(visibility) ||
         !in.fixed(scene.appId, sizeof(scene.appId)) ||
         !in.fixed(scene.title, sizeof(scene.title)))
         return false;
     scene.visibility = static_cast<LCLSceneVisibility>(visibility);
-    if (!validSceneVisibility(scene.visibility) ||
+    if (!validFloat(scene.x) || !validFloat(scene.y) ||
+        !validFloat(scene.width) || scene.width < 0.0f ||
+        !validFloat(scene.height) || scene.height < 0.0f ||
+        !validSceneVisibility(scene.visibility) ||
         !validString(scene.appId, sizeof(scene.appId)) ||
         !validString(scene.title, sizeof(scene.title)))
         return false;
@@ -278,10 +284,10 @@ bool decodeFilter(Reader& in, FilterOp& op) {
            std::all_of(std::begin(op.params), std::end(op.params), validFloat);
 }
 void encodeRegion(Writer& out, const EffectRegion& region) {
-    out.i32(region.x);
-    out.i32(region.y);
-    out.u32(region.width);
-    out.u32(region.height);
+    out.f32(region.x);
+    out.f32(region.y);
+    out.f32(region.width);
+    out.f32(region.height);
     out.f32(region.cornerRadius);
     out.f32(region.cornerRoundness);
     out.u8(static_cast<uint8_t>(region.boundsPolicy));
@@ -293,8 +299,8 @@ void encodeRegion(Writer& out, const EffectRegion& region) {
 }
 bool decodeRegion(Reader& in, EffectRegion& region) {
     uint8_t boundsPolicy = 0, source = 0, blend = 0;
-    if (!in.i32(region.x) || !in.i32(region.y) || !in.u32(region.width) ||
-        !in.u32(region.height) || !in.f32(region.cornerRadius) ||
+    if (!in.f32(region.x) || !in.f32(region.y) || !in.f32(region.width) ||
+        !in.f32(region.height) || !in.f32(region.cornerRadius) ||
         !in.f32(region.cornerRoundness) ||
         !in.u8(boundsPolicy) ||
         !in.u8(source) || !in.u8(blend) || !in.u16(region.filterCount) ||
@@ -303,7 +309,9 @@ bool decodeRegion(Reader& in, EffectRegion& region) {
     region.boundsPolicy = static_cast<EffectBoundsPolicy>(boundsPolicy);
     region.source = static_cast<EffectSourceType>(source);
     region.blendMode = static_cast<EffectBlendMode>(blend);
-    return region.width > 0 && region.height > 0 &&
+    return validFloat(region.x) && validFloat(region.y) &&
+           validFloat(region.width) && region.width > 0.0f &&
+           validFloat(region.height) && region.height > 0.0f &&
            validFloat(region.cornerRadius) && region.cornerRadius >= 0.0f &&
            validFloat(region.cornerRoundness) && region.cornerRoundness >= 2.0f &&
            region.cornerRoundness <= 8.0f &&
@@ -321,38 +329,37 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
     switch (opcode) {
     case LCLOpcode::SurfaceCreate: {
         LOAD_ONE(LCLMsgSurfaceCreate, msg);
-        if (msg.surfaceId == 0 || msg.width == 0 || msg.height == 0 ||
-            !validScale(msg.bufferScale) ||
+        if (msg.surfaceId == 0 || !validFloat(msg.x) || !validFloat(msg.y) ||
+            !validFloat(msg.width) || msg.width <= 0.0f ||
+            !validFloat(msg.height) || msg.height <= 0.0f ||
             !validString(msg.title, sizeof(msg.title)) ||
             !validString(msg.appId, sizeof(msg.appId)) || msg.appId[0] == '\0' ||
             !validResizePresentation(msg.resizePresentation))
             return false;
         out.u32(msg.surfaceId);
-        out.i32(msg.x);
-        out.i32(msg.y);
-        out.u32(msg.width);
-        out.u32(msg.height);
+        out.f32(msg.x);
+        out.f32(msg.y);
+        out.f32(msg.width);
+        out.f32(msg.height);
         out.fixed(msg.title, sizeof(msg.title));
         out.fixed(msg.appId, sizeof(msg.appId));
-        out.f32(msg.bufferScale);
         out.u8(static_cast<uint8_t>(msg.resizePresentation));
         return true;
     }
     case LCLOpcode::PopupSurfaceCreate: {
         LOAD_ONE(LCLMsgPopupSurfaceCreate, msg);
         if (msg.surfaceId == 0 || msg.parentSurfaceId == 0 ||
-            msg.surfaceId == msg.parentSurfaceId || msg.width == 0 ||
-            msg.height == 0 || !validPopupRole(msg.role) ||
-            !validScale(msg.bufferScale))
+            msg.surfaceId == msg.parentSurfaceId || !validFloat(msg.x) ||
+            !validFloat(msg.y) || !validFloat(msg.width) || msg.width <= 0.0f ||
+            !validFloat(msg.height) || msg.height <= 0.0f || !validPopupRole(msg.role))
             return false;
         out.u32(msg.surfaceId);
         out.u32(msg.parentSurfaceId);
         out.u32(static_cast<uint32_t>(msg.role));
-        out.i32(msg.x);
-        out.i32(msg.y);
-        out.u32(msg.width);
-        out.u32(msg.height);
-        out.f32(msg.bufferScale);
+        out.f32(msg.x);
+        out.f32(msg.y);
+        out.f32(msg.width);
+        out.f32(msg.height);
         return true;
     }
     case LCLOpcode::SurfaceDestroy: {
@@ -362,7 +369,10 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
     }
     case LCLOpcode::ConfigureBounds: {
         LOAD_ONE(LCLMsgConfigureBounds, msg);
-        if (msg.surfaceId == 0 || msg.width == 0 || msg.height == 0 ||
+        if (msg.surfaceId == 0 || !validFloat(msg.x) || !validFloat(msg.y) ||
+            !validFloat(msg.width) || msg.width <= 0.0f ||
+            !validFloat(msg.height) || msg.height <= 0.0f ||
+            !validFloat(msg.backingWidth) || !validFloat(msg.backingHeight) ||
             msg.backingWidth < msg.width || msg.backingHeight < msg.height ||
             msg.configureSerial == 0 || msg.isFocused > 1 || !validScale(msg.bufferScale) ||
             !validConfigureResizeReason(msg.resizeReason) ||
@@ -370,12 +380,12 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
             return false;
         out.u32(msg.surfaceId);
         out.u64(msg.configureSerial);
-        out.i32(msg.x);
-        out.i32(msg.y);
-        out.u32(msg.width);
-        out.u32(msg.height);
-        out.u32(msg.backingWidth);
-        out.u32(msg.backingHeight);
+        out.f32(msg.x);
+        out.f32(msg.y);
+        out.f32(msg.width);
+        out.f32(msg.height);
+        out.f32(msg.backingWidth);
+        out.f32(msg.backingHeight);
         out.u32(msg.headerColor);
         out.u8(msg.isFocused);
         out.fixed(msg.title, sizeof(msg.title));
@@ -483,11 +493,14 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
     case LCLOpcode::SetReservedZone: {
         LOAD_ONE(LCLMsgSetReservedZone, msg);
         out.u32(msg.surfaceId);
-        out.u32(msg.top);
-        out.u32(msg.bottom);
-        out.u32(msg.left);
-        out.u32(msg.right);
-        return msg.surfaceId > 0;
+        out.f32(msg.top);
+        out.f32(msg.bottom);
+        out.f32(msg.left);
+        out.f32(msg.right);
+        return msg.surfaceId > 0 && validFloat(msg.top) && msg.top >= 0.0f &&
+               validFloat(msg.bottom) && msg.bottom >= 0.0f &&
+               validFloat(msg.left) && msg.left >= 0.0f &&
+               validFloat(msg.right) && msg.right >= 0.0f;
     }
     case LCLOpcode::SetEffectGraph: {
         LCLMsgSetEffectGraphHeader graph{};
@@ -517,8 +530,10 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
                 region.cornerRoundness > 8.0f ||
                 !validBoundsPolicy(region.boundsPolicy) ||
                 !validUnit(region.opacity) || !validSource(region.source) ||
-                !validBlend(region.blendMode) || region.width == 0 ||
-                region.height == 0)
+                !validBlend(region.blendMode) || !validFloat(region.x) ||
+                !validFloat(region.y) || !validFloat(region.width) ||
+                region.width <= 0.0f || !validFloat(region.height) ||
+                region.height <= 0.0f)
                 return false;
             encodeRegion(out, region);
         }
@@ -560,17 +575,17 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
     case LCLOpcode::SetWindowCornerRadius: {
         LOAD_ONE(LCLMsgSetWindowCornerRadius, msg);
         out.u32(msg.surfaceId);
-        out.f32(msg.radiusPx);
-        return msg.surfaceId > 0 && validFloat(msg.radiusPx) &&
-               msg.radiusPx >= 0.0f;
+        out.f32(msg.radius);
+        return msg.surfaceId > 0 && validFloat(msg.radius) &&
+               msg.radius >= 0.0f;
     }
     case LCLOpcode::SetWindowCornerStyle: {
         LOAD_ONE(LCLMsgSetWindowCornerStyle, msg);
         out.u32(msg.surfaceId);
-        out.f32(msg.radiusPx);
+        out.f32(msg.radius);
         out.f32(msg.roundness);
-        return msg.surfaceId > 0 && validFloat(msg.radiusPx) &&
-               msg.radiusPx >= 0.0f && validFloat(msg.roundness) &&
+        return msg.surfaceId > 0 && validFloat(msg.radius) &&
+               msg.radius >= 0.0f && validFloat(msg.roundness) &&
                msg.roundness >= 2.0f && msg.roundness <= 8.0f;
     }
     case LCLOpcode::RequestWindowAction: {
@@ -644,15 +659,17 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
     case LCLOpcode::SurfaceCreate: {
         LCLMsgSurfaceCreate m{};
         uint8_t resizePresentation = 0;
-        if (!in.u32(m.surfaceId) || !in.i32(m.x) || !in.i32(m.y) ||
-            !in.u32(m.width) || !in.u32(m.height) ||
+        if (!in.u32(m.surfaceId) || !in.f32(m.x) || !in.f32(m.y) ||
+            !in.f32(m.width) || !in.f32(m.height) ||
             !in.fixed(m.title, sizeof(m.title)) ||
-            !in.fixed(m.appId, sizeof(m.appId)) || !in.f32(m.bufferScale) ||
+            !in.fixed(m.appId, sizeof(m.appId)) ||
             !in.u8(resizePresentation))
             return false;
         m.resizePresentation = static_cast<LCLResizePresentationMode>(resizePresentation);
-        if (m.surfaceId == 0 || m.width == 0 || m.height == 0 ||
-            !validScale(m.bufferScale) || !validString(m.title, sizeof(m.title)) ||
+        if (m.surfaceId == 0 || !validFloat(m.x) || !validFloat(m.y) ||
+            !validFloat(m.width) || m.width <= 0.0f ||
+            !validFloat(m.height) || m.height <= 0.0f ||
+            !validString(m.title, sizeof(m.title)) ||
             !validString(m.appId, sizeof(m.appId)) || m.appId[0] == '\0' ||
             !validResizePresentation(m.resizePresentation))
             return false;
@@ -663,15 +680,14 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
         LCLMsgPopupSurfaceCreate m{};
         uint32_t role = 0;
         if (!in.u32(m.surfaceId) || !in.u32(m.parentSurfaceId) ||
-            !in.u32(role) || !in.i32(m.x) || !in.i32(m.y) ||
-            !in.u32(m.width) || !in.u32(m.height) ||
-            !in.f32(m.bufferScale))
+            !in.u32(role) || !in.f32(m.x) || !in.f32(m.y) ||
+            !in.f32(m.width) || !in.f32(m.height))
             return false;
         m.role = static_cast<LCLPopupRole>(role);
         if (m.surfaceId == 0 || m.parentSurfaceId == 0 ||
-            m.surfaceId == m.parentSurfaceId || m.width == 0 ||
-            m.height == 0 || !validPopupRole(m.role) ||
-            !validScale(m.bufferScale))
+            m.surfaceId == m.parentSurfaceId || !validFloat(m.x) ||
+            !validFloat(m.y) || !validFloat(m.width) || m.width <= 0.0f ||
+            !validFloat(m.height) || m.height <= 0.0f || !validPopupRole(m.role))
             return false;
         appendNative(payload, m);
         break;
@@ -687,15 +703,19 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
         LCLMsgConfigureBounds m{};
         uint8_t resizeReason = 0;
         if (!in.u32(m.surfaceId) || !in.u64(m.configureSerial) ||
-            !in.i32(m.x) || !in.i32(m.y) ||
-            !in.u32(m.width) || !in.u32(m.height) ||
-            !in.u32(m.backingWidth) || !in.u32(m.backingHeight) ||
+            !in.f32(m.x) || !in.f32(m.y) ||
+            !in.f32(m.width) || !in.f32(m.height) ||
+            !in.f32(m.backingWidth) || !in.f32(m.backingHeight) ||
             !in.u32(m.headerColor) ||
             !in.u8(m.isFocused) || !in.fixed(m.title, sizeof(m.title)) ||
             !in.f32(m.bufferScale) || !in.u8(resizeReason))
             return false;
         m.resizeReason = static_cast<LCLConfigureResizeReason>(resizeReason);
-        if (m.surfaceId == 0 || m.configureSerial == 0 || m.width == 0 || m.height == 0 ||
+        if (m.surfaceId == 0 || m.configureSerial == 0 ||
+            !validFloat(m.x) || !validFloat(m.y) ||
+            !validFloat(m.width) || m.width <= 0.0f ||
+            !validFloat(m.height) || m.height <= 0.0f ||
+            !validFloat(m.backingWidth) || !validFloat(m.backingHeight) ||
             m.backingWidth < m.width || m.backingHeight < m.height || m.isFocused > 1 ||
             !validScale(m.bufferScale) || !validConfigureResizeReason(m.resizeReason) ||
             !validString(m.title, sizeof(m.title)))
@@ -801,8 +821,12 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
     }
     case LCLOpcode::SetReservedZone: {
         LCLMsgSetReservedZone m{};
-        if (!in.u32(m.surfaceId) || !in.u32(m.top) || !in.u32(m.bottom) ||
-            !in.u32(m.left) || !in.u32(m.right) || m.surfaceId == 0)
+        if (!in.u32(m.surfaceId) || !in.f32(m.top) || !in.f32(m.bottom) ||
+            !in.f32(m.left) || !in.f32(m.right) || m.surfaceId == 0 ||
+            !validFloat(m.top) || m.top < 0.0f ||
+            !validFloat(m.bottom) || m.bottom < 0.0f ||
+            !validFloat(m.left) || m.left < 0.0f ||
+            !validFloat(m.right) || m.right < 0.0f)
             return false;
         appendNative(payload, m);
         break;
@@ -863,16 +887,16 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
     }
     case LCLOpcode::SetWindowCornerRadius: {
         LCLMsgSetWindowCornerRadius m{};
-        if (!in.u32(m.surfaceId) || !in.f32(m.radiusPx) || m.surfaceId == 0 ||
-            !validFloat(m.radiusPx) || m.radiusPx < 0.0f)
+        if (!in.u32(m.surfaceId) || !in.f32(m.radius) || m.surfaceId == 0 ||
+            !validFloat(m.radius) || m.radius < 0.0f)
             return false;
         appendNative(payload, m);
         break;
     }
     case LCLOpcode::SetWindowCornerStyle: {
         LCLMsgSetWindowCornerStyle m{};
-        if (!in.u32(m.surfaceId) || !in.f32(m.radiusPx) || !in.f32(m.roundness) ||
-            m.surfaceId == 0 || !validFloat(m.radiusPx) || m.radiusPx < 0.0f ||
+        if (!in.u32(m.surfaceId) || !in.f32(m.radius) || !in.f32(m.roundness) ||
+            m.surfaceId == 0 || !validFloat(m.radius) || m.radius < 0.0f ||
             !validFloat(m.roundness) || m.roundness < 2.0f || m.roundness > 8.0f)
             return false;
         appendNative(payload, m);

@@ -9,6 +9,7 @@
 #include "render/damage_tracker.hpp"
 #include "lcl-window-chrome/window_chrome.hpp"
 #include "lcl-motion/motion.hpp"
+#include "lcl-graphics/geometry.hpp"
 
 namespace lcl::render {
 
@@ -56,7 +57,7 @@ struct GeometryInteraction {
     uint32_t windowId{0};
     uint64_t generation{0};
     GeometryInteractionKind kind{GeometryInteractionKind::None};
-    Rect previousBounds{};
+    graphics::RectF previousBounds{};
     bool previousWasMaximized{false};
     bool previousWasMinimized{false};
 
@@ -71,7 +72,7 @@ struct GeometryInteraction {
     }
 
     static GeometryInteraction windowStateTransition(
-            uint32_t windowId, uint64_t generation, const Rect& previousBounds,
+            uint32_t windowId, uint64_t generation, const graphics::RectF& previousBounds,
             bool previousWasMaximized, bool previousWasMinimized) noexcept {
         return {windowId, generation, GeometryInteractionKind::WindowStateTransition,
                 previousBounds, previousWasMaximized, previousWasMinimized};
@@ -86,23 +87,23 @@ struct WindowInputResult {
 };
 
 struct ReservedZone {
-    uint32_t top{0};
-    uint32_t bottom{0};
-    uint32_t left{0};
-    uint32_t right{0};
+    float top{0.0f};
+    float bottom{0.0f};
+    float left{0.0f};
+    float right{0.0f};
 };
 
 struct Window {
     uint32_t id{0};
     std::string title;
-    int x{0};
-    int y{0};
-    int pendingX{0};
-    int pendingY{0};
-    int width{400};
-    int height{300};
-    int pendingWidth{400};
-    int pendingHeight{300};
+    float x{0.0f};
+    float y{0.0f};
+    float pendingX{0.0f};
+    float pendingY{0.0f};
+    float width{400.0f};
+    float height{300.0f};
+    float pendingWidth{400.0f};
+    float pendingHeight{300.0f};
     float presentationX{0.0f};
     float presentationY{0.0f};
     float presentationWidth{400.0f};
@@ -114,10 +115,10 @@ struct Window {
     // buffers. Unlike a compositor morph, the currently displayed buffer is
     // never scaled to the interpolated geometry.
     bool liveResizeMotionFinished{false};
-    int liveResizeTargetX{0};
-    int liveResizeTargetY{0};
-    int liveResizeTargetWidth{0};
-    int liveResizeTargetHeight{0};
+    float liveResizeTargetX{0.0f};
+    float liveResizeTargetY{0.0f};
+    float liveResizeTargetWidth{0.0f};
+    float liveResizeTargetHeight{0.0f};
     int zIndex{0};
     bool isFocused{false};
     bool isUnfocusable{false};
@@ -126,8 +127,8 @@ struct Window {
     protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
 
     // Drag state
-    int dragOffsetX{0};
-    int dragOffsetY{0};
+    float dragOffsetX{0.0f};
+    float dragOffsetY{0.0f};
     float lastDragVelX{0.0f};
     float lastDragVelY{0.0f};
 
@@ -141,24 +142,24 @@ struct Window {
     // Resize state
     ResizeEdge resizeEdge{ResizeEdge::None};
     ResizeEdge activeResizeEdge{ResizeEdge::None};
-    int resizeStartX{0};
-    int resizeStartY{0};
-    int initialX{0};
-    int initialY{0};
-    int initialWidth{0};
-    int initialHeight{0};
-    int anchorRight{0};
-    int anchorBottom{0};
+    float resizeStartX{0.0f};
+    float resizeStartY{0.0f};
+    float initialX{0.0f};
+    float initialY{0.0f};
+    float initialWidth{0.0f};
+    float initialHeight{0.0f};
+    float anchorRight{0.0f};
+    float anchorBottom{0.0f};
 
     bool closeRequested{false};
     bool isMinimized{false};
     bool isMaximized{false};
-    int restoreX{0};
-    int restoreY{0};
-    int restoreWidth{0};
-    int restoreHeight{0};
+    float restoreX{0.0f};
+    float restoreY{0.0f};
+    float restoreWidth{0.0f};
+    float restoreHeight{0.0f};
     bool drawInsetBorder{true};
-    float cornerRadiusPx{-1.0f}; // < 0 means use compositor default policy
+    float cornerRadius{-1.0f}; // < 0 means use compositor default policy
     float cornerRoundness{2.0f};
     protocol::LCLResizePresentationMode resizePresentation{
         protocol::LCLResizePresentationMode::CompositorMorph};
@@ -170,29 +171,29 @@ struct Window {
 
     // Damage Tracking & Occlusion Culling
     bool isDirty{true};
-    Rect damageRect{0, 0, 400, 300};
+    graphics::RectF damageRect{0.0f, 0.0f, 400.0f, 300.0f};
 
-    Rect getBounds() const {
-        return Rect{x, y, width, height};
+    graphics::RectF getBounds() const {
+        return {x, y, width, height};
     }
 
     void markDirty() {
         isDirty = true;
-        damageRect = Rect{x, y, width, height};
+        damageRect = {x, y, width, height};
     }
 
-    void markDirty(const Rect& rect) {
+    void markDirty(const graphics::RectF& rect) {
         if (!isDirty) {
             isDirty = true;
             damageRect = rect;
         } else {
-            damageRect = Rect::Union(damageRect, rect);
+            damageRect = damageRect.unionWith(rect);
         }
     }
 
     void clearDirty() {
         isDirty = false;
-        damageRect = Rect{0, 0, 0, 0};
+        damageRect = {};
     }
 
     bool isDragging() const noexcept { return geometryPhase == GeometryPhase::Drag; }
@@ -229,14 +230,14 @@ public:
     /**
      * @brief Initialize window manager canvas dimensions.
      */
-    bool initialize(uint32_t screenWidth = 1024, uint32_t screenHeight = 768);
-    uint32_t getScreenWidth() const noexcept { return m_screenWidth; }
-    uint32_t getScreenHeight() const noexcept { return m_screenHeight; }
+    bool initialize(float screenWidth = 1024.0f, float screenHeight = 768.0f);
+    float getScreenWidth() const noexcept { return m_screenWidth; }
+    float getScreenHeight() const noexcept { return m_screenHeight; }
 
     /**
      * @brief Create a new window dynamically.
      */
-    uint32_t createWindow(const std::string& title, int x, int y, int width, int height,
+    uint32_t createWindow(const std::string& title, float x, float y, float width, float height,
                           uint32_t headerColor = 0xFF38BDF8, bool focus = true);
 
     /**
@@ -265,9 +266,9 @@ public:
      * @param expectedGeneration Zero for initial/legacy commits, otherwise the
      * generation that issued the accepted configure.
      */
-    bool commitSurfaceGeometry(uint32_t windowId, int frameW, int frameH,
+    bool commitSurfaceGeometry(uint32_t windowId, float frameW, float frameH,
                                bool preservePendingTarget = false,
-                               int configuredX = 0, int configuredY = 0,
+                               float configuredX = 0.0f, float configuredY = 0.0f,
                                uint64_t expectedGeneration = 0);
 
     /**
@@ -290,24 +291,24 @@ public:
     /**
      * @brief Set compositor mask corner radius for a window in pixels.
      */
-    void setWindowCornerRadius(uint32_t windowId, float radiusPx);
+    void setWindowCornerRadius(uint32_t windowId, float radius);
     /** Set compositor mask radius and superellipse exponent as one WindowGroup style. */
-    void setWindowCornerStyle(uint32_t windowId, float radiusPx, float roundness);
+    void setWindowCornerStyle(uint32_t windowId, float radius, float roundness);
     void setResizePresentationMode(uint32_t windowId,
                                    protocol::LCLResizePresentationMode mode);
 
     /**
      * @brief Set reserved desktop struts (No Window Move Zone for Menu Bar / Dock).
      */
-    void setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right);
+    void setReservedZone(float top, float bottom, float left, float right);
 
     /** Start a compositor-owned drag from a client-local pointer position. */
-    GeometryInteraction beginWindowDrag(uint32_t windowId, int localX, int localY);
+    GeometryInteraction beginWindowDrag(uint32_t windowId, float localX, float localY);
     bool minimizeWindow(uint32_t windowId);
     bool maximizeWindow(uint32_t windowId, bool animateGeometry = true);
     bool restoreWindow(uint32_t windowId, bool animateGeometry = true);
     bool toggleMaximizeWindow(uint32_t windowId, bool animateGeometry = true);
-    bool rollbackWindowGeometry(uint32_t windowId, const Rect& geometry,
+    bool rollbackWindowGeometry(uint32_t windowId, const graphics::RectF& geometry,
                                 bool wasMaximized, bool wasMinimized,
                                 uint64_t expectedGeneration = 0);
 
@@ -347,27 +348,27 @@ public:
 
     const std::vector<Window>& getWindows() const { return m_windows; }
     std::vector<Window>& getWindowsMutable() { return m_windows; }
-    int getMouseX() const { return m_mouseX; }
-    int getMouseY() const { return m_mouseY; }
+    float getMouseX() const { return m_mouseX; }
+    float getMouseY() const { return m_mouseY; }
 
 private:
     void unfocusAll(); ///< Clear focus + reset header color on all windows
     void focusTopmostVisibleWindow();
     void updateWindowZOrders();
-    void startGeometryTransition(Window& window, int targetX, int targetY,
-                                 int targetWidth, int targetHeight,
+    void startGeometryTransition(Window& window, float targetX, float targetY,
+                                 float targetWidth, float targetHeight,
                                  bool animate);
     uint64_t beginGeometryInteraction(Window& window, GeometryPhase phase);
     void initializeResizeInteraction(Window& window, ResizeEdge edge);
     void settleGeometry(Window& window, GeometryPhase phase = GeometryPhase::Idle);
     void refreshChromeHoverState();
 
-    uint32_t m_screenWidth{1024};
-    uint32_t m_screenHeight{768};
+    float m_screenWidth{1024.0f};
+    float m_screenHeight{768.0f};
     std::vector<Window> m_windows;
     ReservedZone m_reservedZone{};
-    int m_mouseX{512};
-    int m_mouseY{384};
+    float m_mouseX{512.0f};
+    float m_mouseY{384.0f};
     double m_subpixelX{512.0};
     double m_subpixelY{384.0};
     uint32_t m_nextWindowId{1};

@@ -152,8 +152,8 @@ void SurfaceRegistry::interruptGeometryTransaction(SurfaceEntry& entry,
 
 void SurfaceRegistry::beginGeometryTransition(SurfaceEntry& entry,
                                               uint64_t newGeneration,
-                                              int rollbackX, int rollbackY,
-                                              int rollbackWidth, int rollbackHeight,
+                                              float rollbackX, float rollbackY,
+                                              float rollbackWidth, float rollbackHeight,
                                               bool rollbackWasMaximized,
                                               bool rollbackWasMinimized) noexcept {
     interruptGeometryTransaction(entry, newGeneration);

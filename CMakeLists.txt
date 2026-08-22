@@ -59,6 +59,19 @@ target_include_directories(lcl-protocol PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# Backend-neutral logical geometry, path, paint and display-list contracts.
+add_subdirectory(lcl-graphics)
+
+add_library(lcl-path-raster STATIC
+    src/render/path_rasterizer.cpp
+)
+target_include_directories(lcl-path-raster PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lcl-path-raster PUBLIC
+    lcl-graphics
+)
+
 # Display scale is shared policy with no renderer or platform-GPU dependency.
 # Keeping it independent lets lcl-ui consume logical-pixel configuration
 # without pulling compositor display code into application binaries.
@@ -77,6 +90,10 @@ add_library(lcl-font-metrics STATIC
 target_include_directories(lcl-font-metrics PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+)
+
+target_link_libraries(lcl-font-metrics PUBLIC
+    lcl-graphics
 )
 
 # Session lifecycle transport and authority stay independent from compositor
@@ -134,7 +151,7 @@ add_subdirectory(lcl-window-chrome)
 # Depends strictly on lcl-platform-common; never on concrete platform layers.
 add_library(lcl-render STATIC
     src/render/renderer.cpp
-    src/render/skia_renderer.cpp
+    src/render/raster_renderer.cpp
     src/render/window_manager.cpp
 )
 
@@ -145,9 +162,10 @@ target_include_directories(lcl-render PUBLIC
 if(ANDROID)
     target_link_libraries(lcl-render PUBLIC
         lcl-motion
+        lcl-graphics
+        lcl-path-raster
         lcl-window-chrome
         lcl-protocol
-        lcl-display-scale
         lcl-font-metrics
         lcl-platform-common
         GLESv3
@@ -161,9 +179,10 @@ else()
     )
     target_link_libraries(lcl-render PUBLIC
         lcl-motion
+        lcl-graphics
+        lcl-path-raster
         lcl-window-chrome
         lcl-protocol
-        lcl-display-scale
         lcl-font-metrics
         lcl-platform-common
         ${GLES2_LIBRARIES}
@@ -200,7 +219,8 @@ target_link_libraries(lcl-core-engine PUBLIC
     lcl-protocol
     lcl-display-scale
     lcl-session
-    lcl-motion
+        lcl-motion
+        lcl-graphics
     Threads::Threads
 )
 
@@ -276,13 +296,13 @@ else()
 
     # Client canvas attempts a render-node-only EGL context and falls back to the
     # established SHM raster path.  It never owns compositor KMS presentation.
-    add_library(lcl-canvas-skia STATIC
+    add_library(lcl-raster STATIC
         src/render/client_egl_context.cpp
-        src/render/skia_canvas.cpp
-        src/render/skia_renderer.cpp
+        src/render/raster_canvas.cpp
+        src/render/raster_renderer.cpp
     )
 
-    target_include_directories(lcl-canvas-skia PUBLIC
+    target_include_directories(lcl-raster PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
         ${DRM_INCLUDE_DIRS}
@@ -291,8 +311,9 @@ else()
         ${GLES2_INCLUDE_DIRS}
     )
 
-    target_link_libraries(lcl-canvas-skia PUBLIC
-        lcl-ui
+    target_link_libraries(lcl-raster PUBLIC
+        lcl-graphics
+        lcl-path-raster
         lcl-font-metrics
         lcl-protocol
         ${DRM_LIBRARIES}
@@ -302,7 +323,7 @@ else()
         Threads::Threads
     )
 
-    target_compile_options(lcl-canvas-skia PRIVATE
+    target_compile_options(lcl-raster PRIVATE
         ${DRM_CFLAGS_OTHER}
         ${GBM_CFLAGS_OTHER}
         ${EGL_CFLAGS_OTHER}
@@ -331,7 +352,6 @@ else()
 
     target_link_libraries(lcl-platform-desktop PUBLIC
         lcl-platform-common
-        lcl-display-scale
         ${DRM_LIBRARIES}
         ${GBM_LIBRARIES}
         ${EGL_LIBRARIES}
@@ -409,7 +429,7 @@ else()
 
     target_link_libraries(lcl-desktop-shell PRIVATE
         lcl-ui
-        lcl-canvas-skia
+        lcl-raster
         lcl-protocol
         lcl-shell-state
         lcl-session
@@ -431,7 +451,7 @@ else()
 
     target_link_libraries(lcl-terminal PRIVATE
         lcl-ui
-        lcl-canvas-skia
+        lcl-raster
         lcl-protocol
         Threads::Threads
     )
@@ -450,7 +470,7 @@ else()
 
     target_link_libraries(lcl-js PRIVATE
         lcl-ui
-        lcl-canvas-skia
+        lcl-raster
         qjs
         Threads::Threads
     )
@@ -539,7 +559,7 @@ else()
             Threads::Threads
             lcl-ui
             lcl-window-chrome
-            lcl-canvas-skia
+            lcl-raster
             lcl-platform-desktop
             lcl-protocol
             lcl-session
@@ -549,7 +569,10 @@ else()
         )
 
         include(GoogleTest)
-        gtest_discover_tests(lcl_unit_tests)
+        gtest_discover_tests(lcl_unit_tests
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
         add_test(NAME LclUiBoundarySmoke COMMAND lcl_ui_boundary_smoke)
+        set_tests_properties(LclUiBoundarySmoke PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     endif()
 endif()

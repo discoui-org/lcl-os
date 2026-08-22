@@ -1,7 +1,7 @@
 #pragma once
 
-#include "lcl-ui/core/rect.hpp"
-#include "lcl-ui/core/canvas.hpp"
+#include "lcl-graphics/geometry.hpp"
+#include "lcl-graphics/canvas.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/event_dispatcher.hpp"
 #include "lcl-ui/core/motion.hpp"
@@ -21,23 +21,23 @@ using RawKeyCallback = std::function<bool(const KeyEvent&)>;
 using RawPointerCallback = std::function<bool(const PointerEvent&)>;
 using RawTextInputCallback = std::function<bool(const TextInputEvent&)>;
 using IpcMessageCallback = std::function<void(const lcl::protocol::LCLHeader&, const std::vector<uint8_t>&)>;
-using ResizeCallback = std::function<void(uint32_t width, uint32_t height)>;
+using ResizeCallback = std::function<void(float width, float height)>;
 using FrameCallback = std::function<void()>;
 using HostedSurfaceHandle = uint64_t;
-using ResizeTransform = std::function<std::pair<uint32_t, uint32_t>(
-    uint32_t width, uint32_t height, lcl::protocol::LCLConfigureResizeReason reason)>;
+using ResizeTransform = std::function<std::pair<float, float>(
+    float width, float height, lcl::protocol::LCLConfigureResizeReason reason)>;
 
 class WindowApp {
 public:
-    WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height,
+    WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height,
               const std::string& title = "lcl-ui Application");
     ~WindowApp();
 
     WindowApp(const WindowApp&) = delete;
     WindowApp& operator=(const WindowApp&) = delete;
 
-    uint32_t getWidth() const { return m_width; }
-    uint32_t getHeight() const { return m_height; }
+    float getWidth() const { return m_width; }
+    float getHeight() const { return m_height; }
     /** Logical-pixel to shared-buffer-pixel ratio for this client surface. */
     float getBufferScale() const { return m_bufferScale; }
     uint32_t getPixelWidth() const;
@@ -75,7 +75,7 @@ public:
 
     EventDispatcher& getDispatcher() { return m_dispatcher; }
     RenderPass& getRenderPass() { return m_renderPass; }
-    Canvas& getCanvas() { return *m_canvas; }
+    graphics::Canvas& getCanvas() { return *m_canvas; }
     MotionCoordinator& getMotionCoordinator() { return m_motionCoordinator; }
     void setInteractionMotionTheme(InteractionMotionTheme theme) {
         m_motionCoordinator.setInteractionTheme(std::move(theme));
@@ -117,13 +117,13 @@ public:
     void runEventLoop();
     /** Process compositor messages and render at most one frame; useful for multi-surface shells. */
     bool tick();
-    void resize(uint32_t width, uint32_t height);
+    void resize(float width, float height);
     /** Set logical surface bounds before connectCompositor(). */
-    void setInitialBounds(int32_t x, int32_t y, uint32_t width, uint32_t height);
+    void setInitialBounds(float x, float y, float width, float height);
     /** Configure this WindowApp as a parent-bound popup before connecting. */
     void configurePopupSurface(uint32_t parentSurfaceId,
                                lcl::protocol::LCLPopupRole role,
-                               int32_t x, int32_t y);
+                               float x, float y);
     bool isPopupSurface() const noexcept { return m_popupParentSurfaceId != 0; }
 
     void setSurfaceId(uint32_t surfaceId) { if (!m_ipcConnected && surfaceId > 0) m_surfaceId = surfaceId; }
@@ -168,11 +168,11 @@ public:
     /** Extend the surface material beneath compositor-owned system insets. */
     bool setEdgeToEdge(bool enabled);
     bool setWindowLayer(lcl::protocol::LCLWindowLayer layer, bool unfocusable = false);
-    bool setReservedZone(uint32_t top, uint32_t bottom, uint32_t left = 0, uint32_t right = 0);
+    bool setReservedZone(float top, float bottom, float left = 0.0f, float right = 0.0f);
     /** Set the compositor-owned outer WindowGroup shape in logical pixels. */
-    bool setWindowCornerStyle(float radiusPx, float roundness = 2.0f);
+    bool setWindowCornerStyle(float radius, float roundness = 2.0f);
     /** Compatibility shorthand that preserves the current WindowGroup roundness. */
-    bool setWindowCornerRadius(float radiusPx);
+    bool setWindowCornerRadius(float radius);
     void setExternalIpcSocket(int socketFd);
 
     // Frame Execution & Render Loop Pipeline
@@ -182,8 +182,9 @@ public:
     uint32_t* getPixelBuffer() { return m_shmPixels ? m_shmPixels : m_pixelBuffer.data(); }
 
 private:
+    void updateCanvasRenderTarget();
     void pollIPC();
-    void allocateSHM(uint32_t width, uint32_t height);
+    void allocateSHM(float width, float height);
     void startMorphCrossfade(std::vector<uint32_t> snapshot,
                              uint32_t pixelWidth, uint32_t pixelHeight,
                              const lcl::motion::Motion& motion);
@@ -205,8 +206,8 @@ private:
         bool pendingRemoval{false};
     };
 
-    uint32_t m_width;
-    uint32_t m_height;
+    float m_width;
+    float m_height;
     // Public layout/input coordinates remain logical. SHM is rasterized at this DPR.
     float m_bufferScale{1.0f};
     std::string m_title;
@@ -218,7 +219,7 @@ private:
     EventDispatcher m_dispatcher;
     TransientController m_transients{m_dispatcher};
     MotionCoordinator m_motionCoordinator;
-    std::unique_ptr<Canvas> m_canvas;
+    std::unique_ptr<graphics::Canvas> m_canvas;
 
     RawKeyCallback m_onRawKey{nullptr};
     RawPointerCallback m_onRawPointer{nullptr};
@@ -244,26 +245,26 @@ private:
     uint32_t m_nextRequestId{1};
     uint64_t m_configureSerial{1};
     uint64_t m_pendingConfigureSerial{1};
-    uint32_t m_backingWidth{0};
-    uint32_t m_backingHeight{0};
+    float m_backingWidth{0.0f};
+    float m_backingHeight{0.0f};
     // SurfaceCreate is only a request. Do not commit the provisional client
     // buffer until the compositor assigns the first configure serial.
     bool m_waitingForInitialConfigure{false};
     bool m_inputEnabled{true};
-    int32_t m_initialX{80};
-    int32_t m_initialY{60};
+    float m_initialX{80.0f};
+    float m_initialY{60.0f};
     uint32_t m_popupParentSurfaceId{0};
     lcl::protocol::LCLPopupRole m_popupRole{lcl::protocol::LCLPopupRole::Transient};
-    int32_t m_popupX{0};
-    int32_t m_popupY{0};
+    float m_popupX{0.0f};
+    float m_popupY{0.0f};
 
     bool m_initialized{false};
     bool m_firstFrame{true};
     bool m_shmNeedsAttach{true};
     bool m_effectGraphActive{false};
     std::vector<uint8_t> m_lastEffectGraphPayload;
-    uint32_t m_pendingResizeWidth{0};
-    uint32_t m_pendingResizeHeight{0};
+    float m_pendingResizeWidth{0.0f};
+    float m_pendingResizeHeight{0.0f};
     bool m_hasPendingResize{false};
     // Both pointer resize and maximize/restore are frame-paced in Live mode.
     // Initial configure remains an immediate, content-sized transaction.

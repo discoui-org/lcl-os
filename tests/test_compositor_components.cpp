@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdlib>
 #include <fcntl.h>
@@ -17,12 +18,12 @@
 #include "core/compositor/system_surface_policy.hpp"
 #include "core/compositor/window_group_transform.hpp"
 #include "core/compositor/window_chrome_material.hpp"
-#include "core/display/display_scale.hpp"
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
 #include "core/scene/shell_state_broker.hpp"
 #include "render/window_manager.hpp"
 #include "render/dma_buf_crop.hpp"
+#include "render/raster_destination.hpp"
 
 namespace lcl::core {
 
@@ -101,8 +102,8 @@ TEST(PopupSurfaceTest, GeometryFollowsParentAndCanExtendPastWindowBounds) {
     popup.parentSurfaceKey = 1;
     popup.popupX = 180;
     popup.popupY = 20;
-    popup.width = 100;
-    popup.height = 60;
+    popup.initialWidth = 100.0f;
+    popup.initialHeight = 60.0f;
 
     const auto initial = resolvePopupSurfaceBounds(parentWindow, parentSurface, popup);
     EXPECT_FLOAT_EQ(initial.x, 280.0f);
@@ -141,6 +142,44 @@ TEST(CompositorRendererTest, DmaBufCropShowsContentWithoutScalingTheBacking) {
     const auto exact = lcl::render::makeDmaBufCrop(800, 600, 800, 600);
     EXPECT_FLOAT_EQ(exact.uMax, 1.0f);
     EXPECT_FLOAT_EQ(exact.vMax, 1.0f);
+}
+
+TEST(CompositorRendererTest, ShmAndDmaBufShareLogicalDestinationMapping) {
+    constexpr std::array<float, 4> scales{1.0f, 1.25f, 1.5f, 2.0f};
+    for (const float scale : scales) {
+        const auto destination = lcl::render::mapLogicalRasterDestination(
+            12.5f, 18.25f, 320.0f, 180.0f, 14.0f,
+            scale, 3.0f, 5.0f);
+        EXPECT_FLOAT_EQ(destination.x, 12.5f * scale + 3.0f);
+        EXPECT_FLOAT_EQ(destination.y, 18.25f * scale + 5.0f);
+        EXPECT_FLOAT_EQ(destination.width, 320.0f * scale);
+        EXPECT_FLOAT_EQ(destination.height, 180.0f * scale);
+        EXPECT_FLOAT_EQ(destination.cornerRadius, 14.0f * scale);
+
+        // Content/backing extents remain physical and therefore produce the
+        // same crop regardless of destination DPR.
+        const auto crop = lcl::render::makeDmaBufCrop(640, 480, 1920, 1080);
+        EXPECT_FLOAT_EQ(crop.uMax, 640.0f / 1920.0f);
+        EXPECT_FLOAT_EQ(crop.vMax, 480.0f / 1080.0f);
+    }
+}
+
+TEST(CompositorRendererTest, CurrentPreviousAndPopupDestinationsUseOneDprRule) {
+    constexpr std::array<std::array<float, 5>, 3> logicalDestinations{{
+        {80.0f, 92.0f, 800.0f, 568.0f, 20.0f},
+        {80.0f, 92.0f, 640.0f, 448.0f, 20.0f},
+        {260.0f, 120.0f, 180.0f, 90.0f, 10.0f},
+    }};
+    constexpr float scale = 1.5f;
+    for (const auto& logical : logicalDestinations) {
+        const auto physical = lcl::render::mapLogicalRasterDestination(
+            logical[0], logical[1], logical[2], logical[3], logical[4], scale);
+        EXPECT_FLOAT_EQ(physical.x, logical[0] * scale);
+        EXPECT_FLOAT_EQ(physical.y, logical[1] * scale);
+        EXPECT_FLOAT_EQ(physical.width, logical[2] * scale);
+        EXPECT_FLOAT_EQ(physical.height, logical[3] * scale);
+        EXPECT_FLOAT_EQ(physical.cornerRadius, logical[4] * scale);
+    }
 }
 
 TEST(SurfaceRegistryTest, DmaBufSlotIsReleasedOnlyAfterLeavingThePresentedSet) {
@@ -278,10 +317,9 @@ TEST(InputRouterTest, PopupOutsideParentBoundsReceivesParentLocalInput) {
     popup.popupOrder = registry.allocatePopupOrder();
     popup.popupX = 180;
     popup.popupY = 20;
-    popup.width = 100;
-    popup.height = 60;
+    popup.initialWidth = 100.0f;
+    popup.initialHeight = 60.0f;
     popup.stride = 400;
-    popup.bufferScale = 1.0f;
     popup.clientFd = sockets[0];
     popup.hasCommittedBuffer = true;
     popup.pixels = reinterpret_cast<void*>(1);
@@ -468,8 +506,8 @@ TEST(InputRouterTest, PopupDoesNotEscapeParentWindowGroupStacking) {
     popup.popupOrder = registry.allocatePopupOrder();
     popup.popupX = 180;
     popup.popupY = 20;
-    popup.width = 100;
-    popup.height = 60;
+    popup.initialWidth = 100.0f;
+    popup.initialHeight = 60.0f;
     popup.stride = 400;
     popup.clientFd = parentSockets[0];
     popup.hasCommittedBuffer = true;
@@ -502,7 +540,9 @@ TEST(InputRouterTest, PopupDoesNotEscapeParentWindowGroupStacking) {
     down.pressed = true;
     down.absoluteX = 350.0;
     down.absoluteY = 110.0;
-    EXPECT_TRUE(router.route(down));
+    // The unrelated window was already focused by the preceding motion, so
+    // this click forwards input without changing WindowManager state.
+    EXPECT_FALSE(router.route(down));
 
     ASSERT_TRUE(protocol::recvMsgWithFd(
         unrelatedSockets[1], header, payload, receivedFd));
@@ -518,6 +558,38 @@ TEST(InputRouterTest, PopupDoesNotEscapeParentWindowGroupStacking) {
     close(parentSockets[1]);
     close(unrelatedSockets[0]);
     close(unrelatedSockets[1]);
+}
+
+TEST(InputRouterTest, FractionalOutputScaleKeepsHorizontalResizeLogical) {
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t windowId = manager.createWindow("Fractional resize", 100, 80, 300, 200);
+    manager.setDecorationMode(windowId, render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes, 1.25f);
+
+    InputEvent motion{};
+    motion.type = InputEventType::PointerMotion;
+    motion.absoluteX = 399.5 * 1.25;
+    motion.absoluteY = 150.0 * 1.25;
+    router.route(motion);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.absoluteX = motion.absoluteX;
+    down.absoluteY = motion.absoluteY;
+    ASSERT_TRUE(router.route(down));
+
+    motion.absoluteX = 409.5 * 1.25;
+    ASSERT_TRUE(router.route(motion));
+    const auto& resized = manager.getWindows().back();
+    EXPECT_EQ(resized.resizeEdge, render::ResizeEdge::Right);
+    EXPECT_FLOAT_EQ(resized.pendingWidth, 310.0f);
+    EXPECT_FLOAT_EQ(resized.pendingX, 100.0f);
 }
 
 TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
@@ -656,8 +728,6 @@ TEST(InputRouterTest, LiveResizeWaitsForPresentationThenPublishesLatestWithWorks
 }
 
 TEST(InputRouterTest, SsdMaximizeBeginsMorphTransactionWithoutReleasingCurrentTexture) {
-    unsetenv("LCL_SCALE");
-    DisplayScale::initialize();
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
 
@@ -989,10 +1059,10 @@ TEST(SystemSurfacePolicyTest, WallpaperPlacementAlwaysUsesCompositorOutputBounds
     const auto wallpaper = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::Wallpaper);
     ASSERT_EQ(wallpaper.placement, SystemSurfacePlacement::OutputBounds);
 
-    int x = 40;
-    int y = 50;
-    int width = 800;
-    int height = 600;
+    float x = 40.0f;
+    float y = 50.0f;
+    float width = 800.0f;
+    float height = 600.0f;
     SystemSurfacePolicyRegistry::applyInitialPlacement(wallpaper, 1920, 1080, x, y, width, height);
     EXPECT_EQ(x, 0);
     EXPECT_EQ(y, 0);
@@ -1038,6 +1108,7 @@ TEST(WindowGroupTransformTest, ChromeAndClientShareOneSubpixelAnimatedFrame) {
                     (static_cast<float>(window.width) + group.width) * 0.5f,
                 0.0001f);
     EXPECT_NE(group.width, std::round(group.width));
+    EXPECT_NEAR(group.mapLength(20.0f), 20.0f * group.scale, 0.0001f);
 
     const auto resting = makeWindowGroupTransform(window, 32, 1.0f);
     EXPECT_FLOAT_EQ(resting.x, std::round(resting.x));
@@ -1070,35 +1141,18 @@ TEST(CompositorRendererTest, EdgeToEdgeRemovesOnlyTheOpaqueSsdBackground) {
     EXPECT_FALSE(paintsOpaqueSsdTitlebar(true));
 }
 
-TEST(CompositorRendererTest, DoubleInsetBorderGeometryTracksDisplayAndPresentationScale) {
-    const render::SkiaRect bounds{10.0f, 20.0f, 100.0f, 60.0f};
-
-    const auto scale1 = resolveDoubleInsetBorderGeometry(
-        bounds, 10.0f, 1.0f, 1.0f);
-    EXPECT_FLOAT_EQ(scale1.strokeWidth, 1.0f);
-    EXPECT_FLOAT_EQ(scale1.outerRadius, 10.0f);
-    EXPECT_FLOAT_EQ(scale1.innerBounds.x, 11.0f);
-    EXPECT_FLOAT_EQ(scale1.innerBounds.y, 21.0f);
-    EXPECT_FLOAT_EQ(scale1.innerBounds.width, 98.0f);
-    EXPECT_FLOAT_EQ(scale1.innerBounds.height, 58.0f);
-    EXPECT_FLOAT_EQ(scale1.innerRadius, 9.0f);
-    EXPECT_TRUE(scale1.hasInnerBorder);
-
-    const auto scale2 = resolveDoubleInsetBorderGeometry(
-        bounds, 20.0f, 2.0f, 1.0f);
-    EXPECT_FLOAT_EQ(scale2.strokeWidth, 2.0f);
-    EXPECT_FLOAT_EQ(scale2.outerRadius, 20.0f);
-    EXPECT_FLOAT_EQ(scale2.innerBounds.x, 12.0f);
-    EXPECT_FLOAT_EQ(scale2.innerBounds.y, 22.0f);
-    EXPECT_FLOAT_EQ(scale2.innerBounds.width, 96.0f);
-    EXPECT_FLOAT_EQ(scale2.innerBounds.height, 56.0f);
-    EXPECT_FLOAT_EQ(scale2.innerRadius, 18.0f);
-
-    const auto transitioning = resolveDoubleInsetBorderGeometry(
-        bounds, 20.0f, 2.0f, 0.9f);
-    EXPECT_FLOAT_EQ(transitioning.strokeWidth, 1.8f);
-    EXPECT_FLOAT_EQ(transitioning.outerRadius, 18.0f);
-    EXPECT_FLOAT_EQ(transitioning.innerRadius, 16.2f);
+TEST(CompositorRendererTest, DoubleInsetBorderKeepsLogicalStrokeInDisplayList) {
+    const auto list = buildDoubleInsetBorderDisplayList(
+        {10.0f, 20.0f, 100.0f, 60.0f}, 10.0f, 2.0f, 1.0f);
+    ASSERT_EQ(list.commands().size(), 2u);
+    for (const auto& command : list.commands()) {
+        const auto* path = std::get_if<graphics::DrawPathCommand>(&command);
+        ASSERT_NE(path, nullptr);
+        EXPECT_EQ(path->paint.style, graphics::PaintStyle::Stroke);
+        EXPECT_FLOAT_EQ(path->paint.stroke.width, 1.0f);
+        EXPECT_EQ(path->paint.stroke.scaling,
+                  graphics::StrokeScaling::ScaleWithTransform);
+    }
 }
 
 TEST(FrameSchedulerTest, AdvancesEnteringAndClosingTransitionsAtBoundedDelta) {

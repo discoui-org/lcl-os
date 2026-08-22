@@ -2,13 +2,13 @@
 #include <memory>
 #include <string>
 
-#include "lcl-ui/core/canvas.hpp"
+#include "lcl-graphics/canvas.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 
 namespace {
 
-class BoundaryCanvas final : public lcl::ui::Canvas {
+class BoundaryCanvas final : public lcl::graphics::Canvas {
 public:
     bool initialize(uint32_t width, uint32_t height, uint32_t* pixels) override {
         setTargetPixels(pixels, width, height);
@@ -21,16 +21,21 @@ public:
         m_height = height;
     }
 
-    void setContentScale(float) override {}
+    void setRenderTarget(const lcl::graphics::RenderTarget& target) override {
+        m_target = target;
+    }
+    const lcl::graphics::RenderTarget& renderTarget() const override { return m_target; }
     void beginFrame() override {}
     void endFrame() override {}
     uint32_t* rasterBuffer() override { return m_pixels; }
 
-    void clearRect(const lcl::ui::Rect& rect, lcl::ui::Color color) override {
+    void clearRect(const lcl::graphics::RectF& rect, lcl::graphics::Color color) override {
         drawRect(rect, color);
     }
 
-    void drawRect(const lcl::ui::Rect&, lcl::ui::Color color) override {
+    void drawPath(const lcl::graphics::Path&, const lcl::graphics::Paint&) override {}
+
+    void drawRect(const lcl::graphics::RectF&, lcl::graphics::Color color) override {
         if (m_pixels && m_width > 0 && m_height > 0) {
             m_pixels[0] = (static_cast<uint32_t>(color.a) << 24) |
                           (static_cast<uint32_t>(color.r) << 16) |
@@ -39,30 +44,31 @@ public:
         }
     }
 
-    void drawRoundedRect(const lcl::ui::Rect& rect, float, lcl::ui::Color color,
-                         lcl::ui::Color, float, float) override {
+    void drawRoundedRect(const lcl::graphics::RectF& rect, float, lcl::graphics::Color color,
+                         lcl::graphics::Color, float, float) override {
         drawRect(rect, color);
     }
 
-    void drawTopRoundedRect(const lcl::ui::Rect& rect, float,
-                            lcl::ui::Color color, float) override {
+    void drawTopRoundedRect(const lcl::graphics::RectF& rect, float,
+                            lcl::graphics::Color color, float) override {
         drawRect(rect, color);
     }
 
-    void drawText(float, float, const std::string&, lcl::ui::Color,
-                  float, lcl::ui::FontFamily) override {}
+    void drawText(float, float, const std::string&, lcl::graphics::Color,
+                  float, lcl::graphics::FontFamily) override {}
 
-    float measureText(const std::string&, float, lcl::ui::FontFamily) override {
+    float measureText(const std::string&, float, lcl::graphics::FontFamily) override {
         return 0.0f;
     }
 
-    void drawBuffer(int, int, int, int, const uint32_t*, int, float,
-                    float, float, bool, int, int) override {}
+    void drawBuffer(const lcl::graphics::RectF&, int, int, const uint32_t*, int,
+                    float, float, float, bool) override {}
 
 private:
     uint32_t* m_pixels{nullptr};
     uint32_t m_width{0};
     uint32_t m_height{0};
+    lcl::graphics::RenderTarget m_target{};
 };
 
 } // namespace

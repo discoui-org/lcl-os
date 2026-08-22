@@ -40,7 +40,7 @@ public:
     bool onFocusGained(const FocusEvent& event) override;
     bool onFocusLost(const FocusEvent& event) override;
 
-    void draw(Canvas& canvas, const Rect& damageRect) override;
+    void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
 
 private:
     void setState(ButtonState newState);

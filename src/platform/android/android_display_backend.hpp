@@ -29,7 +29,8 @@ public:
     bool isInitialized() const override { return m_initialized; }
     const lcl::platform::DisplayMode& activeMode() const override { return m_activeMode; }
 
-    bool initHardwareCursor(uint32_t width = 64, uint32_t height = 64) override;
+    bool initHardwareCursor(uint32_t width = 64, uint32_t height = 64,
+                            float deviceScale = 1.0f) override;
     bool moveHardwareCursor(int x, int y) override;
     bool isHardwareCursorActive() const override { return false; }
 

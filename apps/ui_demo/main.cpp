@@ -13,9 +13,10 @@
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
 #include "lcl-ui/widgets/toggle.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_canvas.hpp"
 
 using namespace lcl::ui;
+using lcl::graphics::Color;
 
 namespace {
 
@@ -71,13 +72,13 @@ int main() {
   std::cout << "========================================\n";
 
   // 1. Initialize WindowApp Application Pipeline (800x600)
-  WindowApp app(lcl::render::makeSkiaCanvas(), 800, 600,
+  WindowApp app(lcl::render::makeRasterCanvas(), 800, 600,
                 "LCL-UI ScrollView Interactive Demo App");
   app.setAppId("org.lcl.uidemo");
   app.setWindowCornerStyle(20.0f, 2.0f);
   app.setEdgeToEdge(true);
-  Popover popover(app, [] { return lcl::render::makeSkiaCanvas(); });
-  Menu menu(app, [] { return lcl::render::makeSkiaCanvas(); });
+  Popover popover(app, [] { return lcl::render::makeRasterCanvas(); });
+  Menu menu(app, [] { return lcl::render::makeRasterCanvas(); });
 
   // 2. Build Centered Flexbox Layout Tree in User-Space App
   auto rootContainer = std::make_unique<Container>();

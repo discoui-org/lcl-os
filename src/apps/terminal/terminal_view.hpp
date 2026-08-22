@@ -17,7 +17,7 @@ public:
 
     /** Returns true only when the visible cursor state changed. */
     bool updateCursorBlink();
-    void draw(lcl::ui::Canvas& canvas, const lcl::ui::Rect& damageRect) override;
+    void draw(lcl::graphics::Canvas& canvas, const lcl::graphics::RectF& damageRect) override;
 
 private:
     bool isCursorVisible() const;

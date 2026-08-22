@@ -20,7 +20,6 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#include "core/display/display_scale.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "core/session/session_client.hpp"
 #include "core/shell/shell_state_client.hpp"
@@ -30,7 +29,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/image.hpp"
 #include "lcl-ui/widgets/text.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_canvas.hpp"
 
 namespace {
 
@@ -322,20 +321,18 @@ std::pair<uint32_t, uint32_t> displayPixelsFromCmdline() {
 } // namespace
 
 int main() {
-  lcl::core::DisplayScale::initialize();
-  const float scale = lcl::core::DisplayScale::factor();
   const auto [physicalW, physicalH] = displayPixelsFromCmdline();
-  uint32_t width =
-      std::max(1u, static_cast<uint32_t>(std::lround(physicalW / scale)));
-  uint32_t height =
-      std::max(1u, static_cast<uint32_t>(std::lround(physicalH / scale)));
+  // Bootstrap dimensions are replaced by the compositor's first logical
+  // ConfigureBounds before allocation and presentation.
+  uint32_t width = physicalW;
+  uint32_t height = physicalH;
 
   const std::string wallpaperPath =
       std::filesystem::exists("/usr/share/wallpapers/wallpaper.jpg")
           ? "/usr/share/wallpapers/wallpaper.jpg"
           : "/usr/share/wallpaper.jpg";
   auto wallpaper = std::make_unique<lcl::ui::WindowApp>(
-      lcl::render::makeSkiaCanvas(), width, height, "LCL Wallpaper");
+      lcl::render::makeRasterCanvas(), width, height, "LCL Wallpaper");
   wallpaper->setSurfaceId(1);
   wallpaper->setSystemSurfaceKind(
       lcl::protocol::LCLSystemSurfaceKind::Wallpaper);
@@ -398,7 +395,7 @@ int main() {
     // their first real buffer commit, so menu setup cannot leave the shell
     // in a half-created state with no dock.
     menu = std::make_unique<lcl::ui::WindowApp>(
-        lcl::render::makeSkiaCanvas(), width, kMenuBarHeight, "LCL MenuBar");
+        lcl::render::makeRasterCanvas(), width, kMenuBarHeight, "LCL MenuBar");
     menu->setSurfaceId(2);
     menu->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::MenuBar);
     menu->setAppId("org.lcl.desktop-shell");
@@ -411,7 +408,7 @@ int main() {
     });
     menu->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 
-    dock = std::make_unique<lcl::ui::WindowApp>(lcl::render::makeSkiaCanvas(),
+    dock = std::make_unique<lcl::ui::WindowApp>(lcl::render::makeRasterCanvas(),
                                                 width, kDockHeight, "LCL Dock");
     dock->setSurfaceId(3);
     dock->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::Dock);

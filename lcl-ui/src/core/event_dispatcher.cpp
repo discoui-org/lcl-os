@@ -264,7 +264,7 @@ bool EventDispatcher::dispatchPointerEvent(Widget* root, TransientController* tr
     // The snapshotted handle also prevents a callback from dismissing a
     // transient that was opened by this very event.
     if (outsideDismissCandidate != 0 && transients) {
-        transients->dismissOutsideCandidate(outsideDismissCandidate);
+        handled = transients->dismissOutsideCandidate(outsideDismissCandidate) || handled;
     }
 
     // Touch input lift (PointerUp) terminates any active hover state

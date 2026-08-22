@@ -72,7 +72,12 @@ bool Compositor::initialize() {
     }
 
     // --- Window Manager Canvas ---
-    m_windowManager.initialize(m_renderer.getWidth(), m_renderer.getHeight());
+    const float outputScale = DisplayScale::factor();
+    m_renderer.getRasterRenderer()->setDeviceScale(outputScale);
+    display.initHardwareCursor(64, 64, outputScale);
+    m_windowManager.initialize(
+        static_cast<float>(m_renderer.getWidth()) / outputScale,
+        static_cast<float>(m_renderer.getHeight()) / outputScale);
     m_protocolDispatcher = std::make_unique<ProtocolDispatcher>(
         m_renderer, m_windowManager, m_surfaces, m_sceneRegistry,
         m_focusController, m_shellStateBroker);
@@ -81,7 +86,8 @@ bool Compositor::initialize() {
     m_ipcManager.initialize(paths.compositorSocketPath());
 
     // --- Route input through the dedicated focus/hit-test bridge ---
-    m_inputRouter = std::make_unique<InputRouter>(m_windowManager, m_surfaces, m_sceneRegistry);
+    m_inputRouter = std::make_unique<InputRouter>(
+        m_windowManager, m_surfaces, m_sceneRegistry, outputScale);
     input.initialize([this](const lcl::platform::RawInputEvent& event) {
         if (m_inputRouter && m_inputRouter->route(event)) {
             m_needsRedraw = true;
@@ -215,15 +221,25 @@ void Compositor::run() {
 void Compositor::renderDiagnosticOverlay() {
     if (!m_showFpsOverlay) return;
 
-    int screenW = static_cast<int>(m_renderer.getWidth());
-    int cardW = DisplayScale::px(220);
-    int cardH = DisplayScale::px(88);
-    int cardX = screenW - cardW - DisplayScale::px(16);
-    int cardY = DisplayScale::px(16);
+    auto* raster = m_renderer.getRasterRenderer();
+    const float deviceScale = raster->getDeviceScale();
+    const float screenW = static_cast<float>(m_renderer.getWidth()) / deviceScale;
+    constexpr float cardW = 220.0f;
+    constexpr float cardH = 88.0f;
+    const float cardX = screenW - cardW - 16.0f;
+    constexpr float cardY = 16.0f;
 
-    // Render translucent dark slate card background with sky accent border
-    m_renderer.drawFilledRect(cardX, cardY, cardW, cardH, 0xDD0F172A);
-    m_renderer.drawRect(cardX, cardY, cardW, cardH, 0x6638BDF8);
+    graphics::DisplayListBuilder builder;
+    graphics::Path card;
+    card.addRRect({{cardX, cardY, cardW, cardH}, 10.0f, 10.0f, 2.0f});
+    graphics::Paint fill;
+    fill.color = {15, 23, 42, 221};
+    builder.drawPath(card, fill);
+    graphics::Paint stroke;
+    stroke.color = {56, 189, 248, 102};
+    stroke.style = graphics::PaintStyle::Stroke;
+    stroke.stroke.width = 1.0f;
+    builder.drawPath(card, stroke);
 
     // Determine engine label from platform graphics context
     std::string engineStr = "Engine: ";
@@ -243,24 +259,33 @@ void Compositor::renderDiagnosticOverlay() {
     }
 
     char fpsBuf[64];
-    uint32_t fpsColor = 0xFF4ADE80; // Bright Lime
+    graphics::Color fpsColor{74, 222, 128, 255};
     if (m_currentFps <= 0.0f) {
         std::snprintf(fpsBuf, sizeof(fpsBuf), "FPS: 0 (Idle)");
-        fpsColor = 0xFF94A3B8; // Slate Gray when idle
+        fpsColor = {148, 163, 184, 255};
     } else {
         std::snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %.0f (%.1f ms)", m_currentFps, m_currentFrameMs);
     }
 
-    int textX = cardX + DisplayScale::px(12);
-    int textY = cardY + DisplayScale::px(10);
-    int lineSpacing = DisplayScale::px(18);
+    const float textX = cardX + 12.0f;
+    const float textY = cardY + 10.0f;
+    constexpr float lineSpacing = 18.0f;
+    constexpr float fontSize = 16.0f;
 
-    m_renderer.drawString(textX, textY, fpsBuf, fpsColor);
-    m_renderer.drawString(textX, textY + lineSpacing, engineStr, 0xFF38BDF8);     // Cyan Engine
-    m_renderer.drawString(textX, textY + lineSpacing * 2, vsyncStr, 0xFF34D399); // Emerald VSync
+    builder.drawText({textX, textY}, fpsBuf, fpsColor, fontSize);
+    builder.drawText({textX, textY + lineSpacing}, engineStr,
+                     {56, 189, 248, 255}, fontSize);
+    builder.drawText({textX, textY + lineSpacing * 2.0f}, vsyncStr,
+                     {52, 211, 153, 255}, fontSize);
     char composeBuf[64];
     std::snprintf(composeBuf, sizeof(composeBuf), "Compose: %.2f ms", m_lastComposeMs);
-    m_renderer.drawString(textX, textY + lineSpacing * 3, composeBuf, 0xFFFACC15);
+    builder.drawText({textX, textY + lineSpacing * 3.0f}, composeBuf,
+                     {250, 204, 21, 255}, fontSize);
+    raster->replayDisplayList(
+        builder.build(),
+        {{static_cast<float>(m_renderer.getWidth()) / deviceScale,
+          static_cast<float>(m_renderer.getHeight()) / deviceScale},
+         {m_renderer.getWidth(), m_renderer.getHeight()}, deviceScale});
 }
 
 void Compositor::renderFrame() {
@@ -299,7 +324,7 @@ void Compositor::renderFrame() {
     for (auto& [surfaceKey, entry] : m_surfaces) {
         for (const auto& release : entry.pendingDmaBufReleases) {
             if (release.texture != 0) {
-                m_renderer.getSkiaRenderer()->releaseDmaBufTexture(release.texture);
+                m_renderer.getRasterRenderer()->releaseDmaBufTexture(release.texture);
             }
             if (entry.clientFd >= 0 && release.bufferId != 0) {
                 protocol::LCLHeader header{};
@@ -351,7 +376,7 @@ void Compositor::renderFrame() {
             SurfaceRegistry::releaseBuffer(found->second);
             for (const auto& release : found->second.pendingDmaBufReleases) {
                 if (release.texture != 0) {
-                    m_renderer.getSkiaRenderer()->releaseDmaBufTexture(release.texture);
+                    m_renderer.getRasterRenderer()->releaseDmaBufTexture(release.texture);
                 }
             }
             found->second.pendingDmaBufReleases.clear();

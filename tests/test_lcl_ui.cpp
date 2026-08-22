@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
-#include "lcl-ui/core/canvas.hpp"
+#include "lcl-graphics/canvas.hpp"
 #include "lcl-ui/core/caret_presentation_controller.hpp"
-#include "lcl-ui/core/rect.hpp"
+#include "lcl-graphics/geometry.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/layout/yoga_node.hpp"
@@ -16,8 +16,9 @@
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
 #include "lcl-ui/widgets/toggle.hpp"
-#include "render/skia_renderer.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_renderer.hpp"
+#include "render/raster_canvas.hpp"
+#include "render/path_rasterizer.hpp"
 #include "render/backdrop_filter_geometry.hpp"
 #include "render/text_metrics.hpp"
 
@@ -33,10 +34,11 @@
 #include <vector>
 
 using namespace lcl::ui;
+namespace graphics = lcl::graphics;
 
 namespace {
 
-class RecordingCanvas final : public Canvas {
+class RecordingCanvas final : public graphics::Canvas {
 public:
     bool initialize(uint32_t width, uint32_t height, uint32_t* targetPixels) override {
         initialized = true;
@@ -51,7 +53,11 @@ public:
         pixelHeight = height;
     }
 
-    void setContentScale(float value) override { contentScale = value; }
+    void setRenderTarget(const graphics::RenderTarget& value) override {
+        target = value;
+        deviceScale = value.deviceScale;
+    }
+    const graphics::RenderTarget& renderTarget() const override { return target; }
     void beginFrame() override { ++beginCount; }
     void endFrame() override { ++endCount; }
     uint32_t* rasterBuffer() override { return pixels; }
@@ -73,17 +79,17 @@ public:
         return true;
     }
     bool isDmaBufFrameActive() const override { return hasDmaBufTransport(); }
-    std::optional<DmaBufFrame> takeDmaBufFrame() override {
+    std::optional<graphics::DmaBufFrame> takeDmaBufFrame() override {
         if (!hasDmaBufTransport()) return std::nullopt;
         const int fd = dup(STDIN_FILENO);
         if (fd < 0) return std::nullopt;
-        return DmaBufFrame{nextBufferId++, dmaContentWidth, dmaContentHeight,
+        return graphics::DmaBufFrame{nextBufferId++, dmaContentWidth, dmaContentHeight,
                            dmaBackingWidth, dmaBackingHeight, dmaBackingWidth * 4,
                            lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888, ~uint64_t{0}, fd};
     }
     void releaseDmaBufFrame(uint32_t bufferId) override { releasedBufferIds.push_back(bufferId); }
-    void clipRect(const Rect& rect) override { clips.push_back(rect); }
-    bool beginCachedLayer(CachedLayerId id, const Rect& bounds) override {
+    void clipRect(const graphics::RectF& rect) override { clips.push_back(rect); }
+    bool beginCachedLayer(CachedLayerId id, const graphics::RectF& bounds) override {
         ++cachedLayerBeginCount;
         activeCachedLayer = id;
         cachedLayerBounds.push_back(bounds);
@@ -94,7 +100,7 @@ public:
         cachedLayers.insert(activeCachedLayer);
         activeCachedLayer = 0;
     }
-    bool drawCachedLayer(CachedLayerId id, const Rect& destination,
+    bool drawCachedLayer(CachedLayerId id, const graphics::RectF& destination,
                          float) override {
         if (!cachedLayers.contains(id)) return false;
         ++cachedLayerDrawCount;
@@ -102,18 +108,22 @@ public:
         return true;
     }
 
-    void clearRect(const Rect& rect, Color color) override {
+    void clearRect(const graphics::RectF& rect, graphics::Color color) override {
         clearedRects.push_back(rect);
         clearColors.push_back(color);
     }
 
-    void drawRect(const Rect& rect, Color color) override {
+    void drawPath(const graphics::Path&, const graphics::Paint&) override {
+        ++pathDrawCount;
+    }
+
+    void drawRect(const graphics::RectF& rect, graphics::Color color) override {
         rects.push_back(rect);
         colors.push_back(color);
     }
 
-    void drawRoundedRect(const Rect& rect, float radius, Color color,
-                         Color border, float borderWidth, float roundness) override {
+    void drawRoundedRect(const graphics::RectF& rect, float radius, graphics::Color color,
+                         graphics::Color border, float borderWidth, float roundness) override {
         roundedRects.push_back(rect);
         roundedRadii.push_back(radius);
         colors.push_back(color);
@@ -122,7 +132,7 @@ public:
         roundnesses.push_back(roundness);
     }
 
-    void drawTopRoundedRect(const Rect& rect, float radius, Color color,
+    void drawTopRoundedRect(const graphics::RectF& rect, float radius, graphics::Color color,
                             float roundness) override {
         topRoundedRects.push_back(rect);
         roundedRadii.push_back(radius);
@@ -130,8 +140,8 @@ public:
         roundnesses.push_back(roundness);
     }
 
-    void drawText(float x, float y, const std::string& text, Color color,
-                  float fontSize, FontFamily family) override {
+    void drawText(float x, float y, const std::string& text, graphics::Color color,
+                  float fontSize, graphics::FontFamily family) override {
         textPositions.push_back({x, y, 0.0f, 0.0f});
         texts.push_back(text);
         colors.push_back(color);
@@ -139,8 +149,8 @@ public:
         fontFamilies.push_back(family);
     }
 
-    void drawRasterizedText(float x, float y, const std::string& text, Color color,
-                            float fontSize, FontFamily family) override {
+    void drawRasterizedText(float x, float y, const std::string& text, graphics::Color color,
+                            float fontSize, graphics::FontFamily family) override {
         rasterTextPositions.push_back({x, y, 0.0f, 0.0f});
         rasterTexts.push_back(text);
         colors.push_back(color);
@@ -148,7 +158,7 @@ public:
         fontFamilies.push_back(family);
     }
 
-    float measureText(const std::string& text, float fontSize, FontFamily family) override {
+    float measureText(const std::string& text, float fontSize, graphics::FontFamily family) override {
         if (useSharedTextMetrics) {
             return lcl::render::text_metrics::measureText(text, fontSize, family) *
                 measurementScale;
@@ -156,8 +166,8 @@ public:
         return static_cast<float>(text.size()) * fontSize * 0.6f * measurementScale;
     }
 
-    void drawBuffer(int, int, int, int, const uint32_t*, int, float,
-                    float, float, bool, int, int) override {
+    void drawBuffer(const graphics::RectF&, int, int, const uint32_t*, int,
+                    float, float, float, bool) override {
         ++bufferDrawCount;
     }
 
@@ -167,10 +177,12 @@ public:
     uint32_t* pixels{nullptr};
     uint32_t pixelWidth{0};
     uint32_t pixelHeight{0};
-    float contentScale{1.0f};
+    float deviceScale{1.0f};
+    graphics::RenderTarget target{};
     int beginCount{0};
     int endCount{0};
     int bufferDrawCount{0};
+    int pathDrawCount{0};
     int targetSetCount{0};
     int cachedLayerBeginCount{0};
     int cachedLayerEndCount{0};
@@ -188,23 +200,23 @@ public:
     int dmaConfigureCount{0};
     int dmaCapacityGrowCount{0};
     std::vector<uint32_t> releasedBufferIds;
-    std::vector<Rect> rects;
-    std::vector<Rect> clearedRects;
-    std::vector<Rect> roundedRects;
-    std::vector<Rect> topRoundedRects;
-    std::vector<Rect> textPositions;
-    std::vector<Rect> rasterTextPositions;
-    std::vector<Rect> clips;
-    std::vector<Rect> cachedLayerBounds;
-    std::vector<Rect> cachedLayerDestinations;
+    std::vector<graphics::RectF> rects;
+    std::vector<graphics::RectF> clearedRects;
+    std::vector<graphics::RectF> roundedRects;
+    std::vector<graphics::RectF> topRoundedRects;
+    std::vector<graphics::RectF> textPositions;
+    std::vector<graphics::RectF> rasterTextPositions;
+    std::vector<graphics::RectF> clips;
+    std::vector<graphics::RectF> cachedLayerBounds;
+    std::vector<graphics::RectF> cachedLayerDestinations;
     std::vector<float> roundedRadii;
     std::vector<float> borderWidths;
     std::vector<float> roundnesses;
     std::vector<float> fontSizes;
-    std::vector<FontFamily> fontFamilies;
-    std::vector<Color> colors;
-    std::vector<Color> clearColors;
-    std::vector<Color> borders;
+    std::vector<graphics::FontFamily> fontFamilies;
+    std::vector<graphics::Color> colors;
+    std::vector<graphics::Color> clearColors;
+    std::vector<graphics::Color> borders;
     std::vector<std::string> texts;
     std::vector<std::string> rasterTexts;
     std::unordered_set<CachedLayerId> cachedLayers;
@@ -222,7 +234,7 @@ public:
 
 class CountingPaintWidget final : public Widget {
 public:
-    void draw(Canvas& canvas, const Rect&) override {
+    void draw(graphics::Canvas& canvas, const graphics::RectF&) override {
         ++paintCount;
         canvas.drawRect(m_absoluteBounds, {20, 40, 60, 255});
     }
@@ -232,9 +244,9 @@ public:
 
 class PointerProbeWidget final : public Widget {
 public:
-    explicit PointerProbeWidget(Color color = {0, 0, 0, 0}) : m_color(color) {}
+    explicit PointerProbeWidget(graphics::Color color = {0, 0, 0, 0}) : m_color(color) {}
 
-    void draw(Canvas& canvas, const Rect&) override {
+    void draw(graphics::Canvas& canvas, const graphics::RectF&) override {
         ++paintCount;
         canvas.drawRect(m_absoluteBounds, m_color);
     }
@@ -251,7 +263,7 @@ public:
         return true;
     }
 
-    Color m_color;
+    graphics::Color m_color;
     bool captureOnDown{false};
     int* cancelCountSink{nullptr};
     int paintCount{0};
@@ -262,21 +274,123 @@ public:
 
 } // namespace
 
+TEST(LclGraphicsTest, DisplayListKeepsLogicalGeometryAcrossDeviceScales) {
+    for (const float scale : {1.0f, 1.25f, 1.5f, 2.0f}) {
+        const uint32_t pixelWidth = static_cast<uint32_t>(std::ceil(40.0f * scale));
+        const uint32_t pixelHeight = static_cast<uint32_t>(std::ceil(30.0f * scale));
+        std::vector<uint32_t> pixels(
+            static_cast<size_t>(pixelWidth) * pixelHeight, 0u);
+        lcl::render::RasterRenderer renderer;
+        ASSERT_TRUE(renderer.initialize(pixelWidth, pixelHeight, nullptr, pixels.data()));
+        lcl::render::RasterCanvas canvas(renderer);
+        canvas.setRenderTarget({{40.0f, 30.0f}, {pixelWidth, pixelHeight}, scale});
+
+        graphics::Path path;
+        path.addRRect({{3.25f, 4.5f, 20.0f, 12.0f}, 4.0f, 4.0f, 2.0f});
+        graphics::Paint paint{};
+        paint.color = {255, 255, 255, 255};
+        paint.style = graphics::PaintStyle::Stroke;
+        paint.stroke.width = 1.0f;
+
+        canvas.beginFrame();
+        canvas.drawPath(path, paint);
+        canvas.endFrame();
+
+        ASSERT_EQ(canvas.lastDisplayList().commands().size(), 1u);
+        const auto* draw = std::get_if<graphics::DrawPathCommand>(
+            &canvas.lastDisplayList().commands().front());
+        ASSERT_NE(draw, nullptr);
+        EXPECT_FLOAT_EQ(draw->paint.stroke.width, 1.0f);
+        EXPECT_EQ(draw->paint.stroke.scaling,
+                  graphics::StrokeScaling::ScaleWithTransform);
+        ASSERT_FALSE(draw->path.elements().empty());
+        EXPECT_FLOAT_EQ(draw->path.elements().front().p0.x, 7.25f);
+        EXPECT_FLOAT_EQ(draw->path.elements().front().p0.y, 4.5f);
+    }
+}
+
+TEST(LclGraphicsTest, CanvasHelperPathsRetainGpuPrimitiveMetadata) {
+    graphics::Path rect;
+    rect.addRect({2.0f, 3.0f, 80.0f, 40.0f});
+    ASSERT_NE(rect.primitive(), nullptr);
+    EXPECT_EQ(rect.primitive()->kind, graphics::PathPrimitiveKind::Rect);
+
+    graphics::Path rounded;
+    rounded.addRRect({{4.0f, 5.0f, 120.0f, 60.0f}, 12.0f, 12.0f, 2.0f});
+    ASSERT_NE(rounded.primitive(), nullptr);
+    EXPECT_EQ(rounded.primitive()->kind, graphics::PathPrimitiveKind::RRect);
+
+    graphics::Path topRounded;
+    topRounded.addTopRRect({6.0f, 7.0f, 160.0f, 32.0f}, 10.0f, 2.0f);
+    ASSERT_NE(topRounded.primitive(), nullptr);
+    EXPECT_EQ(topRounded.primitive()->kind,
+              graphics::PathPrimitiveKind::TopRRect);
+
+    graphics::Path generic;
+    generic.moveTo(0.0f, 0.0f).lineTo(20.0f, 0.0f)
+        .lineTo(10.0f, 20.0f).close();
+    EXPECT_EQ(generic.primitive(), nullptr);
+
+    rect.lineTo(100.0f, 100.0f);
+    EXPECT_EQ(rect.primitive(), nullptr);
+}
+
+TEST(LclGraphicsTest, NormalStrokeScalesButHairlineRemainsOneDevicePixel) {
+    graphics::Path path;
+    path.addRect({4.0f, 4.0f, 8.0f, 8.0f});
+    graphics::Paint normal{};
+    normal.color = {255, 255, 255, 255};
+    normal.style = graphics::PaintStyle::Stroke;
+    normal.stroke.width = 2.0f;
+    graphics::Paint hairline = normal;
+    hairline.stroke.scaling = graphics::StrokeScaling::Hairline;
+
+    const auto transform = graphics::Matrix3::scale(2.0f, 2.0f);
+    const auto normalPixels = lcl::render::rasterizePath(path, normal, transform);
+    const auto hairlinePixels = lcl::render::rasterizePath(path, hairline, transform);
+    ASSERT_FALSE(normalPixels.empty());
+    ASSERT_FALSE(hairlinePixels.empty());
+    EXPECT_GT(normalPixels.width, hairlinePixels.width);
+    EXPECT_GT(normalPixels.height, hairlinePixels.height);
+}
+
+TEST(LclGraphicsTest, DamageConversionUsesFloorMinAndCeilMax) {
+    const auto device = graphics::enclosingDeviceRect(
+        {1.1f, 2.2f, 3.3f, 4.4f}, graphics::Matrix3::scale(1.25f, 1.25f));
+    EXPECT_FLOAT_EQ(device.x, 1.0f);
+    EXPECT_FLOAT_EQ(device.y, 2.0f);
+    EXPECT_FLOAT_EQ(device.width, 5.0f);
+    EXPECT_FLOAT_EQ(device.height, 7.0f);
+}
+
+TEST(LclGraphicsTest, SvgStyleArcFlattensToCurvedEndpointGeometry) {
+    graphics::Path path;
+    path.moveTo(0.0f, 0.0f)
+        .arcTo(10.0f, 10.0f, 0.0f, false, true, 20.0f, 0.0f);
+    const auto contours = graphics::flattenPath(path, graphics::Matrix3::identity());
+    ASSERT_EQ(contours.size(), 1u);
+    ASSERT_GT(contours.front().points.size(), 2u);
+    EXPECT_NEAR(contours.front().points.front().x, 0.0f, 0.001f);
+    EXPECT_NEAR(contours.front().points.front().y, 0.0f, 0.001f);
+    EXPECT_NEAR(contours.front().points.back().x, 20.0f, 0.001f);
+    EXPECT_NEAR(contours.front().points.back().y, 0.0f, 0.001f);
+}
+
 TEST(LclUiTest, RectMath) {
-    Rect r1{10.0f, 10.0f, 50.0f, 50.0f};
-    Rect r2{30.0f, 30.0f, 50.0f, 50.0f};
+    graphics::RectF r1{10.0f, 10.0f, 50.0f, 50.0f};
+    graphics::RectF r2{30.0f, 30.0f, 50.0f, 50.0f};
 
     EXPECT_TRUE(r1.intersects(r2));
     EXPECT_TRUE(r1.containsPoint(20.0f, 20.0f));
     EXPECT_FALSE(r1.containsPoint(70.0f, 70.0f));
 
-    Rect intersection = r1.intersection(r2);
+    graphics::RectF intersection = r1.intersection(r2);
     EXPECT_EQ(intersection.x, 30.0f);
     EXPECT_EQ(intersection.y, 30.0f);
     EXPECT_EQ(intersection.width, 30.0f);
     EXPECT_EQ(intersection.height, 30.0f);
 
-    Rect unionRect = r1.unionWith(r2);
+    graphics::RectF unionRect = r1.unionWith(r2);
     EXPECT_EQ(unionRect.x, 10.0f);
     EXPECT_EQ(unionRect.y, 10.0f);
     EXPECT_EQ(unionRect.width, 70.0f);
@@ -289,7 +403,7 @@ TEST(LclUiTest, WidgetsUseBackendNeutralCanvas) {
     root->getYogaNode().setWidth(120.0f);
     root->getYogaNode().setHeight(80.0f);
 
-    auto label = std::make_unique<Text>("Canvas");
+    auto label = std::make_unique<Text>("graphics::Canvas");
     label->setTextColor({230, 231, 232, 255});
     root->addChild(std::move(label));
 
@@ -300,18 +414,18 @@ TEST(LclUiTest, WidgetsUseBackendNeutralCanvas) {
     ASSERT_EQ(canvas.rects.size(), 1u);
     EXPECT_EQ(canvas.colors.front().r, 10);
     ASSERT_EQ(canvas.texts.size(), 1u);
-    EXPECT_EQ(canvas.texts.front(), "Canvas");
+    EXPECT_EQ(canvas.texts.front(), "graphics::Canvas");
 }
 
 TEST(LclUiTest, TextYogaMeasurementMatchesRendererGlyphAdvances) {
     std::vector<uint32_t> pixels(512 * 96, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(512, 96, nullptr, pixels.data()));
 
     for (const std::string& value : {"iiiiiiii", "WWWWWWWW", "ScrollView Test Paneli"}) {
         Text text(value);
         text.setFontSize(18.0f);
-        text.getYogaNode().calculateLayout(512.0f, 96.0f);
+        text.getYogaNode().calculateLayout(YGUndefined, YGUndefined);
 
         EXPECT_NEAR(text.getYogaNode().getLayoutWidth(), renderer.measureString(value, 18.0f), 0.01f)
             << value;
@@ -320,7 +434,7 @@ TEST(LclUiTest, TextYogaMeasurementMatchesRendererGlyphAdvances) {
 
 TEST(LclUiTest, FlexCenteredTextUsesItsMeasuredGlyphWidthForOrigin) {
     std::vector<uint32_t> pixels(400 * 96, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(400, 96, nullptr, pixels.data()));
 
     for (const std::string& value : {"iiiiiiii", "WWWWWWWW", "ScrollView Test Paneli"}) {
@@ -342,7 +456,7 @@ TEST(LclUiTest, FlexCenteredTextUsesItsMeasuredGlyphWidthForOrigin) {
             << value;
 
         RecordingCanvas canvas;
-        root->draw(canvas, Rect{0.0f, 0.0f, 400.0f, 96.0f});
+        root->draw(canvas, graphics::RectF{0.0f, 0.0f, 400.0f, 96.0f});
         ASSERT_EQ(canvas.textPositions.size(), 1u);
         EXPECT_NEAR(canvas.textPositions.front().x, labelPtr->getAbsoluteBounds().x, 0.01f)
             << value;
@@ -351,26 +465,26 @@ TEST(LclUiTest, FlexCenteredTextUsesItsMeasuredGlyphWidthForOrigin) {
 
 TEST(LclUiTest, TextMeasurementUpdatesAfterContentAndFamilyChanges) {
     std::vector<uint32_t> pixels(512 * 96, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(512, 96, nullptr, pixels.data()));
 
     Text text("iiiiiiii");
     text.setFontSize(18.0f);
-    text.getYogaNode().calculateLayout(512.0f, 96.0f);
+    text.getYogaNode().calculateLayout(YGUndefined, YGUndefined);
     const float narrowWidth = text.getYogaNode().getLayoutWidth();
 
     text.setText("WWWWWWWW");
-    text.getYogaNode().calculateLayout(512.0f, 96.0f);
+    text.getYogaNode().calculateLayout(YGUndefined, YGUndefined);
     const float wideWidth = text.getYogaNode().getLayoutWidth();
     EXPECT_NE(wideWidth, narrowWidth);
     EXPECT_NEAR(wideWidth, renderer.measureString("WWWWWWWW", 18.0f), 0.01f);
 
     text.setFontSize(24.0f);
-    text.getYogaNode().calculateLayout(512.0f, 96.0f);
+    text.getYogaNode().calculateLayout(YGUndefined, YGUndefined);
     EXPECT_NEAR(text.getYogaNode().getLayoutWidth(), renderer.measureString("WWWWWWWW", 24.0f), 0.01f);
 
-    text.setFontFamily(FontFamily::Monospace);
-    text.getYogaNode().calculateLayout(512.0f, 96.0f);
+    text.setFontFamily(graphics::FontFamily::Monospace);
+    text.getYogaNode().calculateLayout(YGUndefined, YGUndefined);
     EXPECT_NEAR(text.getYogaNode().getLayoutWidth(),
                 renderer.measureMonospaceString("WWWWWWWW", 24.0f), 0.01f);
 }
@@ -381,7 +495,7 @@ TEST(LclUiTest, TextFieldPlaceholderAndCaretFollowFocusAndValueState) {
     field.getYogaNode().setWidth(180.0f);
     field.getYogaNode().calculateLayout(180.0f, 36.0f);
     field.syncLayout();
-    const Rect damage{-10.0f, -10.0f, 220.0f, 80.0f};
+    const graphics::RectF damage{-10.0f, -10.0f, 220.0f, 80.0f};
 
     RecordingCanvas canvas;
     field.draw(canvas, damage);
@@ -475,7 +589,7 @@ TEST(LclUiTest, TextFieldCaretPresentationResetsForEditingAndCaretActivity) {
     field.getYogaNode().calculateLayout(180.0f, 36.0f);
     field.syncLayout();
     field.onFocusGained(FocusEvent{FocusEventType::Gained});
-    const Rect damage{-10.0f, -10.0f, 220.0f, 80.0f};
+    const graphics::RectF damage{-10.0f, -10.0f, 220.0f, 80.0f};
     RecordingCanvas canvas;
 
     auto expectVisibleCaret = [&] {
@@ -599,7 +713,7 @@ TEST(LclUiTest, TextFieldFocusTransferMovesTheActiveCaretPresentation) {
     }
 
     EventDispatcher dispatcher;
-    const Rect damage{-10.0f, -10.0f, 220.0f, 80.0f};
+    const graphics::RectF damage{-10.0f, -10.0f, 220.0f, 80.0f};
     RecordingCanvas canvas;
     dispatcher.setFocus(&first);
     EXPECT_TRUE(coordinator.hasActiveAnimations());
@@ -650,7 +764,7 @@ TEST(LclUiTest, TextFieldCaretUsesActiveCanvasProportionalMetrics) {
     field.getYogaNode().calculateLayout(240.0f, 36.0f);
     field.syncLayout();
     field.onFocusGained(FocusEvent{FocusEventType::Gained});
-    const Rect damage{-10.0f, -10.0f, 280.0f, 80.0f};
+    const graphics::RectF damage{-10.0f, -10.0f, 280.0f, 80.0f};
 
     RecordingCanvas canvas;
     canvas.useSharedTextMetrics = true;
@@ -666,7 +780,7 @@ TEST(LclUiTest, TextFieldCaretUsesActiveCanvasProportionalMetrics) {
     field.draw(canvas, damage);
     ASSERT_EQ(canvas.rects.size(), 1u);
     const float expectedAdvance = lcl::render::text_metrics::measureText(
-        "Wi", 14.0f, FontFamily::Interface) * canvas.measurementScale;
+        "Wi", 14.0f, graphics::FontFamily::Interface) * canvas.measurementScale;
     EXPECT_NEAR(canvas.rects.back().x - emptyCaretX, expectedAdvance, 0.01f);
 }
 
@@ -685,14 +799,14 @@ TEST(LclUiTest, TextFieldHorizontallyScrollsLongTextAndClipsCaret) {
     ASSERT_FALSE(canvas.clips.empty());
     ASSERT_FALSE(canvas.textPositions.empty());
     ASSERT_EQ(canvas.rects.size(), 1u);
-    const Rect viewport = canvas.clips.back();
-    const Rect caret = canvas.rects.back();
+    const graphics::RectF viewport = canvas.clips.back();
+    const graphics::RectF caret = canvas.rects.back();
     EXPECT_LT(canvas.textPositions.back().x, viewport.x);
     EXPECT_GE(caret.x, viewport.x);
     EXPECT_LE(caret.x + caret.width, viewport.x + viewport.width + 0.01f);
     EXPECT_NEAR(caret.x - canvas.textPositions.back().x,
                 lcl::render::text_metrics::measureText(
-                    value, 14.0f, FontFamily::Interface),
+                    value, 14.0f, graphics::FontFamily::Interface),
                 0.01f);
 }
 
@@ -703,7 +817,7 @@ TEST(LclUiTest, TextFieldCaretWalkUsesCodepointPrefixesForAsciiAndUtf8) {
         {"", "ş", "şg", "şğı", "şğıİ", "şğıİö", "şğıİöü"},
         {"", "ǩ", "ǩž", "ǩžʒ"},
     };
-    const Rect damage{-10.0f, -10.0f, 700.0f, 80.0f};
+    const graphics::RectF damage{-10.0f, -10.0f, 700.0f, 80.0f};
 
     for (const auto& prefixes : prefixSets) {
         const std::string& value = prefixes.back();
@@ -727,7 +841,7 @@ TEST(LclUiTest, TextFieldCaretWalkUsesCodepointPrefixesForAsciiAndUtf8) {
             ASSERT_EQ(canvas.textPositions.size(), 1u);
             EXPECT_NEAR(canvas.rects.back().x - canvas.textPositions.back().x,
                         lcl::render::text_metrics::measureText(
-                            prefixes[index], 14.0f, FontFamily::Interface),
+                            prefixes[index], 14.0f, graphics::FontFamily::Interface),
                         0.01f);
             if (index + 1 < prefixes.size()) {
                 ASSERT_TRUE(field.onKeyDown(KeyEvent{
@@ -747,7 +861,7 @@ TEST(LclUiTest, TextFieldCaretWalkUsesCodepointPrefixesForAsciiAndUtf8) {
             ASSERT_EQ(canvas.textPositions.size(), 1u);
             EXPECT_NEAR(canvas.rects.back().x - canvas.textPositions.back().x,
                         lcl::render::text_metrics::measureText(
-                            prefixes[index - 1], 14.0f, FontFamily::Interface),
+                            prefixes[index - 1], 14.0f, graphics::FontFamily::Interface),
                         0.01f);
         }
     }
@@ -759,14 +873,14 @@ TEST(LclUiTest, TextFieldPointerCaretPositionUsesUtf8CodepointBoundaries) {
     field.getYogaNode().calculateLayout(300.0f, 36.0f);
     field.syncLayout();
     field.onFocusGained(FocusEvent{FocusEventType::Gained});
-    const Rect damage{-10.0f, -10.0f, 340.0f, 80.0f};
+    const graphics::RectF damage{-10.0f, -10.0f, 340.0f, 80.0f};
 
     RecordingCanvas canvas;
     canvas.useSharedTextMetrics = true;
     field.draw(canvas, damage);
     ASSERT_EQ(canvas.textPositions.size(), 1u);
     const float prefixWidth = lcl::render::text_metrics::measureText(
-        "abcç", 14.0f, FontFamily::Interface);
+        "abcç", 14.0f, graphics::FontFamily::Interface);
     const float pointerX = canvas.textPositions.back().x + prefixWidth;
 
     ASSERT_TRUE(field.onPointerDown(PointerEvent{
@@ -801,14 +915,14 @@ TEST(LclUiTest, TextFieldUtf8InsertionLeavesCaretAfterInsertedCodepoints) {
     ASSERT_EQ(canvas.textPositions.size(), 1u);
     EXPECT_NEAR(canvas.rects.back().x - canvas.textPositions.back().x,
                 lcl::render::text_metrics::measureText(
-                    "aşğ", 14.0f, FontFamily::Interface),
+                    "aşğ", 14.0f, graphics::FontFamily::Interface),
                 0.01f);
 }
 
 TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     auto canvas = std::make_unique<RecordingCanvas>();
     RecordingCanvas* recorded = canvas.get();
-    WindowApp app(std::move(canvas), 64, 48, "Injected Canvas Test");
+    WindowApp app(std::move(canvas), 64, 48, "Injected graphics::Canvas Test");
     ASSERT_TRUE(recorded->initialized);
 
     auto root = std::make_unique<Container>();
@@ -843,7 +957,7 @@ TEST(LclUiTest, LocalTransientRendersAboveContentInSingleWindowRootLayout) {
     root->addChild(std::move(content));
     app.setRootWidget(std::move(root));
 
-    auto overlay = std::make_unique<PointerProbeWidget>(Color{40, 50, 60, 255});
+    auto overlay = std::make_unique<PointerProbeWidget>(graphics::Color{40, 50, 60, 255});
     overlay->setWidth(24.0f);
     overlay->setHeight(18.0f);
     overlay->setPosition(YGEdgeLeft, 8.0f);
@@ -1253,7 +1367,7 @@ TEST_F(MenuTest, MouseAndValidatedTouchActivateButDragCancelAndDisabledDoNot) {
     ASSERT_TRUE(opened);
     auto items = popupItems();
     ASSERT_EQ(items.size(), 1u);
-    Rect bounds = items[0]->getAbsoluteBounds();
+    graphics::RectF bounds = items[0]->getAbsoluteBounds();
     sendPointer(PointerEventType::Down, bounds.x + 8.0f, bounds.y + 8.0f);
     sendPointer(PointerEventType::Up, bounds.x + 8.0f, bounds.y + 8.0f);
     EXPECT_EQ(activations, 1);
@@ -1292,7 +1406,7 @@ TEST_F(MenuTest, MouseAndValidatedTouchActivateButDragCancelAndDisabledDoNot) {
     EXPECT_EQ(activations, 2);
     EXPECT_TRUE(menu->isOpen(opened.handle));
 
-    const Rect disabledBounds = items[1]->getAbsoluteBounds();
+    const graphics::RectF disabledBounds = items[1]->getAbsoluteBounds();
     sendPointer(PointerEventType::Down, disabledBounds.x + 8.0f,
                 disabledBounds.y + 8.0f);
     sendPointer(PointerEventType::Up, disabledBounds.x + 8.0f,
@@ -1872,7 +1986,7 @@ TEST(LclUiTest, PopupPopoverUsesTheSameOutsideDismissPolicy) {
         });
     const auto openPopup = [&] {
         return popover.show(
-            Rect{260.0f, 160.0f, 30.0f, 20.0f},
+            graphics::RectF{260.0f, 160.0f, 30.0f, 20.0f},
             std::make_unique<Button>("Popup"),
             PopoverOptions{
                 .width = 120.0f,
@@ -2121,7 +2235,7 @@ TEST(LclUiTest, WindowAppCreatesPopupWithParentLocalGeometry) {
     const auto* cornerStyle =
         reinterpret_cast<const lcl::protocol::LCLMsgSetWindowCornerStyle*>(payload.data());
     EXPECT_EQ(cornerStyle->surfaceId, 2u);
-    EXPECT_FLOAT_EQ(cornerStyle->radiusPx, 10.0f);
+    EXPECT_FLOAT_EQ(cornerStyle->radius, 10.0f);
     EXPECT_FLOAT_EQ(cornerStyle->roundness, 2.0f);
     if (receivedFd >= 0) close(receivedFd);
 
@@ -2336,7 +2450,7 @@ TEST(LclUiTest, MorphUsesFinalLayoutAndFreezesWindowInputUntilSettled) {
 }
 
 TEST(LclUiTest, MorphCrossfadesFrozenOldRasterIntoFinalUi) {
-    WindowApp app(lcl::render::makeSkiaCanvas(), 4, 4, "Morph raster crossfade");
+    WindowApp app(lcl::render::makeRasterCanvas(), 4, 4, "Morph raster crossfade");
     auto root = std::make_unique<Container>();
     Container* pointer = root.get();
     root->setWidth(4.0f);
@@ -2568,7 +2682,7 @@ TEST(LclUiTest, ToggleValueIsImmediateWhileThumbAnimationRetargetsOneChannel) {
     EXPECT_TRUE(coordinator.isObjectAnimating(objectId));
 
     RecordingCanvas canvas;
-    const Rect damage{-10.0f, -10.0f, 100.0f, 80.0f};
+    const graphics::RectF damage{-10.0f, -10.0f, 100.0f, 80.0f};
     toggle.draw(canvas, damage);
     ASSERT_EQ(canvas.roundedRects.size(), 3u);
     const float offX = canvas.roundedRects.back().x;
@@ -2594,14 +2708,14 @@ TEST(LclUiTest, ToggleThumbTargetsAndLogicalGeometryStayStableAcrossCanvasScale)
     Toggle toggle;
     toggle.getYogaNode().calculateLayout(60.0f, 44.0f);
     toggle.syncLayout();
-    const Rect damage{-10.0f, -10.0f, 100.0f, 80.0f};
+    const graphics::RectF damage{-10.0f, -10.0f, 100.0f, 80.0f};
 
     RecordingCanvas canvas;
-    canvas.setContentScale(1.0f);
+    canvas.setRenderTarget({{60.0f, 44.0f}, {60, 44}, 1.0f});
     toggle.draw(canvas, damage);
     ASSERT_EQ(canvas.roundedRects.size(), 3u);
-    const Rect offTrack = canvas.roundedRects.front();
-    const Rect offThumb = canvas.roundedRects.back();
+    const graphics::RectF offTrack = canvas.roundedRects.front();
+    const graphics::RectF offThumb = canvas.roundedRects.back();
     EXPECT_FLOAT_EQ(offTrack.width, 52.0f);
     EXPECT_FLOAT_EQ(offTrack.height, 32.0f);
     EXPECT_FLOAT_EQ(offThumb.x, 7.0f);
@@ -2609,11 +2723,11 @@ TEST(LclUiTest, ToggleThumbTargetsAndLogicalGeometryStayStableAcrossCanvasScale)
 
     toggle.setValue(true);
     canvas.roundedRects.clear();
-    canvas.setContentScale(2.0f);
+    canvas.setRenderTarget({{60.0f, 44.0f}, {120, 88}, 2.0f});
     toggle.draw(canvas, damage);
     ASSERT_EQ(canvas.roundedRects.size(), 3u);
-    const Rect onTrack = canvas.roundedRects.front();
-    const Rect onThumb = canvas.roundedRects.back();
+    const graphics::RectF onTrack = canvas.roundedRects.front();
+    const graphics::RectF onThumb = canvas.roundedRects.back();
     EXPECT_FLOAT_EQ(onTrack.x, offTrack.x);
     EXPECT_FLOAT_EQ(onTrack.y, offTrack.y);
     EXPECT_FLOAT_EQ(onTrack.width, offTrack.width);
@@ -2892,7 +3006,7 @@ TEST(LclUiTest, WindowAppSendsOneWindowCornerStyle) {
     ASSERT_EQ(payload.size(), sizeof(lcl::protocol::LCLMsgSetWindowCornerStyle));
     const auto* style = reinterpret_cast<const lcl::protocol::LCLMsgSetWindowCornerStyle*>(payload.data());
     EXPECT_EQ(style->surfaceId, 5u);
-    EXPECT_FLOAT_EQ(style->radiusPx, 20.0f);
+    EXPECT_FLOAT_EQ(style->radius, 20.0f);
     EXPECT_FLOAT_EQ(style->roundness, 3.2f);
 
     close(sockets[0]);
@@ -3045,7 +3159,7 @@ TEST(LclUiTest, GlassPreservesZeroControlsInsteadOfSynthesizingDefaults) {
     EXPECT_FLOAT_EQ(glass.params[2], 0.0f);
 }
 
-TEST(LclUiTest, WindowAppScalesOnlyPixelBasedGlassAndBlurControls) {
+TEST(LclUiTest, WindowAppKeepsEffectControlsInLogicalUnits) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
 
@@ -3094,9 +3208,9 @@ TEST(LclUiTest, WindowAppScalesOnlyPixelBasedGlassAndBlurControls) {
         payload.data() + sizeof(lcl::protocol::LCLMsgSetEffectGraphHeader) +
         sizeof(lcl::protocol::EffectRegion));
     EXPECT_EQ(filters[0].type, lcl::protocol::FilterType::Blur);
-    EXPECT_FLOAT_EQ(filters[0].value, 16.0f);
+    EXPECT_FLOAT_EQ(filters[0].value, 8.0f);
     EXPECT_EQ(filters[1].type, lcl::protocol::FilterType::Glass);
-    EXPECT_FLOAT_EQ(filters[1].params[0], 60.0f);
+    EXPECT_FLOAT_EQ(filters[1].params[0], 30.0f);
     EXPECT_FLOAT_EQ(filters[1].params[1], 3.0f);
     EXPECT_FLOAT_EQ(filters[1].params[2], 0.0f);
     if (receivedFd >= 0) close(receivedFd);
@@ -3124,7 +3238,7 @@ TEST(LclUiTest, SoftwareGlassZeroThicknessOrRefractionLeavesPixelsUntouched) {
         glass.params[0] = thickness;
         glass.params[1] = refraction;
         glass.params[2] = 7.0f;
-        lcl::render::SkiaRenderer renderer;
+        lcl::render::RasterRenderer renderer;
         EXPECT_TRUE(renderer.initialize(8, 8, nullptr, pixels.data()));
         renderer.applyBackdropFilter(0, 0, 8, 8, 0.0f, 2.0f, 1.0f, {glass});
         return std::pair{std::move(pixels), original};
@@ -3152,7 +3266,7 @@ TEST(LclUiTest, SoftwareGlassZeroDispersionDoesNotSplitColorChannels) {
     glass.params[0] = 6.0f;
     glass.params[1] = 3.0f;
     glass.params[2] = 0.0f;
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(16, 16, nullptr, pixels.data()));
     renderer.applyBackdropFilter(0, 0, 16, 16, 0.0f, 2.0f, 1.0f, {glass});
 
@@ -3197,8 +3311,8 @@ TEST(LclUiTest, PassiveBackdropEffectDoesNotRequireAFullWindowRoundedRaster) {
     EXPECT_FLOAT_EQ(effects.front().cornerRoundness, 3.2f);
 }
 
-TEST(LclUiTest, SkiaCanvasInjectionPreservesRasterOutput) {
-    WindowApp app(lcl::render::makeSkiaCanvas(), 8, 8, "Skia Canvas Test");
+TEST(LclUiTest, RasterCanvasInjectionPreservesRasterOutput) {
+    WindowApp app(lcl::render::makeRasterCanvas(), 8, 8, "LCL raster graphics::Canvas Test");
     auto root = std::make_unique<Container>();
     root->setBackgroundColor({11, 22, 33, 255});
     root->getYogaNode().setWidth(8.0f);
@@ -3214,12 +3328,12 @@ TEST(LclUiTest, RenderPassDamageRect) {
     RenderPass pass;
     EXPECT_FALSE(pass.hasDamage());
 
-    pass.addDirtyRect(Rect{10.0f, 10.0f, 20.0f, 20.0f});
-    pass.addDirtyRect(Rect{50.0f, 50.0f, 20.0f, 20.0f});
+    pass.addDirtyRect(graphics::RectF{10.0f, 10.0f, 20.0f, 20.0f});
+    pass.addDirtyRect(graphics::RectF{50.0f, 50.0f, 20.0f, 20.0f});
 
     EXPECT_TRUE(pass.hasDamage());
     EXPECT_EQ(pass.getDirtyRects().size(), 2u);
-    Rect damage = pass.getDamageRect();
+    graphics::RectF damage = pass.getDamageRect();
     EXPECT_EQ(damage.x, 10.0f);
     EXPECT_EQ(damage.y, 10.0f);
     EXPECT_EQ(damage.width, 60.0f);
@@ -3290,9 +3404,9 @@ TEST(LclUiTest, WindowAppRetainedFrameClearsOnlyChangedWidgetRegion) {
     EXPECT_FLOAT_EQ(recorded->clearedRects.front().height, 20.0f);
 }
 
-TEST(LclUiTest, SkiaRendererClearRectReplacesOnlyRequestedRetainedPixels) {
+TEST(LclUiTest, RasterRendererClearRectReplacesOnlyRequestedRetainedPixels) {
     std::vector<uint32_t> pixels(8 * 8, 0xFF123456u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(8, 8, nullptr, pixels.data()));
 
     renderer.clearRect({2.0f, 2.0f, 3.0f, 3.0f}, {0, 0, 0, 0});
@@ -3303,9 +3417,9 @@ TEST(LclUiTest, SkiaRendererClearRectReplacesOnlyRequestedRetainedPixels) {
     EXPECT_EQ(pixels[5 + 5 * 8], 0xFF123456u);
 }
 
-TEST(LclUiTest, SkiaRendererRetainedModeDoesNotClearUnchangedFramePixels) {
+TEST(LclUiTest, RasterRendererRetainedModeDoesNotClearUnchangedFramePixels) {
     std::vector<uint32_t> pixels(4 * 4, 0xFFABCDEFu);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(4, 4, nullptr, pixels.data()));
 
     renderer.setRetainsFrameBacking(true);
@@ -3455,10 +3569,10 @@ TEST(LclUiTest, ButtonStateAndClick) {
 
 TEST(LclUiTest, RendererMapsLogicalCoordinatesToFractionalBufferPixels) {
     std::vector<uint32_t> pixels(6 * 6, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(6, 6, nullptr, pixels.data()));
 
-    renderer.setContentScale(1.5f);
+    renderer.setDeviceScale(1.5f);
     renderer.drawRect({1.0f, 1.0f, 2.0f, 2.0f}, {255, 0, 0, 255});
 
     // Logical [1, 3) maps to physical [1.5, 4.5), i.e. the 3x3 raster area
@@ -3471,10 +3585,10 @@ TEST(LclUiTest, RendererMapsLogicalCoordinatesToFractionalBufferPixels) {
 
 TEST(LclUiTest, RendererMapsLogicalSubtreeToPhysicalOrigin) {
     std::vector<uint32_t> pixels(12 * 12, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(12, 12, nullptr, pixels.data()));
 
-    renderer.setContentScale(1.5f);
+    renderer.setDeviceScale(1.5f);
     renderer.setContentOrigin(3.0f, 2.0f);
     renderer.drawRect({0.0f, 0.0f, 2.0f, 2.0f}, {0, 255, 0, 255});
 
@@ -3509,14 +3623,14 @@ TEST(LclUiTest, TitlebarLayoutComesFromSharedCsdAndSsdChromeCore) {
         540.0f, 34.0f, 20.0f, "LCL Terminal", 14.0f, style);
     const lcl::chrome::WindowChromeWidget ssdChrome("LCL Terminal", style);
     const auto ssdLayout = ssdChrome.layout(
-        540.0f, 34.0f, 20.0f, 14.0f, 1.0f);
+        540.0f, 34.0f, 20.0f, 14.0f);
     EXPECT_FLOAT_EQ(ssdLayout.controlLeft, layout.controlLeft);
     EXPECT_FLOAT_EQ(ssdLayout.controlTop, layout.controlTop);
     EXPECT_FLOAT_EQ(ssdLayout.titleLeft, layout.titleLeft);
     EXPECT_FLOAT_EQ(ssdLayout.titleWidth, layout.titleWidth);
     EXPECT_EQ(ssdChrome.hitTest(layout.controlLeft + 1.0f,
                                 layout.controlTop + 1.0f,
-                                540.0f, 34.0f, 20.0f, 1.0f), 0);
+                                540.0f, 34.0f, 20.0f), 0);
     titleBar->getYogaNode().calculateLayout(540.0f, 34.0f);
     titleBar->syncLayout();
 
@@ -3574,7 +3688,7 @@ TEST(LclUiTest, WindowControlsAreGlyphFreeAndAnimateHoverPress) {
 
 TEST(LclUiTest, TopRoundedRectDoesNotLeakBelowItsCornerArc) {
     std::vector<uint32_t> pixels(64 * 64, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(64, 64, nullptr, pixels.data()));
 
     // 20px radius in a 32px-tall titlebar must keep its full outer radius.
@@ -3589,7 +3703,7 @@ TEST(LclUiTest, TopRoundedRectDoesNotLeakBelowItsCornerArc) {
 
 TEST(LclUiTest, RoundedRectPreservesTranslucentAlphaOnTransparentCanvas) {
     std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
 
     renderer.drawRoundedRect({0.0f, 0.0f, 32.0f, 32.0f}, 8.0f,
@@ -3601,7 +3715,7 @@ TEST(LclUiTest, RoundedRectPreservesTranslucentAlphaOnTransparentCanvas) {
 TEST(LclUiTest, StraightAlphaBufferCompositesSourceAlphaAtFullGlobalOpacity) {
     std::vector<uint32_t> pixels(1, 0xFF0000FFu);
     const uint32_t source = 0x66FF0000u;
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(1, 1, nullptr, pixels.data()));
 
     renderer.drawBuffer(0, 0, 1, 1, &source, 1, 1.0f);
@@ -3613,7 +3727,7 @@ TEST(LclUiTest, MaskedAndUnmaskedStraightAlphaBuffersMatchAtTheirCenters) {
     const uint32_t source = 0x6690C0F0u;
     const auto centerPixel = [&](float radius) {
         std::vector<uint32_t> pixels(5 * 5, 0xFF102030u);
-        lcl::render::SkiaRenderer renderer;
+        lcl::render::RasterRenderer renderer;
         EXPECT_TRUE(renderer.initialize(5, 5, nullptr, pixels.data()));
         renderer.drawBuffer(0, 0, 1, 1, &source, 1, 1.0f, radius, 2.0f,
                             false, 5, 5);
@@ -3627,7 +3741,7 @@ TEST(LclUiTest, StraightAlphaLayersAccumulateAlphaWithoutSquaringIt) {
     std::vector<uint32_t> pixels(1, 0x00000000u);
     const uint32_t red = 0x80FF0000u;
     const uint32_t green = 0x8000FF00u;
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(1, 1, nullptr, pixels.data()));
 
     renderer.drawBuffer(0, 0, 1, 1, &red, 1, 1.0f);
@@ -3676,7 +3790,7 @@ TEST(LclUiTest, SoftwareBackdropPathSkipsBlur) {
         0xFF708090u, 0xFFA0B0C0u,
     };
     const auto original = pixels;
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(2, 2, nullptr, pixels.data()));
 
     renderer.applyBackdropFilter(
@@ -3695,7 +3809,7 @@ TEST(LclUiTest, SoftwareBackdropTintUsesTheSameFilteredMaterialPass) {
     tint.params[1] = 32.0f;
     tint.params[2] = 48.0f;
 
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(1, 1, nullptr, pixels.data()));
     renderer.applyBackdropFilter(0, 0, 1, 1, 0.0f, 2.0f, 1.0f, {tint});
 
@@ -3708,12 +3822,12 @@ TEST(LclUiTest, SoftwareBackdropMaskUsesTheEffectRoundness) {
     };
 
     std::vector<uint32_t> circularPixels(16 * 16, 0xFF102030u);
-    lcl::render::SkiaRenderer circularRenderer;
+    lcl::render::RasterRenderer circularRenderer;
     ASSERT_TRUE(circularRenderer.initialize(16, 16, nullptr, circularPixels.data()));
     circularRenderer.applyBackdropFilter(0, 0, 16, 16, 6.0f, 2.0f, 1.0f, filters);
 
     std::vector<uint32_t> superellipsePixels(16 * 16, 0xFF102030u);
-    lcl::render::SkiaRenderer superellipseRenderer;
+    lcl::render::RasterRenderer superellipseRenderer;
     ASSERT_TRUE(superellipseRenderer.initialize(16, 16, nullptr, superellipsePixels.data()));
     superellipseRenderer.applyBackdropFilter(0, 0, 16, 16, 6.0f, 8.0f, 1.0f, filters);
 
@@ -3724,7 +3838,7 @@ TEST(LclUiTest, SoftwareBackdropMaskUsesTheEffectRoundness) {
 TEST(LclUiTest, RoundedRectPreservesSubpixelEdgeCoverageDuringScaleMotion) {
     const auto edgeAlphaAt = [](float x) {
         std::vector<uint32_t> pixels(16 * 16, 0x00000000u);
-        lcl::render::SkiaRenderer renderer;
+        lcl::render::RasterRenderer renderer;
         EXPECT_TRUE(renderer.initialize(16, 16, nullptr, pixels.data()));
         renderer.drawRoundedRect({x, 2.0f, 8.0f, 8.0f}, 2.0f,
                                  {255, 255, 255, 255}, {}, 0.0f);
@@ -3817,7 +3931,7 @@ TEST(LclUiTest, ScrollViewCachesContentUntilPaintOrGeometryChanges) {
     scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout();
 
-    const Rect fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
+    const graphics::RectF fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
     scrollView->draw(canvas, fullDamage);
     EXPECT_EQ(paintedChildPointer->paintCount, 1);
     EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
@@ -3873,7 +3987,7 @@ TEST(LclUiTest, ScrollViewDoesNotRerasterLongContentEachAnimationTick) {
     scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout();
 
-    const Rect fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
+    const graphics::RectF fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
     scrollView->draw(canvas, fullDamage);
     ASSERT_EQ(canvas.cachedLayerBeginCount, 1);
     const int initialPaints = childPtr->paintCount;
@@ -3898,9 +4012,9 @@ TEST(LclUiTest, ScrollViewDoesNotRerasterLongContentEachAnimationTick) {
 
 TEST(LclUiTest, ScrollViewCachedLayerRespectsViewportClip) {
     std::vector<uint32_t> pixels(64 * 64, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(64, 64, nullptr, pixels.data()));
-    lcl::render::SkiaCanvas canvas(renderer);
+    lcl::render::RasterCanvas canvas(renderer);
 
     auto scrollView = std::make_unique<ScrollView>();
     scrollView->setWidth(32.0f);
@@ -3996,6 +4110,7 @@ TEST(LclUiTest, ScrollViewHitTestRoutesToScrolledChild) {
     auto item2 = std::make_unique<Button>("Item 2");
     item2->setWidth(200.0f);
     item2->setHeight(50.0f);
+    item2->getYogaNode().setPositionType(YGPositionTypeAbsolute);
     item2->setPosition(YGEdgeTop, 200.0f);
 
     Button* item1Ptr = item1.get();
@@ -4028,12 +4143,12 @@ TEST(LclUiTest, ScrollViewHitTestRoutesToScrolledChild) {
 
 TEST(LclUiTest, CanvasClipDiscardsPrimitivesCompletelyOutside) {
     std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
-    lcl::render::SkiaCanvas canvas(renderer);
+    lcl::render::RasterCanvas canvas(renderer);
 
-    canvas.clipRect(Rect{0.0f, 0.0f, 10.0f, 10.0f});
-    canvas.drawRect(Rect{15.0f, 15.0f, 10.0f, 10.0f}, Color{255, 255, 255, 255});
+    canvas.clipRect(graphics::RectF{0.0f, 0.0f, 10.0f, 10.0f});
+    canvas.drawRect(graphics::RectF{15.0f, 15.0f, 10.0f, 10.0f}, graphics::Color{255, 255, 255, 255});
 
     for (uint32_t p : pixels) {
         EXPECT_EQ(p, 0x00000000u);
@@ -4042,12 +4157,12 @@ TEST(LclUiTest, CanvasClipDiscardsPrimitivesCompletelyOutside) {
 
 TEST(LclUiTest, CanvasClipClipsPartiallyIntersectingRect) {
     std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
-    lcl::render::SkiaCanvas canvas(renderer);
+    lcl::render::RasterCanvas canvas(renderer);
 
-    canvas.clipRect(Rect{0.0f, 0.0f, 16.0f, 16.0f});
-    canvas.drawRect(Rect{0.0f, 0.0f, 32.0f, 32.0f}, Color{255, 255, 255, 255});
+    canvas.clipRect(graphics::RectF{0.0f, 0.0f, 16.0f, 16.0f});
+    canvas.drawRect(graphics::RectF{0.0f, 0.0f, 32.0f, 32.0f}, graphics::Color{255, 255, 255, 255});
 
     // Inside clip
     EXPECT_EQ(pixels[5 + 5 * 32], 0xFFFFFFFFu);
@@ -4061,13 +4176,13 @@ TEST(LclUiTest, CanvasClipClipsPartiallyIntersectingRect) {
 
 TEST(LclUiTest, CanvasClipClipsTextRendering) {
     std::vector<uint32_t> pixels(64 * 64, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(64, 64, nullptr, pixels.data()));
-    lcl::render::SkiaCanvas canvas(renderer);
+    lcl::render::RasterCanvas canvas(renderer);
 
-    canvas.clipRect(Rect{0.0f, 0.0f, 32.0f, 20.0f});
+    canvas.clipRect(graphics::RectF{0.0f, 0.0f, 32.0f, 20.0f});
     // Draw text outside clip
-    canvas.drawText(0.0f, 40.0f, "Out of bounds text", Color{255, 255, 255, 255}, 14.0f, FontFamily::Interface);
+    canvas.drawText(0.0f, 40.0f, "Out of bounds text", graphics::Color{255, 255, 255, 255}, 14.0f, graphics::FontFamily::Interface);
 
     for (int y = 30; y < 64; ++y) {
         for (int x = 0; x < 64; ++x) {
@@ -4078,21 +4193,21 @@ TEST(LclUiTest, CanvasClipClipsTextRendering) {
 
 TEST(LclUiTest, CanvasClipSaveAndRestoreRestoresPreviousClip) {
     std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
-    lcl::render::SkiaRenderer renderer;
+    lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
-    lcl::render::SkiaCanvas canvas(renderer);
+    lcl::render::RasterCanvas canvas(renderer);
 
-    canvas.clipRect(Rect{0.0f, 0.0f, 24.0f, 24.0f});
+    canvas.clipRect(graphics::RectF{0.0f, 0.0f, 24.0f, 24.0f});
     canvas.saveState();
-    canvas.clipRect(Rect{0.0f, 0.0f, 8.0f, 8.0f});
+    canvas.clipRect(graphics::RectF{0.0f, 0.0f, 8.0f, 8.0f});
 
     // Draw while inner clip is active
-    canvas.drawRect(Rect{12.0f, 12.0f, 4.0f, 4.0f}, Color{255, 0, 0, 255});
+    canvas.drawRect(graphics::RectF{12.0f, 12.0f, 4.0f, 4.0f}, graphics::Color{255, 0, 0, 255});
     EXPECT_EQ(pixels[13 + 13 * 32], 0x00000000u); // Rejected by inner clip
 
     canvas.restoreState();
 
     // After restore, outer clip [0..24, 0..24] is active again
-    canvas.drawRect(Rect{12.0f, 12.0f, 4.0f, 4.0f}, Color{0, 255, 0, 255});
+    canvas.drawRect(graphics::RectF{12.0f, 12.0f, 4.0f, 4.0f}, graphics::Color{0, 255, 0, 255});
     EXPECT_EQ(pixels[13 + 13 * 32], 0xFF00FF00u); // Drawn successfully
 }

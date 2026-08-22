@@ -6,12 +6,12 @@
 namespace lcl::ui::chrome {
 
 namespace {
-Color toUiColor(const lcl::chrome::Color& color) {
-    return {color.r, color.g, color.b, color.a};
+graphics::Color toUiColor(const graphics::Color& color) {
+    return color;
 }
 
 void applyColor(Container& control, AnimatableProperty first,
-                const lcl::chrome::Color& color) {
+                const graphics::Color& color) {
     control.applyPresentationValue(first, color.r);
     control.applyPresentationValue(
         static_cast<AnimatableProperty>(static_cast<int>(first) + 1), color.g);
@@ -73,7 +73,7 @@ WindowChromeSurface::WindowChromeSurface(
         WindowChromeActions actions)
     : m_chrome(std::move(title), style), m_actions(std::move(actions)),
       m_layout(m_chrome.layout(width, titleHeight, cornerRadius,
-                               titleFontSize, 1.0f)) {
+                               titleFontSize)) {
     setBackgroundColor({0, 0, 0, 0});
     setBorderRadius(0.0f);
     getYogaNode().setPositionType(YGPositionTypeAbsolute);
@@ -196,7 +196,7 @@ WindowTitlebarLayout calculateWindowTitlebarLayout(
         float width, float titleHeight, float cornerRadius, float titleFontSize,
         const WindowChromeStyle& style) {
     return lcl::chrome::WindowChromeWidget({}, style).layout(
-        width, titleHeight, cornerRadius, titleFontSize, 1.0f);
+        width, titleHeight, cornerRadius, titleFontSize);
 }
 
 std::string truncateTitleToWidth(const std::string& title, float widthPx,

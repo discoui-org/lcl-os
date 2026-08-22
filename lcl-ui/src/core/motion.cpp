@@ -64,10 +64,10 @@ void MotionCoordinator::animateFloat(Widget& widget, AnimatableProperty property
 }
 
 void MotionCoordinator::setColor(Widget& widget, AnimatableProperty firstChannel,
-                                 Color presentation, Color target,
-                                 std::function<void(Color)> applyPresentation,
+                                 graphics::Color presentation, graphics::Color target,
+                                 std::function<void(graphics::Color)> applyPresentation,
                                  const lcl::motion::Motion* overrideMotion) {
-    auto sharedColor = std::make_shared<Color>(presentation);
+    auto sharedColor = std::make_shared<graphics::Color>(presentation);
     const std::array<float, 4> current{static_cast<float>(presentation.r), static_cast<float>(presentation.g),
                                        static_cast<float>(presentation.b), static_cast<float>(presentation.a)};
     const std::array<float, 4> destination{static_cast<float>(target.r), static_cast<float>(target.g),
@@ -97,7 +97,7 @@ lcl::motion::AnimationHandle MotionCoordinator::animate(
     return m_timeline.animate(std::move(keyframes), options,
         [lifetime, pointer, property, damage = m_damageCallback](float value) {
             if (lifetime.expired()) return;
-            const Rect before = pointer->getPresentationBounds();
+            const graphics::RectF before = pointer->getPresentationBounds();
             pointer->applyPresentationValue(property, value);
             if (damage) {
                 damage(before);
@@ -118,7 +118,7 @@ bool MotionCoordinator::tick(float dtSec) {
     for (const auto channel : changed) {
         const auto binding = m_bindings.find(channel);
         if (binding == m_bindings.end() || !binding->second.widget) continue;
-        const Rect oldBounds = binding->second.widget->getPresentationBounds();
+        const graphics::RectF oldBounds = binding->second.widget->getPresentationBounds();
         binding->second.apply(m_engine.sample(channel).value);
         layoutChanged = layoutChanged || binding->second.affectsLayout;
         if (m_damageCallback) m_damageCallback(oldBounds);

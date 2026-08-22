@@ -13,7 +13,7 @@ lcl-os/
 ├── iso_root/                 # Limine bootloader configuration & boot tree
 ├── src/                      # Core OS Engine & Compositor
 │   ├── core/                 # DRM/KMS, EGL, Evdev Input, Hotplug, IPC, Session
-│   ├── render/               # Skia Renderer, FontRenderer, WindowManager
+│   ├── render/               # LCL raster Renderer, FontRenderer, WindowManager
 │   └── tools/                # Core System Daemons & Binaries (lcl-core, lcl-terminal, lcl-open)
 ├── lcl-ui/                   # Decoupled UI Application Framework (Yoga Flexbox, Widget Tree)
 ├── apps/                     # User-Space Desktop Applications (Terminal.app, UIDemo.app, ShaderDemo.app)
@@ -38,7 +38,7 @@ LCL OS provides a unified CLI driver via `./main.py`:
 ```bash
 ./main.py test
 ```
-*Executes all 167 GoogleTest CTest cases covering IPC protocols, window management, Skia rendering, event routing, and JS runtimes in ~1.7s.*
+*Executes all 167 GoogleTest CTest cases covering IPC protocols, window management, LCL raster rendering, event routing, and JS runtimes in ~1.7s.*
 
 ### 2. Build Core System & Canonical RootFS
 ```bash

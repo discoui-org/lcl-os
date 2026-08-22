@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lcl-ui/core/rect.hpp"
+#include "lcl-graphics/canvas.hpp"
 #include "lcl-ui/core/effects.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/events.hpp"
@@ -19,8 +19,6 @@ namespace lcl::ui {
 class WindowApp;
 class ScrollView;
 
-class Canvas;
-
 class Widget {
 public:
     Widget();
@@ -38,9 +36,9 @@ public:
 
     Widget* getParent() const { return m_parent; }
 
-    Rect getBounds() const { return m_bounds; }
-    Rect getAbsoluteBounds() const { return m_absoluteBounds; }
-    Rect getPresentationBounds() const;
+    graphics::RectF getBounds() const { return m_bounds; }
+    graphics::RectF getAbsoluteBounds() const { return m_absoluteBounds; }
+    graphics::RectF getPresentationBounds() const;
     bool containsPresentationPoint(float x, float y) const;
     bool hasActiveAnimationInHierarchy() const;
     /** True when this widget or any descendant owns an active motion channel. */
@@ -113,7 +111,7 @@ public:
     }
 
     virtual void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f);
-    virtual void draw(Canvas& canvas, const Rect& damageRect);
+    virtual void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect);
     virtual void collectEffects(std::vector<EffectRegion>& outEffects) const;
 
     // Ancestor observation phase. It cannot consume normal target/bubble dispatch.
@@ -146,16 +144,16 @@ public:
 protected:
     /** Schedule old/new presentation pixels without invalidating paint caches. */
     void markPresentationDirty();
-    void beginPresentation(Canvas& canvas) const;
-    void endPresentation(Canvas& canvas) const;
-    void drawChildren(Canvas& canvas, const Rect& damageRect);
+    void beginPresentation(graphics::Canvas& canvas) const;
+    void endPresentation(graphics::Canvas& canvas) const;
+    void drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect);
 
     YogaNode m_yogaNode;
     Widget* m_parent{nullptr};
     std::vector<std::unique_ptr<Widget>> m_children;
 
-    Rect m_bounds{0.0f, 0.0f, 0.0f, 0.0f};
-    Rect m_absoluteBounds{0.0f, 0.0f, 0.0f, 0.0f};
+    graphics::RectF m_bounds{0.0f, 0.0f, 0.0f, 0.0f};
+    graphics::RectF m_absoluteBounds{0.0f, 0.0f, 0.0f, 0.0f};
     bool m_visible{true};
     bool m_focusable{false};
     bool m_clipsToBounds{false};
@@ -192,7 +190,7 @@ protected:
 private:
     friend class WindowApp;
     friend class ScrollView;
-    void markPresentationDirty(const Rect& previousBounds);
+    void markPresentationDirty(const graphics::RectF& previousBounds);
     void invalidateLayout();
     void propagateDescendantPaintRevision();
     void propagateDescendantPresentationRevision();

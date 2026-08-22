@@ -28,7 +28,7 @@ public:
     void setFit(ImageFit fit) { m_fit = fit; markDirty(); }
     ImageFit getFit() const { return m_fit; }
 
-    void setCornerRadius(float radiusPx);
+    void setCornerRadius(float radius);
     float getCornerRadius() const { return m_cornerRadius; }
 
     void setCornerRoundness(float roundness);
@@ -37,7 +37,7 @@ public:
     void setOpacity(float opacity);
     float getOpacity() const { return m_opacity; }
 
-    void draw(Canvas& canvas, const Rect& damageRect) override;
+    void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
 
 private:
     std::string m_sourcePath;

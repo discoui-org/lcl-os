@@ -294,7 +294,8 @@ void AndroidDisplayBackend::shutdown() {
     m_initialized = false;
 }
 
-bool AndroidDisplayBackend::initHardwareCursor(uint32_t /*width*/, uint32_t /*height*/) {
+bool AndroidDisplayBackend::initHardwareCursor(uint32_t /*width*/, uint32_t /*height*/,
+                                               float /*deviceScale*/) {
     return false;
 }
 

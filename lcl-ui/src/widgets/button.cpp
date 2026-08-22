@@ -58,7 +58,7 @@ void Button::updateComposedState() {
 void Button::applyStateMotion(ButtonState previous) {
     const auto& theme = interactionMotionTheme();
     float targetScale = 1.0f;
-    Color targetColor{37, 99, 235, 255};
+    graphics::Color targetColor{37, 99, 235, 255};
     const lcl::motion::Motion* scaleMotion = &theme.hover;
     if (m_state == ButtonState::Hover) { targetScale = theme.hoverScale; targetColor = {59, 130, 246, 255}; }
     else if (m_state == ButtonState::Active) { targetScale = theme.pressedScale; targetColor = {29, 78, 216, 255}; scaleMotion = &theme.pressed; }
@@ -147,7 +147,7 @@ bool Button::onFocusLost(const FocusEvent& event) {
     return false;
 }
 
-void Button::draw(Canvas& canvas, const Rect& damageRect) {
+void Button::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     Container::draw(canvas, damageRect);
 }
 

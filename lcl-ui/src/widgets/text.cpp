@@ -21,7 +21,7 @@ void Text::setFontSize(float size) {
     markDirty();
 }
 
-void Text::setFontFamily(FontFamily family) {
+void Text::setFontFamily(graphics::FontFamily family) {
     if (m_fontFamily == family) return;
     m_fontFamily = family;
     updateMeasureFunc();
@@ -39,12 +39,12 @@ void Text::updateMeasureFunc() {
     m_yogaNode.markDirty();
 }
 
-void Text::draw(Canvas& canvas, const Rect& damageRect) {
+void Text::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect) || m_text.empty()) return;
 
     beginPresentation(canvas);
 
-    // Keep text alignment in logical coordinates; Canvas applies the selected
+    // Keep text alignment in logical coordinates; graphics::Canvas applies the selected
     // backend's logical-to-buffer transform afterwards.
     const float textWidth = canvas.measureText(m_text, m_fontSize, m_fontFamily);
     float textX = m_absoluteBounds.x;
