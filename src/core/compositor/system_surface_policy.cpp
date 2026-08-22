@@ -1,5 +1,7 @@
 #include "core/compositor/system_surface_policy.hpp"
 
+#include "core/compositor/surface_registry.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -74,6 +76,31 @@ void SystemSurfacePolicyRegistry::applyInitialPlacement(const SystemSurfacePolic
         case SystemSurfacePlacement::ClientBounds:
             break;
     }
+}
+
+SystemReservedZone SystemSurfacePolicyRegistry::computeReservedZone(
+        const SurfaceRegistry& surfaces) noexcept {
+    SystemReservedZone zone{};
+    for (const auto& [_, surface] : surfaces) {
+        if (surface.windowId == 0) continue;
+
+        const auto policy = policyFor(surface.systemSurfaceKind);
+        if (!policy.reservesWorkArea) continue;
+
+        const float logicalHeight = std::max(0.0f, surface.configuredHeight);
+        switch (policy.placement) {
+            case SystemSurfacePlacement::OutputTopEdge:
+                zone.top = std::max(zone.top, logicalHeight);
+                break;
+            case SystemSurfacePlacement::OutputBottomEdge:
+                zone.bottom = std::max(zone.bottom, logicalHeight);
+                break;
+            case SystemSurfacePlacement::ClientBounds:
+            case SystemSurfacePlacement::OutputBounds:
+                break;
+        }
+    }
+    return zone;
 }
 
 bool SystemSurfacePolicyRegistry::isTrustedShellPeer(pid_t pid) noexcept {

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <fcntl.h>
 #include <sys/eventfd.h>
@@ -1090,6 +1091,71 @@ TEST(SystemSurfacePolicyTest, WallpaperPlacementAlwaysUsesCompositorOutputBounds
     EXPECT_EQ(y, 0);
     EXPECT_EQ(width, 1920);
     EXPECT_EQ(height, 32);
+}
+
+TEST(SystemSurfacePolicyTest, ReservedZoneUsesLogicalGeometryAtEveryDeviceScale) {
+    for (const float scale : std::array{1.0f, 1.25f, 1.5f, 2.0f}) {
+        SurfaceRegistry registry;
+        auto& menu = registry[1];
+        menu.windowId = 10;
+        menu.systemSurfaceKind = protocol::LCLSystemSurfaceKind::MenuBar;
+        menu.configuredHeight = 32.0f;
+        menu.bufferScale = scale;
+        menu.height = static_cast<uint32_t>(std::ceil(menu.configuredHeight * scale));
+        menu.backingHeight = menu.height;
+
+        auto& dock = registry[2];
+        dock.windowId = 11;
+        dock.systemSurfaceKind = protocol::LCLSystemSurfaceKind::Dock;
+        dock.configuredHeight = 88.0f;
+        dock.bufferScale = scale;
+        dock.height = static_cast<uint32_t>(std::ceil(dock.configuredHeight * scale));
+        dock.backingHeight = dock.height;
+
+        const auto zone = SystemSurfacePolicyRegistry::computeReservedZone(registry);
+        EXPECT_FLOAT_EQ(zone.top, 32.0f) << "device scale " << scale;
+        EXPECT_FLOAT_EQ(zone.bottom, 88.0f) << "device scale " << scale;
+    }
+}
+
+TEST(SystemSurfacePolicyTest, ReservedZonePreservesFractionsAndIgnoresIneligibleSurfaces) {
+    SurfaceRegistry registry;
+
+    auto& menu = registry[1];
+    menu.windowId = 10;
+    menu.systemSurfaceKind = protocol::LCLSystemSurfaceKind::MenuBar;
+    menu.configuredHeight = 31.5f;
+    menu.height = 63;
+
+    auto& largerMenu = registry[2];
+    largerMenu.windowId = 11;
+    largerMenu.systemSurfaceKind = protocol::LCLSystemSurfaceKind::MenuBar;
+    largerMenu.configuredHeight = 32.25f;
+    largerMenu.height = 129;
+
+    auto& dock = registry[3];
+    dock.windowId = 12;
+    dock.systemSurfaceKind = protocol::LCLSystemSurfaceKind::Dock;
+    dock.configuredHeight = 87.25f;
+    dock.height = 349;
+
+    auto& unmappedMenu = registry[4];
+    unmappedMenu.systemSurfaceKind = protocol::LCLSystemSurfaceKind::MenuBar;
+    unmappedMenu.configuredHeight = 1000.0f;
+
+    auto& wallpaper = registry[5];
+    wallpaper.windowId = 13;
+    wallpaper.systemSurfaceKind = protocol::LCLSystemSurfaceKind::Wallpaper;
+    wallpaper.configuredHeight = 1000.0f;
+
+    auto& application = registry[6];
+    application.windowId = 14;
+    application.systemSurfaceKind = protocol::LCLSystemSurfaceKind::None;
+    application.configuredHeight = 1000.0f;
+
+    const auto zone = SystemSurfacePolicyRegistry::computeReservedZone(registry);
+    EXPECT_FLOAT_EQ(zone.top, 32.25f);
+    EXPECT_FLOAT_EQ(zone.bottom, 87.25f);
 }
 
 TEST(WindowGroupTransformTest, ChromeAndClientShareOneSubpixelAnimatedFrame) {

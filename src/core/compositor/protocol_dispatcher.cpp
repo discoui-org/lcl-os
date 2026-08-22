@@ -1101,17 +1101,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 }
 
 void ProtocolDispatcher::recomputeSystemReservedZone() {
-    uint32_t top = 0;
-    uint32_t bottom = 0;
-    for (const auto& [_, surface] : m_surfaces) {
-        if (surface.windowId == 0) continue;
-        if (surface.systemSurfaceKind == protocol::LCLSystemSurfaceKind::MenuBar) {
-            top = std::max(top, surface.height);
-        } else if (surface.systemSurfaceKind == protocol::LCLSystemSurfaceKind::Dock) {
-            bottom = std::max(bottom, surface.height);
-        }
-    }
-    m_windowManager.setReservedZone(top, bottom, 0, 0);
+    const auto zone = SystemSurfacePolicyRegistry::computeReservedZone(m_surfaces);
+    m_windowManager.setReservedZone(zone.top, zone.bottom, 0.0f, 0.0f);
 }
 
 void ProtocolDispatcher::publishShellStateToSubscribers() {
