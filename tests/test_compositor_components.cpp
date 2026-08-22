@@ -1198,6 +1198,19 @@ TEST(CompositorRendererTest, LocalBackdropStartsBelowSsdTitlebar) {
     EXPECT_EQ(geometry.height, 600);
 }
 
+TEST(CompositorRendererTest, FullSurfaceEffectMatchingUsesLogicalGeometry) {
+    protocol::EffectRegion region{};
+    region.width = 800.0f;
+    region.height = 600.0f;
+
+    EXPECT_TRUE(effectMatchesLogicalSurfaceBounds(region, 800.0f, 600.0f));
+    EXPECT_FALSE(effectMatchesLogicalSurfaceBounds(region, 1600.0f, 1200.0f));
+
+    region.width = 800.0005f;
+    region.height = 599.9995f;
+    EXPECT_TRUE(effectMatchesLogicalSurfaceBounds(region, 800.0f, 600.0f));
+}
+
 TEST(CompositorRendererTest, EdgeToEdgeRemovesOnlyTheOpaqueSsdBackground) {
     EXPECT_EQ(kOpaqueSsdTitlebarMaterial.r, 17u);
     EXPECT_EQ(kOpaqueSsdTitlebarMaterial.g, 19u);

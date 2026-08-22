@@ -3159,6 +3159,27 @@ TEST(LclUiTest, GlassPreservesZeroControlsInsteadOfSynthesizingDefaults) {
     EXPECT_FLOAT_EQ(glass.params[2], 0.0f);
 }
 
+TEST(LclUiTest, GlassRefractionPassScalePreservesLogicalDisplacementAcrossDpr) {
+    const auto scale1 = lcl::render::computeBackdropPassScale(1.0f, 100, 80, 100, 80);
+    const auto scale125 = lcl::render::computeBackdropPassScale(1.25f, 125, 100, 125, 100);
+    const auto scale15 = lcl::render::computeBackdropPassScale(1.5f, 150, 120, 150, 120);
+    const auto scale2 = lcl::render::computeBackdropPassScale(2.0f, 200, 160, 200, 160);
+
+    EXPECT_FLOAT_EQ(scale1.x, 1.0f);
+    EXPECT_FLOAT_EQ(scale125.x, 1.25f);
+    EXPECT_FLOAT_EQ(scale15.x, 1.5f);
+    EXPECT_FLOAT_EQ(scale2.x, 2.0f);
+    EXPECT_FLOAT_EQ(scale1.y, 1.0f);
+    EXPECT_FLOAT_EQ(scale125.y, 1.25f);
+    EXPECT_FLOAT_EQ(scale15.y, 1.5f);
+    EXPECT_FLOAT_EQ(scale2.y, 2.0f);
+
+    const auto downsampled = lcl::render::computeBackdropPassScale(
+        2.0f, 100, 80, 200, 160);
+    EXPECT_FLOAT_EQ(downsampled.x, 1.0f);
+    EXPECT_FLOAT_EQ(downsampled.y, 1.0f);
+}
+
 TEST(LclUiTest, WindowAppKeepsEffectControlsInLogicalUnits) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);

@@ -374,6 +374,7 @@ private:
     int32_t m_uRefractRadiusLoc{-1};
     int32_t m_uRefractRoundnessLoc{-1};
     int32_t m_uRefractInputScaleLoc{-1};
+    int32_t m_uRefractLogicalToPassScaleLoc{-1};
 
     // GPU BGRA Surface Compositing Handles
     uint32_t m_glClientTexture{0};

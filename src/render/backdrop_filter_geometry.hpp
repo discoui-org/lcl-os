@@ -19,6 +19,29 @@ struct BackdropFilterGeometry {
     int outputOffsetY{0};
 };
 
+struct BackdropPassScale {
+    float x{1.0f};
+    float y{1.0f};
+};
+
+/** Logical-to-pass pixel scale after an optional intermediate downsample. */
+inline BackdropPassScale computeBackdropPassScale(
+    float deviceScale,
+    int targetWidth,
+    int targetHeight,
+    int captureWidth,
+    int captureHeight) {
+    const float safeDeviceScale = std::isfinite(deviceScale) && deviceScale > 0.0f
+        ? deviceScale
+        : 1.0f;
+    return {
+        safeDeviceScale * static_cast<float>(std::max(1, targetWidth)) /
+            static_cast<float>(std::max(1, captureWidth)),
+        safeDeviceScale * static_cast<float>(std::max(1, targetHeight)) /
+            static_cast<float>(std::max(1, captureHeight)),
+    };
+}
+
 inline int gaussianKernelRadius(float blurValue) {
     if (!std::isfinite(blurValue) || blurValue <= 0.05f) return 0;
     const float sigma = std::max(0.5f, blurValue * 0.5f);

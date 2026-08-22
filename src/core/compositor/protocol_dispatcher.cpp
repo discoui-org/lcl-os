@@ -1,4 +1,5 @@
 #include "core/compositor/protocol_dispatcher.hpp"
+#include "core/compositor/effect_region_geometry.hpp"
 #include "lcl-motion/motion.hpp"
 #include "core/display/display_scale.hpp"
 #include "theme/palette.hpp"
@@ -1062,10 +1063,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                             SurfaceEffectRegion dstRegion;
                             dstRegion.region = region;
                             dstRegion.filters.assign(filters + offset, filters + offset + count);
-                            dstRegion.followSurfaceBounds =
-                                (region.x == 0 && region.y == 0 &&
-                                 region.width == it->second.width &&
-                                 region.height == it->second.height);
+                            dstRegion.followSurfaceBounds = effectMatchesLogicalSurfaceBounds(
+                                region, it->second.configuredWidth,
+                                it->second.configuredHeight);
                             parsed.push_back(std::move(dstRegion));
                         }
 

@@ -403,6 +403,7 @@ bool RasterRenderer::initGLShader() {
         "uniform float uRadiusPx;\n"
         "uniform float uRoundnessExp;\n"
         "uniform vec2 uInputScale;\n"
+        "uniform vec2 uLogicalToPassScale;\n"
         "float sdSuperRoundRect(vec2 p, vec2 b, float r, float n) {\n"
         "    if (r <= 0.001) return max(abs(p).x - b.x, abs(p).y - b.y);\n"
         "    vec2 q = abs(p) - b + vec2(r);\n"
@@ -431,13 +432,23 @@ bool RasterRenderer::initGLShader() {
         "    float eps = 1.0;\n"
         "    float sdx = sdSuperRoundRect(p + vec2(eps, 0.0), b, r, n) - sdSuperRoundRect(p - vec2(eps, 0.0), b, r, n);\n"
         "    float sdy = sdSuperRoundRect(p + vec2(0.0, eps), b, r, n) - sdSuperRoundRect(p - vec2(0.0, eps), b, r, n);\n"
-        "    vec2 normal = vec2(sdx, sdy) * 700.0;\n"
+        "    vec2 gradient = vec2(sdx, sdy);\n"
+        "    float gradientLength = length(gradient);\n"
+        "    if (gradientLength <= 0.0001) {\n"
+        "        gl_FragColor = base;\n"
+        "        return;\n"
+        "    }\n"
+        "    vec2 normal = gradient / gradientLength;\n"
         "    float xRatio = 1.0 - edgeDepth / thickness;\n"
         "    float thetaI = safeAsin(xRatio * xRatio);\n"
         "    float thetaT = safeAsin((1.0 / eta) * sin(thetaI));\n"
         "    float edgeFactor = max(0.0, -tan(thetaT - thetaI));\n"
         "    edgeFactor = min(edgeFactor, 4.0);\n"
-        "    vec2 offsetUv = (-normal * edgeFactor * 0.05) * uInvSize;\n"
+        // Preserve the existing 1x refraction strength while expressing its
+        // displacement in logical pixels. The pass scale converts that
+        // displacement after any intermediate downsample.
+        "    vec2 displacementPx = (-normal * edgeFactor * 70.0) * uLogicalToPassScale;\n"
+        "    vec2 offsetUv = displacementPx * uInvSize;\n"
         "    float disp = max(0.0, uDispersionGain) * 0.02;\n"
         "    vec2 uvR = clamp(vTexCoord + offsetUv * (1.0 + disp), 0.0, 1.0);\n"
         "    vec2 uvG = clamp(vTexCoord + offsetUv, 0.0, 1.0);\n"
@@ -470,6 +481,8 @@ bool RasterRenderer::initGLShader() {
     m_uRefractRadiusLoc = glGetUniformLocation(m_glRefractionProgram, "uRadiusPx");
     m_uRefractRoundnessLoc = glGetUniformLocation(m_glRefractionProgram, "uRoundnessExp");
     m_uRefractInputScaleLoc = glGetUniformLocation(m_glRefractionProgram, "uInputScale");
+    m_uRefractLogicalToPassScaleLoc = glGetUniformLocation(
+        m_glRefractionProgram, "uLogicalToPassScale");
 
     // --- GLSL BGRA Client Surface Fragment Shader ---
     const char* fBgraSrc =
@@ -2777,6 +2790,8 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
             glUniform2f(m_uRefractInvSizeLoc, 1.0f / static_cast<float>(targetW), 1.0f / static_cast<float>(targetH));
             const float passScaleX = static_cast<float>(targetW) / static_cast<float>(captureW);
             const float passScaleY = static_cast<float>(targetH) / static_cast<float>(captureH);
+            const auto logicalToPassScale = computeBackdropPassScale(
+                m_deviceScale, targetW, targetH, captureW, captureH);
             const float passThicknessPx = std::max(0.0f, thicknessPx) * passScaleX;
             const float passRadiusPx = std::max(0.0f, cornerRadius) * passScaleX;
             const float effectOffsetBottom = static_cast<float>(
@@ -2796,6 +2811,8 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
             glUniform1f(m_uRefractRadiusLoc, passRadiusPx);
             glUniform1f(m_uRefractRoundnessLoc, clampedRoundness);
             glUniform2f(m_uRefractInputScaleLoc, captureUScale, captureVScale);
+            glUniform2f(m_uRefractLogicalToPassScaleLoc,
+                        logicalToPassScale.x, logicalToPassScale.y);
 
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -2925,6 +2942,8 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
         const float rr = std::clamp(cornerRadius, 0.0f, maxCorner);
         const float eta = std::max(1.001f, refractionFactor);
         const float disp = std::max(0.0f, dispersionGain) * 0.02f;
+        const auto logicalToPassScale = computeBackdropPassScale(
+            m_deviceScale, pxW, pxH, pxW, pxH);
 
         auto sample = [&](float sx, float sy) -> uint32_t {
             int ix = std::clamp(static_cast<int>(std::lround(sx)), 0, pxW - 1);
@@ -2963,11 +2982,13 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
                 float edgeFactor = std::max(0.0f, -std::tan(thetaT - thetaI));
                 edgeFactor = std::min(edgeFactor, 4.0f);
 
-                float nx = sdx * 700.0f;
-                float ny = sdy * 700.0f;
-                float aspect = static_cast<float>(pxH) / std::max(1.0f, static_cast<float>(pxW));
-                float offX = -nx * edgeFactor * 0.05f * aspect;
-                float offY = -ny * edgeFactor * 0.05f;
+                const float nx = sdx / nLen;
+                const float ny = sdy / nLen;
+                constexpr float kRefractionDisplacementLogical = 70.0f;
+                const float offX = -nx * edgeFactor *
+                    kRefractionDisplacementLogical * logicalToPassScale.x;
+                const float offY = -ny * edgeFactor *
+                    kRefractionDisplacementLogical * logicalToPassScale.y;
 
                 uint32_t pr = sample(static_cast<float>(x) + offX * (1.0f + disp), static_cast<float>(y) + offY * (1.0f + disp));
                 uint32_t pg = sample(static_cast<float>(x) + offX, static_cast<float>(y) + offY);
