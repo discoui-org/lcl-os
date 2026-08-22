@@ -155,25 +155,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         return true;
     };
     auto beginClosingTransition = [&](SurfaceEntry& entry) {
-        entry.ignoreBufferCommits = true;
-        // System surfaces opt out of presentation transitions in both
-        // directions. This keeps wallpaper/panels input-safe during teardown
-        // just as suppressInitialTransition keeps their startup direct.
-        if (entry.suppressInitialTransition) {
-            return true;
-        }
-        if (entry.windowId > 0 && entry.hasRenderableBuffer() && entry.width > 0 && entry.height > 0) {
-            entry.transitionPhase = SurfaceEntry::TransitionPhase::Closing;
-            entry.transitionElapsedSec = 0.0f;
-            entry.transitionDurationSec = lcl::motion::tokens::windowClose().tweenParams.durationSec;
-            entry.transitionOpacity = 1.0f;
-            entry.transitionScale = 1.0f;
-            entry.pendingDestroy = false;
-            std::cout << "[LCL Compositor] Closing transition started for Window ID: "
-                      << entry.windowId << "\n";
-            changed = true;
-            return false;
-        }
+        if (!SurfaceRegistry::beginClosingTransition(entry)) return false;
+        std::cout << "[LCL Compositor] Closing transition started for Window ID: "
+                  << entry.windowId << "\n";
+        changed = true;
         return true;
     };
 
@@ -218,7 +203,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             it->second.ignoreBufferCommits = true;
             it->second.pendingDestroy = true;
             changed = true;
-        } else if (beginClosingTransition(it->second)) {
+        } else if (!beginClosingTransition(it->second)) {
             if (it->second.windowId > 0) {
                 m_windowManager.removeWindow(it->second.windowId);
             }
@@ -256,7 +241,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     if (entry.isPopup()) {
                         entry.ignoreBufferCommits = true;
                         entry.pendingDestroy = true;
-                    } else if (beginClosingTransition(entry)) {
+                    } else if (!beginClosingTransition(entry)) {
                         if (entry.windowId > 0) m_windowManager.removeWindow(entry.windowId);
                         surfacesToRemove.push_back(surfKey);
                     } else {

@@ -164,6 +164,9 @@ public:
 
     static Key makeKey(int clientFd, pid_t pid, uint32_t surfaceId) noexcept;
 
+    /** Freeze the last renderable client frame and start its close transition. */
+    static bool beginClosingTransition(SurfaceEntry& entry) noexcept;
+
     iterator begin() noexcept { return m_entries.begin(); }
     iterator end() noexcept { return m_entries.end(); }
     const_iterator begin() const noexcept { return m_entries.begin(); }

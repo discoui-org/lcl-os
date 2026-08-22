@@ -154,6 +154,60 @@ TEST(SurfaceRegistryTest, ClientConstrainedCommitDefinesSnappedLogicalExtent) {
                     536.0f);
 }
 
+TEST(SurfaceRegistryTest, CloseTransitionAcceptsShmAndDmaBufFrozenFrames) {
+    SurfaceRegistry::SurfaceEntry shm;
+    shm.windowId = 1;
+    shm.width = 640;
+    shm.height = 480;
+    shm.pixels = reinterpret_cast<void*>(1);
+
+    ASSERT_TRUE(SurfaceRegistry::beginClosingTransition(shm));
+    EXPECT_TRUE(shm.ignoreBufferCommits);
+    EXPECT_EQ(shm.transitionPhase,
+              SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing);
+    EXPECT_GT(shm.transitionDurationSec, 0.0f);
+    EXPECT_FLOAT_EQ(shm.transitionOpacity, 1.0f);
+    EXPECT_FLOAT_EQ(shm.transitionScale, 1.0f);
+    EXPECT_FALSE(shm.pendingDestroy);
+
+    SurfaceRegistry::SurfaceEntry dmaBuf;
+    dmaBuf.windowId = 2;
+    dmaBuf.width = 800;
+    dmaBuf.height = 600;
+    dmaBuf.dmaBufTexture = 77;
+
+    ASSERT_TRUE(SurfaceRegistry::beginClosingTransition(dmaBuf));
+    EXPECT_TRUE(dmaBuf.ignoreBufferCommits);
+    EXPECT_EQ(dmaBuf.transitionPhase,
+              SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing);
+    EXPECT_GT(dmaBuf.transitionDurationSec, 0.0f);
+    EXPECT_FLOAT_EQ(dmaBuf.transitionOpacity, 1.0f);
+    EXPECT_FLOAT_EQ(dmaBuf.transitionScale, 1.0f);
+    EXPECT_FALSE(dmaBuf.pendingDestroy);
+}
+
+TEST(SurfaceRegistryTest, CloseTransitionSkipsUnrenderableAndSuppressedSurfaces) {
+    SurfaceRegistry::SurfaceEntry empty;
+    empty.windowId = 1;
+    empty.width = 640;
+    empty.height = 480;
+    EXPECT_FALSE(SurfaceRegistry::beginClosingTransition(empty));
+    EXPECT_TRUE(empty.ignoreBufferCommits);
+    EXPECT_EQ(empty.transitionPhase,
+              SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+
+    SurfaceRegistry::SurfaceEntry systemSurface;
+    systemSurface.windowId = 2;
+    systemSurface.width = 640;
+    systemSurface.height = 32;
+    systemSurface.dmaBufTexture = 88;
+    systemSurface.suppressInitialTransition = true;
+    EXPECT_FALSE(SurfaceRegistry::beginClosingTransition(systemSurface));
+    EXPECT_TRUE(systemSurface.ignoreBufferCommits);
+    EXPECT_EQ(systemSurface.transitionPhase,
+              SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+}
+
 TEST(CompositorRendererTest, DmaBufCropShowsContentWithoutScalingTheBacking) {
     const auto crop = lcl::render::makeDmaBufCrop(640, 480, 1920, 1080);
     EXPECT_FLOAT_EQ(crop.uMax, 640.0f / 1920.0f);

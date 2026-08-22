@@ -40,7 +40,6 @@ private:
                           SurfaceRegistry::Key surfaceKey) const;
     SurfaceRegistry::Key findPopupAt(float globalX, float globalY) const;
     void destroyPopupChildren(SurfaceRegistry::Key parentSurfaceKey);
-    static bool startClosingTransition(SurfaceRegistry::SurfaceEntry& entry) noexcept;
 
     render::WindowManager& m_windowManager;
     SurfaceRegistry& m_surfaces;

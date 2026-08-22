@@ -1,4 +1,5 @@
 #include "core/compositor/surface_registry.hpp"
+#include "lcl-motion/motion.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -14,6 +15,24 @@ SurfaceRegistry::~SurfaceRegistry() {
 SurfaceRegistry::Key SurfaceRegistry::makeKey(int clientFd, pid_t pid, uint32_t surfaceId) noexcept {
     const auto owner = static_cast<uint64_t>(pid > 0 ? pid : clientFd);
     return (owner << 32) | static_cast<uint64_t>(surfaceId);
+}
+
+bool SurfaceRegistry::beginClosingTransition(SurfaceEntry& entry) noexcept {
+    // Stop accepting replacement frames before deciding whether the frozen
+    // current frame can be animated. Both SHM and DMA-BUF are valid sources.
+    entry.ignoreBufferCommits = true;
+    if (entry.suppressInitialTransition || entry.windowId == 0 ||
+        !entry.hasRenderableBuffer() || entry.width == 0 || entry.height == 0) {
+        return false;
+    }
+
+    entry.transitionPhase = SurfaceEntry::TransitionPhase::Closing;
+    entry.transitionElapsedSec = 0.0f;
+    entry.transitionDurationSec = lcl::motion::tokens::windowClose().tweenParams.durationSec;
+    entry.transitionOpacity = 1.0f;
+    entry.transitionScale = 1.0f;
+    entry.pendingDestroy = false;
+    return true;
 }
 
 SurfaceRegistry::Snapshot SurfaceRegistry::snapshot() const {

@@ -1,5 +1,4 @@
 #include "core/compositor/input_router.hpp"
-#include "lcl-motion/motion.hpp"
 
 #include "core/compositor/popup_surface_geometry.hpp"
 
@@ -266,7 +265,7 @@ void InputRouter::processCloseRequests() {
             protocol::sendMsgWithFd(entry.clientFd, header, &destroy);
         }
 
-        if (!startClosingTransition(entry)) {
+        if (!SurfaceRegistry::beginClosingTransition(entry)) {
             m_windowManager.removeWindow(windowId);
             m_scenes.removeSurface(surfaceIt->first);
             m_surfaces.erase(surfaceIt);
@@ -455,21 +454,6 @@ void InputRouter::destroyPopupChildren(SurfaceRegistry::Key parentSurfaceKey) {
         if (m_activePopupSurface == childKey) m_activePopupSurface = 0;
         m_surfaces.releaseKeyboardFocus(childKey);
     }
-}
-
-bool InputRouter::startClosingTransition(SurfaceRegistry::SurfaceEntry& entry) noexcept {
-    entry.ignoreBufferCommits = true;
-    if (!entry.pixels || entry.width == 0 || entry.height == 0) {
-        return false;
-    }
-
-    entry.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing;
-    entry.transitionElapsedSec = 0.0f;
-    entry.transitionDurationSec = lcl::motion::tokens::windowClose().tweenParams.durationSec;
-    entry.transitionOpacity = 1.0f;
-    entry.transitionScale = 1.0f;
-    entry.pendingDestroy = false;
-    return true;
 }
 
 } // namespace lcl::core
