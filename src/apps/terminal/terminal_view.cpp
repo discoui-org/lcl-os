@@ -25,15 +25,7 @@ size_t utf8CodepointLength(unsigned char firstByte) {
 
 } // namespace
 
-TerminalView::TerminalView(TerminalApp& terminal, float titlebarHeight)
-    : m_terminal(terminal) {
-    setTitlebarHeight(titlebarHeight);
-}
-
-void TerminalView::setTitlebarHeight(float height) {
-    m_titlebarHeight = std::max(0.0f, height);
-    markDirty();
-}
+TerminalView::TerminalView(TerminalApp& terminal) : m_terminal(terminal) {}
 
 bool TerminalView::isCursorVisible() const {
     if (m_terminal.shouldDrawSolidCursor()) return true;
@@ -74,7 +66,7 @@ void TerminalView::draw(lcl::ui::Canvas& canvas, const lcl::ui::Rect& damageRect
 
     const auto& lines = m_terminal.getLines();
     const float contentLeft = m_absoluteBounds.x + kPadding;
-    const float contentTop = m_absoluteBounds.y + m_titlebarHeight + kPadding;
+    const float contentTop = m_absoluteBounds.y + kPadding;
     const float contentRight = m_absoluteBounds.x + m_absoluteBounds.width - kPadding;
     const float contentBottom = m_absoluteBounds.y + m_absoluteBounds.height - kPadding;
     if (contentRight <= contentLeft || contentBottom <= contentTop) return;

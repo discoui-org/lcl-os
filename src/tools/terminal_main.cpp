@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <iostream>
 #include <memory>
 
@@ -7,7 +6,6 @@
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
-#include "lcl-ui/widgets/window_chrome.hpp"
 #include "platform/common/keyboard_types.hpp"
 #include "render/skia_canvas.hpp"
 
@@ -15,9 +13,7 @@ namespace {
 
 constexpr uint32_t kSurfaceWidth = 540;
 constexpr uint32_t kSurfaceHeight = 360;
-constexpr float kTitlebarHeight = 34.0f;
 constexpr float kCornerRadius = 20.0f;
-constexpr float kTitleFontSize = 14.0f;
 
 bool isTerminalControlKey(lcl::platform::PhysicalKey key, uint8_t modifiers) {
   if ((modifiers & lcl::platform::kModCtrl) != 0) {
@@ -65,22 +61,18 @@ int main() {
   window.setInitialBounds(80, 60, kSurfaceWidth, kSurfaceHeight);
   window.setResizePresentationMode(
       lcl::protocol::LCLResizePresentationMode::Live);
-  window.setDecorationMode(lcl::protocol::LCLDecorationMode::CSD);
+  window.setDecorationMode(lcl::protocol::LCLDecorationMode::SSD);
+  window.setEdgeToEdge(true);
   window.setWindowCornerStyle(kCornerRadius, 2.0f);
 
-  const lcl::ui::chrome::WindowChromeStyle chromeStyle;
-
-  // Keep the terminal's alpha background on the inexpensive rectangular
-  // raster path.  The compositor owns the final rounded window mask.
+  // The compositor owns the SSD chrome and final rounded window mask. The
+  // client surface contains only terminal content.
   auto root = std::make_unique<lcl::ui::Container>();
-  root->setBackgroundColor({17, 19, 23, 184});
   root->getYogaNode().setWidth(static_cast<float>(kSurfaceWidth));
   root->getYogaNode().setHeight(static_cast<float>(kSurfaceHeight));
 
-  // This transparent, non-interactive child owns only the backdrop contract.
-  // It must remain separate from the painted background: a full-window
-  // software rounded-rect rasterization on each PTY update is prohibitively
-  // expensive during typing and live resize.
+  // One outer-surface effect chain supplies the same material behind both the
+  // compositor-owned titlebar and the client content.
   auto backdrop = std::make_unique<lcl::ui::BackdropSurface>();
   lcl::ui::BackdropSurface *backdropPtr = backdrop.get();
   backdrop->setInteractive(false);
@@ -95,9 +87,9 @@ int main() {
   blur.type = lcl::protocol::FilterType::Blur;
   blur.value = 50.0f;
   backdrop->setFilters({blur});
+  backdrop->setTint({17, 19, 23, 184});
 
-  auto terminalView =
-      std::make_unique<lcl::apps::TerminalView>(terminal, kTitlebarHeight);
+  auto terminalView = std::make_unique<lcl::apps::TerminalView>(terminal);
   lcl::apps::TerminalView *terminalViewPtr = terminalView.get();
   terminalView->getYogaNode().setPositionType(YGPositionTypeAbsolute);
   terminalView->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
@@ -105,24 +97,8 @@ int main() {
   terminalView->getYogaNode().setWidth(static_cast<float>(kSurfaceWidth));
   terminalView->getYogaNode().setHeight(static_cast<float>(kSurfaceHeight));
 
-  auto titlebar = lcl::ui::chrome::buildWindowTitlebar(
-      static_cast<float>(kSurfaceWidth), kTitlebarHeight, kCornerRadius,
-      "LCL Terminal", kTitleFontSize, chromeStyle,
-      lcl::ui::chrome::WindowChromeActions{
-          .close = [&window] { return window.requestWindowClose(); },
-          .minimize = [&window] { return window.requestWindowMinimize(); },
-          .toggleMaximize = [&window] {
-            return window.requestWindowToggleMaximize();
-          },
-          .beginDrag = [&window](float x, float y) {
-            return window.requestWindowDrag(x, y);
-          },
-      });
-  lcl::ui::Container *titlebarPtr = titlebar.get();
-
   root->addChild(std::move(backdrop));
   root->addChild(std::move(terminalView));
-  root->addChild(std::move(titlebar));
   window.setRootWidget(std::move(root));
 
   const auto updateTerminalGeometry = [&](uint32_t width, uint32_t height) {
@@ -130,9 +106,7 @@ int main() {
     backdropPtr->getYogaNode().setHeight(static_cast<float>(height));
     terminalViewPtr->getYogaNode().setWidth(static_cast<float>(width));
     terminalViewPtr->getYogaNode().setHeight(static_cast<float>(height));
-    titlebarPtr->getYogaNode().setWidth(static_cast<float>(width));
-    terminal.resize(static_cast<int>(width),
-                    std::max(1, static_cast<int>(height - kTitlebarHeight)));
+    terminal.resize(static_cast<int>(width), static_cast<int>(height));
     terminalViewPtr->markDirty();
   };
   updateTerminalGeometry(kSurfaceWidth, kSurfaceHeight);
@@ -144,13 +118,12 @@ int main() {
       return std::pair<uint32_t, uint32_t>{requestedWidth, requestedHeight};
     }
     int contentWidth = static_cast<int>(requestedWidth);
-    int contentHeight =
-        std::max(1, static_cast<int>(requestedHeight - kTitlebarHeight));
+    int contentHeight = static_cast<int>(requestedHeight);
     lcl::apps::TerminalApp::getSnappedDimensions(contentWidth, contentHeight,
                                                  contentWidth, contentHeight);
     return std::pair<uint32_t, uint32_t>{
         static_cast<uint32_t>(contentWidth),
-        static_cast<uint32_t>(contentHeight + kTitlebarHeight),
+        static_cast<uint32_t>(contentHeight),
     };
   });
 

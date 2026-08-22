@@ -59,10 +59,10 @@ paths received equivalent revisioned-state coverage:
 
 ### Terminal
 
-- The terminal keeps client-side decoration and hosts the shared window-chrome
-  state through an `lcl-ui` Canvas painter.
-- Titlebar controls have the same geometry, state, motion, and visual colors as
-  SSD controls; each host uses its native antialiasing painter.
+- The terminal uses compositor-owned SSD controls with edge-to-edge material;
+  its outer-surface backdrop material extends beneath the titlebar.
+- The terminal client buffer is content-only. Titlebar layout, hit testing,
+  actions, motion, and painting stay on the compositor's single SSD path.
 - The terminal root and backdrop remain passive: hovering or clicking the
   window background must not brighten the entire window like a button.
 - Backdrop blur/glass and translucency remain visible over the wallpaper.
