@@ -1,0 +1,7 @@
+{
+  "id": "org.lcl.terminal",
+  "name": "Terminal",
+  "version": "1.0.0",
+  "executable": "Executables/Terminal",
+  "icon": "Resources/Icon.png"
+}

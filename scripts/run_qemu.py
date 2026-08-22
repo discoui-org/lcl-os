@@ -403,7 +403,11 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
 
 def package_initramfs(kernel_path: Path, *, trace_frames: bool = False,
                       debug_layout: bool = False, debug_overlay: bool = False) -> None:
-    log("Preparing initramfs root directory structure...")
+    log("Building canonical LCL rootfs ext4 image...")
+    from build_rootfs import build_rootfs_ext4
+    build_rootfs_ext4(arch="x86_64")
+
+    log("Preparing minimal bootstrap initramfs root directory structure...")
     if INITRAMFS_DIR.exists():
         shutil.rmtree(INITRAMFS_DIR)
 
@@ -414,13 +418,10 @@ def package_initramfs(kernel_path: Path, *, trace_frames: bool = False,
         "tmp",
         "etc",
         "var/log",
+        "sysroot",
         "usr/bin",
         "usr/lib",
-        "usr/share",
-        "home/user/Desktop",
-        "home/user/Documents",
-        "home/user/Downloads",
-        "home/user/Applications",
+        "usr/sbin",
     ):
         (INITRAMFS_DIR / sub).mkdir(parents=True, exist_ok=True)
 
@@ -434,12 +435,6 @@ def package_initramfs(kernel_path: Path, *, trace_frames: bool = False,
         if not link_path.exists():
             link_path.symlink_to(target)
 
-    if not BINARY.is_file():
-        err(f"Binary not found: {BINARY}")
-        sys.exit(1)
-
-    shutil.copy2(BINARY, INITRAMFS_DIR / "usr" / "bin" / "lcl-core")
-
     def find_host_bin(name: str) -> Path | None:
         p = which(name)
         if p:
@@ -452,293 +447,32 @@ def package_initramfs(kernel_path: Path, *, trace_frames: bool = False,
                 return cp
         return None
 
-    util_names = [
-        "sh", "bash", "mount", "mkdir", "sleep", "ls", "cat", "uname", "grep",
-        "printf", "modprobe", "depmod", "kmod", "dmesg", "tee", "find", "cp",
-        "mv", "rm", "chmod", "chown", "touch", "wc", "head", "tail", "lspci", "lsusb"
+    bootstrap_tools = [
+        "switch_root", "sh", "bash", "mount", "mkdir", "sleep",
+        "modprobe", "depmod", "kmod", "dmesg"
     ]
 
-    host_bins: dict[str, Path] = {}
-    for name in util_names:
-        bin_path = find_host_bin(name)
-        if bin_path:
-            host_bins[name] = bin_path
-        else:
-            log(f"WARNING: Host utility '{name}' not found for initramfs packaging")
-
-    log("Packaging GNU Bash and essential utilities...")
+    log("Packaging minimal bootstrap utilities into initramfs...")
     dest_bin = INITRAMFS_DIR / "usr" / "bin"
     dest_lib = INITRAMFS_DIR / "usr" / "lib"
 
-    for name, src in host_bins.items():
-        if src.is_file():
+    for name in bootstrap_tools:
+        src = find_host_bin(name)
+        if src and src.is_file():
             shutil.copy2(src, dest_bin / name, follow_symlinks=True)
+            (dest_bin / name).chmod(0o755)
+            copy_ldd_deps(dest_bin / name, dest_lib)
 
-    libinput_share = Path("/usr/share/libinput")
-    if libinput_share.is_dir():
-        shutil.copytree(libinput_share, INITRAMFS_DIR / "usr" / "share" / "libinput", dirs_exist_ok=True)
-
-    ensure_fonts()
-    log("Packaging system fonts into /usr/share/fonts/...")
-    fonts_src = ROOT_DIR / "assets" / "fonts"
-    fonts_dst = INITRAMFS_DIR / "usr" / "share" / "fonts"
-    fonts_dst.mkdir(parents=True, exist_ok=True)
-    if fonts_src.is_dir():
-        for item in fonts_src.iterdir():
-            dest = fonts_dst / item.name
-            if item.is_dir():
-                if dest.exists():
-                    shutil.rmtree(dest)
-                shutil.copytree(item, dest)
-            else:
-                shutil.copy2(item, dest)
-
-    wp_src = ROOT_DIR / "wallpaper.jpg"
-    if wp_src.is_file():
-        log("Packaging wallpaper.jpg into initramfs...")
-        wp_dir = INITRAMFS_DIR / "usr" / "share" / "wallpapers"
-        wp_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(wp_src, wp_dir / "wallpaper.jpg")
-        shutil.copy2(wp_src, INITRAMFS_DIR / "usr" / "share" / "wallpaper.jpg")
-
-    # Selective hardware firmware packaging (skip huge wifi/sound/net vendor blobs)
-    fw_dst = INITRAMFS_DIR / "usr" / "lib" / "firmware"
-    fw_dst.mkdir(parents=True, exist_ok=True)
-    essential_fw_dirs = ("intel/i915", "i2c")
-    for fw_src in (Path("/usr/lib/firmware"), Path("/lib/firmware")):
-        if fw_src.is_dir():
-            for rel_sub in essential_fw_dirs:
-                src_sub = fw_src / rel_sub
-                if src_sub.is_dir():
-                    dst_sub = fw_dst / rel_sub
-                    dst_sub.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copytree(src_sub, dst_sub, dirs_exist_ok=True)
+    # Dynamic linker
+    for loader_cand in [
+        Path("/lib64/ld-linux-x86-64.so.2"),
+        Path("/usr/lib64/ld-linux-x86-64.so.2"),
+        Path("/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"),
+        Path("/usr/lib/ld-linux-x86-64.so.2"),
+    ]:
+        if loader_cand.is_file():
+            shutil.copy2(loader_cand.resolve(), dest_lib / "ld-linux-x86-64.so.2")
             break
-
-    write_text(
-        dest_bin / "clear",
-        "#!/bin/sh\nprintf \"\\033[2J\\033[H\"\n",
-        executable=True,
-    )
-
-    write_text(
-        INITRAMFS_DIR / "etc" / "profile",
-        """export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
-export HOME=/home/user
-export TERM=xterm-256color
-export HISTSIZE=500
-export HISTFILESIZE=1000
-alias ls='ls --color=auto'
-alias ll='ls -la'
-if [ -f /home/user/.bashrc ]; then
-    . /home/user/.bashrc
-fi
-""",
-    )
-
-    write_text(
-        INITRAMFS_DIR / "home" / "user" / ".bashrc",
-        """export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
-export TERM=xterm-256color
-export PS1='\\[\\033[1;34m\\]\\W\\[\\033[0m\\] ❯ '
-export HISTSIZE=500
-alias ls='ls --color=auto'
-alias ll='ls -la'
-bind 'set completion-ignore-case on' 2>/dev/null || true
-bind 'set show-all-if-ambiguous on' 2>/dev/null || true
-bind 'TAB:menu-complete' 2>/dev/null || true
-bind '"\\e[Z":menu-complete-backward' 2>/dev/null || true
-""",
-    )
-
-    write_text(
-        INITRAMFS_DIR / "home" / "user" / ".shrc",
-        "export PS1='\\W ❯ '\nalias ls='ls --color=auto'\nalias ll='ls -la'\n",
-    )
-    write_text(INITRAMFS_DIR / "home" / "user" / ".profile", ". /home/user/.bashrc\n")
-
-    if OPEN_BIN.is_file():
-        shutil.copy2(OPEN_BIN, dest_bin / "open")
-    else:
-        write_text(
-            dest_bin / "open",
-            "#!/bin/sh\necho \"Usage: open <app_name.app | path_to_app>\"\n",
-            executable=True,
-        )
-
-    if SESSIOND_BIN.is_file():
-        shutil.copy2(SESSIOND_BIN, dest_bin / "lcl-sessiond")
-
-    if SHELL_BIN.is_file():
-        shutil.copy2(SHELL_BIN, dest_bin / "lcl-desktop-shell")
-
-    if TERM_BIN.is_file():
-        shutil.copy2(TERM_BIN, dest_bin / "lcl-terminal")
-
-    if DEMO_BIN.is_file():
-        shutil.copy2(DEMO_BIN, dest_bin / "lcl_ui_demo")
-
-    if JS_BIN.is_file():
-        shutil.copy2(JS_BIN, dest_bin / "lcl-js")
-
-    def copy_bundle_manifest_and_icon(src_meta: Path, dst_bundle: Path) -> bool:
-        if not src_meta.is_file():
-            return False
-
-        shutil.copy2(src_meta, dst_bundle / "metadata.json")
-        try:
-            meta_obj = json.loads(src_meta.read_text(encoding="utf-8"))
-        except Exception as exc:
-            log(f"WARNING: failed to parse {src_meta}: {exc}")
-            return True
-
-        icon_rel = str(meta_obj.get("icon", "")).strip()
-        if not icon_rel:
-            return True
-
-        src_icon = src_meta.parent / icon_rel
-        dst_icon = dst_bundle / icon_rel
-        if src_icon.is_file():
-            dst_icon.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_icon, dst_icon)
-        else:
-            log(f"WARNING: icon missing for {src_meta}: {src_icon}")
-
-        return True
-
-    uidemo_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "UIDemo.app"
-    (uidemo_app / "bin").mkdir(parents=True, exist_ok=True)
-    (uidemo_app / "assets").mkdir(parents=True, exist_ok=True)
-    if not copy_bundle_manifest_and_icon(ROOT_DIR / "apps" / "ui_demo" / "metadata.json", uidemo_app):
-        write_text(
-            uidemo_app / "metadata.json",
-            """{
-    "name": "LCL UI Demo",
-    "id": "org.lcl.uidemo",
-    "executable": "bin/ui_demo",
-    "version": "1.0.0",
-    "icon": "assets/icon.png"
-}
-""",
-        )
-    if DEMO_BIN.is_file():
-        shutil.copy2(DEMO_BIN, uidemo_app / "bin" / "ui_demo")
-    else:
-        write_text(
-            uidemo_app / "bin" / "ui_demo",
-            "#!/bin/sh\n/usr/bin/lcl_ui_demo 2>/dev/null || echo 'LCL UI Demo App'\n",
-            executable=True,
-        )
-
-    term_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "Terminal.app"
-    (term_app / "bin").mkdir(parents=True, exist_ok=True)
-    (term_app / "assets").mkdir(parents=True, exist_ok=True)
-    if not copy_bundle_manifest_and_icon(ROOT_DIR / "src" / "apps" / "terminal" / "metadata.json", term_app):
-        write_text(
-            term_app / "metadata.json",
-            """{
-    "name": "LCL Terminal",
-    "id": "org.lcl.terminal",
-    "executable": "/bin/lcl-terminal",
-    "version": "1.0.0",
-    "icon": "assets/icon.png"
-}
-""",
-        )
-
-    sysmon_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "SystemMonitor.app"
-    (sysmon_app / "bin").mkdir(parents=True, exist_ok=True)
-    (sysmon_app / "assets").mkdir(parents=True, exist_ok=True)
-    write_text(
-        sysmon_app / "metadata.json",
-        """{
-    "id": "org.lcl.system-monitor",
-    "name": "System Monitor",
-    "executable": "bin/sysmon",
-    "version": "1.0.0",
-    "icon": "assets/icon.png"
-}
-""",
-    )
-    write_text(
-        sysmon_app / "bin" / "sysmon",
-        """#!/bin/sh
-echo "===================================================="
-echo "          LCL OS System Monitor v1.0.0              "
-echo "===================================================="
-echo "Kernel: $(uname -a)"
-echo "Uptime: $(uptime 2>/dev/null || echo '0 mins')"
-echo "Memory: 2048 MB RAM Allocated"
-echo "===================================================="
-""",
-        executable=True,
-    )
-
-    uidemo_js_app = INITRAMFS_DIR / "home" / "user" / "Applications" / "UIDemoJS.app"
-    (uidemo_js_app / "bin").mkdir(parents=True, exist_ok=True)
-    (uidemo_js_app / "assets").mkdir(parents=True, exist_ok=True)
-    if not copy_bundle_manifest_and_icon(ROOT_DIR / "apps" / "ui_demo_js" / "metadata.json", uidemo_js_app):
-        write_text(
-            uidemo_js_app / "metadata.json",
-            """{
-    "name": "LCL UI Demo JS",
-    "id": "org.lcl.uidemo-js",
-    "executable": "bin/ui_demo_js",
-    "version": "1.0.0",
-    "icon": "assets/icon.png"
-}
-""",
-        )
-    js_script = ROOT_DIR / "apps" / "ui_demo_js" / "main.js"
-    if js_script.is_file():
-        shutil.copy2(js_script, uidemo_js_app / "bin" / "main.js")
-    write_text(
-        uidemo_js_app / "bin" / "ui_demo_js",
-        "#!/bin/sh\nexec /usr/bin/lcl-js /home/user/Applications/UIDemoJS.app/bin/main.js \"$@\"\n",
-        executable=True,
-    )
-
-    log("Resolving dynamic library dependencies...")
-    bins = [BINARY, OPEN_BIN, SESSIOND_BIN, SHELL_BIN, TERM_BIN, DEMO_BIN, JS_BIN] + [p for p in host_bins.values() if p.is_file()]
-    for bin_path in bins:
-        copy_ldd_deps(bin_path, dest_lib)
-
-    # Package Mesa DRI and GBM drivers for EGL hardware acceleration
-    log("Packaging Mesa DRI and GBM graphics drivers...")
-    dri_dirs = [
-        Path("/usr/lib/x86_64-linux-gnu/dri"),
-        Path("/usr/lib/dri"),
-        Path("/usr/lib/x86_64-linux-gnu/gbm"),
-        Path("/usr/lib/gbm"),
-    ]
-    for dri_src in dri_dirs:
-        if dri_src.is_dir():
-            dri_dst = INITRAMFS_DIR / "usr" / "lib" / "x86_64-linux-gnu" / dri_src.name
-            dri_dst.mkdir(parents=True, exist_ok=True)
-            for item in dri_src.iterdir():
-                if item.is_file():
-                    shutil.copy2(item, dri_dst / item.name, follow_symlinks=True)
-                    copy_ldd_deps(item, dest_lib)
-
-    # Package GLVND vendor configs (/usr/share/glvnd, /etc/glvnd) and Mesa vendor drivers
-    log("Packaging GLVND vendor configs & Mesa EGL drivers...")
-    glvnd_share = Path("/usr/share/glvnd")
-    if glvnd_share.is_dir():
-        shutil.copytree(glvnd_share, INITRAMFS_DIR / "usr" / "share" / "glvnd", dirs_exist_ok=True)
-
-    glvnd_etc = Path("/etc/glvnd")
-    if glvnd_etc.is_dir():
-        shutil.copytree(glvnd_etc, INITRAMFS_DIR / "etc" / "glvnd", dirs_exist_ok=True)
-
-    drirc_share = Path("/usr/share/drirc.d")
-    if drirc_share.is_dir():
-        shutil.copytree(drirc_share, INITRAMFS_DIR / "usr" / "share" / "drirc.d", dirs_exist_ok=True)
-
-    for lib_pattern in ("libEGL_mesa*", "libGLX_mesa*", "libgbm*", "libglapi*"):
-        for mesa_lib in Path("/usr/lib/x86_64-linux-gnu").glob(lib_pattern):
-            if mesa_lib.is_file():
-                shutil.copy2(mesa_lib, dest_lib / mesa_lib.name, follow_symlinks=True)
-                copy_ldd_deps(mesa_lib, dest_lib)
 
     package_kernel_modules(kernel_path, INITRAMFS_DIR)
 
@@ -752,80 +486,20 @@ echo "===================================================="
         except Exception:
             pass
 
-    diagnostic_exports = []
-    if trace_frames:
-        diagnostic_exports.append("export LCL_TRACE_FRAMES=1")
-    if debug_layout:
-        diagnostic_exports.append("export LCL_DEBUG_LAYOUT=1")
-    if debug_overlay:
-        diagnostic_exports.append("export LCL_DEBUG_OVERLAY=1")
-    diagnostic_setup = "\n".join(diagnostic_exports)
-
     write_text(
         INITRAMFS_DIR / "init",
         """#!/bin/sh
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
-__LCL_DIAGNOSTIC_EXPORTS__
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-mkdir -p /var/log /var/tmp /dev/pts /dev/input /home/user/Desktop /home/user/Documents /home/user/Downloads /home/user/Applications
-mount -t devpts devpts /dev/pts -o mode=0620,ptmxmode=0666 2>/dev/null || mount -t devpts devpts /dev/pts 2>/dev/null || true
-if [ ! -e /dev/ptmx ]; then
-    mknod -m 666 /dev/ptmx c 5 2 2>/dev/null || ln -sf pts/ptmx /dev/ptmx 2>/dev/null || true
-fi
-chmod 666 /dev/ptmx 2>/dev/null || true
 
-# Resolve module tree (uname -r inside guest matches booted kernel)
-KVER=$(uname -r 2>/dev/null)
-if [ -d "/lib/modules/$KVER" ]; then
-    echo "[init] modules: /lib/modules/$KVER"
-else
-    echo "[init] WARNING: /lib/modules/$KVER missing"
-    ls -la /lib/modules 2>/dev/null || true
-fi
-
-# Load GPU, USB, I2C, Pin Control & Touchpad stack BEFORE starting compositor
-modprobe virtio_pci || true
-modprobe virtio_dma_buf || true
-modprobe drm || true
-modprobe drm_kms_helper || true
-modprobe virtio_gpu || true
-modprobe bochs || true
-modprobe simpledrm || true
-modprobe virtio_input || true
-
-# USB controllers & HID (Logitech & physical USB mice/keyboards)
-modprobe usbcore || true
-modprobe xhci_hcd || true
-modprobe xhci_pci || true
-modprobe ehci_hcd || true
-modprobe ehci_pci || true
-modprobe usbhid || true
-
-# Intel/AMD Pin Control & I2C Bus Controllers (required for laptop Touchpad GPIO interrupts)
-modprobe pinctrl_intel || true
-modprobe intel_lpss || true
-modprobe intel_lpss_pci || true
-modprobe i2c_core || true
-modprobe i2c_designware_core || true
-modprobe i2c_designware_pci || true
-modprobe i2c_designware_platform || true
-
-# PS/2 & Serio Bus (Legacy / Synaptics / Elantech touchpads)
-modprobe i8042 || true
-modprobe serio || true
-modprobe psmouse || true
-
-# HID & Multitouch (Modern I2C-HID & USB-HID laptop touchpads)
-modprobe hid || true
-modprobe hid_generic || true
-modprobe hid_multitouch || true
-modprobe i2c_hid || true
-modprobe i2c_hid_acpi || true
-modprobe i2c_hid_of || true
-modprobe evdev || true
-modprobe qemu_fw_cfg || true
+# Load storage and display modules early
+modprobe virtio_pci 2>/dev/null || true
+modprobe virtio_blk 2>/dev/null || true
+modprobe virtio_gpu 2>/dev/null || true
+modprobe virtio_input 2>/dev/null || true
+modprobe ext4 2>/dev/null || true
 
 # Auto-probe hardware drivers via /sys modaliases
 for alias_file in $(find /sys/bus /sys/devices -name modalias 2>/dev/null); do
@@ -835,52 +509,51 @@ for alias_file in $(find /sys/bus /sys/devices -name modalias 2>/dev/null); do
     fi
 done
 
-# Save kernel dmesg log and input device inventory to /var/log
-dmesg > /var/log/dmesg.log 2>&1 || true
-ls -la /dev/input/ > /var/log/input_devices.log 2>&1 || true
-
-# Wait for /dev/dri/card* (up to ~3s)
+# Wait for root block device
+ROOT_DEV="/dev/vda"
 i=0
-while [ "$i" -lt 30 ]; do
-    if ls /dev/dri/card* >/dev/null 2>&1; then
+while [ "$i" -lt 60 ]; do
+    if [ -b "/dev/vda" ]; then
+        ROOT_DEV="/dev/vda"
+        break
+    elif [ -b "/dev/disk/by-label/lcl-rootfs" ]; then
+        ROOT_DEV="/dev/disk/by-label/lcl-rootfs"
         break
     fi
     i=$((i + 1))
-    sleep 0.1
+    sleep 0.05
 done
 
-echo "===================================================="
-echo "  LCL Core Linux (LCL) - QEMU Direct Kernel Boot   "
-echo "===================================================="
-echo "Kernel: $(uname -r)  cmdline: $(cat /proc/cmdline 2>/dev/null)"
-echo "DRM devices detected:"
-ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
-echo "Input devices detected:"
-ls /dev/input/ 2>/dev/null || echo "  (none yet)"
+mkdir -p /sysroot
+echo "[bootstrap] Mounting canonical LCL rootfs from $ROOT_DEV on /sysroot..."
+mount -t ext4 -o rw,noatime $ROOT_DEV /sysroot 2>/dev/null || mount -t ext4 $ROOT_DEV /sysroot
 
-# --- Emergency Debug Shell Check (lcl.debug=1 in /proc/cmdline) ---
-if grep -q "lcl.debug=1" /proc/cmdline 2>/dev/null; then
-    echo "===================================================="
-    echo " [init DEBUG] Emergency debug shell active (lcl.debug=1)"
-    echo " [init DEBUG] /var/log/dmesg.log and /var/log/input_devices.log are ready."
-    echo " [init DEBUG] Type 'exit' to resume booting compositor GUI."
-    echo "===================================================="
-    /bin/sh
+if [ ! -x /sysroot/init ] && [ ! -x /sysroot/usr/bin/lcl-sessiond ]; then
+    echo "[bootstrap ERROR] Could not find canonical /init on $ROOT_DEV!"
+    exec /bin/sh
 fi
 
-/bin/lcl-core 2>&1 | tee /var/log/lcl_compositor.log &
-sleep 0.2
-if [ -x /usr/bin/lcl-sessiond ]; then
-    echo "[init] Starting lcl-sessiond..."
-    /usr/bin/lcl-sessiond 2>&1 | tee /var/log/lcl_sessiond.log &
-    sleep 0.1
+# Forward kernel module tree to rootfs if not already populated
+KVER=$(uname -r 2>/dev/null)
+if [ -d "/lib/modules/$KVER" ] && [ ! -d "/sysroot/usr/lib/modules/$KVER" ]; then
+    mkdir -p "/sysroot/usr/lib/modules" 2>/dev/null
+    mount --bind "/lib/modules/$KVER" "/sysroot/usr/lib/modules/$KVER" 2>/dev/null || \
+    cp -a "/lib/modules/$KVER" "/sysroot/usr/lib/modules/" 2>/dev/null || true
 fi
-if [ -x /usr/bin/lcl-desktop-shell ]; then
-    echo "[init] Starting lcl-desktop-shell..."
-    /usr/bin/lcl-desktop-shell 2>&1 | tee /var/log/lcl_desktop_shell.log &
+
+# Clean up any bootstrap /run and hand off canonical virtual filesystems
+umount -l /run 2>/dev/null || true
+mkdir -p /sysroot/Runtime /sysroot/dev /sysroot/proc /sysroot/sys
+if mountpoint -q /Runtime 2>/dev/null; then
+    mount --move /Runtime /sysroot/Runtime 2>/dev/null || true
 fi
-wait
-""".replace("__LCL_DIAGNOSTIC_EXPORTS__", diagnostic_setup),
+mount --move /dev /sysroot/dev 2>/dev/null || true
+mount --move /proc /sysroot/proc 2>/dev/null || true
+mount --move /sys /sysroot/sys 2>/dev/null || true
+
+echo "[bootstrap] Switching root to canonical LCL rootfs..."
+exec switch_root /sysroot /init
+""",
         executable=True,
     )
 
@@ -964,7 +637,24 @@ def ensure_docker_image(arch: str = "x86_64") -> None:
                 str(SCRIPT_DIR),
             ]
         )
-        stamp.write_text(df_mtime + "\n", encoding="utf-8")
+        # CACHE_DIR may be root-owned from a previous Docker run; try to fix
+        # permissions before writing the stamp so the host user can write it.
+        try:
+            subprocess.run(
+                ["chmod", "-R", "a+rwX", str(CACHE_DIR)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+        try:
+            stamp.write_text(df_mtime + "\n", encoding="utf-8")
+        except PermissionError:
+            log(
+                f"[WARN] Could not write stamp {stamp} (permission denied). "
+                "Run: sudo chown -R $USER:$USER build/  to fix ownership. "
+                "The Docker image was built successfully and QEMU will proceed."
+            )
 
 
 def fix_permissions() -> None:
@@ -1402,6 +1092,39 @@ def find_ovmf_firmware(arch: str = "x86_64") -> Path | None:
     return None
 
 
+def is_rootfs_stale(rootfs_img: Path, arch: str = "x86_64") -> bool:
+    """Check if the canonical ext4 rootfs image is missing or older than any compiled binary or asset."""
+    if not rootfs_img.is_file():
+        return True
+
+    rootfs_mtime = rootfs_img.stat().st_mtime
+
+    candidate_binaries = [
+        BINARY,
+        SESSIOND_BIN,
+        SHELL_BIN,
+        OPEN_BIN,
+        JS_BIN,
+        TERM_BIN,
+        DEMO_BIN,
+        BUILD_DIR / "UIDemo",
+        BUILD_DIR / "Terminal",
+        BUILD_DIR / "apps" / "ui_demo" / "UIDemo",
+        BUILD_DIR / "apps" / "terminal" / "Terminal",
+    ]
+    for b in candidate_binaries:
+        if b.is_file() and b.stat().st_mtime > rootfs_mtime:
+            return True
+
+    for directory in (ROOT_DIR / "apps", ROOT_DIR / "assets"):
+        if directory.is_dir():
+            for p in directory.rglob("*"):
+                if p.is_file() and p.stat().st_mtime > rootfs_mtime:
+                    return True
+
+    return False
+
+
 def launch_qemu(
     kernel: Path,
     arch: str = "x86_64",
@@ -1410,14 +1133,19 @@ def launch_qemu(
     uefi_mode: bool = False,
     usb_passthrough: str | None = None,
     retina: bool = False,
+    mobile: bool = False,
     scale_override: float | None = None,
     width_override: int | None = None,
     height_override: int | None = None,
+    no_build: bool = False,
+    rebuild: bool = False,
+    spice_unix: Path | None = None,
+    qmp_unix: Path | None = None,
 ) -> None:
     qemu = find_qemu(arch)
     host = detect_host_display()
 
-    memory = os.environ.get("LCL_QEMU_MEM") or ("2G" if (native or retina) else "1024M")
+    memory = os.environ.get("LCL_QEMU_MEM") or "2G"
     cpus = os.environ.get("LCL_QEMU_CPUS", "2")
     refresh_hz = host.refresh_hz or 60
 
@@ -1442,7 +1170,17 @@ def launch_qemu(
         except ValueError:
             pass
 
-    if retina:
+    if mobile:
+        # Portrait iPhone-like display: 1179x2556 physical, 393x852 logical, 3.0x UI scale
+        width = width_override or 1179
+        height = height_override or 2556
+        scale = scale_override or 3.0
+        host_dpr = scale
+        host.logical_width = 393
+        host.logical_height = 852
+        host.physical_width = width
+        host.physical_height = height
+    elif retina:
         # 13" MacBook Air Retina baseline: 2560x1600 physical resolution, 2.0x UI scale (1280x800 logical viewport)
         width = width_override or 2560
         height = height_override or 1600
@@ -1547,6 +1285,13 @@ def launch_qemu(
     has_virtio_gpu_gl = "virtio-gpu-gl" in dev_help or "virtio-gpu-gl-pci" in dev_help
     has_virtio_vga = "virtio-vga" in dev_help
 
+    if spice_unix is not None and (
+        (arch == "x86_64" and not has_virtio_vga_gl)
+        or (arch == "aarch64" and not has_virtio_gpu_gl)
+    ):
+        err("SPICE Unix display requires a VirGL virtio GPU; no framebuffer fallback is enabled.")
+        sys.exit(1)
+
     if arch == "aarch64":
         # On aarch64 virt machine, set explicit resolution on virtio-gpu-pci to initialize FB immediately
         if want_gl and has_virtio_gpu_gl:
@@ -1564,10 +1309,27 @@ def launch_qemu(
         else:
             gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else f"virtio-gpu-pci,xres={width},yres={height}"]
 
-    if host_os() == "darwin":
+    spice: list[str] = []
+    if spice_unix is not None:
+        rendernode = Path("/dev/dri/renderD128")
+        if not want_gl:
+            err("SPICE Unix display requires --gpu (VirGL/EGL path).")
+            sys.exit(1)
+        if not rendernode.exists():
+            err(f"SPICE Unix display requires a render node: {rendernode}")
+            sys.exit(1)
+
+        display = ["-display", "none"]
+        spice = [
+            "-spice",
+            f"unix=on,addr={spice_unix},disable-ticketing=on,gl=on,rendernode={rendernode}",
+        ]
+    elif host_os() == "darwin":
         if native:
             disp = "cocoa,full-screen=on,zoom-to-fit=on"
             extra_qemu = ["-full-screen"]
+        elif mobile:
+            disp = "cocoa,zoom-to-fit=on,show-cursor=on"
         else:
             disp = "cocoa"
         display = ["-display", disp]
@@ -1579,6 +1341,8 @@ def launch_qemu(
                 if want_gl:
                     disp = "gtk,gl=on,full-screen=on,zoom-to-fit=on"
                 extra_qemu = ["-full-screen"]
+            elif mobile:
+                disp = "gtk,gl=on,zoom-to-fit=on,show-cursor=on" if want_gl else "gtk,zoom-to-fit=on,show-cursor=on"
             else:
                 disp = "gtk,gl=on" if want_gl else "gtk,zoom-to-fit=on"
         elif "sdl" in backends:
@@ -1587,6 +1351,8 @@ def launch_qemu(
                 if want_gl:
                     disp = "sdl,gl=on,full-screen=on"
                 extra_qemu = ["-full-screen"]
+            elif mobile:
+                disp = "sdl,gl=on,show-cursor=on" if want_gl else "sdl,show-cursor=on"
             else:
                 disp = "sdl,gl=on" if want_gl else "sdl"
         else:
@@ -1601,7 +1367,10 @@ def launch_qemu(
     print(f"  - SMP Cores: {cpus}")
     print(f"  - Guest video: {width}x{height}@{refresh_hz}")
     print(f"  - UI scale: {scale} (lcl.scale)")
-    if native:
+    if mobile:
+        print("  - Mode: mobile portrait display (1179x2556 @ 3x scale)")
+        print(f"  - Logical viewport: {host.logical_width}x{host.logical_height}")
+    elif native:
         print("  - Mode: native host display (fullscreen)")
         print(f"  - Host DPR: {host_dpr}  UI scale: {scale}")
         if host.logical_width and host.physical_width:
@@ -1615,6 +1384,8 @@ def launch_qemu(
     print(f"  - Accelerator: {' '.join(accel)}")
     print(f"  - GPU: {' '.join(gpu)}{'  (LCL_QEMU_GL=1 for VirGL)' if not want_gl else ''}")
     print(f"  - Display: {display[1]}")
+    if spice_unix is not None:
+        print(f"  - SPICE Unix socket: {spice_unix}")
     if iso_mode:
         iso_name = f"lcl-os-{arch}.iso"
         iso_file = BUILD_DIR / iso_name if (BUILD_DIR / iso_name).is_file() else BUILD_DIR / "lcl-os.iso"
@@ -1676,6 +1447,21 @@ def launch_qemu(
             sys.exit(1)
         cmd.extend(["-boot", "d", "-cdrom", str(iso_path)])
     else:
+        rootfs_img = BUILD_DIR / "rootfs" / f"lcl-rootfs-{arch}.ext4"
+        if rebuild:
+            log(f"Force rebuild requested (--rebuild). Rebuilding canonical rootfs ({rootfs_img.name})...")
+            sys.path.insert(0, str(SCRIPT_DIR))
+            from build_rootfs import build_rootfs_ext4
+            build_rootfs_ext4(arch=arch)
+        elif not no_build and is_rootfs_stale(rootfs_img, arch=arch):
+            log(f"Canonical rootfs artifact ({rootfs_img.name}) is missing or stale. Rebuilding...")
+            sys.path.insert(0, str(SCRIPT_DIR))
+            from build_rootfs import build_rootfs_ext4
+            build_rootfs_ext4(arch=arch)
+        elif not rootfs_img.is_file():
+            sys.path.insert(0, str(SCRIPT_DIR))
+            from build_rootfs import build_rootfs_ext4
+            build_rootfs_ext4(arch=arch)
         cmd.extend([
             "-kernel",
             str(kernel),
@@ -1683,7 +1469,18 @@ def launch_qemu(
             str(INITRAMFS_IMG),
             "-append",
             append,
+            "-drive",
+            f"file={rootfs_img},format=raw,if=virtio,id=rootfs",
         ])
+
+    input_devices = ["-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci"]
+    qmp: list[str] = []
+    if qmp_unix is not None:
+        # This is viewer-only: host contacts arrive as QMP mtt events and the
+        # guest receives them through a real virtio evdev multitouch device.
+        input_devices.extend(["-device", "virtio-multitouch-pci"])
+        qmp = ["-qmp", f"unix:{qmp_unix},server=on,wait=off"]
+    serial = ["-serial", "stdio"]
 
     cmd.extend([
         "-m",
@@ -1692,13 +1489,11 @@ def launch_qemu(
         cpus,
         *gpu,
         *display,
+        *spice,
         *extra_qemu,
-        "-device",
-        "virtio-keyboard-pci",
-        "-device",
-        "virtio-tablet-pci",
-        "-serial",
-        "stdio",
+        *input_devices,
+        *qmp,
+        *serial,
         "-no-reboot",
     ])
     log("QEMU cmdline: " + " ".join(cmd))
@@ -1736,6 +1531,11 @@ def main() -> None:
         help="Launch in 13\" MacBook Air Retina mode (2560x1600 @ 2.0x UI scale)",
     )
     parser.add_argument(
+        "--mobile",
+        action="store_true",
+        help="Portrait iPhone-like display mode (1179x2556 physical @ 3.0x UI scale)",
+    )
+    parser.add_argument(
         "--scale",
         type=float,
         metavar="FACTOR",
@@ -1758,6 +1558,18 @@ def main() -> None:
         "-g",
         action="store_true",
         help="Enable 3D VirGL GPU acceleration in QEMU",
+    )
+    parser.add_argument(
+        "--spice-unix",
+        type=Path,
+        metavar="SOCKET",
+        help="Expose the display through a local SPICE Unix socket (requires --gpu)",
+    )
+    parser.add_argument(
+        "--qmp-unix",
+        type=Path,
+        metavar="SOCKET",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--trace-frames",
@@ -1784,7 +1596,20 @@ def main() -> None:
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="Skip Docker build/package step; launch QEMU using existing cached kernel/initramfs artifacts.",
+    )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Force clean rebuild of all binaries, initramfs, and canonical rootfs image",
+    )
     args = parser.parse_args()
+
+    if getattr(args, "rebuild", False) and getattr(args, "no_build", False):
+        parser.error("Cannot specify both --rebuild and --no-build.")
 
     arch = normalize_arch(args.arch or os.environ.get("ARCH"))
 
@@ -1815,7 +1640,20 @@ def main() -> None:
         build_only(arch=arch)
         return
 
-    kernel = prepare_artifacts(args, arch=arch)
+    if args.no_build:
+        # Skip Docker build/package; use whatever is already cached.
+        if not KERNEL_CACHE.is_file() or not INITRAMFS_IMG.is_file():
+            err(
+                "--no-build requires pre-built artifacts but none were found.\n"
+                f"  Expected kernel:    {KERNEL_CACHE}\n"
+                f"  Expected initramfs: {INITRAMFS_IMG}\n"
+                "Run without --no-build first to build them."
+            )
+            sys.exit(1)
+        kernel = KERNEL_CACHE
+        log(f"[--no-build] Skipping Docker build. Using cached kernel: {kernel}")
+    else:
+        kernel = prepare_artifacts(args, arch=arch)
 
     if args.package_only:
         log(f"Packaging complete ({arch}). Kernel cache: {kernel}")
@@ -1832,9 +1670,14 @@ def main() -> None:
             uefi_mode=args.uefi,
             usb_passthrough=args.usb,
             retina=args.retina,
+            mobile=args.mobile,
             scale_override=args.scale,
             width_override=args.width,
             height_override=args.height,
+            no_build=args.no_build,
+            rebuild=args.rebuild,
+            spice_unix=args.spice_unix,
+            qmp_unix=args.qmp_unix,
         )
     else:
         log(f"Boot environment ({arch}) ready! Kernel: {kernel}")

@@ -12,14 +12,15 @@ FetchContent_Declare(
     URL https://github.com/facebook/yoga/archive/refs/tags/v2.0.0.tar.gz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
-set(YOGA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(yoga)
+FetchContent_GetProperties(yoga)
+if(NOT yoga_POPULATED)
+    FetchContent_Populate(yoga)
+    add_subdirectory(${yoga_SOURCE_DIR}/yoga ${yoga_BINARY_DIR}/yoga EXCLUDE_FROM_ALL)
+endif()
 
 add_library(lcl-ui STATIC
     src/core/image_loader.cpp
     src/core/motion.cpp
-    src/core/rect.cpp
     src/core/render_pass.cpp
     src/core/event_dispatcher.cpp
     src/core/window_app.cpp
@@ -27,10 +28,17 @@ add_library(lcl-ui STATIC
     src/widgets/widget.cpp
     src/widgets/container.cpp
     src/widgets/text.cpp
+    src/widgets/text_field.cpp
     src/widgets/image.cpp
     src/widgets/button.cpp
     src/widgets/backdrop_surface.cpp
     src/widgets/filter_group.cpp
+    src/widgets/scroll_view.cpp
+    src/widgets/popover.cpp
+    src/widgets/menu.cpp
+    src/widgets/toggle.cpp
+    src/widgets/window_chrome.cpp
+    src/core/transient_controller.cpp
 )
 
 target_include_directories(lcl-ui PUBLIC
@@ -42,8 +50,10 @@ target_include_directories(lcl-ui PUBLIC
 target_link_libraries(lcl-ui PUBLIC
     lcl-platform-common
     lcl-motion
+    lcl-graphics
+    lcl-window-chrome
     lcl-protocol
-    lcl-display-scale
+    lcl-font-metrics
     yogacore
     Threads::Threads
 )

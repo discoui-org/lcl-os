@@ -5,6 +5,8 @@ Provides a clean, cross-platform CLI for building, running QEMU, ISO generation,
 
 Usage:
   ./main.py qemu [--native] [--gpu] [--arch aarch64|x86_64]
+  ./main.py qemu --mobile [--skin pixel_8_pro]
+  ./main.py avd [--avd-name lcl-phone] [--no-window] [--rebuild]
   ./main.py build [--arch ...]
   ./main.py iso [--arch ...]
   ./main.py flash [--dev /dev/sdX]
@@ -29,11 +31,11 @@ BUILD_DIR = ROOT_DIR / "build"
 
 
 def log(msg: str) -> None:
-    print(f"[LCL] {msg}")
+    print(f"[LCL] {msg}", flush=True)
 
 
 def err(msg: str) -> None:
-    print(f"[LCL ERROR] {msg}", file=sys.stderr)
+    print(f"[LCL ERROR] {msg}", file=sys.stderr, flush=True)
 
 
 def normalize_arch(arch_str: str | None) -> str:
@@ -49,6 +51,27 @@ def normalize_arch(arch_str: str | None) -> str:
 
 
 def cmd_qemu(args: argparse.Namespace) -> None:
+    if getattr(args, "mobile", False):
+        if args.utm:
+            err("--mobile uses the LCL Device Viewer and cannot be combined with --utm.")
+            sys.exit(2)
+        if args.iso or args.uefi or args.usb:
+            err("--mobile Device Viewer does not support --iso, --uefi, or --usb.")
+            sys.exit(2)
+        if normalize_arch(args.arch) != "x86_64":
+            err("--mobile Device Viewer currently supports only x86_64.")
+            sys.exit(2)
+
+        viewer_args = [sys.executable, str(ROOT_DIR / "emulator" / "main.py")]
+        if args.skin:
+            viewer_args.extend(["--skin", args.skin])
+        if not args.no_build:
+            viewer_args.append("--build")
+        if args.rebuild:
+            viewer_args.append("--rebuild")
+        subprocess.check_call(viewer_args, cwd=ROOT_DIR)
+        return
+
     if getattr(args, "utm", False) or (platform.system().lower() == "darwin" and (Path("/Applications/UTM.app").is_dir() or (Path.home() / "Applications/UTM.app").is_dir())):
         cmd_utm(args)
         return
@@ -65,6 +88,8 @@ def cmd_qemu(args: argparse.Namespace) -> None:
         qemu_args.append("--gpu")
     if args.retina:
         qemu_args.append("--retina")
+    if getattr(args, "mobile", False):
+        qemu_args.append("--mobile")
     if args.iso:
         qemu_args.append("--iso")
     if args.uefi:
@@ -83,6 +108,10 @@ def cmd_qemu(args: argparse.Namespace) -> None:
         qemu_args.append("--debug-layout")
     if args.debug_overlay:
         qemu_args.append("--debug-overlay")
+    if args.no_build:
+        qemu_args.append("--no-build")
+    if getattr(args, "rebuild", False):
+        qemu_args.append("--rebuild")
 
     subprocess.check_call(qemu_args)
 
@@ -90,7 +119,33 @@ def cmd_qemu(args: argparse.Namespace) -> None:
 def cmd_utm(args: argparse.Namespace) -> None:
     run_utm_py = SCRIPTS_DIR / "run_utm.py"
     arch = normalize_arch(args.arch)
-    subprocess.check_call([sys.executable, str(run_utm_py), "--arch", arch])
+    utm_args = [sys.executable, str(run_utm_py), "--arch", arch]
+    if getattr(args, "rebuild", False):
+        utm_args.append("--rebuild")
+    if getattr(args, "no_build", False):
+        utm_args.append("--no-build")
+    subprocess.check_call(utm_args)
+
+
+def cmd_avd(args: argparse.Namespace) -> None:
+    arch = normalize_arch(getattr(args, "arch", None))
+    if arch != "x86_64":
+        err(f"AVD platform substrate only supports 'x86_64' (requested: '{arch}').")
+        sys.exit(1)
+
+    run_avd_py = SCRIPTS_DIR / "run_avd.py"
+    avd_args = [sys.executable, str(run_avd_py), "--arch", arch]
+    if getattr(args, "avd_name", None):
+        avd_args.extend(["--avd-name", str(args.avd_name)])
+    if getattr(args, "show_kernel", False):
+        avd_args.append("--show-kernel")
+    if getattr(args, "no_window", False):
+        avd_args.append("--no-window")
+    if getattr(args, "no_build", False):
+        avd_args.append("--no-build")
+    if getattr(args, "rebuild", False):
+        avd_args.append("--rebuild")
+    subprocess.check_call(avd_args)
 
 
 def cmd_build(args: argparse.Namespace) -> None:
@@ -109,6 +164,15 @@ def cmd_iso(args: argparse.Namespace) -> None:
     build_iso_py = SCRIPTS_DIR / "build_iso.py"
     arch = normalize_arch(args.arch)
     subprocess.check_call([sys.executable, str(build_iso_py), "--arch", arch])
+
+
+def cmd_rootfs(args: argparse.Namespace) -> None:
+    build_rootfs_py = SCRIPTS_DIR / "build_rootfs.py"
+    arch = normalize_arch(args.arch)
+    rootfs_args = [sys.executable, str(build_rootfs_py), "--arch", arch]
+    if getattr(args, "size", None):
+        rootfs_args.extend(["--size", str(args.size)])
+    subprocess.check_call(rootfs_args)
 
 
 def cmd_flash(args: argparse.Namespace) -> None:
@@ -171,6 +235,8 @@ def main() -> None:
     p_qemu.add_argument("--native", "-n", action="store_true", help="Match host resolution + fullscreen")
     p_qemu.add_argument("--gpu", "-g", action="store_true", help="Enable 3D VirGL GPU acceleration")
     p_qemu.add_argument("--retina", action="store_true", help="13\" MacBook Air Retina (2560x1600 @ 2.0x)")
+    p_qemu.add_argument("--mobile", action="store_true", help="Portrait iPhone-like display (1179x2556 @ 3.0x)")
+    p_qemu.add_argument("--skin", metavar="PIXEL_SKIN", help="Pixel skin for --mobile Device Viewer (e.g. pixel_8_pro)")
     p_qemu.add_argument("--scale", type=float, metavar="FACTOR", help="UI scale factor (e.g. 1.5, 2.0)")
     p_qemu.add_argument("--width", type=int, metavar="PX", help="Display width in pixels")
     p_qemu.add_argument("--height", type=int, metavar="PX", help="Display height in pixels")
@@ -180,10 +246,23 @@ def main() -> None:
     p_qemu.add_argument("--trace-frames", action="store_true", help="Enable layout/render trace")
     p_qemu.add_argument("--debug-layout", action="store_true", help="Draw widget bounds overlay")
     p_qemu.add_argument("--debug-overlay", action="store_true", help="Draw compositor FPS overlay")
+    p_qemu.add_argument("--no-build", action="store_true", help="Skip build/package; launch QEMU with existing cached artifacts")
+    p_qemu.add_argument("--rebuild", action="store_true", help="Force clean rebuild of all binaries and canonical rootfs image")
 
     # ---- utm ----
     p_utm = subparsers.add_parser("utm", help="Build ISO and launch via UTM / utmctl (Metal 3D)")
     p_utm.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (aarch64 or x86_64)")
+    p_utm.add_argument("--no-build", action="store_true", help="Skip build; launch existing UTM VM directly")
+    p_utm.add_argument("--rebuild", action="store_true", help="Force clean rebuild of ISO and VM image")
+
+    # ---- avd ----
+    p_avd = subparsers.add_parser("avd", help="Build & launch LCL OS on Android AVD emulator")
+    p_avd.add_argument("--arch", "-a", metavar="ARCH", default="x86_64", help="Target architecture (only x86_64 supported on AVD)")
+    p_avd.add_argument("--avd-name", metavar="NAME", default="lcl-phone", help="Target AVD name (default: lcl-phone)")
+    p_avd.add_argument("--show-kernel", action="store_true", help="Display live guest kernel and init boot logs in terminal")
+    p_avd.add_argument("--no-window", action="store_true", help="Run emulator headless without GUI window")
+    p_avd.add_argument("--no-build", action="store_true", help="Skip artifact build & packaging")
+    p_avd.add_argument("--rebuild", action="store_true", help="Force clean rebuild of all targets")
 
     # ---- build ----
     p_build = subparsers.add_parser("build", help="Build LCL OS binaries via Docker")
@@ -192,6 +271,11 @@ def main() -> None:
     # ---- package ----
     p_pkg = subparsers.add_parser("package", help="Build binaries and package initramfs")
     p_pkg.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (x86_64 or aarch64)")
+
+    # ---- rootfs ----
+    p_rootfs = subparsers.add_parser("rootfs", help="Build single canonical ext4 rootfs image")
+    p_rootfs.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (x86_64 or aarch64)")
+    p_rootfs.add_argument("--size", "-s", type=int, default=1024, metavar="MB", help="Filesystem size in MB (default: 1024)")
 
     # ---- iso ----
     p_iso = subparsers.add_parser("iso", help="Build Limine bootable ISO image")
@@ -218,11 +302,16 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if getattr(args, "rebuild", False) and getattr(args, "no_build", False):
+        parser.error("Cannot specify both --rebuild and --no-build.")
+
     dispatch = {
         "qemu": cmd_qemu,
         "utm": cmd_utm,
+        "avd": cmd_avd,
         "build": cmd_build,
         "package": cmd_package,
+        "rootfs": cmd_rootfs,
         "iso": cmd_iso,
         "flash": cmd_flash,
         "fonts": cmd_fonts,

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lcl-ui/core/rect.hpp"
+#include "lcl-graphics/canvas.hpp"
 #include "lcl-ui/core/effects.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/events.hpp"
@@ -16,7 +16,8 @@
 
 namespace lcl::ui {
 
-class Canvas;
+class WindowApp;
+class ScrollView;
 
 class Widget {
 public:
@@ -35,11 +36,13 @@ public:
 
     Widget* getParent() const { return m_parent; }
 
-    Rect getBounds() const { return m_bounds; }
-    Rect getAbsoluteBounds() const { return m_absoluteBounds; }
-    Rect getPresentationBounds() const;
+    graphics::RectF getBounds() const { return m_bounds; }
+    graphics::RectF getAbsoluteBounds() const { return m_absoluteBounds; }
+    graphics::RectF getPresentationBounds() const;
     bool containsPresentationPoint(float x, float y) const;
     bool hasActiveAnimationInHierarchy() const;
+    /** True when this widget or any descendant owns an active motion channel. */
+    bool hasActiveAnimationInSubtree() const;
     uint64_t getObjectId() const noexcept { return m_objectId; }
     const PresentationState& getPresentationState() const noexcept { return m_presentation; }
     std::weak_ptr<uint8_t> getLifetimeToken() const noexcept { return m_lifetimeToken; }
@@ -75,8 +78,14 @@ public:
 
     void setFocusable(bool focusable) { m_focusable = focusable; }
     bool isFocusable() const { return m_focusable; }
-
+    /** Marks a traversal boundary without making the widget a focus target. */
+    virtual bool isFocusScope() const noexcept { return false; }
     void markDirty();
+    uint64_t getPaintRevision() const noexcept { return m_paintRevision; }
+    uint64_t getPresentationRevision() const noexcept {
+        return m_presentationRevision;
+    }
+    bool isLayoutDirty() const noexcept { return m_layoutDirty; }
     void setRenderPass(RenderPass* pass);
     void setMotionCoordinator(MotionCoordinator* coordinator);
     MotionCoordinator* getMotionCoordinator() const noexcept { return m_motionCoordinator; }
@@ -102,16 +111,30 @@ public:
     }
 
     virtual void syncLayout(float parentAbsX = 0.0f, float parentAbsY = 0.0f);
-    virtual void draw(Canvas& canvas, const Rect& damageRect);
+    virtual void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect);
     virtual void collectEffects(std::vector<EffectRegion>& outEffects) const;
+
+    // Ancestor observation phase. It cannot consume normal target/bubble dispatch.
+    virtual void onPointerEventPreview(const PointerEvent& event) { (void)event; }
 
     // Polymorphic Event Handlers (Return true if handled, false to bubble to parent)
     virtual bool onPointerEnter(const PointerEvent& event);
     virtual bool onPointerLeave(const PointerEvent& event);
     virtual bool onPointerDown(const PointerEvent& event);
     virtual bool onPointerUp(const PointerEvent& event);
+    virtual bool onPointerCancel(const PointerEvent& event);
     virtual bool onPointerMove(const PointerEvent& event) { (void)event; return false; }
     virtual bool onScroll(const PointerEvent& event) { (void)event; return false; }
+    virtual bool shouldFocusOnPointerDown(const PointerEvent& event) const {
+        (void)event;
+        return true;
+    }
+    // Touch focus is committed by EventDispatcher only after a matching tap
+    // completes. Widgets may opt out without implementing pointer tracking.
+    virtual bool shouldFocusOnTouchTap(const PointerEvent& event) const {
+        (void)event;
+        return true;
+    }
     virtual bool onKeyDown(const KeyEvent& event) { (void)event; return false; }
     virtual bool onKeyUp(const KeyEvent& event) { (void)event; return false; }
     virtual bool onTextInput(const TextInputEvent& event) { (void)event; return false; }
@@ -119,16 +142,18 @@ public:
     virtual bool onFocusLost(const FocusEvent& event);
 
 protected:
-    void beginPresentation(Canvas& canvas) const;
-    void endPresentation(Canvas& canvas) const;
-    void drawChildren(Canvas& canvas, const Rect& damageRect);
+    /** Schedule old/new presentation pixels without invalidating paint caches. */
+    void markPresentationDirty();
+    void beginPresentation(graphics::Canvas& canvas) const;
+    void endPresentation(graphics::Canvas& canvas) const;
+    void drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect);
 
     YogaNode m_yogaNode;
     Widget* m_parent{nullptr};
     std::vector<std::unique_ptr<Widget>> m_children;
 
-    Rect m_bounds{0.0f, 0.0f, 0.0f, 0.0f};
-    Rect m_absoluteBounds{0.0f, 0.0f, 0.0f, 0.0f};
+    graphics::RectF m_bounds{0.0f, 0.0f, 0.0f, 0.0f};
+    graphics::RectF m_absoluteBounds{0.0f, 0.0f, 0.0f, 0.0f};
     bool m_visible{true};
     bool m_focusable{false};
     bool m_clipsToBounds{false};
@@ -163,9 +188,21 @@ protected:
     bool m_declarativeFocused{false};
 
 private:
+    friend class WindowApp;
+    friend class ScrollView;
+    void markPresentationDirty(const graphics::RectF& previousBounds);
+    void invalidateLayout();
+    void propagateDescendantPaintRevision();
+    void propagateDescendantPresentationRevision();
+    void markLayoutDirty();
+    void clearLayoutDirty();
+    void setParentControlledTranslationY(float value);
     bool hasDeclarativeInteraction() const;
     void applyDeclarativeInteractionState();
     static std::atomic<uint64_t> s_nextObjectId;
+    uint64_t m_paintRevision{0};
+    uint64_t m_presentationRevision{0};
+    bool m_layoutDirty{true};
 };
 
 } // namespace lcl::ui

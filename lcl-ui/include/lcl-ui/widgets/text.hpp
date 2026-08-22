@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lcl-graphics/font.hpp"
 #include "lcl-ui/widgets/widget.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include <string>
@@ -23,20 +24,24 @@ public:
     void setFontSize(float size);
     float getFontSize() const { return m_fontSize; }
 
-    void setTextColor(const Color& color) { m_textColor = color; markDirty(); }
-    Color getTextColor() const { return m_textColor; }
+    void setFontFamily(graphics::FontFamily family);
+    graphics::FontFamily getFontFamily() const { return m_fontFamily; }
+
+    void setTextColor(const graphics::Color& color) { m_textColor = color; markDirty(); }
+    graphics::Color getTextColor() const { return m_textColor; }
 
     void setTextAlign(TextAlign align) { m_textAlign = align; markDirty(); }
     TextAlign getTextAlign() const { return m_textAlign; }
 
-    void draw(Canvas& canvas, const Rect& damageRect) override;
+    void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
 
 private:
     void updateMeasureFunc();
 
     std::string m_text;
     float m_fontSize{14.0f};
-    Color m_textColor{255, 255, 255, 255};
+    graphics::FontFamily m_fontFamily{graphics::FontFamily::Interface};
+    graphics::Color m_textColor{255, 255, 255, 255};
     TextAlign m_textAlign{TextAlign::Start};
 };
 

@@ -53,7 +53,10 @@ public:
     bool isInitialized() const override { return m_initialized; }
     const DisplayMode& activeMode() const override { return m_mode; }
 
-    bool initHardwareCursor(uint32_t, uint32_t) override { m_cursorActive = true; return true; }
+    bool initHardwareCursor(uint32_t, uint32_t, float = 1.0f) override {
+        m_cursorActive = true;
+        return true;
+    }
     bool moveHardwareCursor(int x, int y) override { m_cursorX = x; m_cursorY = y; return true; }
     bool isHardwareCursorActive() const override { return m_cursorActive; }
 
@@ -261,10 +264,10 @@ TEST(DesktopPlatformTest, DesktopRuntimePathsImplementsIRuntimePaths) {
     lcl::platform::desktop::DesktopRuntimePaths paths;
     const lcl::platform::IRuntimePaths& iface = paths;
 
-    EXPECT_EQ(iface.compositorSocketPath(), "/run/user/1000/lcl-compositor.sock");
-    EXPECT_EQ(iface.sessionSocketPath(), "/run/user/1000/lcl-sessiond.sock");
-    EXPECT_EQ(iface.appCatalogDirectory(), "/usr/share/lcl/apps");
-    EXPECT_EQ(iface.temporaryDirectory(), "/tmp");
+    EXPECT_EQ(iface.compositorSocketPath(), "/Runtime/lcl-compositor.sock");
+    EXPECT_EQ(iface.sessionSocketPath(), "/Runtime/lcl-sessiond.sock");
+    EXPECT_EQ(iface.appCatalogDirectory(), "/System/Applications");
+    EXPECT_EQ(iface.temporaryDirectory(), "/Runtime/Temporary");
     EXPECT_FALSE(iface.fontSearchDirectories().empty());
 }
 
@@ -276,5 +279,49 @@ TEST(DesktopPlatformTest, DesktopPlatformServicesImplementsIPlatformServices) {
     EXPECT_FALSE(iface.display().isInitialized());
     EXPECT_FALSE(iface.graphics().isInitialized());
     EXPECT_FALSE(iface.input().isInitialized());
-    EXPECT_EQ(iface.paths().compositorSocketPath(), "/run/user/1000/lcl-compositor.sock");
+    EXPECT_EQ(iface.paths().compositorSocketPath(), "/Runtime/lcl-compositor.sock");
+}
+
+#include "platform/android/android_input_backend.hpp"
+
+TEST(AndroidPlatformTest, AndroidInputBackendImplementsIInputBackend) {
+    lcl::platform::android::AndroidInputBackend inputBackend;
+    lcl::platform::IInputBackend& iface = inputBackend;
+
+    EXPECT_FALSE(iface.isInitialized());
+
+    bool callbackCalled = false;
+    bool init = iface.initialize([&](const lcl::platform::RawInputEvent&) {
+        callbackCalled = true;
+    });
+    EXPECT_TRUE(init);
+    EXPECT_TRUE(iface.isInitialized());
+
+    // Polling without events returns 0 and does not crash
+    size_t count = iface.pollEvents(1080, 1920);
+    EXPECT_EQ(count, 0u);
+
+    iface.shutdown();
+    EXPECT_FALSE(iface.isInitialized());
+    (void)callbackCalled;
+}
+
+TEST(AndroidPlatformTest, AndroidInputBackendReinitializesWithCallback) {
+    lcl::platform::android::AndroidInputBackend inputBackend;
+    lcl::platform::IInputBackend& iface = inputBackend;
+
+    // 1. Initial initialization with nullptr (e.g. AndroidPlatformServices::initialize)
+    EXPECT_TRUE(iface.initialize(nullptr));
+    EXPECT_TRUE(iface.isInitialized());
+
+    // 2. Subsequent initialization with real callback (e.g. Compositor::initialize)
+    bool callbackCalled = false;
+    EXPECT_TRUE(iface.initialize([&](const lcl::platform::RawInputEvent&) {
+        callbackCalled = true;
+    }));
+    EXPECT_TRUE(iface.isInitialized());
+
+    iface.shutdown();
+    EXPECT_FALSE(iface.isInitialized());
+    (void)callbackCalled;
 }

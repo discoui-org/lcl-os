@@ -31,7 +31,8 @@ public:
     virtual const DisplayMode& activeMode() const = 0;
 
     // Hardware Cursor Plane
-    virtual bool initHardwareCursor(uint32_t width = 64, uint32_t height = 64) = 0;
+    virtual bool initHardwareCursor(uint32_t width = 64, uint32_t height = 64,
+                                    float deviceScale = 1.0f) = 0;
     virtual bool moveHardwareCursor(int x, int y) = 0;
     virtual bool isHardwareCursorActive() const = 0;
 };

@@ -38,6 +38,11 @@ public:
         enum class ResizeTransitionPhase { None, AwaitingBuffer, Crossfading };
 
         uint32_t windowId{0};
+        uint64_t parentSurfaceKey{0};
+        protocol::LCLPopupRole popupRole{protocol::LCLPopupRole::Transient};
+        float popupX{0.0f};
+        float popupY{0.0f};
+        uint64_t popupOrder{0};
         int clientFd{-1};
         int shmFd{-1};
         void* pixels{nullptr};
@@ -54,10 +59,10 @@ public:
         // A surface is registered before it is mapped.  Keep its window policy
         // here until the first complete client buffer is ready to present.
         std::string title;
-        int initialX{0};
-        int initialY{0};
-        uint32_t initialWidth{0};
-        uint32_t initialHeight{0};
+        float initialX{0.0f};
+        float initialY{0.0f};
+        float initialWidth{0.0f};
+        float initialHeight{0.0f};
         protocol::LCLSystemSurfaceKind systemSurfaceKind{protocol::LCLSystemSurfaceKind::None};
         protocol::LCLDecorationMode decorationMode{protocol::LCLDecorationMode::SSD};
         bool edgeToEdge{false};
@@ -66,16 +71,16 @@ public:
         bool insetBorderEnabled{true};
         protocol::LCLResizePresentationMode resizePresentation{
             protocol::LCLResizePresentationMode::CompositorMorph};
-        float cornerRadiusPx{-1.0f};
+        float cornerRadius{-1.0f};
         float cornerRoundness{2.0f};
         bool suppressInitialTransition{false};
         std::string appId;
         std::vector<SurfaceEffectRegion> effectRegions;
 
-        int configuredX{0};
-        int configuredY{0};
-        uint32_t configuredWidth{0};
-        uint32_t configuredHeight{0};
+        float configuredX{0.0f};
+        float configuredY{0.0f};
+        float configuredWidth{0.0f};
+        float configuredHeight{0.0f};
         uint8_t configuredFocused{0};
         uint64_t nextConfigureSerial{1};
         uint64_t pendingConfigureSerial{0};
@@ -118,10 +123,10 @@ public:
         bool resizeBufferReady{true};
         bool rollbackRequested{false};
         uint64_t resizeGeometryGeneration{0};
-        int rollbackX{0};
-        int rollbackY{0};
-        int rollbackWidth{0};
-        int rollbackHeight{0};
+        float rollbackX{0.0f};
+        float rollbackY{0.0f};
+        float rollbackWidth{0.0f};
+        float rollbackHeight{0.0f};
         bool rollbackWasMaximized{false};
         bool rollbackWasMinimized{false};
 
@@ -136,6 +141,7 @@ public:
         bool hasRenderableBuffer() const noexcept {
             return pixels != nullptr || dmaBufTexture != 0;
         }
+        bool isPopup() const noexcept { return parentSurfaceKey != 0; }
     };
 
     using Key = uint64_t;
@@ -174,6 +180,14 @@ public:
     bool empty() const noexcept { return m_entries.empty(); }
 
     Snapshot snapshot() const;
+    std::vector<Key> popupChildren(Key parentSurfaceKey) const;
+    uint64_t allocatePopupOrder() noexcept { return m_nextPopupOrder++; }
+
+    /** Keyboard routing target within the currently focused WindowGroup. */
+    Key keyboardFocusSurface() const noexcept { return m_keyboardFocusSurface; }
+    bool focusKeyboardSurface(Key key) noexcept;
+    /** Return focus from a closing surface to its live parent, when present. */
+    void releaseKeyboardFocus(Key key) noexcept;
 
     iterator erase(iterator position);
     size_t erase(Key key);
@@ -191,8 +205,8 @@ public:
      */
     static void beginGeometryTransition(SurfaceEntry& entry,
                                         uint64_t newGeneration,
-                                        int rollbackX, int rollbackY,
-                                        int rollbackWidth, int rollbackHeight,
+                                        float rollbackX, float rollbackY,
+                                        float rollbackWidth, float rollbackHeight,
                                         bool rollbackWasMaximized,
                                         bool rollbackWasMinimized) noexcept;
     static bool acceptsBufferCommit(const SurfaceEntry& entry,
@@ -208,6 +222,8 @@ public:
 
 private:
     Entries m_entries;
+    uint64_t m_nextPopupOrder{1};
+    Key m_keyboardFocusSurface{0};
 };
 
 } // namespace lcl::core

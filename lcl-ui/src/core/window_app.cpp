@@ -1,5 +1,4 @@
 #include "lcl-ui/core/window_app.hpp"
-#include "core/display/display_scale.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include <iostream>
 #include <unistd.h>
@@ -48,8 +47,8 @@ float sanitizeBufferScale(float scale) {
     return scale;
 }
 
-uint32_t toBufferPixels(uint32_t logical, float scale) {
-    return std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(logical) * scale)));
+uint32_t toBufferPixels(float logical, float scale) {
+    return std::max(1u, static_cast<uint32_t>(std::ceil(logical * scale)));
 }
 
 uint32_t crossfadePixel(uint32_t oldPixel, uint32_t newPixel, float progress) {
@@ -75,12 +74,12 @@ bool layoutOverlayEnabled() {
     return value && value[0] != '\0' && value[0] != '0';
 }
 
-void drawLayoutOverlay(const Widget& widget, Canvas& canvas, uint32_t depth = 0) {
-    static constexpr Color kPalette[] = {
+void drawLayoutOverlay(const Widget& widget, graphics::Canvas& canvas, uint32_t depth = 0) {
+    static constexpr graphics::Color kPalette[] = {
         {56, 189, 248, 220}, {74, 222, 128, 220}, {250, 204, 21, 220},
         {244, 114, 182, 220}, {167, 139, 250, 220},
     };
-    const Rect bounds = widget.getAbsoluteBounds();
+    const graphics::RectF bounds = widget.getAbsoluteBounds();
     if (!bounds.isEmpty()) {
         canvas.drawRoundedRect(bounds, 0.0f, {0, 0, 0, 0},
                                kPalette[depth % (sizeof(kPalette) / sizeof(kPalette[0]))],
@@ -93,7 +92,7 @@ void drawLayoutOverlay(const Widget& widget, Canvas& canvas, uint32_t depth = 0)
 
 } // namespace
 
-WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height,
+WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height,
                      const std::string& title)
     : m_width(width), m_height(height), m_title(title), m_canvas(std::move(canvas)) {
     setupAppSignalHandlers();
@@ -101,11 +100,14 @@ WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t he
     m_frameTraceEnabled = frameTraceEnabled();
     m_layoutOverlayEnabled = layoutOverlayEnabled();
     m_traceLastLog = std::chrono::steady_clock::now();
-    m_pixelBuffer.resize(width * height, 0xFF000000);
-    m_initialized = m_canvas->initialize(width, height, m_pixelBuffer.data());
+    const uint32_t pixelWidth = toBufferPixels(width, m_bufferScale);
+    const uint32_t pixelHeight = toBufferPixels(height, m_bufferScale);
+    m_pixelBuffer.resize(static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF000000);
+    m_initialized = m_canvas->initialize(pixelWidth, pixelHeight, m_pixelBuffer.data());
+    updateCanvasRenderTarget();
     m_motionCoordinator.setCallbacks(
         [this] { updateLayout(); },
-        [this](const Rect& rect) { if (!rect.isEmpty()) m_renderPass.addDirtyRect(rect); });
+        [this](const graphics::RectF& rect) { if (!rect.isEmpty()) m_renderPass.addDirtyRect(rect); });
 
     auto defaultRoot = std::make_unique<Container>();
     defaultRoot->getYogaNode().setWidth(static_cast<float>(width));
@@ -117,9 +119,13 @@ WindowApp::WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t he
 
 WindowApp::~WindowApp() {
     m_running = false;
+    m_lifetimeToken.reset();
     // Widgets unregister their channels on destruction. Detach while the
     // coordinator member is still alive (member teardown runs in reverse).
-    if (m_rootWidget) m_rootWidget->setMotionCoordinator(nullptr);
+    m_transients.clear();
+    m_transients.setWindowRoot(nullptr);
+    m_hostedSurfaces.clear();
+    if (m_windowRoot) m_windowRoot->setMotionCoordinator(nullptr);
     if (m_shmPixels) {
         munmap(m_shmPixels, m_shmSize);
         m_shmPixels = nullptr;
@@ -143,12 +149,46 @@ uint32_t WindowApp::getPixelHeight() const {
     return toBufferPixels(m_height, m_bufferScale);
 }
 
+void WindowApp::updateCanvasRenderTarget() {
+    if (!m_canvas) return;
+    m_canvas->setRenderTarget({
+        {static_cast<float>(m_width), static_cast<float>(m_height)},
+        {getPixelWidth(), getPixelHeight()},
+        m_bufferScale,
+    });
+}
+
 void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     if (!root) return;
-    m_rootWidget = std::move(root);
-    m_rootWidget->setRenderPass(&m_renderPass);
-    m_rootWidget->setMotionCoordinator(&m_motionCoordinator);
-    m_rootWidget->markDirty();
+    m_dispatcher.cancelPointerCaptures();
+    m_transients.setWindowRoot(nullptr);
+
+    auto windowRoot = std::make_unique<Container>();
+    windowRoot->getYogaNode().setWidth(static_cast<float>(m_width));
+    windowRoot->getYogaNode().setHeight(static_cast<float>(m_height));
+    // A normal application root represents the complete client surface.
+    // App-provided startup dimensions must not remain as fixed cross-axis
+    // constraints after the compositor configures a new window size. Absolute
+    // roots are intentional surface fragments (for example a titlebar-only
+    // test host) and keep their own geometry.
+    if (YGNodeStyleGetPositionType(root->getYogaNode().getRef()) !=
+        YGPositionTypeAbsolute) {
+        root->getYogaNode().setWidthAuto();
+        root->getYogaNode().setHeightAuto();
+        root->getYogaNode().setAlignSelf(YGAlignStretch);
+    }
+    root->getYogaNode().setFlexGrow(1.0f);
+    root->getYogaNode().setFlexShrink(1.0f);
+    Widget* contentRoot = root.get();
+    windowRoot->addChild(std::move(root));
+    windowRoot->setRenderPass(&m_renderPass);
+    windowRoot->setMotionCoordinator(&m_motionCoordinator);
+
+    m_windowRoot = std::move(windowRoot);
+    m_rootWidget = contentRoot;
+    m_transients.setWindowRoot(m_windowRoot.get());
+    m_windowRoot->markLayoutDirty();
+    m_windowRoot->markDirty();
     // A newly mounted tree has not been through Yoga/syncLayout yet, so its
     // absolute bounds are still empty and markDirty() cannot produce damage.
     // Force one full frame after layout; runtime root replacement must not
@@ -156,7 +196,71 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     m_firstFrame = true;
 }
 
-void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
+TransientHandle WindowApp::registerLocalTransient(std::unique_ptr<Widget> widget,
+                                                  TransientOptions options) {
+    if (!widget) return 0;
+    widget->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    return m_transients.registerLocal(std::move(widget), std::move(options));
+}
+
+TransientHandle WindowApp::registerSurfaceTransient(
+        uint32_t surfaceId, std::function<void()> destroySurface,
+        TransientOptions options) {
+    return m_transients.registerSurface(surfaceId, std::move(destroySurface),
+                                        std::move(options));
+}
+
+TransientHandle WindowApp::registerSurfaceTransient(
+        uint32_t surfaceId, TransientOptions options) {
+    return m_transients.registerSurface(
+        surfaceId,
+        [this, surfaceId] { requestSurfaceDestroy(surfaceId); },
+        std::move(options));
+}
+
+bool WindowApp::removeTransient(TransientHandle handle) {
+    return m_transients.remove(handle);
+}
+
+void WindowApp::clearTransients() {
+    m_transients.clear();
+}
+
+HostedSurfaceHandle WindowApp::hostSurface(
+        std::unique_ptr<WindowApp> surface, std::function<void()> onClosed) {
+    if (!surface || surface.get() == this) return 0;
+    const HostedSurfaceHandle handle = m_nextHostedSurfaceHandle++;
+    m_hostedSurfaces.push_back(HostedSurfaceEntry{
+        handle, std::move(surface), std::move(onClosed), false});
+    return handle;
+}
+
+bool WindowApp::removeHostedSurface(HostedSurfaceHandle handle) {
+    const auto found = std::find_if(
+        m_hostedSurfaces.begin(), m_hostedSurfaces.end(),
+        [handle](const HostedSurfaceEntry& entry) { return entry.handle == handle; });
+    if (found == m_hostedSurfaces.end()) return false;
+    if (found->pendingRemoval) return true;
+    found->pendingRemoval = true;
+    if (found->surface) found->surface->requestWindowClose();
+    if (!m_tickingHostedSurfaces) collectClosedHostedSurfaces();
+    return true;
+}
+
+WindowApp* WindowApp::getHostedSurface(HostedSurfaceHandle handle) const noexcept {
+    const auto found = std::find_if(
+        m_hostedSurfaces.begin(), m_hostedSurfaces.end(),
+        [handle](const HostedSurfaceEntry& entry) { return entry.handle == handle; });
+    return found == m_hostedSurfaces.end() ? nullptr : found->surface.get();
+}
+
+void WindowApp::setInputEnabled(bool enabled) {
+    if (m_inputEnabled == enabled) return;
+    if (!enabled) m_dispatcher.cancelPointerCaptures();
+    m_inputEnabled = enabled;
+}
+
+void WindowApp::allocateSHM(float width, float height) {
     const auto started = std::chrono::steady_clock::now();
     if (m_shmPixels) {
         munmap(m_shmPixels, m_shmSize);
@@ -187,6 +291,7 @@ void WindowApp::allocateSHM(uint32_t width, uint32_t height) {
     // Resize path: keep existing renderer instance and only retarget the backing pixels.
     // Re-initializing renderer every configure event causes heavy stalls while dragging.
     m_canvas->setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
+    updateCanvasRenderTarget();
     m_shmNeedsAttach = true;
     if (m_frameTraceEnabled) {
         ++m_traceShmAllocations;
@@ -200,12 +305,18 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         std::cerr << "[lcl-ui ERROR] WindowApp requires a canonical app ID before connection\n";
         return false;
     }
+    std::string effectiveSocketPath = socketPath;
+    if (const char* envSocket = std::getenv("LCL_COMPOSITOR_SOCKET")) {
+        if (envSocket[0] != '\0') {
+            effectiveSocketPath = envSocket;
+        }
+    }
     for (int i = 0; i < 50; ++i) {
         m_socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
         if (m_socketFd >= 0) {
             struct sockaddr_un addr{};
             addr.sun_family = AF_UNIX;
-            std::strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
+            std::strncpy(addr.sun_path, effectiveSocketPath.c_str(), sizeof(addr.sun_path) - 1);
             if (connect(m_socketFd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
                 break;
             }
@@ -216,14 +327,16 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     }
 
     if (m_socketFd < 0) {
-        std::cerr << "[lcl-ui ERROR] Could not connect to compositor IPC socket: " << socketPath << "\n";
+        std::cerr << "[lcl-ui ERROR] Could not connect to compositor IPC socket: " << effectiveSocketPath << "\n";
         return false;
     }
+    m_compositorSocketPath = effectiveSocketPath;
+    m_surfaceEnded = false;
 
-    // WindowApp exposes CSS-like logical pixels. The process-local boot scale is
-    // its device pixel ratio; raw-pixel clients do not use this class and retain 1x.
-    m_bufferScale = sanitizeBufferScale(lcl::core::DisplayScale::factor());
-    m_canvas->setContentScale(m_bufferScale);
+    // The compositor is the output-scale authority. Initial creation is purely
+    // logical; ConfigureBounds supplies the buffer mapping scale.
+    m_bufferScale = 1.0f;
+    updateCanvasRenderTarget();
 
     // Set non-blocking socket reads
     int flags = fcntl(m_socketFd, F_GETFL, 0);
@@ -234,7 +347,8 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // 1. System-surface policy is declared separately. The compositor verifies
     // the declaration against the trusted shell peer; normal clients have no
     // role-selection protocol.
-    if (m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::None) {
+    if (!isPopupSurface() &&
+        m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::None) {
         lcl::protocol::LCLMsgSetSystemSurfaceKind systemSurface{};
         systemSurface.kind = m_systemSurfaceKind;
         if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SetSystemSurfaceKind,
@@ -244,21 +358,37 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         }
     }
 
-    // 2. Request Surface Creation
-    lcl::protocol::LCLMsgSurfaceCreate surfMsg{};
-    surfMsg.surfaceId = m_surfaceId;
-    surfMsg.x = m_initialX;
-    surfMsg.y = m_initialY;
-    surfMsg.width = m_width;
-    surfMsg.height = m_height;
-    surfMsg.bufferScale = m_bufferScale;
-    surfMsg.resizePresentation = m_resizePresentationMode;
-    std::strncpy(surfMsg.title, m_title.c_str(), sizeof(surfMsg.title) - 1);
-    std::strncpy(surfMsg.appId, m_appId.c_str(), sizeof(surfMsg.appId) - 1);
+    // 2. Request normal or parent-bound popup surface creation. Both continue
+    // through the same configure, buffer transport, render, and input paths.
     m_waitingForInitialConfigure = true;
-    if (!sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate, &surfMsg, sizeof(surfMsg))) {
+    bool createSent = false;
+    if (isPopupSurface()) {
+        lcl::protocol::LCLMsgPopupSurfaceCreate popup{};
+        popup.surfaceId = m_surfaceId;
+        popup.parentSurfaceId = m_popupParentSurfaceId;
+        popup.role = m_popupRole;
+        popup.x = m_popupX;
+        popup.y = m_popupY;
+        popup.width = m_width;
+        popup.height = m_height;
+        createSent = sendProtocolMessage(lcl::protocol::LCLOpcode::PopupSurfaceCreate,
+                                         &popup, sizeof(popup));
+    } else {
+        lcl::protocol::LCLMsgSurfaceCreate surface{};
+        surface.surfaceId = m_surfaceId;
+        surface.x = m_initialX;
+        surface.y = m_initialY;
+        surface.width = m_width;
+        surface.height = m_height;
+        surface.resizePresentation = m_resizePresentationMode;
+        std::strncpy(surface.title, m_title.c_str(), sizeof(surface.title) - 1);
+        std::strncpy(surface.appId, m_appId.c_str(), sizeof(surface.appId) - 1);
+        createSent = sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate,
+                                         &surface, sizeof(surface));
+    }
+    if (!createSent) {
         m_waitingForInitialConfigure = false;
-        std::cerr << "[lcl-ui ERROR] Failed to create v11 surface\n";
+        std::cerr << "[lcl-ui ERROR] Failed to create v13 surface\n";
         return false;
     }
 
@@ -277,25 +407,23 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // Decoration state belongs to the surface contract, not to a later frame.
     // Send preconfigured values before the first effect graph/buffer attach so a
     // CSD client never flashes the compositor's default title chrome.
-    if (m_hasRequestedDecorationMode) {
+    if (!isPopupSurface() && m_hasRequestedDecorationMode) {
         setDecorationMode(m_requestedDecorationMode);
     }
-    if (m_hasRequestedEdgeToEdge) {
+    if (!isPopupSurface() && m_hasRequestedEdgeToEdge) {
         setEdgeToEdge(m_requestedEdgeToEdge);
     }
     if (m_hasRequestedCornerRadius) {
         setWindowCornerStyle(m_requestedCornerRadius, m_requestedCornerRoundness);
     }
-    if (m_rootWidget) {
-        m_rootWidget->markDirty();
-    }
+    if (m_windowRoot) m_windowRoot->markDirty();
     m_firstFrame = true;
 
     std::cout << "[lcl-ui] Connected to Compositor IPC socket successfully (" << m_title << ").\n";
     return true;
 }
 
-void WindowApp::resize(uint32_t width, uint32_t height) {
+void WindowApp::resize(float width, float height) {
     if (width == 0 || height == 0) return;
     if (width == m_width && height == m_height) return;
 
@@ -303,10 +431,10 @@ void WindowApp::resize(uint32_t width, uint32_t height) {
     m_height = height;
     clearMorphCrossfade();
 
-    if (m_rootWidget) {
-        m_rootWidget->getYogaNode().setWidth(static_cast<float>(width));
-        m_rootWidget->getYogaNode().setHeight(static_cast<float>(height));
-        m_rootWidget->markDirty();
+    if (m_windowRoot) {
+        m_windowRoot->getYogaNode().setWidth(static_cast<float>(width));
+        m_windowRoot->getYogaNode().setHeight(static_cast<float>(height));
+        m_windowRoot->markDirty();
     }
 
     if (m_ipcConnected) {
@@ -333,29 +461,42 @@ void WindowApp::resize(uint32_t width, uint32_t height) {
     }
 }
 
-void WindowApp::setInitialBounds(int32_t x, int32_t y, uint32_t width, uint32_t height) {
+void WindowApp::setInitialBounds(float x, float y, float width, float height) {
     if (m_ipcConnected || width == 0 || height == 0) return;
 
     m_initialX = x;
     m_initialY = y;
     m_width = width;
     m_height = height;
-    m_pixelBuffer.resize(static_cast<size_t>(width) * height, 0xFF000000);
-    m_canvas->setTargetPixels(m_pixelBuffer.data(), width, height);
-    if (m_rootWidget) {
-        m_rootWidget->getYogaNode().setWidth(static_cast<float>(width));
-        m_rootWidget->getYogaNode().setHeight(static_cast<float>(height));
-        m_rootWidget->markDirty();
+    const uint32_t pixelWidth = toBufferPixels(width, m_bufferScale);
+    const uint32_t pixelHeight = toBufferPixels(height, m_bufferScale);
+    m_pixelBuffer.resize(static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF000000);
+    m_canvas->setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
+    updateCanvasRenderTarget();
+    if (m_windowRoot) {
+        m_windowRoot->getYogaNode().setWidth(static_cast<float>(width));
+        m_windowRoot->getYogaNode().setHeight(static_cast<float>(height));
+        m_windowRoot->markDirty();
     }
+}
+
+void WindowApp::configurePopupSurface(uint32_t parentSurfaceId,
+                                      lcl::protocol::LCLPopupRole role,
+                                      float x, float y) {
+    if (m_ipcConnected || parentSurfaceId == 0) return;
+    m_popupParentSurfaceId = parentSurfaceId;
+    m_popupRole = role;
+    m_popupX = x;
+    m_popupY = y;
 }
 
 void WindowApp::pollIPC() {
     if (!m_ipcConnected || m_socketFd < 0) return;
 
-    uint32_t latestWidth = 0;
-    uint32_t latestHeight = 0;
-    uint32_t latestBackingWidth = 0;
-    uint32_t latestBackingHeight = 0;
+    float latestWidth = 0.0f;
+    float latestHeight = 0.0f;
+    float latestBackingWidth = 0.0f;
+    float latestBackingHeight = 0.0f;
     float latestScale = m_bufferScale;
     lcl::protocol::LCLConfigureResizeReason latestResizeReason =
         lcl::protocol::LCLConfigureResizeReason::Initial;
@@ -386,13 +527,24 @@ void WindowApp::pollIPC() {
                 } else if (inputMsg->type == 2) { // KeyUp
                     sendKeyUp(inputMsg->key, inputMsg->modifiers);
                 } else if (inputMsg->type == 3) { // PointerMotion
-                    sendPointerMove(inputMsg->x, inputMsg->y);
+                    const auto source = (inputMsg->source == static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch))
+                        ? PointerSource::Touch
+                        : PointerSource::Mouse;
+                    sendPointerMove(inputMsg->x, inputMsg->y, source);
                 } else if (inputMsg->type == 4) { // PointerButton
+                    const auto source = (inputMsg->source == static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch))
+                        ? PointerSource::Touch
+                        : PointerSource::Mouse;
                     if (inputMsg->pressed) {
-                        sendPointerDown(inputMsg->x, inputMsg->y, inputMsg->key);
+                        sendPointerDown(inputMsg->x, inputMsg->y, inputMsg->key, source);
                     } else {
-                        sendPointerUp(inputMsg->x, inputMsg->y, inputMsg->key);
+                        sendPointerUp(inputMsg->x, inputMsg->y, inputMsg->key, source);
                     }
+                } else if (inputMsg->type == 6) { // PointerScroll
+                    const auto source = (inputMsg->source == static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch))
+                        ? PointerSource::Touch
+                        : PointerSource::Mouse;
+                    sendPointerScroll(inputMsg->x, inputMsg->y, inputMsg->deltaX, inputMsg->deltaY, source);
                 } else if (inputMsg->type == 5) { // KeyPress / TextInput
                     if (inputMsg->codepoint > 0) {
                         std::string utf8;
@@ -475,16 +627,20 @@ void WindowApp::pollIPC() {
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
                 if (payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceDestroy)) {
                     auto* destroy = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceDestroy*>(payload.data());
-                    if (destroy->surfaceId == m_surfaceId) m_running = false;
+                    if (destroy->surfaceId == m_surfaceId) {
+                        m_running = false;
+                        m_surfaceEnded = true;
+                    }
                 }
             }
             if (m_onIpcMessage) m_onIpcMessage(header, payload);
         } else if (receiveStatus == lcl::protocol::ReceiveStatus::WouldBlock) {
             break;
         } else {
-            std::cerr << "[lcl-ui ERROR] Compositor v11 connection closed or rejected\n";
+            std::cerr << "[lcl-ui ERROR] Compositor v13 connection closed or rejected\n";
             m_ipcConnected = false;
             m_running = false;
+            m_surfaceEnded = true;
             break;
         }
     }
@@ -508,9 +664,10 @@ void WindowApp::pollIPC() {
              latestResizeReason == lcl::protocol::LCLConfigureResizeReason::WindowStateTransition) &&
             m_canvas->hasDmaBufTransport();
 
+        latestScale = sanitizeBufferScale(latestScale);
         if (std::fabs(latestScale - m_bufferScale) > 0.0001f) {
             m_bufferScale = latestScale;
-            m_canvas->setContentScale(m_bufferScale);
+            updateCanvasRenderTarget();
             // A scale-only configure has identical logical bounds but needs a new buffer.
             if (latestWidth == m_width && latestHeight == m_height && m_ipcConnected) {
                 if (m_canvas->hasDmaBufTransport()) {
@@ -536,14 +693,10 @@ void WindowApp::pollIPC() {
         const auto now = std::chrono::steady_clock::now();
         constexpr auto kMinResizeInterval = std::chrono::milliseconds(22);
 
-        const uint32_t dx = (m_pendingResizeWidth > m_width)
-            ? (m_pendingResizeWidth - m_width)
-            : (m_width - m_pendingResizeWidth);
-        const uint32_t dy = (m_pendingResizeHeight > m_height)
-            ? (m_pendingResizeHeight - m_height)
-            : (m_height - m_pendingResizeHeight);
+        const float dx = std::fabs(m_pendingResizeWidth - m_width);
+        const float dy = std::fabs(m_pendingResizeHeight - m_height);
 
-        const bool largeJump = (dx >= 48u) || (dy >= 48u);
+        const bool largeJump = (dx >= 48.0f) || (dy >= 48.0f);
         const bool intervalElapsed = (now - m_lastResizeApply) >= kMinResizeInterval;
 
         // The first configure establishes the only serial eligible for an
@@ -604,6 +757,7 @@ void WindowApp::runEventLoop() {
 }
 
 bool WindowApp::tick() {
+    m_transients.pruneExpiredOwners();
     pollIPC();
     if (m_onFrame) {
         m_onFrame();
@@ -612,26 +766,50 @@ bool WindowApp::tick() {
     const float dtSec = std::chrono::duration<float>(now - m_lastAnimationTick).count();
     m_lastAnimationTick = now;
     advanceAnimations(dtSec);
-    const bool rendered = renderFrame();
+    bool rendered = renderFrame();
+    m_tickingHostedSurfaces = true;
+    for (auto& entry : m_hostedSurfaces) {
+        if (!entry.pendingRemoval && entry.surface) {
+            rendered = entry.surface->tick() || rendered;
+            if (entry.surface->m_surfaceEnded) entry.pendingRemoval = true;
+        }
+    }
+    m_tickingHostedSurfaces = false;
+    collectClosedHostedSurfaces();
     logFrameTraceIfDue();
     return rendered;
 }
 
+void WindowApp::collectClosedHostedSurfaces() {
+    for (size_t index = 0; index < m_hostedSurfaces.size();) {
+        if (!m_hostedSurfaces[index].pendingRemoval) {
+            ++index;
+            continue;
+        }
+        auto surface = std::move(m_hostedSurfaces[index].surface);
+        auto onClosed = std::move(m_hostedSurfaces[index].onClosed);
+        m_hostedSurfaces.erase(m_hostedSurfaces.begin() +
+                               static_cast<std::ptrdiff_t>(index));
+        surface.reset();
+        if (onClosed) onClosed();
+    }
+}
+
 namespace {
-void collectWidgetBounds(Widget* widget, std::unordered_map<uint64_t, Rect>& bounds) {
+void collectWidgetBounds(Widget* widget, std::unordered_map<uint64_t, graphics::RectF>& bounds) {
     if (!widget) return;
     bounds[widget->getObjectId()] = widget->getAbsoluteBounds();
     for (const auto& child : widget->getChildren()) collectWidgetBounds(child.get(), bounds);
 }
 
-void startMorphs(Widget* widget, const std::unordered_map<uint64_t, Rect>& oldBounds,
+void startMorphs(Widget* widget, const std::unordered_map<uint64_t, graphics::RectF>& oldBounds,
                  MotionCoordinator& coordinator, const lcl::motion::Motion& motion,
                  bool& anyMorph) {
     if (!widget) return;
     const auto found = oldBounds.find(widget->getObjectId());
     if (found != oldBounds.end()) {
-        const Rect before = found->second;
-        const Rect after = widget->getAbsoluteBounds();
+        const graphics::RectF before = found->second;
+        const graphics::RectF after = widget->getAbsoluteBounds();
         if (!before.isEmpty() && !after.isEmpty() &&
             (std::fabs(before.x - after.x) > 0.01f || std::fabs(before.y - after.y) > 0.01f ||
              std::fabs(before.width - after.width) > 0.01f || std::fabs(before.height - after.height) > 0.01f)) {
@@ -669,7 +847,7 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
                         AnimationTransactionOptions options,
                         const std::function<void()>& changes) {
     if (!changes) return;
-    std::unordered_map<uint64_t, Rect> oldBounds;
+    std::unordered_map<uint64_t, graphics::RectF> oldBounds;
     std::vector<uint32_t> oldPixels;
     uint32_t snapshotWidth = 0;
     uint32_t snapshotHeight = 0;
@@ -683,7 +861,7 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
             const size_t pixelCount = static_cast<size_t>(snapshotWidth) * snapshotHeight;
             oldPixels.assign(pixels, pixels + pixelCount);
         }
-        collectWidgetBounds(m_rootWidget.get(), oldBounds);
+        collectWidgetBounds(m_windowRoot.get(), oldBounds);
     }
     m_motionCoordinator.beginTransaction(motion, options);
     try {
@@ -696,9 +874,10 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
     if (options.layout == LayoutMode::Morph) {
         updateLayout();
         bool anyMorph = false;
-        startMorphs(m_rootWidget.get(), oldBounds, m_motionCoordinator, motion, anyMorph);
+        startMorphs(m_windowRoot.get(), oldBounds, m_motionCoordinator, motion, anyMorph);
         startMorphCrossfade(std::move(oldPixels), snapshotWidth, snapshotHeight, motion);
         m_morphInputFrozen = anyMorph || m_morphBlendEngine.hasActiveAnimations();
+        if (m_morphInputFrozen) m_dispatcher.cancelPointerCaptures();
     }
 }
 
@@ -785,13 +964,14 @@ void WindowApp::setExternalIpcSocket(int socketFd) {
     if (socketFd < 0) return;
     m_socketFd = socketFd;
     m_ipcConnected = true;
+    m_surfaceEnded = false;
     m_ownsSocketFd = false;
     m_canvas->setDmaBufTransportEnabled(true);
 }
 
 bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
                                     float localX, float localY) {
-    if (!m_ipcConnected || m_socketFd < 0) return false;
+    if (!m_ipcConnected || m_socketFd < 0 || isPopupSurface()) return false;
 
     lcl::protocol::LCLMsgRequestWindowAction msg{};
     msg.surfaceId = m_surfaceId;
@@ -801,6 +981,14 @@ bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
 
     return sendProtocolMessage(lcl::protocol::LCLOpcode::RequestWindowAction,
                                &msg, sizeof(msg));
+}
+
+bool WindowApp::requestSurfaceDestroy(uint32_t surfaceId) {
+    if (!m_ipcConnected || m_socketFd < 0 || surfaceId == 0) return false;
+    lcl::protocol::LCLMsgRequestSurfaceClose close{};
+    close.surfaceId = surfaceId;
+    return sendProtocolMessage(lcl::protocol::LCLOpcode::RequestSurfaceClose,
+                               &close, sizeof(close));
 }
 
 bool WindowApp::sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
@@ -835,6 +1023,9 @@ bool WindowApp::requestWindowToggleMaximize() {
 }
 
 bool WindowApp::requestWindowClose() {
+    if (isPopupSurface()) {
+        return requestSurfaceDestroy(m_surfaceId);
+    }
     return requestWindowAction(lcl::protocol::LCLWindowAction::Close);
 }
 
@@ -874,111 +1065,86 @@ bool WindowApp::setWindowLayer(lcl::protocol::LCLWindowLayer layer, bool unfocus
                                &msg, sizeof(msg));
 }
 
-bool WindowApp::setReservedZone(uint32_t top, uint32_t bottom, uint32_t left, uint32_t right) {
+bool WindowApp::setReservedZone(float top, float bottom, float left, float right) {
     if (!m_ipcConnected || m_socketFd < 0) return false;
 
     lcl::protocol::LCLMsgSetReservedZone msg{};
     msg.surfaceId = m_surfaceId;
-    msg.top = static_cast<uint32_t>(std::lround(static_cast<float>(top) * m_bufferScale));
-    msg.bottom = static_cast<uint32_t>(std::lround(static_cast<float>(bottom) * m_bufferScale));
-    msg.left = static_cast<uint32_t>(std::lround(static_cast<float>(left) * m_bufferScale));
-    msg.right = static_cast<uint32_t>(std::lround(static_cast<float>(right) * m_bufferScale));
+    msg.top = top;
+    msg.bottom = bottom;
+    msg.left = left;
+    msg.right = right;
     return sendProtocolMessage(lcl::protocol::LCLOpcode::SetReservedZone,
                                &msg, sizeof(msg));
 }
 
-bool WindowApp::setWindowCornerStyle(float radiusPx, float roundness) {
-    m_requestedCornerRadius = std::max(0.0f, radiusPx);
+bool WindowApp::setWindowCornerStyle(float radius, float roundness) {
+    m_requestedCornerRadius = std::max(0.0f, radius);
     m_requestedCornerRoundness = std::clamp(roundness, 2.0f, 8.0f);
     m_hasRequestedCornerRadius = true;
     if (!m_ipcConnected || m_socketFd < 0) return true;
 
     lcl::protocol::LCLMsgSetWindowCornerStyle msg{};
     msg.surfaceId = m_surfaceId;
-    msg.radiusPx = m_requestedCornerRadius;
+    msg.radius = m_requestedCornerRadius;
     msg.roundness = m_requestedCornerRoundness;
 
     return sendProtocolMessage(lcl::protocol::LCLOpcode::SetWindowCornerStyle,
                                &msg, sizeof(msg));
 }
 
-bool WindowApp::setWindowCornerRadius(float radiusPx) {
-    return setWindowCornerStyle(radiusPx, m_requestedCornerRoundness);
+bool WindowApp::setWindowCornerRadius(float radius) {
+    return setWindowCornerStyle(radius, m_requestedCornerRoundness);
 }
 
-void WindowApp::configureCsdTitlebar(float height, float controlLeft, float controlTop,
-                                     float controlSize, float controlGap) {
-    m_csdTitlebarHeight = std::max(0.0f, height);
-    m_csdControlLeft = controlLeft;
-    m_csdControlTop = controlTop;
-    m_csdControlSize = std::max(0.0f, controlSize);
-    m_csdControlGap = std::max(0.0f, controlGap);
-}
-
-int WindowApp::hitCsdControl(float x, float y) const noexcept {
-    if (!m_csdTitlebarEnabled || y < m_csdControlTop ||
-        y > (m_csdControlTop + m_csdControlSize)) {
-        return -1;
-    }
-    for (int index = 0; index < 3; ++index) {
-        const float left = m_csdControlLeft +
-            static_cast<float>(index) * (m_csdControlSize + m_csdControlGap);
-        if (x >= left && x <= (left + m_csdControlSize)) return index;
-    }
-    return -1;
-}
-
-bool WindowApp::sendPointerMove(float x, float y) {
+bool WindowApp::sendPointerMove(float x, float y, PointerSource source, uint32_t pointerId) {
     if (m_morphInputFrozen) return false;
-    PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Move};
+    PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Move, source, pointerId};
+    if (!m_dispatcher.hasPointerCapture(pointerId) &&
+        m_onRawPointer && m_onRawPointer(ev)) {
+        return true;
+    }
+    return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
+}
+
+bool WindowApp::sendPointerDown(float x, float y, int button, PointerSource source,
+                                uint32_t pointerId) {
+    if (m_morphInputFrozen) return false;
+    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Down, source, pointerId};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
+    return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
 }
 
-bool WindowApp::sendPointerDown(float x, float y, int button) {
+bool WindowApp::sendPointerUp(float x, float y, int button, PointerSource source,
+                              uint32_t pointerId) {
     if (m_morphInputFrozen) return false;
-    if (m_csdTitlebarEnabled && button == 0 && y >= 0.0f && y <= m_csdTitlebarHeight) {
-        m_csdPressedControl = hitCsdControl(x, y);
-        if (m_csdPressedControl >= 0) {
-            m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
-                PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Down});
-            return true;
-        }
-        m_csdPressedControl = -1;
-        requestWindowDrag(x, y);
+    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Up, source, pointerId};
+    if (!m_dispatcher.hasPointerCapture(pointerId) &&
+        m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
+    return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
+}
 
-    m_csdPressedControl = -1;
+bool WindowApp::sendPointerCancel(float x, float y, PointerSource source,
+                                  uint32_t pointerId) {
+    PointerEvent ev{x, y, 0, 0.0f, 0.0f, PointerEventType::Cancel, source, pointerId};
+    if (!m_dispatcher.hasPointerCapture(pointerId) &&
+        m_onRawPointer && m_onRawPointer(ev)) {
+        return true;
+    }
+    return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
+}
 
-    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Down};
+bool WindowApp::sendPointerScroll(float x, float y, float deltaX, float deltaY, PointerSource source) {
+    if (m_morphInputFrozen) return false;
+    PointerEvent ev{x, y, 0, deltaX, deltaY, PointerEventType::Scroll, source};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
-}
-
-bool WindowApp::sendPointerUp(float x, float y, int button) {
-    if (m_morphInputFrozen) return false;
-    if (button == 0 && m_csdPressedControl >= 0) {
-        const int pressedControl = m_csdPressedControl;
-        m_csdPressedControl = -1;
-        m_dispatcher.dispatchPointerEvent(m_rootWidget.get(),
-            PointerEvent{x, y, button, 0.0f, 0.0f, PointerEventType::Up});
-        if (hitCsdControl(x, y) == pressedControl) {
-            if (pressedControl == 0) return requestWindowClose();
-            if (pressedControl == 1) return requestWindowMinimize();
-            if (pressedControl == 2) return requestWindowToggleMaximize();
-        }
-        return true;
-    }
-    PointerEvent ev{x, y, button, 0.0f, 0.0f, PointerEventType::Up};
-    if (m_onRawPointer && m_onRawPointer(ev)) {
-        return true;
-    }
-    return m_dispatcher.dispatchPointerEvent(m_rootWidget.get(), ev);
+    return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
 }
 
 bool WindowApp::sendKeyDown(int keyCode, char32_t codepoint, uint8_t modifiers) {
@@ -986,7 +1152,7 @@ bool WindowApp::sendKeyDown(int keyCode, char32_t codepoint, uint8_t modifiers) 
     if (m_onRawKey && m_onRawKey(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchKeyEvent(ev);
+    return m_dispatcher.dispatchKeyEvent(m_windowRoot.get(), ev);
 }
 
 bool WindowApp::sendKeyUp(int keyCode, uint8_t modifiers) {
@@ -994,7 +1160,7 @@ bool WindowApp::sendKeyUp(int keyCode, uint8_t modifiers) {
     if (m_onRawKey && m_onRawKey(ev)) {
         return true;
     }
-    return m_dispatcher.dispatchKeyEvent(ev);
+    return m_dispatcher.dispatchKeyEvent(m_windowRoot.get(), ev);
 }
 
 bool WindowApp::sendTextInput(const std::string& text) {
@@ -1006,10 +1172,14 @@ bool WindowApp::sendTextInput(const std::string& text) {
 }
 
 void WindowApp::updateLayout() {
-    if (m_rootWidget) {
+    if (m_windowRoot) {
         const auto started = std::chrono::steady_clock::now();
-        m_rootWidget->getYogaNode().calculateLayout(static_cast<float>(m_width), static_cast<float>(m_height));
-        m_rootWidget->syncLayout(0.0f, 0.0f);
+        // Clear the request being serviced before calculation. A widget that
+        // performs a genuine Yoga mutation from syncLayout() will set it again
+        // and receive another layout pass on the next frame.
+        m_windowRoot->clearLayoutDirty();
+        m_windowRoot->getYogaNode().calculateLayout(static_cast<float>(m_width), static_cast<float>(m_height));
+        m_windowRoot->syncLayout(0.0f, 0.0f);
         if (m_frameTraceEnabled) {
             ++m_traceLayoutPasses;
             m_traceLayoutMs += std::chrono::duration<double, std::milli>(
@@ -1026,42 +1196,63 @@ bool WindowApp::renderFrame() {
     if (m_liveResizeFramePacing && m_canvas->hasDmaBufTransport() &&
         !m_liveFrameGateOpen) return false;
 
-    updateLayout();
+    if (m_windowRoot && m_windowRoot->isLayoutDirty()) {
+        updateLayout();
+        // Layout can move several siblings without each new bound producing a
+        // paint invalidation. It is intentionally the infrequent full-window
+        // invalidation path; presentation-only motion remains region-scoped.
+        m_renderPass.addDirtyRect(m_windowRoot->getAbsoluteBounds());
+    }
 
     // A resize can leave old-layout damage queued before Yoga computes the
     // new child positions. Always include the complete post-layout root extent
     // on the first frame so children moved outside the old damage are painted.
-    if (m_firstFrame && m_rootWidget) {
-        m_renderPass.addDirtyRect(m_rootWidget->getAbsoluteBounds());
+    if (m_firstFrame) {
+        if (m_windowRoot) m_renderPass.addDirtyRect(m_windowRoot->getAbsoluteBounds());
     }
     if (!m_renderPass.hasDamage()) return false;
     m_firstFrame = false;
 
-    Rect damageRect = m_renderPass.getDamageRect();
+    const graphics::RectF surfaceBounds{0.0f, 0.0f, static_cast<float>(m_width),
+                             static_cast<float>(m_height)};
+    std::vector<graphics::RectF> damageRects;
+    damageRects.reserve(m_renderPass.getDirtyRects().size());
+    for (const graphics::RectF& dirty : m_renderPass.getDirtyRects()) {
+        const graphics::RectF clipped = dirty.intersection(surfaceBounds);
+        if (!clipped.isEmpty()) damageRects.push_back(clipped);
+    }
     m_renderPass.clear();
+    if (damageRects.empty()) return false;
     m_canvas->beginFrame();
     if (m_canvas->isDmaBufFrameBlocked()) {
         // Keep the last compositor-owned DMA-BUF visible until a release
         // arrives. Requeue the exact damage instead of CPU-rendering it into
         // SHM during configure/transition pressure.
-        m_renderPass.addDirtyRect(damageRect);
-        m_firstFrame = true;
+        for (const graphics::RectF& damage : damageRects) {
+            m_renderPass.addDirtyRect(damage);
+        }
         return false;
     }
 
     const auto paintStarted = std::chrono::steady_clock::now();
     if (m_frameTraceEnabled) {
         ++m_traceRenderedFrames;
-        m_traceDamagePixels += static_cast<uint64_t>(std::max(0.0f, damageRect.width)) *
-            static_cast<uint64_t>(std::max(0.0f, damageRect.height));
+        for (const graphics::RectF& damage : damageRects) {
+            m_traceDamagePixels +=
+                static_cast<uint64_t>(std::max(0.0f, damage.width)) *
+                static_cast<uint64_t>(std::max(0.0f, damage.height));
+        }
     }
 
     const auto clearStarted = paintStarted;
     const bool dmaBufFrame = m_canvas->isDmaBufFrameActive();
-    if (!dmaBufFrame) if (auto* pixels = m_canvas->rasterBuffer()) {
-        std::fill_n(pixels, static_cast<size_t>(getPixelWidth()) * static_cast<size_t>(getPixelHeight()), 0x00000000);
+    for (const graphics::RectF& damage : damageRects) {
+        m_canvas->clearRect(damage, {0, 0, 0, 0});
         if (m_frameTraceEnabled) {
-            m_traceClearedBytes += static_cast<uint64_t>(getPixelWidth()) * getPixelHeight() * sizeof(uint32_t);
+            m_traceClearedBytes +=
+                static_cast<uint64_t>(std::ceil(damage.width * m_bufferScale)) *
+                static_cast<uint64_t>(std::ceil(damage.height * m_bufferScale)) *
+                sizeof(uint32_t);
         }
     }
     if (m_frameTraceEnabled) {
@@ -1072,19 +1263,22 @@ bool WindowApp::renderFrame() {
     const auto drawStarted = std::chrono::steady_clock::now();
     m_renderPass.begin(*m_canvas);
 
-    if (m_rootWidget && m_rootWidget->isVisible()) {
-        m_rootWidget->draw(*m_canvas, damageRect);
-    }
-    if (m_layoutOverlayEnabled && m_rootWidget) {
-        drawLayoutOverlay(*m_rootWidget, *m_canvas);
-        m_canvas->drawRoundedRect(damageRect, 0.0f, {0, 0, 0, 0},
-                                  {239, 68, 68, 255}, 1.0f, 2.0f);
+    for (const graphics::RectF& damage : damageRects) {
+        m_canvas->saveState();
+        m_canvas->clipRect(damage);
+        if (m_windowRoot && m_windowRoot->isVisible()) {
+            m_windowRoot->draw(*m_canvas, damage);
+        }
+        if (m_layoutOverlayEnabled && m_windowRoot) {
+            drawLayoutOverlay(*m_windowRoot, *m_canvas);
+            m_canvas->drawRoundedRect(damage, 0.0f, {0, 0, 0, 0},
+                                      {239, 68, 68, 255}, 1.0f, 2.0f);
+        }
+        m_canvas->restoreState();
     }
 
     std::vector<EffectRegion> uiEffects;
-    if (m_rootWidget) {
-        m_rootWidget->collectEffects(uiEffects);
-    }
+    if (m_windowRoot) m_windowRoot->collectEffects(uiEffects);
 
     m_renderPass.end(*m_canvas);
     m_canvas->endFrame();
@@ -1120,22 +1314,19 @@ bool WindowApp::renderFrame() {
         for (const auto& effect : uiEffects) {
             if (effect.bounds.isEmpty() || effect.filters.empty()) continue;
 
-            int x = std::max(0, static_cast<int>(std::lround(effect.bounds.x * m_bufferScale)));
-            int y = std::max(0, static_cast<int>(std::lround(effect.bounds.y * m_bufferScale)));
-            int w = std::max(0, static_cast<int>(std::lround(effect.bounds.width * m_bufferScale)));
-            int h = std::max(0, static_cast<int>(std::lround(effect.bounds.height * m_bufferScale)));
-
-            if (x >= static_cast<int>(getPixelWidth()) || y >= static_cast<int>(getPixelHeight())) continue;
-            w = std::min(w, static_cast<int>(getPixelWidth()) - x);
-            h = std::min(h, static_cast<int>(getPixelHeight()) - y);
-            if (w <= 0 || h <= 0) continue;
+            const float x = std::max(0.0f, effect.bounds.x);
+            const float y = std::max(0.0f, effect.bounds.y);
+            if (x >= m_width || y >= m_height) continue;
+            const float w = std::min(std::max(0.0f, effect.bounds.width), m_width - x);
+            const float h = std::min(std::max(0.0f, effect.bounds.height), m_height - y);
+            if (w <= 0.0f || h <= 0.0f) continue;
 
             lcl::protocol::EffectRegion region{};
             region.x = x;
             region.y = y;
-            region.width = static_cast<uint32_t>(w);
-            region.height = static_cast<uint32_t>(h);
-            region.cornerRadius = std::max(0.0f, effect.cornerRadius * m_bufferScale);
+            region.width = w;
+            region.height = h;
+            region.cornerRadius = std::max(0.0f, effect.cornerRadius);
             region.cornerRoundness = std::clamp(effect.cornerRoundness, 2.0f, 8.0f);
             region.boundsPolicy = toProtoBounds(effect.boundsPolicy);
             region.source = toProtoSource(effect.source);
@@ -1146,12 +1337,6 @@ bool WindowApp::renderFrame() {
 
             for (uint16_t i = 0; i < region.filterCount; ++i) {
                 auto filter = effect.filters[i];
-                // These values are specified by widgets in logical px as well.
-                if (filter.type == lcl::protocol::FilterType::Blur) {
-                    filter.value *= m_bufferScale;
-                } else if (filter.type == lcl::protocol::FilterType::Glass) {
-                    filter.params[0] *= m_bufferScale; // thicknessPx
-                }
                 flatFilters.push_back(filter);
             }
             protoRegions.push_back(region);
@@ -1199,12 +1384,37 @@ bool WindowApp::renderFrame() {
             std::chrono::steady_clock::now() - drawStarted).count();
     }
 
-    // Double Buffering: Copy 100% complete rendered frame to SHM buffer atomically
+    // The SHM mapping is retained as well. Copy only changed scanline spans;
+    // the first frame and resize paths already invalidate the full surface.
     const auto copyStarted = std::chrono::steady_clock::now();
     if (!dmaBufFrame && m_shmPixels && !m_pixelBuffer.empty()) {
-        size_t copyBytes = std::min(m_shmSize, m_pixelBuffer.size() * sizeof(uint32_t));
-        std::memcpy(m_shmPixels, m_pixelBuffer.data(), copyBytes);
-        if (m_frameTraceEnabled) m_traceCopiedBytes += copyBytes;
+        const uint32_t pixelWidth = getPixelWidth();
+        const uint32_t pixelHeight = getPixelHeight();
+        for (const graphics::RectF& damage : damageRects) {
+            const uint32_t left = std::min(
+                pixelWidth, static_cast<uint32_t>(std::floor(
+                    std::max(0.0f, damage.x * m_bufferScale))));
+            const uint32_t top = std::min(
+                pixelHeight, static_cast<uint32_t>(std::floor(
+                    std::max(0.0f, damage.y * m_bufferScale))));
+            const uint32_t right = std::min(
+                pixelWidth, static_cast<uint32_t>(std::ceil(
+                    std::max(0.0f, (damage.x + damage.width) * m_bufferScale))));
+            const uint32_t bottom = std::min(
+                pixelHeight, static_cast<uint32_t>(std::ceil(
+                    std::max(0.0f, (damage.y + damage.height) * m_bufferScale))));
+            if (left >= right || top >= bottom) continue;
+            const size_t rowBytes = static_cast<size_t>(right - left) * sizeof(uint32_t);
+            for (uint32_t y = top; y < bottom; ++y) {
+                const size_t offset = static_cast<size_t>(y) * pixelWidth + left;
+                if ((offset + (right - left)) * sizeof(uint32_t) > m_shmSize) break;
+                std::memcpy(m_shmPixels + offset, m_pixelBuffer.data() + offset,
+                            rowBytes);
+            }
+            if (m_frameTraceEnabled) {
+                m_traceCopiedBytes += rowBytes * (bottom - top);
+            }
+        }
     }
     if (m_frameTraceEnabled) {
         m_traceCopyMs += std::chrono::duration<double, std::milli>(

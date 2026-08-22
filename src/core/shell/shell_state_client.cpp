@@ -42,14 +42,21 @@ bool ShellStateClient::connect(const std::string& socketPath) {
     m_socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
     if (m_socketFd < 0) return false;
 
+    std::string effectiveSocketPath = socketPath;
+    if (const char* envSocket = std::getenv("LCL_COMPOSITOR_SOCKET")) {
+        if (envSocket[0] != '\0') {
+            effectiveSocketPath = envSocket;
+        }
+    }
+
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
-    if (socketPath.size() >= sizeof(address.sun_path)) {
+    if (effectiveSocketPath.size() >= sizeof(address.sun_path)) {
         close(m_socketFd);
         m_socketFd = -1;
         return false;
     }
-    std::strncpy(address.sun_path, socketPath.c_str(), sizeof(address.sun_path) - 1);
+    std::strncpy(address.sun_path, effectiveSocketPath.c_str(), sizeof(address.sun_path) - 1);
     if (::connect(m_socketFd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
         close(m_socketFd);
         m_socketFd = -1;

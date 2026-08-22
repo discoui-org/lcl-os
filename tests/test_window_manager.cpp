@@ -95,7 +95,7 @@ TEST(WindowManagerTest, WindowCornerStyleOwnsRadiusAndRoundnessTogether) {
     manager.setWindowCornerStyle(id, 20.0f, 3.2f);
     const auto* window = findWindow(manager, id);
     ASSERT_NE(window, nullptr);
-    EXPECT_FLOAT_EQ(window->cornerRadiusPx, 20.0f);
+    EXPECT_FLOAT_EQ(window->cornerRadius, 20.0f);
     EXPECT_FLOAT_EQ(window->cornerRoundness, 3.2f);
 }
 
@@ -216,8 +216,8 @@ TEST(WindowManagerTest, RestoreMorphIsPreemptedByDragAtThePresentedRect) {
     const auto* pinned = findWindow(manager, id);
     ASSERT_NE(pinned, nullptr);
     EXPECT_TRUE(pinned->isDragging());
-    EXPECT_EQ(pinned->x, static_cast<int>(std::lround(before.x)));
-    EXPECT_EQ(pinned->width, static_cast<int>(std::lround(before.width)));
+    EXPECT_FLOAT_EQ(pinned->x, before.x);
+    EXPECT_FLOAT_EQ(pinned->width, before.width);
 
     manager.updateAnimations(1.0f);
     const auto* afterTick = findWindow(manager, id);
@@ -225,15 +225,15 @@ TEST(WindowManagerTest, RestoreMorphIsPreemptedByDragAtThePresentedRect) {
     EXPECT_TRUE(afterTick->isDragging());
     EXPECT_FLOAT_EQ(afterTick->presentationX, static_cast<float>(afterTick->x));
     EXPECT_FLOAT_EQ(afterTick->presentationWidth, static_cast<float>(afterTick->width));
-    const int dragStartX = afterTick->x;
-    const int dragStartY = afterTick->y;
+    const float dragStartX = afterTick->x;
+    const float dragStartY = afterTick->y;
 
     lcl::core::InputEvent motion{};
     motion.type = lcl::core::InputEventType::PointerMotion;
     motion.absoluteX = static_cast<double>(dragStartX + 24 + 60);
     motion.absoluteY = static_cast<double>(dragStartY + 18 + 30);
     EXPECT_TRUE(manager.processInputEvent(motion));
-    EXPECT_EQ(findWindow(manager, id)->x, dragStartX + 60);
+    EXPECT_FLOAT_EQ(findWindow(manager, id)->x, dragStartX + 60.0f);
     EXPECT_FLOAT_EQ(findWindow(manager, id)->presentationX,
                     static_cast<float>(findWindow(manager, id)->x));
 }
@@ -296,20 +296,20 @@ TEST(WindowManagerTest, NewDragInvalidatesSnapRollbackAndLateResizeCommit) {
     const auto secondDrag = manager.beginWindowDrag(id, 10, 10);
     ASSERT_TRUE(secondDrag);
     ASSERT_GT(secondDrag.generation, firstDrag.generation);
-    const int pinnedX = findWindow(manager, id)->x;
-    const int pinnedY = findWindow(manager, id)->y;
-    const int pinnedWidth = findWindow(manager, id)->width;
+    const float pinnedX = findWindow(manager, id)->x;
+    const float pinnedY = findWindow(manager, id)->y;
+    const float pinnedWidth = findWindow(manager, id)->width;
     manager.updateAnimations(2.0f);
     EXPECT_TRUE(findWindow(manager, id)->isDragging());
-    EXPECT_EQ(findWindow(manager, id)->x, pinnedX);
+    EXPECT_FLOAT_EQ(findWindow(manager, id)->x, pinnedX);
 
     EXPECT_FALSE(manager.rollbackWindowGeometry(
         id, {0, 32, 1000, 668}, true, false, firstDrag.generation));
     EXPECT_FALSE(manager.commitSurfaceGeometry(
         id, 700, 500, false, 0, 32, firstDrag.generation));
-    EXPECT_EQ(findWindow(manager, id)->x, pinnedX);
-    EXPECT_EQ(findWindow(manager, id)->y, pinnedY);
-    EXPECT_EQ(findWindow(manager, id)->width, pinnedWidth);
+    EXPECT_FLOAT_EQ(findWindow(manager, id)->x, pinnedX);
+    EXPECT_FLOAT_EQ(findWindow(manager, id)->y, pinnedY);
+    EXPECT_FLOAT_EQ(findWindow(manager, id)->width, pinnedWidth);
 }
 
 TEST(WindowManagerTest, ServerChromeControlsAnimateHoverPressWithoutGlyphState) {

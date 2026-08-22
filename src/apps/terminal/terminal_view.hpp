@@ -13,14 +13,11 @@ namespace lcl::apps {
  */
 class TerminalView final : public lcl::ui::Widget {
 public:
-    explicit TerminalView(TerminalApp& terminal, float titlebarHeight = 34.0f);
-
-    void setTitlebarHeight(float height);
-    float getTitlebarHeight() const { return m_titlebarHeight; }
+    explicit TerminalView(TerminalApp& terminal);
 
     /** Returns true only when the visible cursor state changed. */
     bool updateCursorBlink();
-    void draw(lcl::ui::Canvas& canvas, const lcl::ui::Rect& damageRect) override;
+    void draw(lcl::graphics::Canvas& canvas, const lcl::graphics::RectF& damageRect) override;
 
 private:
     bool isCursorVisible() const;
@@ -28,7 +25,6 @@ private:
                             float cellWidth) const;
 
     TerminalApp& m_terminal;
-    float m_titlebarHeight{34.0f};
     bool m_cursorStateInitialized{false};
     bool m_cursorVisible{true};
 };

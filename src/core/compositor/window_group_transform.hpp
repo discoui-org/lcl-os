@@ -15,6 +15,10 @@ struct WindowGroupTransform {
     float height{1.0f};
     float titleHeight{0.0f};
     float scale{1.0f};
+
+    float mapLength(float logicalLength) const noexcept {
+        return logicalLength * scale;
+    }
 };
 
 inline WindowGroupTransform makeWindowGroupTransform(const render::Window& window,

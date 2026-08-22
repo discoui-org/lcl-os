@@ -36,7 +36,6 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     msg.y = 200;
     msg.width = 800;
     msg.height = 600;
-    msg.bufferScale = 1.5f;
     msg.resizePresentation = LCLResizePresentationMode::Live;
     std::strncpy(msg.title, "Test Window Title", sizeof(msg.title) - 1);
     std::strncpy(msg.appId, "org.lcl.test", sizeof(msg.appId) - 1);
@@ -63,17 +62,69 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
 
     const auto* msgRecv = reinterpret_cast<const LCLMsgSurfaceCreate*>(payloadRecv.data());
     EXPECT_EQ(msgRecv->surfaceId, 42u);
-    EXPECT_EQ(msgRecv->x, 100);
-    EXPECT_EQ(msgRecv->y, 200);
-    EXPECT_EQ(msgRecv->width, 800u);
-    EXPECT_EQ(msgRecv->height, 600u);
-    EXPECT_FLOAT_EQ(msgRecv->bufferScale, 1.5f);
+    EXPECT_FLOAT_EQ(msgRecv->x, 100.0f);
+    EXPECT_FLOAT_EQ(msgRecv->y, 200.0f);
+    EXPECT_FLOAT_EQ(msgRecv->width, 800.0f);
+    EXPECT_FLOAT_EQ(msgRecv->height, 600.0f);
     EXPECT_EQ(msgRecv->resizePresentation, LCLResizePresentationMode::Live);
     EXPECT_STREQ(msgRecv->title, "Test Window Title");
     EXPECT_STREQ(msgRecv->appId, "org.lcl.test");
 
     close(sv[0]);
     close(sv[1]);
+}
+
+TEST(LCLProtocolTest, PopupSurfaceCreateRoundTripsParentRoleAndGeometry) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    LCLMsgPopupSurfaceCreate popup{};
+    popup.surfaceId = 9;
+    popup.parentSurfaceId = 3;
+    popup.role = LCLPopupRole::Transient;
+    popup.x = 280;
+    popup.y = -12;
+    popup.width = 220;
+    popup.height = 96;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::PopupSurfaceCreate;
+    header.payloadSize = sizeof(popup);
+    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &popup));
+
+    LCLHeader received{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sockets[1], received, payload, receivedFd));
+    ASSERT_EQ(received.opcode, LCLOpcode::PopupSurfaceCreate);
+    ASSERT_EQ(payload.size(), sizeof(LCLMsgPopupSurfaceCreate));
+    const auto* decoded = reinterpret_cast<const LCLMsgPopupSurfaceCreate*>(payload.data());
+    EXPECT_EQ(decoded->surfaceId, 9u);
+    EXPECT_EQ(decoded->parentSurfaceId, 3u);
+    EXPECT_EQ(decoded->role, LCLPopupRole::Transient);
+    EXPECT_FLOAT_EQ(decoded->x, 280.0f);
+    EXPECT_FLOAT_EQ(decoded->y, -12.0f);
+    EXPECT_FLOAT_EQ(decoded->width, 220.0f);
+    EXPECT_FLOAT_EQ(decoded->height, 96.0f);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(LCLProtocolTest, PopupSurfaceRejectsSelfParentAndUnknownRole) {
+    LCLMsgPopupSurfaceCreate popup{};
+    popup.surfaceId = 4;
+    popup.parentSurfaceId = 4;
+    popup.width = 100;
+    popup.height = 50;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::PopupSurfaceCreate;
+    header.payloadSize = sizeof(popup);
+    std::vector<uint8_t> packet;
+    EXPECT_FALSE(encodePacket(header, &popup, packet));
+
+    popup.parentSurfaceId = 1;
+    popup.role = static_cast<LCLPopupRole>(99);
+    EXPECT_FALSE(encodePacket(header, &popup, packet));
 }
 
 TEST(LCLProtocolTest, ConfigureAndAttachRoundTripTheSameSerial) {
@@ -118,7 +169,6 @@ void appendLe32(std::vector<uint8_t>& bytes, uint32_t value) {
 }
 
 std::vector<uint8_t> surfaceCreatePacket(
-    float scale,
     LCLResizePresentationMode mode = LCLResizePresentationMode::CompositorMorph) {
     LCLHeader header{};
     header.opcode = LCLOpcode::SurfaceCreate;
@@ -128,7 +178,6 @@ std::vector<uint8_t> surfaceCreatePacket(
     create.surfaceId = 4;
     create.width = 640;
     create.height = 480;
-    create.bufferScale = scale;
     create.resizePresentation = mode;
     std::strncpy(create.title, "Codec Test", sizeof(create.title) - 1);
     std::strncpy(create.appId, "org.lcl.codec-test", sizeof(create.appId) - 1);
@@ -177,11 +226,11 @@ TEST(LCLProtocolTest, RejectsProtocolV2Packet) {
     EXPECT_FALSE(decodePacket(packet.data(), packet.size(), header, payload));
 }
 
-TEST(LCLProtocolTest, RejectsMissingAndInvalidBufferScale) {
-    auto packet = surfaceCreatePacket(1.5f);
+TEST(LCLProtocolTest, RejectsTruncatedAndNonFiniteLogicalSurfaceGeometry) {
+    auto packet = surfaceCreatePacket();
     ASSERT_FALSE(packet.empty());
 
-    // A v7 SurfaceCreate must contain the final resize presentation field.
+    // v13 SurfaceCreate must contain the final resize presentation field.
     packet.resize(packet.size() - sizeof(uint8_t));
     const uint32_t shortened = sizeof(LCLMsgSurfaceCreate) - sizeof(uint8_t);
     packet[20] = static_cast<uint8_t>(shortened);
@@ -192,19 +241,18 @@ TEST(LCLProtocolTest, RejectsMissingAndInvalidBufferScale) {
     std::vector<uint8_t> payload;
     EXPECT_FALSE(decodePacket(packet.data(), packet.size(), header, payload));
 
-    packet = surfaceCreatePacket(1.5f);
+    packet = surfaceCreatePacket();
     const uint32_t nanBits =
         std::bit_cast<uint32_t>(std::numeric_limits<float>::quiet_NaN());
-    const size_t scaleOffset = packet.size() - sizeof(uint8_t) - sizeof(float);
-    packet[scaleOffset] = static_cast<uint8_t>(nanBits);
-    packet[scaleOffset + 1] = static_cast<uint8_t>(nanBits >> 8);
-    packet[scaleOffset + 2] = static_cast<uint8_t>(nanBits >> 16);
-    packet[scaleOffset + 3] = static_cast<uint8_t>(nanBits >> 24);
+    // First logical float follows surfaceId.
+    const size_t xOffset = sizeof(LCLHeader) + sizeof(uint32_t);
+    packet[xOffset] = static_cast<uint8_t>(nanBits);
+    packet[xOffset + 1] = static_cast<uint8_t>(nanBits >> 8);
+    packet[xOffset + 2] = static_cast<uint8_t>(nanBits >> 16);
+    packet[xOffset + 3] = static_cast<uint8_t>(nanBits >> 24);
     EXPECT_FALSE(decodePacket(packet.data(), packet.size(), header, payload));
 
-    EXPECT_TRUE(surfaceCreatePacket(0.49f).empty());
-    EXPECT_TRUE(surfaceCreatePacket(4.01f).empty());
-    EXPECT_TRUE(surfaceCreatePacket(1.0f,
+    EXPECT_TRUE(surfaceCreatePacket(
         static_cast<LCLResizePresentationMode>(2)).empty());
 }
 
@@ -255,7 +303,7 @@ TEST(LCLProtocolTest, QueuedPacketsPreserveRequestOrder) {
 TEST(LCLProtocolTest, SeqpacketRejectsTruncatedPayload) {
     int sv[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
-    auto packet = surfaceCreatePacket(1.0f);
+    auto packet = surfaceCreatePacket();
     ASSERT_GT(packet.size(), LCL_PROTOCOL_WIRE_HEADER_SIZE);
     iovec iov{packet.data(), packet.size() - 1};
     msghdr rawMessage{};
@@ -550,10 +598,10 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     filters[4].params[2] = 42.0f;
 
     EffectRegion region{};
-    region.x = 10;
-    region.y = 20;
-    region.width = 300;
-    region.height = 180;
+    region.x = 10.25f;
+    region.y = 20.5f;
+    region.width = 300.75f;
+    region.height = 180.125f;
     region.cornerRadius = 14.0f;
     region.cornerRoundness = 3.2f;
     region.boundsPolicy = EffectBoundsPolicy::OuterSurface;
@@ -597,10 +645,10 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
 
     const auto* regionRecv = reinterpret_cast<const EffectRegion*>(
         payloadRecv.data() + sizeof(LCLMsgSetEffectGraphHeader));
-    EXPECT_EQ(regionRecv->x, 10);
-    EXPECT_EQ(regionRecv->y, 20);
-    EXPECT_EQ(regionRecv->width, 300u);
-    EXPECT_EQ(regionRecv->height, 180u);
+    EXPECT_FLOAT_EQ(regionRecv->x, 10.25f);
+    EXPECT_FLOAT_EQ(regionRecv->y, 20.5f);
+    EXPECT_FLOAT_EQ(regionRecv->width, 300.75f);
+    EXPECT_FLOAT_EQ(regionRecv->height, 180.125f);
     EXPECT_FLOAT_EQ(regionRecv->cornerRadius, 14.0f);
     EXPECT_FLOAT_EQ(regionRecv->cornerRoundness, 3.2f);
     EXPECT_EQ(regionRecv->boundsPolicy, EffectBoundsPolicy::OuterSurface);
@@ -639,7 +687,7 @@ TEST(LCLProtocolTest, SendAndReceiveWindowCornerStyle) {
 
     LCLMsgSetWindowCornerStyle sent{};
     sent.surfaceId = 7;
-    sent.radiusPx = 20.0f;
+    sent.radius = 20.0f;
     sent.roundness = 3.2f;
     LCLHeader header{};
     header.opcode = LCLOpcode::SetWindowCornerStyle;
@@ -655,7 +703,7 @@ TEST(LCLProtocolTest, SendAndReceiveWindowCornerStyle) {
     ASSERT_EQ(receivedPayload.size(), sizeof(LCLMsgSetWindowCornerStyle));
     const auto* received = reinterpret_cast<const LCLMsgSetWindowCornerStyle*>(receivedPayload.data());
     EXPECT_EQ(received->surfaceId, 7u);
-    EXPECT_FLOAT_EQ(received->radiusPx, 20.0f);
+    EXPECT_FLOAT_EQ(received->radius, 20.0f);
     EXPECT_FLOAT_EQ(received->roundness, 3.2f);
 
     close(sv[0]);
@@ -781,7 +829,6 @@ TEST(LCLProtocolTest, SurfaceCreateRequiresCanonicalAppId) {
     request.surfaceId = 7;
     request.width = 640;
     request.height = 480;
-    request.bufferScale = 1.0f;
     std::strncpy(request.title, "No identity", sizeof(request.title) - 1);
 
     LCLHeader header{};
@@ -793,4 +840,47 @@ TEST(LCLProtocolTest, SurfaceCreateRequiresCanonicalAppId) {
 
     std::strncpy(request.appId, "org.lcl.test", sizeof(request.appId) - 1);
     EXPECT_TRUE(encodePacket(header, &request, packet));
+}
+
+TEST(LCLProtocolTest, InputEventCodecRoundTripWithPointerSource) {
+    LCLMsgInputEvent input{};
+    input.surfaceId = 12;
+    input.type = 3; // PointerMotion
+    input.key = 1;
+    input.pressed = 1;
+    input.modifiers = 0x05;
+    input.source = static_cast<uint8_t>(LCLPointerSource::Touch);
+    input.codepoint = 0;
+    input.x = 123.45f;
+    input.y = 678.90f;
+    input.deltaX = -1.5f;
+    input.deltaY = 2.5f;
+
+    LCLHeader header{};
+    header.opcode = LCLOpcode::InputEvent;
+    header.requestId = 88;
+    header.payloadSize = sizeof(input);
+
+    std::vector<uint8_t> packet;
+    ASSERT_TRUE(encodePacket(header, &input, packet));
+
+    LCLHeader decodedHeader{};
+    std::vector<uint8_t> decodedPayload;
+    ASSERT_TRUE(decodePacket(packet.data(), packet.size(), decodedHeader, decodedPayload));
+
+    EXPECT_EQ(decodedHeader.opcode, LCLOpcode::InputEvent);
+    EXPECT_EQ(decodedHeader.requestId, 88u);
+    ASSERT_EQ(decodedPayload.size(), sizeof(input));
+
+    const auto* decodedInput = reinterpret_cast<const LCLMsgInputEvent*>(decodedPayload.data());
+    EXPECT_EQ(decodedInput->surfaceId, 12u);
+    EXPECT_EQ(decodedInput->type, 3u);
+    EXPECT_EQ(decodedInput->key, 1u);
+    EXPECT_EQ(decodedInput->pressed, 1u);
+    EXPECT_EQ(decodedInput->modifiers, 0x05u);
+    EXPECT_EQ(decodedInput->source, static_cast<uint8_t>(LCLPointerSource::Touch));
+    EXPECT_FLOAT_EQ(decodedInput->x, 123.45f);
+    EXPECT_FLOAT_EQ(decodedInput->y, 678.90f);
+    EXPECT_FLOAT_EQ(decodedInput->deltaX, -1.5f);
+    EXPECT_FLOAT_EQ(decodedInput->deltaY, 2.5f);
 }

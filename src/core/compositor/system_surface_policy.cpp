@@ -1,9 +1,12 @@
 #include "core/compositor/system_surface_policy.hpp"
 
+#include "core/compositor/surface_registry.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <unistd.h>
 
 namespace lcl::core {
@@ -49,30 +52,55 @@ SystemSurfacePolicy SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSu
 }
 
 void SystemSurfacePolicyRegistry::applyInitialPlacement(const SystemSurfacePolicy& policy,
-                                                        uint32_t outputWidth, uint32_t outputHeight,
-                                                        int& x, int& y, int& width, int& height) noexcept {
+                                                        float outputWidth, float outputHeight,
+                                                        float& x, float& y, float& width, float& height) noexcept {
     switch (policy.placement) {
         case SystemSurfacePlacement::OutputBounds:
             x = 0;
             y = 0;
-            width = static_cast<int>(outputWidth);
-            height = static_cast<int>(outputHeight);
+            width = outputWidth;
+            height = outputHeight;
             break;
         case SystemSurfacePlacement::OutputTopEdge:
             x = 0;
             y = 0;
-            width = static_cast<int>(outputWidth);
-            height = std::min(height, static_cast<int>(outputHeight));
+            width = outputWidth;
+            height = std::min(height, outputHeight);
             break;
         case SystemSurfacePlacement::OutputBottomEdge:
             x = 0;
-            width = static_cast<int>(outputWidth);
-            height = std::min(height, static_cast<int>(outputHeight));
-            y = std::max(0, static_cast<int>(outputHeight) - height);
+            width = outputWidth;
+            height = std::min(height, outputHeight);
+            y = std::max(0.0f, outputHeight - height);
             break;
         case SystemSurfacePlacement::ClientBounds:
             break;
     }
+}
+
+SystemReservedZone SystemSurfacePolicyRegistry::computeReservedZone(
+        const SurfaceRegistry& surfaces) noexcept {
+    SystemReservedZone zone{};
+    for (const auto& [_, surface] : surfaces) {
+        if (surface.windowId == 0) continue;
+
+        const auto policy = policyFor(surface.systemSurfaceKind);
+        if (!policy.reservesWorkArea) continue;
+
+        const float logicalHeight = std::max(0.0f, surface.configuredHeight);
+        switch (policy.placement) {
+            case SystemSurfacePlacement::OutputTopEdge:
+                zone.top = std::max(zone.top, logicalHeight);
+                break;
+            case SystemSurfacePlacement::OutputBottomEdge:
+                zone.bottom = std::max(zone.bottom, logicalHeight);
+                break;
+            case SystemSurfacePlacement::ClientBounds:
+            case SystemSurfacePlacement::OutputBounds:
+                break;
+        }
+    }
+    return zone;
 }
 
 bool SystemSurfacePolicyRegistry::isTrustedShellPeer(pid_t pid) noexcept {
@@ -83,8 +111,27 @@ bool SystemSurfacePolicyRegistry::isTrustedShellPeer(pid_t pid) noexcept {
     const ssize_t count = readlink(procPath.data(), resolved.data(), resolved.size() - 1);
     if (count <= 0) return false;
     resolved[static_cast<size_t>(count)] = '\0';
-    const auto executable = std::filesystem::path(resolved.data()).filename();
-    return executable == "lcl-desktop-shell" || executable == "lcl-mobile-shell";
+    const auto executable = std::filesystem::path(resolved.data()).filename().string();
+    if (executable == "lcl-desktop-shell" || executable == "lcl-mobile-shell") {
+        return true;
+    }
+    // If invoked via an explicit dynamic linker (e.g. ld-linux-x86-64.so.2),
+    // inspect /proc/<pid>/cmdline to check the target executable argument.
+    if (executable.rfind("ld-linux", 0) == 0 || executable.rfind("ld.so", 0) == 0 || executable.rfind("ld-", 0) == 0) {
+        std::array<char, 64> cmdlinePath{};
+        std::snprintf(cmdlinePath.data(), cmdlinePath.size(), "/proc/%d/cmdline", static_cast<int>(pid));
+        std::ifstream cmdlineFile(cmdlinePath.data(), std::ios::binary);
+        if (cmdlineFile) {
+            std::string arg;
+            while (std::getline(cmdlineFile, arg, '\0')) {
+                const auto targetName = std::filesystem::path(arg).filename().string();
+                if (targetName == "lcl-desktop-shell" || targetName == "lcl-mobile-shell") {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 } // namespace lcl::core

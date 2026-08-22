@@ -17,8 +17,8 @@ public:
     void addFilter(const lcl::protocol::FilterOp& filter);
     void clearFilters();
     /** Composite one tint over the filtered pixels in the compositor effect pass. */
-    void setTint(const Color& color);
-    Color getTint() const { return m_tint; }
+    void setTint(const graphics::Color& color);
+    graphics::Color getTint() const { return m_tint; }
 
     void setEffectBounds(EffectBounds bounds) {
         if (m_effectBounds != bounds) {
@@ -43,6 +43,7 @@ public:
     bool onPointerLeave(const PointerEvent& event) override;
     bool onPointerDown(const PointerEvent& event) override;
     bool onPointerUp(const PointerEvent& event) override;
+    bool onPointerCancel(const PointerEvent& event) override;
     bool onFocusGained(const FocusEvent& event) override;
     bool onFocusLost(const FocusEvent& event) override;
 
@@ -54,7 +55,7 @@ private:
     void restoreBaseVisuals();
 
     std::vector<lcl::protocol::FilterOp> m_filters;
-    Color m_tint{0, 0, 0, 0};
+    graphics::Color m_tint{0, 0, 0, 0};
     EffectBounds m_effectBounds{EffectBounds::Local};
     EffectBlend m_blendMode{EffectBlend::Normal};
     float m_opacity{1.0f};
@@ -63,8 +64,8 @@ private:
     bool m_hovered{false};
     bool m_focused{false};
     bool m_hasBaseVisuals{false};
-    Color m_baseBackground{0, 0, 0, 0};
-    Color m_baseBorder{0, 0, 0, 0};
+    graphics::Color m_baseBackground{0, 0, 0, 0};
+    graphics::Color m_baseBorder{0, 0, 0, 0};
     bool m_interactive{true};
 };
 

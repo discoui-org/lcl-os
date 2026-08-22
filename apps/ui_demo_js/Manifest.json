@@ -1,0 +1,8 @@
+{
+  "id": "org.lcl.uidemo-js",
+  "name": "UI Demo JS",
+  "version": "1.0.0",
+  "executable": "Executables/Main.js",
+  "runtime": "org.lcl.javascript",
+  "icon": "Resources/Icon.png"
+}

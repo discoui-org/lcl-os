@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "lcl-ui/core/canvas.hpp"
+#include "lcl-graphics/canvas.hpp"
 
 namespace lcl::ui {
 
@@ -42,8 +42,8 @@ void Image::clearSource() {
     markDirty();
 }
 
-void Image::setCornerRadius(float radiusPx) {
-    float clamped = std::max(0.0f, radiusPx);
+void Image::setCornerRadius(float radius) {
+    float clamped = std::max(0.0f, radius);
     if (std::fabs(clamped - m_cornerRadius) <= 0.001f) {
         return;
     }
@@ -69,17 +69,17 @@ void Image::setOpacity(float opacity) {
     markDirty();
 }
 
-void Image::draw(Canvas& canvas, const Rect& damageRect) {
+void Image::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect) || !m_sourceImage || !m_sourceImage->isValid()) {
         return;
     }
 
     beginPresentation(canvas);
 
-    const int boxX = static_cast<int>(std::round(m_absoluteBounds.x));
-    const int boxY = static_cast<int>(std::round(m_absoluteBounds.y));
-    const int boxW = std::max(0, static_cast<int>(std::round(m_absoluteBounds.width)));
-    const int boxH = std::max(0, static_cast<int>(std::round(m_absoluteBounds.height)));
+    const float boxX = m_absoluteBounds.x;
+    const float boxY = m_absoluteBounds.y;
+    const float boxW = std::max(0.0f, m_absoluteBounds.width);
+    const float boxH = std::max(0.0f, m_absoluteBounds.height);
     if (boxW <= 0 || boxH <= 0) {
         endPresentation(canvas);
         return;
@@ -92,10 +92,10 @@ void Image::draw(Canvas& canvas, const Rect& damageRect) {
         return;
     }
 
-    int drawW = boxW;
-    int drawH = boxH;
-    int drawX = boxX;
-    int drawY = boxY;
+    float drawW = boxW;
+    float drawH = boxH;
+    float drawX = boxX;
+    float drawY = boxY;
 
     if (m_fit == ImageFit::Contain) {
         const float srcAspect = static_cast<float>(srcW) / static_cast<float>(srcH);
@@ -103,18 +103,33 @@ void Image::draw(Canvas& canvas, const Rect& damageRect) {
 
         if (srcAspect > boxAspect) {
             drawW = boxW;
-            drawH = std::max(1, static_cast<int>(std::round(static_cast<float>(drawW) / srcAspect)));
+            drawH = std::max(1.0f, drawW / srcAspect);
         } else {
             drawH = boxH;
-            drawW = std::max(1, static_cast<int>(std::round(static_cast<float>(drawH) * srcAspect)));
+            drawW = std::max(1.0f, drawH * srcAspect);
+        }
+
+        drawX = boxX + (boxW - drawW) / 2;
+        drawY = boxY + (boxH - drawH) / 2;
+    } else if (m_fit == ImageFit::Cover) {
+        const float srcAspect = static_cast<float>(srcW) / static_cast<float>(srcH);
+        const float boxAspect = static_cast<float>(boxW) / static_cast<float>(boxH);
+
+        if (srcAspect > boxAspect) {
+            drawH = boxH;
+            drawW = std::max(1.0f, drawH * srcAspect);
+        } else {
+            drawW = boxW;
+            drawH = std::max(1.0f, drawW / srcAspect);
         }
 
         drawX = boxX + (boxW - drawW) / 2;
         drawY = boxY + (boxH - drawH) / 2;
     }
 
-    canvas.drawBuffer(drawX, drawY, srcW, srcH, m_sourceImage->pixels.data(), srcW,
-                      m_opacity, m_cornerRadius, m_cornerRoundness, false, drawW, drawH);
+    canvas.drawBuffer({drawX, drawY, drawW, drawH}, srcW, srcH,
+                      m_sourceImage->pixels.data(), srcW, m_opacity,
+                      m_cornerRadius, m_cornerRoundness, false);
 
     drawChildren(canvas, damageRect);
     endPresentation(canvas);

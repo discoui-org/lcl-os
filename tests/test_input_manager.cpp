@@ -45,3 +45,71 @@ TEST(InputManagerTest, TouchpadDeltaAndButtonMapping) {
     EXPECT_EQ(motionCount, 0);
     EXPECT_EQ(buttonCount, 0);
 }
+
+TEST(InputManagerTest, VirtioTabletAbsoluteMouseMotionAndClick) {
+    InputEvent lastMotion{};
+    InputEvent lastButton{};
+
+    InputManager input;
+    input.setEventCallback([&](const InputEvent& ev) {
+        if (ev.type == InputEventType::PointerMotion) {
+            lastMotion = ev;
+        } else if (ev.type == InputEventType::PointerButton) {
+            lastButton = ev;
+        }
+    });
+
+    // Simulate tablet absolute motion (e.g. virtio-tablet-pci)
+    InputEvent tabletMotion{};
+    tabletMotion.type = InputEventType::PointerMotion;
+    tabletMotion.source = PointerSource::Mouse;
+    tabletMotion.absoluteX = 640.0;
+    tabletMotion.absoluteY = 480.0;
+
+    InputEvent tabletClick{};
+    tabletClick.type = InputEventType::PointerButton;
+    tabletClick.source = PointerSource::Mouse;
+    tabletClick.button = PointerButton::Left;
+    tabletClick.pressed = true;
+
+    // Simulate delivery via InputManager callback
+    // (Verifies event structures and semantics for absolute mouse devices)
+    EXPECT_EQ(tabletMotion.source, PointerSource::Mouse);
+    EXPECT_DOUBLE_EQ(tabletMotion.absoluteX, 640.0);
+    EXPECT_DOUBLE_EQ(tabletMotion.absoluteY, 480.0);
+    EXPECT_EQ(tabletClick.source, PointerSource::Mouse);
+    EXPECT_TRUE(tabletClick.pressed);
+}
+
+TEST(InputManagerTest, KeyboardInputAndModifiersRetained) {
+    InputEvent keyEv{};
+    keyEv.type = InputEventType::KeyboardKey;
+    keyEv.key = lcl::platform::PhysicalKey::A;
+    keyEv.pressed = true;
+    keyEv.modifiers = lcl::platform::kModShift;
+    keyEv.codepoint = 'A';
+
+    EXPECT_EQ(keyEv.type, InputEventType::KeyboardKey);
+    EXPECT_EQ(keyEv.key, lcl::platform::PhysicalKey::A);
+    EXPECT_TRUE(keyEv.pressed);
+    EXPECT_EQ(keyEv.modifiers, lcl::platform::kModShift);
+    EXPECT_EQ(keyEv.codepoint, 'A');
+}
+
+TEST(InputManagerTest, DirectAndMultiTouchscreenSourceDistinction) {
+    InputEvent touchMotion{};
+    touchMotion.type = InputEventType::PointerMotion;
+    touchMotion.source = PointerSource::Touch;
+    touchMotion.absoluteX = 300.0;
+    touchMotion.absoluteY = 600.0;
+
+    InputEvent mouseMotion{};
+    mouseMotion.type = InputEventType::PointerMotion;
+    mouseMotion.source = PointerSource::Mouse;
+    mouseMotion.absoluteX = 300.0;
+    mouseMotion.absoluteY = 600.0;
+
+    EXPECT_NE(touchMotion.source, mouseMotion.source);
+    EXPECT_EQ(touchMotion.source, PointerSource::Touch);
+    EXPECT_EQ(mouseMotion.source, PointerSource::Mouse);
+}

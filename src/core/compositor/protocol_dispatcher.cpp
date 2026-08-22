@@ -15,12 +15,6 @@
 
 namespace lcl::core {
 namespace {
-int logicalToPhysical(int value, float scale) {
-    return static_cast<int>(std::lround(static_cast<float>(value) * scale));
-}
-uint32_t physicalToLogical(uint32_t value, float scale) {
-    return std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(value) / scale)));
-}
 protocol::LCLMsgShellScene toWireScene(const SceneRecord& scene) {
     protocol::LCLMsgShellScene wire{};
     wire.sceneId = scene.id;
@@ -116,25 +110,27 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         }
     };
     auto mapSurface = [&](SurfaceRegistry::Key surfaceKey, SurfaceEntry& entry, pid_t clientPid) {
-        if (entry.windowId != 0 || !entry.hasRenderableBuffer() || entry.width == 0 || entry.height == 0) {
+        if (entry.isPopup() || entry.windowId != 0 || !entry.hasRenderableBuffer() ||
+            entry.width == 0 || entry.height == 0) {
             return false;
         }
 
         const auto decorationMode = toRenderDecorationMode(entry.decorationMode);
         const int titleOffset = decorationMode == render::DecorationMode::SSD
-            ? DisplayScale::titleBarHeight()
+            ? 32
             : 0;
         entry.windowId = m_windowManager.createWindow(
             entry.title, entry.initialX, entry.initialY,
-            static_cast<int>(entry.width), static_cast<int>(entry.height) + titleOffset,
+            entry.initialWidth,
+            entry.initialHeight + static_cast<float>(titleOffset),
             ::lcl::theme::UI::WindowTitleFocused, !entry.unfocusable);
         m_windowManager.setDecorationMode(entry.windowId, decorationMode);
         m_windowManager.setEdgeToEdge(entry.windowId, entry.edgeToEdge);
         m_windowManager.setWindowLayer(entry.windowId, entry.layer, entry.unfocusable);
         m_windowManager.setInsetBorderEnabled(entry.windowId, entry.insetBorderEnabled);
         m_windowManager.setResizePresentationMode(entry.windowId, entry.resizePresentation);
-        if (entry.cornerRadiusPx >= 0.0f) {
-            m_windowManager.setWindowCornerStyle(entry.windowId, entry.cornerRadiusPx,
+        if (entry.cornerRadius >= 0.0f) {
+            m_windowManager.setWindowCornerStyle(entry.windowId, entry.cornerRadius,
                                                   entry.cornerRoundness);
         }
 
@@ -180,9 +176,30 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         return true;
     };
 
+    auto destroyPopupChildren = [&](uint64_t parentSurfaceKey) {
+        for (const auto childKey : m_surfaces.popupChildren(parentSurfaceKey)) {
+            auto child = m_surfaces.find(childKey);
+            if (child == m_surfaces.end()) continue;
+            if (child->second.clientFd >= 0) {
+                lcl::protocol::LCLHeader header{};
+                header.opcode = lcl::protocol::LCLOpcode::SurfaceDestroy;
+                header.payloadSize = sizeof(lcl::protocol::LCLMsgSurfaceDestroy);
+                lcl::protocol::LCLMsgSurfaceDestroy destroy{};
+                destroy.surfaceId = static_cast<uint32_t>(childKey & 0xFFFFFFFFu);
+                lcl::protocol::sendMsgWithFd(child->second.clientFd, header, &destroy);
+            }
+            child->second.ignoreBufferCommits = true;
+            child->second.pendingDestroy = true;
+            m_surfaces.releaseKeyboardFocus(childKey);
+            changed = true;
+        }
+    };
+
     auto requestSurfaceClose = [&](uint64_t surfaceKey, uint32_t surfaceId) {
         auto it = m_surfaces.find(surfaceKey);
         if (it == m_surfaces.end()) return;
+
+        destroyPopupChildren(surfaceKey);
 
         // Ask the client to stop its loop while compositor animates its frozen
         // last frame.  All close entry points use this same transition path.
@@ -195,7 +212,12 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             lcl::protocol::sendMsgWithFd(it->second.clientFd, destroyHeader, &destroyMsg);
         }
 
-        if (beginClosingTransition(it->second)) {
+        m_surfaces.releaseKeyboardFocus(surfaceKey);
+        if (it->second.isPopup()) {
+            it->second.ignoreBufferCommits = true;
+            it->second.pendingDestroy = true;
+            changed = true;
+        } else if (beginClosingTransition(it->second)) {
             if (it->second.windowId > 0) {
                 m_windowManager.removeWindow(it->second.windowId);
             }
@@ -212,14 +234,28 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             m_pendingSystemSurfaceKinds.erase(msg.clientFd);
             m_shellSubscriptions.erase(msg.clientFd);
             std::vector<uint64_t> surfacesToRemove;
+            std::vector<uint64_t> ownedParentSurfaces;
+            for (const auto& [surfKey, entry] : m_surfaces) {
+                if (SurfaceRegistry::isOwnedByClientConnection(entry, msg.clientFd) &&
+                    !entry.isPopup()) {
+                    ownedParentSurfaces.push_back(surfKey);
+                }
+            }
+            for (const auto parentKey : ownedParentSurfaces) {
+                destroyPopupChildren(parentKey);
+            }
             for (auto& [surfKey, entry] : m_surfaces) {
                 // One process can own wallpaper, menu and Dock over separate
                 // sockets. Closing one WindowApp must not tear down every
                 // surface sharing that PID; process exit closes each socket
                 // and therefore still cleans all of them deterministically.
                 if (SurfaceRegistry::isOwnedByClientConnection(entry, msg.clientFd)) {
+                    m_surfaces.releaseKeyboardFocus(surfKey);
                     entry.clientFd = -1;
-                    if (beginClosingTransition(entry)) {
+                    if (entry.isPopup()) {
+                        entry.ignoreBufferCommits = true;
+                        entry.pendingDestroy = true;
+                    } else if (beginClosingTransition(entry)) {
                         if (entry.windowId > 0) m_windowManager.removeWindow(entry.windowId);
                         surfacesToRemove.push_back(surfKey);
                     } else {
@@ -240,6 +276,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 
         // --- SURFACE_CREATE: register a window on the compositor canvas ---
         const bool isSurfaceCreate = msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceCreate;
+        const bool isPopupSurfaceCreate =
+            msg.header.opcode == lcl::protocol::LCLOpcode::PopupSurfaceCreate;
         const bool isAttachBuffer = msg.header.opcode == lcl::protocol::LCLOpcode::AttachBuffer;
         const bool isAttachDmaBuf = msg.header.opcode == lcl::protocol::LCLOpcode::AttachDmaBuf;
 
@@ -273,14 +311,78 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             continue;
         }
 
-        if (isSurfaceCreate) {
+        if (isPopupSurfaceCreate) {
+            const auto* popup = reinterpret_cast<const lcl::protocol::LCLMsgPopupSurfaceCreate*>(
+                msg.payload.data());
+            const auto owner = static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd);
+            const uint64_t surfaceKey = (owner << 32) | popup->surfaceId;
+            const uint64_t parentKey = (owner << 32) | popup->parentSurfaceId;
+            const auto parent = m_surfaces.find(parentKey);
+            if (parent == m_surfaces.end() || parent->second.isPopup() ||
+                parent->second.pendingDestroy || parent->second.ignoreBufferCommits ||
+                parent->second.transitionPhase == SurfaceEntry::TransitionPhase::Closing) {
+                requestAck.error(7, "popup parent surface is unavailable");
+                continue;
+            }
+            const uint32_t parentWindowId = parent->second.windowId;
+            if (m_surfaces.contains(surfaceKey)) {
+                requestAck.error(8, "popup surface ID is already registered");
+                continue;
+            }
+
+            SurfaceEntry entry{};
+            entry.parentSurfaceKey = parentKey;
+            entry.popupRole = popup->role;
+            entry.popupX = popup->x;
+            entry.popupY = popup->y;
+            entry.popupOrder = m_surfaces.allocatePopupOrder();
+            entry.initialWidth = popup->width;
+            entry.initialHeight = popup->height;
+            entry.clientFd = msg.clientFd;
+            entry.bufferScale = m_renderer.getRasterRenderer()->getDeviceScale();
+            entry.decorationMode = protocol::LCLDecorationMode::None;
+            entry.insetBorderEnabled = true;
+            entry.suppressInitialTransition = true;
+            m_surfaces[surfaceKey] = std::move(entry);
+            if (parentWindowId != 0) {
+                m_windowManager.focusWindow(parentWindowId);
+            }
+            m_surfaces.focusKeyboardSurface(surfaceKey);
+
+            protocol::LCLHeader header{};
+            header.opcode = protocol::LCLOpcode::ConfigureBounds;
+            header.payloadSize = sizeof(protocol::LCLMsgConfigureBounds);
+            protocol::LCLMsgConfigureBounds configure{};
+            auto& configured = m_surfaces[surfaceKey];
+            configure.surfaceId = popup->surfaceId;
+            configure.configureSerial = configured.nextConfigureSerial++;
+            configure.x = popup->x;
+            configure.y = popup->y;
+            configure.width = popup->width;
+            configure.height = popup->height;
+            configure.backingWidth = popup->width;
+            configure.backingHeight = popup->height;
+            configure.bufferScale = configured.bufferScale;
+            configure.resizeReason = protocol::LCLConfigureResizeReason::Initial;
+            configure.isFocused = 1;
+            configured.pendingConfigureSerial = configure.configureSerial;
+            configured.configuredX = configured.popupX;
+            configured.configuredY = configured.popupY;
+            configured.configuredWidth = configured.initialWidth;
+            configured.configuredHeight = configured.initialHeight;
+            configured.configuredFocused = configure.isFocused;
+            protocol::sendMsgWithFd(msg.clientFd, header, &configure);
+            m_pendingSystemSurfaceKinds.erase(msg.clientFd);
+            changed = true;
+
+        } else if (isSurfaceCreate) {
             uint32_t surfId = 1;
             std::string title = "LCL Application";
-            int winX = DisplayScale::px(80);
-            int winY = DisplayScale::px(60);
-            int winW = DisplayScale::px(540);
-            int winH = DisplayScale::px(360);
-            float bufferScale = 1.0f;
+            float winX = 80.0f;
+            float winY = 60.0f;
+            float winW = 540.0f;
+            float winH = 360.0f;
+            const float bufferScale = m_renderer.getRasterRenderer()->getDeviceScale();
             protocol::LCLResizePresentationMode resizePresentation =
                 protocol::LCLResizePresentationMode::CompositorMorph;
 
@@ -288,12 +390,13 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
                 surfId = sm->surfaceId;
                 if (sm->title[0]) title = sm->title;
-                bufferScale = sm->bufferScale;
                 resizePresentation = sm->resizePresentation;
-                winX = logicalToPhysical(sm->x, bufferScale);
-                winY = logicalToPhysical(sm->y, bufferScale);
-                winW = (sm->width > 0) ? logicalToPhysical(static_cast<int>(sm->width), bufferScale) : static_cast<int>(m_renderer.getWidth());
-                winH = (sm->height > 0) ? logicalToPhysical(static_cast<int>(sm->height), bufferScale) : static_cast<int>(m_renderer.getHeight());
+                winX = sm->x;
+                winY = sm->y;
+                winW = (sm->width > 0.0f) ? sm->width
+                                          : m_windowManager.getScreenWidth();
+                winH = (sm->height > 0.0f) ? sm->height
+                                           : m_windowManager.getScreenHeight();
             }
 
             auto kindIt = m_pendingSystemSurfaceKinds.find(msg.clientFd);
@@ -303,7 +406,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     : protocol::LCLSystemSurfaceKind::None;
             const auto systemPolicy = SystemSurfacePolicyRegistry::policyFor(requestedSystemKind);
             SystemSurfacePolicyRegistry::applyInitialPlacement(
-                systemPolicy, m_renderer.getWidth(), m_renderer.getHeight(),
+                systemPolicy, m_windowManager.getScreenWidth(),
+                m_windowManager.getScreenHeight(),
                 winX, winY, winW, winH);
 
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
@@ -312,8 +416,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.title = title;
                 entry.initialX = winX;
                 entry.initialY = winY;
-                entry.initialWidth = static_cast<uint32_t>(winW);
-                entry.initialHeight = static_cast<uint32_t>(winH);
+                entry.initialWidth = winW;
+                entry.initialHeight = winH;
                 entry.resizePresentation = resizePresentation;
                 entry.systemSurfaceKind = requestedSystemKind;
                 entry.suppressInitialTransition = systemPolicy.suppressInitialTransition;
@@ -344,10 +448,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             auto& configuredEntry = m_surfaces[surfaceKey];
             cfgMsg.configureSerial = configuredEntry.nextConfigureSerial++;
             configuredEntry.pendingConfigureSerial = cfgMsg.configureSerial;
-            cfgMsg.x = logicalToPhysical(winX, 1.0f / bufferScale);
-            cfgMsg.y = logicalToPhysical(winY, 1.0f / bufferScale);
-            cfgMsg.width = physicalToLogical(static_cast<uint32_t>(winW), bufferScale);
-            cfgMsg.height = physicalToLogical(static_cast<uint32_t>(winH), bufferScale);
+            cfgMsg.x = winX;
+            cfgMsg.y = winY;
+            cfgMsg.width = winW;
+            cfgMsg.height = winH;
             cfgMsg.backingWidth = cfgMsg.width;
             cfgMsg.backingHeight = cfgMsg.height;
             cfgMsg.bufferScale = bufferScale;
@@ -356,8 +460,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 
             configuredEntry.configuredX = winX;
             configuredEntry.configuredY = winY;
-            configuredEntry.configuredWidth = static_cast<uint32_t>(winW);
-            configuredEntry.configuredHeight = static_cast<uint32_t>(winH);
+            configuredEntry.configuredWidth = winW;
+            configuredEntry.configuredHeight = winH;
             configuredEntry.configuredFocused = cfgMsg.isFocused;
 
             protocol::sendMsgWithFd(msg.clientFd, header, &cfgMsg);
@@ -404,7 +508,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             descriptor.stride = bufferMessage->stride;
             descriptor.format = bufferMessage->format;
             descriptor.modifier = bufferMessage->modifier;
-            const uint32_t texture = m_renderer.getSkiaRenderer()->importDmaBuf(descriptor);
+            const uint32_t texture = m_renderer.getRasterRenderer()->importDmaBuf(descriptor);
             close(msg.passedFd);
             if (texture == 0) {
                 // Keep the client pool live when a compositor lacks DMA-BUF
@@ -469,24 +573,35 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.resizeCrossfadeElapsedSec = 0.0f;
                 entry.resizeCrossfadeProgress = 0.0f;
             }
-            if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) continue;
+            if (entry.isPopup()) {
+                entry.hasCommittedBuffer = true;
+            } else if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) {
+                continue;
+            }
+
+            if (entry.isPopup()) {
+                SurfaceRegistry::queueLivePresentation(entry, bufferMessage->configureSerial);
+                changed = true;
+                continue;
+            }
 
             int titleOffset = 0;
             for (const auto& win : m_windowManager.getWindows()) {
                 if (win.id == entry.windowId && win.decorationMode == render::DecorationMode::SSD) {
-                    titleOffset = DisplayScale::titleBarHeight();
+                    titleOffset = 32;
                     break;
                 }
             }
-            const int frameW = static_cast<int>(entry.width);
-            const int frameH = static_cast<int>(entry.height) + titleOffset;
+            const float frameW = entry.configuredWidth;
+            const float frameH = entry.configuredHeight + static_cast<float>(titleOffset);
             bool preserveNewerTarget = false;
             const auto configuredWindow = std::find_if(
                 m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
                 [&entry](const auto& window) { return window.id == entry.windowId; });
             if (configuredWindow != m_windowManager.getWindows().end()) {
-                const int configuredFrameHeight = static_cast<int>(entry.configuredHeight) + titleOffset;
-                preserveNewerTarget = configuredWindow->pendingWidth != static_cast<int>(entry.configuredWidth) ||
+                const float configuredFrameHeight =
+                    entry.configuredHeight + static_cast<float>(titleOffset);
+                preserveNewerTarget = configuredWindow->pendingWidth != entry.configuredWidth ||
                     configuredWindow->pendingHeight != configuredFrameHeight;
             }
             m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH,
@@ -624,8 +739,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             // successfully mapped SHM buffer while retrying its first commit;
             // the surface must then become visible as soon as that buffer is
             // known to be valid.
-            if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) {
+            if (entry.isPopup()) {
+                entry.hasCommittedBuffer = true;
+            } else if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) {
                 // The first visible commit must include a real shared buffer.
+                continue;
+            }
+
+            if (entry.isPopup()) {
+                changed = true;
                 continue;
             }
 
@@ -634,24 +756,24 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             for (const auto& win : m_windowManager.getWindows()) {
                 if (win.id == entry.windowId) {
                     if (win.decorationMode == render::DecorationMode::SSD) {
-                        titleOffset = DisplayScale::titleBarHeight();
+                        titleOffset = 32;
                     }
                     break;
                 }
             }
 
             // Notify WindowManager of client surface buffer commit
-            int frameW = static_cast<int>(w);
-            int frameH = static_cast<int>(h) + titleOffset;
+            const float frameW = entry.configuredWidth;
+            const float frameH = entry.configuredHeight + static_cast<float>(titleOffset);
             bool preserveNewerTarget = false;
             const auto configuredWindow = std::find_if(
                 m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
                 [&entry](const auto& window) { return window.id == entry.windowId; });
             if (configuredWindow != m_windowManager.getWindows().end()) {
-                const int configuredFrameHeight =
-                    static_cast<int>(entry.configuredHeight) + titleOffset;
+                const float configuredFrameHeight =
+                    entry.configuredHeight + static_cast<float>(titleOffset);
                 preserveNewerTarget =
-                    configuredWindow->pendingWidth != static_cast<int>(entry.configuredWidth) ||
+                    configuredWindow->pendingWidth != entry.configuredWidth ||
                     configuredWindow->pendingHeight != configuredFrameHeight;
             }
             m_windowManager.commitSurfaceGeometry(
@@ -718,10 +840,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
                 [windowId](const auto& window) { return window.id == windowId; });
             const bool hasCurrentWindow = currentWindow != m_windowManager.getWindows().end();
-            const int rollbackX = hasCurrentWindow ? currentWindow->x : 0;
-            const int rollbackY = hasCurrentWindow ? currentWindow->y : 0;
-            const int rollbackWidth = hasCurrentWindow ? currentWindow->width : 0;
-            const int rollbackHeight = hasCurrentWindow ? currentWindow->height : 0;
+            const float rollbackX = hasCurrentWindow ? currentWindow->x : 0.0f;
+            const float rollbackY = hasCurrentWindow ? currentWindow->y : 0.0f;
+            const float rollbackWidth = hasCurrentWindow ? currentWindow->width : 0.0f;
+            const float rollbackHeight = hasCurrentWindow ? currentWindow->height : 0.0f;
             const bool rollbackWasMaximized = hasCurrentWindow && currentWindow->isMaximized;
             const bool rollbackWasMinimized = hasCurrentWindow && currentWindow->isMinimized;
             const bool compositorMorph = surfaceIt->second.resizePresentation ==
@@ -741,9 +863,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             switch (request->action) {
                 case lcl::protocol::LCLWindowAction::BeginDrag:
                     if (const auto interaction = m_windowManager.beginWindowDrag(
-                        windowId,
-                        logicalToPhysical(static_cast<int>(std::lround(request->localX)), surfaceIt->second.bufferScale),
-                        logicalToPhysical(static_cast<int>(std::lround(request->localY)), surfaceIt->second.bufferScale))) {
+                        windowId, request->localX, request->localY)) {
                         SurfaceRegistry::interruptGeometryTransaction(
                             surfaceIt->second, interaction.generation);
                         changed = true;
@@ -791,9 +911,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end() && it->second.windowId > 0) {
                     if (const auto interaction = m_windowManager.beginWindowDrag(
-                        it->second.windowId,
-                        logicalToPhysical(static_cast<int>(std::lround(moveMsg->localX)), it->second.bufferScale),
-                        logicalToPhysical(static_cast<int>(std::lround(moveMsg->localY)), it->second.bufferScale))) {
+                        it->second.windowId, moveMsg->localX, moveMsg->localY)) {
                         SurfaceRegistry::interruptGeometryTransaction(
                             it->second, interaction.generation);
                         changed = true;
@@ -863,10 +981,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | radiusMsg->surfaceId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
-                    it->second.cornerRadiusPx = radiusMsg->radiusPx * it->second.bufferScale;
+                    it->second.cornerRadius = radiusMsg->radius;
                     if (it->second.windowId != 0) {
                         m_windowManager.setWindowCornerStyle(it->second.windowId,
-                                                              it->second.cornerRadiusPx,
+                                                              it->second.cornerRadius,
                                                               it->second.cornerRoundness);
                     }
                     changed = true;
@@ -879,11 +997,11 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | styleMsg->surfaceId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
-                    it->second.cornerRadiusPx = styleMsg->radiusPx * it->second.bufferScale;
+                    it->second.cornerRadius = styleMsg->radius;
                     it->second.cornerRoundness = std::clamp(styleMsg->roundness, 2.0f, 8.0f);
                     if (it->second.windowId != 0) {
                         m_windowManager.setWindowCornerStyle(it->second.windowId,
-                                                              it->second.cornerRadiusPx,
+                                                              it->second.cornerRadius,
                                                               it->second.cornerRoundness);
                     }
                     changed = true;
@@ -983,17 +1101,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 }
 
 void ProtocolDispatcher::recomputeSystemReservedZone() {
-    uint32_t top = 0;
-    uint32_t bottom = 0;
-    for (const auto& [_, surface] : m_surfaces) {
-        if (surface.windowId == 0) continue;
-        if (surface.systemSurfaceKind == protocol::LCLSystemSurfaceKind::MenuBar) {
-            top = std::max(top, surface.height);
-        } else if (surface.systemSurfaceKind == protocol::LCLSystemSurfaceKind::Dock) {
-            bottom = std::max(bottom, surface.height);
-        }
-    }
-    m_windowManager.setReservedZone(top, bottom, 0, 0);
+    const auto zone = SystemSurfacePolicyRegistry::computeReservedZone(m_surfaces);
+    m_windowManager.setReservedZone(zone.top, zone.bottom, 0.0f, 0.0f);
 }
 
 void ProtocolDispatcher::publishShellStateToSubscribers() {

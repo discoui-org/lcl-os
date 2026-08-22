@@ -1,4 +1,7 @@
 #include "lcl-ui/widgets/text.hpp"
+#include "render/text_metrics.hpp"
+
+#include <algorithm>
 
 namespace lcl::ui {
 
@@ -18,24 +21,32 @@ void Text::setFontSize(float size) {
     markDirty();
 }
 
+void Text::setFontFamily(graphics::FontFamily family) {
+    if (m_fontFamily == family) return;
+    m_fontFamily = family;
+    updateMeasureFunc();
+    markDirty();
+}
+
 void Text::updateMeasureFunc() {
     m_yogaNode.setMeasureFunc([this](float width, YGMeasureMode widthMode, float height, YGMeasureMode heightMode) {
         (void)width; (void)widthMode; (void)height; (void)heightMode;
-        float charWidth = m_fontSize * 0.6f;
-        float measuredW = static_cast<float>(m_text.length()) * charWidth;
+        const float measuredW = lcl::render::text_metrics::measureText(
+            m_text, m_fontSize, m_fontFamily);
         float measuredH = m_fontSize * 1.2f;
         return YGSize{measuredW, measuredH};
     });
+    m_yogaNode.markDirty();
 }
 
-void Text::draw(Canvas& canvas, const Rect& damageRect) {
+void Text::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect) || m_text.empty()) return;
 
     beginPresentation(canvas);
 
-    // Keep text alignment in logical coordinates; Canvas applies the selected
+    // Keep text alignment in logical coordinates; graphics::Canvas applies the selected
     // backend's logical-to-buffer transform afterwards.
-    const float textWidth = canvas.measureText(m_text, m_fontSize);
+    const float textWidth = canvas.measureText(m_text, m_fontSize, m_fontFamily);
     float textX = m_absoluteBounds.x;
     if (m_textAlign == TextAlign::Center) {
         textX += std::max(0.0f, (m_absoluteBounds.width - textWidth) * 0.5f);
@@ -46,9 +57,11 @@ void Text::draw(Canvas& canvas, const Rect& damageRect) {
         // Keep one glyph raster stable for the entire transform. Once the
         // animation settles the normal path below is used again, producing a
         // fresh, pixel-aligned final render instead of scaling forever.
-        canvas.drawRasterizedText(textX, m_absoluteBounds.y, m_text, m_textColor, m_fontSize);
+        canvas.drawRasterizedText(textX, m_absoluteBounds.y, m_text, m_textColor,
+                                  m_fontSize, m_fontFamily);
     } else {
-        canvas.drawText(textX, m_absoluteBounds.y, m_text, m_textColor, m_fontSize);
+        canvas.drawText(textX, m_absoluteBounds.y, m_text, m_textColor,
+                        m_fontSize, m_fontFamily);
     }
     drawChildren(canvas, damageRect);
     endPresentation(canvas);

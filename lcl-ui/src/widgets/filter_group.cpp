@@ -28,7 +28,7 @@ void FilterGroup::setOpacity(float opacity) {
 
 void FilterGroup::collectEffects(std::vector<EffectRegion>& outEffects) const {
     if (isVisible() && !m_filters.empty()) {
-        const Rect abs = getAbsoluteBounds();
+        const graphics::RectF abs = getAbsoluteBounds();
         if (!abs.isEmpty()) {
             EffectRegion region;
             region.bounds = abs;

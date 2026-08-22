@@ -32,9 +32,6 @@ bool DesktopPlatformServices::initialize() {
         }
     }
 
-    // 3. Hardware cursor plane setup
-    m_displayBackend.initHardwareCursor(64, 64);
-
     m_initialized = true;
     return true;
 }

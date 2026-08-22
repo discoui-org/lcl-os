@@ -80,30 +80,50 @@ bool PTYManager::spawnShell(const std::string& shellPath) {
             if (slaveFd > STDERR_FILENO) close(slaveFd);
         }
 
-        // Set HOME environment variable and change working directory to /home/user
-        const char* userHome = "/home/user";
+        // Set HOME environment variable and change working directory to canonical /Users/Rei
+        const char* userHome = "/Users/Rei";
         struct stat st{};
         if (stat(userHome, &st) == 0 && S_ISDIR(st.st_mode)) {
             chdir(userHome);
             setenv("HOME", userHome, 1);
             setenv("PWD", userHome, 1);
+            setenv("USER", "Rei", 1);
+        } else if (stat("/home/user", &st) == 0 && S_ISDIR(st.st_mode)) {
+            chdir("/home/user");
+            setenv("HOME", "/home/user", 1);
+            setenv("PWD", "/home/user", 1);
+            setenv("USER", "user", 1);
         } else {
             setenv("HOME", "/", 1);
+            setenv("USER", "Rei", 1);
         }
         setenv("TERM", "xterm-256color", 1);
         setenv("PS1", "\\W \xe2\x9d\xaf ", 1);
-        setenv("BASH_ENV", "/home/user/.bashrc", 1);
 
-        // Prefer bash for interactive use; fall back through specified shell to /bin/sh
-        char* const bashArgv[] = {
-            const_cast<char*>("/usr/bin/bash"),
-            const_cast<char*>("--login"),
-            const_cast<char*>("-i"),
-            nullptr
+        const char* currentHome = getenv("HOME") ? getenv("HOME") : "/Users/Rei";
+        std::string bashrcPath = std::string(currentHome) + "/.bashrc";
+        setenv("BASH_ENV", bashrcPath.c_str(), 1);
+
+        // Platform-independent system shell resolution
+        const char* shellCandidates[] = {
+            "/System/Tools/bash",
+            "/System/Core/bash",
+            "/usr/bin/bash",
+            "/bin/bash"
         };
-        execv("/usr/bin/bash", bashArgv);
+        for (const char* shPath : shellCandidates) {
+            if (stat(shPath, &st) == 0 && (st.st_mode & S_IXUSR)) {
+                char* const bashArgv[] = {
+                    const_cast<char*>(shPath),
+                    const_cast<char*>("--login"),
+                    const_cast<char*>("-i"),
+                    nullptr
+                };
+                execv(shPath, bashArgv);
+            }
+        }
 
-        // Use caller-specified shell if bash not available
+        // Use caller-specified shell if candidate list not available
         if (!shellPath.empty() && shellPath != "/bin/sh") {
             char* const specArgv[] = {
                 const_cast<char*>(shellPath.c_str()),

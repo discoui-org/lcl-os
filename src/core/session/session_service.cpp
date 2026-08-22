@@ -20,9 +20,15 @@ namespace {
 constexpr size_t kReceiveBufferSize = kSessionWireHeaderSize + kSessionMaxPayload;
 
 std::vector<std::string> executableArgs(const core::AppBundleMetadata& app) {
-    if (app.executablePath.size() >= 3 &&
-        app.executablePath.substr(app.executablePath.size() - 3) == ".js") {
-        return {"/usr/bin/lcl-js", app.executablePath};
+    if (app.runtime == "org.lcl.javascript" ||
+        (app.executablePath.size() >= 3 &&
+         app.executablePath.substr(app.executablePath.size() - 3) == ".js")) {
+        std::string jsRuntime = "/System/Core/lcl-js";
+        std::error_code ec;
+        if (!std::filesystem::exists(jsRuntime, ec)) {
+            jsRuntime = "/usr/bin/lcl-js";
+        }
+        return {jsRuntime, app.executablePath};
     }
     return {app.executablePath};
 }

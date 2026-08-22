@@ -38,7 +38,8 @@ The following behavior is part of the baseline and must remain:
 - Terminal rendering stays in `TerminalView` under `WindowApp`; the previous
   handwritten terminal socket/frame renderer is not restored.
 - Widgets draw through the backend-neutral `Canvas` contract.
-- CSD and SSD use the shared window-chrome geometry and window-action contract.
+- CSD and SSD host the same renderer-independent `WindowChromeWidget` for
+  geometry, hit testing, actions, interaction state, motion, and visual colors.
 
 The following compatibility bridges have been removed after their replacement
 paths received equivalent revisioned-state coverage:
@@ -52,14 +53,16 @@ paths received equivalent revisioned-state coverage:
   process owner.
 - EGL/DRM/GBM/GLES and renderer sources compiled directly into `lcl-ui`.
 - The old `Renderer`/VGA path and the current combined client/compositor
-  `SkiaRenderer` implementation.
+  `RasterRenderer` implementation.
 
 ## Behavioral contract
 
 ### Terminal
 
-- The terminal uses client-side decoration with the shared titlebar layout.
-- Titlebar controls have the same geometry and antialiasing as the SSD controls.
+- The terminal uses compositor-owned SSD controls with edge-to-edge material;
+  its outer-surface backdrop material extends beneath the titlebar.
+- The terminal client buffer is content-only. Titlebar layout, hit testing,
+  actions, motion, and painting stay on the compositor's single SSD path.
 - The terminal root and backdrop remain passive: hovering or clicking the
   window background must not brighten the entire window like a button.
 - Backdrop blur/glass and translucency remain visible over the wallpaper.
@@ -133,7 +136,7 @@ Step 2 separates build ownership without changing protocol or shell behavior:
 - `lcl-ui` now contains only widgets, Yoga layout, event/render-pass logic,
   `WindowApp`, image loading, and IPC/SHM client lifecycle.
 - `lcl-display-scale` owns the shared logical-pixel policy.
-- `lcl-canvas-skia` owns the client Canvas and font renderer. It first tries a
+- `lcl-raster` owns the client Canvas and font renderer. It first tries a
   render-node-only EGL/GLES context for GPU drawing, then reads that frame into
   the existing SHM staging buffer. If no audited hardware renderer is available
   it falls back to the software raster path. It never opens a KMS scanout card
@@ -141,10 +144,10 @@ Step 2 separates build ownership without changing protocol or shell behavior:
 - `lcl-render` owns compositor rendering, window management, EGL, DRM, GBM,
   GLES, and presentation.
 - `WindowApp` requires an injected Canvas. Native clients and the JS binding
-  explicitly inject `makeSkiaCanvas()`.
+  explicitly inject `makeRasterCanvas()`.
 
 The boundary gate proves that `liblcl-ui.a` has no EGL/DRM/GBM/GLES dependency.
-Client executables may link those libraries solely through `lcl-canvas-skia`;
+Client executables may link those libraries solely through `lcl-raster`;
 the client context must use `/dev/dri/renderD*`, while KMS scanout and display
 presentation remain exclusively in `lcl-render`.
 

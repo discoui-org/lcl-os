@@ -6,7 +6,9 @@ namespace lcl::ui {
 
 std::atomic<uint64_t> Widget::s_nextObjectId{1};
 
-Widget::Widget() : m_objectId(s_nextObjectId.fetch_add(1, std::memory_order_relaxed)) {}
+Widget::Widget() : m_objectId(s_nextObjectId.fetch_add(1, std::memory_order_relaxed)) {
+    m_yogaNode.setLayoutInvalidationCallback([this] { invalidateLayout(); });
+}
 
 Widget::~Widget() {
     if (m_destructionCallback) m_destructionCallback();
@@ -150,6 +152,15 @@ bool Widget::onPointerUp(const PointerEvent& event) {
     return true;
 }
 
+bool Widget::onPointerCancel(const PointerEvent& event) {
+    (void)event;
+    if (!hasDeclarativeInteraction()) return false;
+    m_declarativePressed = false;
+    m_declarativeHovered = false;
+    applyDeclarativeInteractionState();
+    return true;
+}
+
 bool Widget::onFocusGained(const FocusEvent& event) {
     (void)event;
     if (!hasDeclarativeInteraction()) return false;
@@ -180,12 +191,54 @@ void Widget::removeChild(Widget* child) {
 }
 
 void Widget::markDirty() {
-    if (m_renderPass && m_visible) {
+    ++m_paintRevision;
+    if (m_renderPass) {
         m_renderPass->addDirtyRect(m_absoluteBounds.unionWith(getPresentationBounds()));
     }
-    if (m_parent) {
-        m_parent->markDirty();
+    if (m_parent) m_parent->propagateDescendantPaintRevision();
+}
+
+void Widget::markPresentationDirty() {
+    markPresentationDirty(getPresentationBounds());
+}
+
+void Widget::markPresentationDirty(const graphics::RectF& previousBounds) {
+    ++m_presentationRevision;
+    if (m_renderPass) {
+        m_renderPass->addDirtyRect(previousBounds);
+        m_renderPass->addDirtyRect(getPresentationBounds());
     }
+    if (m_parent) m_parent->propagateDescendantPresentationRevision();
+}
+
+void Widget::propagateDescendantPaintRevision() {
+    ++m_paintRevision;
+    if (m_parent) m_parent->propagateDescendantPaintRevision();
+}
+
+void Widget::propagateDescendantPresentationRevision() {
+    ++m_presentationRevision;
+    if (m_parent) m_parent->propagateDescendantPresentationRevision();
+}
+
+void Widget::invalidateLayout() {
+    markLayoutDirty();
+    markDirty();
+}
+
+void Widget::markLayoutDirty() {
+    m_layoutDirty = true;
+    if (m_parent) m_parent->markLayoutDirty();
+}
+
+void Widget::clearLayoutDirty() {
+    m_layoutDirty = false;
+    for (auto& child : m_children) child->clearLayoutDirty();
+}
+
+void Widget::setParentControlledTranslationY(float value) {
+    m_modelTransform.translationY = value;
+    m_presentation.translationY = value;
 }
 
 void Widget::setOpacity(float value) {
@@ -193,10 +246,9 @@ void Widget::setOpacity(float value) {
     m_opacity = value;
     if (m_motionCoordinator) {
         m_motionCoordinator->setFloat(*this, AnimatableProperty::Opacity, m_presentation.opacity, value,
-            [this](float next) { m_presentation.opacity = next; markDirty(); });
+            [this](float next) { applyPresentationValue(AnimatableProperty::Opacity, next); });
     } else {
-        m_presentation.opacity = value;
-        markDirty();
+        applyPresentationValue(AnimatableProperty::Opacity, value);
     }
 }
 
@@ -204,14 +256,16 @@ void Widget::setTranslation(float x, float y) { setTranslationX(x); setTranslati
 void Widget::setTranslationX(float value) {
     m_modelTransform.translationX = value;
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::TranslationX,
-        m_presentation.translationX, value, [this](float next) { m_presentation.translationX = next; markDirty(); });
-    else { m_presentation.translationX = value; markDirty(); }
+        m_presentation.translationX, value,
+        [this](float next) { applyPresentationValue(AnimatableProperty::TranslationX, next); });
+    else applyPresentationValue(AnimatableProperty::TranslationX, value);
 }
 void Widget::setTranslationY(float value) {
     m_modelTransform.translationY = value;
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::TranslationY,
-        m_presentation.translationY, value, [this](float next) { m_presentation.translationY = next; markDirty(); });
-    else { m_presentation.translationY = value; markDirty(); }
+        m_presentation.translationY, value,
+        [this](float next) { applyPresentationValue(AnimatableProperty::TranslationY, next); });
+    else applyPresentationValue(AnimatableProperty::TranslationY, value);
 }
 void Widget::setScale(float value) { setScale(value, value); }
 void Widget::setScale(float x, float y) {
@@ -219,16 +273,20 @@ void Widget::setScale(float x, float y) {
     m_modelTransform.scaleY = y;
     if (m_motionCoordinator) {
         m_motionCoordinator->setFloat(*this, AnimatableProperty::ScaleX, m_presentation.scaleX, x,
-            [this](float next) { m_presentation.scaleX = next; markDirty(); });
+            [this](float next) { applyPresentationValue(AnimatableProperty::ScaleX, next); });
         m_motionCoordinator->setFloat(*this, AnimatableProperty::ScaleY, m_presentation.scaleY, y,
-            [this](float next) { m_presentation.scaleY = next; markDirty(); });
-    } else { m_presentation.scaleX = x; m_presentation.scaleY = y; markDirty(); }
+            [this](float next) { applyPresentationValue(AnimatableProperty::ScaleY, next); });
+    } else {
+        applyPresentationValue(AnimatableProperty::ScaleX, x);
+        applyPresentationValue(AnimatableProperty::ScaleY, y);
+    }
 }
 void Widget::setRotation(float value) {
     m_modelTransform.rotationRadians = value;
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::Rotation,
-        m_presentation.rotationRadians, value, [this](float next) { m_presentation.rotationRadians = next; markDirty(); });
-    else { m_presentation.rotationRadians = value; markDirty(); }
+        m_presentation.rotationRadians, value,
+        [this](float next) { applyPresentationValue(AnimatableProperty::Rotation, next); });
+    else applyPresentationValue(AnimatableProperty::Rotation, value);
 }
 void Widget::setTransformOrigin(float x, float y) {
     x = std::clamp(x, 0.0f, 1.0f); y = std::clamp(y, 0.0f, 1.0f);
@@ -236,10 +294,13 @@ void Widget::setTransformOrigin(float x, float y) {
     m_modelTransform.originY = y;
     if (m_motionCoordinator) {
         m_motionCoordinator->setFloat(*this, AnimatableProperty::TransformOriginX, m_presentation.originX, x,
-            [this](float next) { m_presentation.originX = next; markDirty(); });
+            [this](float next) { applyPresentationValue(AnimatableProperty::TransformOriginX, next); });
         m_motionCoordinator->setFloat(*this, AnimatableProperty::TransformOriginY, m_presentation.originY, y,
-            [this](float next) { m_presentation.originY = next; markDirty(); });
-    } else { m_presentation.originX = x; m_presentation.originY = y; markDirty(); }
+            [this](float next) { applyPresentationValue(AnimatableProperty::TransformOriginY, next); });
+    } else {
+        applyPresentationValue(AnimatableProperty::TransformOriginX, x);
+        applyPresentationValue(AnimatableProperty::TransformOriginY, y);
+    }
 }
 
 void Widget::setWidth(float value) {
@@ -320,6 +381,7 @@ float Widget::getPresentationValue(AnimatableProperty property) const {
 }
 
 void Widget::applyPresentationValue(AnimatableProperty property, float value) {
+    const graphics::RectF previousBounds = getPresentationBounds();
     switch (property) {
         case AnimatableProperty::Opacity: m_presentation.opacity = std::clamp(value, 0.0f, 1.0f); break;
         case AnimatableProperty::TranslationX: m_presentation.translationX = value; break;
@@ -335,7 +397,7 @@ void Widget::applyPresentationValue(AnimatableProperty property, float value) {
             m_presentation.scaleY = value / std::max(0.001f, m_absoluteBounds.height); break;
         default: break;
     }
-    markDirty();
+    markPresentationDirty(previousBounds);
 }
 
 void Widget::commitModelValue(AnimatableProperty property, float value) {
@@ -363,14 +425,14 @@ lcl::motion::AnimationHandle Widget::animate(
 }
 
 void Widget::syncLayout(float parentAbsX, float parentAbsY) {
-    m_bounds = Rect{
+    m_bounds = graphics::RectF{
         m_yogaNode.getLayoutX(),
         m_yogaNode.getLayoutY(),
         m_yogaNode.getLayoutWidth(),
         m_yogaNode.getLayoutHeight()
     };
 
-    m_absoluteBounds = Rect{
+    m_absoluteBounds = graphics::RectF{
         parentAbsX + m_bounds.x,
         parentAbsY + m_bounds.y,
         m_bounds.width,
@@ -382,12 +444,12 @@ void Widget::syncLayout(float parentAbsX, float parentAbsY) {
     }
 }
 
-Rect Widget::getPresentationBounds() const {
-    Rect result = m_absoluteBounds;
+graphics::RectF Widget::getPresentationBounds() const {
+    graphics::RectF result = m_absoluteBounds;
     const Widget* current = this;
     while (current) {
         const auto& p = current->m_presentation;
-        const Rect basis = current->m_absoluteBounds;
+        const graphics::RectF basis = current->m_absoluteBounds;
         const float ox = basis.x + basis.width * p.originX;
         const float oy = basis.y + basis.height * p.originY;
         const float cosine = std::cos(p.rotationRadians);
@@ -442,7 +504,18 @@ bool Widget::hasActiveAnimationInHierarchy() const {
     return false;
 }
 
-void Widget::beginPresentation(Canvas& canvas) const {
+bool Widget::hasActiveAnimationInSubtree() const {
+    if (m_motionCoordinator &&
+        m_motionCoordinator->isObjectAnimating(m_objectId)) {
+        return true;
+    }
+    for (const auto& child : m_children) {
+        if (child->hasActiveAnimationInSubtree()) return true;
+    }
+    return false;
+}
+
+void Widget::beginPresentation(graphics::Canvas& canvas) const {
     canvas.saveState();
     const float ox = m_absoluteBounds.x + m_absoluteBounds.width * m_presentation.originX;
     const float oy = m_absoluteBounds.y + m_absoluteBounds.height * m_presentation.originY;
@@ -460,18 +533,18 @@ void Widget::beginPresentation(Canvas& canvas) const {
     canvas.beginLayer(m_presentation.opacity);
 }
 
-void Widget::endPresentation(Canvas& canvas) const {
+void Widget::endPresentation(graphics::Canvas& canvas) const {
     canvas.endLayer();
     canvas.restoreState();
 }
 
-void Widget::drawChildren(Canvas& canvas, const Rect& damageRect) {
+void Widget::drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     for (auto& child : m_children) {
         if (child->isVisible() && child->getPresentationBounds().intersects(damageRect)) child->draw(canvas, damageRect);
     }
 }
 
-void Widget::draw(Canvas& canvas, const Rect& damageRect) {
+void Widget::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible) return;
     beginPresentation(canvas);
     drawChildren(canvas, damageRect);

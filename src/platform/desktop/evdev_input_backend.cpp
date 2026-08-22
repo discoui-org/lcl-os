@@ -236,6 +236,15 @@ size_t EvdevInputBackend::rescanEvdevDevices() {
             dev.name = devname;
         }
 
+        // Property bits
+        uint8_t propBits[INPUT_PROP_MAX / 8 + 1] = {};
+        bool hasPropDirect = false;
+        bool hasPropPointer = false;
+        if (ioctl(fd, EVIOCGPROP(sizeof(propBits)), propBits) >= 0) {
+            hasPropDirect = (propBits[INPUT_PROP_DIRECT / 8] >> (INPUT_PROP_DIRECT % 8)) & 1;
+            hasPropPointer = (propBits[INPUT_PROP_POINTER / 8] >> (INPUT_PROP_POINTER % 8)) & 1;
+        }
+
         uint8_t relBits[KEY_MAX / 8 + 1] = {};
         if (ioctl(fd, EVIOCGBIT(EV_REL, sizeof(relBits)), relBits) >= 0) {
             dev.hasRelX = (relBits[REL_X / 8] >> (REL_X % 8)) & 1;
@@ -245,15 +254,17 @@ size_t EvdevInputBackend::rescanEvdevDevices() {
         uint8_t absBits[KEY_MAX / 8 + 1] = {};
         bool hasMTAbsX = false;
         bool hasMTAbsY = false;
+        bool hasMTTrackingId = false;
         if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(absBits)), absBits) >= 0) {
             dev.hasAbsX = (absBits[ABS_X / 8] >> (ABS_X % 8)) & 1;
             dev.hasAbsY = (absBits[ABS_Y / 8] >> (ABS_Y % 8)) & 1;
 
             hasMTAbsX = (absBits[ABS_MT_POSITION_X / 8] >> (ABS_MT_POSITION_X % 8)) & 1;
             hasMTAbsY = (absBits[ABS_MT_POSITION_Y / 8] >> (ABS_MT_POSITION_Y % 8)) & 1;
+            hasMTTrackingId = (absBits[ABS_MT_TRACKING_ID / 8] >> (ABS_MT_TRACKING_ID % 8)) & 1;
 
-            int axisX = dev.hasAbsX ? ABS_X : (hasMTAbsX ? ABS_MT_POSITION_X : -1);
-            int axisY = dev.hasAbsY ? ABS_Y : (hasMTAbsY ? ABS_MT_POSITION_Y : -1);
+            int axisX = hasMTAbsX ? ABS_MT_POSITION_X : (dev.hasAbsX ? ABS_X : -1);
+            int axisY = hasMTAbsY ? ABS_MT_POSITION_Y : (dev.hasAbsY ? ABS_Y : -1);
 
             if (axisX >= 0) {
                 struct input_absinfo absinfo{};
@@ -261,6 +272,12 @@ size_t EvdevInputBackend::rescanEvdevDevices() {
                     dev.absXMin = absinfo.minimum;
                     dev.absXMax = std::max(absinfo.maximum, absinfo.minimum + 1);
                     dev.currentAbsX = absinfo.value;
+                }
+                if (dev.absXMax <= dev.absXMin + 1 && dev.hasAbsX && axisX != ABS_X) {
+                    if (ioctl(fd, EVIOCGABS(ABS_X), &absinfo) >= 0 && absinfo.maximum > absinfo.minimum) {
+                        dev.absXMin = absinfo.minimum;
+                        dev.absXMax = absinfo.maximum;
+                    }
                 }
             }
             if (axisY >= 0) {
@@ -270,13 +287,25 @@ size_t EvdevInputBackend::rescanEvdevDevices() {
                     dev.absYMax = std::max(absinfo.maximum, absinfo.minimum + 1);
                     dev.currentAbsY = absinfo.value;
                 }
+                if (dev.absYMax <= dev.absYMin + 1 && dev.hasAbsY && axisY != ABS_Y) {
+                    if (ioctl(fd, EVIOCGABS(ABS_Y), &absinfo) >= 0 && absinfo.maximum > absinfo.minimum) {
+                        dev.absYMin = absinfo.minimum;
+                        dev.absYMax = absinfo.maximum;
+                    }
+                }
             }
 
             if (hasMTAbsX) dev.hasAbsX = true;
             if (hasMTAbsY) dev.hasAbsY = true;
         }
 
-        if (hasMTAbsX || hasMTAbsY) {
+        const bool isMTTouchscreen = (hasMTAbsX && hasMTAbsY && hasMTTrackingId && !hasPropPointer);
+        const bool isExplicitDirect = (hasPropDirect && (hasMTAbsX || hasMTAbsY || (dev.hasAbsX && dev.hasAbsY)));
+        const bool isSingleTouchscreen = (dev.hasAbsX && dev.hasAbsY && !hasPropPointer && !hasMTAbsX && hasPropDirect);
+
+        if (isMTTouchscreen || isExplicitDirect || isSingleTouchscreen) {
+            dev.isDirectTouchscreen = true;
+        } else if (hasMTAbsX || hasMTAbsY || hasPropPointer) {
             dev.isTouchpad = true;
         }
 
@@ -341,6 +370,7 @@ size_t EvdevInputBackend::dispatchLibinputEvents(int screenWidth, int screenHeig
             case LIBINPUT_EVENT_POINTER_MOTION: {
                 auto* p = libinput_event_get_pointer_event(event);
                 outEv.type = RawInputEventType::PointerMotion;
+                outEv.source = PointerSource::Mouse;
                 outEv.dx = libinput_event_pointer_get_dx(p);
                 outEv.dy = libinput_event_pointer_get_dy(p);
                 outEv.superPressed = m_superPressed;
@@ -351,6 +381,7 @@ size_t EvdevInputBackend::dispatchLibinputEvents(int screenWidth, int screenHeig
             case LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE: {
                 auto* p = libinput_event_get_pointer_event(event);
                 outEv.type = RawInputEventType::PointerMotion;
+                outEv.source = PointerSource::Mouse;
                 outEv.absoluteX = libinput_event_pointer_get_absolute_x_transformed(p, screenWidth);
                 outEv.absoluteY = libinput_event_pointer_get_absolute_y_transformed(p, screenHeight);
                 outEv.superPressed = m_superPressed;
@@ -361,6 +392,7 @@ size_t EvdevInputBackend::dispatchLibinputEvents(int screenWidth, int screenHeig
             case LIBINPUT_EVENT_POINTER_BUTTON: {
                 auto* p = libinput_event_get_pointer_event(event);
                 outEv.type = RawInputEventType::PointerButton;
+                outEv.source = PointerSource::Mouse;
                 outEv.button = EvdevKeyMapper::toPointerButton(libinput_event_pointer_get_button(p));
                 outEv.pressed = libinput_event_pointer_get_button_state(p) == LIBINPUT_BUTTON_STATE_PRESSED;
                 outEv.superPressed = m_superPressed;
@@ -392,6 +424,22 @@ size_t EvdevInputBackend::dispatchLibinputEvents(int screenWidth, int screenHeig
                 outEv.superPressed = m_superPressed;
                 outEv.modifiers = getActiveModifiers();
                 outEv.codepoint = KeyboardMapper::toCodepoint(physKey, outEv.modifiers);
+                if (m_callback) m_callback(outEv);
+                break;
+            }
+            case LIBINPUT_EVENT_POINTER_SCROLL_WHEEL:
+            case LIBINPUT_EVENT_POINTER_AXIS: {
+                auto* p = libinput_event_get_pointer_event(event);
+                outEv.type = RawInputEventType::PointerScroll;
+                outEv.source = PointerSource::Mouse;
+                if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
+                    outEv.dy = libinput_event_pointer_get_axis_value(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL);
+                }
+                if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)) {
+                    outEv.dx = libinput_event_pointer_get_axis_value(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL);
+                }
+                outEv.superPressed = m_superPressed;
+                outEv.modifiers = getActiveModifiers();
                 if (m_callback) m_callback(outEv);
                 break;
             }
@@ -446,6 +494,28 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     dev.currentRelY += ev.value;
                     dev.relYUpdated = true;
                 }
+                if (ev.code == REL_WHEEL) {
+                    // In evdev, positive value is wheel up, negative is wheel down.
+                    // For UI scrolling, deltaY > 0 scrolls content down, deltaY < 0 scrolls up.
+                    dev.currentWheelY += -static_cast<double>(ev.value);
+                    dev.wheelUpdated = true;
+                }
+#ifdef REL_WHEEL_HI_RES
+                if (ev.code == REL_WHEEL_HI_RES) {
+                    dev.currentWheelY += -static_cast<double>(ev.value) / 120.0;
+                    dev.wheelUpdated = true;
+                }
+#endif
+                if (ev.code == REL_HWHEEL) {
+                    dev.currentWheelX += static_cast<double>(ev.value);
+                    dev.wheelUpdated = true;
+                }
+#ifdef REL_HWHEEL_HI_RES
+                if (ev.code == REL_HWHEEL_HI_RES) {
+                    dev.currentWheelX += static_cast<double>(ev.value) / 120.0;
+                    dev.wheelUpdated = true;
+                }
+#endif
             } else if (ev.type == EV_ABS) {
                 if (ev.code == ABS_X || ev.code == ABS_MT_POSITION_X) {
                     dev.currentAbsX = ev.value;
@@ -458,16 +528,109 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                 if (ev.code == ABS_MT_TRACKING_ID) {
                     if (ev.value >= 0) {
                         dev.isTouching = true;
+                        if (dev.isDirectTouchscreen) {
+                            dev.touchPressed = true;
+                        }
                     } else {
                         dev.isTouching = false;
+                        if (dev.isDirectTouchscreen) {
+                            dev.touchReleased = true;
+                        }
                         dev.lastTouchX = -1;
                         dev.lastTouchY = -1;
                     }
                 }
             } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
-                if (dev.relXUpdated || dev.relYUpdated) {
+                if (dev.isDirectTouchscreen) {
+                    const double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
+                    const double rangeY = static_cast<double>(dev.absYMax - dev.absYMin);
+
+                    double normX = -1.0;
+                    double normY = -1.0;
+                    if (rangeX > 0.0 && dev.currentAbsX >= 0) {
+                        normX = (static_cast<double>(dev.currentAbsX - dev.absXMin) / rangeX) * screenWidth;
+                        normX = std::clamp(normX, 0.0, static_cast<double>(screenWidth - 1));
+                    } else {
+                        normX = dev.lastNormTouchX;
+                    }
+
+                    if (rangeY > 0.0 && dev.currentAbsY >= 0) {
+                        normY = (static_cast<double>(dev.currentAbsY - dev.absYMin) / rangeY) * screenHeight;
+                        normY = std::clamp(normY, 0.0, static_cast<double>(screenHeight - 1));
+                    } else {
+                        normY = dev.lastNormTouchY;
+                    }
+
+                    if (dev.touchPressed) {
+                        if (normX >= 0.0 && normY >= 0.0) {
+                            RawInputEvent moveEv{};
+                            moveEv.type = RawInputEventType::PointerMotion;
+                            moveEv.source = PointerSource::Touch;
+                            moveEv.absoluteX = normX;
+                            moveEv.absoluteY = normY;
+                            moveEv.deviceName = dev.name;
+                            moveEv.superPressed = m_superPressed;
+                            moveEv.modifiers = getActiveModifiers();
+                            if (m_callback) m_callback(moveEv);
+                        }
+
+                        RawInputEvent downEv{};
+                        downEv.type = RawInputEventType::PointerButton;
+                        downEv.source = PointerSource::Touch;
+                        downEv.button = PointerButton::Left;
+                        downEv.pressed = true;
+                        downEv.absoluteX = normX;
+                        downEv.absoluteY = normY;
+                        downEv.deviceName = dev.name;
+                        downEv.superPressed = m_superPressed;
+                        downEv.modifiers = getActiveModifiers();
+                        if (m_callback) m_callback(downEv);
+
+                        dev.lastNormTouchX = normX;
+                        dev.lastNormTouchY = normY;
+                        dev.touchPressed = false;
+                        count++;
+                    } else if (dev.touchReleased) {
+                        RawInputEvent upEv{};
+                        upEv.type = RawInputEventType::PointerButton;
+                        upEv.source = PointerSource::Touch;
+                        upEv.button = PointerButton::Left;
+                        upEv.pressed = false;
+                        upEv.absoluteX = normX >= 0.0 ? normX : dev.lastNormTouchX;
+                        upEv.absoluteY = normY >= 0.0 ? normY : dev.lastNormTouchY;
+                        upEv.deviceName = dev.name;
+                        upEv.superPressed = m_superPressed;
+                        upEv.modifiers = getActiveModifiers();
+                        if (m_callback) m_callback(upEv);
+
+                        dev.lastNormTouchX = -1.0;
+                        dev.lastNormTouchY = -1.0;
+                        dev.touchReleased = false;
+                        count++;
+                    } else if (dev.isTouching && (dev.absXUpdated || dev.absYUpdated)) {
+                        if (normX >= 0.0 && normY >= 0.0) {
+                            RawInputEvent moveEv{};
+                            moveEv.type = RawInputEventType::PointerMotion;
+                            moveEv.source = PointerSource::Touch;
+                            moveEv.absoluteX = normX;
+                            moveEv.absoluteY = normY;
+                            moveEv.deviceName = dev.name;
+                            moveEv.superPressed = m_superPressed;
+                            moveEv.modifiers = getActiveModifiers();
+                            if (m_callback) m_callback(moveEv);
+
+                            dev.lastNormTouchX = normX;
+                            dev.lastNormTouchY = normY;
+                            count++;
+                        }
+                    }
+
+                    dev.absXUpdated = false;
+                    dev.absYUpdated = false;
+                } else if (dev.relXUpdated || dev.relYUpdated) {
                     RawInputEvent outEv{};
                     outEv.type = RawInputEventType::PointerMotion;
+                    outEv.source = PointerSource::Mouse;
                     outEv.deviceName = dev.name;
                     outEv.dx = dev.currentRelX;
                     outEv.dy = dev.currentRelY;
@@ -480,8 +643,27 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     dev.relXUpdated = false;
                     dev.relYUpdated = false;
                     count++;
-                } else if ((dev.absXUpdated || dev.absYUpdated) &&
-                           (dev.hasAbsX || dev.hasAbsY)) {
+                }
+
+                if (dev.wheelUpdated) {
+                    RawInputEvent outEv{};
+                    outEv.type = RawInputEventType::PointerScroll;
+                    outEv.source = PointerSource::Mouse;
+                    outEv.deviceName = dev.name;
+                    outEv.dx = dev.currentWheelX;
+                    outEv.dy = dev.currentWheelY;
+                    outEv.superPressed = m_superPressed;
+                    outEv.modifiers = getActiveModifiers();
+                    if (m_callback) m_callback(outEv);
+
+                    dev.currentWheelX = 0.0;
+                    dev.currentWheelY = 0.0;
+                    dev.wheelUpdated = false;
+                    count++;
+                }
+
+                if ((dev.absXUpdated || dev.absYUpdated) &&
+                    (dev.hasAbsX || dev.hasAbsY)) {
                     if (dev.isTouchpad) {
                         if (!dev.isTouching && dev.currentAbsX >= 0 && dev.currentAbsY >= 0) {
                             dev.isTouching = true;
@@ -509,6 +691,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                             if ((dx != 0.0 || dy != 0.0) && m_callback) {
                                 RawInputEvent outEv{};
                                 outEv.type = RawInputEventType::PointerMotion;
+                                outEv.source = PointerSource::Mouse;
                                 outEv.deviceName = dev.name;
                                 outEv.dx = dx;
                                 outEv.dy = dy;
@@ -520,6 +703,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     } else {
                         RawInputEvent outEv{};
                         outEv.type = RawInputEventType::PointerMotion;
+                        outEv.source = PointerSource::Mouse;
                         outEv.deviceName = dev.name;
 
                         double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
@@ -543,10 +727,19 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     count++;
                 }
             } else if (ev.type == EV_KEY) {
-                if (dev.isTouchpad && (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER)) {
+                if (dev.isDirectTouchscreen && ev.code == BTN_TOUCH) {
+                    if (ev.value != 0) {
+                        dev.isTouching = true;
+                        dev.touchPressed = true;
+                    } else {
+                        dev.isTouching = false;
+                        dev.touchReleased = true;
+                    }
+                } else if (dev.isTouchpad && (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER)) {
                     RawInputEvent outEv{};
                     outEv.deviceName = dev.name;
                     outEv.type = RawInputEventType::PointerButton;
+                    outEv.source = PointerSource::Mouse;
                     outEv.button = PointerButton::Left;
                     outEv.pressed = (ev.value != 0);
                     outEv.superPressed = m_superPressed;
@@ -566,6 +759,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     RawInputEvent outEv{};
                     outEv.deviceName = dev.name;
                     outEv.type = RawInputEventType::PointerButton;
+                    outEv.source = PointerSource::Mouse;
                     outEv.button = EvdevKeyMapper::toPointerButton(ev.code);
                     outEv.pressed = (ev.value != 0);
                     outEv.superPressed = m_superPressed;

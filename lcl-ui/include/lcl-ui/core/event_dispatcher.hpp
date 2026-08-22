@@ -2,8 +2,13 @@
 
 #include "lcl-ui/core/events.hpp"
 #include "lcl-ui/widgets/widget.hpp"
+#include <cstdint>
+#include <memory>
+#include <unordered_map>
 
 namespace lcl::ui {
+
+class TransientController;
 
 class EventDispatcher {
 public:
@@ -13,16 +18,77 @@ public:
     Widget* hitTest(Widget* root, float x, float y);
 
     bool dispatchPointerEvent(Widget* root, const PointerEvent& event);
+    bool dispatchPointerEvent(Widget* root, TransientController* transients,
+                              const PointerEvent& event);
+    /** Root-aware dispatch enables deterministic Tab traversal for a WindowApp. */
+    bool dispatchKeyEvent(Widget* root, const KeyEvent& event);
+    /** Compatibility path for embedders that only need focused-widget routing. */
     bool dispatchKeyEvent(const KeyEvent& event);
     bool dispatchTextInputEvent(const TextInputEvent& event);
 
+    bool capturePointer(uint32_t pointerId, Widget* owner,
+                        PointerSource source = PointerSource::Mouse);
+    bool releasePointerCapture(uint32_t pointerId, const Widget* owner = nullptr);
+    bool hasPointerCapture(uint32_t pointerId, const Widget* owner = nullptr) const;
+    Widget* getPointerCapture(uint32_t pointerId) const;
+    bool cancelPointerDownTarget(uint32_t pointerId, Widget* newOwner,
+                                 const PointerEvent& sourceEvent);
+    void cancelPointerCaptures();
+    /** Clears focus, hover, captures, and down-target records below a subtree. */
+    void cancelWidgetSubtree(Widget* subtree);
+
     void setFocus(Widget* widget);
-    Widget* getFocusedWidget() const { return m_focusedWidget; }
+    /** Move focus in tree order, respecting the nearest active FocusScope. */
+    bool moveFocus(Widget* root, bool backwards = false);
+    Widget* getFocusedWidget() const noexcept {
+        return m_focusedWidget && !m_focusedLifetime.expired()
+            ? m_focusedWidget
+            : nullptr;
+    }
     Widget* getHoveredWidget() const { return m_hoveredWidget; }
 
 private:
+    struct PointerCapture {
+        Widget* owner{nullptr};
+        std::weak_ptr<uint8_t> lifetime;
+        PointerSource source{PointerSource::Mouse};
+    };
+
+    struct PointerDownTarget {
+        Widget* target{nullptr};
+        std::weak_ptr<uint8_t> lifetime;
+        PointerSource source{PointerSource::Mouse};
+        float downX{0.0f};
+        float downY{0.0f};
+        // Touch-only, one-way state. It starts true and becomes false only
+        // after total displacement reaches the shared touch slop or ownership
+        // leaves the original down-target sequence.
+        bool tapEligible{true};
+    };
+
+    static bool isEventCapableInTree(Widget* root, const Widget* target,
+                                     bool ancestorsVisible = true);
+    static bool isDescendantOf(const Widget* target, const Widget* ancestor);
+    static bool dispatchToTarget(Widget* target, const PointerEvent& event);
+    static void dispatchPreviewToTarget(Widget* target, const PointerEvent& event);
+    static bool dispatchCancelUntil(Widget* target, Widget* stopBefore,
+                                    const PointerEvent& event);
+    static Widget* findFocusableTarget(Widget* target);
+    Widget* getPointerDownTarget(uint32_t pointerId, Widget* root);
+    void updateTouchTapEligibility(uint32_t pointerId, const PointerEvent& event);
+    void invalidateTouchTapForCapture(uint32_t pointerId);
+    bool isTouchTapEligible(uint32_t pointerId) const;
+    void applyPointerDownFocus(Widget* target, const PointerEvent& event);
+    void applyTouchTapFocus(Widget* downTarget, Widget* upTarget,
+                            const PointerEvent& event);
+    Widget* validatePointerCapture(Widget* root, const PointerEvent& event);
+    void clearPointerCapture(uint32_t pointerId);
+
     Widget* m_hoveredWidget{nullptr};
     Widget* m_focusedWidget{nullptr};
+    std::weak_ptr<uint8_t> m_focusedLifetime;
+    std::unordered_map<uint32_t, PointerCapture> m_pointerCaptures;
+    std::unordered_map<uint32_t, PointerDownTarget> m_pointerDownTargets;
 };
 
 } // namespace lcl::ui

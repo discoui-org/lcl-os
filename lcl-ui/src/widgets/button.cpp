@@ -40,6 +40,9 @@ void Button::setState(ButtonState newState) {
 void Button::setEnabled(bool enabled) {
     if (m_enabled == enabled) return;
     m_enabled = enabled;
+    // Keep the generic input/focus eligibility contract authoritative so
+    // EventDispatcher does not need Button-specific disabled logic.
+    setInteractionEnabled(enabled);
     if (!enabled) { m_pressed = false; m_hovered = false; }
     updateComposedState();
 }
@@ -55,7 +58,7 @@ void Button::updateComposedState() {
 void Button::applyStateMotion(ButtonState previous) {
     const auto& theme = interactionMotionTheme();
     float targetScale = 1.0f;
-    Color targetColor{37, 99, 235, 255};
+    graphics::Color targetColor{37, 99, 235, 255};
     const lcl::motion::Motion* scaleMotion = &theme.hover;
     if (m_state == ButtonState::Hover) { targetScale = theme.hoverScale; targetColor = {59, 130, 246, 255}; }
     else if (m_state == ButtonState::Active) { targetScale = theme.pressedScale; targetColor = {29, 78, 216, 255}; scaleMotion = &theme.pressed; }
@@ -104,11 +107,10 @@ bool Button::onPointerDown(const PointerEvent& event) {
 }
 
 bool Button::onPointerUp(const PointerEvent& event) {
-    (void)event;
     if (!m_enabled) return false;
     if (m_pressed) {
         m_pressed = false;
-        m_hovered = true;
+        m_hovered = (event.source == PointerSource::Mouse);
         updateComposedState();
         if (m_onClick) {
             m_onClick();
@@ -116,6 +118,16 @@ bool Button::onPointerUp(const PointerEvent& event) {
         return true;
     }
     m_pressed = false;
+    m_hovered = (event.source == PointerSource::Mouse);
+    updateComposedState();
+    return true;
+}
+
+bool Button::onPointerCancel(const PointerEvent& event) {
+    (void)event;
+    if (!m_enabled) return false;
+    m_pressed = false;
+    m_hovered = false;
     updateComposedState();
     return true;
 }
@@ -135,7 +147,7 @@ bool Button::onFocusLost(const FocusEvent& event) {
     return false;
 }
 
-void Button::draw(Canvas& canvas, const Rect& damageRect) {
+void Button::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     Container::draw(canvas, damageRect);
 }
 

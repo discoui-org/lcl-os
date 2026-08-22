@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lcl-ui/core/rect.hpp"
+#include "lcl-graphics/geometry.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 
 #include <vector>
@@ -26,7 +26,7 @@ enum class EffectBounds {
 };
 
 struct EffectRegion {
-    Rect bounds;
+    graphics::RectF bounds;
     float cornerRadius{0.0f};
     float cornerRoundness{2.0f};
     EffectBounds boundsPolicy{EffectBounds::Local};

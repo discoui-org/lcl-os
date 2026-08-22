@@ -4,38 +4,38 @@ namespace lcl::ui {
 
 Container::Container() = default;
 
-void Container::setBackgroundColor(const Color& color) {
+void Container::setBackgroundColor(const graphics::Color& color) {
     m_backgroundColor = color;
     if (m_motionCoordinator) {
         m_motionCoordinator->setColor(*this, AnimatableProperty::BackgroundRed,
             m_presentationBackgroundColor, color,
-            [this](Color next) { m_presentationBackgroundColor = next; markDirty(); });
+            [this](graphics::Color next) { m_presentationBackgroundColor = next; markDirty(); });
     } else { m_presentationBackgroundColor = color; markDirty(); }
 }
 
-void Container::animateBackgroundColor(const Color& color, const lcl::motion::Motion& motion) {
+void Container::animateBackgroundColor(const graphics::Color& color, const lcl::motion::Motion& motion) {
     m_backgroundColor = color;
     if (!m_motionCoordinator) { m_presentationBackgroundColor = color; markDirty(); return; }
     m_motionCoordinator->setColor(*this, AnimatableProperty::BackgroundRed,
         m_presentationBackgroundColor, color,
-        [this](Color next) { m_presentationBackgroundColor = next; markDirty(); }, &motion);
+        [this](graphics::Color next) { m_presentationBackgroundColor = next; markDirty(); }, &motion);
 }
 
-void Container::setBorderColor(const Color& color) {
+void Container::setBorderColor(const graphics::Color& color) {
     m_borderColor = color;
     if (m_motionCoordinator) {
         m_motionCoordinator->setColor(*this, AnimatableProperty::BorderRed,
             m_presentationBorderColor, color,
-            [this](Color next) { m_presentationBorderColor = next; markDirty(); });
+            [this](graphics::Color next) { m_presentationBorderColor = next; markDirty(); });
     } else { m_presentationBorderColor = color; markDirty(); }
 }
 
-void Container::animateBorderColor(const Color& color, const lcl::motion::Motion& motion) {
+void Container::animateBorderColor(const graphics::Color& color, const lcl::motion::Motion& motion) {
     m_borderColor = color;
     if (!m_motionCoordinator) { m_presentationBorderColor = color; markDirty(); return; }
     m_motionCoordinator->setColor(*this, AnimatableProperty::BorderRed,
         m_presentationBorderColor, color,
-        [this](Color next) { m_presentationBorderColor = next; markDirty(); }, &motion);
+        [this](graphics::Color next) { m_presentationBorderColor = next; markDirty(); }, &motion);
 }
 
 void Container::setBorderWidth(float width) {
@@ -89,7 +89,7 @@ void Container::applyPresentationValue(AnimatableProperty property, float value)
 }
 
 void Container::commitModelValue(AnimatableProperty property, float value) {
-    Color color;
+    graphics::Color color;
     switch (property) {
         case AnimatableProperty::BackgroundRed: case AnimatableProperty::BackgroundGreen:
         case AnimatableProperty::BackgroundBlue: case AnimatableProperty::BackgroundAlpha:
@@ -113,12 +113,12 @@ void Container::commitModelValue(AnimatableProperty property, float value) {
     }
 }
 
-void Container::draw(Canvas& canvas, const Rect& damageRect) {
+void Container::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
 
     beginPresentation(canvas);
 
-    const Rect rect{m_absoluteBounds.x, m_absoluteBounds.y, m_absoluteBounds.width, m_absoluteBounds.height};
+    const graphics::RectF rect{m_absoluteBounds.x, m_absoluteBounds.y, m_absoluteBounds.width, m_absoluteBounds.height};
     const bool hasBackground = (m_presentationBackgroundColor.a > 0);
     const bool hasBorder = (m_presentationBorderWidth > 0.0f && m_presentationBorderColor.a > 0);
     if (hasBackground || hasBorder) {

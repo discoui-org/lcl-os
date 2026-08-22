@@ -1,6 +1,6 @@
 # `lcl-ui` Application Development Framework & API Guide
 
-`lcl-ui` is the official C++20 user-space GUI application framework for **LCL Core Linux (LCL OS)**. It is decoupled from display-server dependencies and provides flexbox layout, polymorphic widgets, damage tracking, and a backend-neutral Canvas contract. The standard client raster backend is selected separately through `lcl-canvas-skia`.
+`lcl-ui` is the official C++20 user-space GUI application framework for **LCL Core Linux (LCL OS)**. It is decoupled from display-server dependencies and provides flexbox layout, polymorphic widgets, damage tracking, and a backend-neutral Canvas contract. The standard client raster backend is selected separately through `lcl-raster`.
 
 ---
 
@@ -20,7 +20,7 @@
 
 ## 1. Architecture Overview
 
-`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v11 Unix Domain `SOCK_SEQPACKET` IPC (`/run/user/1000/lcl-compositor.sock`), DMA-BUF, and lazy shared-memory (`memfd`) fallback.
+`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v13 Unix Domain `SOCK_SEQPACKET` IPC (`/run/user/1000/lcl-compositor.sock`), DMA-BUF, and lazy shared-memory (`memfd`) fallback.
 
 ```text
 +-----------------------------------------------------------+
@@ -31,7 +31,7 @@
                               v
 +-----------------------------------------------------------+
 |                      LCL Core Compositor                  |
-|          (Direct DRM/KMS Scanout & EGL Skia Renderer)     |
+|          (Direct DRM/KMS Scanout & EGL LCL raster Renderer)     |
 +-----------------------------------------------------------+
 ```
 
@@ -45,16 +45,49 @@
 `WindowApp` is the top-level application container. It handles window surface creation, SHM pixel allocation, IPC message dispatching, and 144Hz frame pacing.
 
 #### Public Methods
-- `WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height, const std::string& title = "lcl-ui Application")`: Constructs a window with an explicitly selected drawing backend.
+- `WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height, const std::string& title = "lcl-ui Application")`: Constructs a logical-size window with an explicitly selected drawing backend.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Binds the top-level Flexbox widget container.
 - `Widget* getRootWidget() const`: Returns the root widget pointer.
 - `void setAppId(std::string appId)`: Sets the required canonical application identity before connecting.
-- `bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v11 window surface.
+- `bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v13 normal or configured popup surface.
+- `registerLocalTransient(...)`: Registers an ordinary absolute-positioned Widget in the single WindowRoot tree with generic lifecycle/dismissal policy.
+- `configurePopupSurface(parentSurfaceId, role, x, y)`: Configures this `WindowApp` as a compositor-level popup that reuses the normal configure and buffer path.
+- `hostSurface(...)`: Owns and ticks an additional generic `WindowApp` surface from the same event loop; it contains no Popover-specific policy.
 - `bool setEdgeToEdge(bool enabled)`: Extends the surface material beneath compositor-owned system insets. Desktop window controls or mobile system indicators remain foreground chrome while the client widget tree stays inside its safe content area.
 - `BackdropSurface::setEffectBounds(EffectBounds::OuterSurface)`: Uses the compositor-owned outer surface rather than the local safe content rect.
 - `BackdropSurface::setTint(Color color)`: Adds the tint to the same compositor filter chain as blur and color adjustment, preventing separate inset and content shades.
+- `BackdropSurface::addFilter(FilterType::Glass, thicknessPx, refractionFactor, dispersionGain)`: Uses logical pixels for thickness, which follows the surface buffer scale. Zero thickness or refraction disables Glass; zero dispersion preserves refraction without RGB color separation.
 - `void runEventLoop()`: Executes the non-blocking main event loop at **144 Hz target frame pacing** (~6.9ms target period).
 - `uint32_t* getPixelBuffer()`: Returns raw pointer to the SHM pixel buffer (`uint32_t` ARGB format).
+
+### `Popover` v1
+
+`Popover::show(anchor, content, options)` accepts any Widget subtree and returns
+`PopoverOpenResult { handle, presentation, geometry }`. Placement is directly
+below the anchor and left-aligned. Presentation is always a parent-bound hosted
+`WindowApp` configured as `PopupSurface`, regardless of whether the desired
+rectangle also fits inside the parent window. `TransientController` owns its
+stable handle, owner teardown, outside mouse dismissal, and validated touch-tap
+dismissal. `Popover::close(handle)` closes it programmatically. The constructor
+accepts a backend-neutral popup `Canvas` factory, preserving the same explicit
+Canvas injection contract as every other `WindowApp`. The hosted content root
+is a `FocusScope`: opening clears the parent dispatcher focus and selects the
+first eligible popup descendant, while close restores the weakly tracked anchor
+when it is still interaction-eligible. Compositor keyboard routing tracks only
+the active surface; it has no Popover or widget-focus policy.
+
+### `FocusScope` v1
+
+`FocusScope` is a normal `Container` that also marks a keyboard
+traversal boundary without receiving focus itself. `WindowApp` routes Tab and
+Shift+Tab centrally through `EventDispatcher` in depth-first insertion order.
+The nearest ancestor `FocusScope` of the focused widget is the active context;
+forward and backward traversal wrap inside it. Without an explicit scope, the
+window root is the implicit scope. Hidden, non-focusable, or
+interaction-disabled widgets are skipped. Each hosted PopupSurface has its own
+`WindowApp` and therefore its own independent traversal context. Popover uses
+this boundary for its transient Tab trap; ordinary form groups should remain
+plain `Container` trees so window traversal can continue past them.
 
 ---
 
@@ -102,7 +135,7 @@ label->setTextColor(0xFF38BDF8); // Sky Cyan
 ---
 
 ### `lcl::ui::Canvas`
-*Header:* [`lcl-ui/include/lcl-ui/core/canvas.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/core/canvas.hpp)
+*Header:* [`lcl-ui/include/lcl-graphics/canvas.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-graphics/canvas.hpp)
 
 The backend-neutral 2D drawing contract available inside `Widget::draw(...)`:
 - `drawRect(rect, color)`
@@ -111,8 +144,8 @@ The backend-neutral 2D drawing contract available inside `Widget::draw(...)`:
 - `drawText(x, y, text, color, fontSize)`
 - `drawBuffer(...)`
 
-`SkiaCanvas` is the standard client SHM raster adapter. Applications select it
-explicitly with `lcl::render::makeSkiaCanvas()` and link `lcl-canvas-skia`.
+`RasterCanvas` is the standard client SHM raster adapter. Applications select it
+explicitly with `lcl::render::makeRasterCanvas()` and link `lcl-raster`.
 Widgets themselves depend only on `Canvas`; `lcl-ui` does not link EGL, DRM,
 GBM, or GLES.
 
@@ -129,13 +162,13 @@ Create `main.cpp` inside `apps/my_app/`:
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/text.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_canvas.hpp"
 
 using namespace lcl::ui;
 
 int main() {
     // 1. Initialize WindowApp (600x400)
-    WindowApp app(lcl::render::makeSkiaCanvas(), 600, 400, "My Application");
+    WindowApp app(lcl::render::makeRasterCanvas(), 600, 400, "My Application");
 
     // 2. Build Centered Flexbox Layout Tree
     auto rootContainer = std::make_unique<Container>();

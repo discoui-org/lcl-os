@@ -7,6 +7,8 @@
 
 namespace lcl::core {
 
+class SurfaceRegistry;
+
 enum class SystemSurfacePlacement : uint8_t {
     ClientBounds,
     OutputBounds,
@@ -25,6 +27,12 @@ struct SystemSurfacePolicy {
     SystemSurfacePlacement placement{SystemSurfacePlacement::ClientBounds};
 };
 
+/** Logical work-area insets contributed by mapped system surfaces. */
+struct SystemReservedZone {
+    float top{0.0f};
+    float bottom{0.0f};
+};
+
 /**
  * Defines system-surface semantics in one place.  Client requests can name a
  * kind, but compositor policy—not client-selected layer/role commands—decides
@@ -36,8 +44,10 @@ public:
     static SystemSurfacePolicy policyFor(protocol::LCLSystemSurfaceKind kind) noexcept;
     /** Apply compositor-owned initial placement for system surfaces. */
     static void applyInitialPlacement(const SystemSurfacePolicy& policy,
-                                      uint32_t outputWidth, uint32_t outputHeight,
-                                      int& x, int& y, int& width, int& height) noexcept;
+                                      float outputWidth, float outputHeight,
+                                      float& x, float& y, float& width, float& height) noexcept;
+    /** Derive work-area reservations from logical surface geometry only. */
+    static SystemReservedZone computeReservedZone(const SurfaceRegistry& surfaces) noexcept;
     static bool isTrustedShellPeer(pid_t pid) noexcept;
 };
 

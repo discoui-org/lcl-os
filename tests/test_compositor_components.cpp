@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <fcntl.h>
 #include <sys/eventfd.h>
@@ -9,18 +11,20 @@
 #include <unistd.h>
 
 #include "core/compositor/frame_scheduler.hpp"
+#include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/input_router.hpp"
+#include "core/compositor/popup_surface_geometry.hpp"
 #include "core/compositor/surface_registry.hpp"
 #include "core/compositor/system_surface_policy.hpp"
 #include "core/compositor/window_group_transform.hpp"
 #include "core/compositor/window_chrome_material.hpp"
-#include "core/display/display_scale.hpp"
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
 #include "core/scene/shell_state_broker.hpp"
 #include "render/window_manager.hpp"
 #include "render/dma_buf_crop.hpp"
+#include "render/raster_destination.hpp"
 
 namespace lcl::core {
 
@@ -42,6 +46,78 @@ TEST(SurfaceRegistryTest, SnapshotProvidesReadOnlyViewsWithoutCopyingEntries) {
     ASSERT_NE(found->entry, nullptr);
     EXPECT_EQ(found->entry, &registry.find(firstKey)->second);
     EXPECT_EQ(found->entry->windowId, 11u);
+}
+
+TEST(SurfaceRegistryTest, PopupChildrenKeepStableParentLocalStackOrder) {
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(7, 42, 1);
+    const auto firstPopupKey = SurfaceRegistry::makeKey(8, 42, 2);
+    const auto secondPopupKey = SurfaceRegistry::makeKey(9, 42, 3);
+    registry[parentKey].windowId = 11;
+    registry[firstPopupKey].parentSurfaceKey = parentKey;
+    registry[firstPopupKey].popupOrder = registry.allocatePopupOrder();
+    registry[secondPopupKey].parentSurfaceKey = parentKey;
+    registry[secondPopupKey].popupOrder = registry.allocatePopupOrder();
+
+    const auto children = registry.popupChildren(parentKey);
+    ASSERT_EQ(children.size(), 2u);
+    EXPECT_EQ(children[0], firstPopupKey);
+    EXPECT_EQ(children[1], secondPopupKey);
+
+    registry.erase(secondPopupKey);
+    EXPECT_TRUE(registry.contains(parentKey));
+    ASSERT_EQ(registry.popupChildren(parentKey).size(), 1u);
+}
+
+TEST(SurfaceRegistryTest, KeyboardSurfaceFocusReturnsToParentAndNeverStaysStale) {
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(7, 42, 1);
+    const auto popupKey = SurfaceRegistry::makeKey(8, 42, 2);
+    registry[parentKey].windowId = 11;
+    registry[popupKey].parentSurfaceKey = parentKey;
+
+    ASSERT_TRUE(registry.focusKeyboardSurface(popupKey));
+    EXPECT_EQ(registry.keyboardFocusSurface(), popupKey);
+    registry.releaseKeyboardFocus(popupKey);
+    EXPECT_EQ(registry.keyboardFocusSurface(), parentKey);
+
+    ASSERT_TRUE(registry.focusKeyboardSurface(popupKey));
+    registry.erase(popupKey);
+    EXPECT_EQ(registry.keyboardFocusSurface(), parentKey);
+    registry.erase(parentKey);
+    EXPECT_EQ(registry.keyboardFocusSurface(), 0u);
+    EXPECT_FALSE(registry.focusKeyboardSurface(popupKey));
+}
+
+TEST(PopupSurfaceTest, GeometryFollowsParentAndCanExtendPastWindowBounds) {
+    render::Window parentWindow{};
+    parentWindow.x = 100;
+    parentWindow.y = 80;
+    parentWindow.width = 200;
+    parentWindow.height = 140;
+    parentWindow.decorationMode = render::DecorationMode::None;
+    parentWindow.presentationInitialized = false;
+
+    SurfaceRegistry::SurfaceEntry parentSurface;
+    SurfaceRegistry::SurfaceEntry popup;
+    popup.parentSurfaceKey = 1;
+    popup.popupX = 180;
+    popup.popupY = 20;
+    popup.initialWidth = 100.0f;
+    popup.initialHeight = 60.0f;
+
+    const auto initial = resolvePopupSurfaceBounds(parentWindow, parentSurface, popup);
+    EXPECT_FLOAT_EQ(initial.x, 280.0f);
+    EXPECT_FLOAT_EQ(initial.y, 100.0f);
+    EXPECT_FLOAT_EQ(initial.width, 100.0f);
+    EXPECT_GT(initial.x + initial.width,
+              static_cast<float>(parentWindow.x + parentWindow.width));
+
+    parentWindow.x += 45;
+    parentWindow.y += 30;
+    const auto moved = resolvePopupSurfaceBounds(parentWindow, parentSurface, popup);
+    EXPECT_FLOAT_EQ(moved.x - initial.x, 45.0f);
+    EXPECT_FLOAT_EQ(moved.y - initial.y, 30.0f);
 }
 
 TEST(SurfaceRegistryTest, RejectsStaleSerialButAcceptsClientConstrainedDimensions) {
@@ -67,6 +143,44 @@ TEST(CompositorRendererTest, DmaBufCropShowsContentWithoutScalingTheBacking) {
     const auto exact = lcl::render::makeDmaBufCrop(800, 600, 800, 600);
     EXPECT_FLOAT_EQ(exact.uMax, 1.0f);
     EXPECT_FLOAT_EQ(exact.vMax, 1.0f);
+}
+
+TEST(CompositorRendererTest, ShmAndDmaBufShareLogicalDestinationMapping) {
+    constexpr std::array<float, 4> scales{1.0f, 1.25f, 1.5f, 2.0f};
+    for (const float scale : scales) {
+        const auto destination = lcl::render::mapLogicalRasterDestination(
+            12.5f, 18.25f, 320.0f, 180.0f, 14.0f,
+            scale, 3.0f, 5.0f);
+        EXPECT_FLOAT_EQ(destination.x, 12.5f * scale + 3.0f);
+        EXPECT_FLOAT_EQ(destination.y, 18.25f * scale + 5.0f);
+        EXPECT_FLOAT_EQ(destination.width, 320.0f * scale);
+        EXPECT_FLOAT_EQ(destination.height, 180.0f * scale);
+        EXPECT_FLOAT_EQ(destination.cornerRadius, 14.0f * scale);
+
+        // Content/backing extents remain physical and therefore produce the
+        // same crop regardless of destination DPR.
+        const auto crop = lcl::render::makeDmaBufCrop(640, 480, 1920, 1080);
+        EXPECT_FLOAT_EQ(crop.uMax, 640.0f / 1920.0f);
+        EXPECT_FLOAT_EQ(crop.vMax, 480.0f / 1080.0f);
+    }
+}
+
+TEST(CompositorRendererTest, CurrentPreviousAndPopupDestinationsUseOneDprRule) {
+    constexpr std::array<std::array<float, 5>, 3> logicalDestinations{{
+        {80.0f, 92.0f, 800.0f, 568.0f, 20.0f},
+        {80.0f, 92.0f, 640.0f, 448.0f, 20.0f},
+        {260.0f, 120.0f, 180.0f, 90.0f, 10.0f},
+    }};
+    constexpr float scale = 1.5f;
+    for (const auto& logical : logicalDestinations) {
+        const auto physical = lcl::render::mapLogicalRasterDestination(
+            logical[0], logical[1], logical[2], logical[3], logical[4], scale);
+        EXPECT_FLOAT_EQ(physical.x, logical[0] * scale);
+        EXPECT_FLOAT_EQ(physical.y, logical[1] * scale);
+        EXPECT_FLOAT_EQ(physical.width, logical[2] * scale);
+        EXPECT_FLOAT_EQ(physical.height, logical[3] * scale);
+        EXPECT_FLOAT_EQ(physical.cornerRadius, logical[4] * scale);
+    }
 }
 
 TEST(SurfaceRegistryTest, DmaBufSlotIsReleasedOnlyAfterLeavingThePresentedSet) {
@@ -179,6 +293,304 @@ TEST(SurfaceRegistryTest, DisconnectOwnershipIsPerSocketEvenWithinOneProcess) {
     EXPECT_TRUE(SurfaceRegistry::isOwnedByClientConnection(menu, 11));
     EXPECT_FALSE(SurfaceRegistry::isOwnedByClientConnection(wallpaper, 11));
     EXPECT_FALSE(SurfaceRegistry::isOwnedByClientConnection(dock, 11));
+}
+
+TEST(InputRouterTest, PopupOutsideParentBoundsReceivesParentLocalInput) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t windowId = manager.createWindow("Parent", 100, 80, 200, 140);
+    manager.setDecorationMode(windowId, render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(sockets[0], 501, 1);
+    const auto popupKey = SurfaceRegistry::makeKey(sockets[0], 501, 2);
+    auto& parent = registry[parentKey];
+    parent.windowId = windowId;
+    parent.clientFd = sockets[0];
+    parent.hasCommittedBuffer = true;
+    parent.configuredWidth = 200;
+    parent.configuredHeight = 140;
+    auto& popup = registry[popupKey];
+    popup.parentSurfaceKey = parentKey;
+    popup.popupOrder = registry.allocatePopupOrder();
+    popup.popupX = 180;
+    popup.popupY = 20;
+    popup.initialWidth = 100.0f;
+    popup.initialHeight = 60.0f;
+    popup.stride = 400;
+    popup.clientFd = sockets[0];
+    popup.hasCommittedBuffer = true;
+    popup.pixels = reinterpret_cast<void*>(1);
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.source = lcl::platform::PointerSource::Mouse;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.absoluteX = 350.0;
+    down.absoluteY = 110.0;
+    EXPECT_TRUE(router.route(down));
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    const auto* input = reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(input->surfaceId, 2u);
+    EXPECT_EQ(input->type, 4u);
+    EXPECT_FLOAT_EQ(input->x, 70.0f);
+    EXPECT_FLOAT_EQ(input->y, 10.0f);
+
+    InputEvent key{};
+    key.type = InputEventType::KeyboardKey;
+    key.key = lcl::platform::PhysicalKey::A;
+    key.pressed = true;
+    EXPECT_FALSE(router.route(key));
+
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    input = reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(input->surfaceId, 2u);
+    EXPECT_EQ(input->type, 1u);
+
+    popup.pixels = nullptr;
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(InputRouterTest, KeyboardUsesSelectedPopupSurfaceThenItsParentOnRelease) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t windowId = manager.createWindow("Parent", 100, 80, 200, 140);
+    manager.setDecorationMode(windowId, render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(sockets[0], 504, 1);
+    const auto popupKey = SurfaceRegistry::makeKey(sockets[0], 504, 2);
+    auto& parent = registry[parentKey];
+    parent.windowId = windowId;
+    parent.clientFd = sockets[0];
+    parent.hasCommittedBuffer = true;
+    auto& popup = registry[popupKey];
+    popup.parentSurfaceKey = parentKey;
+    popup.clientFd = sockets[0];
+    popup.hasCommittedBuffer = true;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    ASSERT_TRUE(registry.focusKeyboardSurface(popupKey));
+
+    InputEvent key{};
+    key.type = InputEventType::KeyboardKey;
+    key.key = lcl::platform::PhysicalKey::Tab;
+    key.pressed = true;
+    EXPECT_FALSE(router.route(key));
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    EXPECT_EQ(reinterpret_cast<const protocol::LCLMsgInputEvent*>(
+                  payload.data())->surfaceId,
+              2u);
+
+    registry.releaseKeyboardFocus(popupKey);
+    EXPECT_FALSE(router.route(key));
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    EXPECT_EQ(reinterpret_cast<const protocol::LCLMsgInputEvent*>(
+                  payload.data())->surfaceId,
+              1u);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(InputRouterTest, ParentCloseMarksPopupForAutomaticDestroy) {
+    int parentSockets[2];
+    int popupSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, parentSockets), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, popupSockets), 0);
+
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t windowId = manager.createWindow("Parent", 100, 80, 200, 140);
+    manager.setDecorationMode(windowId, render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(parentSockets[0], 502, 1);
+    const auto popupKey = SurfaceRegistry::makeKey(popupSockets[0], 502, 2);
+    auto& parent = registry[parentKey];
+    parent.windowId = windowId;
+    parent.clientFd = parentSockets[0];
+    parent.width = 200;
+    parent.height = 140;
+    parent.stride = 800;
+    parent.configuredWidth = 200;
+    parent.configuredHeight = 140;
+    parent.hasCommittedBuffer = true;
+    parent.pixels = reinterpret_cast<void*>(1);
+    auto& popup = registry[popupKey];
+    popup.parentSurfaceKey = parentKey;
+    popup.popupOrder = registry.allocatePopupOrder();
+    popup.clientFd = popupSockets[0];
+    popup.width = 80;
+    popup.height = 40;
+    popup.stride = 320;
+    popup.hasCommittedBuffer = true;
+    popup.pixels = reinterpret_cast<void*>(1);
+
+    manager.getWindowsMutable().back().closeRequested = true;
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    InputEvent motion{};
+    motion.type = InputEventType::PointerMotion;
+    motion.absoluteX = 401.0;
+    motion.absoluteY = 301.0;
+    EXPECT_TRUE(router.route(motion));
+
+    ASSERT_TRUE(registry.contains(parentKey));
+    ASSERT_TRUE(registry.contains(popupKey));
+    EXPECT_EQ(registry.find(parentKey)->second.transitionPhase,
+              SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing);
+    EXPECT_TRUE(registry.find(popupKey)->second.pendingDestroy);
+    EXPECT_TRUE(registry.find(popupKey)->second.ignoreBufferCommits);
+
+    registry.find(parentKey)->second.pixels = nullptr;
+    registry.find(popupKey)->second.pixels = nullptr;
+    close(parentSockets[0]);
+    close(parentSockets[1]);
+    close(popupSockets[0]);
+    close(popupSockets[1]);
+}
+
+TEST(InputRouterTest, PopupDoesNotEscapeParentWindowGroupStacking) {
+    int parentSockets[2];
+    int unrelatedSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, parentSockets), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, unrelatedSockets), 0);
+
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t parentWindow = manager.createWindow("Parent", 100, 80, 200, 140);
+    manager.setDecorationMode(parentWindow, render::DecorationMode::None);
+    const uint32_t unrelatedWindow = manager.createWindow("Unrelated", 320, 90, 120, 100);
+    manager.setDecorationMode(unrelatedWindow, render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(parentSockets[0], 503, 1);
+    const auto popupKey = SurfaceRegistry::makeKey(parentSockets[0], 503, 2);
+    const auto unrelatedKey = SurfaceRegistry::makeKey(unrelatedSockets[0], 503, 3);
+    auto& parent = registry[parentKey];
+    parent.windowId = parentWindow;
+    parent.clientFd = parentSockets[0];
+    parent.hasCommittedBuffer = true;
+    parent.configuredWidth = 200;
+    parent.configuredHeight = 140;
+    auto& popup = registry[popupKey];
+    popup.parentSurfaceKey = parentKey;
+    popup.popupOrder = registry.allocatePopupOrder();
+    popup.popupX = 180;
+    popup.popupY = 20;
+    popup.initialWidth = 100.0f;
+    popup.initialHeight = 60.0f;
+    popup.stride = 400;
+    popup.clientFd = parentSockets[0];
+    popup.hasCommittedBuffer = true;
+    popup.pixels = reinterpret_cast<void*>(1);
+    auto& unrelated = registry[unrelatedKey];
+    unrelated.windowId = unrelatedWindow;
+    unrelated.clientFd = unrelatedSockets[0];
+    unrelated.hasCommittedBuffer = true;
+    unrelated.configuredWidth = 120;
+    unrelated.configuredHeight = 100;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    InputEvent motion{};
+    motion.type = InputEventType::PointerMotion;
+    motion.absoluteX = 350.0;
+    motion.absoluteY = 110.0;
+    EXPECT_TRUE(router.route(motion));
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        unrelatedSockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.absoluteX = 350.0;
+    down.absoluteY = 110.0;
+    // The unrelated window was already focused by the preceding motion, so
+    // this click forwards input without changing WindowManager state.
+    EXPECT_FALSE(router.route(down));
+
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        unrelatedSockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    const auto* input = reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(input->surfaceId, 3u);
+    EXPECT_EQ(input->type, 4u);
+    EXPECT_FLOAT_EQ(input->x, 30.0f);
+    EXPECT_FLOAT_EQ(input->y, 20.0f);
+
+    popup.pixels = nullptr;
+    close(parentSockets[0]);
+    close(parentSockets[1]);
+    close(unrelatedSockets[0]);
+    close(unrelatedSockets[1]);
+}
+
+TEST(InputRouterTest, FractionalOutputScaleKeepsHorizontalResizeLogical) {
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t windowId = manager.createWindow("Fractional resize", 100, 80, 300, 200);
+    manager.setDecorationMode(windowId, render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes, 1.25f);
+
+    InputEvent motion{};
+    motion.type = InputEventType::PointerMotion;
+    motion.absoluteX = 399.5 * 1.25;
+    motion.absoluteY = 150.0 * 1.25;
+    router.route(motion);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.absoluteX = motion.absoluteX;
+    down.absoluteY = motion.absoluteY;
+    ASSERT_TRUE(router.route(down));
+
+    motion.absoluteX = 409.5 * 1.25;
+    ASSERT_TRUE(router.route(motion));
+    const auto& resized = manager.getWindows().back();
+    EXPECT_EQ(resized.resizeEdge, render::ResizeEdge::Right);
+    EXPECT_FLOAT_EQ(resized.pendingWidth, 310.0f);
+    EXPECT_FLOAT_EQ(resized.pendingX, 100.0f);
 }
 
 TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
@@ -317,8 +729,6 @@ TEST(InputRouterTest, LiveResizeWaitsForPresentationThenPublishesLatestWithWorks
 }
 
 TEST(InputRouterTest, SsdMaximizeBeginsMorphTransactionWithoutReleasingCurrentTexture) {
-    unsetenv("LCL_SCALE");
-    DisplayScale::initialize();
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
 
@@ -442,8 +852,114 @@ TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
     const auto* input = reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
     EXPECT_EQ(input->type, 3u);
+    EXPECT_EQ(input->source, static_cast<uint8_t>(protocol::LCLPointerSource::Mouse));
     EXPECT_FLOAT_EQ(input->x, 20.0f);
     EXPECT_FLOAT_EQ(input->y, 20.0f);
+
+    // Route a Touch event
+    InputEvent touchMotion{};
+    touchMotion.type = InputEventType::PointerMotion;
+    touchMotion.source = lcl::platform::PointerSource::Touch;
+    touchMotion.absoluteX = 100.0;
+    touchMotion.absoluteY = 110.0;
+    EXPECT_TRUE(router.route(touchMotion));
+
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    const auto* touchInput = reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(touchInput->type, 3u);
+    EXPECT_EQ(touchInput->source, static_cast<uint8_t>(protocol::LCLPointerSource::Touch));
+
+    // Route a PointerScroll event
+    InputEvent scrollEvent{};
+    scrollEvent.type = InputEventType::PointerScroll;
+    scrollEvent.source = lcl::platform::PointerSource::Mouse;
+    scrollEvent.dx = 0.0;
+    scrollEvent.dy = 1.0;
+    router.route(scrollEvent);
+
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    const auto* scrollInput = reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(scrollInput->type, 6u);
+    EXPECT_FLOAT_EQ(scrollInput->deltaY, 1.0f);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(InputRouterTest, TouchReleaseKeepsEventCoordinatesAfterCursorReset) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t windowId = manager.createWindow("CSD", 80, 90, 320, 200);
+    manager.setDecorationMode(windowId, lcl::render::DecorationMode::CSD);
+
+    SurfaceRegistry registry;
+    const auto surfaceKey = SurfaceRegistry::makeKey(sockets[0], 102, 1);
+    auto& surface = registry[surfaceKey];
+    surface.windowId = windowId;
+    surface.clientFd = sockets[0];
+    surface.hasCommittedBuffer = true;
+    surface.bufferScale = 1.0f;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+
+    InputEvent motion{};
+    motion.type = InputEventType::PointerMotion;
+    motion.source = lcl::platform::PointerSource::Touch;
+    motion.absoluteX = 100.0;
+    motion.absoluteY = 100.0;
+    router.route(motion);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.source = lcl::platform::PointerSource::Touch;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.absoluteX = 100.0;
+    down.absoluteY = 100.0;
+    router.route(down);
+
+    InputEvent up = down;
+    up.pressed = false;
+    router.route(up);
+
+    EXPECT_EQ(manager.getMouseX(), -10000);
+    EXPECT_EQ(manager.getMouseY(), -10000);
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    for (uint8_t expectedType : {3u, 4u, 4u}) {
+        bool receivedInput = false;
+        for (int packet = 0; packet < 4; ++packet) {
+            ASSERT_TRUE(protocol::recvMsgWithFd(
+                sockets[1], header, payload, receivedFd));
+            if (receivedFd >= 0) {
+                close(receivedFd);
+                receivedFd = -1;
+            }
+            if (header.opcode == protocol::LCLOpcode::InputEvent) {
+                receivedInput = true;
+                break;
+            }
+        }
+        ASSERT_TRUE(receivedInput);
+        ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+        const auto* input =
+            reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+        EXPECT_EQ(input->type, expectedType);
+        EXPECT_EQ(input->source,
+                  static_cast<uint8_t>(protocol::LCLPointerSource::Touch));
+        EXPECT_FLOAT_EQ(input->x, 20.0f);
+        EXPECT_FLOAT_EQ(input->y, 10.0f);
+    }
 
     close(sockets[0]);
     close(sockets[1]);
@@ -544,10 +1060,10 @@ TEST(SystemSurfacePolicyTest, WallpaperPlacementAlwaysUsesCompositorOutputBounds
     const auto wallpaper = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::Wallpaper);
     ASSERT_EQ(wallpaper.placement, SystemSurfacePlacement::OutputBounds);
 
-    int x = 40;
-    int y = 50;
-    int width = 800;
-    int height = 600;
+    float x = 40.0f;
+    float y = 50.0f;
+    float width = 800.0f;
+    float height = 600.0f;
     SystemSurfacePolicyRegistry::applyInitialPlacement(wallpaper, 1920, 1080, x, y, width, height);
     EXPECT_EQ(x, 0);
     EXPECT_EQ(y, 0);
@@ -577,6 +1093,71 @@ TEST(SystemSurfacePolicyTest, WallpaperPlacementAlwaysUsesCompositorOutputBounds
     EXPECT_EQ(height, 32);
 }
 
+TEST(SystemSurfacePolicyTest, ReservedZoneUsesLogicalGeometryAtEveryDeviceScale) {
+    for (const float scale : std::array{1.0f, 1.25f, 1.5f, 2.0f}) {
+        SurfaceRegistry registry;
+        auto& menu = registry[1];
+        menu.windowId = 10;
+        menu.systemSurfaceKind = protocol::LCLSystemSurfaceKind::MenuBar;
+        menu.configuredHeight = 32.0f;
+        menu.bufferScale = scale;
+        menu.height = static_cast<uint32_t>(std::ceil(menu.configuredHeight * scale));
+        menu.backingHeight = menu.height;
+
+        auto& dock = registry[2];
+        dock.windowId = 11;
+        dock.systemSurfaceKind = protocol::LCLSystemSurfaceKind::Dock;
+        dock.configuredHeight = 88.0f;
+        dock.bufferScale = scale;
+        dock.height = static_cast<uint32_t>(std::ceil(dock.configuredHeight * scale));
+        dock.backingHeight = dock.height;
+
+        const auto zone = SystemSurfacePolicyRegistry::computeReservedZone(registry);
+        EXPECT_FLOAT_EQ(zone.top, 32.0f) << "device scale " << scale;
+        EXPECT_FLOAT_EQ(zone.bottom, 88.0f) << "device scale " << scale;
+    }
+}
+
+TEST(SystemSurfacePolicyTest, ReservedZonePreservesFractionsAndIgnoresIneligibleSurfaces) {
+    SurfaceRegistry registry;
+
+    auto& menu = registry[1];
+    menu.windowId = 10;
+    menu.systemSurfaceKind = protocol::LCLSystemSurfaceKind::MenuBar;
+    menu.configuredHeight = 31.5f;
+    menu.height = 63;
+
+    auto& largerMenu = registry[2];
+    largerMenu.windowId = 11;
+    largerMenu.systemSurfaceKind = protocol::LCLSystemSurfaceKind::MenuBar;
+    largerMenu.configuredHeight = 32.25f;
+    largerMenu.height = 129;
+
+    auto& dock = registry[3];
+    dock.windowId = 12;
+    dock.systemSurfaceKind = protocol::LCLSystemSurfaceKind::Dock;
+    dock.configuredHeight = 87.25f;
+    dock.height = 349;
+
+    auto& unmappedMenu = registry[4];
+    unmappedMenu.systemSurfaceKind = protocol::LCLSystemSurfaceKind::MenuBar;
+    unmappedMenu.configuredHeight = 1000.0f;
+
+    auto& wallpaper = registry[5];
+    wallpaper.windowId = 13;
+    wallpaper.systemSurfaceKind = protocol::LCLSystemSurfaceKind::Wallpaper;
+    wallpaper.configuredHeight = 1000.0f;
+
+    auto& application = registry[6];
+    application.windowId = 14;
+    application.systemSurfaceKind = protocol::LCLSystemSurfaceKind::None;
+    application.configuredHeight = 1000.0f;
+
+    const auto zone = SystemSurfacePolicyRegistry::computeReservedZone(registry);
+    EXPECT_FLOAT_EQ(zone.top, 32.25f);
+    EXPECT_FLOAT_EQ(zone.bottom, 87.25f);
+}
+
 TEST(WindowGroupTransformTest, ChromeAndClientShareOneSubpixelAnimatedFrame) {
     render::Window window{};
     window.x = 81;
@@ -593,6 +1174,7 @@ TEST(WindowGroupTransformTest, ChromeAndClientShareOneSubpixelAnimatedFrame) {
                     (static_cast<float>(window.width) + group.width) * 0.5f,
                 0.0001f);
     EXPECT_NE(group.width, std::round(group.width));
+    EXPECT_NEAR(group.mapLength(20.0f), 20.0f * group.scale, 0.0001f);
 
     const auto resting = makeWindowGroupTransform(window, 32, 1.0f);
     EXPECT_FLOAT_EQ(resting.x, std::round(resting.x));
@@ -623,6 +1205,20 @@ TEST(CompositorRendererTest, EdgeToEdgeRemovesOnlyTheOpaqueSsdBackground) {
     EXPECT_EQ(kOpaqueSsdTitlebarMaterial.a, 255u);
     EXPECT_TRUE(paintsOpaqueSsdTitlebar(false));
     EXPECT_FALSE(paintsOpaqueSsdTitlebar(true));
+}
+
+TEST(CompositorRendererTest, DoubleInsetBorderKeepsLogicalStrokeInDisplayList) {
+    const auto list = buildDoubleInsetBorderDisplayList(
+        {10.0f, 20.0f, 100.0f, 60.0f}, 10.0f, 2.0f, 1.0f);
+    ASSERT_EQ(list.commands().size(), 2u);
+    for (const auto& command : list.commands()) {
+        const auto* path = std::get_if<graphics::DrawPathCommand>(&command);
+        ASSERT_NE(path, nullptr);
+        EXPECT_EQ(path->paint.style, graphics::PaintStyle::Stroke);
+        EXPECT_FLOAT_EQ(path->paint.stroke.width, 1.0f);
+        EXPECT_EQ(path->paint.stroke.scaling,
+                  graphics::StrokeScaling::ScaleWithTransform);
+    }
 }
 
 TEST(FrameSchedulerTest, AdvancesEnteringAndClosingTransitionsAtBoundedDelta) {

@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 11;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 13;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
@@ -46,7 +46,13 @@ enum class LCLOpcode : uint32_t {
     // Presentation timing is separate from DMA-BUF ownership. A release makes
     // a pool slot writable; this callback paces the next interactive frame.
     FramePresented = 26,
-    SetEdgeToEdge = 27
+    SetEdgeToEdge = 27,
+    PopupSurfaceCreate = 28
+};
+
+/** Minimal v1 popup role. Feature semantics remain in client-side UI policy. */
+enum class LCLPopupRole : uint32_t {
+    Transient = 1,
 };
 
 enum class LCLSystemSurfaceKind : uint32_t {
@@ -158,9 +164,9 @@ struct FilterOp {
 
     // Optional custom parameters (used by advanced filters like Glass and Tint).
     // Glass mapping:
-    // params[0] = thicknessPx
-    // params[1] = refractionFactor
-    // params[2] = dispersionGain
+    // params[0] = logical thickness (zero disables Glass)
+    // params[1] = refractionFactor (zero disables Glass)
+    // params[2] = dispersionGain (zero keeps refraction without RGB separation)
     // Tint mapping:
     // value = alpha in [0, 1]
     // params[0..2] = red, green, blue in [0, 255]
@@ -168,10 +174,10 @@ struct FilterOp {
 };
 
 struct EffectRegion {
-    int32_t x{0};
-    int32_t y{0};
-    uint32_t width{0};
-    uint32_t height{0};
+    float x{0.0f};
+    float y{0.0f};
+    float width{0.0f};
+    float height{0.0f};
     float cornerRadius{0.0f};
     float cornerRoundness{2.0f};
     EffectBoundsPolicy boundsPolicy{EffectBoundsPolicy::Local};
@@ -193,14 +199,27 @@ struct LCLHeader {
 
 struct LCLMsgSurfaceCreate {
     uint32_t surfaceId{0};
-    int32_t x{0};
-    int32_t y{0};
-    uint32_t width{0};
-    uint32_t height{0};
+    float x{0.0f};
+    float y{0.0f};
+    float width{0.0f};
+    float height{0.0f};
     char title[128]{0};
     char appId[64]{0};
-    float bufferScale{1.0f}; // Required v3 logical-to-buffer scale.
     LCLResizePresentationMode resizePresentation{LCLResizePresentationMode::CompositorMorph};
+};
+
+/**
+ * Creates a surface bound to a same-process parent surface. Position is in
+ * parent-window logical coordinates; width/height are popup logical pixels.
+ */
+struct LCLMsgPopupSurfaceCreate {
+    uint32_t surfaceId{0};
+    uint32_t parentSurfaceId{0};
+    LCLPopupRole role{LCLPopupRole::Transient};
+    float x{0.0f};
+    float y{0.0f};
+    float width{0.0f};
+    float height{0.0f};
 };
 
 struct LCLMsgSurfaceDestroy {
@@ -210,18 +229,18 @@ struct LCLMsgSurfaceDestroy {
 struct LCLMsgConfigureBounds {
     uint32_t surfaceId{0};
     uint64_t configureSerial{0};
-    int32_t x{0};
-    int32_t y{0};
-    uint32_t width{0};
-    uint32_t height{0};
+    float x{0.0f};
+    float y{0.0f};
+    float width{0.0f};
+    float height{0.0f};
     // Logical capacity hint for a GPU backing allocation. Content remains
     // width x height and must fit inside this extent without being scaled.
-    uint32_t backingWidth{0};
-    uint32_t backingHeight{0};
+    float backingWidth{0.0f};
+    float backingHeight{0.0f};
     uint32_t headerColor{0};
     uint8_t isFocused{0};
     char title[128]{0};
-    float bufferScale{1.0f}; // Required v3 scale; bounds and input are logical.
+    float bufferScale{1.0f}; // v13 buffer mapping; bounds and input are logical.
     LCLConfigureResizeReason resizeReason{LCLConfigureResizeReason::Initial};
 };
 
@@ -265,15 +284,23 @@ struct LCLMsgAckResponse {
     char message[128]{0};
 };
 
+enum class LCLPointerSource : uint8_t {
+    Mouse = 0,
+    Touch = 1
+};
+
 struct LCLMsgInputEvent {
     uint32_t surfaceId{0};
-    uint32_t type{0};      // 1 = KeyDown, 2 = KeyUp, 3 = PointerMotion, 4 = PointerButton, 5 = KeyPress/TextInput
+    uint32_t type{0};      // 1 = KeyDown, 2 = KeyUp, 3 = PointerMotion, 4 = PointerButton, 5 = KeyPress/TextInput, 6 = PointerScroll
     uint32_t key{0};       // Linux evdev keycode (e.g. KEY_A, KEY_ENTER)
     uint8_t  pressed{0};   // 1 = Down, 0 = Up
     uint8_t  modifiers{0}; // Bitmask: 0x01=Shift, 0x02=Ctrl, 0x04=Alt, 0x08=CapsLock, 0x10=Super
+    uint8_t  source{0};    // 0 = Mouse, 1 = Touch (LCLPointerSource)
     uint32_t codepoint{0}; // Translated UTF-8 / ASCII codepoint (e.g. 'A', 'a', '1', '\n')
     float    x{0.0f};
     float    y{0.0f};
+    float    deltaX{0.0f};
+    float    deltaY{0.0f};
 };
 
 struct LCLMsgSetDecorationMode {
@@ -294,10 +321,10 @@ struct LCLMsgSetWindowLayer {
 
 struct LCLMsgSetReservedZone {
     uint32_t surfaceId{0};
-    uint32_t top{0};    // Reserved inset from top of screen (Menu bar height, e.g. 32px)
-    uint32_t bottom{0}; // Reserved inset from bottom of screen (Dock height)
-    uint32_t left{0};   // Reserved inset from left edge
-    uint32_t right{0};  // Reserved inset from right edge
+    float top{0.0f};    // Logical inset from top of the output.
+    float bottom{0.0f}; // Logical inset from bottom of the output.
+    float left{0.0f};
+    float right{0.0f};
 };
 
 struct LCLMsgSetEffectGraphHeader {
@@ -335,12 +362,12 @@ struct LCLMsgSetInsetBorder {
 
 struct LCLMsgSetWindowCornerRadius {
     uint32_t surfaceId{0};
-    float radiusPx{0.0f};
+    float radius{0.0f};
 };
 
 struct LCLMsgSetWindowCornerStyle {
     uint32_t surfaceId{0};
-    float radiusPx{0.0f};
+    float radius{0.0f};
     float roundness{2.0f};
 };
 
@@ -362,10 +389,10 @@ struct LCLMsgShellScene {
     int32_t clientPid{0};
     uint32_t displayId{0};
     uint32_t workspaceId{0};
-    int32_t x{0};
-    int32_t y{0};
-    int32_t width{0};
-    int32_t height{0};
+    float x{0.0f};
+    float y{0.0f};
+    float width{0.0f};
+    float height{0.0f};
     LCLSceneVisibility visibility{LCLSceneVisibility::Visible};
     char appId[64]{0};
     char title[128]{0};

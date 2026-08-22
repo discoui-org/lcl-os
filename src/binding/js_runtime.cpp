@@ -16,7 +16,7 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/image.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_canvas.hpp"
 
 namespace lcl::binding {
 
@@ -327,7 +327,7 @@ JSValue js_window_app_constructor(JSContext* ctx, JSValueConst new_target, int a
 
     auto* wrapper = new JsWindowAppWrapper();
     wrapper->app = new lcl::ui::WindowApp(
-        lcl::render::makeSkiaCanvas(), width, height, title);
+        lcl::render::makeRasterCanvas(), width, height, title);
     JS_SetOpaque(obj, wrapper);
     return obj;
 }
@@ -503,43 +503,6 @@ JSValue js_window_app_requestWindowClose(JSContext* ctx, JSValueConst this_val, 
 
     bool ok = appWrap->app->requestWindowClose();
     return JS_NewBool(ctx, ok);
-}
-
-JSValue js_window_app_setCsdTitlebarEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
-    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
-
-    int enabled = 0;
-    if (argc >= 1) {
-        enabled = JS_ToBool(ctx, argv[0]);
-    }
-    appWrap->app->setCsdTitlebarEnabled(enabled != 0);
-    return JS_UNDEFINED;
-}
-
-JSValue js_window_app_configureCsdTitlebar(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
-    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
-
-    double height = 32.0;
-    double controlLeft = 10.0;
-    double controlTop = 8.0;
-    double controlSize = 16.0;
-    double controlGap = 6.0;
-
-    if (argc >= 1) JS_ToFloat64(ctx, &height, argv[0]);
-    if (argc >= 2) JS_ToFloat64(ctx, &controlLeft, argv[1]);
-    if (argc >= 3) JS_ToFloat64(ctx, &controlTop, argv[2]);
-    if (argc >= 4) JS_ToFloat64(ctx, &controlSize, argv[3]);
-    if (argc >= 5) JS_ToFloat64(ctx, &controlGap, argv[4]);
-
-    appWrap->app->configureCsdTitlebar(
-        static_cast<float>(height),
-        static_cast<float>(controlLeft),
-        static_cast<float>(controlTop),
-        static_cast<float>(controlSize),
-        static_cast<float>(controlGap));
-    return JS_UNDEFINED;
 }
 
 JSValue js_window_app_setDecorationMode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -817,7 +780,7 @@ JSValue js_widget_setBackgroundColor(JSContext* ctx, JSValueConst this_val, int 
     JS_ToInt32(ctx, &b, argv[2]);
     if (argc >= 4) JS_ToInt32(ctx, &a, argv[3]);
 
-    container->setBackgroundColor(lcl::ui::Color{
+    container->setBackgroundColor(lcl::graphics::Color{
         static_cast<uint8_t>(std::clamp(r, 0, 255)),
         static_cast<uint8_t>(std::clamp(g, 0, 255)),
         static_cast<uint8_t>(std::clamp(b, 0, 255)),
@@ -839,7 +802,7 @@ JSValue js_widget_setBorderColor(JSContext* ctx, JSValueConst this_val, int argc
     JS_ToInt32(ctx, &b, argv[2]);
     if (argc >= 4) JS_ToInt32(ctx, &a, argv[3]);
 
-    container->setBorderColor(lcl::ui::Color{
+    container->setBorderColor(lcl::graphics::Color{
         static_cast<uint8_t>(std::clamp(r, 0, 255)),
         static_cast<uint8_t>(std::clamp(g, 0, 255)),
         static_cast<uint8_t>(std::clamp(b, 0, 255)),
@@ -907,7 +870,7 @@ JSValue js_text_setTextColor(JSContext* ctx, JSValueConst this_val, int argc, JS
     JS_ToInt32(ctx, &b, argv[2]);
     if (argc >= 4) JS_ToInt32(ctx, &a, argv[3]);
 
-    txt->setTextColor(lcl::ui::Color{
+    txt->setTextColor(lcl::graphics::Color{
         static_cast<uint8_t>(std::clamp(r, 0, 255)),
         static_cast<uint8_t>(std::clamp(g, 0, 255)),
         static_cast<uint8_t>(std::clamp(b, 0, 255)),
@@ -950,7 +913,7 @@ JSValue js_effect_addFilter(JSContext* ctx, JSValueConst this_val, int argc, JSV
             blurSurface->addFilter(
                 filterType,
                 static_cast<float>(std::max(0.0, value)),
-                static_cast<float>(std::max(1.0, refractionFactor)),
+                static_cast<float>(std::max(0.0, refractionFactor)),
                 static_cast<float>(std::max(0.0, dispersionGain)));
         } else {
             blurSurface->addFilter(filterType, static_cast<float>(value));
@@ -1780,8 +1743,6 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowRestore", JS_NewCFunction(m_ctx, js_window_app_requestWindowRestore, "requestWindowRestore", 0));
     JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowToggleMaximize", JS_NewCFunction(m_ctx, js_window_app_requestWindowToggleMaximize, "requestWindowToggleMaximize", 0));
     JS_SetPropertyStr(m_ctx, windowAppProto, "requestWindowClose", JS_NewCFunction(m_ctx, js_window_app_requestWindowClose, "requestWindowClose", 0));
-    JS_SetPropertyStr(m_ctx, windowAppProto, "setCsdTitlebarEnabled", JS_NewCFunction(m_ctx, js_window_app_setCsdTitlebarEnabled, "setCsdTitlebarEnabled", 1));
-    JS_SetPropertyStr(m_ctx, windowAppProto, "configureCsdTitlebar", JS_NewCFunction(m_ctx, js_window_app_configureCsdTitlebar, "configureCsdTitlebar", 5));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setDecorationMode", JS_NewCFunction(m_ctx, js_window_app_setDecorationMode, "setDecorationMode", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setEdgeToEdge", JS_NewCFunction(m_ctx, js_window_app_setEdgeToEdge, "setEdgeToEdge", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setWindowCornerStyle", JS_NewCFunction(m_ctx, js_window_app_setWindowCornerStyle, "setWindowCornerStyle", 2));

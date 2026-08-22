@@ -14,8 +14,10 @@ class InputRouter {
 public:
     InputRouter(render::WindowManager& windowManager,
                 SurfaceRegistry& surfaces,
-                SceneRegistry& scenes)
-        : m_windowManager(windowManager), m_surfaces(surfaces), m_scenes(scenes) {}
+                SceneRegistry& scenes,
+                float outputScale = 1.0f)
+        : m_windowManager(windowManager), m_surfaces(surfaces), m_scenes(scenes),
+          m_outputScale(outputScale) {}
 
     /**
      * Applies compositor interaction (hit test/focus/resize) then sends a
@@ -34,11 +36,17 @@ private:
     void sendPendingConfigures();
     void processCloseRequests();
     void forwardToFocusedSurface(const InputEvent& event) const;
+    void forwardToSurface(const InputEvent& event,
+                          SurfaceRegistry::Key surfaceKey) const;
+    SurfaceRegistry::Key findPopupAt(float globalX, float globalY) const;
+    void destroyPopupChildren(SurfaceRegistry::Key parentSurfaceKey);
     static bool startClosingTransition(SurfaceRegistry::SurfaceEntry& entry) noexcept;
 
     render::WindowManager& m_windowManager;
     SurfaceRegistry& m_surfaces;
     SceneRegistry& m_scenes;
+    float m_outputScale{1.0f};
+    SurfaceRegistry::Key m_activePopupSurface{0};
     std::chrono::nanoseconds m_refreshInterval{std::chrono::nanoseconds(16666667)};
 };
 

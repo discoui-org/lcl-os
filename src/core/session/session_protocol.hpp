@@ -11,7 +11,7 @@ inline constexpr uint32_t kSessionProtocolMagic = 0x4C435353; // "LCSS"
 inline constexpr uint32_t kSessionProtocolVersion = 1;
 inline constexpr uint32_t kSessionWireHeaderSize = 20;
 inline constexpr uint32_t kSessionMaxPayload = 64u * 1024u;
-inline constexpr const char* kSessionSocket = "/run/user/1000/lcl-sessiond.sock";
+inline constexpr const char* kSessionSocket = "/Runtime/lcl-sessiond.sock";
 
 enum class SessionOpcode : uint32_t {
     CatalogRequest = 1,

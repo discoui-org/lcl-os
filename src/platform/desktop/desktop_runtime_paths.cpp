@@ -3,26 +3,28 @@
 namespace lcl::platform::desktop {
 
 std::string DesktopRuntimePaths::compositorSocketPath() const {
-    return "/run/user/1000/lcl-compositor.sock";
+    return "/Runtime/lcl-compositor.sock";
 }
 
 std::string DesktopRuntimePaths::sessionSocketPath() const {
-    return "/run/user/1000/lcl-sessiond.sock";
+    return "/Runtime/lcl-sessiond.sock";
 }
 
 std::string DesktopRuntimePaths::appCatalogDirectory() const {
-    return "/usr/share/lcl/apps";
+    return "/System/Applications";
 }
 
 std::vector<std::string> DesktopRuntimePaths::fontSearchDirectories() const {
     return {
+        "/System/Library/Fonts",
+        "/Library/Fonts",
         "/usr/share/fonts",
         "/usr/local/share/fonts"
     };
 }
 
 std::string DesktopRuntimePaths::temporaryDirectory() const {
-    return "/tmp";
+    return "/Runtime/Temporary";
 }
 
 } // namespace lcl::platform::desktop

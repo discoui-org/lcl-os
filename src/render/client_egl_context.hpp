@@ -7,7 +7,13 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+
+#if !defined(__ANDROID__)
 #include <gbm.h>
+#else
+struct gbm_bo;
+struct gbm_device;
+#endif
 
 #include "platform/common/graphics_context.hpp"
 
@@ -102,10 +108,12 @@ private:
     std::string m_rendererString{"unavailable"};
     std::vector<DmaBufSlot> m_dmaBufs;
     int m_currentDmaBuf{-1};
+#if !defined(__ANDROID__)
     uint32_t m_nextDmaBufId{1};
     uint32_t m_dmaBufCapacityWidth{0};
     uint32_t m_dmaBufCapacityHeight{0};
     bool m_dmaBufTransportLogged{false};
+#endif
 };
 
 } // namespace lcl::render

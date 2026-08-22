@@ -7,15 +7,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Dependencies
-find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 
-pkg_check_modules(DRM libdrm)
-pkg_check_modules(GBM gbm)
-pkg_check_modules(EGL egl)
-pkg_check_modules(GLES2 glesv2)
-pkg_check_modules(LIBINPUT libinput)
-pkg_check_modules(UDEV libudev)
+if(NOT ANDROID)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(DRM libdrm)
+    pkg_check_modules(GBM gbm)
+    pkg_check_modules(EGL egl)
+    pkg_check_modules(GLES2 glesv2)
+    pkg_check_modules(LIBINPUT libinput)
+    pkg_check_modules(UDEV libudev)
+endif()
 
 # QuickJS Engine (C-based JavaScript Runtime)
 include(FetchContent)
@@ -57,11 +59,41 @@ target_include_directories(lcl-protocol PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# Backend-neutral logical geometry, path, paint and display-list contracts.
+add_subdirectory(lcl-graphics)
+
+add_library(lcl-path-raster STATIC
+    src/render/path_rasterizer.cpp
+)
+target_include_directories(lcl-path-raster PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(lcl-path-raster PUBLIC
+    lcl-graphics
+)
+
 # Display scale is shared policy with no renderer or platform-GPU dependency.
 # Keeping it independent lets lcl-ui consume logical-pixel configuration
 # without pulling compositor display code into application binaries.
 add_library(lcl-display-scale STATIC
     src/core/display/display_scale.cpp
+)
+
+# Font selection and glyph-advance metrics are shared by lcl-ui layout and
+# client/compositor rendering. Keeping this below the UI ABI avoids a renderer
+# dependency from widgets while preserving one authoritative measurement path.
+add_library(lcl-font-metrics STATIC
+    src/render/font_renderer.cpp
+    src/render/text_metrics.cpp
+)
+
+target_include_directories(lcl-font-metrics PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+)
+
+target_link_libraries(lcl-font-metrics PUBLIC
+    lcl-graphics
 )
 
 # Session lifecycle transport and authority stay independent from compositor
@@ -112,111 +144,54 @@ target_include_directories(lcl-display-scale PUBLIC
 # Renderer/UI-independent motion primitives shared by clients and compositor.
 add_subdirectory(lcl-motion)
 
-# Backend-neutral widgets, layout, events and WindowApp lifecycle.
-add_subdirectory(lcl-ui)
-
-# Client canvas attempts a render-node-only EGL context and falls back to the
-# established SHM raster path.  It never owns compositor KMS presentation.
-add_library(lcl-canvas-skia STATIC
-    src/render/client_egl_context.cpp
-    src/render/skia_canvas.cpp
-    src/render/skia_renderer.cpp
-    src/render/font_renderer.cpp
-)
-
-target_include_directories(lcl-canvas-skia PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
-    ${DRM_INCLUDE_DIRS}
-    ${GBM_INCLUDE_DIRS}
-    ${EGL_INCLUDE_DIRS}
-    ${GLES2_INCLUDE_DIRS}
-)
-
-target_link_libraries(lcl-canvas-skia PUBLIC
-    lcl-ui
-    lcl-protocol
-    ${DRM_LIBRARIES}
-    ${GBM_LIBRARIES}
-    ${EGL_LIBRARIES}
-    ${GLES2_LIBRARIES}
-    Threads::Threads
-)
-
-target_compile_options(lcl-canvas-skia PRIVATE
-    ${DRM_CFLAGS_OTHER}
-    ${GBM_CFLAGS_OTHER}
-    ${EGL_CFLAGS_OTHER}
-    ${GLES2_CFLAGS_OTHER}
-)
-
-# Desktop Linux platform implementation library
-add_library(lcl-platform-desktop STATIC
-    src/platform/desktop/drm_display_backend.cpp
-    src/platform/desktop/gbm_graphics_context.cpp
-    src/platform/desktop/evdev_input_backend.cpp
-    src/platform/desktop/evdev_key_mapper.cpp
-    src/platform/desktop/desktop_runtime_paths.cpp
-    src/platform/desktop/desktop_platform_services.cpp
-)
-
-target_include_directories(lcl-platform-desktop PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${DRM_INCLUDE_DIRS}
-    ${GBM_INCLUDE_DIRS}
-    ${EGL_INCLUDE_DIRS}
-    ${GLES2_INCLUDE_DIRS}
-    ${LIBINPUT_INCLUDE_DIRS}
-    ${UDEV_INCLUDE_DIRS}
-)
-
-target_link_libraries(lcl-platform-desktop PUBLIC
-    lcl-platform-common
-    lcl-display-scale
-    ${DRM_LIBRARIES}
-    ${GBM_LIBRARIES}
-    ${EGL_LIBRARIES}
-    ${GLES2_LIBRARIES}
-    ${LIBINPUT_LIBRARIES}
-    ${UDEV_LIBRARIES}
-)
-
-target_compile_options(lcl-platform-desktop PRIVATE
-    ${DRM_CFLAGS_OTHER}
-    ${GBM_CFLAGS_OTHER}
-    ${EGL_CFLAGS_OTHER}
-    ${GLES2_CFLAGS_OTHER}
-    ${LIBINPUT_CFLAGS_OTHER}
-    ${UDEV_CFLAGS_OTHER}
-)
+# Renderer-independent window chrome state shared by CSD clients and SSD.
+add_subdirectory(lcl-window-chrome)
 
 # Compositor-owned render/present layer.
-# Depends strictly on lcl-platform-common; never on lcl-platform-desktop.
+# Depends strictly on lcl-platform-common; never on concrete platform layers.
 add_library(lcl-render STATIC
-    src/render/font_renderer.cpp
     src/render/renderer.cpp
-    src/render/skia_renderer.cpp
-    src/render/window_chrome_widget.cpp
+    src/render/raster_renderer.cpp
     src/render/window_manager.cpp
 )
 
 target_include_directories(lcl-render PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${GLES2_INCLUDE_DIRS}
 )
 
-target_link_libraries(lcl-render PUBLIC
-    lcl-motion
-    lcl-protocol
-    lcl-display-scale
-    lcl-platform-common
-    ${GLES2_LIBRARIES}
-    Threads::Threads
-)
-
-target_compile_options(lcl-render PRIVATE
-    ${GLES2_CFLAGS_OTHER}
-)
+if(ANDROID)
+    target_link_libraries(lcl-render PUBLIC
+        lcl-motion
+        lcl-graphics
+        lcl-path-raster
+        lcl-window-chrome
+        lcl-protocol
+        lcl-font-metrics
+        lcl-platform-common
+        GLESv3
+        EGL
+        android
+        Threads::Threads
+    )
+else()
+    target_include_directories(lcl-render PUBLIC
+        ${GLES2_INCLUDE_DIRS}
+    )
+    target_link_libraries(lcl-render PUBLIC
+        lcl-motion
+        lcl-graphics
+        lcl-path-raster
+        lcl-window-chrome
+        lcl-protocol
+        lcl-font-metrics
+        lcl-platform-common
+        ${GLES2_LIBRARIES}
+        Threads::Threads
+    )
+    target_compile_options(lcl-render PRIVATE
+        ${GLES2_CFLAGS_OTHER}
+    )
+endif()
 
 # Platform-agnostic Core Compositor Engine Library
 add_library(lcl-core-engine STATIC
@@ -244,212 +219,360 @@ target_link_libraries(lcl-core-engine PUBLIC
     lcl-protocol
     lcl-display-scale
     lcl-session
-    lcl-motion
+        lcl-motion
+        lcl-graphics
     Threads::Threads
 )
 
-# Main Compositor Executable Target (Desktop Composition Root)
-add_executable(lcl-core
-    src/main.cpp
-)
+if(ANDROID)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
-target_include_directories(lcl-core PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-target_link_libraries(lcl-core PRIVATE
-    lcl-core-engine
-    lcl-platform-desktop
-)
-
-target_compile_options(lcl-core PRIVATE
-    ${LIBINPUT_CFLAGS_OTHER}
-    ${UDEV_CFLAGS_OTHER}
-)
-
-# Session authority: app catalog, launch, and process lifecycle.
-add_executable(lcl-sessiond
-    src/tools/sessiond_main.cpp
-)
-
-target_include_directories(lcl-sessiond PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-target_link_libraries(lcl-sessiond PRIVATE
-    lcl-session
-    Threads::Threads
-)
-
-# Native CLI App Launcher Target (lcl-open). It never forks applications;
-# all process lifecycle is delegated to lcl-sessiond.
-add_executable(lcl-open
-    src/tools/open_main.cpp
-)
-
-target_include_directories(lcl-open PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-target_link_libraries(lcl-open PRIVATE
-    lcl-session
-)
-
-# Standalone Desktop Shell Daemon Target (lcl-desktop-shell)
-add_executable(lcl-desktop-shell
-    src/apps/desktop_shell/ui_main.cpp
-    src/core/ipc/ipc_manager.cpp
-)
-
-target_include_directories(lcl-desktop-shell PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
-)
-
-target_link_libraries(lcl-desktop-shell PRIVATE
-    lcl-ui
-    lcl-canvas-skia
-    lcl-protocol
-    lcl-shell-state
-    lcl-session
-    Threads::Threads
-)
-
-# Standalone Client Terminal App Target (lcl-terminal)
-add_executable(lcl-terminal
-    src/tools/terminal_main.cpp
-    src/apps/terminal/terminal_app.cpp
-    src/apps/terminal/terminal_view.cpp
-    src/core/terminal/pty_manager.cpp
-)
-
-target_include_directories(lcl-terminal PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
-)
-
-target_link_libraries(lcl-terminal PRIVATE
-    lcl-ui
-    lcl-canvas-skia
-    lcl-protocol
-    Threads::Threads
-)
-
-# JavaScript Runtime Executable Target (lcl-js)
-add_executable(lcl-js
-    src/tools/js_main.cpp
-    src/binding/js_runtime.cpp
-)
-
-target_include_directories(lcl-js PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
-    ${quickjs_SOURCE_DIR}
-)
-
-target_link_libraries(lcl-js PRIVATE
-    lcl-ui
-    lcl-canvas-skia
-    qjs
-    Threads::Threads
-)
-
-# Subdirectories
-add_subdirectory(apps/ui_demo)
-add_subdirectory(apps/ui_demo_js)
-
-# Unit Testing Framework Configuration
-option(BUILD_TESTS "Build LCL OS unit tests" ON)
-
-if(BUILD_TESTS)
-    enable_testing()
-    include(FetchContent)
-    FetchContent_Declare(
-        googletest
-        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
-
-    add_executable(lcl_unit_tests
-        tests/test_platform_interfaces.cpp
-        tests/test_motion.cpp
-        tests/test_lcl_protocol.cpp
-        tests/test_app_bundle_parser.cpp
-        tests/test_session_service.cpp
-        tests/test_display_scale.cpp
-        tests/test_ipc_manager.cpp
-        tests/test_input_manager.cpp
-        tests/test_key_mapper.cpp
-        tests/test_compositor_components.cpp
-        src/core/shell/shell_state_client.cpp
-        src/core/shell/shell_state_model.cpp
-        tests/test_shell_state_model.cpp
-        tests/test_window_manager.cpp
-        tests/test_lcl_ui.cpp
-        tests/test_lcl_ui_events.cpp
-        tests/test_js_runtime.cpp
-        src/core/ipc/ipc_manager.cpp
-        src/core/compositor/frame_scheduler.cpp
-        src/core/compositor/input_router.cpp
-        src/core/compositor/surface_registry.cpp
-        src/core/compositor/system_surface_policy.cpp
-        src/core/scene/focus_controller.cpp
-        src/core/scene/scene_registry.cpp
-        src/core/scene/shell_state_broker.cpp
-        src/core/app/app_bundle_parser.cpp
-        src/core/display/display_scale.cpp
-        src/core/input/input_manager.cpp
-        src/render/window_chrome_widget.cpp
-        src/render/window_manager.cpp
-        src/binding/js_runtime.cpp
+    # Collect generated AIDL NDK sources
+    file(GLOB_RECURSE ANDROID_AIDL_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/src/*.cpp"
     )
 
-    # This executable deliberately links only lcl-ui. It exercises WindowApp
-    # with an injected mock Canvas so any accidental renderer/EGL/DRM
-    # dependency added to the UI target fails at link time.
-    add_executable(lcl_ui_boundary_smoke
-        tests/lcl_ui_boundary_smoke.cpp
+    # Android Platform implementation library
+    add_library(lcl-platform-android STATIC
+        src/platform/android/android_input_backend.cpp
+        src/platform/android/android_display_backend.cpp
+        src/platform/android/android_graphics_context.cpp
+        src/platform/android/android_platform_services.cpp
+        ${ANDROID_AIDL_SOURCES}
     )
 
-    target_include_directories(lcl_ui_boundary_smoke PRIVATE
+    target_include_directories(lcl-platform-android PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/include
+    )
+
+    target_link_libraries(lcl-platform-android PUBLIC
+        lcl-platform-common
+        binder_ndk
+        EGL
+        GLESv3
+        android
+        dl
+    )
+
+    # Standalone Platform Smoke Test
+    add_executable(test_android_platform_services
+        tests/android/test_android_platform_services.cpp
+    )
+    target_include_directories(test_android_platform_services PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/include
+    )
+    target_link_libraries(test_android_platform_services PRIVATE
+        lcl-platform-android
+    )
+
+    # Android Compositor Runtime (Composition Root)
+    add_executable(lcl-core-android
+        src/platform/android/main_android.cpp
+    )
+    target_include_directories(lcl-core-android PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/include
+    )
+    target_link_libraries(lcl-core-android PRIVATE
+        lcl-core-engine
+        lcl-platform-android
+    )
+else()
+    # =========================================================================
+    # LCL Application Runtime & Canonical Executables
+    #
+    # ARCHITECTURAL INVARIANT:
+    # For the same CPU architecture, LCL application executables are
+    # platform-independent artifacts and must be reused byte-for-byte
+    # across LCL platform targets.
+    #
+    # Platform differences terminate below the LCL userspace ABI.
+    # =========================================================================
+
+    # Backend-neutral widgets, layout, events and WindowApp lifecycle.
+    add_subdirectory(lcl-ui)
+
+    # Client canvas attempts a render-node-only EGL context and falls back to the
+    # established SHM raster path.  It never owns compositor KMS presentation.
+    add_library(lcl-raster STATIC
+        src/render/client_egl_context.cpp
+        src/render/raster_canvas.cpp
+        src/render/raster_renderer.cpp
+    )
+
+    target_include_directories(lcl-raster PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+        ${DRM_INCLUDE_DIRS}
+        ${GBM_INCLUDE_DIRS}
+        ${EGL_INCLUDE_DIRS}
+        ${GLES2_INCLUDE_DIRS}
     )
 
-    target_link_libraries(lcl_ui_boundary_smoke PRIVATE
-        lcl-ui
+    target_link_libraries(lcl-raster PUBLIC
+        lcl-graphics
+        lcl-path-raster
+        lcl-font-metrics
+        lcl-protocol
+        ${DRM_LIBRARIES}
+        ${GBM_LIBRARIES}
+        ${EGL_LIBRARIES}
+        ${GLES2_LIBRARIES}
         Threads::Threads
     )
 
-    target_compile_options(lcl_unit_tests PRIVATE -frtti)
-    target_compile_options(gtest PRIVATE -frtti)
-    target_compile_options(gtest_main PRIVATE -frtti)
+    target_compile_options(lcl-raster PRIVATE
+        ${DRM_CFLAGS_OTHER}
+        ${GBM_CFLAGS_OTHER}
+        ${EGL_CFLAGS_OTHER}
+        ${GLES2_CFLAGS_OTHER}
+    )
 
-    target_include_directories(lcl_unit_tests PRIVATE
+    # Desktop Linux platform implementation library
+    add_library(lcl-platform-desktop STATIC
+        src/platform/desktop/drm_display_backend.cpp
+        src/platform/desktop/gbm_graphics_context.cpp
+        src/platform/desktop/evdev_input_backend.cpp
+        src/platform/desktop/evdev_key_mapper.cpp
+        src/platform/desktop/desktop_runtime_paths.cpp
+        src/platform/desktop/desktop_platform_services.cpp
+    )
+
+    target_include_directories(lcl-platform-desktop PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
-        ${quickjs_SOURCE_DIR}
+        ${DRM_INCLUDE_DIRS}
+        ${GBM_INCLUDE_DIRS}
+        ${EGL_INCLUDE_DIRS}
+        ${GLES2_INCLUDE_DIRS}
         ${LIBINPUT_INCLUDE_DIRS}
         ${UDEV_INCLUDE_DIRS}
     )
 
-    target_link_libraries(lcl_unit_tests PRIVATE
-        gtest_main
-        gtest
-        Threads::Threads
-        lcl-ui
-        lcl-canvas-skia
-        lcl-platform-desktop
-        lcl-protocol
-        lcl-session
-        qjs
+    target_link_libraries(lcl-platform-desktop PUBLIC
+        lcl-platform-common
+        ${DRM_LIBRARIES}
+        ${GBM_LIBRARIES}
+        ${EGL_LIBRARIES}
+        ${GLES2_LIBRARIES}
         ${LIBINPUT_LIBRARIES}
         ${UDEV_LIBRARIES}
     )
 
-    include(GoogleTest)
-    gtest_discover_tests(lcl_unit_tests)
-    add_test(NAME LclUiBoundarySmoke COMMAND lcl_ui_boundary_smoke)
+    target_compile_options(lcl-platform-desktop PRIVATE
+        ${DRM_CFLAGS_OTHER}
+        ${GBM_CFLAGS_OTHER}
+        ${EGL_CFLAGS_OTHER}
+        ${GLES2_CFLAGS_OTHER}
+        ${LIBINPUT_CFLAGS_OTHER}
+        ${UDEV_CFLAGS_OTHER}
+    )
+
+    # Main Compositor Executable Target (Desktop Composition Root)
+    add_executable(lcl-core
+        src/main.cpp
+    )
+
+    target_include_directories(lcl-core PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(lcl-core PRIVATE
+        lcl-core-engine
+        lcl-platform-desktop
+    )
+
+    target_compile_options(lcl-core PRIVATE
+        ${LIBINPUT_CFLAGS_OTHER}
+        ${UDEV_CFLAGS_OTHER}
+    )
+
+    # Session authority: app catalog, launch, and process lifecycle.
+    add_executable(lcl-sessiond
+        src/tools/sessiond_main.cpp
+    )
+
+    target_include_directories(lcl-sessiond PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(lcl-sessiond PRIVATE
+        lcl-session
+        Threads::Threads
+    )
+
+    # Native CLI App Launcher Target (lcl-open). It never forks applications;
+    # all process lifecycle is delegated to lcl-sessiond.
+    add_executable(lcl-open
+        src/tools/open_main.cpp
+    )
+
+    target_include_directories(lcl-open PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(lcl-open PRIVATE
+        lcl-session
+    )
+
+    # Standalone Desktop Shell Daemon Target (lcl-desktop-shell)
+    add_executable(lcl-desktop-shell
+        src/apps/desktop_shell/ui_main.cpp
+        src/core/ipc/ipc_manager.cpp
+    )
+
+    target_include_directories(lcl-desktop-shell PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+
+    target_link_libraries(lcl-desktop-shell PRIVATE
+        lcl-ui
+        lcl-raster
+        lcl-protocol
+        lcl-shell-state
+        lcl-session
+        Threads::Threads
+    )
+
+    # Standalone Client Terminal App Target (lcl-terminal)
+    add_executable(lcl-terminal
+        src/tools/terminal_main.cpp
+        src/apps/terminal/terminal_app.cpp
+        src/apps/terminal/terminal_view.cpp
+        src/core/terminal/pty_manager.cpp
+    )
+
+    target_include_directories(lcl-terminal PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+
+    target_link_libraries(lcl-terminal PRIVATE
+        lcl-ui
+        lcl-raster
+        lcl-protocol
+        Threads::Threads
+    )
+
+    # JavaScript Runtime Executable Target (lcl-js)
+    add_executable(lcl-js
+        src/tools/js_main.cpp
+        src/binding/js_runtime.cpp
+    )
+
+    target_include_directories(lcl-js PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+        ${quickjs_SOURCE_DIR}
+    )
+
+    target_link_libraries(lcl-js PRIVATE
+        lcl-ui
+        lcl-raster
+        qjs
+        Threads::Threads
+    )
+
+    # Subdirectories
+    add_subdirectory(apps/ui_demo)
+    add_subdirectory(apps/ui_demo_js)
+
+    # Unit Testing Framework Configuration
+    option(BUILD_TESTS "Build LCL OS unit tests" ON)
+
+    if(BUILD_TESTS)
+        enable_testing()
+        include(FetchContent)
+        FetchContent_Declare(
+            googletest
+            URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        )
+        set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(googletest)
+
+        add_executable(lcl_unit_tests
+            tests/test_platform_interfaces.cpp
+            tests/test_motion.cpp
+            tests/test_lcl_protocol.cpp
+            tests/test_app_bundle_parser.cpp
+            tests/test_session_service.cpp
+            tests/test_display_scale.cpp
+            tests/test_ipc_manager.cpp
+            tests/test_input_manager.cpp
+            tests/test_key_mapper.cpp
+            tests/test_compositor_components.cpp
+            src/core/shell/shell_state_client.cpp
+            src/core/shell/shell_state_model.cpp
+            tests/test_shell_state_model.cpp
+            tests/test_window_manager.cpp
+            tests/test_lcl_ui.cpp
+            tests/test_lcl_ui_events.cpp
+            tests/test_js_runtime.cpp
+            src/core/ipc/ipc_manager.cpp
+            src/core/compositor/frame_scheduler.cpp
+            src/core/compositor/input_router.cpp
+            src/core/compositor/surface_registry.cpp
+            src/core/compositor/system_surface_policy.cpp
+            src/core/scene/focus_controller.cpp
+            src/core/scene/scene_registry.cpp
+            src/core/scene/shell_state_broker.cpp
+            src/core/app/app_bundle_parser.cpp
+            src/core/display/display_scale.cpp
+            src/core/input/input_manager.cpp
+            src/platform/android/android_input_backend.cpp
+            src/render/window_manager.cpp
+            src/binding/js_runtime.cpp
+        )
+
+        add_executable(lcl_ui_boundary_smoke
+            tests/lcl_ui_boundary_smoke.cpp
+        )
+
+        target_include_directories(lcl_ui_boundary_smoke PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+        )
+
+        target_link_libraries(lcl_ui_boundary_smoke PRIVATE
+            lcl-ui
+            Threads::Threads
+        )
+
+        target_compile_options(lcl_unit_tests PRIVATE -frtti)
+        target_compile_options(gtest PRIVATE -frtti)
+        target_compile_options(gtest_main PRIVATE -frtti)
+
+        target_include_directories(lcl_unit_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+            ${quickjs_SOURCE_DIR}
+            ${LIBINPUT_INCLUDE_DIRS}
+            ${UDEV_INCLUDE_DIRS}
+        )
+
+        target_link_libraries(lcl_unit_tests PRIVATE
+            gtest_main
+            gtest
+            Threads::Threads
+            lcl-ui
+            lcl-window-chrome
+            lcl-raster
+            lcl-platform-desktop
+            lcl-protocol
+            lcl-session
+            qjs
+            ${LIBINPUT_LIBRARIES}
+            ${UDEV_LIBRARIES}
+        )
+
+        include(GoogleTest)
+        gtest_discover_tests(lcl_unit_tests
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        add_test(NAME LclUiBoundarySmoke COMMAND lcl_ui_boundary_smoke)
+        set_tests_properties(LclUiBoundarySmoke PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
 endif()

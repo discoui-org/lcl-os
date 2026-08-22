@@ -18,7 +18,7 @@ The LCL architecture consists of 5 main decoupled layers:
 +-----------------------------------------------------------------------+
 |  Application & IPC Layer (lcl-ui clients, compositor AF_UNIX IPC)    |
 +-----------------------------------------------------------------------+
-|  Graphics & Window Manager (Skia/stb_truetype, FontRenderer, PTY)     |
+|  Graphics & Window Manager (LCL raster/stb_truetype, FontRenderer, PTY)     |
 +-----------------------------------------------------------------------+
 |  Linux Kernel & Hardware Layer (DRM/KMS, virtio_gpu, evdev, io_uring) |
 +-----------------------------------------------------------------------+
@@ -50,8 +50,8 @@ The LCL architecture consists of 5 main decoupled layers:
 * **Session RPC:** `lcl-sessiond` exposes an owner-only `SOCK_SEQPACKET`
   endpoint at `/run/user/1000/lcl-sessiond.sock`. Its explicit little-endian
   requests cover catalog snapshots and launch/process-exit lifecycle; this is
-  distinct from compositor protocol v11 surface IPC.
-* **Secure Unix Domain Socket IPC:** Compositor protocol v11 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`. Live GPU resize carries independent content/backing extents and compositor presentation timestamps. Edge-to-edge is a platform-neutral surface policy: one outer-surface effect chain can extend beneath desktop or mobile system insets while client widgets remain inside the safe content rect.
+  distinct from compositor protocol v13 surface IPC.
+* **Secure Unix Domain Socket IPC:** Compositor protocol v13 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`. Live GPU resize carries independent logical content/backing extents and compositor presentation timestamps. Edge-to-edge is a platform-neutral surface policy: one outer-surface effect chain can extend beneath desktop or mobile system insets while client widgets remain inside the safe content rect. `PopupSurface v1` reuses the same buffer infrastructure while binding a popup to a same-process parent surface; it is composed and hit-tested inside that parent's WindowGroup rather than entering the normal window stack.
 * **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`. Manifests declare a stable `id`; older bundles receive a deterministic `bundle.<name>` compatibility ID.
 * **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ session client. It sends `LaunchRequest` to sessiond and optionally waits for `ProcessExited`; it never forks or execs applications itself.
 
@@ -150,7 +150,7 @@ Guest display boot args (when `NATIVE=1`):
 - 1x displays: `video=` = host resolution, `lcl.scale=1`
 - QEMU cocoa: `full-screen=on,zoom-to-fit=on` (fill screen if mode list is inexact)
 
-`DisplayManager` prefers boot-requested mode. `DisplayScale` multiplies fonts/chrome/windows by `lcl.scale`.
+`DisplayManager` prefers the boot-requested mode. Output initialization turns `lcl.scale` into `RenderTarget.deviceScale`; widgets, chrome, paths, strokes and effects remain in logical units and receive that scale only during raster replay.
 
 ---
 
@@ -161,6 +161,10 @@ Guest display boot args (when `NATIVE=1`):
 1. **Client Applications (User Space / UI Kits):** Kendi iç düzenini (Flexbox, Grid, Monospace Cell) yönetir. WM'den gelen pencere resize isteklerini (`RESIZE_REQUEST` / `ConfigureBounds`) alır. Kendi mantığına göre uygun boyutta SHM buffer allocate eder ve `ATTACH_BUFFER` ile sunar. WM veya Compositor'ün ekran koordinatları (\(X, Y\)) hakkında bilgi sahibi değildir.
 2. **Window Manager (WM):** Pencere geometrisi, odak yönetimi, sürükleme/boyutlandırma durum makinelerinin (`WM Drag/Resize State`) tek sahibidir. Sürüklenen kenara (`ResizeEdge`) göre sabit kalacak anchor noktasını korur. Client'tan gelen gerçek tampon boyutunu (\(frameW, frameH\)) kabul eder, `commitSurfaceGeometry` metodu üzerinden offset hesabını yapar ve pencerenin nihai dünya koordinatlarını (\(X_{final}, Y_{final}\)) belirler. Uygulamaya özel kod barındıramaz.
 3. **Compositor (Presentation Engine):** "Kör Çizici" (Blind Renderer) olarak çalışır. Tamponların ekrana çizimi, z-index harmanlaması (blending) ve vSync eşzamanlamasını üstlenir. Pencere durum makinelerinden veya kenar hesaplarından bağımsızdır. WM'in onayladığı geometriyi ve Client'ın sunduğu tamponu vSync anında atomic olarak ekrana çeker.
+
+Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı değildir. `WindowApp` içindeki widget-olmayan `TransientController` yalnız stable handle, dismissal ve teardown policy'sini yönetir; local transient primitive gerektiğinde tek normal WindowRoot ağacında absolute Widget sibling olarak çizilir. `Popover v1` ise her zaman parent-bound `PopupSurface v1` kullanır.
+
+`Popover v1`, generic content'i hosted `WindowApp` üzerinden anchor-altı ve left-aligned bir `PopupSurface` içinde sunar; pencere içine sığma durumuna göre ikinci bir presentation yolu seçmez. Generic content sahipliği yalnız lcl-ui Popover katmanındadır; compositor Popover kavramını bilmez.
 
 ### Compositor içi sorumluluklar
 
@@ -192,12 +196,49 @@ Guest display boot args (when `NATIVE=1`):
 2. **Common Decoration Negotiation Protocol (`lcl_protocol`):**
    - `LCLOpcode::SetDecorationMode` IPC mesajı ile istemciler `SSD` (Server-Side Decoration) veya `CSD` (Client-Side Decoration) modlarını talep eder.
    - **Compositor WindowManager:** Varsayılan olarak `SSD` modunda pencere başlık çubuğunu çizer. İstemci `CSD` talep ederse başlık çubuğu çizimini devre dışı bırakarak tüm render alanını istemciye devreder.
+   - Her iki mod da renderer bağımsız `lcl-window-chrome` hedefindeki aynı
+     `WindowChromeWidget` layout, hit-test, aksiyon, interaction, motion ve
+     görsel renk çözümlemesini host eder; yalnızca CSD Canvas painter ile SSD
+     compositor painter birbirinden ayrıdır.
    - Mobil shell gelecekte aynı compositor ve revisioned shell-state sözleşmesini tüketir; ayrı bir `lcl-mobile-wm` veya paralel pencere otoritesi yoktur.
 
 ---
 
 ## 7. Unix Domain Socket IPC & Disconnect Detection
 
-1. **Secure Domain Socket Protocol:** Compositor IPC v3 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
-2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v3 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
+1. **Secure Domain Socket Protocol:** Compositor IPC v13 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
+2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v13 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
 3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits a typed disconnect event upon socket EOF. `ProtocolDispatcher` ilgili pencereyi `WindowManager`dan kaldırır; `SurfaceRegistry` SHM eşlemesini ve memfd'yi tek sahip olarak serbest bırakır.
+
+---
+
+## 8. Multi-Platform Substrates & Stage 4C.3 Architecture
+
+LCL OS decouples the user-space runtime environment from the underlying platform substrate:
+
+```text
++-----------------------------------------------------------------------------------------+
+|                  Canonical LCL Userspace (build/rootfs/lcl-rootfs-x86_64.ext4)          |
+|  - Desktop Apps: Terminal.app, UIDemo.app, UIDemoJS.app, ShaderDemo.app                |
+|  - System Daemons: lcl-sessiond, lcl-desktop-shell, lcl-open                           |
+|  - User Home (/Users/Rei), Shell (/System/Tools/bash), Fonts, C/C++ glibc Libraries     |
++-----------------------------------------------------------------------------------------+
+                                         │
+                 ┌───────────────────────┴───────────────────────┐
+                 │  Shared IPC Bridge: /Runtime/*.sock           │
+                 ▼                                               ▼
++─────────────────────────────────+             +─────────────────────────────────+
+|   Bare-Metal Linux Substrate    |             |    Android Substrate (Stage 4C) |
+|   - Driver: Linux DRM/KMS       |             |    - Driver: AIDL Composer3/HAL |
+|   - Compositor: lcl-core        |             |    - Compositor: lcl-core-android|
+|   - Input: evdev / libinput     |             |    - Mount: /mnt/lcl ext4        |
+|   - Init: Limine / custom init  |             |    - Init: Android init / lcl.rc |
++─────────────────────────────────+             +─────────────────────────────────+
+```
+
+### Key Invariants of Stage 4C.3
+1. **Same-Binary Invariant:** All user-facing binaries and system daemons are built once and packaged into `lcl-rootfs-x86_64.ext4`. They run unmodified across bare-metal Linux and Android AVD.
+2. **Minimal Substrate Footprint:** Android `system.img` contains ONLY platform-specific substrate components (`lcl-core-android`, `lcl.rc`, `lcl-bootstrap.sh`). Zero user applications or desktop daemons reside inside `system.img`.
+3. **Idempotent RootFS Attachment & Probe Isolation:** Canonical rootfs is attached as an independent raw block device (`-drive file=...,format=raw`) and mounted on `/mnt/lcl`. Probing for block device discovery is performed on `/mnt/lcl-probe` and immediately unmounted to prevent overlay stacking and `EBUSY` remount errors.
+4. **Kernel devpts Bind-Mount:** The kernel `devpts` pseudo-filesystem is explicitly bind-mounted (`/dev/pts` -> `/mnt/lcl/dev/pts`) to ensure glibc `posix_openpt()` can allocate pseudo-terminals for `Terminal.app` without `ENODEV`.
+5. **Shared `/Runtime` tmpfs IPC Bridge:** `/Runtime` tmpfs is bind-mounted into `/mnt/lcl/Runtime`, enabling transparent little-endian `SOCK_SEQPACKET` IPC communication between `lcl-core-android` (host substrate) and canonical desktop processes.

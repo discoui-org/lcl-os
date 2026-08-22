@@ -7,13 +7,14 @@
 namespace lcl::core {
 
 struct AppBundleMetadata {
-    std::string bundlePath;      // e.g. "/home/user/Applications/SystemMonitor.app"
+    std::string bundlePath;      // e.g. "/System/Applications/Terminal.app"
     std::string appId;           // Canonical manifest identity, e.g. "org.lcl.terminal"
-    std::string name;            // e.g. "System Monitor"
-    std::string executablePath;  // e.g. "/home/user/Applications/SystemMonitor.app/bin/sysmon"
+    std::string name;            // e.g. "Terminal"
+    std::string executablePath;  // e.g. "/System/Applications/Terminal.app/Executables/Terminal"
     std::string version;         // e.g. "1.0.0"
-    std::string icon;            // e.g. "assets/icon.png"
+    std::string icon;            // e.g. "Resources/Icon.png"
     std::string type;            // "gui" or "cli"
+    std::string runtime;         // e.g. "org.lcl.javascript"
     bool valid{false};
 };
 

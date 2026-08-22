@@ -1,6 +1,10 @@
 # LCL Core Linux (LCL OS)
 
-Modular, Lightweight Linux Distribution built with C++20 and Limine bootloader. This is a custom Linux distribution built from scratch with a focus on modularity, performance, and ease of use. I made this to learn about operating systems and to create a lightweight desktop environment that is easy to use and customize. This is a work in progress and is not intended for production use but I have plans to continue developing it for my personal use.
+Modular, Lightweight Linux Distribution built with C++20 and Limine bootloader. Custom Linux distribution architecture built from scratch with a focus on modularity, high performance, and platform-independent userspace binaries.
+
+LCL OS runs directly on bare-metal Linux DRM/KMS and `evdev` (as well as Android HAL/Composer3 substrates), completely bypassing traditional X11 and Wayland display server dependencies.
+
+---
 
 ## Project Structure
 
@@ -9,89 +13,78 @@ lcl-os/
 ├── iso_root/                 # Limine bootloader configuration & boot tree
 ├── src/                      # Core OS Engine & Compositor
 │   ├── core/                 # DRM/KMS, EGL, Evdev Input, Hotplug, IPC, Session
-│   ├── render/               # Skia Renderer, FontRenderer, WindowManager
+│   ├── render/               # LCL raster Renderer, FontRenderer, WindowManager
 │   └── tools/                # Core System Daemons & Binaries (lcl-core, lcl-terminal, lcl-open)
 ├── lcl-ui/                   # Decoupled UI Application Framework (Yoga Flexbox, Widget Tree)
-├── apps/                     # User-Space Desktop Applications
-│   ├── ui_demo/              # Flexbox Interactive Widget Demo App (UIDemo.app)
-│   └── shader_demo/          # 144Hz Procedural Shader & Animation App (ShaderDemo.app)
+├── apps/                     # User-Space Desktop Applications (Terminal.app, UIDemo.app, ShaderDemo.app)
 ├── docs/                     # Technical Documentation & Guides
 │   ├── ARCHITECTURE.md       # Low-level system & architectural design
 │   ├── LCL_UI_FRAMEWORK.md   # Complete lcl-ui developer API guide
 │   └── DEVELOPER_GUIDE.md    # Build, testing, and contribution instructions
-└── scripts/                  # QEMU Isolated Boot Launcher, ISO Builder & Packaging
+└── scripts/                  # Unified CLI launcher, ISO Builder, Android Image Builder & Packaging
 ```
 
 ---
 
-## Quick Start & Building
+## Quick Start & Unified CLI
 
-### Prerequisites
-- Linux host or Docker (the build system automatically uses an isolated Docker container `lcl-os-qemu-builder` if local toolchain is absent).
-- CMake 3.20+ and C++20 compiler (`g++-13` or `clang-16`+).
-- `xorriso` and `limine` (for generating bootable ISO images).
-- QEMU (`qemu-system-x86_64`) for running the test environment.
+LCL OS provides a unified CLI driver via `./main.py`:
 
-### Building
-Compile all core binaries, libraries, unit tests, and application bundles:
 ```bash
-make
+./main.py --help
 ```
 
-### Building Bootable ISO Image (`build/lcl-os.iso`)
-Generate a hybrid bootable LiveUSB / ISO image for bare-metal hardware or VMs:
+### 1. Run the Full Unit Test Suite (167 Tests)
 ```bash
-make iso
+./main.py test
 ```
+*Executes all 167 GoogleTest CTest cases covering IPC protocols, window management, LCL raster rendering, event routing, and JS runtimes in ~1.7s.*
 
-### Running in QEMU Virtual Machine
-
-#### 1. Fast Direct Kernel Boot (Development)
+### 2. Build Core System & Canonical RootFS
 ```bash
-make qemu GPU=1 NATIVE=1
+./main.py build
 ```
+*Compiles C++20 engine binaries, builds application bundles, and produces the canonical userspace image `build/rootfs/lcl-rootfs-x86_64.ext4`.*
 
-#### 2. Boot Limine ISO in Legacy BIOS Mode
+### 3. Run in QEMU Bare-Metal Environment (DRM/KMS + Evdev)
 ```bash
-make qemu-iso
+./main.py qemu
 ```
+*Launches direct kernel boot with VirtIO GPU hardware acceleration.*
 
-#### 3. Boot Limine ISO in UEFI Mode (OVMF Firmware)
+### 4. Run in Android AVD Target (Stage 4C.3 Substrate)
 ```bash
-make qemu-iso UEFI=1
+./main.py avd
 ```
+*Boots the Android Emulator directly attaching the exact, byte-for-byte canonical rootfs (`lcl-rootfs-x86_64.ext4`).*
 
 ---
 
 ## Running Applications Inside LCL OS
 
-When LCL OS boots in QEMU, launch applications from the built-in terminal or using the `open` command:
+When LCL OS boots, launch applications from the built-in terminal or using the `open` command:
 
-- **Launch 144Hz Procedural Shader Demo:**
-  ```bash
-  lcl_shader_demo
-  # or
-  open ShaderDemo.app
-  ```
 - **Launch Interactive Flexbox UI Demo:**
   ```bash
-  lcl_ui_demo
-  # or
   open UIDemo.app
+  ```
+- **Launch Procedural Shader Animation Demo:**
+  ```bash
+  open ShaderDemo.app
   ```
 - **Launch Additional Terminal Instances:**
   ```bash
   open Terminal.app
   ```
 
---
+---
 
-## Running Unit Tests
+## Key Architectural Principles
 
-Run the full GoogleTest CTest suite (22 passing unit tests covering IPC protocol, input hotplug/touchpad math, bundle parsing, display scaling, Yoga layout, and event routing):
-```bash
-make test
-```
+1. **No X11 / No Wayland:** Direct EGL/DRM/KMS scanout on bare metal; native AIDL Composer3 on mobile substrates.
+2. **Platform-Independent Application Binaries (Same-Binary Invariant):** For the same CPU architecture, LCL application executables (`Terminal.app`, `lcl-desktop-shell`, `lcl-sessiond`, etc.) are 100% byte-for-byte identical across Linux DRM/KMS and Android AVD targets.
+3. **Decoupled Window Manager & Compositor:** Window Manager owns spatial coordinates and geometry state; Compositor acts as a pure presentation engine.
+4. **Secure Unix Domain Socket IPC:** Robust little-endian protocol over `SOCK_SEQPACKET` with `0600` permissions and kernel peer credential verification (`SO_PEERCRED`).
 
 ---
 

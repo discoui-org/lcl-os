@@ -58,7 +58,7 @@ public:
     ShellStateClient(const ShellStateClient&) = delete;
     ShellStateClient& operator=(const ShellStateClient&) = delete;
 
-    bool connect(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock");
+    bool connect(const std::string& socketPath = "/Runtime/lcl-compositor.sock");
     void setOnSnapshot(SnapshotCallback callback) { m_onSnapshot = std::move(callback); }
     void setOnDelta(DeltaCallback callback) { m_onDelta = std::move(callback); }
     /** Drain available state packets. Returns false after disconnect/protocol failure. */

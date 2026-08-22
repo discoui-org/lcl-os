@@ -36,10 +36,11 @@ public:
     bool onPointerLeave(const PointerEvent& event) override;
     bool onPointerDown(const PointerEvent& event) override;
     bool onPointerUp(const PointerEvent& event) override;
+    bool onPointerCancel(const PointerEvent& event) override;
     bool onFocusGained(const FocusEvent& event) override;
     bool onFocusLost(const FocusEvent& event) override;
 
-    void draw(Canvas& canvas, const Rect& damageRect) override;
+    void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
 
 private:
     void setState(ButtonState newState);
