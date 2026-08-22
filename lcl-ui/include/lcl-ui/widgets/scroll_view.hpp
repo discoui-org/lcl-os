@@ -57,6 +57,7 @@ private:
     float m_touchStartScrollY{0.0f};
     bool m_cacheValid{false};
     uint64_t m_cachedContentPaintRevision{0};
+    uint64_t m_cachedContentPresentationRevision{0};
     float m_cachedContentWidth{0.0f};
     float m_cachedContentHeight{0.0f};
     float m_cachedViewportWidth{0.0f};

@@ -16,6 +16,7 @@ SkiaCanvas::SkiaCanvas(SkiaRenderer& renderer) : m_renderer(&renderer) {}
 SkiaCanvas::~SkiaCanvas() {
     if (m_cachedLayerCanvasState) endCachedLayer();
     clearCachedLayers();
+    if (m_renderer) m_renderer->setRetainsFrameBacking(false);
 }
 
 SkiaColor SkiaCanvas::toSkia(lcl::ui::Color color) {
@@ -27,9 +28,14 @@ bool SkiaCanvas::initialize(uint32_t width, uint32_t height, uint32_t* targetPix
         if (!m_clientEglContext->hasDmaBufPool()) {
             std::cerr << "[LCL Canvas] Client DMA-BUF unavailable; retaining GPU-to-SHM transport\n";
         }
-        return renderer().initialize(width, height, m_clientEglContext.get(), targetPixels);
+        const bool initialized = renderer().initialize(
+            width, height, m_clientEglContext.get(), targetPixels);
+        if (initialized) renderer().setRetainsFrameBacking(true);
+        return initialized;
     }
-    return renderer().initialize(width, height, nullptr, targetPixels);
+    const bool initialized = renderer().initialize(width, height, nullptr, targetPixels);
+    if (initialized) renderer().setRetainsFrameBacking(true);
+    return initialized;
 }
 
 void SkiaCanvas::setTargetPixels(uint32_t* targetPixels, uint32_t width, uint32_t height) {
@@ -87,7 +93,7 @@ bool SkiaCanvas::configureDmaBufFrame(uint32_t contentWidth, uint32_t contentHei
     m_dmaBufContentWidth = contentWidth;
     m_dmaBufContentHeight = contentHeight;
     renderer().setFrameExtent(contentWidth, contentHeight);
-    return true;
+    return renderer().ensureFrameBackingCapacity(backingWidth, backingHeight);
 }
 bool SkiaCanvas::isDmaBufFrameBlocked() const { return m_dmaBufFrameBlocked; }
 
@@ -244,6 +250,10 @@ void SkiaCanvas::clearCachedLayers() {
         renderer().destroyCachedLayerTarget(layer.framebuffer, layer.texture);
     }
     m_cachedLayers.clear();
+}
+
+void SkiaCanvas::clearRect(const lcl::ui::Rect& rect, lcl::ui::Color color) {
+    renderer().clearRect({rect.x, rect.y, rect.width, rect.height}, toSkia(color));
 }
 
 std::pair<float, float> SkiaCanvas::mapPoint(float x, float y) const {

@@ -3,8 +3,25 @@
 namespace lcl::ui {
 
 void RenderPass::addDirtyRect(const Rect& rect) {
-    if (!rect.isEmpty()) {
-        m_dirtyRects.push_back(rect);
+    if (rect.isEmpty()) return;
+
+    Rect merged = rect;
+    for (auto it = m_dirtyRects.begin(); it != m_dirtyRects.end();) {
+        if (!merged.intersects(*it)) {
+            ++it;
+            continue;
+        }
+        merged = merged.unionWith(*it);
+        it = m_dirtyRects.erase(it);
+    }
+    m_dirtyRects.push_back(merged);
+
+    // Keep traversal bounded under pathological invalidation storms. Normal
+    // UI motion remains a small list of independent regions.
+    constexpr size_t kMaxDamageRegions = 32;
+    if (m_dirtyRects.size() > kMaxDamageRegions) {
+        const Rect combined = getDamageRect();
+        m_dirtyRects.assign(1, combined);
     }
 }
 

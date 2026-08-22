@@ -26,6 +26,10 @@ public:
     void endFrame() override {}
     uint32_t* rasterBuffer() override { return m_pixels; }
 
+    void clearRect(const lcl::ui::Rect& rect, lcl::ui::Color color) override {
+        drawRect(rect, color);
+    }
+
     void drawRect(const lcl::ui::Rect&, lcl::ui::Color color) override {
         if (m_pixels && m_width > 0 && m_height > 0) {
             m_pixels[0] = (static_cast<uint32_t>(color.a) << 24) |

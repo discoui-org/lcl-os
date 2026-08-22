@@ -102,6 +102,11 @@ public:
         return true;
     }
 
+    void clearRect(const Rect& rect, Color color) override {
+        clearedRects.push_back(rect);
+        clearColors.push_back(color);
+    }
+
     void drawRect(const Rect& rect, Color color) override {
         rects.push_back(rect);
         colors.push_back(color);
@@ -184,6 +189,7 @@ public:
     int dmaCapacityGrowCount{0};
     std::vector<uint32_t> releasedBufferIds;
     std::vector<Rect> rects;
+    std::vector<Rect> clearedRects;
     std::vector<Rect> roundedRects;
     std::vector<Rect> topRoundedRects;
     std::vector<Rect> textPositions;
@@ -197,6 +203,7 @@ public:
     std::vector<float> fontSizes;
     std::vector<FontFamily> fontFamilies;
     std::vector<Color> colors;
+    std::vector<Color> clearColors;
     std::vector<Color> borders;
     std::vector<std::string> texts;
     std::vector<std::string> rasterTexts;
@@ -3181,6 +3188,7 @@ TEST(LclUiTest, RenderPassDamageRect) {
     pass.addDirtyRect(Rect{50.0f, 50.0f, 20.0f, 20.0f});
 
     EXPECT_TRUE(pass.hasDamage());
+    EXPECT_EQ(pass.getDirtyRects().size(), 2u);
     Rect damage = pass.getDamageRect();
     EXPECT_EQ(damage.x, 10.0f);
     EXPECT_EQ(damage.y, 10.0f);
@@ -3189,6 +3197,138 @@ TEST(LclUiTest, RenderPassDamageRect) {
 
     pass.clear();
     EXPECT_FALSE(pass.hasDamage());
+}
+
+TEST(LclUiTest, RenderPassMergesOverlappingDamageButKeepsDistantRegions) {
+    RenderPass pass;
+    pass.addDirtyRect({10.0f, 10.0f, 20.0f, 20.0f});
+    pass.addDirtyRect({15.0f, 15.0f, 20.0f, 20.0f});
+    pass.addDirtyRect({80.0f, 60.0f, 10.0f, 10.0f});
+
+    ASSERT_EQ(pass.getDirtyRects().size(), 2u);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().x, 10.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().y, 10.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().width, 25.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().height, 25.0f);
+}
+
+TEST(LclUiTest, ChildPaintInvalidationDoesNotExpandDamageToRootBounds) {
+    RenderPass pass;
+    auto root = std::make_unique<Container>();
+    root->setWidth(200.0f);
+    root->setHeight(120.0f);
+    auto child = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* childPtr = child.get();
+    child->setWidth(30.0f);
+    child->setHeight(20.0f);
+    root->addChild(std::move(child));
+    root->getYogaNode().calculateLayout(200.0f, 120.0f);
+    root->syncLayout();
+    root->setRenderPass(&pass);
+    pass.clear();
+
+    const uint64_t rootRevision = root->getPaintRevision();
+    childPtr->markDirty();
+
+    ASSERT_EQ(pass.getDirtyRects().size(), 1u);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().width, 30.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().height, 20.0f);
+    EXPECT_GT(root->getPaintRevision(), rootRevision);
+}
+
+TEST(LclUiTest, WindowAppRetainedFrameClearsOnlyChangedWidgetRegion) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    WindowApp app(std::move(canvas), 200, 120, "Retained damage");
+    auto root = std::make_unique<Container>();
+    root->setWidth(200.0f);
+    root->setHeight(120.0f);
+    auto child = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* childPtr = child.get();
+    child->setWidth(30.0f);
+    child->setHeight(20.0f);
+    root->addChild(std::move(child));
+    app.setRootWidget(std::move(root));
+
+    ASSERT_TRUE(app.renderFrame());
+    recorded->clearedRects.clear();
+    childPtr->markDirty();
+    ASSERT_TRUE(app.renderFrame());
+
+    ASSERT_EQ(recorded->clearedRects.size(), 1u);
+    EXPECT_FLOAT_EQ(recorded->clearedRects.front().width, 30.0f);
+    EXPECT_FLOAT_EQ(recorded->clearedRects.front().height, 20.0f);
+}
+
+TEST(LclUiTest, SkiaRendererClearRectReplacesOnlyRequestedRetainedPixels) {
+    std::vector<uint32_t> pixels(8 * 8, 0xFF123456u);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(8, 8, nullptr, pixels.data()));
+
+    renderer.clearRect({2.0f, 2.0f, 3.0f, 3.0f}, {0, 0, 0, 0});
+
+    EXPECT_EQ(pixels[0], 0xFF123456u);
+    EXPECT_EQ(pixels[2 + 2 * 8], 0x00000000u);
+    EXPECT_EQ(pixels[4 + 4 * 8], 0x00000000u);
+    EXPECT_EQ(pixels[5 + 5 * 8], 0xFF123456u);
+}
+
+TEST(LclUiTest, SkiaRendererRetainedModeDoesNotClearUnchangedFramePixels) {
+    std::vector<uint32_t> pixels(4 * 4, 0xFFABCDEFu);
+    lcl::render::SkiaRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(4, 4, nullptr, pixels.data()));
+
+    renderer.setRetainsFrameBacking(true);
+    renderer.beginFrame();
+    EXPECT_EQ(pixels[0], 0xFFABCDEFu);
+
+    renderer.setRetainsFrameBacking(false);
+    renderer.beginFrame();
+    EXPECT_EQ(pixels[0], 0xFF14161Du);
+}
+
+TEST(LclUiTest, PresentationMotionDoesNotInvalidateAncestorPaintCacheRevision) {
+    MotionCoordinator coordinator;
+    auto root = std::make_unique<Container>();
+    auto child = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* childPtr = child.get();
+    root->addChild(std::move(child));
+    root->setMotionCoordinator(&coordinator);
+    const uint64_t paintRevision = root->getPaintRevision();
+    const uint64_t presentationRevision = root->getPresentationRevision();
+
+    coordinator.animateFloat(
+        *childPtr, AnimatableProperty::ScaleX, 1.0f, 0.9f,
+        Motion::tween(0.2f, Easing::linear()),
+        [childPtr](float value) {
+            childPtr->applyPresentationValue(AnimatableProperty::ScaleX, value);
+        });
+    coordinator.tick(0.05f);
+
+    EXPECT_EQ(root->getPaintRevision(), paintRevision);
+    EXPECT_GT(root->getPresentationRevision(), presentationRevision);
+}
+
+TEST(LclUiTest, PresentationTransformDamagesOldAndNewBoundsWithoutPaintInvalidation) {
+    RenderPass pass;
+    auto widget = std::make_unique<CountingPaintWidget>();
+    widget->setWidth(30.0f);
+    widget->setHeight(20.0f);
+    widget->getYogaNode().calculateLayout(200.0f, 120.0f);
+    widget->syncLayout();
+    widget->setRenderPass(&pass);
+    pass.clear();
+    const uint64_t paintRevision = widget->getPaintRevision();
+
+    widget->setTranslationX(100.0f);
+
+    ASSERT_EQ(pass.getDirtyRects().size(), 2u);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects()[0].x, 0.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects()[0].width, 30.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects()[1].x, 100.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects()[1].width, 30.0f);
+    EXPECT_EQ(widget->getPaintRevision(), paintRevision);
+    EXPECT_GT(widget->getPresentationRevision(), 0u);
 }
 
 TEST(LclUiTest, YogaNodeFlexLayout) {
@@ -3662,6 +3802,48 @@ TEST(LclUiTest, ScrollViewCachesContentUntilPaintOrGeometryChanges) {
     ASSERT_FALSE(canvas.clips.empty());
     EXPECT_FLOAT_EQ(canvas.clips.back().width, 200.0f);
     EXPECT_FLOAT_EQ(canvas.clips.back().height, 120.0f);
+}
+
+TEST(LclUiTest, ScrollViewDoesNotRerasterLongContentEachAnimationTick) {
+    RecordingCanvas canvas;
+    MotionCoordinator coordinator;
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(100.0f);
+    scrollView->setMotionCoordinator(&coordinator);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    auto animatedChild = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* childPtr = animatedChild.get();
+    animatedChild->setWidth(200.0f);
+    animatedChild->setHeight(300.0f);
+    content->addChild(std::move(animatedChild));
+    scrollView->setContent(std::move(content));
+    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->syncLayout();
+
+    const Rect fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
+    scrollView->draw(canvas, fullDamage);
+    ASSERT_EQ(canvas.cachedLayerBeginCount, 1);
+    const int initialPaints = childPtr->paintCount;
+
+    coordinator.animateFloat(
+        *childPtr, AnimatableProperty::ScaleX, 1.0f, 0.96f,
+        Motion::tween(0.2f, Easing::linear()),
+        [childPtr](float value) {
+            childPtr->applyPresentationValue(AnimatableProperty::ScaleX, value);
+        });
+    coordinator.tick(0.05f);
+    ASSERT_TRUE(childPtr->hasActiveAnimationInSubtree());
+    scrollView->draw(canvas, fullDamage);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_GT(childPtr->paintCount, initialPaints);
+
+    coordinator.tick(0.2f);
+    ASSERT_FALSE(childPtr->hasActiveAnimationInSubtree());
+    scrollView->draw(canvas, fullDamage);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 2);
 }
 
 TEST(LclUiTest, ScrollViewCachedLayerRespectsViewportClip) {

@@ -520,6 +520,8 @@ bool SkiaRenderer::initGLShader() {
     glGenFramebuffers(1, &m_glSceneFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_glSceneTexture, 0);
+    m_glSceneCapacityWidth = m_width;
+    m_glSceneCapacityHeight = m_height;
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -615,13 +617,46 @@ void SkiaRenderer::setFrameExtent(uint32_t width, uint32_t height) {
     m_height = height;
 }
 
+bool SkiaRenderer::ensureFrameBackingCapacity(uint32_t width, uint32_t height) {
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType != SkiaBackendType::OpenGL_EGL || !m_eglBackend ||
+        m_glSceneTexture == 0 || width == 0 || height == 0) {
+        return m_backendType != SkiaBackendType::OpenGL_EGL;
+    }
+    if (width <= m_glSceneCapacityWidth && height <= m_glSceneCapacityHeight) {
+        return true;
+    }
+    const uint32_t nextWidth = std::max(width, m_glSceneCapacityWidth);
+    const uint32_t nextHeight = std::max(height, m_glSceneCapacityHeight);
+    m_eglBackend->makeCurrent();
+    glBindTexture(GL_TEXTURE_2D, m_glSceneTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+                 static_cast<GLsizei>(nextWidth),
+                 static_cast<GLsizei>(nextHeight), 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_glSceneFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, m_glSceneTexture, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        return false;
+    }
+    m_glSceneCapacityWidth = nextWidth;
+    m_glSceneCapacityHeight = nextHeight;
+    return true;
+#else
+    (void)width;
+    (void)height;
+    return true;
+#endif
+}
+
 void SkiaRenderer::setExternalFrameTarget(uint32_t framebuffer, uint32_t texture,
                                           uint32_t backingWidth, uint32_t backingHeight) {
 #ifndef LCL_SOFTWARE_ONLY
-    m_glExternalFrameFBO = framebuffer;
-    m_glExternalFrameTexture = texture;
-    m_glExternalBackingWidth = backingWidth;
-    m_glExternalBackingHeight = backingHeight;
+    m_glOutputFrameFBO = framebuffer;
+    (void)texture;
+    (void)backingWidth;
+    (void)backingHeight;
 #else
     (void)framebuffer;
     (void)texture;
@@ -630,10 +665,7 @@ void SkiaRenderer::setExternalFrameTarget(uint32_t framebuffer, uint32_t texture
 
 void SkiaRenderer::clearExternalFrameTarget() {
 #ifndef LCL_SOFTWARE_ONLY
-    m_glExternalFrameFBO = 0;
-    m_glExternalFrameTexture = 0;
-    m_glExternalBackingWidth = 0;
-    m_glExternalBackingHeight = 0;
+    m_glOutputFrameFBO = 0;
 #endif
 }
 
@@ -800,9 +832,12 @@ void SkiaRenderer::shutdown() {
         }
         m_glSceneFBO = 0;
         m_glSceneTexture = 0;
+        m_glSceneCapacityWidth = 0;
+        m_glSceneCapacityHeight = 0;
     }
     m_glExternalFrameFBO = 0;
     m_glExternalFrameTexture = 0;
+    m_glOutputFrameFBO = 0;
     if (m_glFBOReady) {
         if (canDeleteGlResources) {
             glDeleteFramebuffers(2, m_glFBO);
@@ -1166,6 +1201,74 @@ void SkiaRenderer::applyScissorState() {
 #endif
 }
 
+void SkiaRenderer::clear(const SkiaColor& color) {
+    if (!m_initialized) return;
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend &&
+        activeSceneFBO() > 0) {
+        m_eglBackend->makeCurrent();
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+        glViewport(0, 0, m_width, m_height);
+        glDisable(GL_SCISSOR_TEST);
+        glClearColor(static_cast<float>(color.r) / 255.0f,
+                     static_cast<float>(color.g) / 255.0f,
+                     static_cast<float>(color.b) / 255.0f,
+                     static_cast<float>(color.a) / 255.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        applyScissorState();
+        return;
+    }
+#endif
+    if (m_targetPixels) {
+        std::fill_n(m_targetPixels, static_cast<size_t>(m_width) * m_height,
+                    color.toARGB());
+    }
+}
+
+void SkiaRenderer::clearRect(const SkiaRect& rect, const SkiaColor& color) {
+    if (!m_initialized || rect.width <= 0.0f || rect.height <= 0.0f) return;
+
+    const SkiaRect deviceRect = scaleRect(rect);
+    const int left = std::clamp(static_cast<int>(std::floor(deviceRect.x)),
+                                0, static_cast<int>(m_width));
+    const int top = std::clamp(static_cast<int>(std::floor(deviceRect.y)),
+                               0, static_cast<int>(m_height));
+    const int right = std::clamp(
+        static_cast<int>(std::ceil(deviceRect.x + deviceRect.width)),
+        0, static_cast<int>(m_width));
+    const int bottom = std::clamp(
+        static_cast<int>(std::ceil(deviceRect.y + deviceRect.height)),
+        0, static_cast<int>(m_height));
+    if (left >= right || top >= bottom) return;
+
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == SkiaBackendType::OpenGL_EGL && m_eglBackend &&
+        activeSceneFBO() > 0) {
+        m_eglBackend->makeCurrent();
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+        glViewport(0, 0, m_width, m_height);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(left, static_cast<int>(m_height) - bottom,
+                  right - left, bottom - top);
+        glClearColor(static_cast<float>(color.r) / 255.0f,
+                     static_cast<float>(color.g) / 255.0f,
+                     static_cast<float>(color.b) / 255.0f,
+                     static_cast<float>(color.a) / 255.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        applyScissorState();
+        return;
+    }
+#endif
+
+    if (!m_targetPixels) return;
+    const uint32_t pixel = color.toARGB();
+    for (int y = top; y < bottom; ++y) {
+        std::fill(m_targetPixels + static_cast<size_t>(y) * m_width + left,
+                  m_targetPixels + static_cast<size_t>(y) * m_width + right,
+                  pixel);
+    }
+}
+
 void SkiaRenderer::setClipRect(const std::optional<SkiaRect>& clip) {
     m_clipRect = clip;
     applyScissorState();
@@ -1181,31 +1284,24 @@ void SkiaRenderer::beginFrame() {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
-        // Client canvases are alpha surfaces composited later by the window
-        // manager.  KMS composition remains opaque, but an offscreen client
-        // target must preserve transparent rounded corners and glass regions.
-        if (m_eglBackend->presentsToDisplay()) {
-            glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
-        } else {
-            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        if (!m_retainsFrameBacking) {
+            if (m_eglBackend->presentsToDisplay()) {
+                glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
+            } else {
+                glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            }
+            glClear(GL_COLOR_BUFFER_BIT);
         }
-        if (m_glExternalFrameFBO != 0) {
-            glEnable(GL_SCISSOR_TEST);
-            glScissor(0, 0, m_width, m_height);
-        }
-        glClear(GL_COLOR_BUFFER_BIT);
-        if (m_glExternalFrameFBO != 0) glDisable(GL_SCISSOR_TEST);
     }
 #endif
 
-    if (m_targetPixels && m_glExternalFrameFBO == 0) {
-        // GPU path uses m_targetPixels as a temporary CPU staging surface that can
-        // be flushed into the GPU scene during composition.
-        // Software path still treats it as the final opaque framebuffer.
-        const uint32_t clearColor = (m_backendType == SkiaBackendType::OpenGL_EGL)
-            ? 0x00000000
-            : 0xFF14161D;
-        std::fill_n(m_targetPixels, m_width * m_height, clearColor);
+    if (!m_retainsFrameBacking && m_targetPixels && m_glExternalFrameFBO == 0) {
+        const uint32_t clearColor =
+            (m_backendType == SkiaBackendType::OpenGL_EGL)
+                ? 0x00000000u
+                : 0xFF14161Du;
+        std::fill_n(m_targetPixels, static_cast<size_t>(m_width) * m_height,
+                    clearColor);
     }
 }
 
@@ -1220,11 +1316,32 @@ void SkiaRenderer::endFrame() {
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glViewport(0, 0, m_width, m_height);
             if (m_glSceneTexture > 0) {
-                drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height);
+                const float uMax = static_cast<float>(m_width) /
+                    static_cast<float>(std::max(1u, m_glSceneCapacityWidth));
+                const float vMax = static_cast<float>(m_height) /
+                    static_cast<float>(std::max(1u, m_glSceneCapacityHeight));
+                drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height,
+                                1.0f, uMax, vMax);
             }
             glFlush();
             m_eglBackend->present();
-        } else if (m_glExternalFrameFBO != 0) {
+        } else if (m_glOutputFrameFBO != 0 && m_glSceneTexture != 0) {
+            // DMA-BUF slots rotate and cannot retain authoritative content.
+            // Copy the retained scene into the acquired slot before export.
+            glBindFramebuffer(GL_FRAMEBUFFER, m_glOutputFrameFBO);
+            glViewport(0, 0, m_width, m_height);
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(0, 0, static_cast<GLsizei>(m_width),
+                      static_cast<GLsizei>(m_height));
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glDisable(GL_SCISSOR_TEST);
+            const float uMax = static_cast<float>(m_width) /
+                static_cast<float>(std::max(1u, m_glSceneCapacityWidth));
+            const float vMax = static_cast<float>(m_height) /
+                static_cast<float>(std::max(1u, m_glSceneCapacityHeight));
+            drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height,
+                            1.0f, uMax, vMax);
             glFlush();
         } else if (m_targetPixels) {
             glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
@@ -2213,20 +2330,22 @@ void SkiaRenderer::applyBackdropFilter(int dstX, int dstY, int srcW, int srcH,
         glViewport(0, 0, targetW, targetH);
 
         const float textureWidth = static_cast<float>(
-            m_glExternalFrameTexture && m_glExternalBackingWidth ? m_glExternalBackingWidth : m_width);
+            m_glExternalFrameTexture && m_glExternalBackingWidth
+                ? m_glExternalBackingWidth
+                : std::max(1u, m_glSceneCapacityWidth));
         const float textureHeight = static_cast<float>(
-            m_glExternalFrameTexture && m_glExternalBackingHeight ? m_glExternalBackingHeight : m_height);
+            m_glExternalFrameTexture && m_glExternalBackingHeight
+                ? m_glExternalBackingHeight
+                : std::max(1u, m_glSceneCapacityHeight));
         float uLeft = static_cast<float>(captureX) / textureWidth;
         float uRight = static_cast<float>(captureX + captureW) / textureWidth;
         // Client external FBO content occupies the lower-left viewport of its
         // capacity allocation. UI coordinates are top-left, so invert within
         // the content viewport before normalizing by backing capacity.
-        float vTop = m_glExternalFrameTexture
-            ? static_cast<float>(static_cast<int>(m_height) - captureY) / textureHeight
-            : 1.0f - (static_cast<float>(captureY) / textureHeight);
-        float vBottom = m_glExternalFrameTexture
-            ? static_cast<float>(static_cast<int>(m_height) - (captureY + captureH)) / textureHeight
-            : 1.0f - (static_cast<float>(captureY + captureH) / textureHeight);
+        float vTop = static_cast<float>(
+            static_cast<int>(m_height) - captureY) / textureHeight;
+        float vBottom = static_cast<float>(
+            static_cast<int>(m_height) - (captureY + captureH)) / textureHeight;
 
         float cropQuad[16] = {
             -1.0f,  1.0f,  uLeft,  vTop,

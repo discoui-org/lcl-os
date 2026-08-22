@@ -38,13 +38,28 @@ void ScrollView::draw(Canvas& canvas, const Rect& damageRect) {
         contentBounds.height,
     };
     const uint64_t contentRevision = m_contentWidget->getPaintRevision();
+    const uint64_t contentPresentationRevision =
+        m_contentWidget->getPresentationRevision();
     const bool geometryChanged =
         m_cachedContentWidth != contentBounds.width ||
         m_cachedContentHeight != contentBounds.height ||
         m_cachedViewportWidth != m_absoluteBounds.width ||
         m_cachedViewportHeight != m_absoluteBounds.height;
+    const bool subtreeAnimating = m_contentWidget->hasActiveAnimationInSubtree();
     const bool needsRaster = !m_cacheValid || geometryChanged ||
-        m_cachedContentPaintRevision != contentRevision;
+        m_cachedContentPaintRevision != contentRevision ||
+        m_cachedContentPresentationRevision != contentPresentationRevision;
+
+    // A cached ScrollView layer is a retained snapshot. Rebuilding the entire
+    // long content texture for every descendant animation tick defeats that
+    // model. Paint only the damaged visible subtree while motion is active,
+    // then refresh the stable cache once after the last presentation frame.
+    if (subtreeAnimating) {
+        m_cacheValid = false;
+        m_contentWidget->draw(canvas, damageRect);
+        endPresentation(canvas);
+        return;
+    }
 
     if (needsRaster) {
         if (canvas.beginCachedLayer(getObjectId(), presentedContentBounds)) {
@@ -54,6 +69,7 @@ void ScrollView::draw(Canvas& canvas, const Rect& damageRect) {
             canvas.endCachedLayer();
             m_cacheValid = true;
             m_cachedContentPaintRevision = contentRevision;
+            m_cachedContentPresentationRevision = contentPresentationRevision;
             m_cachedContentWidth = contentBounds.width;
             m_cachedContentHeight = contentBounds.height;
             m_cachedViewportWidth = m_absoluteBounds.width;

@@ -46,6 +46,7 @@ public:
     bool drawCachedLayer(CachedLayerId id, const lcl::ui::Rect& destination,
                          float opacity = 1.0f) override;
 
+    void clearRect(const lcl::ui::Rect& rect, lcl::ui::Color color) override;
     void drawRect(const lcl::ui::Rect& rect, lcl::ui::Color color) override;
     void drawRoundedRect(const lcl::ui::Rect& rect, float radius, lcl::ui::Color color,
                          lcl::ui::Color border, float borderWidth, float roundness) override;

@@ -43,6 +43,8 @@ public:
     Rect getPresentationBounds() const;
     bool containsPresentationPoint(float x, float y) const;
     bool hasActiveAnimationInHierarchy() const;
+    /** True when this widget or any descendant owns an active motion channel. */
+    bool hasActiveAnimationInSubtree() const;
     uint64_t getObjectId() const noexcept { return m_objectId; }
     const PresentationState& getPresentationState() const noexcept { return m_presentation; }
     std::weak_ptr<uint8_t> getLifetimeToken() const noexcept { return m_lifetimeToken; }
@@ -82,6 +84,9 @@ public:
     virtual bool isFocusScope() const noexcept { return false; }
     void markDirty();
     uint64_t getPaintRevision() const noexcept { return m_paintRevision; }
+    uint64_t getPresentationRevision() const noexcept {
+        return m_presentationRevision;
+    }
     bool isLayoutDirty() const noexcept { return m_layoutDirty; }
     void setRenderPass(RenderPass* pass);
     void setMotionCoordinator(MotionCoordinator* coordinator);
@@ -139,6 +144,8 @@ public:
     virtual bool onFocusLost(const FocusEvent& event);
 
 protected:
+    /** Schedule old/new presentation pixels without invalidating paint caches. */
+    void markPresentationDirty();
     void beginPresentation(Canvas& canvas) const;
     void endPresentation(Canvas& canvas) const;
     void drawChildren(Canvas& canvas, const Rect& damageRect);
@@ -185,7 +192,10 @@ protected:
 private:
     friend class WindowApp;
     friend class ScrollView;
+    void markPresentationDirty(const Rect& previousBounds);
     void invalidateLayout();
+    void propagateDescendantPaintRevision();
+    void propagateDescendantPresentationRevision();
     void markLayoutDirty();
     void clearLayoutDirty();
     void setParentControlledTranslationY(float value);
@@ -193,6 +203,7 @@ private:
     void applyDeclarativeInteractionState();
     static std::atomic<uint64_t> s_nextObjectId;
     uint64_t m_paintRevision{0};
+    uint64_t m_presentationRevision{0};
     bool m_layoutDirty{true};
 };
 

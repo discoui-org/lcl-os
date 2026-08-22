@@ -1228,6 +1228,10 @@ bool WindowApp::renderFrame() {
 
     if (m_windowRoot && m_windowRoot->isLayoutDirty()) {
         updateLayout();
+        // Layout can move several siblings without each new bound producing a
+        // paint invalidation. It is intentionally the infrequent full-window
+        // invalidation path; presentation-only motion remains region-scoped.
+        m_renderPass.addDirtyRect(m_windowRoot->getAbsoluteBounds());
     }
 
     // A resize can leave old-layout damage queued before Yoga computes the
@@ -1239,31 +1243,46 @@ bool WindowApp::renderFrame() {
     if (!m_renderPass.hasDamage()) return false;
     m_firstFrame = false;
 
-    Rect damageRect = m_renderPass.getDamageRect();
+    const Rect surfaceBounds{0.0f, 0.0f, static_cast<float>(m_width),
+                             static_cast<float>(m_height)};
+    std::vector<Rect> damageRects;
+    damageRects.reserve(m_renderPass.getDirtyRects().size());
+    for (const Rect& dirty : m_renderPass.getDirtyRects()) {
+        const Rect clipped = dirty.intersection(surfaceBounds);
+        if (!clipped.isEmpty()) damageRects.push_back(clipped);
+    }
     m_renderPass.clear();
+    if (damageRects.empty()) return false;
     m_canvas->beginFrame();
     if (m_canvas->isDmaBufFrameBlocked()) {
         // Keep the last compositor-owned DMA-BUF visible until a release
         // arrives. Requeue the exact damage instead of CPU-rendering it into
         // SHM during configure/transition pressure.
-        m_renderPass.addDirtyRect(damageRect);
-        m_firstFrame = true;
+        for (const Rect& damage : damageRects) {
+            m_renderPass.addDirtyRect(damage);
+        }
         return false;
     }
 
     const auto paintStarted = std::chrono::steady_clock::now();
     if (m_frameTraceEnabled) {
         ++m_traceRenderedFrames;
-        m_traceDamagePixels += static_cast<uint64_t>(std::max(0.0f, damageRect.width)) *
-            static_cast<uint64_t>(std::max(0.0f, damageRect.height));
+        for (const Rect& damage : damageRects) {
+            m_traceDamagePixels +=
+                static_cast<uint64_t>(std::max(0.0f, damage.width)) *
+                static_cast<uint64_t>(std::max(0.0f, damage.height));
+        }
     }
 
     const auto clearStarted = paintStarted;
     const bool dmaBufFrame = m_canvas->isDmaBufFrameActive();
-    if (!dmaBufFrame) if (auto* pixels = m_canvas->rasterBuffer()) {
-        std::fill_n(pixels, static_cast<size_t>(getPixelWidth()) * static_cast<size_t>(getPixelHeight()), 0x00000000);
+    for (const Rect& damage : damageRects) {
+        m_canvas->clearRect(damage, {0, 0, 0, 0});
         if (m_frameTraceEnabled) {
-            m_traceClearedBytes += static_cast<uint64_t>(getPixelWidth()) * getPixelHeight() * sizeof(uint32_t);
+            m_traceClearedBytes +=
+                static_cast<uint64_t>(std::ceil(damage.width * m_bufferScale)) *
+                static_cast<uint64_t>(std::ceil(damage.height * m_bufferScale)) *
+                sizeof(uint32_t);
         }
     }
     if (m_frameTraceEnabled) {
@@ -1274,13 +1293,18 @@ bool WindowApp::renderFrame() {
     const auto drawStarted = std::chrono::steady_clock::now();
     m_renderPass.begin(*m_canvas);
 
-    if (m_windowRoot && m_windowRoot->isVisible()) {
-        m_windowRoot->draw(*m_canvas, damageRect);
-    }
-    if (m_layoutOverlayEnabled && m_windowRoot) {
-        drawLayoutOverlay(*m_windowRoot, *m_canvas);
-        m_canvas->drawRoundedRect(damageRect, 0.0f, {0, 0, 0, 0},
-                                  {239, 68, 68, 255}, 1.0f, 2.0f);
+    for (const Rect& damage : damageRects) {
+        m_canvas->saveState();
+        m_canvas->clipRect(damage);
+        if (m_windowRoot && m_windowRoot->isVisible()) {
+            m_windowRoot->draw(*m_canvas, damage);
+        }
+        if (m_layoutOverlayEnabled && m_windowRoot) {
+            drawLayoutOverlay(*m_windowRoot, *m_canvas);
+            m_canvas->drawRoundedRect(damage, 0.0f, {0, 0, 0, 0},
+                                      {239, 68, 68, 255}, 1.0f, 2.0f);
+        }
+        m_canvas->restoreState();
     }
 
     std::vector<EffectRegion> uiEffects;
@@ -1399,12 +1423,37 @@ bool WindowApp::renderFrame() {
             std::chrono::steady_clock::now() - drawStarted).count();
     }
 
-    // Double Buffering: Copy 100% complete rendered frame to SHM buffer atomically
+    // The SHM mapping is retained as well. Copy only changed scanline spans;
+    // the first frame and resize paths already invalidate the full surface.
     const auto copyStarted = std::chrono::steady_clock::now();
     if (!dmaBufFrame && m_shmPixels && !m_pixelBuffer.empty()) {
-        size_t copyBytes = std::min(m_shmSize, m_pixelBuffer.size() * sizeof(uint32_t));
-        std::memcpy(m_shmPixels, m_pixelBuffer.data(), copyBytes);
-        if (m_frameTraceEnabled) m_traceCopiedBytes += copyBytes;
+        const uint32_t pixelWidth = getPixelWidth();
+        const uint32_t pixelHeight = getPixelHeight();
+        for (const Rect& damage : damageRects) {
+            const uint32_t left = std::min(
+                pixelWidth, static_cast<uint32_t>(std::floor(
+                    std::max(0.0f, damage.x * m_bufferScale))));
+            const uint32_t top = std::min(
+                pixelHeight, static_cast<uint32_t>(std::floor(
+                    std::max(0.0f, damage.y * m_bufferScale))));
+            const uint32_t right = std::min(
+                pixelWidth, static_cast<uint32_t>(std::ceil(
+                    std::max(0.0f, (damage.x + damage.width) * m_bufferScale))));
+            const uint32_t bottom = std::min(
+                pixelHeight, static_cast<uint32_t>(std::ceil(
+                    std::max(0.0f, (damage.y + damage.height) * m_bufferScale))));
+            if (left >= right || top >= bottom) continue;
+            const size_t rowBytes = static_cast<size_t>(right - left) * sizeof(uint32_t);
+            for (uint32_t y = top; y < bottom; ++y) {
+                const size_t offset = static_cast<size_t>(y) * pixelWidth + left;
+                if ((offset + (right - left)) * sizeof(uint32_t) > m_shmSize) break;
+                std::memcpy(m_shmPixels + offset, m_pixelBuffer.data() + offset,
+                            rowBytes);
+            }
+            if (m_frameTraceEnabled) {
+                m_traceCopiedBytes += rowBytes * (bottom - top);
+            }
+        }
     }
     if (m_frameTraceEnabled) {
         m_traceCopyMs += std::chrono::duration<double, std::milli>(

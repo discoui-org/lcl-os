@@ -79,6 +79,8 @@ public:
     void setTargetPixels(uint32_t* targetPixels, uint32_t width = 0, uint32_t height = 0);
     /** Change the drawable content viewport without resizing the EGL backing. */
     void setFrameExtent(uint32_t width, uint32_t height);
+    /** Grow the retained scene texture without changing its content viewport. */
+    bool ensureFrameBackingCapacity(uint32_t width, uint32_t height);
     /** Select an externally owned GL framebuffer for one client frame. */
     void setExternalFrameTarget(uint32_t framebuffer, uint32_t texture = 0,
                                 uint32_t backingWidth = 0, uint32_t backingHeight = 0);
@@ -102,6 +104,8 @@ public:
      */
     void setContentScale(float scale);
     float getContentScale() const { return m_contentScale; }
+    /** Client canvases retain scene pixels; compositor frames remain clearing. */
+    void setRetainsFrameBacking(bool enabled) { m_retainsFrameBacking = enabled; }
 
     /** Physical framebuffer origin for a logical content subtree. */
     void setContentOrigin(float x, float y) { m_contentOriginX = x; m_contentOriginY = y; }
@@ -122,9 +126,7 @@ public:
      */
     void shutdown();
 
-    /**
-     * @brief Begin frame drawing sequence. Clears canvas.
-     */
+    /** Begin drawing into the retained scene backing store. */
     void beginFrame();
 
     /**
@@ -262,6 +264,7 @@ private:
     float m_contentOriginX{0.0f};
     float m_contentOriginY{0.0f};
     bool m_initialized{false};
+    bool m_retainsFrameBacking{false};
 
     uint32_t m_glTexture{0};
     uint32_t m_glProgram{0};
@@ -279,10 +282,15 @@ private:
 
     uint32_t m_glSceneFBO{0};
     uint32_t m_glSceneTexture{0};
+    uint32_t m_glSceneCapacityWidth{0};
+    uint32_t m_glSceneCapacityHeight{0};
     uint32_t m_glExternalFrameFBO{0};
     uint32_t m_glExternalFrameTexture{0};
     uint32_t m_glExternalBackingWidth{0};
     uint32_t m_glExternalBackingHeight{0};
+    // Rotating DMA-BUF output is separate from the authoritative retained
+    // scene FBO. A completed scene is copied here once per submitted frame.
+    uint32_t m_glOutputFrameFBO{0};
     std::optional<CachedLayerTargetState> m_cachedLayerTargetState;
 
     uint32_t m_glBlurProgram{0};

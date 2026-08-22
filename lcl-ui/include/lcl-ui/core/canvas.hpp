@@ -88,6 +88,12 @@ public:
     virtual void endLayer() {}
 
     /**
+     * Replace a logical region in the retained frame backing store. Unlike
+     * drawRect(), transparent pixels must erase prior content.
+     */
+    virtual void clearRect(const Rect& rect, Color color) = 0;
+
+    /**
      * Rasterize a widget subtree into a backend-owned cache. The source bounds
      * use the same logical coordinate space as ordinary draw calls. Backends
      * without cached-layer support return false so the caller can draw normally.

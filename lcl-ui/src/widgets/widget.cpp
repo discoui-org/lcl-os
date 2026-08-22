@@ -192,12 +192,33 @@ void Widget::removeChild(Widget* child) {
 
 void Widget::markDirty() {
     ++m_paintRevision;
-    if (m_renderPass && m_visible) {
+    if (m_renderPass) {
         m_renderPass->addDirtyRect(m_absoluteBounds.unionWith(getPresentationBounds()));
     }
-    if (m_parent) {
-        m_parent->markDirty();
+    if (m_parent) m_parent->propagateDescendantPaintRevision();
+}
+
+void Widget::markPresentationDirty() {
+    markPresentationDirty(getPresentationBounds());
+}
+
+void Widget::markPresentationDirty(const Rect& previousBounds) {
+    ++m_presentationRevision;
+    if (m_renderPass) {
+        m_renderPass->addDirtyRect(previousBounds);
+        m_renderPass->addDirtyRect(getPresentationBounds());
     }
+    if (m_parent) m_parent->propagateDescendantPresentationRevision();
+}
+
+void Widget::propagateDescendantPaintRevision() {
+    ++m_paintRevision;
+    if (m_parent) m_parent->propagateDescendantPaintRevision();
+}
+
+void Widget::propagateDescendantPresentationRevision() {
+    ++m_presentationRevision;
+    if (m_parent) m_parent->propagateDescendantPresentationRevision();
 }
 
 void Widget::invalidateLayout() {
@@ -225,10 +246,9 @@ void Widget::setOpacity(float value) {
     m_opacity = value;
     if (m_motionCoordinator) {
         m_motionCoordinator->setFloat(*this, AnimatableProperty::Opacity, m_presentation.opacity, value,
-            [this](float next) { m_presentation.opacity = next; markDirty(); });
+            [this](float next) { applyPresentationValue(AnimatableProperty::Opacity, next); });
     } else {
-        m_presentation.opacity = value;
-        markDirty();
+        applyPresentationValue(AnimatableProperty::Opacity, value);
     }
 }
 
@@ -236,14 +256,16 @@ void Widget::setTranslation(float x, float y) { setTranslationX(x); setTranslati
 void Widget::setTranslationX(float value) {
     m_modelTransform.translationX = value;
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::TranslationX,
-        m_presentation.translationX, value, [this](float next) { m_presentation.translationX = next; markDirty(); });
-    else { m_presentation.translationX = value; markDirty(); }
+        m_presentation.translationX, value,
+        [this](float next) { applyPresentationValue(AnimatableProperty::TranslationX, next); });
+    else applyPresentationValue(AnimatableProperty::TranslationX, value);
 }
 void Widget::setTranslationY(float value) {
     m_modelTransform.translationY = value;
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::TranslationY,
-        m_presentation.translationY, value, [this](float next) { m_presentation.translationY = next; markDirty(); });
-    else { m_presentation.translationY = value; markDirty(); }
+        m_presentation.translationY, value,
+        [this](float next) { applyPresentationValue(AnimatableProperty::TranslationY, next); });
+    else applyPresentationValue(AnimatableProperty::TranslationY, value);
 }
 void Widget::setScale(float value) { setScale(value, value); }
 void Widget::setScale(float x, float y) {
@@ -251,16 +273,20 @@ void Widget::setScale(float x, float y) {
     m_modelTransform.scaleY = y;
     if (m_motionCoordinator) {
         m_motionCoordinator->setFloat(*this, AnimatableProperty::ScaleX, m_presentation.scaleX, x,
-            [this](float next) { m_presentation.scaleX = next; markDirty(); });
+            [this](float next) { applyPresentationValue(AnimatableProperty::ScaleX, next); });
         m_motionCoordinator->setFloat(*this, AnimatableProperty::ScaleY, m_presentation.scaleY, y,
-            [this](float next) { m_presentation.scaleY = next; markDirty(); });
-    } else { m_presentation.scaleX = x; m_presentation.scaleY = y; markDirty(); }
+            [this](float next) { applyPresentationValue(AnimatableProperty::ScaleY, next); });
+    } else {
+        applyPresentationValue(AnimatableProperty::ScaleX, x);
+        applyPresentationValue(AnimatableProperty::ScaleY, y);
+    }
 }
 void Widget::setRotation(float value) {
     m_modelTransform.rotationRadians = value;
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::Rotation,
-        m_presentation.rotationRadians, value, [this](float next) { m_presentation.rotationRadians = next; markDirty(); });
-    else { m_presentation.rotationRadians = value; markDirty(); }
+        m_presentation.rotationRadians, value,
+        [this](float next) { applyPresentationValue(AnimatableProperty::Rotation, next); });
+    else applyPresentationValue(AnimatableProperty::Rotation, value);
 }
 void Widget::setTransformOrigin(float x, float y) {
     x = std::clamp(x, 0.0f, 1.0f); y = std::clamp(y, 0.0f, 1.0f);
@@ -268,10 +294,13 @@ void Widget::setTransformOrigin(float x, float y) {
     m_modelTransform.originY = y;
     if (m_motionCoordinator) {
         m_motionCoordinator->setFloat(*this, AnimatableProperty::TransformOriginX, m_presentation.originX, x,
-            [this](float next) { m_presentation.originX = next; markDirty(); });
+            [this](float next) { applyPresentationValue(AnimatableProperty::TransformOriginX, next); });
         m_motionCoordinator->setFloat(*this, AnimatableProperty::TransformOriginY, m_presentation.originY, y,
-            [this](float next) { m_presentation.originY = next; markDirty(); });
-    } else { m_presentation.originX = x; m_presentation.originY = y; markDirty(); }
+            [this](float next) { applyPresentationValue(AnimatableProperty::TransformOriginY, next); });
+    } else {
+        applyPresentationValue(AnimatableProperty::TransformOriginX, x);
+        applyPresentationValue(AnimatableProperty::TransformOriginY, y);
+    }
 }
 
 void Widget::setWidth(float value) {
@@ -352,6 +381,7 @@ float Widget::getPresentationValue(AnimatableProperty property) const {
 }
 
 void Widget::applyPresentationValue(AnimatableProperty property, float value) {
+    const Rect previousBounds = getPresentationBounds();
     switch (property) {
         case AnimatableProperty::Opacity: m_presentation.opacity = std::clamp(value, 0.0f, 1.0f); break;
         case AnimatableProperty::TranslationX: m_presentation.translationX = value; break;
@@ -367,7 +397,7 @@ void Widget::applyPresentationValue(AnimatableProperty property, float value) {
             m_presentation.scaleY = value / std::max(0.001f, m_absoluteBounds.height); break;
         default: break;
     }
-    markDirty();
+    markPresentationDirty(previousBounds);
 }
 
 void Widget::commitModelValue(AnimatableProperty property, float value) {
@@ -470,6 +500,17 @@ bool Widget::hasActiveAnimationInHierarchy() const {
             current->m_motionCoordinator->isObjectAnimating(current->m_objectId)) {
             return true;
         }
+    }
+    return false;
+}
+
+bool Widget::hasActiveAnimationInSubtree() const {
+    if (m_motionCoordinator &&
+        m_motionCoordinator->isObjectAnimating(m_objectId)) {
+        return true;
+    }
+    for (const auto& child : m_children) {
+        if (child->hasActiveAnimationInSubtree()) return true;
     }
     return false;
 }
