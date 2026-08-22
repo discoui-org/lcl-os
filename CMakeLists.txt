@@ -127,12 +127,14 @@ target_include_directories(lcl-display-scale PUBLIC
 # Renderer/UI-independent motion primitives shared by clients and compositor.
 add_subdirectory(lcl-motion)
 
+# Renderer-independent window chrome state shared by CSD clients and SSD.
+add_subdirectory(lcl-window-chrome)
+
 # Compositor-owned render/present layer.
 # Depends strictly on lcl-platform-common; never on concrete platform layers.
 add_library(lcl-render STATIC
     src/render/renderer.cpp
     src/render/skia_renderer.cpp
-    src/render/window_chrome_widget.cpp
     src/render/window_manager.cpp
 )
 
@@ -143,6 +145,7 @@ target_include_directories(lcl-render PUBLIC
 if(ANDROID)
     target_link_libraries(lcl-render PUBLIC
         lcl-motion
+        lcl-window-chrome
         lcl-protocol
         lcl-display-scale
         lcl-font-metrics
@@ -158,6 +161,7 @@ else()
     )
     target_link_libraries(lcl-render PUBLIC
         lcl-motion
+        lcl-window-chrome
         lcl-protocol
         lcl-display-scale
         lcl-font-metrics
@@ -499,7 +503,6 @@ else()
             src/core/display/display_scale.cpp
             src/core/input/input_manager.cpp
             src/platform/android/android_input_backend.cpp
-            src/render/window_chrome_widget.cpp
             src/render/window_manager.cpp
             src/binding/js_runtime.cpp
         )
@@ -535,6 +538,7 @@ else()
             gtest
             Threads::Threads
             lcl-ui
+            lcl-window-chrome
             lcl-canvas-skia
             lcl-platform-desktop
             lcl-protocol

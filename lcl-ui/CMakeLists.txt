@@ -38,6 +38,7 @@ add_library(lcl-ui STATIC
     src/widgets/popover.cpp
     src/widgets/menu.cpp
     src/widgets/toggle.cpp
+    src/widgets/window_chrome.cpp
     src/core/transient_controller.cpp
 )
 
@@ -50,6 +51,7 @@ target_include_directories(lcl-ui PUBLIC
 target_link_libraries(lcl-ui PUBLIC
     lcl-platform-common
     lcl-motion
+    lcl-window-chrome
     lcl-protocol
     lcl-display-scale
     lcl-font-metrics

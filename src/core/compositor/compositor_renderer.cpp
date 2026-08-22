@@ -73,7 +73,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
         const float controlSize = chromeStyle.controlSize * scale;
         const float controlGap = chromeStyle.controlGap * scale;
         const float fontSize = static_cast<float>(DisplayScale::kBaseFontPx) * scale;
-        const render::WindowChromeLayout layout = win.chrome.layout(
+        const lcl::chrome::WindowChromeLayout layout = win.chrome.layout(
             group.width, titleHeight, radius, fontSize, scale);
 
         if (drawTitlebar && paintsOpaqueSsdTitlebar(win.edgeToEdge)) {
@@ -88,51 +88,39 @@ void CompositorRenderer::render(render::Renderer& renderer,
         }
 
         for (int index = 0; index < 3; ++index) {
-            const auto& control = win.chrome.control(static_cast<size_t>(index));
-            const float interactionScale = std::clamp(control.scale, 0.90f, 1.08f);
-            const float emphasis = std::clamp(control.emphasis, 0.0f, 2.0f);
-            const float stateMix = std::min(1.0f, emphasis);
-            const float pressedMix = std::max(0.0f, emphasis - 1.0f);
-            const auto mix = [](float from, float to, float amount) {
-                return from + (to - from) * amount;
-            };
-            const auto mixedByte = [&](uint8_t normal, uint8_t hover, uint8_t pressed) {
-                const float hoverValue = mix(static_cast<float>(normal), static_cast<float>(hover), stateMix);
-                return static_cast<uint8_t>(std::clamp(std::lround(
-                    mix(hoverValue, static_cast<float>(pressed), pressedMix)), 0l, 255l));
-            };
+            const auto visual = win.chrome.visual(static_cast<size_t>(index));
+            const float interactionScale = std::clamp(visual.scale, 0.90f, 1.08f);
             const float baseLeft = group.x + layout.controlLeft +
                                    static_cast<float>(index) * (controlSize + controlGap);
             const float baseTop = group.y + layout.controlTop;
             const float drawSize = controlSize * interactionScale;
             const float left = baseLeft + (controlSize - drawSize) * 0.5f;
             const float top = baseTop + (controlSize - drawSize) * 0.5f;
-            const auto mixedColor = [&](const render::WindowChromeColor& normal,
-                                        const render::WindowChromeColor& hover,
-                                        const render::WindowChromeColor& pressed) {
+            const auto skiaColor = [&](const lcl::chrome::Color& color) {
                 return render::SkiaColor{
-                    mixedByte(normal.r, hover.r, pressed.r),
-                    mixedByte(normal.g, hover.g, pressed.g),
-                    mixedByte(normal.b, hover.b, pressed.b),
-                    applyOpacityToAlpha(mixedByte(normal.a, hover.a, pressed.a), chromeOpacity),
+                    color.r, color.g, color.b,
+                    applyOpacityToAlpha(color.a, chromeOpacity),
                 };
             };
             skia->drawRoundedRect(
                 {left, top, drawSize, drawSize}, drawSize * 0.5f,
-                mixedColor(chromeStyle.normalBackground, chromeStyle.hoverBackground,
-                           chromeStyle.pressedBackground),
-                mixedColor(chromeStyle.normalBorder, chromeStyle.hoverBorder,
-                           chromeStyle.pressedBorder),
-                std::max(chromeStyle.borderWidth, group.scale), chromeStyle.roundness);
+                skiaColor(visual.background), skiaColor(visual.border),
+                std::max(chromeStyle.buttonBorderWidth, group.scale),
+                chromeStyle.buttonRoundness);
         }
 
         if (drawTitlebar) {
             const std::string title = truncateTitle(win.chrome.title(), layout.titleWidth, fontSize);
+            const auto titleColor = chromeStyle.titleColor;
+            const uint32_t packedTitleColor =
+                (static_cast<uint32_t>(applyOpacityToAlpha(titleColor.a, chromeOpacity)) << 24) |
+                (static_cast<uint32_t>(titleColor.r) << 16) |
+                (static_cast<uint32_t>(titleColor.g) << 8) |
+                static_cast<uint32_t>(titleColor.b);
             skia->drawString(
                 static_cast<int>(std::lround(group.x + layout.titleLeft)),
                 static_cast<int>(std::lround(group.y + layout.titleTop)),
-                title,
-                (static_cast<uint32_t>(applyOpacityToAlpha(245, chromeOpacity)) << 24) | 0x00F0F8FFu,
+                title, packedTitleColor,
                 fontSize);
         }
     };

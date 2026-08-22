@@ -2256,12 +2256,32 @@ TEST(LclUiTest, ResizeFirstFrameDamagesPostLayoutRootExtent) {
     ASSERT_TRUE(app.renderFrame());
 
     ASSERT_FALSE(recorded->roundedRects.empty());
+    EXPECT_FLOAT_EQ(app.getRootWidget()->getBounds().width, 400.0f);
+    EXPECT_FLOAT_EQ(app.getRootWidget()->getBounds().height, 100.0f);
     EXPECT_GT(recorded->roundedRects.back().x, 100.0f);
     ASSERT_EQ(recorded->texts.size(), 1u);
     EXPECT_EQ(recorded->texts.front(), "Moved");
 
     close(sockets[0]);
     close(sockets[1]);
+}
+
+TEST(LclUiTest, WindowContentRootFollowsBothResizeAxes) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 100, 80, "Two-axis resize");
+
+    auto root = std::make_unique<Container>();
+    root->getYogaNode().setWidth(100.0f);
+    root->getYogaNode().setHeight(80.0f);
+    app.setRootWidget(std::move(root));
+    ASSERT_TRUE(app.renderFrame());
+
+    app.resize(260, 190);
+    ASSERT_TRUE(app.renderFrame());
+
+    ASSERT_NE(app.getRootWidget(), nullptr);
+    EXPECT_FLOAT_EQ(app.getRootWidget()->getBounds().width, 260.0f);
+    EXPECT_FLOAT_EQ(app.getRootWidget()->getBounds().height, 190.0f);
 }
 
 TEST(LclUiTest, ImplicitTransactionInterpolatesTransformOpacityAndReflowLayout) {
@@ -2889,11 +2909,21 @@ TEST(LclUiTest, WindowAppCsdControlsAndCustomRequestsUseWindowActions) {
     app.setExternalIpcSocket(sockets[0]);
 
     const lcl::ui::chrome::WindowChromeStyle style;
-    const auto layout = lcl::ui::chrome::calculateWindowTitlebarLayout(
-        540.0f, 34.0f, 20.0f, 14.0f, style);
-    app.setCsdTitlebarEnabled(true);
-    app.configureCsdTitlebar(34.0f, layout.controlLeft, layout.controlTop,
-                             style.controlSize, style.controlGap);
+    auto titlebar = lcl::ui::chrome::buildWindowTitlebar(
+        540.0f, 34.0f, 20.0f, "Window action test", 14.0f, style,
+        lcl::ui::chrome::WindowChromeActions{
+            .close = [&app] { return app.requestWindowClose(); },
+            .minimize = [&app] { return app.requestWindowMinimize(); },
+            .toggleMaximize = [&app] {
+                return app.requestWindowToggleMaximize();
+            },
+            .beginDrag = [&app](float x, float y) {
+                return app.requestWindowDrag(x, y);
+            },
+        });
+    const auto layout = titlebar->chromeLayout();
+    app.setRootWidget(std::move(titlebar));
+    ASSERT_TRUE(app.renderFrame());
 
     const auto expectAction = [&](lcl::protocol::LCLWindowAction expected) {
         lcl::protocol::LCLHeader header{};
@@ -3466,18 +3496,27 @@ TEST(LclUiTest, TitlebarRadiusMatchesWindowMaskByDefault) {
     EXPECT_TRUE(roundedBackground->hasTopOnlyBorderRadius());
 }
 
-TEST(LclUiTest, TitlebarLayoutIsSharedByCsdCloseHitGeometry) {
+TEST(LclUiTest, TitlebarLayoutComesFromSharedCsdAndSsdChromeCore) {
     const lcl::ui::chrome::WindowChromeStyle style;
     const auto layout = lcl::ui::chrome::calculateWindowTitlebarLayout(
         540.0f, 34.0f, 20.0f, 14.0f, style);
 
-    // The caller gives these same values to WindowApp for its CSD close hit
-    // target, while SSD draws the first control through this builder.
+    // CSD widget bounds and SSD hit testing consume this same core layout.
     EXPECT_FLOAT_EQ(layout.controlLeft, 12.0f);
     EXPECT_FLOAT_EQ(layout.controlTop, 12.0f);
 
     auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
         540.0f, 34.0f, 20.0f, "LCL Terminal", 14.0f, style);
+    const lcl::chrome::WindowChromeWidget ssdChrome("LCL Terminal", style);
+    const auto ssdLayout = ssdChrome.layout(
+        540.0f, 34.0f, 20.0f, 14.0f, 1.0f);
+    EXPECT_FLOAT_EQ(ssdLayout.controlLeft, layout.controlLeft);
+    EXPECT_FLOAT_EQ(ssdLayout.controlTop, layout.controlTop);
+    EXPECT_FLOAT_EQ(ssdLayout.titleLeft, layout.titleLeft);
+    EXPECT_FLOAT_EQ(ssdLayout.titleWidth, layout.titleWidth);
+    EXPECT_EQ(ssdChrome.hitTest(layout.controlLeft + 1.0f,
+                                layout.controlTop + 1.0f,
+                                540.0f, 34.0f, 20.0f, 1.0f), 0);
     titleBar->getYogaNode().calculateLayout(540.0f, 34.0f);
     titleBar->syncLayout();
 
@@ -3497,14 +3536,13 @@ TEST(LclUiTest, WindowControlsAreGlyphFreeAndAnimateHoverPress) {
         240.0f, 40.0f, 20.0f, 14.0f, style);
     auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
         240.0f, 40.0f, 20.0f, "Window", 14.0f, style);
+    auto* titleBarPtr = titleBar.get();
     auto* closeControl = dynamic_cast<lcl::ui::chrome::WindowControl*>(
         titleBar->getChildren()[1].get());
     ASSERT_NE(closeControl, nullptr);
     EXPECT_TRUE(closeControl->getChildren().empty());
 
     app.setRootWidget(std::move(titleBar));
-    app.configureCsdTitlebar(40.0f, layout.controlLeft, layout.controlTop,
-                            style.controlSize, style.controlGap);
     ASSERT_TRUE(app.renderFrame());
 
     const float controlX = layout.controlLeft + style.controlSize * 0.5f;
@@ -3512,10 +3550,22 @@ TEST(LclUiTest, WindowControlsAreGlyphFreeAndAnimateHoverPress) {
     app.sendPointerMove(controlX, controlY);
     for (int index = 0; index < 60; ++index) app.advanceAnimations(1.0f / 240.0f);
     EXPECT_GT(closeControl->getPresentationState().scaleX, 1.0f);
+    const auto hoverVisual = titleBarPtr->sharedChrome().visual(0);
+    const auto hoverColor = closeControl->getPresentationBackgroundColor();
+    EXPECT_EQ(hoverColor.r, hoverVisual.background.r);
+    EXPECT_EQ(hoverColor.g, hoverVisual.background.g);
+    EXPECT_EQ(hoverColor.b, hoverVisual.background.b);
+    EXPECT_EQ(hoverColor.a, hoverVisual.background.a);
 
     EXPECT_TRUE(app.sendPointerDown(controlX, controlY));
     for (int index = 0; index < 60; ++index) app.advanceAnimations(1.0f / 240.0f);
     EXPECT_LT(closeControl->getPresentationState().scaleX, 1.0f);
+    const auto pressedVisual = titleBarPtr->sharedChrome().visual(0);
+    const auto pressedColor = closeControl->getPresentationBackgroundColor();
+    EXPECT_EQ(pressedColor.r, pressedVisual.background.r);
+    EXPECT_EQ(pressedColor.g, pressedVisual.background.g);
+    EXPECT_EQ(pressedColor.b, pressedVisual.background.b);
+    EXPECT_EQ(pressedColor.a, pressedVisual.background.a);
 
     EXPECT_TRUE(app.sendPointerUp(controlX, controlY));
     for (int index = 0; index < 90; ++index) app.advanceAnimations(1.0f / 240.0f);

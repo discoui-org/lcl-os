@@ -1,26 +1,51 @@
-#include "render/window_chrome_widget.hpp"
+#include "lcl-window-chrome/window_chrome.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <utility>
 
-namespace lcl::render {
+namespace lcl::chrome {
 
 namespace {
 constexpr uint32_t kScalePropertyBase = 100;
 constexpr uint32_t kEmphasisPropertyBase = 110;
+
+uint8_t mixedByte(uint8_t normal, uint8_t hover, uint8_t pressed,
+                  float emphasis) {
+    const float hoverMix = std::min(1.0f, std::clamp(emphasis, 0.0f, 2.0f));
+    const float pressedMix = std::max(0.0f, std::clamp(emphasis, 0.0f, 2.0f) - 1.0f);
+    const float hoverValue = static_cast<float>(normal) +
+        (static_cast<float>(hover) - static_cast<float>(normal)) * hoverMix;
+    return static_cast<uint8_t>(std::clamp(std::lround(
+        hoverValue + (static_cast<float>(pressed) - hoverValue) * pressedMix),
+        0l, 255l));
 }
 
-WindowChromeWidget::WindowChromeWidget(std::string title) : m_title(std::move(title)) {}
+Color mixedColor(const Color& normal, const Color& hover,
+                 const Color& pressed, float emphasis) {
+    return {
+        mixedByte(normal.r, hover.r, pressed.r, emphasis),
+        mixedByte(normal.g, hover.g, pressed.g, emphasis),
+        mixedByte(normal.b, hover.b, pressed.b, emphasis),
+        mixedByte(normal.a, hover.a, pressed.a, emphasis),
+    };
+}
+} // namespace
+
+WindowChromeWidget::WindowChromeWidget(std::string title,
+                                       WindowChromeStyle style)
+    : m_title(std::move(title)), m_style(std::move(style)) {}
 
 WindowChromeLayout WindowChromeWidget::layout(float width, float titleHeight,
-                                                float cornerRadius, float fontSize,
-                                                float displayScale) const {
+                                               float cornerRadius, float fontSize,
+                                               float displayScale) const {
+    displayScale = std::max(0.0f, displayScale);
     const float controlSize = m_style.controlSize * displayScale;
     const float controlGap = m_style.controlGap * displayScale;
-    const float inset = std::max({m_style.minInset * displayScale,
-                                  cornerRadius - m_style.cornerInsetOffset * displayScale,
-                                  4.0f * displayScale});
+    const float inset = std::max({m_style.minControlLeft * displayScale,
+        cornerRadius - m_style.controlLeftRadiusOffset * displayScale,
+        m_style.minControlTop * displayScale});
     const float titleLeft = std::max(m_style.titleMinLeft * displayScale,
         inset + controlSize * 3.0f + controlGap * 2.0f +
             m_style.titleGapAfterControls * displayScale);
@@ -30,7 +55,8 @@ WindowChromeLayout WindowChromeWidget::layout(float width, float titleHeight,
         titleLeft,
         std::clamp(inset + (controlSize - fontSize) * 0.5f, 0.0f,
                    std::max(0.0f, titleHeight - fontSize)),
-        std::max(0.0f, width - titleLeft - m_style.titleRightPadding * displayScale),
+        std::max(0.0f, width - titleLeft -
+            m_style.titleRightPadding * displayScale),
     };
 }
 
@@ -57,9 +83,11 @@ void WindowChromeWidget::animateControl(size_t index, float targetScale,
                                         float targetEmphasis,
                                         const lcl::motion::Motion& motion) {
     const auto scaleChannel = m_motion.ensureChannel(
-        {1u, kScalePropertyBase + static_cast<uint32_t>(index)}, m_controls[index].scale);
+        {1u, kScalePropertyBase + static_cast<uint32_t>(index)},
+        m_controls[index].scale);
     const auto emphasisChannel = m_motion.ensureChannel(
-        {1u, kEmphasisPropertyBase + static_cast<uint32_t>(index)}, m_controls[index].emphasis);
+        {1u, kEmphasisPropertyBase + static_cast<uint32_t>(index)},
+        m_controls[index].emphasis);
     m_motion.animateTo(scaleChannel, targetScale, motion);
     m_motion.animateTo(emphasisChannel, targetEmphasis, motion);
 }
@@ -94,15 +122,17 @@ bool WindowChromeWidget::pointerDown(int controlIndex) {
     return true;
 }
 
-int WindowChromeWidget::pointerUp(int controlIndex) {
+int WindowChromeWidget::pointerUp(int controlIndex, bool keepHovered) {
     controlIndex = std::clamp(controlIndex, -1, 2);
     const int pressed = m_pressedControl;
     if (pressed < 0) return -1;
     m_pressedControl = -1;
-    m_hoveredControl = controlIndex;
+    m_hoveredControl = keepHovered ? controlIndex : -1;
     const bool activated = pressed == controlIndex;
-    animateControl(static_cast<size_t>(pressed), activated ? 1.015f : 1.0f,
-                   activated ? 1.0f : 0.0f, lcl::motion::tokens::release());
+    const bool remainsHovered = activated && keepHovered;
+    animateControl(static_cast<size_t>(pressed), remainsHovered ? 1.015f : 1.0f,
+                   remainsHovered ? 1.0f : 0.0f,
+                   lcl::motion::tokens::release());
     return activated ? pressed : -1;
 }
 
@@ -141,4 +171,28 @@ bool WindowChromeWidget::tick(float dtSec) {
     return presentationChanged || !changed.empty();
 }
 
-} // namespace lcl::render
+bool WindowChromeWidget::hasActiveAnimations() const noexcept {
+    return m_motion.hasActiveAnimations();
+}
+
+WindowControlVisual WindowChromeWidget::visual(size_t index) const {
+    const auto& presentation = m_controls.at(index);
+    return {
+        presentation.scale,
+        mixedColor(m_style.buttonBackground, m_style.buttonHoverBackground,
+                   m_style.buttonPressedBackground, presentation.emphasis),
+        mixedColor(m_style.buttonBorder, m_style.buttonHoverBorder,
+                   m_style.buttonPressedBorder, presentation.emphasis),
+    };
+}
+
+WindowChromeAction WindowChromeWidget::actionForControl(size_t index) {
+    switch (index) {
+        case 0: return WindowChromeAction::Close;
+        case 1: return WindowChromeAction::Minimize;
+        case 2: return WindowChromeAction::ToggleMaximize;
+        default: throw std::out_of_range("window chrome control index");
+    }
+}
+
+} // namespace lcl::chrome

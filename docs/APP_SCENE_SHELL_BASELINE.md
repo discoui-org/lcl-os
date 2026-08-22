@@ -38,7 +38,8 @@ The following behavior is part of the baseline and must remain:
 - Terminal rendering stays in `TerminalView` under `WindowApp`; the previous
   handwritten terminal socket/frame renderer is not restored.
 - Widgets draw through the backend-neutral `Canvas` contract.
-- CSD and SSD use the shared window-chrome geometry and window-action contract.
+- CSD and SSD host the same renderer-independent `WindowChromeWidget` for
+  geometry, hit testing, actions, interaction state, motion, and visual colors.
 
 The following compatibility bridges have been removed after their replacement
 paths received equivalent revisioned-state coverage:
@@ -58,8 +59,10 @@ paths received equivalent revisioned-state coverage:
 
 ### Terminal
 
-- The terminal uses client-side decoration with the shared titlebar layout.
-- Titlebar controls have the same geometry and antialiasing as the SSD controls.
+- The terminal keeps client-side decoration and hosts the shared window-chrome
+  state through an `lcl-ui` Canvas painter.
+- Titlebar controls have the same geometry, state, motion, and visual colors as
+  SSD controls; each host uses its native antialiasing painter.
 - The terminal root and backdrop remain passive: hovering or clicking the
   window background must not brighten the entire window like a button.
 - Backdrop blur/glass and translucency remain visible over the wallpaper.

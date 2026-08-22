@@ -174,17 +174,6 @@ public:
     /** Compatibility shorthand that preserves the current WindowGroup roundness. */
     bool setWindowCornerRadius(float radiusPx);
     void setExternalIpcSocket(int socketFd);
-    void setCsdTitlebarEnabled(bool enabled) {
-        m_csdTitlebarEnabled = enabled;
-        if (!enabled) m_csdPressedControl = -1;
-    }
-    /**
-     * Enable default CSD chrome behavior for the shared three-control layout.
-     * Custom CSD controls can leave this disabled and call the request methods
-     * above directly from any widget or user-area gesture.
-     */
-    void configureCsdTitlebar(float height, float controlLeft, float controlTop,
-                              float controlSize, float controlGap = 6.0f);
 
     // Frame Execution & Render Loop Pipeline
     void updateLayout();
@@ -204,7 +193,6 @@ private:
     bool requestWindowAction(lcl::protocol::LCLWindowAction action,
                              float localX = 0.0f, float localY = 0.0f);
     bool requestSurfaceDestroy(uint32_t surfaceId);
-    int hitCsdControl(float x, float y) const noexcept;
     bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
                              uint32_t payloadSize, int passedFd = -1);
     void logFrameTraceIfDue();
@@ -325,13 +313,6 @@ private:
     double m_traceShmMs{0.0};
     std::chrono::steady_clock::time_point m_traceLastLog{};
 
-    bool m_csdTitlebarEnabled{false};
-    float m_csdTitlebarHeight{32.0f};
-    float m_csdControlLeft{10.0f};
-    float m_csdControlTop{8.0f};
-    float m_csdControlSize{16.0f};
-    float m_csdControlGap{6.0f};
-    int m_csdPressedControl{-1};
     lcl::protocol::LCLDecorationMode m_requestedDecorationMode{lcl::protocol::LCLDecorationMode::None};
     bool m_hasRequestedDecorationMode{false};
     bool m_requestedEdgeToEdge{false};

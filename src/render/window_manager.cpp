@@ -530,29 +530,36 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                 auto found = std::find_if(m_windows.begin(), m_windows.end(),
                     [activatedWindowId](const Window& window) { return window.id == activatedWindowId; });
                 if (found == m_windows.end()) return {stateChanged, interaction};
-                if (activatedControl == 0) {
-                    std::cout << "[LCL WM] Close button clicked on window ID: " << found->id << "\n";
-                    found->closeRequested = true;
-                    found->markDirty();
-                } else if (activatedControl == 1) {
-                    stateChanged = minimizeWindow(activatedWindowId) || stateChanged;
-                } else if (activatedControl == 2) {
-                    const Rect previousBounds = found->getBounds();
-                    const bool previousWasMaximized = found->isMaximized;
-                    const bool previousWasMinimized = found->isMinimized;
-                    if (toggleMaximizeWindow(activatedWindowId)) {
-                        const auto transitioned = std::find_if(
-                            m_windows.begin(), m_windows.end(),
-                            [activatedWindowId](const Window& window) {
-                                return window.id == activatedWindowId;
-                            });
-                        if (transitioned != m_windows.end()) {
-                            interaction = GeometryInteraction::windowStateTransition(
-                                transitioned->id, transitioned->geometryGeneration,
-                                previousBounds, previousWasMaximized,
-                                previousWasMinimized);
+                switch (lcl::chrome::WindowChromeWidget::actionForControl(
+                        static_cast<size_t>(activatedControl))) {
+                    case lcl::chrome::WindowChromeAction::Close:
+                        std::cout << "[LCL WM] Close button clicked on window ID: "
+                                  << found->id << "\n";
+                        found->closeRequested = true;
+                        found->markDirty();
+                        break;
+                    case lcl::chrome::WindowChromeAction::Minimize:
+                        stateChanged = minimizeWindow(activatedWindowId) || stateChanged;
+                        break;
+                    case lcl::chrome::WindowChromeAction::ToggleMaximize: {
+                        const Rect previousBounds = found->getBounds();
+                        const bool previousWasMaximized = found->isMaximized;
+                        const bool previousWasMinimized = found->isMinimized;
+                        if (toggleMaximizeWindow(activatedWindowId)) {
+                            const auto transitioned = std::find_if(
+                                m_windows.begin(), m_windows.end(),
+                                [activatedWindowId](const Window& window) {
+                                    return window.id == activatedWindowId;
+                                });
+                            if (transitioned != m_windows.end()) {
+                                interaction = GeometryInteraction::windowStateTransition(
+                                    transitioned->id, transitioned->geometryGeneration,
+                                    previousBounds, previousWasMaximized,
+                                    previousWasMinimized);
+                            }
+                            stateChanged = true;
                         }
-                        stateChanged = true;
+                        break;
                     }
                 }
             }

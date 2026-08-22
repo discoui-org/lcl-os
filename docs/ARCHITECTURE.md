@@ -196,6 +196,10 @@ Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı deği
 2. **Common Decoration Negotiation Protocol (`lcl_protocol`):**
    - `LCLOpcode::SetDecorationMode` IPC mesajı ile istemciler `SSD` (Server-Side Decoration) veya `CSD` (Client-Side Decoration) modlarını talep eder.
    - **Compositor WindowManager:** Varsayılan olarak `SSD` modunda pencere başlık çubuğunu çizer. İstemci `CSD` talep ederse başlık çubuğu çizimini devre dışı bırakarak tüm render alanını istemciye devreder.
+   - Her iki mod da renderer bağımsız `lcl-window-chrome` hedefindeki aynı
+     `WindowChromeWidget` layout, hit-test, aksiyon, interaction, motion ve
+     görsel renk çözümlemesini host eder; yalnızca CSD Canvas painter ile SSD
+     compositor painter birbirinden ayrıdır.
    - Mobil shell gelecekte aynı compositor ve revisioned shell-state sözleşmesini tüketir; ayrı bir `lcl-mobile-wm` veya paralel pencere otoritesi yoktur.
 
 ---

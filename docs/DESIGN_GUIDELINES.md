@@ -42,6 +42,8 @@ Use neutral tones as defaults. Avoid catppuccin-like saturated accents.
 
 ## Implementation Notes
 
-- Reuse shared chrome widgets between compositor and CSD overlays.
+- CSD and SSD host the same renderer-independent `WindowChromeWidget` state;
+  only their painters differ.
 - Keep all radius/border tokens centralized where possible.
-- If visual behavior diverges between CSD and SSD, compositor-side rendering is source of truth.
+- Layout, hit testing, actions, interaction state, motion, and visual color
+  resolution come from `lcl-window-chrome`; neither host may reimplement them.

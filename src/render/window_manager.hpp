@@ -7,7 +7,7 @@
 #include "core/input/input_manager.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "render/damage_tracker.hpp"
-#include "render/window_chrome_widget.hpp"
+#include "lcl-window-chrome/window_chrome.hpp"
 #include "lcl-motion/motion.hpp"
 
 namespace lcl::render {
@@ -166,7 +166,7 @@ struct Window {
     uint32_t headerColor{0xFF38BDF8};
     // Window is the parent presentation group. The compositor-owned titlebar
     // widget and the attached client surface are its two children.
-    WindowChromeWidget chrome{};
+    lcl::chrome::WindowChromeWidget chrome{};
 
     // Damage Tracking & Occlusion Culling
     bool isDirty{true};

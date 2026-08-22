@@ -67,15 +67,8 @@ int main() {
       lcl::protocol::LCLResizePresentationMode::Live);
   window.setDecorationMode(lcl::protocol::LCLDecorationMode::CSD);
   window.setWindowCornerStyle(kCornerRadius, 2.0f);
-  window.setCsdTitlebarEnabled(true);
 
   const lcl::ui::chrome::WindowChromeStyle chromeStyle;
-  const auto titlebarLayout = lcl::ui::chrome::calculateWindowTitlebarLayout(
-      static_cast<float>(kSurfaceWidth), kTitlebarHeight, kCornerRadius,
-      kTitleFontSize, chromeStyle);
-  window.configureCsdTitlebar(kTitlebarHeight, titlebarLayout.controlLeft,
-                              titlebarLayout.controlTop,
-                              chromeStyle.controlSize, chromeStyle.controlGap);
 
   // Keep the terminal's alpha background on the inexpensive rectangular
   // raster path.  The compositor owns the final rounded window mask.
@@ -114,7 +107,17 @@ int main() {
 
   auto titlebar = lcl::ui::chrome::buildWindowTitlebar(
       static_cast<float>(kSurfaceWidth), kTitlebarHeight, kCornerRadius,
-      "LCL Terminal", kTitleFontSize, chromeStyle);
+      "LCL Terminal", kTitleFontSize, chromeStyle,
+      lcl::ui::chrome::WindowChromeActions{
+          .close = [&window] { return window.requestWindowClose(); },
+          .minimize = [&window] { return window.requestWindowMinimize(); },
+          .toggleMaximize = [&window] {
+            return window.requestWindowToggleMaximize();
+          },
+          .beginDrag = [&window](float x, float y) {
+            return window.requestWindowDrag(x, y);
+          },
+      });
   lcl::ui::Container *titlebarPtr = titlebar.get();
 
   root->addChild(std::move(backdrop));
