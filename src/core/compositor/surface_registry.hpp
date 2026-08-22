@@ -211,6 +211,10 @@ public:
                                         bool rollbackWasMinimized) noexcept;
     static bool acceptsBufferCommit(const SurfaceEntry& entry,
                                     uint64_t configureSerial) noexcept;
+    /** Resolve a client-constrained logical extent from its physical commit. */
+    static float committedLogicalExtent(uint32_t physicalExtent,
+                                        float requestedLogicalExtent,
+                                        float bufferScale) noexcept;
     static bool hasOutstandingConfigure(const SurfaceEntry& entry) noexcept;
     static bool hasUnpresentedLiveFrame(const SurfaceEntry& entry) noexcept;
     static void queueLivePresentation(SurfaceEntry& entry,

@@ -593,18 +593,26 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     break;
                 }
             }
-            const float frameW = entry.configuredWidth;
-            const float frameH = entry.configuredHeight + static_cast<float>(titleOffset);
+            const float requestedContentW = entry.configuredWidth;
+            const float requestedContentH = entry.configuredHeight;
+            const float committedContentW = SurfaceRegistry::committedLogicalExtent(
+                entry.width, requestedContentW, entry.bufferScale);
+            const float committedContentH = SurfaceRegistry::committedLogicalExtent(
+                entry.height, requestedContentH, entry.bufferScale);
+            const float frameW = committedContentW;
+            const float frameH = committedContentH + static_cast<float>(titleOffset);
             bool preserveNewerTarget = false;
             const auto configuredWindow = std::find_if(
                 m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
                 [&entry](const auto& window) { return window.id == entry.windowId; });
             if (configuredWindow != m_windowManager.getWindows().end()) {
                 const float configuredFrameHeight =
-                    entry.configuredHeight + static_cast<float>(titleOffset);
-                preserveNewerTarget = configuredWindow->pendingWidth != entry.configuredWidth ||
+                    requestedContentH + static_cast<float>(titleOffset);
+                preserveNewerTarget = configuredWindow->pendingWidth != requestedContentW ||
                     configuredWindow->pendingHeight != configuredFrameHeight;
             }
+            entry.configuredWidth = committedContentW;
+            entry.configuredHeight = committedContentH;
             m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH,
                                                   preserveNewerTarget, entry.configuredX,
                                                   entry.configuredY,
@@ -764,19 +772,27 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
 
             // Notify WindowManager of client surface buffer commit
-            const float frameW = entry.configuredWidth;
-            const float frameH = entry.configuredHeight + static_cast<float>(titleOffset);
+            const float requestedContentW = entry.configuredWidth;
+            const float requestedContentH = entry.configuredHeight;
+            const float committedContentW = SurfaceRegistry::committedLogicalExtent(
+                entry.width, requestedContentW, entry.bufferScale);
+            const float committedContentH = SurfaceRegistry::committedLogicalExtent(
+                entry.height, requestedContentH, entry.bufferScale);
+            const float frameW = committedContentW;
+            const float frameH = committedContentH + static_cast<float>(titleOffset);
             bool preserveNewerTarget = false;
             const auto configuredWindow = std::find_if(
                 m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
                 [&entry](const auto& window) { return window.id == entry.windowId; });
             if (configuredWindow != m_windowManager.getWindows().end()) {
                 const float configuredFrameHeight =
-                    entry.configuredHeight + static_cast<float>(titleOffset);
+                    requestedContentH + static_cast<float>(titleOffset);
                 preserveNewerTarget =
-                    configuredWindow->pendingWidth != entry.configuredWidth ||
+                    configuredWindow->pendingWidth != requestedContentW ||
                     configuredWindow->pendingHeight != configuredFrameHeight;
             }
+            entry.configuredWidth = committedContentW;
+            entry.configuredHeight = committedContentH;
             m_windowManager.commitSurfaceGeometry(
                 entry.windowId, frameW, frameH, preserveNewerTarget,
                 entry.configuredX, entry.configuredY,

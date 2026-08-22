@@ -1,3 +1,4 @@
+#include <cmath>
 #include <iostream>
 #include <memory>
 
@@ -111,19 +112,19 @@ int main() {
   };
   updateTerminalGeometry(kSurfaceWidth, kSurfaceHeight);
   window.setOnResize(updateTerminalGeometry);
-  window.setResizeTransform([](uint32_t requestedWidth,
-                               uint32_t requestedHeight,
+  window.setResizeTransform([](float requestedWidth,
+                               float requestedHeight,
                                lcl::protocol::LCLConfigureResizeReason reason) {
     if (reason != lcl::protocol::LCLConfigureResizeReason::Interactive) {
-      return std::pair<uint32_t, uint32_t>{requestedWidth, requestedHeight};
+      return std::pair<float, float>{requestedWidth, requestedHeight};
     }
-    int contentWidth = static_cast<int>(requestedWidth);
-    int contentHeight = static_cast<int>(requestedHeight);
+    int contentWidth = static_cast<int>(std::floor(requestedWidth));
+    int contentHeight = static_cast<int>(std::floor(requestedHeight));
     lcl::apps::TerminalApp::getSnappedDimensions(contentWidth, contentHeight,
                                                  contentWidth, contentHeight);
-    return std::pair<uint32_t, uint32_t>{
-        static_cast<uint32_t>(contentWidth),
-        static_cast<uint32_t>(contentHeight),
+    return std::pair<float, float>{
+        static_cast<float>(contentWidth),
+        static_cast<float>(contentHeight),
     };
   });
 

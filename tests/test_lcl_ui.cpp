@@ -3790,6 +3790,14 @@ TEST(LclUiTest, BackdropBlurCaptureClampsToSurfaceWithoutPreEntryBleed) {
     EXPECT_EQ(centered.capture.height, 32);
     EXPECT_EQ(centered.outputOffsetX, 0);
     EXPECT_EQ(centered.outputOffsetY, 0);
+    EXPECT_EQ(centered.maskWidth, 200);
+    EXPECT_EQ(centered.maskHeight, 32);
+    EXPECT_EQ(centered.maskOffsetX, 0);
+    EXPECT_EQ(centered.maskOffsetY, 0);
+    EXPECT_FALSE(centered.clippedLeft);
+    EXPECT_FALSE(centered.clippedRight);
+    EXPECT_FALSE(centered.clippedTop);
+    EXPECT_FALSE(centered.clippedBottom);
 
     const auto screenEdge = lcl::render::computeBackdropFilterGeometry(
         0, 0, 1920, 32, 1920, 1080, radius);
@@ -3803,6 +3811,57 @@ TEST(LclUiTest, BackdropBlurCaptureClampsToSurfaceWithoutPreEntryBleed) {
     EXPECT_EQ(screenEdge.capture.height, 32);
     EXPECT_EQ(screenEdge.outputOffsetX, 0);
     EXPECT_EQ(screenEdge.outputOffsetY, 0);
+    EXPECT_FALSE(screenEdge.clippedLeft);
+    EXPECT_FALSE(screenEdge.clippedRight);
+    EXPECT_FALSE(screenEdge.clippedTop);
+    EXPECT_FALSE(screenEdge.clippedBottom);
+
+    const auto clippedRight = lcl::render::computeBackdropFilterGeometry(
+        10, 0, 60, 40, 40, 40, 0);
+    EXPECT_EQ(clippedRight.effect.x, 10);
+    EXPECT_EQ(clippedRight.effect.width, 30);
+    EXPECT_EQ(clippedRight.maskWidth, 60);
+    EXPECT_EQ(clippedRight.maskHeight, 40);
+    EXPECT_EQ(clippedRight.maskOffsetX, 0);
+    EXPECT_EQ(clippedRight.maskOffsetY, 0);
+    EXPECT_FALSE(clippedRight.clippedLeft);
+    EXPECT_TRUE(clippedRight.clippedRight);
+    EXPECT_FALSE(clippedRight.clippedTop);
+    EXPECT_FALSE(clippedRight.clippedBottom);
+
+    const auto clippedLeft = lcl::render::computeBackdropFilterGeometry(
+        -20, 0, 60, 40, 40, 40, 0);
+    EXPECT_EQ(clippedLeft.effect.x, 0);
+    EXPECT_EQ(clippedLeft.effect.width, 40);
+    EXPECT_EQ(clippedLeft.maskWidth, 60);
+    EXPECT_EQ(clippedLeft.maskOffsetX, 20);
+    EXPECT_TRUE(clippedLeft.clippedLeft);
+    EXPECT_FALSE(clippedLeft.clippedRight);
+
+    const auto clippedVertically = lcl::render::computeBackdropFilterGeometry(
+        0, -10, 40, 60, 40, 40, 0);
+    EXPECT_TRUE(clippedVertically.clippedTop);
+    EXPECT_TRUE(clippedVertically.clippedBottom);
+}
+
+TEST(LclUiTest, BackdropMaskDoesNotCreateACornerAtFramebufferClipEdge) {
+    const auto render = [](float effectX) {
+        std::vector<uint32_t> pixels(40 * 40, 0xFF102030u);
+        lcl::render::RasterRenderer renderer;
+        EXPECT_TRUE(renderer.initialize(40, 40, nullptr, pixels.data()));
+        renderer.applyBackdropFilter(
+            effectX, 0, 60, 40, 10.0f, 2.0f, 1.0f,
+            {{lcl::protocol::FilterType::Brightness, 1.0f}});
+        return pixels;
+    };
+
+    const auto clippedRight = render(10.0f);
+    EXPECT_EQ((clippedRight[0 * 40 + 39] >> 24) & 0xFFu, 255u);
+    EXPECT_EQ((clippedRight[0 * 40 + 10] >> 24) & 0xFFu, 0u);
+
+    const auto clippedLeft = render(-20.0f);
+    EXPECT_EQ((clippedLeft[0 * 40 + 0] >> 24) & 0xFFu, 255u);
+    EXPECT_EQ((clippedLeft[0 * 40 + 39] >> 24) & 0xFFu, 0u);
 }
 
 TEST(LclUiTest, SoftwareBackdropPathSkipsBlur) {

@@ -17,6 +17,14 @@ struct BackdropFilterGeometry {
     BackdropIntRect capture{};
     int outputOffsetX{0};
     int outputOffsetY{0};
+    int maskWidth{0};
+    int maskHeight{0};
+    int maskOffsetX{0};
+    int maskOffsetY{0};
+    bool clippedLeft{false};
+    bool clippedRight{false};
+    bool clippedTop{false};
+    bool clippedBottom{false};
 };
 
 struct BackdropPassScale {
@@ -68,6 +76,18 @@ inline BackdropFilterGeometry computeBackdropFilterGeometry(
     geometry.effect.width = std::max(0, effectRight - geometry.effect.x);
     geometry.effect.height = std::max(0, effectBottom - geometry.effect.y);
     if (geometry.effect.width == 0 || geometry.effect.height == 0) return geometry;
+
+    // Keep the rounded mask anchored to the original effect rect. Clipping to
+    // the framebuffer exposes only a slice; it must not manufacture new
+    // corners at the screen edge.
+    geometry.maskWidth = effectWidth;
+    geometry.maskHeight = effectHeight;
+    geometry.maskOffsetX = geometry.effect.x - effectX;
+    geometry.maskOffsetY = geometry.effect.y - effectY;
+    geometry.clippedLeft = effectX < 0;
+    geometry.clippedRight = effectX + effectWidth > sceneWidth;
+    geometry.clippedTop = effectY < 0;
+    geometry.clippedBottom = effectY + effectHeight > sceneHeight;
 
     // Capture strictly the surface effect boundary. External scene pixels
     // are not sampled to eliminate pre-entry blur halo bleeding.

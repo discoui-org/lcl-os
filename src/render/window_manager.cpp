@@ -286,6 +286,39 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                     }
                 }
 
+                const bool resizesLeft = win.resizeEdge == ResizeEdge::Left ||
+                    win.resizeEdge == ResizeEdge::TopLeft ||
+                    win.resizeEdge == ResizeEdge::BottomLeft;
+                const bool resizesRight = win.resizeEdge == ResizeEdge::Right ||
+                    win.resizeEdge == ResizeEdge::TopRight ||
+                    win.resizeEdge == ResizeEdge::BottomRight ||
+                    win.resizeEdge == ResizeEdge::None;
+                const bool resizesTop = win.resizeEdge == ResizeEdge::Top ||
+                    win.resizeEdge == ResizeEdge::TopLeft ||
+                    win.resizeEdge == ResizeEdge::TopRight;
+                const bool resizesBottom = win.resizeEdge == ResizeEdge::Bottom ||
+                    win.resizeEdge == ResizeEdge::BottomLeft ||
+                    win.resizeEdge == ResizeEdge::BottomRight;
+
+                // Interactive window extents are whole logical pixels. DPR is
+                // applied later at the raster/buffer boundary, so a 2x output
+                // advances the physical edge by two pixels without leaking
+                // device-pixel quantization back into WindowManager geometry.
+                if (resizesLeft || resizesRight) {
+                    newW = std::clamp(std::round(newW), minW, maxW);
+                }
+                if (resizesTop || resizesBottom) {
+                    newH = std::clamp(std::round(newH), minH, maxH);
+                }
+                if (resizesLeft) {
+                    newX = win.initialX + win.initialWidth - newW;
+                }
+                if (resizesTop) {
+                    const float bottomAnchor = win.initialY + win.initialHeight;
+                    newY = std::max(topInset, bottomAnchor - newH);
+                    newH = bottomAnchor - newY;
+                }
+
                 if (newX != win.pendingX || newY != win.pendingY || newW != win.pendingWidth || newH != win.pendingHeight) {
                     win.pendingX = newX;
                     win.pendingY = newY;

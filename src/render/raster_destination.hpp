@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace lcl::render {
 
 struct DeviceRasterDestination {
@@ -9,6 +11,15 @@ struct DeviceRasterDestination {
     float height{0.0f};
     float cornerRadius{0.0f};
 };
+
+/** Half a texel in normalized texture coordinates.
+ * Cropped textures must clamp to this inset so linear filtering cannot sample
+ * an inactive/stale texel immediately outside the active region. */
+inline float normalizedHalfTexel(uint32_t backingExtent) noexcept {
+    return backingExtent > 0
+        ? 0.5f / static_cast<float>(backingExtent)
+        : 0.0f;
+}
 
 /** Convert a logical destination to physical framebuffer coordinates.
  * Source and backing buffer extents deliberately do not participate here. */

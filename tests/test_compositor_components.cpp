@@ -136,6 +136,24 @@ TEST(SurfaceRegistryTest, RejectsStaleSerialButAcceptsClientConstrainedDimension
     EXPECT_FALSE(SurfaceRegistry::hasOutstandingConfigure(entry));
 }
 
+TEST(SurfaceRegistryTest, ClientConstrainedCommitDefinesSnappedLogicalExtent) {
+    // An exact physical realization keeps the configured float because ceil
+    // at the buffer boundary is not reversible for fractional logical sizes.
+    EXPECT_FLOAT_EQ(SurfaceRegistry::committedLogicalExtent(1073, 536.25f, 2.0f),
+                    536.25f);
+    EXPECT_FLOAT_EQ(SurfaceRegistry::committedLogicalExtent(677, 541.0f, 1.25f),
+                    541.0f);
+
+    // A different physical extent is an intentional client constraint (for
+    // example Terminal's cell grid), so it becomes the committed frame size.
+    EXPECT_FLOAT_EQ(SurfaceRegistry::committedLogicalExtent(1072, 541.0f, 2.0f),
+                    536.0f);
+    EXPECT_FLOAT_EQ(SurfaceRegistry::committedLogicalExtent(670, 541.0f, 1.25f),
+                    536.0f);
+    EXPECT_FLOAT_EQ(SurfaceRegistry::committedLogicalExtent(536, 541.0f, 0.0f),
+                    536.0f);
+}
+
 TEST(CompositorRendererTest, DmaBufCropShowsContentWithoutScalingTheBacking) {
     const auto crop = lcl::render::makeDmaBufCrop(640, 480, 1920, 1080);
     EXPECT_FLOAT_EQ(crop.uMax, 640.0f / 1920.0f);
@@ -143,6 +161,19 @@ TEST(CompositorRendererTest, DmaBufCropShowsContentWithoutScalingTheBacking) {
     const auto exact = lcl::render::makeDmaBufCrop(800, 600, 800, 600);
     EXPECT_FLOAT_EQ(exact.uMax, 1.0f);
     EXPECT_FLOAT_EQ(exact.vMax, 1.0f);
+}
+
+TEST(CompositorRendererTest, CroppedTextureSamplingStopsAtActiveTexelCenters) {
+    EXPECT_FLOAT_EQ(lcl::render::normalizedHalfTexel(1920), 0.5f / 1920.0f);
+    EXPECT_FLOAT_EQ(lcl::render::normalizedHalfTexel(1080), 0.5f / 1080.0f);
+    EXPECT_FLOAT_EQ(lcl::render::normalizedHalfTexel(1), 0.5f);
+    EXPECT_FLOAT_EQ(lcl::render::normalizedHalfTexel(0), 0.0f);
+
+    const auto crop = lcl::render::makeDmaBufCrop(640, 480, 1920, 1080);
+    const float rightSample = crop.uMax - lcl::render::normalizedHalfTexel(1920);
+    const float bottomSample = crop.vMax - lcl::render::normalizedHalfTexel(1080);
+    EXPECT_LT(rightSample, crop.uMax);
+    EXPECT_LT(bottomSample, crop.vMax);
 }
 
 TEST(CompositorRendererTest, ShmAndDmaBufShareLogicalDestinationMapping) {
@@ -591,6 +622,45 @@ TEST(InputRouterTest, FractionalOutputScaleKeepsHorizontalResizeLogical) {
     EXPECT_EQ(resized.resizeEdge, render::ResizeEdge::Right);
     EXPECT_FLOAT_EQ(resized.pendingWidth, 310.0f);
     EXPECT_FLOAT_EQ(resized.pendingX, 100.0f);
+}
+
+TEST(InputRouterTest, TwoXOutputQuantizesInteractiveResizeToLogicalPixels) {
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t windowId = manager.createWindow("2x resize", 100, 80, 300, 200);
+    manager.setDecorationMode(windowId, render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes, 2.0f);
+
+    InputEvent motion{};
+    motion.type = InputEventType::PointerMotion;
+    motion.absoluteX = 399.5 * 2.0;
+    motion.absoluteY = 150.0 * 2.0;
+    router.route(motion);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.absoluteX = motion.absoluteX;
+    down.absoluteY = motion.absoluteY;
+    ASSERT_TRUE(router.route(down));
+
+    // One physical pointer pixel is half a logical unit at DPR 2. The window
+    // edge advances one whole logical unit, i.e. two physical pixels.
+    motion.absoluteX += 1.0;
+    ASSERT_TRUE(router.route(motion));
+    EXPECT_FLOAT_EQ(manager.getWindows().back().pendingWidth, 301.0f);
+
+    motion.absoluteX += 1.0;
+    router.route(motion);
+    EXPECT_FLOAT_EQ(manager.getWindows().back().pendingWidth, 301.0f);
+
+    motion.absoluteX += 1.0;
+    ASSERT_TRUE(router.route(motion));
+    EXPECT_FLOAT_EQ(manager.getWindows().back().pendingWidth, 302.0f);
 }
 
 TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {

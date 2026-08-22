@@ -1,6 +1,7 @@
 #include "core/compositor/surface_registry.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -180,6 +181,23 @@ bool SurfaceRegistry::acceptsBufferCommit(const SurfaceEntry& entry,
     // closest valid size for that same configure. WindowManager reconciles the
     // accepted dimensions through commitSurfaceGeometry().
     return configureSerial != 0 && configureSerial == entry.pendingConfigureSerial;
+}
+
+float SurfaceRegistry::committedLogicalExtent(uint32_t physicalExtent,
+                                              float requestedLogicalExtent,
+                                              float bufferScale) noexcept {
+    const float scale = std::isfinite(bufferScale) && bufferScale > 0.0f
+        ? bufferScale : 1.0f;
+    if (std::isfinite(requestedLogicalExtent) && requestedLogicalExtent > 0.0f) {
+        const uint32_t requestedPhysical = static_cast<uint32_t>(std::ceil(
+            requestedLogicalExtent * scale));
+        if (physicalExtent == requestedPhysical) {
+            // Preserve the exact fractional logical configure when the client
+            // accepted it verbatim; ceil(logical * scale) is not reversible.
+            return requestedLogicalExtent;
+        }
+    }
+    return static_cast<float>(physicalExtent) / scale;
 }
 
 bool SurfaceRegistry::hasOutstandingConfigure(const SurfaceEntry& entry) noexcept {

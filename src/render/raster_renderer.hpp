@@ -319,6 +319,7 @@ private:
     int32_t m_uBlurCornerRadiusLoc{-1};
     int32_t m_uBlurRoundnessLoc{-1};
     int32_t m_uBlurInputScaleLoc{-1};
+    int32_t m_uBlurFramebufferClipEdgesLoc{-1};
 
     uint32_t m_glColorMatrixProgram{0};
     int32_t m_aColorPosLoc{-1};
@@ -339,6 +340,9 @@ private:
     int32_t m_uMaskSquareTopCornersLoc{-1};
     int32_t m_uMaskSampleOffsetLoc{-1};
     int32_t m_uMaskSampleScaleLoc{-1};
+    int32_t m_uMaskSampleTexelInsetLoc{-1};
+    int32_t m_uMaskDrawSizeLoc{-1};
+    int32_t m_uMaskGeometryOffsetLoc{-1};
 
     uint32_t m_glMaskBgraProgram{0};
     int32_t m_aMaskBgraPosLoc{-1};
@@ -370,7 +374,7 @@ private:
     int32_t m_uRefractDispersionLoc{-1};
     int32_t m_uRefractSizeLoc{-1};
     int32_t m_uRefractCaptureSizeLoc{-1};
-    int32_t m_uRefractEffectOffsetLoc{-1};
+    int32_t m_uRefractMaskOffsetLoc{-1};
     int32_t m_uRefractRadiusLoc{-1};
     int32_t m_uRefractRoundnessLoc{-1};
     int32_t m_uRefractInputScaleLoc{-1};
@@ -393,7 +397,10 @@ private:
                                float cornerRadius, float cornerRoundness, float opacity,
                                bool squareTopCorners = false,
                                float uScale = 1.0f, float vScale = 1.0f,
-                               float uOffset = 0.0f, float vOffset = 0.0f);
+                               float uOffset = 0.0f, float vOffset = 0.0f,
+                               float maskWidth = 0.0f, float maskHeight = 0.0f,
+                               float maskOffsetX = 0.0f, float maskOffsetY = 0.0f,
+                               float uTexelInset = 0.0f, float vTexelInset = 0.0f);
     void drawMaskedBgraTextureQuad(uint32_t textureId,
                                    float x,
                                    float y,

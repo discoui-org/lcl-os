@@ -89,9 +89,21 @@ bool RasterRenderer::initGLShader() {
         "uniform float uCornerRadiusPx;\n"
         "uniform float uRoundnessExp;\n"
         "uniform vec2 uInputScale;\n"
-        "vec2 mirrorTexCoord(vec2 uv) {\n"
-        "    vec2 m = mod(abs(uv), 2.0);\n"
-        "    return vec2(m.x > 1.0 ? 2.0 - m.x : m.x, m.y > 1.0 ? 2.0 - m.y : m.y);\n"
+        // left, right, bottom, top. A framebuffer clip is not a material
+        // boundary: mirroring there reflects unrelated scene pixels back into
+        // the visible window edge. Real effect edges keep the existing mirror
+        // behavior so blur remains contained within the declared region.
+        "uniform vec4 uFramebufferClipEdges;\n"
+        "float mirrorTexCoord(float uv) {\n"
+        "    float m = mod(abs(uv), 2.0);\n"
+        "    return m > 1.0 ? 2.0 - m : m;\n"
+        "}\n"
+        "vec2 resolveTexCoord(vec2 uv) {\n"
+        "    if (uv.x < 0.0) uv.x = uFramebufferClipEdges.x > 0.5 ? 0.0 : mirrorTexCoord(uv.x);\n"
+        "    if (uv.x > 1.0) uv.x = uFramebufferClipEdges.y > 0.5 ? 1.0 : mirrorTexCoord(uv.x);\n"
+        "    if (uv.y < 0.0) uv.y = uFramebufferClipEdges.z > 0.5 ? 0.0 : mirrorTexCoord(uv.y);\n"
+        "    if (uv.y > 1.0) uv.y = uFramebufferClipEdges.w > 0.5 ? 1.0 : mirrorTexCoord(uv.y);\n"
+        "    return uv;\n"
         "}\n"
         "void main() {\n"
         "    if (uSigma <= 0.1) {\n"
@@ -105,7 +117,7 @@ bool RasterRenderer::initGLShader() {
         "        if (i >= -uRadius && i <= uRadius) {\n"
         "            float fi = float(i);\n"
         "            float weight = exp(-(fi * fi) / twoSigmaSq);\n"
-        "            vec2 tap = mirrorTexCoord(vTexCoord + uDirection * fi);\n"
+        "            vec2 tap = resolveTexCoord(vTexCoord + uDirection * fi);\n"
         "            vec2 halfTexel = vec2(0.5) / uSizePx;\n"
         "            vec2 coord = clamp(tap, halfTexel, vec2(1.0) - halfTexel);\n"
         "            colorAcc += texture2D(uTexture, coord * uInputScale) * weight;\n"
@@ -135,6 +147,8 @@ bool RasterRenderer::initGLShader() {
     m_uBlurCornerRadiusLoc = glGetUniformLocation(m_glBlurProgram, "uCornerRadiusPx");
     m_uBlurRoundnessLoc = glGetUniformLocation(m_glBlurProgram, "uRoundnessExp");
     m_uBlurInputScaleLoc = glGetUniformLocation(m_glBlurProgram, "uInputScale");
+    m_uBlurFramebufferClipEdgesLoc = glGetUniformLocation(
+        m_glBlurProgram, "uFramebufferClipEdges");
 
     // --- GLSL Color Matrix Fragment Shader ---
     const char* fColorMatrixSrc =
@@ -178,6 +192,9 @@ bool RasterRenderer::initGLShader() {
         "uniform float uSquareTopCorners;\n"
         "uniform vec2 uSampleOffset;\n"
         "uniform vec2 uSampleScale;\n"
+        "uniform vec2 uSampleTexelInset;\n"
+        "uniform vec2 uDrawSizePx;\n"
+        "uniform vec2 uMaskOffsetPx;\n"
         "float sdSuperRoundRect(vec2 p, vec2 b, float r, float n) {\n"
         "    vec2 q = abs(p) - b + vec2(r);\n"
         "    if (q.x <= 0.0 || q.y <= 0.0) {\n"
@@ -188,10 +205,19 @@ bool RasterRenderer::initGLShader() {
         "    return (k - 1.0) * r;\n"
         "}\n"
         "void main() {\n"
-        "    vec4 c = texture2D(uTexture, uSampleOffset + vTexCoord * uSampleScale);\n"
+        "    vec2 sampleMin = uSampleOffset + uSampleTexelInset;\n"
+        "    vec2 sampleMax = uSampleOffset + uSampleScale - uSampleTexelInset;\n"
+        "    vec2 sampleCoord = clamp(uSampleOffset + vTexCoord * uSampleScale,\n"
+        "                             min(sampleMin, sampleMax),\n"
+        "                             max(sampleMin, sampleMax));\n"
+        "    vec4 c = texture2D(uTexture, sampleCoord);\n"
         "    float r = clamp(uRadiusPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
         "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
-        "    vec2 p = (vTexCoord - vec2(0.5)) * uSizePx;\n"
+        "    vec2 maskCoord = vec2(\n"
+        "        uMaskOffsetPx.x + vTexCoord.x * uDrawSizePx.x,\n"
+        "        uMaskOffsetPx.y + (1.0 - vTexCoord.y) * uDrawSizePx.y);\n"
+        "    vec2 p = vec2(maskCoord.x - uSizePx.x * 0.5,\n"
+        "                  uSizePx.y * 0.5 - maskCoord.y);\n"
         "    vec2 halfSize = uSizePx * 0.5;\n"
         "    float d = (uSquareTopCorners > 0.5 && p.y > 0.0)\n"
         "        ? -1.0\n"
@@ -221,6 +247,10 @@ bool RasterRenderer::initGLShader() {
     m_uMaskSquareTopCornersLoc = glGetUniformLocation(m_glMaskProgram, "uSquareTopCorners");
     m_uMaskSampleOffsetLoc = glGetUniformLocation(m_glMaskProgram, "uSampleOffset");
     m_uMaskSampleScaleLoc = glGetUniformLocation(m_glMaskProgram, "uSampleScale");
+    m_uMaskSampleTexelInsetLoc = glGetUniformLocation(
+        m_glMaskProgram, "uSampleTexelInset");
+    m_uMaskDrawSizeLoc = glGetUniformLocation(m_glMaskProgram, "uDrawSizePx");
+    m_uMaskGeometryOffsetLoc = glGetUniformLocation(m_glMaskProgram, "uMaskOffsetPx");
 
     // --- GLSL Rounded Mask Composite Shader (BGRA-aware client surfaces) ---
     const char* fMaskBgraSrc =
@@ -399,7 +429,7 @@ bool RasterRenderer::initGLShader() {
         "uniform float uDispersionGain;\n"
         "uniform vec2 uSizePx;\n"
         "uniform vec2 uCaptureSizePx;\n"
-        "uniform vec2 uEffectOffsetPx;\n"
+        "uniform vec2 uMaskOffsetPx;\n"
         "uniform float uRadiusPx;\n"
         "uniform float uRoundnessExp;\n"
         "uniform vec2 uInputScale;\n"
@@ -416,12 +446,24 @@ bool RasterRenderer::initGLShader() {
         "    return asin(clamp(x, -1.0, 1.0));\n"
         "}\n"
         "void main() {\n"
-        "    vec4 base = texture2D(uTexture, vTexCoord * uInputScale);\n"
+        // The FBO texture can be larger than the active capture. Clamp in the
+        // capture's normalized space to texel centers before applying
+        // uInputScale; sampling 1.0 would otherwise linearly blend the last
+        // valid texel with stale capacity pixels just outside the capture.
+        "    vec2 halfTexel = vec2(0.5) * uInvSize;\n"
+        "    vec2 sampleMin = halfTexel;\n"
+        "    vec2 sampleMax = vec2(1.0) - halfTexel;\n"
+        "    vec2 baseUv = clamp(vTexCoord, sampleMin, sampleMax);\n"
+        "    vec4 base = texture2D(uTexture, baseUv * uInputScale);\n"
         "    float thickness = max(0.001, uThicknessPx);\n"
         "    float eta = max(1.001, uRefractionFactor);\n"
         "    float r = clamp(uRadiusPx, 0.0, min(uSizePx.x, uSizePx.y) * 0.5);\n"
         "    float n = clamp(uRoundnessExp, 2.0, 8.0);\n"
-        "    vec2 p = vTexCoord * uCaptureSizePx - uEffectOffsetPx - uSizePx * 0.5;\n"
+        "    vec2 maskCoord = vec2(\n"
+        "        uMaskOffsetPx.x + vTexCoord.x * uCaptureSizePx.x,\n"
+        "        uMaskOffsetPx.y + (1.0 - vTexCoord.y) * uCaptureSizePx.y);\n"
+        "    vec2 p = vec2(maskCoord.x - uSizePx.x * 0.5,\n"
+        "                  uSizePx.y * 0.5 - maskCoord.y);\n"
         "    vec2 b = uSizePx * 0.5;\n"
         "    float sd = sdSuperRoundRect(p, b, r, n);\n"
         "    float edgeDepth = max(0.0, -sd);\n"
@@ -450,9 +492,9 @@ bool RasterRenderer::initGLShader() {
         "    vec2 displacementPx = (-normal * edgeFactor * 70.0) * uLogicalToPassScale;\n"
         "    vec2 offsetUv = displacementPx * uInvSize;\n"
         "    float disp = max(0.0, uDispersionGain) * 0.02;\n"
-        "    vec2 uvR = clamp(vTexCoord + offsetUv * (1.0 + disp), 0.0, 1.0);\n"
-        "    vec2 uvG = clamp(vTexCoord + offsetUv, 0.0, 1.0);\n"
-        "    vec2 uvB = clamp(vTexCoord + offsetUv * (1.0 - disp), 0.0, 1.0);\n"
+        "    vec2 uvR = clamp(vTexCoord + offsetUv * (1.0 + disp), sampleMin, sampleMax);\n"
+        "    vec2 uvG = clamp(vTexCoord + offsetUv, sampleMin, sampleMax);\n"
+        "    vec2 uvB = clamp(vTexCoord + offsetUv * (1.0 - disp), sampleMin, sampleMax);\n"
         "    float rCh = texture2D(uTexture, uvR * uInputScale).r;\n"
         "    float gCh = texture2D(uTexture, uvG * uInputScale).g;\n"
         "    float bCh = texture2D(uTexture, uvB * uInputScale).b;\n"
@@ -477,7 +519,7 @@ bool RasterRenderer::initGLShader() {
     m_uRefractDispersionLoc = glGetUniformLocation(m_glRefractionProgram, "uDispersionGain");
     m_uRefractSizeLoc = glGetUniformLocation(m_glRefractionProgram, "uSizePx");
     m_uRefractCaptureSizeLoc = glGetUniformLocation(m_glRefractionProgram, "uCaptureSizePx");
-    m_uRefractEffectOffsetLoc = glGetUniformLocation(m_glRefractionProgram, "uEffectOffsetPx");
+    m_uRefractMaskOffsetLoc = glGetUniformLocation(m_glRefractionProgram, "uMaskOffsetPx");
     m_uRefractRadiusLoc = glGetUniformLocation(m_glRefractionProgram, "uRadiusPx");
     m_uRefractRoundnessLoc = glGetUniformLocation(m_glRefractionProgram, "uRoundnessExp");
     m_uRefractInputScaleLoc = glGetUniformLocation(m_glRefractionProgram, "uInputScale");
@@ -1252,7 +1294,13 @@ void RasterRenderer::drawMaskedTextureQuad(uint32_t textureId,
                                          float uScale,
                                          float vScale,
                                          float uOffset,
-                                         float vOffset) {
+                                         float vOffset,
+                                         float maskWidth,
+                                         float maskHeight,
+                                         float maskOffsetX,
+                                         float maskOffsetY,
+                                         float uTexelInset,
+                                         float vTexelInset) {
     if (textureId == 0 || m_glMaskProgram == 0) return;
 
     float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
@@ -1271,13 +1319,21 @@ void RasterRenderer::drawMaskedTextureQuad(uint32_t textureId,
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, textureId);
     glUniform1i(m_uMaskTextureLoc, 0);
-    glUniform2f(m_uMaskSizeLoc, std::max(1.0f, w), std::max(1.0f, h));
+    const float resolvedMaskWidth = maskWidth > 0.0f ? maskWidth : w;
+    const float resolvedMaskHeight = maskHeight > 0.0f ? maskHeight : h;
+    glUniform2f(m_uMaskSizeLoc, std::max(1.0f, resolvedMaskWidth),
+                std::max(1.0f, resolvedMaskHeight));
     glUniform1f(m_uMaskRadiusLoc, std::max(0.0f, cornerRadius));
     glUniform1f(m_uMaskRoundnessLoc, std::clamp(cornerRoundness, 2.0f, 8.0f));
     glUniform1f(m_uMaskOpacityLoc, std::clamp(opacity, 0.0f, 1.0f));
     glUniform1f(m_uMaskSquareTopCornersLoc, squareTopCorners ? 1.0f : 0.0f);
     glUniform2f(m_uMaskSampleOffsetLoc, uOffset, vOffset);
     glUniform2f(m_uMaskSampleScaleLoc, uScale, vScale);
+    glUniform2f(m_uMaskSampleTexelInsetLoc,
+                std::max(0.0f, uTexelInset),
+                std::max(0.0f, vTexelInset));
+    glUniform2f(m_uMaskDrawSizeLoc, std::max(1.0f, w), std::max(1.0f, h));
+    glUniform2f(m_uMaskGeometryOffsetLoc, maskOffsetX, maskOffsetY);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glVertexAttribPointer(m_aMaskPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
@@ -1665,7 +1721,12 @@ void RasterRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int sr
         drawMaskedTextureQuad(texture, destination.x, destination.y,
                               destination.width, destination.height,
                               destination.cornerRadius, cornerRoundness, opacity,
-                              squareTopCorners, crop.uMax, crop.vMax);
+                              squareTopCorners, crop.uMax, crop.vMax,
+                              0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                              normalizedHalfTexel(static_cast<uint32_t>(
+                                  std::max(0, backingW))),
+                              normalizedHalfTexel(static_cast<uint32_t>(
+                                  std::max(0, backingH))));
     } else {
         drawTextureQuad(texture, destination.x, destination.y,
                         destination.width, destination.height,
@@ -2553,6 +2614,13 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
     int w = clipX2 - clipX1;
     int h = clipY2 - clipY1;
     const float clampedRoundness = std::clamp(cornerRoundness, 2.0f, 8.0f);
+    const BackdropFilterGeometry geometry = computeBackdropFilterGeometry(
+        dstX, dstY, srcW, srcH,
+        static_cast<int>(m_width), static_cast<int>(m_height));
+    if (geometry.effect.width <= 0 || geometry.effect.height <= 0 ||
+        geometry.capture.width <= 0 || geometry.capture.height <= 0) {
+        return;
+    }
 
     auto resolveGlassValues = [&](const protocol::FilterOp& op,
                                   float& outThicknessPx,
@@ -2568,13 +2636,6 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
         m_eglBackend->makeCurrent();
         const bool gpuBlurAvailable = m_eglBackend->isHardwareAccelerated();
 
-        const BackdropFilterGeometry geometry = computeBackdropFilterGeometry(
-            dstX, dstY, srcW, srcH,
-            static_cast<int>(m_width), static_cast<int>(m_height));
-        if (geometry.effect.width <= 0 || geometry.effect.height <= 0 ||
-            geometry.capture.width <= 0 || geometry.capture.height <= 0) {
-            return;
-        }
         const int effectX = geometry.effect.x;
         const int effectY = geometry.effect.y;
         const int effectW = geometry.effect.width;
@@ -2742,6 +2803,11 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
             glUniform1f(m_uBlurCornerRadiusLoc, 0.0f);
             glUniform1f(m_uBlurRoundnessLoc, clampedRoundness);
             glUniform2f(m_uBlurInputScaleLoc, captureUScale, captureVScale);
+            glUniform4f(m_uBlurFramebufferClipEdgesLoc,
+                        geometry.clippedLeft ? 1.0f : 0.0f,
+                        geometry.clippedRight ? 1.0f : 0.0f,
+                        geometry.clippedBottom ? 1.0f : 0.0f,
+                        geometry.clippedTop ? 1.0f : 0.0f);
 
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -2759,6 +2825,11 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
             glUniform1f(m_uBlurCornerRadiusLoc, 0.0f);
             glUniform1f(m_uBlurRoundnessLoc, clampedRoundness);
             glUniform2f(m_uBlurInputScaleLoc, captureUScale, captureVScale);
+            glUniform4f(m_uBlurFramebufferClipEdgesLoc,
+                        geometry.clippedLeft ? 1.0f : 0.0f,
+                        geometry.clippedRight ? 1.0f : 0.0f,
+                        geometry.clippedBottom ? 1.0f : 0.0f,
+                        geometry.clippedTop ? 1.0f : 0.0f);
 
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -2794,20 +2865,18 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
                 m_deviceScale, targetW, targetH, captureW, captureH);
             const float passThicknessPx = std::max(0.0f, thicknessPx) * passScaleX;
             const float passRadiusPx = std::max(0.0f, cornerRadius) * passScaleX;
-            const float effectOffsetBottom = static_cast<float>(
-                captureH - geometry.outputOffsetY - effectH);
 
             glUniform1f(m_uRefractThicknessLoc, passThicknessPx);
             glUniform1f(m_uRefractFactorLoc, std::max(1.001f, refractionFactor));
             glUniform1f(m_uRefractDispersionLoc, std::max(0.0f, dispersionGain));
             glUniform2f(m_uRefractSizeLoc,
-                        static_cast<float>(effectW) * passScaleX,
-                        static_cast<float>(effectH) * passScaleY);
+                        static_cast<float>(geometry.maskWidth) * passScaleX,
+                        static_cast<float>(geometry.maskHeight) * passScaleY);
             glUniform2f(m_uRefractCaptureSizeLoc,
                         static_cast<float>(targetW), static_cast<float>(targetH));
-            glUniform2f(m_uRefractEffectOffsetLoc,
-                        static_cast<float>(geometry.outputOffsetX) * passScaleX,
-                        effectOffsetBottom * passScaleY);
+            glUniform2f(m_uRefractMaskOffsetLoc,
+                        static_cast<float>(geometry.maskOffsetX) * passScaleX,
+                        static_cast<float>(geometry.maskOffsetY) * passScaleY);
             glUniform1f(m_uRefractRadiusLoc, passRadiusPx);
             glUniform1f(m_uRefractRoundnessLoc, clampedRoundness);
             glUniform2f(m_uRefractInputScaleLoc, captureUScale, captureVScale);
@@ -2894,7 +2963,13 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
                       outputUScale,
                       outputVScale,
                       outputUOffset,
-                      outputVOffset);
+                      outputVOffset,
+                      static_cast<float>(geometry.maskWidth),
+                      static_cast<float>(geometry.maskHeight),
+                      static_cast<float>(geometry.maskOffsetX),
+                      static_cast<float>(geometry.maskOffsetY),
+                      normalizedHalfTexel(m_glFBOCapacityWidth),
+                      normalizedHalfTexel(m_glFBOCapacityHeight));
         return;
     }
 #endif
@@ -2936,9 +3011,11 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
             pxW <= 1 || pxH <= 1) return;
         std::vector<uint32_t> src = pixels;
 
-        const float halfW = static_cast<float>(pxW) * 0.5f;
-        const float halfH = static_cast<float>(pxH) * 0.5f;
-        const float maxCorner = std::min(static_cast<float>(pxW), static_cast<float>(pxH)) * 0.5f;
+        const float maskWidth = static_cast<float>(geometry.maskWidth);
+        const float maskHeight = static_cast<float>(geometry.maskHeight);
+        const float halfW = maskWidth * 0.5f;
+        const float halfH = maskHeight * 0.5f;
+        const float maxCorner = std::min(maskWidth, maskHeight) * 0.5f;
         const float rr = std::clamp(cornerRadius, 0.0f, maxCorner);
         const float eta = std::max(1.001f, refractionFactor);
         const float disp = std::max(0.0f, dispersionGain) * 0.02f;
@@ -2957,8 +3034,10 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
 
         for (int y = 0; y < pxH; ++y) {
             for (int x = 0; x < pxW; ++x) {
-                const float px = (static_cast<float>(x) + 0.5f) - halfW;
-                const float py = (static_cast<float>(y) + 0.5f) - halfH;
+                const float px = static_cast<float>(geometry.maskOffsetX) +
+                    (static_cast<float>(x) + 0.5f) - halfW;
+                const float py = static_cast<float>(geometry.maskOffsetY) +
+                    (static_cast<float>(y) + 0.5f) - halfH;
                 const float sd = sdSuperRoundRect(px, py, halfW, halfH, rr);
                 const float edgeDepth = std::max(0.0f, -sd);
 
@@ -3057,17 +3136,21 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
 
     if (cornerRadius > 0.5f || opacity < 0.999f) {
         const float radius = std::max(0.0f, cornerRadius);
-        const float maxR = std::min(static_cast<float>(w), static_cast<float>(h)) * 0.5f;
+        const float maskWidth = static_cast<float>(geometry.maskWidth);
+        const float maskHeight = static_cast<float>(geometry.maskHeight);
+        const float maxR = std::min(maskWidth, maskHeight) * 0.5f;
         const float r = std::min(radius, maxR);
         const float alphaMul = std::clamp(opacity, 0.0f, 1.0f);
 
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
-                const float fx = (static_cast<float>(x) + 0.5f) - static_cast<float>(w) * 0.5f;
-                const float fy = (static_cast<float>(y) + 0.5f) - static_cast<float>(h) * 0.5f;
+                const float fx = static_cast<float>(geometry.maskOffsetX) +
+                    (static_cast<float>(x) + 0.5f) - maskWidth * 0.5f;
+                const float fy = static_cast<float>(geometry.maskOffsetY) +
+                    (static_cast<float>(y) + 0.5f) - maskHeight * 0.5f;
                 const bool inside = sdSuperRoundRect(
-                    fx, fy, static_cast<float>(w) * 0.5f,
-                    static_cast<float>(h) * 0.5f, r) <= 0.0f;
+                    fx, fy, maskWidth * 0.5f,
+                    maskHeight * 0.5f, r) <= 0.0f;
 
                 uint32_t& p = crop[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)];
                 uint8_t a = static_cast<uint8_t>((p >> 24) & 0xFF);
