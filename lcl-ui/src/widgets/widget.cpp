@@ -239,22 +239,27 @@ void Widget::removeChild(Widget* child) {
 void Widget::markDirty() {
     ++m_paintRevision;
     if (m_renderPass) {
-        m_renderPass->addDirtyRect(m_absoluteBounds.unionWith(getPresentationBounds()));
+        m_renderPass->addDirtyRect(getPresentationPaintBounds());
     }
     if (m_parent) m_parent->propagateDescendantPaintRevision();
 }
 
 void Widget::markPresentationDirty() {
-    markPresentationDirty(getPresentationBounds());
+    markPresentationDirty(getPresentationSubtreePaintBounds());
 }
 
 void Widget::markPresentationDirty(const graphics::RectF& previousBounds) {
     ++m_presentationRevision;
     if (m_renderPass) {
         m_renderPass->addDirtyRect(previousBounds);
-        m_renderPass->addDirtyRect(getPresentationBounds());
+        m_renderPass->addDirtyRect(getPresentationSubtreePaintBounds());
     }
     if (m_parent) m_parent->propagateDescendantPresentationRevision();
+}
+
+void Widget::markPaintDirty(const graphics::RectF& previousPaintBounds) {
+    if (m_renderPass) m_renderPass->addDirtyRect(previousPaintBounds);
+    markDirty();
 }
 
 void Widget::propagateDescendantPaintRevision() {
@@ -427,7 +432,7 @@ float Widget::getPresentationValue(AnimatableProperty property) const {
 }
 
 void Widget::applyPresentationValue(AnimatableProperty property, float value) {
-    const graphics::RectF previousBounds = getPresentationBounds();
+    const graphics::RectF previousBounds = getPresentationSubtreePaintBounds();
     switch (property) {
         case AnimatableProperty::Opacity: m_presentation.opacity = std::clamp(value, 0.0f, 1.0f); break;
         case AnimatableProperty::TranslationX: m_presentation.translationX = value; break;
@@ -491,8 +496,13 @@ void Widget::syncLayout(float parentAbsX, float parentAbsY) {
 }
 
 graphics::RectF Widget::getPresentationBounds() const {
-    graphics::RectF result = m_absoluteBounds;
-    const Widget* current = this;
+    return mapPresentationRect(m_absoluteBounds, this);
+}
+
+graphics::RectF Widget::mapPresentationRect(
+        const graphics::RectF& rect, const Widget* firstTransform) const {
+    graphics::RectF result = rect;
+    const Widget* current = firstTransform;
     while (current) {
         const auto& p = current->m_presentation;
         const graphics::RectF basis = current->m_absoluteBounds;
@@ -515,6 +525,27 @@ graphics::RectF Widget::getPresentationBounds() const {
         const float bottom = std::max({a.second, b.second, c.second, d.second});
         result = {left, top, right - left, bottom - top};
         current = current->m_parent;
+    }
+    return result;
+}
+
+graphics::RectF Widget::getPresentationPaintBounds() const {
+    graphics::RectF result = mapPresentationRect(getUntransformedPaintBounds(), this);
+    for (const Widget* current = this; current && !result.isEmpty();
+         current = current->m_parent) {
+        if (!current->m_clipsToBounds) continue;
+        const graphics::RectF clip = current->mapPresentationRect(
+            current->m_absoluteBounds, current);
+        result = result.intersection(clip);
+    }
+    return result;
+}
+
+graphics::RectF Widget::getPresentationSubtreePaintBounds() const {
+    graphics::RectF result = getPresentationPaintBounds();
+    for (const auto& child : m_children) {
+        if (!child->m_visible) continue;
+        result = result.unionWith(child->getPresentationSubtreePaintBounds());
     }
     return result;
 }
@@ -586,7 +617,9 @@ void Widget::endPresentation(graphics::Canvas& canvas) const {
 
 void Widget::drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     for (auto& child : m_children) {
-        if (child->isVisible() && child->getPresentationBounds().intersects(damageRect)) child->draw(canvas, damageRect);
+        if (child->isVisible() && child->getPresentationBounds().intersects(damageRect)) {
+            child->draw(canvas, damageRect);
+        }
     }
 }
 

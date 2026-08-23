@@ -1226,12 +1226,24 @@ bool WindowApp::renderFrame() {
 
     const graphics::RectF surfaceBounds{0.0f, 0.0f, static_cast<float>(m_width),
                              static_cast<float>(m_height)};
-    std::vector<graphics::RectF> damageRects;
-    damageRects.reserve(m_renderPass.getDirtyRects().size());
+    // Path coverage can extend one physical pixel past its analytic bounds.
+    // Keep widget damage logical and add that backend sampling margin only at
+    // the raster boundary, before clear, paint clipping and buffer copy.
+    const float deviceScale = sanitizeBufferScale(
+        m_canvas->renderTarget().deviceScale);
+    const float rasterOutset = 1.0f / deviceScale;
+    RenderPass rasterDamage;
     for (const graphics::RectF& dirty : m_renderPass.getDirtyRects()) {
-        const graphics::RectF clipped = dirty.intersection(surfaceBounds);
-        if (!clipped.isEmpty()) damageRects.push_back(clipped);
+        const graphics::RectF expanded{
+            dirty.x - rasterOutset,
+            dirty.y - rasterOutset,
+            dirty.width + rasterOutset * 2.0f,
+            dirty.height + rasterOutset * 2.0f,
+        };
+        const graphics::RectF clipped = expanded.intersection(surfaceBounds);
+        if (!clipped.isEmpty()) rasterDamage.addDirtyRect(clipped);
     }
+    std::vector<graphics::RectF> damageRects = rasterDamage.getDirtyRects();
     m_renderPass.clear();
     if (damageRects.empty()) return false;
     m_canvas->beginFrame();

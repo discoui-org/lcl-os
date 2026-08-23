@@ -40,6 +40,10 @@ public:
     graphics::RectF getBounds() const { return m_bounds; }
     graphics::RectF getAbsoluteBounds() const { return m_absoluteBounds; }
     graphics::RectF getPresentationBounds() const;
+    /** Pixels painted by this widget, mapped through presentation transforms. */
+    graphics::RectF getPresentationPaintBounds() const;
+    /** Painted pixels owned by this widget and its visible descendants. */
+    graphics::RectF getPresentationSubtreePaintBounds() const;
     bool containsPresentationPoint(float x, float y) const;
     bool hasActiveAnimationInHierarchy() const;
     /** True when this widget or any descendant owns an active motion channel. */
@@ -149,12 +153,17 @@ public:
 protected:
     /** Schedule old/new presentation pixels without invalidating paint caches. */
     void markPresentationDirty();
+    /** Schedule a previous paint extent before a style change shrinks it. */
+    void markPaintDirty(const graphics::RectF& previousPaintBounds);
     void beginPresentation(graphics::Canvas& canvas) const;
     void endPresentation(graphics::Canvas& canvas) const;
     void drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect);
     const lcl::theme::WidgetStyle* resolvedStyle() const noexcept;
     virtual const lcl::theme::WidgetStyle* defaultStyle() const noexcept {
         return nullptr;
+    }
+    virtual graphics::RectF getUntransformedPaintBounds() const noexcept {
+        return m_absoluteBounds;
     }
     virtual void styleDidChange() {}
 
@@ -203,6 +212,8 @@ private:
     friend class WindowApp;
     friend class ScrollView;
     void markPresentationDirty(const graphics::RectF& previousBounds);
+    graphics::RectF mapPresentationRect(
+        const graphics::RectF& rect, const Widget* firstTransform) const;
     void invalidateLayout();
     void propagateDescendantPaintRevision();
     void propagateDescendantPresentationRevision();

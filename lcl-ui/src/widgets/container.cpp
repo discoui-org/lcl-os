@@ -4,6 +4,19 @@ namespace lcl::ui {
 
 Container::Container() = default;
 
+graphics::RectF Container::getUntransformedPaintBounds() const noexcept {
+    const bool hasStroke = m_presentationBorderWidth > 0.0f &&
+        m_presentationBorderColor.a > 0;
+    if (!hasStroke) return m_absoluteBounds;
+    const float outset = m_presentationBorderWidth * 0.5f;
+    return {
+        m_absoluteBounds.x - outset,
+        m_absoluteBounds.y - outset,
+        m_absoluteBounds.width + outset * 2.0f,
+        m_absoluteBounds.height + outset * 2.0f,
+    };
+}
+
 void Container::styleDidChange() {
     const auto* style = resolvedStyle();
     if (!style) return;
@@ -36,24 +49,36 @@ void Container::animateBackgroundColor(const graphics::Color& color, const lcl::
 
 void Container::setBorderColor(const graphics::Color& color) {
     m_borderColor = color;
+    const auto apply = [this](graphics::Color next) {
+        const graphics::RectF previous = getPresentationPaintBounds();
+        m_presentationBorderColor = next;
+        markPaintDirty(previous);
+    };
     if (m_motionCoordinator) {
         m_motionCoordinator->setColor(*this, AnimatableProperty::BorderRed,
-            m_presentationBorderColor, color,
-            [this](graphics::Color next) { m_presentationBorderColor = next; markDirty(); });
-    } else { m_presentationBorderColor = color; markDirty(); }
+            m_presentationBorderColor, color, apply);
+    } else { apply(color); }
 }
 
 void Container::animateBorderColor(const graphics::Color& color, const lcl::motion::Motion& motion) {
     m_borderColor = color;
-    if (!m_motionCoordinator) { m_presentationBorderColor = color; markDirty(); return; }
+    const auto apply = [this](graphics::Color next) {
+        const graphics::RectF previous = getPresentationPaintBounds();
+        m_presentationBorderColor = next;
+        markPaintDirty(previous);
+    };
+    if (!m_motionCoordinator) { apply(color); return; }
     m_motionCoordinator->setColor(*this, AnimatableProperty::BorderRed,
-        m_presentationBorderColor, color,
-        [this](graphics::Color next) { m_presentationBorderColor = next; markDirty(); }, &motion);
+        m_presentationBorderColor, color, apply, &motion);
 }
 
 void Container::setBorderWidth(float width) {
     m_borderWidth = std::max(0.0f, width);
-    const auto apply = [this](float next) { m_presentationBorderWidth = next; markDirty(); };
+    const auto apply = [this](float next) {
+        const graphics::RectF previous = getPresentationPaintBounds();
+        m_presentationBorderWidth = next;
+        markPaintDirty(previous);
+    };
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::BorderWidth,
         m_presentationBorderWidth, m_borderWidth, apply);
     else apply(m_borderWidth);
@@ -84,6 +109,7 @@ float Container::getPresentationValue(AnimatableProperty property) const {
 }
 
 void Container::applyPresentationValue(AnimatableProperty property, float value) {
+    const graphics::RectF previous = getPresentationPaintBounds();
     const auto byte = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
     switch (property) {
         case AnimatableProperty::BackgroundRed: m_presentationBackgroundColor.r = byte; break;
@@ -98,7 +124,7 @@ void Container::applyPresentationValue(AnimatableProperty property, float value)
         case AnimatableProperty::BorderRadius: m_presentationBorderRadius = std::max(0.0f, value); break;
         default: Widget::applyPresentationValue(property, value); return;
     }
-    markDirty();
+    markPaintDirty(previous);
 }
 
 void Container::commitModelValue(AnimatableProperty property, float value) {
@@ -127,7 +153,7 @@ void Container::commitModelValue(AnimatableProperty property, float value) {
 }
 
 void Container::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
-    if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
+    if (!m_visible || !getPresentationPaintBounds().intersects(damageRect)) return;
 
     beginPresentation(canvas);
 

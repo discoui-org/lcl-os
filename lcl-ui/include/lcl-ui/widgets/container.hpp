@@ -44,6 +44,7 @@ public:
     void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
 
 protected:
+    graphics::RectF getUntransformedPaintBounds() const noexcept override;
     void styleDidChange() override;
 
 private:
