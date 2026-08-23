@@ -255,14 +255,14 @@ bool AndroidGraphicsContext::present() {
 
     // 1. Copy the rendered PBuffer contents into the active scanout AHardwareBuffer FBO.
     // OpenGL PBuffer coordinate origin is bottom-left (Y=0 is bottom row in PBuffer).
-    // AHardwareBuffer / Android Composer3 scanout memory origin is top-left (Row 0 is top scanline of display).
+    // AHardwareBuffer / Android Composer scanout memory origin is top-left (Row 0 is top scanline of display).
     // Blit with inverted destination Y [0..m_height] -> [m_height..0] to map UI top to display top scanline.
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_scanoutSlots[m_currentSlotIndex].fbo);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0); // PBuffer default FBO
     glBlitFramebuffer(0, 0, m_width, m_height, 0, m_height, m_width, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glFinish();
 
-    // 2. Present active AHardwareBuffer to display via Composer3
+    // 2. Present active AHardwareBuffer through the selected Android Composer backend.
     if (m_displayBackend && m_scanoutSlots[m_currentSlotIndex].ahb) {
         m_displayBackend->presentBuffer(m_scanoutSlots[m_currentSlotIndex].ahb);
     }

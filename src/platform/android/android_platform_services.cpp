@@ -12,7 +12,7 @@ AndroidPlatformServices::~AndroidPlatformServices() {
 bool AndroidPlatformServices::initialize() {
     if (m_initialized) return true;
 
-    // 1. Initialize Android Display Backend (Composer3)
+    // 1. Initialize Android Display Backend (Composer3 AIDL, then Composer 2.4 HIDL)
     if (!m_displayBackend.initialize()) {
         std::cerr << "[AndroidPlatformServices] Display backend initialization failed or running in fallback.\n";
     }

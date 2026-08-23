@@ -26,7 +26,7 @@ namespace {
      *
      * This is a diagnostic readback of the compositor's OpenGL ES PBuffer. After
      * endFrame(), FBO 0 still contains the scene that was blitted to the AHB
-     * scanout and presented via Composer3.
+     * scanout and presented via the selected Android Composer backend.
      */
     void verifyRenderedFrame(lcl::platform::android::AndroidPlatformServices& platformServices,
                              const lcl::core::Compositor& compositor) {
@@ -117,8 +117,9 @@ namespace {
         std::printf("[FRAME VERIFY] Active Windows:          %zu\n", compositor.activeWindowCount());
         std::printf("[FRAME VERIFY] LCL Dark Theme Bg:       %s\n", hasLclBackground ? "YES" : "NO");
         std::printf("[FRAME VERIFY] Rendered UI Content:     %s (%u pixels)\n", hasRenderedUi ? "YES" : "NO", uiPixels);
-        std::printf("[FRAME VERIFY] Composer3 Present:       %s\n",
-                    platformServices.getAndroidDisplay().isInitialized() ? "ACTIVE" : "INACTIVE");
+        std::printf("[FRAME VERIFY] Composer Present:        %s (%s)\n",
+                    platformServices.getAndroidDisplay().isInitialized() ? "ACTIVE" : "INACTIVE",
+                    platformServices.getAndroidDisplay().backendName());
         std::printf("[FRAME VERIFY] AVD SCREEN SHOWS REAL LCL: %s\n",
                     hasRenderedContent ? "YES" : "NO");
         std::cout << "[FRAME VERIFY] ============================================\n";
@@ -131,7 +132,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "====================================================\n"
               << "  LCL Core Linux — Android Compositor Runtime       \n"
-              << "  Architecture: Direct Composer3 & GLES3 (No SurfaceFlinger)\n"
+              << "  Architecture: Direct Android Composer & GLES3 (No SurfaceFlinger)\n"
               << "  C++ Standard: C++20\n"
               << "====================================================\n";
 

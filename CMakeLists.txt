@@ -222,6 +222,12 @@ target_link_libraries(lcl-core-engine PUBLIC
 if(ANDROID)
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
+    set(LCL_ANDROID_HIDL_ROOT "" CACHE PATH
+        "Prepared Android HIDL dependency root from scripts/prepare_android_hidl.py")
+    if(LCL_ANDROID_HIDL_ROOT)
+        include("${LCL_ANDROID_HIDL_ROOT}/hidl-config.cmake")
+    endif()
+
     # Collect generated AIDL NDK sources
     file(GLOB_RECURSE ANDROID_AIDL_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/src/*.cpp"
@@ -231,6 +237,7 @@ if(ANDROID)
     add_library(lcl-platform-android STATIC
         src/platform/android/android_input_backend.cpp
         src/platform/android/android_display_backend.cpp
+        src/platform/android/android_hidl_display_backend.cpp
         src/platform/android/android_graphics_context.cpp
         src/platform/android/android_platform_services.cpp
         ${ANDROID_AIDL_SOURCES}
@@ -249,6 +256,42 @@ if(ANDROID)
         android
         dl
     )
+
+    if(LCL_ANDROID_HIDL_ROOT)
+        # Platform HIDL uses Android's private libc++ ABI (std::__1), while NDK
+        # applications use std::__ndk1.  Keep that ABI below a small C bridge.
+        add_library(lcl-android-hidl-bridge SHARED
+            src/platform/android/android_hidl_bridge.cpp
+        )
+        target_compile_definitions(lcl-android-hidl-bridge PRIVATE
+            LCL_HAS_ANDROID_HIDL=1
+        )
+        target_include_directories(lcl-android-hidl-bridge BEFORE PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/hidl_libcpp_overlay
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/hidl_generated/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${LCL_ANDROID_HIDL_INCLUDE_DIRS}
+        )
+        target_compile_options(lcl-android-hidl-bridge PRIVATE
+            -fno-rtti
+            -Wno-deprecated-declarations
+            -Wno-deprecated-copy-with-user-provided-copy
+            -Wno-inconsistent-missing-override
+            -Wno-format-pedantic
+            -Wno-switch
+        )
+        target_link_options(lcl-android-hidl-bridge PRIVATE -nostdlib++)
+        target_link_libraries(lcl-android-hidl-bridge PRIVATE
+            ${LCL_ANDROID_HIDL_LIBRARIES}
+            android
+            dl
+        )
+        set_target_properties(lcl-android-hidl-bridge PROPERTIES
+            CXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN YES
+        )
+        add_dependencies(lcl-platform-android lcl-android-hidl-bridge)
+    endif()
 
     # Standalone Platform Smoke Test
     add_executable(test_android_platform_services

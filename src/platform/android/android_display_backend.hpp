@@ -9,12 +9,13 @@ struct AHardwareBuffer;
 
 namespace lcl::platform::android {
 
+class AndroidHidlDisplayBackend;
+
 /**
- * @brief Android Display Backend using AIDL Hardware Composer 3 (Composer3).
+ * @brief Android display facade selecting Composer3 AIDL or Composer 2.4 HIDL.
  *
- * Manages Composer3 client session, display configuration discovery, primary
- * presentation layer lifecycle (createLayer/destroyLayer), and frame presentation
- * from AHardwareBuffer via strongly-typed AIDL DisplayCommand.
+ * Manages the selected Composer client session, display configuration discovery,
+ * primary presentation layer lifecycle, and AHardwareBuffer presentation.
  */
 class AndroidDisplayBackend final : public lcl::platform::IDisplayBackend {
 public:
@@ -37,12 +38,13 @@ public:
     int64_t displayId() const { return m_displayId; }
     int64_t layerId() const { return m_layerId; }
     bool isDisplayConnected() const { return m_displayConnected; }
+    const char* backendName() const;
 
     /**
-     * @brief Present an AHardwareBuffer directly to the primary Android display via Composer3.
+     * @brief Present an AHardwareBuffer directly to the primary Android display.
      *
-     * Submits layer state, validates display composition, accepts composition changes if requested,
-     * presents display, and waits for present fence signal.
+     * Submits layer state through the selected AIDL/HIDL backend, validates display
+     * composition, presents the display, and waits for the present fence.
      *
      * @param buffer Hardware buffer containing the rendered frame.
      * @param acquireFenceFd Optional acquire fence file descriptor (-1 if none).
@@ -51,7 +53,19 @@ public:
     bool presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd = -1);
 
 private:
+    enum class BackendKind {
+        None,
+        AidlComposer3,
+        HidlComposer24,
+    };
+
+    bool initializeAidl();
+    void shutdownAidl();
+    bool presentBufferAidl(AHardwareBuffer* buffer, int acquireFenceFd);
+
     std::unique_ptr<Impl> m_impl;
+    std::unique_ptr<AndroidHidlDisplayBackend> m_hidlBackend;
+    BackendKind m_backendKind{BackendKind::None};
 
     bool m_initialized{false};
     int64_t m_displayId{0};

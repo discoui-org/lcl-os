@@ -1,0 +1,496 @@
+#include "platform/android/android_hidl_display_backend.hpp"
+#include "platform/android/android_hidl_bridge.h"
+
+#include <android/hardware_buffer.h>
+
+#include <chrono>
+#include <cstdio>
+#include <iostream>
+#include <thread>
+#include <unistd.h>
+
+#if defined(LCL_HAS_ANDROID_HIDL)
+
+#ifndef PAGE_SIZE
+#define PAGE_SIZE getpagesize()
+#endif
+
+#define LOG_TAG "LclHidlDisplay"
+#include <android/hardware/graphics/composer/2.4/IComposer.h>
+#include <android/hardware/graphics/composer/2.4/IComposerClient.h>
+#include <android/hardware/graphics/composer/2.1/IComposerCallback.h>
+#include <composer-command-buffer/2.4/ComposerCommandBuffer.h>
+#include <hidl/HidlTransportSupport.h>
+#include <sync/sync.h>
+#include <unistd.h>
+
+#include <condition_variable>
+#include <mutex>
+#include <vector>
+
+namespace composer21 = ::android::hardware::graphics::composer::V2_1;
+namespace composer24 = ::android::hardware::graphics::composer::V2_4;
+namespace common10 = ::android::hardware::graphics::common::V1_0;
+namespace common12 = ::android::hardware::graphics::common::V1_2;
+
+extern "C" const native_handle_t* AHardwareBuffer_getNativeHandle(
+    const AHardwareBuffer* buffer);
+
+#endif
+
+namespace lcl::platform::android {
+
+#if defined(LCL_HAS_ANDROID_HIDL)
+
+using ::android::hardware::Return;
+using ::android::hardware::hidl_handle;
+using ::android::hardware::hidl_vec;
+using ::android::sp;
+
+class HidlCommandReader final : public composer24::CommandReaderBase {
+public:
+    bool parse() {
+        composer21::IComposerClient::Command command{};
+        uint16_t length = 0;
+        while (!isEmpty()) {
+            if (!beginCommand(&command, &length)) return false;
+            bool parsed = true;
+            switch (command) {
+            case composer21::IComposerClient::Command::SELECT_DISPLAY:
+                parsed = length == composer21::CommandWriterBase::kSelectDisplayLength;
+                if (parsed) m_currentDisplay = read64();
+                break;
+            case composer21::IComposerClient::Command::SET_ERROR:
+                parsed = length == composer21::CommandWriterBase::kSetErrorLength;
+                if (parsed) {
+                    const uint32_t location = read();
+                    const auto error = static_cast<composer21::Error>(readSigned());
+                    m_errors.emplace_back(location, error);
+                }
+                break;
+            case composer21::IComposerClient::Command::SET_CHANGED_COMPOSITION_TYPES:
+                parsed = length % 3 == 0;
+                while (parsed && length > 0) {
+                    (void)read64();
+                    (void)readSigned();
+                    length -= 3;
+                    m_hasChangedTypes = true;
+                }
+                break;
+            case composer21::IComposerClient::Command::SET_DISPLAY_REQUESTS:
+                parsed = length % 3 == 1;
+                if (parsed) {
+                    (void)read();
+                    while (length > 1) {
+                        (void)read64();
+                        (void)read();
+                        length -= 3;
+                    }
+                }
+                break;
+            case composer21::IComposerClient::Command::SET_PRESENT_FENCE:
+                parsed = length == composer21::CommandWriterBase::kSetPresentFenceLength;
+                if (parsed) {
+                    if (m_presentFence >= 0) close(m_presentFence);
+                    m_presentFence = readFence();
+                }
+                break;
+            case composer21::IComposerClient::Command::SET_RELEASE_FENCES:
+                parsed = length % 3 == 0;
+                while (parsed && length > 0) {
+                    (void)read64();
+                    const int fence = readFence();
+                    if (fence >= 0) close(fence);
+                    length -= 3;
+                }
+                break;
+            case composer21::IComposerClient::Command::SET_PRESENT_OR_VALIDATE_DISPLAY_RESULT:
+                parsed = length == composer21::CommandWriterBase::kPresentOrValidateDisplayResultLength;
+                if (parsed) (void)read();
+                break;
+            case static_cast<composer21::IComposerClient::Command>(
+                composer24::IComposerClient::Command::SET_CLIENT_TARGET_PROPERTY):
+                parsed = length == 2;
+                if (parsed) {
+                    (void)readSigned();
+                    (void)readSigned();
+                }
+                break;
+            default:
+                parsed = false;
+                break;
+            }
+            endCommand();
+            if (!parsed) return false;
+        }
+        return true;
+    }
+
+    void resetResults() {
+        m_errors.clear();
+        m_hasChangedTypes = false;
+        m_currentDisplay = 0;
+        if (m_presentFence >= 0) {
+            close(m_presentFence);
+            m_presentFence = -1;
+        }
+    }
+
+    bool hasChangedTypes() const { return m_hasChangedTypes; }
+    bool hasErrors() const { return !m_errors.empty(); }
+    int takePresentFence() {
+        const int fence = m_presentFence;
+        m_presentFence = -1;
+        return fence;
+    }
+    const std::vector<std::pair<uint32_t, composer21::Error>>& errors() const { return m_errors; }
+
+private:
+    uint64_t m_currentDisplay{0};
+    bool m_hasChangedTypes{false};
+    int m_presentFence{-1};
+    std::vector<std::pair<uint32_t, composer21::Error>> m_errors;
+};
+
+struct AndroidHidlDisplayBackend::Impl {
+    sp<composer24::IComposer> composer;
+    sp<composer24::IComposerClient> client;
+    sp<composer21::IComposerCallback> callback;
+    composer24::CommandWriterBase writer{1024};
+    HidlCommandReader reader;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool hotplugReceived{false};
+    uint64_t hotplugDisplayId{0};
+    bool hotplugConnected{false};
+};
+
+class HidlComposerCallback final : public composer21::IComposerCallback {
+public:
+    explicit HidlComposerCallback(AndroidHidlDisplayBackend::Impl* impl) : m_impl(impl) {}
+
+    Return<void> onHotplug(uint64_t display, Connection connection) override {
+        if (m_impl) {
+            std::lock_guard<std::mutex> lock(m_impl->mutex);
+            m_impl->hotplugDisplayId = display;
+            m_impl->hotplugConnected = connection == Connection::CONNECTED;
+            m_impl->hotplugReceived = true;
+            m_impl->cv.notify_all();
+        }
+        return {};
+    }
+    Return<void> onRefresh(uint64_t) override { return {}; }
+    Return<void> onVsync(uint64_t, int64_t) override { return {}; }
+
+private:
+    AndroidHidlDisplayBackend::Impl* m_impl;
+};
+
+static bool isNone(composer21::Error error) {
+    return error == composer21::Error::NONE;
+}
+
+#else
+
+struct AndroidHidlDisplayBackend::Impl {};
+
+#endif
+
+AndroidHidlDisplayBackend::AndroidHidlDisplayBackend()
+    : m_impl(std::make_unique<Impl>()) {
+    m_activeMode.width = 320;
+    m_activeMode.height = 640;
+    m_activeMode.refreshRate = 60;
+    m_activeMode.refreshRateHz = 60;
+    m_activeMode.scaleFactor = 1.0f;
+    m_activeMode.name = "Android HIDL Primary Display";
+}
+
+AndroidHidlDisplayBackend::~AndroidHidlDisplayBackend() {
+    shutdown();
+}
+
+bool AndroidHidlDisplayBackend::initialize(float outputScale) {
+#if !defined(LCL_HAS_ANDROID_HIDL)
+    (void)outputScale;
+    std::cerr << "[AndroidHidlDisplayBackend] HIDL support was not enabled at build time\n";
+    return false;
+#else
+    if (m_initialized) return true;
+    m_activeMode.scaleFactor = outputScale;
+    m_impl->hotplugReceived = false;
+    m_impl->hotplugDisplayId = 0;
+    m_impl->hotplugConnected = false;
+
+    ::android::hardware::configureRpcThreadpool(1, false);
+    m_impl->composer = composer24::IComposer::getService("default", false);
+    if (!m_impl->composer) {
+        std::cerr << "[AndroidHidlDisplayBackend] Composer 2.4 service not found\n";
+        return false;
+    }
+
+    composer24::Error createError = composer24::Error::NO_RESOURCES;
+    for (int retry = 0; retry < 15 && !m_impl->client; ++retry) {
+        const auto result = m_impl->composer->createClient_2_4(
+            [&](composer24::Error error, const sp<composer24::IComposerClient>& client) {
+                createError = error;
+                m_impl->client = client;
+            });
+        if (!result.isOk()) {
+            std::cerr << "[AndroidHidlDisplayBackend] createClient_2_4 transaction failed: "
+                      << result.description() << "\n";
+        }
+        if (!m_impl->client) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    if (!m_impl->client || createError != composer24::Error::NONE) {
+        std::cerr << "[AndroidHidlDisplayBackend] createClient_2_4 failed (likely owned by SurfaceFlinger): "
+                  << composer24::toString(createError) << "\n";
+        shutdown();
+        return false;
+    }
+
+    m_impl->callback = new HidlComposerCallback(m_impl.get());
+    const auto callbackResult = m_impl->client->registerCallback(m_impl->callback);
+    if (!callbackResult.isOk()) {
+        std::cerr << "[AndroidHidlDisplayBackend] registerCallback transaction failed: "
+                  << callbackResult.description() << "\n";
+        shutdown();
+        return false;
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(m_impl->mutex);
+        m_impl->cv.wait_for(lock, std::chrono::seconds(2), [this] {
+            return m_impl->hotplugReceived;
+        });
+    }
+    if (!m_impl->hotplugReceived || !m_impl->hotplugConnected) {
+        std::cerr << "[AndroidHidlDisplayBackend] no connected display hotplug callback\n";
+        shutdown();
+        return false;
+    }
+    m_displayId = m_impl->hotplugDisplayId;
+    m_displayConnected = true;
+
+    uint32_t activeConfig = 0;
+    composer21::Error queryError = composer21::Error::NO_RESOURCES;
+    m_impl->client->getActiveConfig(m_displayId, [&](composer21::Error error, uint32_t config) {
+        queryError = error;
+        activeConfig = config;
+    });
+    if (!isNone(queryError)) {
+        std::cerr << "[AndroidHidlDisplayBackend] getActiveConfig failed: "
+                  << composer21::toString(queryError) << "\n";
+        shutdown();
+        return false;
+    }
+
+    const auto readAttribute = [&](composer21::IComposerClient::Attribute attribute,
+                                   int32_t* destination) {
+        composer21::Error error = composer21::Error::NO_RESOURCES;
+        m_impl->client->getDisplayAttribute(
+            m_displayId, activeConfig, attribute,
+            [&](composer21::Error callbackError, int32_t value) {
+                error = callbackError;
+                if (isNone(error)) *destination = value;
+            });
+        return error;
+    };
+    int32_t width = 0;
+    int32_t height = 0;
+    int32_t vsyncPeriod = 0;
+    if (!isNone(readAttribute(composer21::IComposerClient::Attribute::WIDTH, &width)) ||
+        !isNone(readAttribute(composer21::IComposerClient::Attribute::HEIGHT, &height))) {
+        std::cerr << "[AndroidHidlDisplayBackend] failed to query display dimensions\n";
+        shutdown();
+        return false;
+    }
+    (void)readAttribute(composer21::IComposerClient::Attribute::VSYNC_PERIOD, &vsyncPeriod);
+    m_activeMode.width = width;
+    m_activeMode.height = height;
+    if (vsyncPeriod > 0) {
+        m_activeMode.refreshRateHz = 1000000000 / vsyncPeriod;
+        m_activeMode.refreshRate = m_activeMode.refreshRateHz;
+    }
+    m_activeMode.name = "Android HIDL Display " + std::to_string(m_displayId) + " (" +
+                        std::to_string(width) + "x" + std::to_string(height) + ")";
+
+    const auto powerResult = m_impl->client->setPowerMode(
+        m_displayId, composer21::IComposerClient::PowerMode::ON);
+    if (!powerResult.isOk() || !isNone(powerResult)) {
+        std::cerr << "[AndroidHidlDisplayBackend] setPowerMode(ON) failed\n";
+    }
+
+    composer21::Error layerError = composer21::Error::NO_RESOURCES;
+    m_impl->client->createLayer(
+        m_displayId, 4,
+        [&](composer21::Error error, uint64_t layer) {
+            layerError = error;
+            m_layerId = layer;
+        });
+    if (!isNone(layerError)) {
+        std::cerr << "[AndroidHidlDisplayBackend] createLayer failed: "
+                  << composer21::toString(layerError) << "\n";
+        shutdown();
+        return false;
+    }
+    m_hasLayer = true;
+    m_initialized = true;
+    std::cerr << "[AndroidHidlDisplayBackend] initialized Composer 2.4 on display "
+              << m_displayId << " at " << width << "x" << height << "\n";
+    return true;
+#endif
+}
+
+void AndroidHidlDisplayBackend::shutdown() {
+#if defined(LCL_HAS_ANDROID_HIDL)
+    if (m_hasLayer && m_impl->client) {
+        (void)m_impl->client->destroyLayer(m_displayId, m_layerId);
+    }
+    m_impl->reader.resetResults();
+    m_impl->writer.reset();
+    m_impl->callback.clear();
+    m_impl->client.clear();
+    m_impl->composer.clear();
+    m_impl->hotplugReceived = false;
+    m_impl->hotplugDisplayId = 0;
+    m_impl->hotplugConnected = false;
+#endif
+    m_initialized = false;
+    m_displayConnected = false;
+    m_hasLayer = false;
+    m_layerId = 0;
+}
+
+bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd) {
+#if !defined(LCL_HAS_ANDROID_HIDL)
+    (void)buffer;
+    (void)acquireFenceFd;
+    return false;
+#else
+    if (!m_initialized || !m_impl->client || !m_hasLayer || !buffer) return false;
+    const native_handle_t* handle = AHardwareBuffer_getNativeHandle(buffer);
+    if (!handle) return false;
+
+    using Client = composer21::IComposerClient;
+    const int32_t width = m_activeMode.width;
+    const int32_t height = m_activeMode.height;
+    const Client::Rect frame{0, 0, width, height};
+    const Client::FRect crop{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)};
+    const std::vector<Client::Rect> region{frame};
+
+    auto execute = [&]() -> bool {
+        bool inputQueueChanged = false;
+        uint32_t commandLength = 0;
+        hidl_vec<hidl_handle> commandHandles;
+        if (!m_impl->writer.writeQueue(&inputQueueChanged, &commandLength, &commandHandles)) {
+            return false;
+        }
+        if (inputQueueChanged) {
+            const auto queueError = m_impl->client->setInputCommandQueue(
+                *m_impl->writer.getMQDescriptor());
+            if (!queueError.isOk() || !isNone(queueError)) return false;
+        }
+
+        composer21::Error executeError = composer21::Error::NO_RESOURCES;
+        const auto result = m_impl->client->executeCommands_2_2(
+            commandLength, commandHandles,
+            [&](composer21::Error error, bool outputQueueChanged, uint32_t outputLength,
+                const hidl_vec<hidl_handle>& outputHandles) {
+                executeError = error;
+                if (!isNone(executeError)) return;
+                if (outputQueueChanged) {
+                    m_impl->client->getOutputCommandQueue(
+                        [&](composer21::Error queueError, const auto& descriptor) {
+                            executeError = queueError;
+                            if (isNone(queueError) && !m_impl->reader.setMQDescriptor(descriptor)) {
+                                executeError = composer21::Error::NO_RESOURCES;
+                            }
+                        });
+                }
+                if (isNone(executeError) &&
+                    (!m_impl->reader.readQueue(outputLength, outputHandles) ||
+                     !m_impl->reader.parse())) {
+                    executeError = composer21::Error::NO_RESOURCES;
+                }
+            });
+        m_impl->writer.reset();
+        if (!result.isOk() || !isNone(executeError)) return false;
+        for (const auto& [location, error] : m_impl->reader.errors()) {
+            std::cerr << "[AndroidHidlDisplayBackend] command error at " << location
+                      << ": " << composer21::toString(error) << "\n";
+        }
+        return !m_impl->reader.hasErrors();
+    };
+
+    m_impl->reader.resetResults();
+    m_impl->writer.selectDisplay(m_displayId);
+    m_impl->writer.selectLayer(m_layerId);
+    m_impl->writer.setLayerBuffer(0, handle, acquireFenceFd >= 0 ? dup(acquireFenceFd) : -1);
+    m_impl->writer.setLayerSurfaceDamage(region);
+    m_impl->writer.setLayerBlendMode(Client::BlendMode::NONE);
+    m_impl->writer.setLayerCompositionType(Client::Composition::DEVICE);
+    m_impl->writer.setLayerDataspace(common12::Dataspace::UNKNOWN);
+    m_impl->writer.setLayerDisplayFrame(frame);
+    m_impl->writer.setLayerPlaneAlpha(1.0f);
+    m_impl->writer.setLayerSourceCrop(crop);
+    m_impl->writer.setLayerTransform(static_cast<common10::Transform>(0));
+    m_impl->writer.setLayerVisibleRegion(region);
+    m_impl->writer.setLayerZOrder(0);
+    m_impl->writer.validateDisplay();
+    if (!execute()) return false;
+
+    const bool changedTypes = m_impl->reader.hasChangedTypes();
+    m_impl->reader.resetResults();
+    m_impl->writer.selectDisplay(m_displayId);
+    if (changedTypes) m_impl->writer.acceptDisplayChanges();
+    m_impl->writer.presentDisplay();
+    if (!execute()) return false;
+
+    const int presentFence = m_impl->reader.takePresentFence();
+    if (presentFence >= 0) {
+        (void)sync_wait(presentFence, 1000);
+        close(presentFence);
+    }
+    return true;
+#endif
+}
+
+} // namespace lcl::platform::android
+
+#define LCL_HIDL_BRIDGE_EXPORT __attribute__((visibility("default")))
+
+extern "C" LCL_HIDL_BRIDGE_EXPORT void* lcl_android_hidl_create(void) {
+    return new lcl::platform::android::AndroidHidlDisplayBackend();
+}
+
+extern "C" LCL_HIDL_BRIDGE_EXPORT void lcl_android_hidl_destroy(void* instance) {
+    delete static_cast<lcl::platform::android::AndroidHidlDisplayBackend*>(instance);
+}
+
+extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_initialize(
+    void* instance, float outputScale, LclAndroidHidlDisplayInfo* info) {
+    auto* backend = static_cast<lcl::platform::android::AndroidHidlDisplayBackend*>(instance);
+    if (!backend || !info || !backend->initialize(outputScale)) return 0;
+    const auto& mode = backend->activeMode();
+    info->width = mode.width;
+    info->height = mode.height;
+    info->refresh_rate_hz = mode.refreshRateHz;
+    info->scale_factor = mode.scaleFactor;
+    info->display_id = backend->displayId();
+    info->layer_id = backend->layerId();
+    info->connected = backend->isDisplayConnected() ? 1 : 0;
+    snprintf(info->name, sizeof(info->name), "%s", mode.name.c_str());
+    return 1;
+}
+
+extern "C" LCL_HIDL_BRIDGE_EXPORT void lcl_android_hidl_shutdown(void* instance) {
+    auto* backend = static_cast<lcl::platform::android::AndroidHidlDisplayBackend*>(instance);
+    if (backend) backend->shutdown();
+}
+
+extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_present(
+    void* instance, AHardwareBuffer* buffer, int acquireFenceFd) {
+    auto* backend = static_cast<lcl::platform::android::AndroidHidlDisplayBackend*>(instance);
+    return backend && backend->presentBuffer(buffer, acquireFenceFd) ? 1 : 0;
+}

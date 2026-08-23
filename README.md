@@ -2,7 +2,7 @@
 
 Modular, Lightweight Linux Distribution built with C++20 and Limine bootloader. Custom Linux distribution architecture built from scratch with a focus on modularity, high performance, and platform-independent userspace binaries.
 
-LCL OS runs directly on bare-metal Linux DRM/KMS and `evdev` (as well as Android HAL/Composer3 substrates), completely bypassing traditional X11 and Wayland display server dependencies.
+LCL OS runs directly on bare-metal Linux DRM/KMS and `evdev` (as well as Android Composer AIDL/HIDL substrates), completely bypassing traditional X11 and Wayland display server dependencies.
 
 ---
 
@@ -58,6 +58,23 @@ LCL OS provides a unified CLI driver via `./main.py`:
 ```
 *Boots the Android Emulator directly attaching the exact, byte-for-byte canonical rootfs (`lcl-rootfs-x86_64.ext4`).*
 
+### 5. Run on a Rooted ARM64 Android Phone (Composer3 AIDL / Composer 2.4 HIDL)
+
+```bash
+python3 scripts/prepare_android_hidl.py
+cmake -S . -B build-android-arm64 \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-33 \
+  -DLCL_ANDROID_HIDL_ROOT="$PWD/build/android-hidl-v31"
+cmake --build build-android-arm64 --target lcl-core-android -j2
+python3 scripts/deploy_android_device.py
+```
+
+The preparation step downloads pinned official AOSP VNDK headers and pulls the
+compatible platform HIDL libraries from the connected phone without modifying
+it. Deployment temporarily stops SurfaceFlinger for exclusive Composer access
+and restores Android UI when the LCL process exits. Root access is required.
+
 ---
 
 ## Running Applications Inside LCL OS
@@ -81,7 +98,7 @@ When LCL OS boots, launch applications from the built-in terminal or using the `
 
 ## Key Architectural Principles
 
-1. **No X11 / No Wayland:** Direct EGL/DRM/KMS scanout on bare metal; native AIDL Composer3 on mobile substrates.
+1. **No X11 / No Wayland:** Direct EGL/DRM/KMS scanout on bare metal; native Composer3 AIDL or Composer 2.4 HIDL on mobile substrates.
 2. **Platform-Independent Application Binaries (Same-Binary Invariant):** For the same CPU architecture, LCL application executables (`Terminal.app`, `lcl-desktop-shell`, `lcl-sessiond`, etc.) are 100% byte-for-byte identical across Linux DRM/KMS and Android AVD targets.
 3. **Decoupled Window Manager & Compositor:** Window Manager owns spatial coordinates and geometry state; Compositor acts as a pure presentation engine.
 4. **Secure Unix Domain Socket IPC:** Robust little-endian protocol over `SOCK_SEQPACKET` with `0600` permissions and kernel peer credential verification (`SO_PEERCRED`).

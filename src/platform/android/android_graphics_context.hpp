@@ -19,7 +19,7 @@ class AndroidDisplayBackend;
  *
  * Implements IGraphicsContext on top of Android EGL and OpenGL ES 3.0.
  * Manages EGLDisplay, EGLContext, PBuffer rendering surfaces, and
- * double-buffered AHardwareBuffer scanout targets for Composer3 presentation.
+ * double-buffered AHardwareBuffer scanout targets for Android Composer presentation.
  */
 class AndroidGraphicsContext final : public lcl::platform::IGraphicsContext {
 public:

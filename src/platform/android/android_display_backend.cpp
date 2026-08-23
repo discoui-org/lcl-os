@@ -1,4 +1,5 @@
 #include "platform/android/android_display_backend.hpp"
+#include "platform/android/android_hidl_display_backend.hpp"
 #include "platform/common/output_scale.hpp"
 
 #include <aidl/android/hardware/graphics/composer3/IComposer.h>
@@ -151,7 +152,8 @@ private:
 };
 
 AndroidDisplayBackend::AndroidDisplayBackend()
-    : m_impl(std::make_unique<Impl>()) {
+    : m_impl(std::make_unique<Impl>()),
+      m_hidlBackend(std::make_unique<AndroidHidlDisplayBackend>()) {
     m_activeMode.width = 320;
     m_activeMode.height = 640;
     m_activeMode.refreshRate = 60;
@@ -168,6 +170,30 @@ bool AndroidDisplayBackend::initialize() {
     if (m_initialized) return true;
 
     m_activeMode.scaleFactor = resolveOutputScale();
+
+    if (initializeAidl()) {
+        m_backendKind = BackendKind::AidlComposer3;
+        std::cerr << "[AndroidDisplayBackend] selected Composer3 AIDL\n";
+        return true;
+    }
+    shutdownAidl();
+
+    std::cerr << "[AndroidDisplayBackend] Composer3 AIDL unavailable; trying Composer 2.4 HIDL\n";
+    if (m_hidlBackend->initialize(m_activeMode.scaleFactor)) {
+        m_activeMode = m_hidlBackend->activeMode();
+        m_displayId = m_hidlBackend->displayId();
+        m_layerId = m_hidlBackend->layerId();
+        m_displayConnected = m_hidlBackend->isDisplayConnected();
+        m_backendKind = BackendKind::HidlComposer24;
+        m_initialized = true;
+        return true;
+    }
+
+    m_backendKind = BackendKind::None;
+    return false;
+}
+
+bool AndroidDisplayBackend::initializeAidl() {
 
     m_impl->binderNdkLib = dlopen("libbinder_ndk.so", RTLD_NOW);
     if (!m_impl->binderNdkLib) {
@@ -277,8 +303,7 @@ bool AndroidDisplayBackend::initialize() {
     return true;
 }
 
-void AndroidDisplayBackend::shutdown() {
-    if (!m_initialized) return;
+void AndroidDisplayBackend::shutdownAidl() {
 
     if (m_layerId >= 0 && m_impl->client) {
         m_impl->client->destroyLayer(m_displayId, m_layerId);
@@ -297,6 +322,27 @@ void AndroidDisplayBackend::shutdown() {
     m_initialized = false;
 }
 
+void AndroidDisplayBackend::shutdown() {
+    if (m_backendKind == BackendKind::HidlComposer24) {
+        m_hidlBackend->shutdown();
+    } else {
+        shutdownAidl();
+    }
+    m_backendKind = BackendKind::None;
+    m_initialized = false;
+    m_displayConnected = false;
+    m_layerId = -1;
+}
+
+const char* AndroidDisplayBackend::backendName() const {
+    switch (m_backendKind) {
+    case BackendKind::AidlComposer3: return "aidl-composer3";
+    case BackendKind::HidlComposer24: return "hidl-composer-2.4";
+    case BackendKind::None: return "none";
+    }
+    return "none";
+}
+
 bool AndroidDisplayBackend::initHardwareCursor(uint32_t /*width*/, uint32_t /*height*/,
                                                float /*deviceScale*/) {
     return false;
@@ -307,6 +353,13 @@ bool AndroidDisplayBackend::moveHardwareCursor(int /*x*/, int /*y*/) {
 }
 
 bool AndroidDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd) {
+    if (m_backendKind == BackendKind::HidlComposer24) {
+        return m_hidlBackend->presentBuffer(buffer, acquireFenceFd);
+    }
+    return presentBufferAidl(buffer, acquireFenceFd);
+}
+
+bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acquireFenceFd) {
     if (!m_initialized || !m_impl->client || m_layerId < 0 || !buffer) {
         std::cerr << "[AndroidDisplayBackend] presentBuffer invalid state (initialized="
                   << m_initialized << ", layer=" << m_layerId << ", buffer=" << buffer << ")\n";

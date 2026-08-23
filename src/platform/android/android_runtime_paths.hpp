@@ -1,6 +1,7 @@
 #pragma once
 
 #include "platform/common/runtime_paths.hpp"
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -20,11 +21,11 @@ public:
 
     // Canonical LCL runtime paths
     std::string compositorSocketPath() const override {
-        return "/Runtime/lcl-compositor.sock";
+        return runtimeDirectory() + "/lcl-compositor.sock";
     }
 
     std::string sessionSocketPath() const override {
-        return "/Runtime/lcl-sessiond.sock";
+        return runtimeDirectory() + "/lcl-sessiond.sock";
     }
 
     std::string appCatalogDirectory() const override {
@@ -36,7 +37,14 @@ public:
     }
 
     std::string temporaryDirectory() const override {
-        return "/Runtime/Temporary";
+        return runtimeDirectory() + "/Temporary";
+    }
+
+private:
+    static std::string runtimeDirectory() {
+        const char* overridePath = std::getenv("LCL_RUNTIME_DIR");
+        if (overridePath && overridePath[0] == '/') return overridePath;
+        return "/Runtime";
     }
 };
 

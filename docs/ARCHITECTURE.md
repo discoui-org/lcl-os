@@ -248,7 +248,7 @@ LCL OS decouples the user-space runtime environment from the underlying platform
                  ▼                                               ▼
 +─────────────────────────────────+             +─────────────────────────────────+
 |   Bare-Metal Linux Substrate    |             |    Android Substrate (Stage 4C) |
-|   - Driver: Linux DRM/KMS       |             |    - Driver: AIDL Composer3/HAL |
+|   - Driver: Linux DRM/KMS       |             | - Driver: Composer3 AIDL / 2.4 HIDL|
 |   - Compositor: lcl-core        |             |    - Compositor: lcl-core-android|
 |   - Input: evdev / libinput     |             |    - Mount: /mnt/lcl ext4        |
 |   - Init: Limine / custom init  |             |    - Init: Android init / lcl.rc |

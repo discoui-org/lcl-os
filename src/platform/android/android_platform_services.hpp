@@ -11,7 +11,7 @@ namespace lcl::platform::android {
 /**
  * @brief Android platform services implementation.
  *
- * Owns and coordinates the lifecycle of Composer3 display backend, EGL/GLES graphics context,
+ * Owns and coordinates the lifecycle of the Android Composer display backend, EGL/GLES graphics context,
  * input backend, and runtime paths on Android targets.
  */
 class AndroidPlatformServices final : public lcl::platform::IPlatformServices {
