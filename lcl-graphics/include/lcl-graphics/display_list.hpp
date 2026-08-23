@@ -17,6 +17,14 @@ struct BeginLayerCommand { float opacity{1.0f}; };
 struct EndLayerCommand {};
 struct ClipRectCommand { RectF rect{}; };
 struct ClipPathCommand { Path path{}; FillRule fillRule{FillRule::NonZero}; };
+struct ClearRectCommand { RectF rect{}; Color color{}; };
+struct BeginCachedLayerCommand { uint64_t id{0}; RectF sourceBounds{}; };
+struct EndCachedLayerCommand {};
+struct DrawCachedLayerCommand {
+    uint64_t id{0};
+    RectF destination{};
+    float opacity{1.0f};
+};
 struct DrawPathCommand { Path path{}; Paint paint{}; };
 struct DrawTextCommand {
     PointF origin{};
@@ -24,6 +32,7 @@ struct DrawTextCommand {
     Color color{};
     float fontSize{14.0f};
     FontFamily fontFamily{FontFamily::Interface};
+    bool rasterized{false};
 };
 struct DrawImageCommand {
     RectF destination{};
@@ -40,6 +49,9 @@ struct DrawImageCommand {
 using DisplayCommand = std::variant<SaveCommand, RestoreCommand, ConcatCommand,
                                     BeginLayerCommand, EndLayerCommand,
                                     ClipRectCommand, ClipPathCommand,
+                                    ClearRectCommand,
+                                    BeginCachedLayerCommand, EndCachedLayerCommand,
+                                    DrawCachedLayerCommand,
                                     DrawPathCommand, DrawTextCommand,
                                     DrawImageCommand>;
 
@@ -65,9 +77,14 @@ public:
     void endLayer();
     void clipRect(const RectF& rect);
     void clipPath(const Path& path, FillRule fillRule = FillRule::NonZero);
+    void clearRect(const RectF& rect, Color color);
+    void beginCachedLayer(uint64_t id, const RectF& sourceBounds);
+    void endCachedLayer();
+    void drawCachedLayer(uint64_t id, const RectF& destination, float opacity);
     void drawPath(const Path& path, const Paint& paint);
     void drawText(PointF origin, std::string text, Color color,
-                  float fontSize, FontFamily fontFamily = FontFamily::Interface);
+                  float fontSize, FontFamily fontFamily = FontFamily::Interface,
+                  bool rasterized = false);
     void drawImage(const RectF& destination, uintptr_t resourceKey,
                    int sourceWidth, int sourceHeight, int stridePixels,
                    float opacity,

@@ -873,11 +873,69 @@ void RasterRenderer::drawCachedLayerTexture(uint32_t texture,
 #endif
 }
 
+bool RasterRenderer::prepareCachedDisplayLayer(
+        uint64_t id, const lcl::graphics::RectF& sourceBounds,
+        const lcl::graphics::Matrix3& transform,
+        const lcl::graphics::RenderTarget& target) {
+    if (sourceBounds.width <= 0.0f || sourceBounds.height <= 0.0f) return false;
+    const float effectiveScale = std::max(
+        0.001f, target.deviceScale * transform.maxScale());
+    const uint32_t pixelWidth = std::max(
+        1u, static_cast<uint32_t>(std::ceil(sourceBounds.width * effectiveScale)));
+    const uint32_t pixelHeight = std::max(
+        1u, static_cast<uint32_t>(std::ceil(sourceBounds.height * effectiveScale)));
+    const auto sameTransform = [](const auto& lhs, const auto& rhs) {
+        return std::fabs(lhs.a - rhs.a) < 0.0001f &&
+               std::fabs(lhs.b - rhs.b) < 0.0001f &&
+               std::fabs(lhs.c - rhs.c) < 0.0001f &&
+               std::fabs(lhs.d - rhs.d) < 0.0001f &&
+               std::fabs(lhs.tx - rhs.tx) < 0.0001f &&
+               std::fabs(lhs.ty - rhs.ty) < 0.0001f;
+    };
+
+    auto& layer = m_cachedDisplayLayers[id];
+    if (layer.pixelWidth != pixelWidth || layer.pixelHeight != pixelHeight ||
+        std::fabs(layer.effectiveScale - effectiveScale) > 0.0001f ||
+        !sameTransform(layer.transform, transform)) {
+        destroyCachedLayerTarget(layer.framebuffer, layer.texture);
+        layer = CachedDisplayLayer{};
+        layer.pixelWidth = pixelWidth;
+        layer.pixelHeight = pixelHeight;
+        layer.transform = transform;
+        layer.effectiveScale = effectiveScale;
+    }
+
+    const bool gpu = m_backendType == RasterBackend::OpenGL_EGL;
+    if (gpu && layer.framebuffer == 0 &&
+        !createCachedLayerTarget(pixelWidth, pixelHeight,
+                                 layer.framebuffer, layer.texture)) {
+        m_cachedDisplayLayers.erase(id);
+        return false;
+    }
+    if (!gpu && layer.pixels.size() != static_cast<size_t>(pixelWidth) * pixelHeight) {
+        layer.pixels.resize(static_cast<size_t>(pixelWidth) * pixelHeight);
+    }
+    return true;
+}
+
+bool RasterRenderer::hasCachedDisplayLayer(uint64_t id) const {
+    return m_cachedDisplayLayers.find(id) != m_cachedDisplayLayers.end();
+}
+
+void RasterRenderer::clearDisplayListCaches() {
+    for (const auto& [_, layer] : m_cachedDisplayLayers) {
+        destroyCachedLayerTarget(layer.framebuffer, layer.texture);
+    }
+    m_cachedDisplayLayers.clear();
+    m_rasterizedTextLayers.clear();
+}
+
 void RasterRenderer::shutdown() {
     // A Canvas normally balances cached-target redirection before shutdown.
     // Drop any saved target state defensively so a reinitialized renderer can
     // never restore dimensions or pointers owned by its previous lifetime.
     m_cachedLayerTargetState.reset();
+    clearDisplayListCaches();
 #ifndef LCL_SOFTWARE_ONLY
     // Several WindowApps may interleave independent EGL contexts on one
     // thread. Resource names are context-local, so deleting this renderer's
@@ -1081,6 +1139,7 @@ void RasterRenderer::replayDisplayList(
     state.transform = rootTransform;
     std::vector<ReplayState> stack;
     std::vector<float> layerOpacityStack;
+    std::optional<ReplayState> cachedLayerReplayState;
 
     const auto concat = [](const lcl::graphics::Matrix3& old,
                            const lcl::graphics::Matrix3& value) {
@@ -1132,25 +1191,70 @@ void RasterRenderer::replayDisplayList(
                 clipPaint.color = {255, 255, 255, 255};
                 clipPaint.fillRule = op.fillRule;
                 const auto deviceTransform = state.transform.followedBy(
-                    lcl::graphics::Matrix3::scale(target.deviceScale, target.deviceScale));
+                    lcl::graphics::Matrix3::scale(m_deviceScale, m_deviceScale));
                 auto mask = rasterizePath(op.path, clipPaint, deviceTransform);
                 if (!mask.empty()) {
                     const lcl::graphics::RectF bounds{
-                        static_cast<float>(mask.x) / target.deviceScale,
-                        static_cast<float>(mask.y) / target.deviceScale,
-                        static_cast<float>(mask.width) / target.deviceScale,
-                        static_cast<float>(mask.height) / target.deviceScale};
+                        static_cast<float>(mask.x) / m_deviceScale,
+                        static_cast<float>(mask.y) / m_deviceScale,
+                        static_cast<float>(mask.width) / m_deviceScale,
+                        static_cast<float>(mask.height) / m_deviceScale};
                     state.clip = state.clip ? state.clip->intersection(bounds) : bounds;
                     state.pathClips.push_back(std::move(mask));
                     syncClip();
+                }
+            } else if constexpr (std::is_same_v<T, lcl::graphics::ClearRectCommand>) {
+                const auto mapped = state.transform.mapRect(op.rect);
+                clearRect({mapped.x, mapped.y, mapped.width, mapped.height},
+                          {op.color.r, op.color.g, op.color.b, op.color.a});
+            } else if constexpr (std::is_same_v<T, lcl::graphics::BeginCachedLayerCommand>) {
+                if (cachedLayerReplayState) return;
+                const auto found = m_cachedDisplayLayers.find(op.id);
+                if (found == m_cachedDisplayLayers.end()) return;
+                auto& layer = found->second;
+                uint32_t* softwarePixels = layer.texture != 0
+                    ? nullptr : layer.pixels.data();
+                if (!beginCachedLayerTarget(
+                        layer.framebuffer, layer.texture,
+                        layer.pixelWidth, layer.pixelHeight, softwarePixels,
+                        op.sourceBounds.x, op.sourceBounds.y,
+                        layer.effectiveScale)) {
+                    return;
+                }
+                cachedLayerReplayState = state;
+                state = ReplayState{};
+            } else if constexpr (std::is_same_v<T, lcl::graphics::EndCachedLayerCommand>) {
+                if (!cachedLayerReplayState) return;
+                endCachedLayerTarget();
+                state = *cachedLayerReplayState;
+                cachedLayerReplayState.reset();
+                syncClip();
+            } else if constexpr (std::is_same_v<T, lcl::graphics::DrawCachedLayerCommand>) {
+                const auto found = m_cachedDisplayLayers.find(op.id);
+                if (found == m_cachedDisplayLayers.end()) return;
+                const auto& layer = found->second;
+                const auto mapped = state.transform.mapRect(op.destination);
+                const float opacity = std::clamp(op.opacity * state.opacity, 0.0f, 1.0f);
+                if (layer.texture != 0) {
+                    drawCachedLayerTexture(
+                        layer.texture,
+                        {mapped.x, mapped.y, mapped.width, mapped.height}, opacity);
+                } else if (!layer.pixels.empty()) {
+                    drawBufferTransformed(
+                        mapped.x, mapped.y,
+                        static_cast<int>(layer.pixelWidth),
+                        static_cast<int>(layer.pixelHeight),
+                        layer.pixels.data(), static_cast<int>(layer.pixelWidth),
+                        opacity, 0.0f, 2.0f, false,
+                        mapped.width, mapped.height);
                 }
             } else if constexpr (std::is_same_v<T, lcl::graphics::DrawPathCommand>) {
                 if (state.pathClips.empty()) {
                     drawPath(op.path, op.paint, state.transform, state.opacity);
                 } else {
                     const auto deviceTransform = state.transform.followedBy(
-                        lcl::graphics::Matrix3::scale(target.deviceScale,
-                                                     target.deviceScale));
+                        lcl::graphics::Matrix3::scale(m_deviceScale,
+                                                     m_deviceScale));
                     auto image = rasterizePath(op.path, op.paint, deviceTransform,
                                                state.opacity);
                     for (const auto& mask : state.pathClips) {
@@ -1175,15 +1279,89 @@ void RasterRenderer::replayDisplayList(
                     }
                     if (!image.empty()) {
                         drawBufferTransformed(
-                            static_cast<float>(image.x) / target.deviceScale,
-                            static_cast<float>(image.y) / target.deviceScale,
+                            static_cast<float>(image.x) / m_deviceScale,
+                            static_cast<float>(image.y) / m_deviceScale,
                             image.width, image.height, image.pixels.data(), image.width,
                             1.0f, 0.0f, 2.0f, false,
-                            static_cast<float>(image.width) / target.deviceScale,
-                            static_cast<float>(image.height) / target.deviceScale);
+                            static_cast<float>(image.width) / m_deviceScale,
+                            static_cast<float>(image.height) / m_deviceScale);
                     }
                 }
             } else if constexpr (std::is_same_v<T, lcl::graphics::DrawTextCommand>) {
+                if (op.rasterized) {
+                    const uint32_t argb = (static_cast<uint32_t>(op.color.a) << 24) |
+                        (static_cast<uint32_t>(op.color.r) << 16) |
+                        (static_cast<uint32_t>(op.color.g) << 8) | op.color.b;
+                    const float effectiveScale = std::max(
+                        0.001f, m_deviceScale * state.transform.maxScale());
+                    ++m_textLayerUseCounter;
+                    auto found = std::find_if(
+                        m_rasterizedTextLayers.begin(), m_rasterizedTextLayers.end(),
+                        [&](const RasterizedTextLayer& layer) {
+                            return layer.text == op.text && layer.argb == argb &&
+                                   layer.family == op.fontFamily &&
+                                   std::fabs(layer.fontSize - op.fontSize) < 0.0001f &&
+                                   std::fabs(layer.effectiveScale - effectiveScale) < 0.0001f;
+                        });
+                    if (found == m_rasterizedTextLayers.end()) {
+                        RasterizedTextLayer layer;
+                        layer.text = op.text;
+                        layer.argb = argb;
+                        layer.fontSize = op.fontSize;
+                        layer.effectiveScale = effectiveScale;
+                        layer.family = op.fontFamily;
+                        const float currentScale = m_deviceScale;
+                        setDeviceScale(effectiveScale);
+                        const bool rasterized = rasterizeString(
+                            op.text, argb, op.fontSize,
+                            op.fontFamily == lcl::graphics::FontFamily::Monospace,
+                            layer.pixels, layer.width, layer.height);
+                        setDeviceScale(currentScale);
+                        if (!rasterized) {
+                            const auto origin = state.transform.mapPoint(op.origin);
+                            const float fontSize = op.fontSize * state.transform.maxScale();
+                            const uint8_t alpha = static_cast<uint8_t>(std::clamp(
+                                std::lround(static_cast<float>(op.color.a) * state.opacity),
+                                0l, 255l));
+                            const uint32_t packed = (static_cast<uint32_t>(alpha) << 24) |
+                                (static_cast<uint32_t>(op.color.r) << 16) |
+                                (static_cast<uint32_t>(op.color.g) << 8) | op.color.b;
+                            if (op.fontFamily == lcl::graphics::FontFamily::Monospace) {
+                                drawMonospaceString(static_cast<int>(std::lround(origin.x)),
+                                                    static_cast<int>(std::lround(origin.y)),
+                                                    op.text, packed, fontSize);
+                            } else {
+                                drawString(static_cast<int>(std::lround(origin.x)),
+                                           static_cast<int>(std::lround(origin.y)),
+                                           op.text, packed, fontSize);
+                            }
+                            return;
+                        }
+                        layer.lastUse = m_textLayerUseCounter;
+                        if (m_rasterizedTextLayers.size() >= 96u) {
+                            const auto oldest = std::min_element(
+                                m_rasterizedTextLayers.begin(), m_rasterizedTextLayers.end(),
+                                [](const auto& lhs, const auto& rhs) {
+                                    return lhs.lastUse < rhs.lastUse;
+                                });
+                            m_rasterizedTextLayers.erase(oldest);
+                        }
+                        m_rasterizedTextLayers.push_back(std::move(layer));
+                        found = std::prev(m_rasterizedTextLayers.end());
+                    }
+                    found->lastUse = m_textLayerUseCounter;
+                    const float logicalWidth =
+                        static_cast<float>(found->width) / effectiveScale;
+                    const float logicalHeight =
+                        static_cast<float>(found->height) / effectiveScale;
+                    const auto mapped = state.transform.mapRect(
+                        {op.origin.x, op.origin.y, logicalWidth, logicalHeight});
+                    drawBufferTransformed(
+                        mapped.x, mapped.y, found->width, found->height,
+                        found->pixels.data(), found->width, state.opacity,
+                        0.0f, 2.0f, false, mapped.width, mapped.height);
+                    return;
+                }
                 const auto origin = state.transform.mapPoint(op.origin);
                 const float fontSize = op.fontSize * state.transform.maxScale();
                 const uint8_t alpha = static_cast<uint8_t>(std::clamp(

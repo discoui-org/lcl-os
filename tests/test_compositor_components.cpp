@@ -17,7 +17,7 @@
 #include "core/compositor/popup_surface_geometry.hpp"
 #include "core/compositor/surface_registry.hpp"
 #include "core/compositor/system_surface_policy.hpp"
-#include "core/compositor/window_group_transform.hpp"
+#include "render/window_group_transform.hpp"
 #include "core/compositor/window_chrome_material.hpp"
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
@@ -398,6 +398,7 @@ TEST(InputRouterTest, PopupOutsideParentBoundsReceivesParentLocalInput) {
     parent.hasCommittedBuffer = true;
     parent.configuredWidth = 200;
     parent.configuredHeight = 140;
+    parent.transitionScale = 0.8f;
     auto& popup = registry[popupKey];
     popup.parentSurfaceKey = parentKey;
     popup.popupOrder = registry.allocatePopupOrder();
@@ -417,8 +418,10 @@ TEST(InputRouterTest, PopupOutsideParentBoundsReceivesParentLocalInput) {
     down.source = lcl::platform::PointerSource::Mouse;
     down.button = lcl::platform::PointerButton::Left;
     down.pressed = true;
-    down.absoluteX = 350.0;
-    down.absoluteY = 110.0;
+    // Parent group origin is (120, 94) at scale 0.8. Popup-local (70, 10)
+    // therefore lands at global (320, 118), outside the parent frame.
+    down.absoluteX = 320.0;
+    down.absoluteY = 118.0;
     EXPECT_TRUE(router.route(down));
 
     protocol::LCLHeader header{};
@@ -955,13 +958,16 @@ TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     surface.clientFd = sockets[0];
     surface.hasCommittedBuffer = true;
     surface.bufferScale = 1.0f;
+    surface.transitionScale = 0.8f;
 
     SceneRegistry scenes;
     InputRouter router(manager, registry, scenes);
     InputEvent motion{};
     motion.type = InputEventType::PointerMotion;
-    motion.absoluteX = 100.0;
-    motion.absoluteY = 110.0;
+    // The 0.8 group is centered inside the presented rect. Local (20, 20)
+    // maps to global (128, 126), and inverse input mapping must recover it.
+    motion.absoluteX = 128.0;
+    motion.absoluteY = 126.0;
     EXPECT_TRUE(router.route(motion));
 
     protocol::LCLHeader header{};
@@ -984,8 +990,8 @@ TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     InputEvent touchMotion{};
     touchMotion.type = InputEventType::PointerMotion;
     touchMotion.source = lcl::platform::PointerSource::Touch;
-    touchMotion.absoluteX = 100.0;
-    touchMotion.absoluteY = 110.0;
+    touchMotion.absoluteX = 128.0;
+    touchMotion.absoluteY = 126.0;
     EXPECT_TRUE(router.route(touchMotion));
 
     ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
@@ -1289,22 +1295,29 @@ TEST(WindowGroupTransformTest, ChromeAndClientShareOneSubpixelAnimatedFrame) {
     window.width = 541;
     window.height = 367;
 
-    const auto group = makeWindowGroupTransform(window, 32, 0.963f);
+    const auto group = render::makeWindowGroupTransform(window, 32, 0.963f);
     EXPECT_NEAR(group.titleHeight, 32.0f * group.scale, 0.0001f);
-    EXPECT_NEAR(group.y + group.titleHeight + (group.height - group.titleHeight),
-                group.y + group.height, 0.0001f);
-    EXPECT_NEAR(group.x + group.width,
+    EXPECT_NEAR(group.globalBounds.y + group.titleHeight +
+                    (group.globalBounds.height - group.titleHeight),
+                group.globalBounds.y + group.globalBounds.height, 0.0001f);
+    EXPECT_NEAR(group.globalBounds.x + group.globalBounds.width,
                 static_cast<float>(window.x) +
-                    (static_cast<float>(window.width) + group.width) * 0.5f,
+                    (static_cast<float>(window.width) + group.globalBounds.width) * 0.5f,
                 0.0001f);
-    EXPECT_NE(group.width, std::round(group.width));
+    EXPECT_NE(group.globalBounds.width, std::round(group.globalBounds.width));
     EXPECT_NEAR(group.mapLength(20.0f), 20.0f * group.scale, 0.0001f);
 
-    const auto resting = makeWindowGroupTransform(window, 32, 1.0f);
-    EXPECT_FLOAT_EQ(resting.x, std::round(resting.x));
-    EXPECT_FLOAT_EQ(resting.y, std::round(resting.y));
-    EXPECT_FLOAT_EQ(resting.width, std::round(resting.width));
-    EXPECT_FLOAT_EQ(resting.height, std::round(resting.height));
+    const graphics::PointF local{123.25f, 87.5f};
+    const auto global = group.mapPoint(local);
+    const auto roundTrip = group.unmapPoint(global);
+    EXPECT_NEAR(roundTrip.x, local.x, 0.0001f);
+    EXPECT_NEAR(roundTrip.y, local.y, 0.0001f);
+
+    const auto resting = render::makeWindowGroupTransform(window, 32, 1.0f);
+    EXPECT_FLOAT_EQ(resting.globalBounds.x, std::round(resting.globalBounds.x));
+    EXPECT_FLOAT_EQ(resting.globalBounds.y, std::round(resting.globalBounds.y));
+    EXPECT_FLOAT_EQ(resting.globalBounds.width, std::round(resting.globalBounds.width));
+    EXPECT_FLOAT_EQ(resting.globalBounds.height, std::round(resting.globalBounds.height));
 }
 
 TEST(CompositorRendererTest, LocalBackdropStartsBelowSsdTitlebar) {

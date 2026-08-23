@@ -2,8 +2,8 @@
 #include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/window_chrome_material.hpp"
-#include "core/compositor/window_group_transform.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
+#include "render/window_group_transform.hpp"
 #include "theme/palette.hpp"
 
 #include <algorithm>
@@ -48,12 +48,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
         return std::clamp(win.cornerRoundness, 2.0f, 8.0f);
     };
 
-    auto drawChrome = [&](const render::Window& win, const WindowGroupTransform& group,
+    auto drawChrome = [&](const render::Window& win, const render::WindowGroupTransform& group,
                           float chromeOpacity, bool drawTitlebar) {
-        const auto presentation = render::presentedBounds(win);
-        const lcl::graphics::RectF logicalBounds{
-            presentation.x, presentation.y,
-            presentation.width, presentation.height};
+        const lcl::graphics::RectF logicalBounds = group.localBounds;
         const float unscaledTitleHeight = group.scale > 0.0f
             ? group.titleHeight / group.scale : 0.0f;
         const lcl::graphics::Color titlebarColor =
@@ -72,16 +69,11 @@ void CompositorRenderer::render(render::Renderer& renderer,
             drawTitlebar,
             titlebarColor,
         });
-        const float centerX = logicalBounds.x + logicalBounds.width * 0.5f;
-        const float centerY = logicalBounds.y + logicalBounds.height * 0.5f;
-        auto rootTransform = lcl::graphics::Matrix3::translation(-centerX, -centerY)
-            .followedBy(lcl::graphics::Matrix3::scale(group.scale, group.scale))
-            .followedBy(lcl::graphics::Matrix3::translation(centerX, centerY));
         raster->replayDisplayList(displayList,
             {{static_cast<float>(renderer.getWidth()) / outputScale,
               static_cast<float>(renderer.getHeight()) / outputScale},
              {renderer.getWidth(), renderer.getHeight()}, outputScale},
-            rootTransform);
+            group.localToGlobal);
     };
 
     auto replayLogicalList = [&](const graphics::DisplayList& displayList,
@@ -93,14 +85,6 @@ void CompositorRenderer::render(render::Renderer& renderer,
             rootTransform);
     };
 
-    auto windowPresentationTransform = [](const graphics::RectF& bounds, float scale) {
-        const float centerX = bounds.x + bounds.width * 0.5f;
-        const float centerY = bounds.y + bounds.height * 0.5f;
-        return graphics::Matrix3::translation(-centerX, -centerY)
-            .followedBy(graphics::Matrix3::scale(scale, scale))
-            .followedBy(graphics::Matrix3::translation(centerX, centerY));
-    };
-
     // 1. Clear Desktop Canvas (Black background)
     renderer.clear(0xFF000000);
 
@@ -109,7 +93,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                                          const SurfaceEntry& surface,
                                          protocol::EffectSourceType sourceType,
                                          float windowOpacity,
-                                         const WindowGroupTransform& group) {
+        const render::WindowGroupTransform& group) {
         const float titleOffset = (win.decorationMode == render::DecorationMode::SSD)
             ? 32.0f
             : 0.0f;
@@ -129,23 +113,26 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 // The compositor owns the outer surface geometry, including
                 // desktop or mobile system insets. A root backdrop therefore
                 // cannot drift below it or select a different corner shape.
-                fxX = group.x;
-                fxY = group.y;
-                fxW = std::max(1.0f, group.width);
-                fxH = std::max(1.0f, group.height);
+                fxX = group.globalBounds.x;
+                fxY = group.globalBounds.y;
+                fxW = std::max(1.0f, group.globalBounds.width);
+                fxH = std::max(1.0f, group.globalBounds.height);
                 cornerRadius = group.mapLength(resolveWindowCornerRadiusLogical(win));
                 cornerRoundness = resolveWindowCornerRoundness(win);
             } else {
                 const auto local = resolveLocalEffectGeometry(
-                    win.x, win.y, titleOffset,
-                    std::max(1.0f, win.width),
-                    std::max(1.0f, win.height - titleOffset),
+                    0.0f, 0.0f, titleOffset,
+                    std::max(1.0f, group.localBounds.width),
+                    std::max(1.0f, group.localBounds.height - titleOffset),
                     fx.region, fx.followSurfaceBounds);
-                fxX = local.x;
-                fxY = local.y;
-                fxW = local.width;
-                fxH = local.height;
-                cornerRadius = std::max(0.0f, fx.region.cornerRadius);
+                const auto mapped = group.mapRect(
+                    {local.x, local.y, local.width, local.height});
+                fxX = mapped.x;
+                fxY = mapped.y;
+                fxW = mapped.width;
+                fxH = mapped.height;
+                cornerRadius = group.mapLength(
+                    std::max(0.0f, fx.region.cornerRadius));
                 cornerRoundness = std::clamp(fx.region.cornerRoundness, 2.0f, 8.0f);
             }
             if (fxW <= 0.0f || fxH <= 0.0f) continue;
@@ -189,7 +176,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
             windowScale = std::clamp(matchingSurface->transitionScale, 0.80f, 1.20f);
         }
 
-        const WindowGroupTransform group = makeWindowGroupTransform(win, titleOffset, windowScale);
+        const render::WindowGroupTransform group =
+            render::makeWindowGroupTransform(win, titleOffset, windowScale);
 
         // B. Apply effect-graph backdrop regions (new pipeline only)
         if (matchingSurface && !matchingSurface->effectRegions.empty()) {
@@ -201,16 +189,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
             int srcW = static_cast<int>(matchingSurface->width);
             int srcH = static_cast<int>(matchingSurface->height);
             int stridePixels = static_cast<int>(matchingSurface->stride / 4);
-            float drawX = group.x;
-            float drawY = group.y;
-            float drawW = group.width;
-            float drawH = group.height;
+            float drawX = group.globalBounds.x;
+            float drawY = group.globalBounds.y;
+            float drawW = group.globalBounds.width;
+            float drawH = group.globalBounds.height;
 
             if (win.decorationMode == render::DecorationMode::SSD) {
                 // The client buffer occupies the remaining exact pixels of
                 // the same transformed group rect used by the titlebar.
                 drawY += group.titleHeight;
-                drawH = std::max(1.0f, group.height - group.titleHeight);
+                drawH = std::max(1.0f, group.globalBounds.height - group.titleHeight);
             }
 
             const float windowCornerRadius = resolveWindowCornerRadiusLogical(win);
@@ -289,15 +277,12 @@ void CompositorRenderer::render(render::Renderer& renderer,
             if (borderRadius <= 0.001f) {
                 borderRadius = kWindowCornerRadiusLogical;
             }
-            const auto logicalBounds = render::presentedBounds(win);
-            const graphics::RectF borderBounds{
-                logicalBounds.x, logicalBounds.y,
-                logicalBounds.width, logicalBounds.height};
+            const graphics::RectF borderBounds = group.localBounds;
             replayLogicalList(
                 buildDoubleInsetBorderDisplayList(
                     borderBounds, borderRadius,
                     resolveWindowCornerRoundness(win), windowOpacity),
-                windowPresentationTransform(borderBounds, windowScale));
+                group.localToGlobal);
         }
 
         // PopupSurface entries are not windows. Compose them immediately above
@@ -345,20 +330,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     const float borderRadius = popup->cornerRadius >= 0.0f
                         ? popup->cornerRadius
                         : kPopupCornerRadiusLogical;
-                    const auto parentBounds = render::presentedBounds(win);
-                    const graphics::RectF parentLogical{
-                        parentBounds.x, parentBounds.y,
-                        parentBounds.width, parentBounds.height};
                     const graphics::RectF popupLogical{
-                        parentBounds.x + popup->popupX,
-                        parentBounds.y + popup->popupY,
+                        popup->popupX,
+                        popup->popupY,
                         popup->initialWidth, popup->initialHeight};
                     replayLogicalList(
                         buildDoubleInsetBorderDisplayList(
                             popupLogical, borderRadius,
                             std::clamp(popup->cornerRoundness, 2.0f, 8.0f),
                             opacity),
-                        windowPresentationTransform(parentLogical, windowScale));
+                        group.localToGlobal);
                 }
             }
         }

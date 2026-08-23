@@ -3,7 +3,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "lcl-graphics/canvas.hpp"
@@ -81,33 +80,6 @@ private:
         std::optional<lcl::graphics::RectF> clip{};
     };
 
-    struct TextLayer {
-        std::string text;
-        uint32_t argb{0};
-        float fontSize{0.0f};
-        float effectiveScale{1.0f};
-        lcl::graphics::FontFamily family{lcl::graphics::FontFamily::Interface};
-        int width{0};
-        int height{0};
-        uint64_t lastUse{0};
-        std::vector<uint32_t> pixels;
-    };
-
-    struct CachedLayer {
-        uint32_t pixelWidth{0};
-        uint32_t pixelHeight{0};
-        uint32_t framebuffer{0};
-        uint32_t texture{0};
-        lcl::graphics::Matrix3 transform{};
-        float effectiveScale{1.0f};
-        std::vector<uint32_t> pixels;
-    };
-
-    static RasterColor toRaster(lcl::graphics::Color color);
-    lcl::graphics::RectF mapRect(const lcl::graphics::RectF& rect) const;
-    std::pair<float, float> mapPoint(float x, float y) const;
-    lcl::graphics::Color mapColor(lcl::graphics::Color color) const;
-    void syncRendererClip();
     void clearCachedLayers();
     RasterRenderer& renderer() { return *m_renderer; }
 
@@ -119,10 +91,7 @@ private:
     CanvasState m_state{};
     std::vector<CanvasState> m_stack;
     std::vector<float> m_layerOpacityStack;
-    std::vector<TextLayer> m_textLayers;
-    std::unordered_map<CachedLayerId, CachedLayer> m_cachedLayers;
     std::optional<CanvasState> m_cachedLayerCanvasState;
-    uint64_t m_textLayerUseCounter{0};
     lcl::graphics::RenderTarget m_renderTarget{};
     lcl::graphics::DisplayListBuilder m_displayListBuilder;
     lcl::graphics::DisplayList m_lastDisplayList;

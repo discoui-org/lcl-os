@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "core/ipc/lcl_protocol.hpp"
@@ -140,6 +141,12 @@ public:
     void replayDisplayList(const lcl::graphics::DisplayList& displayList,
                            const lcl::graphics::RenderTarget& target,
                            const lcl::graphics::Matrix3& rootTransform = {});
+    bool prepareCachedDisplayLayer(uint64_t id,
+                                   const lcl::graphics::RectF& sourceBounds,
+                                   const lcl::graphics::Matrix3& transform,
+                                   const lcl::graphics::RenderTarget& target);
+    bool hasCachedDisplayLayer(uint64_t id) const;
+    void clearDisplayListCaches();
 
     /** Draw one logical path. GPU backends keep recognized primitives on-GPU;
      * software and generic paths share the CPU raster fallback. */
@@ -248,6 +255,28 @@ private:
         uint32_t externalBackingHeight{0};
     };
 
+    struct CachedDisplayLayer {
+        uint32_t pixelWidth{0};
+        uint32_t pixelHeight{0};
+        uint32_t framebuffer{0};
+        uint32_t texture{0};
+        lcl::graphics::Matrix3 transform{};
+        float effectiveScale{1.0f};
+        std::vector<uint32_t> pixels;
+    };
+
+    struct RasterizedTextLayer {
+        std::string text;
+        uint32_t argb{0};
+        float fontSize{0.0f};
+        float effectiveScale{1.0f};
+        lcl::graphics::FontFamily family{lcl::graphics::FontFamily::Interface};
+        int width{0};
+        int height{0};
+        uint64_t lastUse{0};
+        std::vector<uint32_t> pixels;
+    };
+
     bool initGLShader();
     RasterRect scaleRect(const RasterRect& rect) const;
     int scaleCoord(int value) const;
@@ -309,6 +338,9 @@ private:
     // scene FBO. A completed scene is copied here once per submitted frame.
     uint32_t m_glOutputFrameFBO{0};
     std::optional<CachedLayerTargetState> m_cachedLayerTargetState;
+    std::unordered_map<uint64_t, CachedDisplayLayer> m_cachedDisplayLayers;
+    std::vector<RasterizedTextLayer> m_rasterizedTextLayers;
+    uint64_t m_textLayerUseCounter{0};
 
     uint32_t m_glBlurProgram{0};
     int32_t m_aBlurPosLoc{-1};

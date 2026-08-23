@@ -312,6 +312,59 @@ TEST(LclGraphicsTest, DisplayListKeepsLogicalGeometryAcrossDeviceScales) {
     }
 }
 
+TEST(LclGraphicsTest, RasterCanvasDefersRasterWorkUntilDisplayListReplay) {
+    std::vector<uint32_t> pixels(16 * 16, 0x00000000u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(16, 16, nullptr, pixels.data()));
+    renderer.setRetainsFrameBacking(true);
+    lcl::render::RasterCanvas canvas(renderer);
+
+    canvas.beginFrame();
+    canvas.drawRect({2.0f, 3.0f, 6.0f, 5.0f}, {255, 255, 255, 255});
+    EXPECT_EQ(pixels[4 + 4 * 16], 0x00000000u);
+    canvas.endFrame();
+
+    EXPECT_EQ(pixels[4 + 4 * 16], 0xFFFFFFFFu);
+    ASSERT_EQ(canvas.lastDisplayList().commands().size(), 1u);
+    EXPECT_NE(std::get_if<graphics::DrawPathCommand>(
+                  &canvas.lastDisplayList().commands().front()), nullptr);
+}
+
+TEST(LclGraphicsTest, RasterCanvasRecordsClearLayerImageAndRasterTextCommands) {
+    std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
+    std::array<uint32_t, 6> imagePixels{
+        0xFFFFFFFFu, 0xFFFFFFFFu, 0u,
+        0xFFFFFFFFu, 0xFFFFFFFFu, 0u,
+    };
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
+    renderer.setRetainsFrameBacking(true);
+    lcl::render::RasterCanvas canvas(renderer);
+
+    canvas.beginFrame();
+    canvas.clearRect({0.0f, 0.0f, 32.0f, 32.0f}, {0, 0, 0, 0});
+    canvas.beginLayer(0.5f);
+    canvas.drawBuffer({10.0f, 10.0f, 2.0f, 2.0f},
+                      2, 2, imagePixels.data(), 3,
+                      1.0f, 0.0f, 2.0f, false);
+    canvas.drawRasterizedText(1.0f, 1.0f, "A", {255, 255, 255, 255},
+                              10.0f, graphics::FontFamily::Interface);
+    canvas.endLayer();
+    canvas.endFrame();
+
+    const auto& commands = canvas.lastDisplayList().commands();
+    ASSERT_EQ(commands.size(), 5u);
+    EXPECT_NE(std::get_if<graphics::ClearRectCommand>(&commands[0]), nullptr);
+    EXPECT_NE(std::get_if<graphics::BeginLayerCommand>(&commands[1]), nullptr);
+    const auto* image = std::get_if<graphics::DrawImageCommand>(&commands[2]);
+    ASSERT_NE(image, nullptr);
+    EXPECT_EQ(image->stridePixels, 3);
+    const auto* text = std::get_if<graphics::DrawTextCommand>(&commands[3]);
+    ASSERT_NE(text, nullptr);
+    EXPECT_TRUE(text->rasterized);
+    EXPECT_NE(std::get_if<graphics::EndLayerCommand>(&commands[4]), nullptr);
+}
+
 TEST(LclGraphicsTest, CanvasHelperPathsRetainGpuPrimitiveMetadata) {
     graphics::Path rect;
     rect.addRect({2.0f, 3.0f, 80.0f, 40.0f});
@@ -3792,7 +3845,6 @@ TEST(LclUiTest, RoundedRectPreservesTranslucentAlphaOnTransparentCanvas) {
     std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
     lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
-
     renderer.drawRoundedRect({0.0f, 0.0f, 32.0f, 32.0f}, 8.0f,
                              {17, 19, 23, 184}, {}, 0.0f);
 
@@ -4215,6 +4267,16 @@ TEST(LclUiTest, ScrollViewCachedLayerRespectsViewportClip) {
 
     EXPECT_EQ(pixels[4 + 4 * 64], 0xFF14283Cu);
     EXPECT_EQ(pixels[4 + 20 * 64], 0xFF14161Du);
+    const auto& commands = canvas.lastDisplayList().commands();
+    EXPECT_EQ(std::count_if(commands.begin(), commands.end(), [](const auto& command) {
+        return std::holds_alternative<graphics::BeginCachedLayerCommand>(command);
+    }), 1);
+    EXPECT_EQ(std::count_if(commands.begin(), commands.end(), [](const auto& command) {
+        return std::holds_alternative<graphics::EndCachedLayerCommand>(command);
+    }), 1);
+    EXPECT_EQ(std::count_if(commands.begin(), commands.end(), [](const auto& command) {
+        return std::holds_alternative<graphics::DrawCachedLayerCommand>(command);
+    }), 1);
 }
 
 TEST(LclUiTest, ScrollViewHandlesWheelScroll) {
@@ -4325,10 +4387,13 @@ TEST(LclUiTest, CanvasClipDiscardsPrimitivesCompletelyOutside) {
     std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
     lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
+    renderer.setRetainsFrameBacking(true);
     lcl::render::RasterCanvas canvas(renderer);
 
+    canvas.beginFrame();
     canvas.clipRect(graphics::RectF{0.0f, 0.0f, 10.0f, 10.0f});
     canvas.drawRect(graphics::RectF{15.0f, 15.0f, 10.0f, 10.0f}, graphics::Color{255, 255, 255, 255});
+    canvas.endFrame();
 
     for (uint32_t p : pixels) {
         EXPECT_EQ(p, 0x00000000u);
@@ -4339,10 +4404,13 @@ TEST(LclUiTest, CanvasClipClipsPartiallyIntersectingRect) {
     std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
     lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
+    renderer.setRetainsFrameBacking(true);
     lcl::render::RasterCanvas canvas(renderer);
 
+    canvas.beginFrame();
     canvas.clipRect(graphics::RectF{0.0f, 0.0f, 16.0f, 16.0f});
     canvas.drawRect(graphics::RectF{0.0f, 0.0f, 32.0f, 32.0f}, graphics::Color{255, 255, 255, 255});
+    canvas.endFrame();
 
     // Inside clip
     EXPECT_EQ(pixels[5 + 5 * 32], 0xFFFFFFFFu);
@@ -4358,11 +4426,14 @@ TEST(LclUiTest, CanvasClipClipsTextRendering) {
     std::vector<uint32_t> pixels(64 * 64, 0x00000000u);
     lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(64, 64, nullptr, pixels.data()));
+    renderer.setRetainsFrameBacking(true);
     lcl::render::RasterCanvas canvas(renderer);
 
+    canvas.beginFrame();
     canvas.clipRect(graphics::RectF{0.0f, 0.0f, 32.0f, 20.0f});
     // Draw text outside clip
     canvas.drawText(0.0f, 40.0f, "Out of bounds text", graphics::Color{255, 255, 255, 255}, 14.0f, graphics::FontFamily::Interface);
+    canvas.endFrame();
 
     for (int y = 30; y < 64; ++y) {
         for (int x = 0; x < 64; ++x) {
@@ -4375,19 +4446,22 @@ TEST(LclUiTest, CanvasClipSaveAndRestoreRestoresPreviousClip) {
     std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
     lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(32, 32, nullptr, pixels.data()));
+    renderer.setRetainsFrameBacking(true);
     lcl::render::RasterCanvas canvas(renderer);
 
+    canvas.beginFrame();
     canvas.clipRect(graphics::RectF{0.0f, 0.0f, 24.0f, 24.0f});
     canvas.saveState();
     canvas.clipRect(graphics::RectF{0.0f, 0.0f, 8.0f, 8.0f});
 
     // Draw while inner clip is active
     canvas.drawRect(graphics::RectF{12.0f, 12.0f, 4.0f, 4.0f}, graphics::Color{255, 0, 0, 255});
-    EXPECT_EQ(pixels[13 + 13 * 32], 0x00000000u); // Rejected by inner clip
 
     canvas.restoreState();
 
     // After restore, outer clip [0..24, 0..24] is active again
     canvas.drawRect(graphics::RectF{12.0f, 12.0f, 4.0f, 4.0f}, graphics::Color{0, 255, 0, 255});
+    EXPECT_EQ(pixels[13 + 13 * 32], 0x00000000u); // Still record-only.
+    canvas.endFrame();
     EXPECT_EQ(pixels[13 + 13 * 32], 0xFF00FF00u); // Drawn successfully
 }

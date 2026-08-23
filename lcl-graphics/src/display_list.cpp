@@ -22,13 +22,27 @@ void DisplayListBuilder::clipRect(const RectF& rect) {
 void DisplayListBuilder::clipPath(const Path& path, FillRule fillRule) {
     m_commands.emplace_back(ClipPathCommand{path, fillRule});
 }
+void DisplayListBuilder::clearRect(const RectF& rect, Color color) {
+    m_commands.emplace_back(ClearRectCommand{rect, color});
+}
+void DisplayListBuilder::beginCachedLayer(uint64_t id, const RectF& sourceBounds) {
+    m_commands.emplace_back(BeginCachedLayerCommand{id, sourceBounds});
+}
+void DisplayListBuilder::endCachedLayer() {
+    m_commands.emplace_back(EndCachedLayerCommand{});
+}
+void DisplayListBuilder::drawCachedLayer(uint64_t id, const RectF& destination,
+                                         float opacity) {
+    m_commands.emplace_back(DrawCachedLayerCommand{id, destination, opacity});
+}
 void DisplayListBuilder::drawPath(const Path& path, const Paint& paint) {
     m_commands.emplace_back(DrawPathCommand{path, paint});
 }
 void DisplayListBuilder::drawText(PointF origin, std::string text, Color color,
-                                  float fontSize, FontFamily fontFamily) {
+                                  float fontSize, FontFamily fontFamily,
+                                  bool rasterized) {
     m_commands.emplace_back(DrawTextCommand{origin, std::move(text), color,
-                                            fontSize, fontFamily});
+                                            fontSize, fontFamily, rasterized});
 }
 void DisplayListBuilder::drawImage(const RectF& destination, uintptr_t resourceKey,
                                    int sourceWidth, int sourceHeight, int stridePixels,

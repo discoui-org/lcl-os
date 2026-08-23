@@ -22,11 +22,24 @@ void Canvas::drawDisplayList(const DisplayList& displayList) {
                 clipRect(op.rect);
             } else if constexpr (std::is_same_v<T, ClipPathCommand>) {
                 clipPath(op.path, op.fillRule);
+            } else if constexpr (std::is_same_v<T, ClearRectCommand>) {
+                clearRect(op.rect, op.color);
+            } else if constexpr (std::is_same_v<T, BeginCachedLayerCommand>) {
+                beginCachedLayer(op.id, op.sourceBounds);
+            } else if constexpr (std::is_same_v<T, EndCachedLayerCommand>) {
+                endCachedLayer();
+            } else if constexpr (std::is_same_v<T, DrawCachedLayerCommand>) {
+                drawCachedLayer(op.id, op.destination, op.opacity);
             } else if constexpr (std::is_same_v<T, DrawPathCommand>) {
                 drawPath(op.path, op.paint);
             } else if constexpr (std::is_same_v<T, DrawTextCommand>) {
-                drawText(op.origin.x, op.origin.y, op.text, op.color,
-                         op.fontSize, op.fontFamily);
+                if (op.rasterized) {
+                    drawRasterizedText(op.origin.x, op.origin.y, op.text, op.color,
+                                       op.fontSize, op.fontFamily);
+                } else {
+                    drawText(op.origin.x, op.origin.y, op.text, op.color,
+                             op.fontSize, op.fontFamily);
+                }
             } else if constexpr (std::is_same_v<T, DrawImageCommand>) {
                 const auto* pixels = reinterpret_cast<const uint32_t*>(op.resourceKey);
                 drawBuffer(op.destination, op.sourceWidth, op.sourceHeight, pixels,

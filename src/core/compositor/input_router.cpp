@@ -1,6 +1,7 @@
 #include "core/compositor/input_router.hpp"
 
 #include "core/compositor/popup_surface_geometry.hpp"
+#include "render/window_group_transform.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -365,7 +366,6 @@ void InputRouter::forwardToSurface(const InputEvent& event,
         input.deltaX = static_cast<float>(event.dx);
         input.deltaY = static_cast<float>(event.dy);
     }
-    const auto bounds = render::presentedBounds(*windowIt);
     // Touch release clears WindowManager's hover cursor before this client
     // forwarding step. Prefer the immutable event coordinates when the input
     // backend supplied them so CSD receives the actual release position.
@@ -377,20 +377,20 @@ void InputRouter::forwardToSurface(const InputEvent& event,
         std::isfinite(event.absoluteY) && event.absoluteY >= 0.0
             ? static_cast<float>(event.absoluteY)
             : static_cast<float>(m_windowManager.getMouseY());
-    float surfaceX = bounds.x;
-    float surfaceY = bounds.y + titleOffset;
+    graphics::PointF surfacePoint{};
     if (entry.isPopup()) {
         const auto parent = m_surfaces.find(entry.parentSurfaceKey);
         if (parent == m_surfaces.end()) return;
         const auto popupBounds = resolvePopupSurfaceBounds(*windowIt, parent->second, entry);
-        surfaceX = popupBounds.x;
-        surfaceY = popupBounds.y;
-        if (entry.width > 0) {
-            // Popup transition scaling is already represented by popupBounds.
-        }
+        surfacePoint = popupBounds.unmapPoint(globalPointerX, globalPointerY);
+    } else {
+        const auto group = render::makeWindowGroupTransform(
+            *windowIt, titleOffset, entry.transitionScale);
+        surfacePoint = group.unmapPoint({globalPointerX, globalPointerY});
+        surfacePoint.y -= titleOffset;
     }
-    input.x = globalPointerX - surfaceX;
-    input.y = globalPointerY - surfaceY;
+    input.x = surfacePoint.x;
+    input.y = surfacePoint.y;
     input.key = toClientPointerButton(event.button);
     input.pressed = event.pressed ? 1 : 0;
     input.source = static_cast<uint8_t>(event.source == lcl::platform::PointerSource::Touch
@@ -403,7 +403,6 @@ SurfaceRegistry::Key InputRouter::findPopupAt(float globalX, float globalY) cons
     for (auto window = m_windowManager.getWindows().rbegin();
          window != m_windowManager.getWindows().rend(); ++window) {
         if (window->isMinimized) continue;
-        const auto bounds = render::presentedBounds(*window);
         const auto parent = std::find_if(m_surfaces.begin(), m_surfaces.end(),
             [&window](const auto& item) {
                 return !item.second.isPopup() && item.second.windowId == window->id;
@@ -429,8 +428,10 @@ SurfaceRegistry::Key InputRouter::findPopupAt(float globalX, float globalY) cons
 
         // A higher unrelated WindowGroup occludes popups belonging to groups
         // below it, exactly matching compositor render order.
-        if (globalX >= bounds.x && globalX < bounds.x + bounds.width &&
-            globalY >= bounds.y && globalY < bounds.y + bounds.height) {
+        const float scale = parent == m_surfaces.end()
+            ? 1.0f : parent->second.transitionScale;
+        const auto group = render::makeWindowGroupTransform(*window, 0.0f, scale);
+        if (group.containsGlobalPoint(globalX, globalY)) {
             return 0;
         }
     }

@@ -1,4 +1,5 @@
 #include "render/window_manager.hpp"
+#include "render/window_group_transform.hpp"
 #include "theme/palette.hpp"
 #include <iostream>
 #include <algorithm>
@@ -103,13 +104,14 @@ bool WindowManager::removeWindow(uint32_t windowId) {
 namespace {
     ResizeEdge detectResizeEdge(float mx, float my, const Window& win) {
         constexpr float border = 8.0f;
-        const auto bounds = presentedBounds(win);
-        bool nearLeft = (mx >= bounds.x - border && mx <= bounds.x + border);
-        bool nearRight = (mx >= bounds.x + bounds.width - border &&
-                          mx <= bounds.x + bounds.width + border);
-        bool nearTop = (my >= bounds.y - border && my <= bounds.y + border);
-        bool nearBottom = (my >= bounds.y + bounds.height - border &&
-                           my <= bounds.y + bounds.height + border);
+        const auto group = makeWindowGroupTransform(win, 0.0f, 1.0f);
+        const auto local = group.unmapPoint({mx, my});
+        bool nearLeft = local.x >= -border && local.x <= border;
+        bool nearRight = local.x >= group.localBounds.width - border &&
+                         local.x <= group.localBounds.width + border;
+        bool nearTop = local.y >= -border && local.y <= border;
+        bool nearBottom = local.y >= group.localBounds.height - border &&
+                          local.y <= group.localBounds.height + border;
 
         if (nearTop && nearLeft) return ResizeEdge::TopLeft;
         if (nearTop && nearRight) return ResizeEdge::TopRight;
@@ -128,10 +130,11 @@ namespace {
         const float cornerRadius = win.cornerRadius >= 0.0f
             ? win.cornerRadius
             : 20.0f;
-        const auto bounds = presentedBounds(win);
+        const auto group = makeWindowGroupTransform(win, 32.0f, 1.0f);
+        const auto local = group.unmapPoint({mouseX, mouseY});
         return win.chrome.hitTest(
-            static_cast<float>(mouseX) - bounds.x, static_cast<float>(mouseY) - bounds.y,
-            std::max(1.0f, bounds.width), 32.0f,
+            local.x, local.y,
+            group.localBounds.width, 32.0f,
             cornerRadius);
     }
 }
@@ -145,9 +148,8 @@ void WindowManager::refreshChromeHoverState() {
             window.layer == protocol::LCLWindowLayer::Bottom) {
             continue;
         }
-        const auto bounds = presentedBounds(window);
-        if (m_mouseX < bounds.x || m_mouseX >= bounds.x + bounds.width ||
-            m_mouseY < bounds.y || m_mouseY >= bounds.y + bounds.height) {
+        const auto group = makeWindowGroupTransform(window, 0.0f, 1.0f);
+        if (!group.containsGlobalPoint(m_mouseX, m_mouseY)) {
             continue;
         }
         hoveredControl = hitWindowChromeControl(window, m_mouseX, m_mouseY);
@@ -358,11 +360,8 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                     win.layer == protocol::LCLWindowLayer::Bottom) {
                     continue; // Skip unfocusable background surfaces (e.g. Wallpaper)
                 }
-                const auto bounds = presentedBounds(win);
-                if (m_mouseX >= bounds.x - border &&
-                    m_mouseX < bounds.x + bounds.width + border &&
-                    m_mouseY >= bounds.y - border &&
-                    m_mouseY < bounds.y + bounds.height + border) {
+                const auto group = makeWindowGroupTransform(win, 0.0f, 1.0f);
+                if (group.containsGlobalPoint(m_mouseX, m_mouseY, border)) {
                     targetWinId = win.id;
                     break;
                 }
@@ -380,7 +379,8 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                 if (targetIt != m_windows.end()) {
                     auto& targetWin = *targetIt;
                     const float titleH = (targetWin.decorationMode == DecorationMode::SSD) ? 32.0f : 0.0f;
-                    const auto visibleBounds = presentedBounds(targetWin);
+                    const auto group = makeWindowGroupTransform(targetWin, titleH, 1.0f);
+                    const auto localPointer = group.unmapPoint({m_mouseX, m_mouseY});
                     const int chromeControl = hitWindowChromeControl(targetWin, m_mouseX, m_mouseY);
                     if (chromeControl >= 0 && !event.superPressed) {
                         if (targetWin.chrome.pointerDown(chromeControl)) {
@@ -411,13 +411,13 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                             stateChanged = true;
                         } else if (event.button == lcl::platform::PointerButton::Right) {
                             // Super + Right Click = Normalized Aspect-Aware Grid
-                            double normX = (visibleBounds.width > 0.0f)
-                                ? static_cast<double>(m_mouseX - visibleBounds.x) /
-                                    static_cast<double>(visibleBounds.width)
+                            double normX = (group.localBounds.width > 0.0f)
+                                ? static_cast<double>(localPointer.x) /
+                                    static_cast<double>(group.localBounds.width)
                                 : 0.5;
-                            double normY = (visibleBounds.height > 0.0f)
-                                ? static_cast<double>(m_mouseY - visibleBounds.y) /
-                                    static_cast<double>(visibleBounds.height)
+                            double normY = (group.localBounds.height > 0.0f)
+                                ? static_cast<double>(localPointer.y) /
+                                    static_cast<double>(group.localBounds.height)
                                 : 0.5;
 
                             if (normY < 0.33) {
@@ -453,8 +453,8 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                             interaction = GeometryInteraction::manual(targetWin.id, generation);
                             targetWin.markDirty();
                             stateChanged = true;
-                        } else if (titleH > 0 && m_mouseY >= visibleBounds.y &&
-                                   m_mouseY < visibleBounds.y + titleH) {
+                        } else if (titleH > 0 && localPointer.y >= 0.0f &&
+                                   localPointer.y < titleH) {
                             // Header Drag Move
                             const uint64_t generation = beginGeometryInteraction(
                                 targetWin, GeometryPhase::Drag);
