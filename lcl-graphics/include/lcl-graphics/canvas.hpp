@@ -9,6 +9,7 @@
 
 namespace lcl::graphics {
 
+/** A GPU-native frame whose color channels are premultiplied by alpha. */
 struct DmaBufFrame {
     uint32_t bufferId{0};
     uint32_t width{0};

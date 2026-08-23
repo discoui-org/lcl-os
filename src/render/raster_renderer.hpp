@@ -181,6 +181,7 @@ public:
                          std::vector<uint32_t>& pixels,
                          int& width,
                          int& height);
+    /** Composite a straight-alpha CPU/SHM ARGB buffer. */
     void drawBuffer(int dstX,
                     int dstY,
                     int srcW,
@@ -193,7 +194,7 @@ public:
                     bool squareTopCorners = false,
                     int drawWidth = 0,
                     int drawHeight = 0);
-    /** Composite a presentation texture without quantizing animated bounds. */
+    /** Composite a straight-alpha CPU/SHM buffer without quantizing animated bounds. */
     void drawBufferTransformed(float dstX,
                                float dstY,
                                int srcW,
@@ -209,7 +210,7 @@ public:
     void applyBackdropFilter(float dstX, float dstY, float srcW, float srcH,
                              float cornerRadius, float cornerRoundness,
                              float opacity, const std::vector<protocol::FilterOp>& filters);
-    /** Imports and composites compositor-owned native textures without CPU upload. */
+    /** Imports compositor-owned premultiplied native textures without CPU upload. */
     uint32_t importTexture(const lcl::platform::INativeBuffer& buffer);
     uint32_t importDmaBuf(const lcl::platform::DmaBufDescriptor& descriptor);
     void releaseTexture(uint32_t texture);
@@ -219,6 +220,7 @@ public:
     void releaseDmaBufTexture(uint32_t texture) {
         releaseTexture(texture);
     }
+    /** Composite a premultiplied-alpha DMA-BUF texture in logical destination space. */
     void drawDmaBufTextureTransformed(float dstX, float dstY, int srcW, int srcH,
                                       int backingW, int backingH,
                                       uint32_t texture, float opacity,

@@ -250,7 +250,7 @@ struct LCLMsgAttachBuffer {
     uint32_t width{0};
     uint32_t height{0};
     uint32_t stride{0};
-    uint32_t format{0}; // LCL_BUFFER_FORMAT_ARGB8888
+    uint32_t format{0}; // Straight-alpha LCL_BUFFER_FORMAT_ARGB8888
 };
 
 struct LCLMsgAttachDmaBuf {
@@ -264,7 +264,9 @@ struct LCLMsgAttachDmaBuf {
     uint32_t backingWidth{0};
     uint32_t backingHeight{0};
     uint32_t stride{0};
-    uint32_t format{0}; // LCL_BUFFER_FORMAT_ARGB8888
+    // GPU surfaces use premultiplied alpha end-to-end. This is intentionally
+    // distinct from the straight-alpha SHM buffer contract above.
+    uint32_t format{0}; // Premultiplied-alpha LCL_BUFFER_FORMAT_ARGB8888
     uint64_t modifier{~uint64_t{0}}; // DRM_FORMAT_MOD_INVALID when unspecified
 };
 

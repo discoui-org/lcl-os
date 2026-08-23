@@ -90,9 +90,8 @@ int main() {
   // The material fills the outer surface behind system insets. Widget
   // content remains in the compositor-provided safe content rect.
   backdrop->setEffectBounds(EffectBounds::OuterSurface);
-  backdrop->addFilter(lcl::protocol::FilterType::Blur, 2.0f);
-  backdrop->addFilter(lcl::protocol::FilterType::Glass, 10.0f, 5.0f, 0.0f);
-  backdrop->addFilter(lcl::protocol::FilterType::Saturation, 1.4f);
+  backdrop->addFilter(lcl::protocol::FilterType::Blur, 50.0f);
+  backdrop->addFilter(lcl::protocol::FilterType::Saturation, 2.0f);
   backdrop->addFilter(lcl::protocol::FilterType::Brightness, 1.1f);
   backdrop->setTint(Color{15, 23, 42, 128});
   backdrop->getYogaNode().setPositionType(YGPositionTypeAbsolute);

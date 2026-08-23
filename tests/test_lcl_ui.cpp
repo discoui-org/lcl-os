@@ -18,6 +18,7 @@
 #include "lcl-ui/widgets/toggle.hpp"
 #include "render/raster_renderer.hpp"
 #include "render/raster_canvas.hpp"
+#include "render/alpha_math.hpp"
 #include "render/path_rasterizer.hpp"
 #include "render/backdrop_filter_geometry.hpp"
 #include "render/text_metrics.hpp"
@@ -3731,6 +3732,40 @@ TEST(LclUiTest, RoundedRectPreservesTranslucentAlphaOnTransparentCanvas) {
                              {17, 19, 23, 184}, {}, 0.0f);
 
     EXPECT_EQ(pixels[16 + 16 * 32], 0xB8111317u);
+}
+
+TEST(LclUiTest, CpuStraightAlphaEntersGpuPremultipliedExactlyOnce) {
+    constexpr uint32_t straight = 0x80ECEFF4u;
+    constexpr uint32_t premultiplied = lcl::render::alpha::premultiplyArgb(straight);
+
+    EXPECT_EQ(premultiplied, 0x8076787Au);
+    EXPECT_EQ((premultiplied >> 24u) & 0xFFu, 128u);
+    EXPECT_LE((premultiplied >> 16u) & 0xFFu, 128u);
+    EXPECT_LE((premultiplied >> 8u) & 0xFFu, 128u);
+    EXPECT_LE(premultiplied & 0xFFu, 128u);
+
+    // A premultiplied intermediate copy is an identity operation. Applying
+    // the CPU ingress conversion again demonstrates the old alpha-squaring bug.
+    constexpr uint32_t copiedIntermediate = premultiplied;
+    EXPECT_EQ(copiedIntermediate, premultiplied);
+    EXPECT_NE(lcl::render::alpha::premultiplyArgb(premultiplied), premultiplied);
+}
+
+TEST(LclUiTest, GpuReadbackRestoresTheStraightAlphaShmContract) {
+    constexpr uint32_t straight = 0x80ECEFF4u;
+    constexpr uint32_t roundTrip = lcl::render::alpha::unpremultiplyArgb(
+        lcl::render::alpha::premultiplyArgb(straight));
+
+    const auto difference = [](uint32_t lhs, uint32_t rhs, uint32_t shift) {
+        return std::abs(static_cast<int>((lhs >> shift) & 0xFFu) -
+                        static_cast<int>((rhs >> shift) & 0xFFu));
+    };
+    EXPECT_EQ((roundTrip >> 24u) & 0xFFu, 128u);
+    EXPECT_LE(difference(roundTrip, straight, 16u), 1);
+    EXPECT_LE(difference(roundTrip, straight, 8u), 1);
+    EXPECT_LE(difference(roundTrip, straight, 0u), 1);
+    EXPECT_EQ(lcl::render::alpha::unpremultiplyArgb(0x00112233u), 0u);
+    EXPECT_EQ(lcl::render::alpha::premultiplyArgb(0xFF123456u), 0xFF123456u);
 }
 
 TEST(LclUiTest, StraightAlphaBufferCompositesSourceAlphaAtFullGlobalOpacity) {

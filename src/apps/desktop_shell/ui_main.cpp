@@ -182,8 +182,8 @@ std::unique_ptr<lcl::ui::Container> makeMenuRoot(uint32_t width,
   auto backdrop = std::make_unique<lcl::ui::BackdropSurface>();
   backdrop->setInteractive(false);
   backdrop->setEffectBounds(lcl::ui::EffectBounds::Local);
-  backdrop->addFilter(lcl::protocol::FilterType::Blur, 15.0f);
-  backdrop->addFilter(lcl::protocol::FilterType::Saturation, 1.4f);
+  backdrop->addFilter(lcl::protocol::FilterType::Blur, 50.0f);
+  backdrop->addFilter(lcl::protocol::FilterType::Saturation, 2.0f);
   backdrop->addFilter(lcl::protocol::FilterType::Brightness, 1.1f);
   absolute(*backdrop, 0, 0, width, kMenuBarHeight);
 

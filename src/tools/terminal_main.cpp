@@ -84,10 +84,9 @@ int main() {
   backdrop->getYogaNode().setWidth(static_cast<float>(kSurfaceWidth));
   backdrop->getYogaNode().setHeight(static_cast<float>(kSurfaceHeight));
 
-  lcl::protocol::FilterOp blur{};
-  blur.type = lcl::protocol::FilterType::Blur;
-  blur.value = 50.0f;
-  backdrop->setFilters({blur});
+  backdrop->addFilter(lcl::protocol::FilterType::Blur, 50.0f);
+  backdrop->addFilter(lcl::protocol::FilterType::Saturation, 2.0f);
+  backdrop->addFilter(lcl::protocol::FilterType::Brightness, 1.1f);
   backdrop->setTint({17, 19, 23, 184});
 
   auto terminalView = std::make_unique<lcl::apps::TerminalView>(terminal);

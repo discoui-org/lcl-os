@@ -1,4 +1,5 @@
 #include "render/raster_renderer.hpp"
+#include "render/alpha_math.hpp"
 #include "render/path_rasterizer.hpp"
 #include "render/text_metrics.hpp"
 #include "render/backdrop_filter_geometry.hpp"
@@ -23,14 +24,14 @@ static GLuint compileShader(GLenum type, const char* source) {
     return shader;
 }
 
-void beginStraightAlphaSourceOver() {
+void beginPremultipliedAlphaSourceOver() {
     glEnable(GL_BLEND);
     glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
                         GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 }
 
-void endStraightAlphaSourceOver() {
+void endPremultipliedAlphaSourceOver() {
     glDisable(GL_BLEND);
 }
 
@@ -51,7 +52,8 @@ bool RasterRenderer::initGLShader() {
         "uniform float uOpacity;\n"
         "void main() {\n"
         "    vec4 c = texture2D(uTexture, vTexCoord);\n"
-        "    gl_FragColor = vec4(c.rgb, c.a * uOpacity);\n"
+        "    float opacity = clamp(uOpacity, 0.0, 1.0);\n"
+        "    gl_FragColor = vec4(c.rgb * opacity, c.a * opacity);\n"
         "}\n";
 
     GLuint vs = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -160,8 +162,9 @@ bool RasterRenderer::initGLShader() {
         "uniform vec2 uInputScale;\n"
         "void main() {\n"
         "    vec4 c = texture2D(uTexture, vTexCoord * uInputScale);\n"
-        "    vec3 rgb = uColorMatrix * c.rgb + (uColorOffset / 255.0);\n"
-        "    gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);\n"
+        "    vec3 straightRgb = c.a > 0.0001 ? c.rgb / c.a : vec3(0.0);\n"
+        "    vec3 rgb = uColorMatrix * straightRgb + (uColorOffset / 255.0);\n"
+        "    gl_FragColor = vec4(clamp(rgb, 0.0, 1.0) * c.a, c.a);\n"
         "}\n";
 
     GLuint vsColor = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -225,7 +228,8 @@ bool RasterRenderer::initGLShader() {
         // Center the device-pixel coverage ramp on the analytic edge. This
         // remains stable while the destination quad moves through subpixels.
         "    float mask = 1.0 - smoothstep(-0.5, 0.5, d);\n"
-        "    gl_FragColor = vec4(c.rgb, c.a * mask * uOpacity);\n"
+        "    float coverage = mask * clamp(uOpacity, 0.0, 1.0);\n"
+        "    gl_FragColor = vec4(c.rgb * coverage, c.a * coverage);\n"
         "}\n";
 
     GLuint vsMask = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -310,7 +314,8 @@ bool RasterRenderer::initGLShader() {
         "        d = sdSuperRoundRect(p, halfSize, r, n);\n"
         "    }\n"
         "    float mask = 1.0 - smoothstep(-0.5, 0.5, d);\n"
-        "    gl_FragColor = vec4(c.b, c.g, c.r, c.a * mask * uOpacity);\n"
+        "    float coverage = mask * clamp(uOpacity, 0.0, 1.0);\n"
+        "    gl_FragColor = vec4(c.bgr * coverage, c.a * coverage);\n"
         "}\n";
 
     GLuint vsMaskBgra = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -396,7 +401,7 @@ bool RasterRenderer::initGLShader() {
         "        discard;\n"
         "    }\n"
         "\n"
-        "    vec3 outRgb = (uBorderColor.rgb * aBorder + uFillColor.rgb * aFill) / outA;\n"
+        "    vec3 outRgb = uBorderColor.rgb * aBorder + uFillColor.rgb * aFill;\n"
         "    gl_FragColor = vec4(outRgb, outA);\n"
         "}\n";
 
@@ -495,10 +500,13 @@ bool RasterRenderer::initGLShader() {
         "    vec2 uvR = clamp(vTexCoord + offsetUv * (1.0 + disp), sampleMin, sampleMax);\n"
         "    vec2 uvG = clamp(vTexCoord + offsetUv, sampleMin, sampleMax);\n"
         "    vec2 uvB = clamp(vTexCoord + offsetUv * (1.0 - disp), sampleMin, sampleMax);\n"
-        "    float rCh = texture2D(uTexture, uvR * uInputScale).r;\n"
-        "    float gCh = texture2D(uTexture, uvG * uInputScale).g;\n"
-        "    float bCh = texture2D(uTexture, uvB * uInputScale).b;\n"
-        "    gl_FragColor = vec4(rCh, gCh, bCh, base.a);\n"
+        "    vec4 sampleR = texture2D(uTexture, uvR * uInputScale);\n"
+        "    vec4 sampleG = texture2D(uTexture, uvG * uInputScale);\n"
+        "    vec4 sampleB = texture2D(uTexture, uvB * uInputScale);\n"
+        "    float rCh = sampleR.a > 0.0001 ? sampleR.r / sampleR.a : 0.0;\n"
+        "    float gCh = sampleG.a > 0.0001 ? sampleG.g / sampleG.a : 0.0;\n"
+        "    float bCh = sampleB.a > 0.0001 ? sampleB.b / sampleB.a : 0.0;\n"
+        "    gl_FragColor = vec4(vec3(rCh, gCh, bCh) * base.a, base.a);\n"
         "}\n";
 
     GLuint vsRefract = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -534,7 +542,8 @@ bool RasterRenderer::initGLShader() {
         "uniform float uOpacity;\n"
         "void main() {\n"
         "    vec4 c = texture2D(uTexture, vTexCoord);\n"
-        "    gl_FragColor = vec4(c.b, c.g, c.r, c.a * uOpacity);\n"
+        "    float opacity = clamp(uOpacity, 0.0, 1.0);\n"
+        "    gl_FragColor = vec4(c.bgr * opacity, c.a * opacity);\n"
         "}\n";
 
     GLuint vsBgra = compileShader(GL_VERTEX_SHADER, vSrc);
@@ -1274,9 +1283,9 @@ void RasterRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float
     glVertexAttribPointer(m_aTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
     glEnableVertexAttribArray(m_aTexLoc);
 
-    beginStraightAlphaSourceOver();
+    beginPremultipliedAlphaSourceOver();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    endStraightAlphaSourceOver();
+    endPremultipliedAlphaSourceOver();
 
     glDisableVertexAttribArray(m_aPosLoc);
     glDisableVertexAttribArray(m_aTexLoc);
@@ -1341,9 +1350,9 @@ void RasterRenderer::drawMaskedTextureQuad(uint32_t textureId,
     glVertexAttribPointer(m_aMaskTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
     glEnableVertexAttribArray(m_aMaskTexLoc);
 
-    beginStraightAlphaSourceOver();
+    beginPremultipliedAlphaSourceOver();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    endStraightAlphaSourceOver();
+    endPremultipliedAlphaSourceOver();
     glDisableVertexAttribArray(m_aMaskPosLoc);
     glDisableVertexAttribArray(m_aMaskTexLoc);
 }
@@ -1376,9 +1385,9 @@ void RasterRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y, f
     glVertexAttribPointer(m_aBgraTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
     glEnableVertexAttribArray(m_aBgraTexLoc);
 
-    beginStraightAlphaSourceOver();
+    beginPremultipliedAlphaSourceOver();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    endStraightAlphaSourceOver();
+    endPremultipliedAlphaSourceOver();
     glDisableVertexAttribArray(m_aBgraPosLoc);
     glDisableVertexAttribArray(m_aBgraTexLoc);
 }
@@ -1434,9 +1443,9 @@ void RasterRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
     glVertexAttribPointer(m_aMaskBgraTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
     glEnableVertexAttribArray(m_aMaskBgraTexLoc);
 
-    beginStraightAlphaSourceOver();
+    beginPremultipliedAlphaSourceOver();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    endStraightAlphaSourceOver();
+    endPremultipliedAlphaSourceOver();
 
     glDisableVertexAttribArray(m_aMaskBgraPosLoc);
     glDisableVertexAttribArray(m_aMaskBgraTexLoc);
@@ -1487,9 +1496,9 @@ void RasterRenderer::drawGpuRoundedRect(float x,
     glVertexAttribPointer(m_aRoundRectTexLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad + 2);
     glEnableVertexAttribArray(m_aRoundRectTexLoc);
 
-    beginStraightAlphaSourceOver();
+    beginPremultipliedAlphaSourceOver();
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    endStraightAlphaSourceOver();
+    endPremultipliedAlphaSourceOver();
 
     glDisableVertexAttribArray(m_aRoundRectPosLoc);
     glDisableVertexAttribArray(m_aRoundRectTexLoc);
@@ -1528,10 +1537,11 @@ void RasterRenderer::clear(const RasterColor& color) {
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
         glDisable(GL_SCISSOR_TEST);
-        glClearColor(static_cast<float>(color.r) / 255.0f,
-                     static_cast<float>(color.g) / 255.0f,
-                     static_cast<float>(color.b) / 255.0f,
-                     static_cast<float>(color.a) / 255.0f);
+        const float alpha = static_cast<float>(color.a) / 255.0f;
+        glClearColor((static_cast<float>(color.r) / 255.0f) * alpha,
+                     (static_cast<float>(color.g) / 255.0f) * alpha,
+                     (static_cast<float>(color.b) / 255.0f) * alpha,
+                     alpha);
         glClear(GL_COLOR_BUFFER_BIT);
         applyScissorState();
         return;
@@ -1568,10 +1578,11 @@ void RasterRenderer::clearRect(const RasterRect& rect, const RasterColor& color)
         glEnable(GL_SCISSOR_TEST);
         glScissor(left, static_cast<int>(m_height) - bottom,
                   right - left, bottom - top);
-        glClearColor(static_cast<float>(color.r) / 255.0f,
-                     static_cast<float>(color.g) / 255.0f,
-                     static_cast<float>(color.b) / 255.0f,
-                     static_cast<float>(color.a) / 255.0f);
+        const float alpha = static_cast<float>(color.a) / 255.0f;
+        glClearColor((static_cast<float>(color.r) / 255.0f) * alpha,
+                     (static_cast<float>(color.g) / 255.0f) * alpha,
+                     (static_cast<float>(color.b) / 255.0f) * alpha,
+                     alpha);
         glClear(GL_COLOR_BUFFER_BIT);
         applyScissorState();
         return;
@@ -1663,7 +1674,14 @@ void RasterRenderer::endFrame() {
             glFlush();
         } else if (m_targetPixels) {
             glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
-            m_eglBackend->readback(m_targetPixels, m_width, m_height);
+            if (m_eglBackend->readback(m_targetPixels, m_width, m_height)) {
+                // SHM remains a straight-alpha CPU contract even when an EGL
+                // renderer produced the frame internally.
+                const size_t pixelCount = static_cast<size_t>(m_width) * m_height;
+                for (size_t i = 0; i < pixelCount; ++i) {
+                    m_targetPixels[i] = alpha::unpremultiplyArgb(m_targetPixels[i]);
+                }
+            }
         }
     }
 #endif
@@ -2270,11 +2288,46 @@ void RasterRenderer::drawBufferRaw(float dstX,
             m_glClientTextureHeight = srcH;
         }
 
-        if (stridePixels == srcW) {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, srcW, srcH, GL_RGBA, GL_UNSIGNED_BYTE, pixelData);
+        // CPU and SHM pixels are straight ARGB. Convert before upload so
+        // bilinear filtering and mip generation operate on premultiplied
+        // texels instead of creating dark fringes at translucent edges.
+        const uint32_t* uploadPixels = pixelData;
+        int uploadStride = stridePixels;
+        bool needsPremultiply = false;
+        for (int y = 0; y < srcH && !needsPremultiply; ++y) {
+            const uint32_t* row = pixelData + static_cast<size_t>(y) * stridePixels;
+            for (int x = 0; x < srcW; ++x) {
+                const uint32_t pixel = row[x];
+                if ((pixel >> 24u) != 0xFFu && (pixel & 0x00FFFFFFu) != 0u) {
+                    needsPremultiply = true;
+                    break;
+                }
+            }
+        }
+
+        std::vector<uint32_t> premultipliedPixels;
+        if (needsPremultiply) {
+            premultipliedPixels.resize(static_cast<size_t>(srcW) * srcH);
+            for (int y = 0; y < srcH; ++y) {
+                const uint32_t* source = pixelData + static_cast<size_t>(y) * stridePixels;
+                uint32_t* destination = premultipliedPixels.data() +
+                    static_cast<size_t>(y) * srcW;
+                for (int x = 0; x < srcW; ++x) {
+                    destination[x] = alpha::premultiplyArgb(source[x]);
+                }
+            }
+            uploadPixels = premultipliedPixels.data();
+            uploadStride = srcW;
+        }
+
+        if (uploadStride == srcW) {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, srcW, srcH,
+                            GL_RGBA, GL_UNSIGNED_BYTE, uploadPixels);
         } else {
             for (int y = 0; y < srcH; ++y) {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, srcW, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelData + (y * stridePixels));
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y, srcW, 1,
+                                GL_RGBA, GL_UNSIGNED_BYTE,
+                                uploadPixels + static_cast<size_t>(y) * uploadStride);
             }
         }
         glGenerateMipmap(GL_TEXTURE_2D);
