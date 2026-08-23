@@ -1,4 +1,5 @@
 #include "platform/android/android_display_backend.hpp"
+#include "platform/common/output_scale.hpp"
 
 #include <aidl/android/hardware/graphics/composer3/IComposer.h>
 #include <aidl/android/hardware/graphics/composer3/IComposerClient.h>
@@ -165,6 +166,8 @@ AndroidDisplayBackend::~AndroidDisplayBackend() {
 
 bool AndroidDisplayBackend::initialize() {
     if (m_initialized) return true;
+
+    m_activeMode.scaleFactor = resolveOutputScale();
 
     m_impl->binderNdkLib = dlopen("libbinder_ndk.so", RTLD_NOW);
     if (!m_impl->binderNdkLib) {

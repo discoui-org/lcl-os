@@ -45,6 +45,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 # Platform-agnostic interface library (consumed by core and render without concrete platform dependencies)
 add_library(lcl-platform-common STATIC
     src/platform/common/keyboard_mapper.cpp
+    src/platform/common/output_scale.cpp
 )
 target_include_directories(lcl-platform-common PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -70,13 +71,6 @@ target_include_directories(lcl-path-raster PUBLIC
 )
 target_link_libraries(lcl-path-raster PUBLIC
     lcl-graphics
-)
-
-# Display scale is shared policy with no renderer or platform-GPU dependency.
-# Keeping it independent lets lcl-ui consume logical-pixel configuration
-# without pulling compositor display code into application binaries.
-add_library(lcl-display-scale STATIC
-    src/core/display/display_scale.cpp
 )
 
 # Font selection and glyph-advance metrics are shared by lcl-ui layout and
@@ -135,10 +129,6 @@ target_include_directories(lcl-shell-state PUBLIC
 
 target_link_libraries(lcl-shell-state PUBLIC
     lcl-protocol
-)
-
-target_include_directories(lcl-display-scale PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # Renderer/UI-independent motion primitives shared by clients and compositor.
@@ -217,7 +207,6 @@ target_link_libraries(lcl-core-engine PUBLIC
     lcl-render
     lcl-platform-common
     lcl-protocol
-    lcl-display-scale
     lcl-session
         lcl-motion
         lcl-graphics
@@ -499,7 +488,6 @@ else()
             tests/test_lcl_protocol.cpp
             tests/test_app_bundle_parser.cpp
             tests/test_session_service.cpp
-            tests/test_display_scale.cpp
             tests/test_ipc_manager.cpp
             tests/test_input_manager.cpp
             tests/test_key_mapper.cpp
@@ -520,7 +508,6 @@ else()
             src/core/scene/scene_registry.cpp
             src/core/scene/shell_state_broker.cpp
             src/core/app/app_bundle_parser.cpp
-            src/core/display/display_scale.cpp
             src/core/input/input_manager.cpp
             src/platform/android/android_input_backend.cpp
             src/render/window_manager.cpp

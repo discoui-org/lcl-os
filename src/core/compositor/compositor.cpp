@@ -1,5 +1,5 @@
 #include "core/compositor/compositor.hpp"
-#include "core/display/display_scale.hpp"
+#include "platform/common/output_scale.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -55,9 +55,6 @@ bool Compositor::initialize() {
               << "====================================================\n"
               << "[LCL Core] Initializing pure Display Server compositor...\n";
 
-    // --- Display scale (reads lcl.scale= from /proc/cmdline) ---
-    DisplayScale::initialize();
-
     auto& display = m_platformServices.display();
     auto& graphics = m_platformServices.graphics();
     auto& input = m_platformServices.input();
@@ -72,7 +69,8 @@ bool Compositor::initialize() {
     }
 
     // --- Window Manager Canvas ---
-    const float outputScale = DisplayScale::factor();
+    const float outputScale = lcl::platform::sanitizeOutputScale(mode.scaleFactor);
+    std::cout << "[LCL Output] Device scale: " << outputScale << "\n";
     m_renderer.getRasterRenderer()->setDeviceScale(outputScale);
     display.initHardwareCursor(64, 64, outputScale);
     m_windowManager.initialize(

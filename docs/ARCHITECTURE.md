@@ -122,7 +122,6 @@ lcl-os/
 ├── tests/                          # CTest & GoogleTest native unit testing suite
 │   ├── test_lcl_protocol.cpp       # IPC binary protocol & header tests
 │   ├── test_app_bundle_parser.cpp  # .app bundle metadata parsing & directory scan
-│   ├── test_display_scale.cpp      # HiDPI scale factor & pixel conversion math
 │   └── test_ipc_manager.cpp        # Unix Domain Socket & SO_PEERCRED authentication
 └── src/                            # Core C++20 Engine & Applications
     ├── main.cpp                    # Application entry point & compositor loop
@@ -160,9 +159,11 @@ Guest display boot args (when `NATIVE=1`):
 - 1x displays: `video=` = host resolution, `lcl.scale=1`
 - QEMU cocoa: `full-screen=on,zoom-to-fit=on` (fill screen if mode list is inexact)
 
-`DisplayManager` prefers the boot-requested mode. Output initialization turns
-`lcl.scale` into `RenderTarget.deviceScale`; widgets, chrome, paths, strokes,
-text, images, and effects remain in logical units and receive that scale only
+The active `IDisplayBackend` prefers the boot-requested mode and stores the
+resolved `lcl.scale` value in its `DisplayMode.scaleFactor`. Compositor output
+initialization transfers that value into `RenderTarget.deviceScale`; widgets,
+chrome, paths, strokes, text, images, and effects remain in logical units and
+receive that scale only
 during raster replay. `WindowGroupTransform` owns the forward and inverse
 presentation matrices shared by client content, chrome, popups, effects, and
 hit testing. Physical input is converted to output-logical coordinates once;

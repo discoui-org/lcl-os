@@ -1,7 +1,6 @@
 #include "core/compositor/protocol_dispatcher.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "lcl-motion/motion.hpp"
-#include "core/display/display_scale.hpp"
 #include "theme/palette.hpp"
 #include "platform/common/native_buffer.hpp"
 

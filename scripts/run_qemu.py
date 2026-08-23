@@ -1395,7 +1395,7 @@ def launch_qemu(
         print(f"  - Initrd: {INITRAMFS_IMG}")
     print("----------------------------------------------------")
 
-    # Resolution -> DRM/KMS via kernel video= + lcl.width/height (DisplayManager picks mode)
+    # Resolution -> DRM/KMS via kernel video= + lcl.width/height (display backend picks mode)
     video_mode = f"video={width}x{height}-32@{refresh_hz}"
     lcl_params = (
         f"lcl.scale={scale} lcl.width={width} lcl.height={height} "

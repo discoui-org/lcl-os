@@ -1,4 +1,5 @@
 #include "platform/desktop/drm_display_backend.hpp"
+#include "platform/common/output_scale.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -191,6 +192,7 @@ bool DrmDisplayBackend::initialize(const std::string& devicePath) {
     }
 
     m_devicePath = devicePath;
+    m_activeMode.scaleFactor = resolveOutputScale();
     std::cout << "[LCL Display] Initializing Desktop Display Subsystem...\n";
 
     // 1. Try DRM/KMS initialization with retry loop
