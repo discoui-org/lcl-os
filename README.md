@@ -61,19 +61,23 @@ LCL OS provides a unified CLI driver via `./main.py`:
 ### 5. Run on a Rooted ARM64 Android Phone (Composer3 AIDL / Composer 2.4 HIDL)
 
 ```bash
-python3 scripts/prepare_android_hidl.py
-cmake -S . -B build-android-arm64 \
-  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-33 \
-  -DLCL_ANDROID_HIDL_ROOT="$PWD/build/android-hidl-v31"
-cmake --build build-android-arm64 --target lcl-core-android -j2
-python3 scripts/deploy_android_device.py
+./main.py android
 ```
 
-The preparation step downloads pinned official AOSP VNDK headers and pulls the
-compatible platform HIDL libraries from the connected phone without modifying
-it. Deployment temporarily stops SurfaceFlinger for exclusive Composer access
-and restores Android UI when the LCL process exits. Root access is required.
+This builds the ARM64 Android substrate and canonical rootfs, deploys both, then
+starts the full LCL desktop session. Later runs can reuse existing artifacts:
+
+```bash
+./main.py android --no-build
+```
+
+Use `--rebuild` for a clean compositor rebuild, `--push-rootfs` to force a
+rootfs upload, `--compositor-only` for substrate diagnostics, or
+`--restore-only` to recover Android UI after an interrupted session. The first
+build downloads pinned official AOSP VNDK headers and pulls compatible HIDL
+libraries from the connected phone without modifying it. Deployment temporarily
+stops SurfaceFlinger for exclusive Composer access and restores Android UI when
+the LCL process exits. Root access is required.
 
 ---
 

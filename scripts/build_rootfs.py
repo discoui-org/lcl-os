@@ -157,14 +157,22 @@ def is_binary_matching_arch(binary_path: Path | None, arch: str) -> bool:
     return False
 
 
+def canonical_build_dir(arch: str) -> Path:
+    return BUILD_DIR / "rootfs-build" / normalize_arch(arch)
+
+
 def find_built_binary(name: str, arch: str | None = None) -> Path | None:
-    for cand in [
-        BUILD_DIR / name,
-        BUILD_DIR / "apps" / "ui_demo" / name,
-        BUILD_DIR / "apps" / name / name,
-        BUILD_DIR / "src" / "tools" / name,
-    ]:
-        if cand.is_file():
+    roots = [canonical_build_dir(arch)] if arch is not None else []
+    roots.append(BUILD_DIR)
+    for root in roots:
+        for cand in [
+            root / name,
+            root / "apps" / "ui_demo" / name,
+            root / "apps" / name / name,
+            root / "src" / "tools" / name,
+        ]:
+            if not cand.is_file():
+                continue
             if arch is not None and not is_binary_matching_arch(cand, arch):
                 continue
             return cand
@@ -187,10 +195,15 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
     missing = [name for name in targets if not find_built_binary(name, norm_arch)]
     if missing:
         log(f"Building missing/stale canonical targets for {norm_arch}: {missing}...")
-        if not (BUILD_DIR / "CMakeCache.txt").is_file():
-            subprocess.run(["cmake", "-B", str(BUILD_DIR), "-S", str(PROJECT_ROOT)], check=True)
+        target_build_dir = canonical_build_dir(norm_arch)
+        if not (target_build_dir / "CMakeCache.txt").is_file():
+            subprocess.run(
+                ["cmake", "-B", str(target_build_dir), "-S", str(PROJECT_ROOT)],
+                check=True,
+            )
         subprocess.run(
-            ["cmake", "--build", str(BUILD_DIR), "--target"] + missing + ["-j", str(os.cpu_count() or 4)],
+            ["cmake", "--build", str(target_build_dir), "--target"] +
+            missing + ["-j", str(os.cpu_count() or 4)],
             check=True,
         )
 

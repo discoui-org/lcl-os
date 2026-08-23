@@ -7,6 +7,7 @@ Usage:
   ./main.py qemu [--native] [--gpu] [--arch aarch64|x86_64]
   ./main.py qemu --mobile [--skin pixel_8_pro]
   ./main.py avd [--avd-name lcl-phone] [--no-window] [--rebuild]
+  ./main.py android [--no-build] [--rebuild] [--push-rootfs]
   ./main.py build [--arch ...]
   ./main.py iso [--arch ...]
   ./main.py flash [--dev /dev/sdX]
@@ -28,6 +29,9 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 BUILD_DIR = ROOT_DIR / "build"
+ANDROID_BUILD_DIR = ROOT_DIR / "build-android-arm64"
+ANDROID_HIDL_ROOT = BUILD_DIR / "android-hidl-v31"
+ANDROID_ROOTFS_IMAGE = BUILD_DIR / "rootfs" / "lcl-rootfs-aarch64.ext4"
 
 
 def log(msg: str) -> None:
@@ -148,6 +152,130 @@ def cmd_avd(args: argparse.Namespace) -> None:
     subprocess.check_call(avd_args)
 
 
+def find_android_ndk() -> Path:
+    """Resolve an installed Android NDK without assuming one SDK layout."""
+    for variable in ("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT"):
+        value = os.environ.get(variable)
+        if value:
+            ndk = Path(value).expanduser()
+            if (ndk / "build/cmake/android.toolchain.cmake").is_file():
+                return ndk.resolve()
+
+    cache = ANDROID_BUILD_DIR / "CMakeCache.txt"
+    if cache.is_file():
+        prefix = "CMAKE_TOOLCHAIN_FILE:FILEPATH="
+        for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith(prefix):
+                toolchain = Path(line.removeprefix(prefix))
+                if toolchain.is_file():
+                    return toolchain.parent.parent.parent.resolve()
+
+    sdk_roots: list[Path] = []
+    for variable in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        value = os.environ.get(variable)
+        if value:
+            sdk_roots.append(Path(value).expanduser())
+    sdk_roots.append(Path.home() / "Android/Sdk")
+
+    candidates: list[Path] = []
+    for sdk_root in sdk_roots:
+        ndk_root = sdk_root / "ndk"
+        if ndk_root.is_dir():
+            candidates.extend(path for path in ndk_root.iterdir() if path.is_dir())
+        ndk_bundle = sdk_root / "ndk-bundle"
+        if ndk_bundle.is_dir():
+            candidates.append(ndk_bundle)
+
+    for ndk in sorted(candidates, reverse=True):
+        if (ndk / "build/cmake/android.toolchain.cmake").is_file():
+            return ndk.resolve()
+
+    raise RuntimeError(
+        "Android NDK not found. Set ANDROID_NDK_HOME or install the NDK under "
+        "$ANDROID_HOME/ndk/."
+    )
+
+
+def build_android_phone_artifacts(args: argparse.Namespace, use_rootfs: bool) -> None:
+    """Build the Android substrate and optional canonical ARM64 userspace."""
+    hidl_config = ANDROID_HIDL_ROOT / "hidl-config.cmake"
+    if not hidl_config.is_file():
+        log("Preparing official Android HIDL headers and device libraries...")
+        subprocess.check_call(
+            [sys.executable, str(SCRIPTS_DIR / "prepare_android_hidl.py")],
+            cwd=ROOT_DIR,
+        )
+
+    ndk = find_android_ndk()
+    log(f"Configuring ARM64 Android compositor with NDK: {ndk}")
+    configure_args = [
+        "cmake", "-S", str(ROOT_DIR), "-B", str(ANDROID_BUILD_DIR),
+        f"-DCMAKE_TOOLCHAIN_FILE={ndk / 'build/cmake/android.toolchain.cmake'}",
+        "-DANDROID_ABI=arm64-v8a",
+        "-DANDROID_PLATFORM=android-33",
+        f"-DLCL_ANDROID_HIDL_ROOT={ANDROID_HIDL_ROOT}",
+    ]
+    subprocess.check_call(configure_args, cwd=ROOT_DIR)
+
+    jobs = max(1, int(args.jobs))
+    build_args = [
+        "cmake", "--build", str(ANDROID_BUILD_DIR),
+        "--target", "lcl-core-android", "-j", str(jobs),
+    ]
+    if args.rebuild:
+        build_args.append("--clean-first")
+    log("Building ARM64 Android compositor (AIDL + HIDL)...")
+    subprocess.check_call(build_args, cwd=ROOT_DIR)
+
+    if use_rootfs:
+        log("Building canonical ARM64 rootfs...")
+        subprocess.check_call(
+            [
+                sys.executable, str(SCRIPTS_DIR / "build_rootfs.py"),
+                "--arch", "aarch64", "--size", str(args.size),
+            ],
+            cwd=ROOT_DIR,
+        )
+
+
+def require_android_phone_artifacts(use_rootfs: bool) -> None:
+    """Make --no-build strict instead of silently building missing files."""
+    required = [ANDROID_BUILD_DIR / "lcl-core-android"]
+    if use_rootfs:
+        required.append(ANDROID_ROOTFS_IMAGE)
+    missing = [path for path in required if not path.is_file()]
+    if missing:
+        formatted = "\n".join(f"  - {path}" for path in missing)
+        raise RuntimeError(
+            "--no-build was requested, but required Android artifacts are missing:\n"
+            f"{formatted}\nRun './main.py android' once to build them."
+        )
+
+
+def cmd_android(args: argparse.Namespace) -> None:
+    """Build and launch LCL OS on a connected rooted ARM64 Android phone."""
+    deploy_args = [sys.executable, str(SCRIPTS_DIR / "deploy_android_device.py")]
+    if args.restore_only:
+        subprocess.check_call([*deploy_args, "--restore-only"], cwd=ROOT_DIR)
+        return
+
+    use_rootfs = not args.compositor_only
+    if args.no_build:
+        require_android_phone_artifacts(use_rootfs)
+        log("Skipping Android compositor and rootfs build (--no-build).")
+    else:
+        build_android_phone_artifacts(args, use_rootfs)
+
+    if use_rootfs:
+        deploy_args.append("--push-rootfs" if args.push_rootfs else "--rootfs")
+    if args.no_stop_sysui:
+        deploy_args.append("--no-stop-sysui")
+    if args.logcat:
+        deploy_args.append("--logcat")
+
+    subprocess.check_call(deploy_args, cwd=ROOT_DIR)
+
+
 def cmd_build(args: argparse.Namespace) -> None:
     run_qemu_py = SCRIPTS_DIR / "run_qemu.py"
     arch = normalize_arch(args.arch)
@@ -264,6 +392,48 @@ def main() -> None:
     p_avd.add_argument("--no-build", action="store_true", help="Skip artifact build & packaging")
     p_avd.add_argument("--rebuild", action="store_true", help="Force clean rebuild of all targets")
 
+    # ---- android ----
+    p_android = subparsers.add_parser(
+        "android",
+        help="Build & launch LCL OS on a connected rooted ARM64 Android phone",
+    )
+    p_android.add_argument(
+        "--no-build", action="store_true",
+        help="Skip all builds and require existing Android/rootfs artifacts",
+    )
+    p_android.add_argument(
+        "--rebuild", action="store_true",
+        help="Clean-rebuild the Android compositor and regenerate the rootfs",
+    )
+    p_android.add_argument(
+        "--jobs", "-j", type=int, default=2, metavar="N",
+        help="Parallel jobs for the Android compositor build (default: 2)",
+    )
+    p_android.add_argument(
+        "--size", "-s", type=int, default=1024, metavar="MB",
+        help="Canonical ARM64 rootfs size in MB (default: 1024)",
+    )
+    p_android.add_argument(
+        "--push-rootfs", action="store_true",
+        help="Force re-upload of the canonical rootfs image",
+    )
+    p_android.add_argument(
+        "--compositor-only", action="store_true",
+        help="Launch only the Android compositor without the canonical rootfs session",
+    )
+    p_android.add_argument(
+        "--no-stop-sysui", action="store_true",
+        help="Keep Android System UI running (overlay diagnostics only)",
+    )
+    p_android.add_argument(
+        "--logcat", action="store_true",
+        help="Show Android logcat alongside LCL compositor output",
+    )
+    p_android.add_argument(
+        "--restore-only", action="store_true",
+        help="Stop LCL and restore Android UI without building or launching",
+    )
+
     # ---- build ----
     p_build = subparsers.add_parser("build", help="Build LCL OS binaries via Docker")
     p_build.add_argument("--arch", "-a", metavar="ARCH", help="Target architecture (x86_64 or aarch64)")
@@ -304,11 +474,19 @@ def main() -> None:
 
     if getattr(args, "rebuild", False) and getattr(args, "no_build", False):
         parser.error("Cannot specify both --rebuild and --no-build.")
+    if args.command == "android":
+        if args.jobs < 1:
+            parser.error("android --jobs must be at least 1.")
+        if args.size < 128:
+            parser.error("android --size must be at least 128 MB.")
+        if args.push_rootfs and args.compositor_only:
+            parser.error("android --push-rootfs cannot be combined with --compositor-only.")
 
     dispatch = {
         "qemu": cmd_qemu,
         "utm": cmd_utm,
         "avd": cmd_avd,
+        "android": cmd_android,
         "build": cmd_build,
         "package": cmd_package,
         "rootfs": cmd_rootfs,
@@ -331,6 +509,9 @@ if __name__ == "__main__":
         main()
     except subprocess.CalledProcessError as exc:
         sys.exit(exc.returncode or 1)
+    except RuntimeError as exc:
+        err(str(exc))
+        sys.exit(1)
     except KeyboardInterrupt:
         print("\nInterrupted.")
         sys.exit(130)

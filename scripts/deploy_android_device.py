@@ -10,7 +10,9 @@ Workflow:
   4. Restore System UI on exit / Ctrl+C
 
 Usage:
-  python3 scripts/deploy_android_device.py [--restore-only] [--no-stop-sysui] [--logcat]
+  python3 scripts/deploy_android_device.py --rootfs
+  python3 scripts/deploy_android_device.py --push-rootfs
+  python3 scripts/deploy_android_device.py --restore-only
 
 Requirements:
   - ADB connected device (USB or network)
@@ -21,7 +23,9 @@ Requirements:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -35,6 +39,18 @@ DEVICE_TMP_DIR = "/data/local/tmp"
 DEVICE_BINARY_PATH = f"{DEVICE_TMP_DIR}/{BINARY_NAME}"
 DEVICE_HIDL_BRIDGE_PATH = f"{DEVICE_TMP_DIR}/{HIDL_BRIDGE_NAME}"
 DEVICE_LOG_PATH = f"{DEVICE_TMP_DIR}/lcl-core.log"
+DEVICE_RUNTIME_DIR = f"{DEVICE_TMP_DIR}/lcl-runtime"
+DEVICE_COMPOSITOR_SOCKET = f"{DEVICE_RUNTIME_DIR}/lcl-compositor.sock"
+DEVICE_SESSION_SOCKET = f"{DEVICE_RUNTIME_DIR}/lcl-sessiond.sock"
+ROOTFS_IMAGE = ROOT_DIR / "build" / "rootfs" / "lcl-rootfs-aarch64.ext4"
+ROOTFS_ARCHIVE = ROOT_DIR / "build" / "rootfs" / "lcl-rootfs-aarch64.ext4.zst"
+ROOTFS_SESSION_LAUNCHER = ROOT_DIR / "scripts" / "lcl_android_rootfs_session.sh"
+DEVICE_ROOTFS_IMAGE = f"{DEVICE_TMP_DIR}/lcl-rootfs-aarch64.ext4"
+DEVICE_ROOTFS_ARCHIVE = f"{DEVICE_ROOTFS_IMAGE}.zst"
+DEVICE_ROOTFS_HASH = f"{DEVICE_ROOTFS_IMAGE}.sha256"
+DEVICE_ROOTFS_MOUNT = f"{DEVICE_TMP_DIR}/lcl-rootfs"
+DEVICE_ROOTFS_LOOP = f"{DEVICE_TMP_DIR}/lcl-rootfs.loop"
+DEVICE_SESSION_LAUNCHER = f"{DEVICE_TMP_DIR}/lcl-android-rootfs-session.sh"
 
 # Android system services to suspend for display takeover
 SYSUI_PACKAGE = "com.android.systemui"
@@ -193,6 +209,211 @@ def stop_lcl_process() -> None:
         adb_shell("kill -KILL " + " ".join(remaining), as_root=True)
 
 
+def stop_rootfs_session() -> None:
+    """Stop canonical userspace processes before unmounting its rootfs."""
+    process_names = (
+        "lcl-desktop-shell", "lcl-sessiond", "lcl-terminal", "lcl-open",
+        "lcl-js", "lcl_ui_demo",
+    )
+    pids: list[str] = []
+    for name in process_names:
+        result = adb_shell(f"pidof {name}", as_root=True)
+        pids.extend(value for value in result.stdout.split() if value.isdigit())
+    pids = list(dict.fromkeys(pids))
+    if not pids:
+        return
+    log("Stopping canonical rootfs session...")
+    adb_shell("kill -TERM " + " ".join(pids), as_root=True)
+    time.sleep(0.7)
+    remaining: list[str] = []
+    for name in process_names:
+        result = adb_shell(f"pidof {name}", as_root=True)
+        remaining.extend(value for value in result.stdout.split() if value.isdigit())
+    remaining = list(dict.fromkeys(remaining))
+    if remaining:
+        adb_shell("kill -KILL " + " ".join(remaining), as_root=True)
+
+
+def unmount_rootfs() -> None:
+    """Unmount canonical rootfs bind mounts and release its loop device."""
+    stop_rootfs_session()
+    for relative in ("dev/pts", "Runtime", "proc", "sys", "dev"):
+        adb_shell(f"umount {DEVICE_ROOTFS_MOUNT}/{relative}", as_root=True)
+    adb_shell(f"umount {DEVICE_ROOTFS_MOUNT}", as_root=True)
+    adb_shell(
+        f"if [ -f {DEVICE_ROOTFS_LOOP} ]; then "
+        f"loop=$(cat {DEVICE_ROOTFS_LOOP}); "
+        f"[ -n \"$loop\" ] && losetup -d \"$loop\" 2>/dev/null; "
+        f"rm -f {DEVICE_ROOTFS_LOOP}; fi",
+        as_root=True,
+    )
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def ensure_rootfs_image() -> None:
+    """Build the canonical ARM64 glibc rootfs when it is absent."""
+    if ROOTFS_IMAGE.is_file():
+        return
+    log("Canonical ARM64 rootfs is missing; building it in the ARM64 Docker builder...")
+    subprocess.run(
+        [sys.executable, str(ROOT_DIR / "scripts" / "build_rootfs.py"),
+         "--arch", "aarch64", "--size", "1024"],
+        cwd=ROOT_DIR,
+        check=True,
+    )
+
+
+def push_rootfs_image(force: bool = False) -> None:
+    """Compress and deploy the canonical ARM64 ext4 artifact."""
+    ensure_rootfs_image()
+    rootfs_hash = sha256_file(ROOTFS_IMAGE)
+    remote_hash = adb_shell(f"cat {DEVICE_ROOTFS_HASH}", as_root=True).stdout.strip()
+    remote_image = adb_shell(f"test -f {DEVICE_ROOTFS_IMAGE}; echo $?", as_root=True).stdout.strip()
+    if not force and remote_hash == rootfs_hash and remote_image.endswith("0"):
+        log("Canonical ARM64 rootfs already matches the connected phone.")
+        return
+
+    zstd = shutil.which("zstd")
+    if not zstd:
+        raise RuntimeError("Host zstd executable is required to deploy the rootfs image.")
+    if (not ROOTFS_ARCHIVE.is_file() or
+            ROOTFS_ARCHIVE.stat().st_mtime < ROOTFS_IMAGE.stat().st_mtime):
+        log("Compressing canonical ARM64 rootfs with zstd...")
+        subprocess.run(
+            [zstd, "-T0", "-3", "-f", str(ROOTFS_IMAGE), "-o", str(ROOTFS_ARCHIVE)],
+            check=True,
+        )
+
+    unmount_rootfs()
+    archive_mb = ROOTFS_ARCHIVE.stat().st_size / (1024 * 1024)
+    log(f"Pushing compressed rootfs ({archive_mb:.1f} MB)...")
+    run_adb("push", str(ROOTFS_ARCHIVE), DEVICE_ROOTFS_ARCHIVE)
+    log("Decompressing rootfs on the phone...")
+    result = adb_shell(
+        f"/system_ext/bin/zstd -d -f {DEVICE_ROOTFS_ARCHIVE} -o {DEVICE_ROOTFS_IMAGE} && "
+        f"chmod 0600 {DEVICE_ROOTFS_IMAGE} && rm -f {DEVICE_ROOTFS_ARCHIVE}",
+        as_root=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Rootfs decompression failed: " + result.stderr.strip())
+    adb_shell(f"echo {rootfs_hash} > {DEVICE_ROOTFS_HASH}", as_root=True)
+    log(f"Canonical rootfs deployed: {DEVICE_ROOTFS_IMAGE}")
+
+
+def mount_rootfs() -> None:
+    """Loop-mount rootfs and bind Android kernel/runtime views into it."""
+    adb_shell(f"mkdir -p {DEVICE_ROOTFS_MOUNT}", as_root=True)
+    mounted = adb_shell(
+        f"test -x {DEVICE_ROOTFS_MOUNT}/System/Core/lcl-sessiond; echo $?",
+        as_root=True,
+    ).stdout.strip()
+    if not mounted.endswith("0"):
+        unmount_rootfs()
+        result = adb_shell(
+            f"mkdir -p {DEVICE_ROOTFS_MOUNT}; "
+            f"loop=$(losetup -f); "
+            f"[ -n \"$loop\" ] && losetup \"$loop\" {DEVICE_ROOTFS_IMAGE} && "
+            f"echo \"$loop\" > {DEVICE_ROOTFS_LOOP} && "
+            f"mount -t ext4 -o rw,noatime \"$loop\" {DEVICE_ROOTFS_MOUNT}",
+            as_root=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("Rootfs loop mount failed: " + result.stderr.strip())
+
+    adb_shell(
+        f"mkdir -p {DEVICE_ROOTFS_MOUNT}/dev/pts {DEVICE_ROOTFS_MOUNT}/proc "
+        f"{DEVICE_ROOTFS_MOUNT}/sys {DEVICE_ROOTFS_MOUNT}/Runtime",
+        as_root=True,
+    )
+    binds = (
+        ("/dev", "dev"),
+        ("/dev/pts", "dev/pts"),
+        ("/proc", "proc"),
+        ("/sys", "sys"),
+        (f"{DEVICE_TMP_DIR}/lcl-runtime", "Runtime"),
+    )
+    for source, relative in binds:
+        destination = f"{DEVICE_ROOTFS_MOUNT}/{relative}"
+        result = adb_shell(
+            f"mount | grep -q \" {destination} \" || mount --bind {source} {destination}",
+            as_root=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Rootfs bind mount failed ({source} -> {destination}): " +
+                result.stderr.strip()
+            )
+
+    probe = adb_shell(
+        f"chroot {DEVICE_ROOTFS_MOUNT} /System/Tools/bash -c \""
+        f"test -S /Runtime/lcl-compositor.sock -o -d /Runtime; "
+        f"echo ROOTFS_ARCH=\\$(/System/Tools/uname -m)\"",
+        as_root=True,
+    )
+    if probe.returncode != 0 or "ROOTFS_ARCH=aarch64" not in probe.stdout:
+        raise RuntimeError("ARM64 rootfs chroot probe failed: " +
+                           (probe.stderr.strip() or probe.stdout.strip()))
+    log("Canonical ARM64 rootfs mounted and chroot probe passed.")
+
+
+def push_rootfs_session_launcher() -> None:
+    if not ROOTFS_SESSION_LAUNCHER.is_file():
+        raise RuntimeError(f"Rootfs session launcher missing: {ROOTFS_SESSION_LAUNCHER}")
+    run_adb("push", str(ROOTFS_SESSION_LAUNCHER), DEVICE_SESSION_LAUNCHER)
+    adb_shell(f"chmod 0755 {DEVICE_SESSION_LAUNCHER}", as_root=True)
+
+
+def prepare_runtime_for_launch() -> None:
+    """Reject overlapping sessions and remove sockets left by dead processes."""
+    process_names = ("lcl-core-android", "lcl-sessiond", "lcl-desktop-shell", "lcl-terminal")
+    active: list[str] = []
+    for name in process_names:
+        result = adb_shell(f"pidof {name}", as_root=True)
+        pids = [value for value in result.stdout.split() if value.isdigit()]
+        if pids:
+            active.append(f"{name} ({', '.join(pids)})")
+    if active:
+        raise RuntimeError(
+            "An LCL session is already running on the phone: " + ", ".join(active) +
+            ". Stop its current launcher with Ctrl+C or run './main.py android --restore-only'."
+        )
+
+    result = adb_shell(
+        f"rm -f {DEVICE_COMPOSITOR_SOCKET} {DEVICE_SESSION_SOCKET}",
+        as_root=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Could not remove stale LCL runtime sockets: " + result.stderr.strip())
+    log("Stale runtime sockets cleared; no overlapping LCL session found.")
+
+
+def wait_for_compositor_socket(
+    timeout_seconds: float = 8.0,
+    process: subprocess.Popen | None = None,
+) -> bool:
+    """Wait until the kernel reports the compositor socket as listening."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            return False
+        result = adb_shell(
+            f"grep -F {DEVICE_COMPOSITOR_SOCKET} /proc/net/unix | "
+            f"grep -q \"00010000 0005 01\"",
+            as_root=True,
+        )
+        if result.returncode == 0:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def push_binary() -> None:
     """Push lcl-core-android and its optional HIDL ABI bridge to device."""
     binary = BUILD_ANDROID_ARM64_DIR / BINARY_NAME
@@ -219,13 +440,13 @@ def push_binary() -> None:
 
 def setup_runtime_dir() -> str:
     """Create writable runtime directory on device for LCL sockets."""
-    runtime_dir = f"{DEVICE_TMP_DIR}/lcl-runtime"
-    adb_shell(f"mkdir -p {runtime_dir} && chmod 700 {runtime_dir}", as_root=True)
-    log(f"Runtime directory ready: {runtime_dir}")
-    return runtime_dir
+    adb_shell(f"mkdir -p {DEVICE_RUNTIME_DIR} && chmod 700 {DEVICE_RUNTIME_DIR}", as_root=True)
+    log(f"Runtime directory ready: {DEVICE_RUNTIME_DIR}")
+    return DEVICE_RUNTIME_DIR
 
 
-def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False) -> None:
+def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
+               use_rootfs: bool = False, force_rootfs: bool = False) -> None:
     """Main deployment logic: push binary, stop SysUI, launch LCL compositor."""
 
     log("=" * 60)
@@ -249,11 +470,24 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False) -> None:
         err(f"Device ABI '{info['abi']}' is not arm64-v8a. This binary requires ARM64.")
         sys.exit(1)
 
-    # 4. Push binary
+    # 4. Reject an overlapping session before changing deployed artifacts.
+    runtime_dir = setup_runtime_dir()
+    prepare_runtime_for_launch()
+
+    # 4b. Push binary
     push_binary()
 
-    # 4b. Create runtime directory on device
-    runtime_dir = setup_runtime_dir()
+    # 4c. Deploy and mount the canonical ARM64 glibc userspace when requested.
+    if use_rootfs:
+        try:
+            push_rootfs_image(force=force_rootfs)
+            mount_rootfs()
+            push_rootfs_session_launcher()
+        except Exception:
+            # These steps run before the main session try/finally. Do not leave
+            # loop or bind mounts behind when rootfs preparation fails early.
+            unmount_rootfs()
+            raise
 
     # 5. Stop System UI for display takeover (unless suppressed)
     if not no_stop_sysui:
@@ -270,6 +504,7 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False) -> None:
 
     lc_proc = None
     lcl_proc = None
+    session_proc = None
 
     try:
         if logcat:
@@ -289,6 +524,19 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False) -> None:
             f"su -c '{launch_env} {DEVICE_BINARY_PATH} 2>&1 | tee {DEVICE_LOG_PATH}'"
         ])
 
+        if use_rootfs:
+            log("Waiting for Android compositor IPC before starting canonical userspace...")
+            if not wait_for_compositor_socket(process=lcl_proc):
+                raise RuntimeError(
+                    "LCL compositor did not expose a live listening IPC socket "
+                    "before the rootfs session timeout."
+                )
+            session_proc = subprocess.Popen([
+                "adb", "shell",
+                f"su -c '{DEVICE_SESSION_LAUNCHER} 2>&1'",
+            ])
+            log("Canonical ARM64 rootfs session launched.")
+
         lcl_proc.wait()
 
     except KeyboardInterrupt:
@@ -298,7 +546,14 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False) -> None:
             lcl_proc.terminate()
 
     finally:
+        if use_rootfs:
+            stop_rootfs_session()
+            if session_proc is not None and session_proc.poll() is None:
+                session_proc.terminate()
         stop_lcl_process()
+
+        if use_rootfs:
+            unmount_rootfs()
 
         # Always restore System UI
         if not no_stop_sysui:
@@ -314,6 +569,9 @@ def restore_only() -> None:
     """Just restore System UI without launching LCL."""
     log("Restore-only mode: Restarting Android System UI...")
     check_device()
+    stop_rootfs_session()
+    stop_lcl_process()
+    unmount_rootfs()
     restore_system_ui()
     log("Done.")
 
@@ -337,6 +595,16 @@ def main() -> None:
         action="store_true",
         help="Show Android logcat output alongside LCL compositor logs"
     )
+    parser.add_argument(
+        "--rootfs",
+        action="store_true",
+        help="Mount and launch the canonical ARM64 glibc rootfs desktop session"
+    )
+    parser.add_argument(
+        "--push-rootfs",
+        action="store_true",
+        help="Force re-upload of the canonical ARM64 rootfs (implies --rootfs)"
+    )
     args = parser.parse_args()
 
     if args.restore_only:
@@ -346,6 +614,8 @@ def main() -> None:
     launch_lcl(
         no_stop_sysui=args.no_stop_sysui,
         logcat=args.logcat,
+        use_rootfs=args.rootfs or args.push_rootfs,
+        force_rootfs=args.push_rootfs,
     )
 
 
