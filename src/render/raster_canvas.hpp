@@ -44,6 +44,9 @@ public:
     void beginLayer(float opacity) override;
     void endLayer() override;
     bool beginCachedLayer(CachedLayerId id, const lcl::graphics::RectF& sourceBounds) override;
+    bool beginCachedLayerUpdate(
+        CachedLayerId id, const lcl::graphics::RectF& sourceBounds,
+        const lcl::graphics::RectF& updateBounds) override;
     void endCachedLayer() override;
     bool drawCachedLayer(CachedLayerId id, const lcl::graphics::RectF& destination,
                          float opacity = 1.0f) override;
@@ -81,6 +84,9 @@ private:
     };
 
     void clearCachedLayers();
+    bool beginCachedLayerInternal(
+        CachedLayerId id, const lcl::graphics::RectF& sourceBounds,
+        std::optional<lcl::graphics::RectF> updateBounds);
     RasterRenderer& renderer() { return *m_renderer; }
 
     std::unique_ptr<ClientEGLContext> m_clientEglContext;

@@ -791,7 +791,8 @@ bool RasterRenderer::beginCachedLayerTarget(uint32_t framebuffer, uint32_t textu
                                           uint32_t width, uint32_t height,
                                           uint32_t* softwarePixels,
                                           float logicalOriginX, float logicalOriginY,
-                                          float effectiveScale) {
+                                          float effectiveScale,
+                                          std::optional<lcl::graphics::RectF> updateBounds) {
     if (!m_initialized || m_cachedLayerTargetState || width == 0 || height == 0) return false;
     const bool gpu = m_backendType == RasterBackend::OpenGL_EGL;
     if ((gpu && (framebuffer == 0 || texture == 0 || !m_eglBackend)) ||
@@ -819,13 +820,30 @@ bool RasterRenderer::beginCachedLayerTarget(uint32_t framebuffer, uint32_t textu
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
         glViewport(0, 0, width, height);
-        glDisable(GL_SCISSOR_TEST);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        if (!updateBounds) {
+            glDisable(GL_SCISSOR_TEST);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
     } else
 #endif
     {
-        std::fill_n(softwarePixels, static_cast<size_t>(width) * height, 0x00000000u);
+        if (!updateBounds) {
+            std::fill_n(softwarePixels, static_cast<size_t>(width) * height,
+                        0x00000000u);
+        }
+    }
+    if (updateBounds) {
+        clearRect({updateBounds->x, updateBounds->y,
+                   updateBounds->width, updateBounds->height},
+                  {0, 0, 0, 0});
+        m_clipRect = RasterRect{
+            updateBounds->x,
+            updateBounds->y,
+            updateBounds->width,
+            updateBounds->height,
+        };
+        applyScissorState();
     }
     return true;
 }
@@ -876,7 +894,8 @@ void RasterRenderer::drawCachedLayerTexture(uint32_t texture,
 bool RasterRenderer::prepareCachedDisplayLayer(
         uint64_t id, const lcl::graphics::RectF& sourceBounds,
         const lcl::graphics::Matrix3& transform,
-        const lcl::graphics::RenderTarget& target) {
+        const lcl::graphics::RenderTarget& target,
+        bool preserveContents) {
     if (sourceBounds.width <= 0.0f || sourceBounds.height <= 0.0f) return false;
     const float effectiveScale = std::max(
         0.001f, target.deviceScale * transform.maxScale());
@@ -893,10 +912,27 @@ bool RasterRenderer::prepareCachedDisplayLayer(
                std::fabs(lhs.ty - rhs.ty) < 0.0001f;
     };
 
+    const auto matches = [&](const CachedDisplayLayer& layer) {
+        return layer.pixelWidth == pixelWidth &&
+            layer.pixelHeight == pixelHeight &&
+            std::fabs(layer.effectiveScale - effectiveScale) <= 0.0001f &&
+            sameTransform(layer.transform, transform);
+    };
+    const bool gpu = m_backendType == RasterBackend::OpenGL_EGL;
+    const auto found = m_cachedDisplayLayers.find(id);
+    if (preserveContents) {
+        if (found == m_cachedDisplayLayers.end() || !matches(found->second)) {
+            return false;
+        }
+        if (gpu) {
+            return found->second.framebuffer != 0 && found->second.texture != 0;
+        }
+        return found->second.pixels.size() ==
+            static_cast<size_t>(pixelWidth) * pixelHeight;
+    }
+
     auto& layer = m_cachedDisplayLayers[id];
-    if (layer.pixelWidth != pixelWidth || layer.pixelHeight != pixelHeight ||
-        std::fabs(layer.effectiveScale - effectiveScale) > 0.0001f ||
-        !sameTransform(layer.transform, transform)) {
+    if (!matches(layer)) {
         destroyCachedLayerTarget(layer.framebuffer, layer.texture);
         layer = CachedDisplayLayer{};
         layer.pixelWidth = pixelWidth;
@@ -905,7 +941,6 @@ bool RasterRenderer::prepareCachedDisplayLayer(
         layer.effectiveScale = effectiveScale;
     }
 
-    const bool gpu = m_backendType == RasterBackend::OpenGL_EGL;
     if (gpu && layer.framebuffer == 0 &&
         !createCachedLayerTarget(pixelWidth, pixelHeight,
                                  layer.framebuffer, layer.texture)) {
@@ -1218,11 +1253,15 @@ void RasterRenderer::replayDisplayList(
                         layer.framebuffer, layer.texture,
                         layer.pixelWidth, layer.pixelHeight, softwarePixels,
                         op.sourceBounds.x, op.sourceBounds.y,
-                        layer.effectiveScale)) {
+                        layer.effectiveScale, op.updateBounds)) {
                     return;
                 }
                 cachedLayerReplayState = state;
                 state = ReplayState{};
+                if (op.updateBounds) {
+                    state.clip = *op.updateBounds;
+                    syncClip();
+                }
             } else if constexpr (std::is_same_v<T, lcl::graphics::EndCachedLayerCommand>) {
                 if (!cachedLayerReplayState) return;
                 endCachedLayerTarget();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -18,7 +19,11 @@ struct EndLayerCommand {};
 struct ClipRectCommand { RectF rect{}; };
 struct ClipPathCommand { Path path{}; FillRule fillRule{FillRule::NonZero}; };
 struct ClearRectCommand { RectF rect{}; Color color{}; };
-struct BeginCachedLayerCommand { uint64_t id{0}; RectF sourceBounds{}; };
+struct BeginCachedLayerCommand {
+    uint64_t id{0};
+    RectF sourceBounds{};
+    std::optional<RectF> updateBounds{};
+};
 struct EndCachedLayerCommand {};
 struct DrawCachedLayerCommand {
     uint64_t id{0};
@@ -79,6 +84,8 @@ public:
     void clipPath(const Path& path, FillRule fillRule = FillRule::NonZero);
     void clearRect(const RectF& rect, Color color);
     void beginCachedLayer(uint64_t id, const RectF& sourceBounds);
+    void beginCachedLayerUpdate(uint64_t id, const RectF& sourceBounds,
+                                const RectF& updateBounds);
     void endCachedLayer();
     void drawCachedLayer(uint64_t id, const RectF& destination, float opacity);
     void drawPath(const Path& path, const Paint& paint);

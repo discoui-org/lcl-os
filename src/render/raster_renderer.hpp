@@ -96,7 +96,8 @@ public:
                                 uint32_t width, uint32_t height,
                                 uint32_t* softwarePixels,
                                 float logicalOriginX, float logicalOriginY,
-                                float effectiveScale);
+                                float effectiveScale,
+                                std::optional<lcl::graphics::RectF> updateBounds);
     void endCachedLayerTarget();
     void drawCachedLayerTexture(uint32_t texture, const RasterRect& destination,
                                 float opacity = 1.0f);
@@ -144,7 +145,8 @@ public:
     bool prepareCachedDisplayLayer(uint64_t id,
                                    const lcl::graphics::RectF& sourceBounds,
                                    const lcl::graphics::Matrix3& transform,
-                                   const lcl::graphics::RenderTarget& target);
+                                   const lcl::graphics::RenderTarget& target,
+                                   bool preserveContents = false);
     bool hasCachedDisplayLayer(uint64_t id) const;
     void clearDisplayListCaches();
 

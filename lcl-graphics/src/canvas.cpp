@@ -25,7 +25,12 @@ void Canvas::drawDisplayList(const DisplayList& displayList) {
             } else if constexpr (std::is_same_v<T, ClearRectCommand>) {
                 clearRect(op.rect, op.color);
             } else if constexpr (std::is_same_v<T, BeginCachedLayerCommand>) {
-                beginCachedLayer(op.id, op.sourceBounds);
+                if (op.updateBounds) {
+                    beginCachedLayerUpdate(op.id, op.sourceBounds,
+                                           *op.updateBounds);
+                } else {
+                    beginCachedLayer(op.id, op.sourceBounds);
+                }
             } else if constexpr (std::is_same_v<T, EndCachedLayerCommand>) {
                 endCachedLayer();
             } else if constexpr (std::is_same_v<T, DrawCachedLayerCommand>) {

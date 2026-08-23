@@ -26,7 +26,12 @@ void DisplayListBuilder::clearRect(const RectF& rect, Color color) {
     m_commands.emplace_back(ClearRectCommand{rect, color});
 }
 void DisplayListBuilder::beginCachedLayer(uint64_t id, const RectF& sourceBounds) {
-    m_commands.emplace_back(BeginCachedLayerCommand{id, sourceBounds});
+    m_commands.emplace_back(BeginCachedLayerCommand{id, sourceBounds, std::nullopt});
+}
+void DisplayListBuilder::beginCachedLayerUpdate(uint64_t id,
+                                                const RectF& sourceBounds,
+                                                const RectF& updateBounds) {
+    m_commands.emplace_back(BeginCachedLayerCommand{id, sourceBounds, updateBounds});
 }
 void DisplayListBuilder::endCachedLayer() {
     m_commands.emplace_back(EndCachedLayerCommand{});

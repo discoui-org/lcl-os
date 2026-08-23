@@ -40,8 +40,10 @@ public:
     graphics::RectF getBounds() const { return m_bounds; }
     graphics::RectF getAbsoluteBounds() const { return m_absoluteBounds; }
     graphics::RectF getPresentationBounds() const;
-    /** Pixels painted by this widget, mapped through presentation transforms. */
+    /** Unclipped pixels painted by this widget, mapped through presentation transforms. */
     graphics::RectF getPresentationPaintBounds() const;
+    /** Paint bounds intersected with every clipping ancestor. */
+    graphics::RectF getVisiblePresentationPaintBounds() const;
     /** Painted pixels owned by this widget and its visible descendants. */
     graphics::RectF getPresentationSubtreePaintBounds() const;
     bool containsPresentationPoint(float x, float y) const;

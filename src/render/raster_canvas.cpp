@@ -196,16 +196,36 @@ void RasterCanvas::endLayer() {
 
 bool RasterCanvas::beginCachedLayer(CachedLayerId id,
                                   const lcl::graphics::RectF& sourceBounds) {
+    return beginCachedLayerInternal(id, sourceBounds, std::nullopt);
+}
+
+bool RasterCanvas::beginCachedLayerUpdate(
+        CachedLayerId id, const lcl::graphics::RectF& sourceBounds,
+        const lcl::graphics::RectF& updateBounds) {
+    if (updateBounds.isEmpty()) return false;
+    return beginCachedLayerInternal(id, sourceBounds, updateBounds);
+}
+
+bool RasterCanvas::beginCachedLayerInternal(
+        CachedLayerId id, const lcl::graphics::RectF& sourceBounds,
+        std::optional<lcl::graphics::RectF> updateBounds) {
     if (m_cachedLayerCanvasState || sourceBounds.width <= 0.0f ||
         sourceBounds.height <= 0.0f) return false;
     if (!renderer().prepareCachedDisplayLayer(
-            id, sourceBounds, m_state.transform, m_renderTarget)) {
+            id, sourceBounds, m_state.transform, m_renderTarget,
+            updateBounds.has_value())) {
         return false;
     }
 
-    m_displayListBuilder.beginCachedLayer(id, sourceBounds);
+    if (updateBounds) {
+        m_displayListBuilder.beginCachedLayerUpdate(
+            id, sourceBounds, *updateBounds);
+    } else {
+        m_displayListBuilder.beginCachedLayer(id, sourceBounds);
+    }
     m_cachedLayerCanvasState = m_state;
     m_state = CanvasState{};
+    if (updateBounds) m_state.clip = *updateBounds;
     return true;
 }
 

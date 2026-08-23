@@ -2,6 +2,46 @@
 
 namespace lcl::ui {
 
+namespace {
+
+std::optional<graphics::RectF> activeAnimationPaintBounds(const Widget& widget) {
+    const MotionCoordinator* coordinator = widget.getMotionCoordinator();
+    if (coordinator && coordinator->isObjectAnimating(widget.getObjectId())) {
+        return widget.getPresentationSubtreePaintBounds();
+    }
+
+    std::optional<graphics::RectF> result;
+    for (const auto& child : widget.getChildren()) {
+        if (!child->isVisible()) continue;
+        const auto childBounds = activeAnimationPaintBounds(*child);
+        if (!childBounds) continue;
+        result = result ? result->unionWith(*childBounds) : childBounds;
+    }
+    return result;
+}
+
+graphics::RectF relativeTo(const graphics::RectF& rect,
+                           const graphics::RectF& origin) {
+    return {
+        rect.x - origin.x,
+        rect.y - origin.y,
+        rect.width,
+        rect.height,
+    };
+}
+
+graphics::RectF positionedAt(const graphics::RectF& rect,
+                             const graphics::RectF& origin) {
+    return {
+        rect.x + origin.x,
+        rect.y + origin.y,
+        rect.width,
+        rect.height,
+    };
+}
+
+} // namespace
+
 ScrollView::ScrollView() {
     setClipsToBounds(true);
     m_yogaNode.setAlignItems(YGAlignStretch);
@@ -9,6 +49,8 @@ ScrollView::ScrollView() {
 
 void ScrollView::setContent(std::unique_ptr<Widget> content) {
     m_cacheValid = false;
+    m_cachedSubtreeAnimating = false;
+    m_cachedAnimationBounds.reset();
     if (m_contentWidget) {
         removeChild(m_contentWidget);
         m_contentWidget = nullptr;
@@ -52,18 +94,64 @@ void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRec
         m_cachedContentPaintRevision != contentRevision ||
         m_cachedContentPresentationRevision != contentPresentationRevision;
 
-    // A cached ScrollView layer is a retained snapshot. Rebuilding the entire
-    // long content texture for every descendant animation tick defeats that
-    // model. Paint only the damaged visible subtree while motion is active,
-    // then refresh the stable cache once after the last presentation frame.
-    if (subtreeAnimating) {
-        m_cacheValid = false;
+    const bool wasSubtreeAnimating = m_cachedSubtreeAnimating;
+    const bool animationUpdate = subtreeAnimating ||
+        (wasSubtreeAnimating && needsRaster);
+    const auto activeBounds = activeAnimationPaintBounds(*m_contentWidget);
+    const auto activeCacheBounds = activeBounds
+        ? std::optional<graphics::RectF>{relativeTo(*activeBounds,
+                                                   presentedContentBounds)}
+        : std::nullopt;
+    std::optional<graphics::RectF> animationCacheDamage = activeCacheBounds;
+    if (m_cachedAnimationBounds) {
+        animationCacheDamage = animationCacheDamage
+            ? animationCacheDamage->unionWith(*m_cachedAnimationBounds)
+            : m_cachedAnimationBounds;
+    }
+    m_cachedSubtreeAnimating = subtreeAnimating;
+    m_cachedAnimationBounds = activeCacheBounds;
+    if (m_cacheValid && !geometryChanged && animationUpdate) {
+        const float rasterOutset = 1.0f /
+            std::max(0.001f, canvas.renderTarget().deviceScale);
+        graphics::RectF updateBounds{};
+        if (animationCacheDamage) {
+            const graphics::RectF positioned = positionedAt(
+                *animationCacheDamage, presentedContentBounds);
+            updateBounds = graphics::RectF{
+                positioned.x - rasterOutset,
+                positioned.y - rasterOutset,
+                positioned.width + rasterOutset * 2.0f,
+                positioned.height + rasterOutset * 2.0f,
+            };
+        }
+        updateBounds = updateBounds
+            .intersection(getPresentationBounds())
+            .intersection(presentedContentBounds);
+        if (!updateBounds.isEmpty() &&
+            canvas.beginCachedLayerUpdate(
+                getObjectId(), presentedContentBounds, updateBounds)) {
+            m_contentWidget->draw(canvas, updateBounds);
+            canvas.endCachedLayer();
+            m_cachedContentPaintRevision = contentRevision;
+            m_cachedContentPresentationRevision = contentPresentationRevision;
+        } else if (!updateBounds.isEmpty()) {
+            // Preserve the old direct-paint fallback for Canvas backends that
+            // do not implement retained partial layer updates.
+            m_cacheValid = false;
+            m_contentWidget->draw(canvas, damageRect);
+            endPresentation(canvas);
+            return;
+        }
+    } else if (subtreeAnimating && !m_cacheValid) {
         m_contentWidget->draw(canvas, damageRect);
         endPresentation(canvas);
         return;
     }
 
-    if (needsRaster) {
+    const bool needsFullRaster = !m_cacheValid || geometryChanged ||
+        m_cachedContentPaintRevision != contentRevision ||
+        m_cachedContentPresentationRevision != contentPresentationRevision;
+    if (needsFullRaster) {
         if (canvas.beginCachedLayer(getObjectId(), presentedContentBounds)) {
             // The cached target origin cancels the ScrollView-owned content
             // translation. Scroll offset is applied only when the texture is drawn.

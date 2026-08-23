@@ -53,6 +53,8 @@ public:
     virtual void endLayer() {}
     virtual void clearRect(const RectF& rect, Color color) = 0;
     virtual bool beginCachedLayer(CachedLayerId, const RectF&) { return false; }
+    virtual bool beginCachedLayerUpdate(CachedLayerId, const RectF&,
+                                        const RectF&) { return false; }
     virtual void endCachedLayer() {}
     virtual bool drawCachedLayer(CachedLayerId, const RectF&, float = 1.0f) { return false; }
 

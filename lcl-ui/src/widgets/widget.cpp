@@ -239,7 +239,7 @@ void Widget::removeChild(Widget* child) {
 void Widget::markDirty() {
     ++m_paintRevision;
     if (m_renderPass) {
-        m_renderPass->addDirtyRect(getPresentationPaintBounds());
+        m_renderPass->addDirtyRect(getVisiblePresentationPaintBounds());
     }
     if (m_parent) m_parent->propagateDescendantPaintRevision();
 }
@@ -530,7 +530,11 @@ graphics::RectF Widget::mapPresentationRect(
 }
 
 graphics::RectF Widget::getPresentationPaintBounds() const {
-    graphics::RectF result = mapPresentationRect(getUntransformedPaintBounds(), this);
+    return mapPresentationRect(getUntransformedPaintBounds(), this);
+}
+
+graphics::RectF Widget::getVisiblePresentationPaintBounds() const {
+    graphics::RectF result = getPresentationPaintBounds();
     for (const Widget* current = this; current && !result.isEmpty();
          current = current->m_parent) {
         if (!current->m_clipsToBounds) continue;
@@ -542,7 +546,7 @@ graphics::RectF Widget::getPresentationPaintBounds() const {
 }
 
 graphics::RectF Widget::getPresentationSubtreePaintBounds() const {
-    graphics::RectF result = getPresentationPaintBounds();
+    graphics::RectF result = getVisiblePresentationPaintBounds();
     for (const auto& child : m_children) {
         if (!child->m_visible) continue;
         result = result.unionWith(child->getPresentationSubtreePaintBounds());

@@ -50,7 +50,7 @@ void Container::animateBackgroundColor(const graphics::Color& color, const lcl::
 void Container::setBorderColor(const graphics::Color& color) {
     m_borderColor = color;
     const auto apply = [this](graphics::Color next) {
-        const graphics::RectF previous = getPresentationPaintBounds();
+        const graphics::RectF previous = getVisiblePresentationPaintBounds();
         m_presentationBorderColor = next;
         markPaintDirty(previous);
     };
@@ -63,7 +63,7 @@ void Container::setBorderColor(const graphics::Color& color) {
 void Container::animateBorderColor(const graphics::Color& color, const lcl::motion::Motion& motion) {
     m_borderColor = color;
     const auto apply = [this](graphics::Color next) {
-        const graphics::RectF previous = getPresentationPaintBounds();
+        const graphics::RectF previous = getVisiblePresentationPaintBounds();
         m_presentationBorderColor = next;
         markPaintDirty(previous);
     };
@@ -75,7 +75,7 @@ void Container::animateBorderColor(const graphics::Color& color, const lcl::moti
 void Container::setBorderWidth(float width) {
     m_borderWidth = std::max(0.0f, width);
     const auto apply = [this](float next) {
-        const graphics::RectF previous = getPresentationPaintBounds();
+        const graphics::RectF previous = getVisiblePresentationPaintBounds();
         m_presentationBorderWidth = next;
         markPaintDirty(previous);
     };
@@ -109,7 +109,7 @@ float Container::getPresentationValue(AnimatableProperty property) const {
 }
 
 void Container::applyPresentationValue(AnimatableProperty property, float value) {
-    const graphics::RectF previous = getPresentationPaintBounds();
+    const graphics::RectF previous = getVisiblePresentationPaintBounds();
     const auto byte = static_cast<uint8_t>(std::clamp(std::lround(value), 0l, 255l));
     switch (property) {
         case AnimatableProperty::BackgroundRed: m_presentationBackgroundColor.r = byte; break;

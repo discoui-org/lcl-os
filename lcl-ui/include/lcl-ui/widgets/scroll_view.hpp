@@ -56,6 +56,8 @@ private:
     float m_touchStartY{0.0f};
     float m_touchStartScrollY{0.0f};
     bool m_cacheValid{false};
+    bool m_cachedSubtreeAnimating{false};
+    std::optional<graphics::RectF> m_cachedAnimationBounds{};
     uint64_t m_cachedContentPaintRevision{0};
     uint64_t m_cachedContentPresentationRevision{0};
     float m_cachedContentWidth{0.0f};
