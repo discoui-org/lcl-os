@@ -143,6 +143,32 @@ const Theme& defaultTheme() {
     return theme;
 }
 
+const TypographyStyle& typographyForRole(const Theme& theme, TextRole role) {
+    switch (role) {
+        case TextRole::Title: return theme.typography.title;
+        case TextRole::Description: return theme.typography.description;
+        case TextRole::Caption: return theme.typography.caption;
+        case TextRole::Body:
+        default: return theme.typography.body;
+    }
+}
+
+const WidgetStyle& widgetStyleForRole(const Theme& theme,
+                                      WidgetStyleRole role) {
+    switch (role) {
+        case WidgetStyleRole::PrimarySurface: return theme.primarySurface;
+        case WidgetStyleRole::SecondarySurface: return theme.secondarySurface;
+        case WidgetStyleRole::GroupedSurface: return theme.groupedSurface;
+        case WidgetStyleRole::QuietButton: return theme.quietButton;
+        case WidgetStyleRole::TextField: return theme.textField;
+        case WidgetStyleRole::Toggle: return theme.toggle;
+        case WidgetStyleRole::MenuItem: return theme.menuItem;
+        case WidgetStyleRole::Popover: return theme.popover;
+        case WidgetStyleRole::PrimaryButton:
+        default: return theme.primaryButton;
+    }
+}
+
 ResolvedStyle resolveStyle(const WidgetStyle& style, StyleState state) {
     const StyleValues& selected = valuesForState(style, state);
     return {

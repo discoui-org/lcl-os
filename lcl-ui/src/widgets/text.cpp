@@ -23,6 +23,18 @@ void Text::setFontSize(float size) {
     markDirty();
 }
 
+void Text::resetFontSize() {
+    if (!m_hasExplicitFontSize) return;
+    m_hasExplicitFontSize = false;
+    styleDidChange();
+}
+
+void Text::setTextRole(lcl::theme::TextRole role) {
+    if (m_textRole == role) return;
+    m_textRole = role;
+    styleDidChange();
+}
+
 void Text::setFontFamily(graphics::FontFamily family) {
     if (m_fontFamily == family) return;
     m_fontFamily = family;
@@ -47,15 +59,19 @@ const lcl::theme::WidgetStyle* Text::defaultStyle() const noexcept {
 }
 
 void Text::styleDidChange() {
+    const auto& typography = lcl::theme::typographyForRole(
+        getTheme(), m_textRole);
     if (!m_hasExplicitFontSize) {
-        m_fontSize = getTheme().typography.body.fontSize;
+        m_fontSize = typography.fontSize;
         updateMeasureFunc();
     }
     if (!m_hasExplicitTextColor) {
-        const auto* style = resolvedStyle();
-        if (style) {
+        if (hasStyleOverride()) {
+            const auto* style = resolvedStyle();
             m_textColor = lcl::theme::resolveStyle(
                 *style, lcl::theme::StyleState::Normal).foreground;
+        } else {
+            m_textColor = typography.foreground;
         }
     }
     markDirty();

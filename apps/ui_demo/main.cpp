@@ -17,15 +17,6 @@
 
 using namespace lcl::ui;
 
-namespace {
-
-void applyTypography(Text &text, const lcl::theme::TypographyRole &role) {
-  text.setFontSize(role.fontSize);
-  text.setTextColor(role.foreground);
-}
-
-} // namespace
-
 int main() {
   std::cout << "========================================\n";
   std::cout << "  LCL OS - lcl-ui ScrollView Live Demo  \n";
@@ -77,28 +68,28 @@ int main() {
   auto cardContainer = std::make_unique<Container>();
   cardContainer->getYogaNode().setDirection(YGFlexDirectionColumn);
   cardContainer->getYogaNode().setAlignItems(YGAlignCenter);
-  cardContainer->useStyle(theme.primarySurface);
+  cardContainer->useThemeStyle(lcl::theme::WidgetStyleRole::PrimarySurface);
   cardContainer->getYogaNode().setPadding(YGEdgeAll, metrics.cardPadding);
   cardContainer->getYogaNode().setGap(YGGutterAll, 12.0f);
 
   // Title & Status Label
   auto titleText = std::make_unique<Text>("ScrollView Test Paneli");
-  applyTypography(*titleText, theme.typography.title);
+  titleText->setTextRole(lcl::theme::TextRole::Title);
 
   auto statusText = std::make_unique<Text>("Seçilen: Henüz yok (Tıklama: 0)");
   Text *textPtr = statusText.get();
-  applyTypography(*statusText, theme.typography.description);
+  statusText->setTextRole(lcl::theme::TextRole::Description);
 
   auto popoverTitle = std::make_unique<Text>("Popover v1");
-  applyTypography(*popoverTitle, theme.typography.body);
+  popoverTitle->setTextRole(lcl::theme::TextRole::Body);
 
   auto popoverStatus = std::make_unique<Text>("Popover: kapalı");
   Text *popoverStatusPtr = popoverStatus.get();
-  applyTypography(*popoverStatus, theme.typography.description);
+  popoverStatus->setTextRole(lcl::theme::TextRole::Description);
   popoverStatus->getYogaNode().setWidth(300.0f);
   popoverStatus->getYogaNode().setHeight(18.0f);
 
-  auto makePopoverContent = [&popover, popoverStatusPtr, &theme](
+  auto makePopoverContent = [&popover, popoverStatusPtr](
                                 const std::string &message) {
     auto handleSlot = std::make_shared<TransientHandle>(0);
     auto panelContent = std::make_unique<Container>();
@@ -106,7 +97,7 @@ int main() {
     panelContent->getYogaNode().setGap(YGGutterAll, 10.0f);
 
     auto messageText = std::make_unique<Text>(message);
-    applyTypography(*messageText, theme.typography.body);
+    messageText->setTextRole(lcl::theme::TextRole::Body);
 
     auto popupField = std::make_unique<TextField>();
     popupField->setPlaceholder("Popover TextField");
@@ -126,7 +117,8 @@ int main() {
 
   auto localPopoverButton = std::make_unique<Button>("Popover aç");
   Button *localPopoverButtonPtr = localPopoverButton.get();
-  localPopoverButton->useStyle(theme.quietButton);
+  localPopoverButton->useThemeStyle(
+      lcl::theme::WidgetStyleRole::QuietButton);
   localPopoverButton->setWidth(220.0f);
   localPopoverButton->setHeight(metrics.regularControlHeight);
   localPopoverButton->setOnClick(
@@ -158,17 +150,18 @@ int main() {
   auto scrollContent = std::make_unique<Container>();
   scrollContent->getYogaNode().setDirection(YGFlexDirectionColumn);
   scrollContent->getYogaNode().setGap(YGGutterAll, 8.0f);
-  scrollContent->useStyle(theme.groupedSurface);
+  scrollContent->useThemeStyle(
+      lcl::theme::WidgetStyleRole::GroupedSurface);
   scrollContent->getYogaNode().setPadding(YGEdgeAll, metrics.groupPadding);
 
   // TextField Widget Lab section
   auto textFieldTitle = std::make_unique<Text>("TextField");
-  applyTypography(*textFieldTitle, theme.typography.body);
+  textFieldTitle->setTextRole(lcl::theme::TextRole::Body);
 
   auto textFieldStatus =
       std::make_unique<Text>("Son değişiklik: Henüz yok");
   Text *textFieldStatusPtr = textFieldStatus.get();
-  applyTypography(*textFieldStatus, theme.typography.description);
+  textFieldStatus->setTextRole(lcl::theme::TextRole::Description);
   textFieldStatus->getYogaNode().setWidth(300.0f);
   textFieldStatus->getYogaNode().setHeight(18.0f);
   textFieldStatus->setClipsToBounds(true);
@@ -207,7 +200,7 @@ int main() {
   scrollContent->addChild(std::move(textFieldStatus));
 
   auto buttonStyleTitle = std::make_unique<Text>("Native Button Styles");
-  applyTypography(*buttonStyleTitle, theme.typography.body);
+  buttonStyleTitle->setTextRole(lcl::theme::TextRole::Body);
 
   auto buttonStyleRow = std::make_unique<Container>();
   buttonStyleRow->setWidth(300.0f);
@@ -222,7 +215,7 @@ int main() {
   auto styledButton = std::make_unique<Button>("useStyle");
   styledButton->setWidth(140.0f);
   styledButton->setHeight(metrics.regularControlHeight);
-  styledButton->useStyle(theme.quietButton);
+  styledButton->useThemeStyle(lcl::theme::WidgetStyleRole::QuietButton);
 
   buttonStyleRow->addChild(std::move(defaultButton));
   buttonStyleRow->addChild(std::move(styledButton));
@@ -230,13 +223,13 @@ int main() {
   scrollContent->addChild(std::move(buttonStyleRow));
 
   auto toggleTitle = std::make_unique<Text>("Toggle v1");
-  applyTypography(*toggleTitle, theme.typography.body);
+  toggleTitle->setTextRole(lcl::theme::TextRole::Body);
   auto toggleStatus = std::make_unique<Text>("Toggle: henüz değişiklik yok");
   Text *toggleStatusPtr = toggleStatus.get();
-  applyTypography(*toggleStatus, theme.typography.description);
+  toggleStatus->setTextRole(lcl::theme::TextRole::Description);
   toggleStatus->setHeight(18.0f);
 
-  const auto makeToggleRow = [toggleStatusPtr, &theme, &metrics](
+  const auto makeToggleRow = [toggleStatusPtr, &metrics](
                                  const std::string &label,
                                  bool initialValue,
                                  bool enabled) {
@@ -248,8 +241,8 @@ int main() {
     row->getYogaNode().setJustifyContent(YGJustifySpaceBetween);
 
     auto rowLabel = std::make_unique<Text>(label);
-    applyTypography(*rowLabel, enabled ? theme.typography.body
-                                      : theme.typography.caption);
+    rowLabel->setTextRole(enabled ? lcl::theme::TextRole::Body
+                                  : lcl::theme::TextRole::Caption);
 
     auto toggle = std::make_unique<Toggle>(initialValue);
     toggle->setEnabled(enabled);
@@ -270,10 +263,10 @@ int main() {
   scrollContent->addChild(makeToggleRow("Disabled", false, false));
 
   auto menuTitle = std::make_unique<Text>("Menu v1");
-  applyTypography(*menuTitle, theme.typography.body);
+  menuTitle->setTextRole(lcl::theme::TextRole::Body);
   auto menuStatus = std::make_unique<Text>("Menu: henüz seçim yok");
   Text *menuStatusPtr = menuStatus.get();
-  applyTypography(*menuStatus, theme.typography.description);
+  menuStatus->setTextRole(lcl::theme::TextRole::Description);
   menuStatus->setHeight(18.0f);
   auto menuButton = std::make_unique<Button>("Open Menu");
   Button *menuButtonPtr = menuButton.get();
@@ -309,13 +302,14 @@ int main() {
   auto focusGroup = std::make_unique<Container>();
   focusGroup->getYogaNode().setDirection(YGFlexDirectionColumn);
   focusGroup->getYogaNode().setGap(YGGutterAll, 8.0f);
-  focusGroup->useStyle(theme.secondarySurface);
+  focusGroup->useThemeStyle(
+      lcl::theme::WidgetStyleRole::SecondarySurface);
   focusGroup->setPadding(YGEdgeAll, metrics.groupPadding);
 
   auto focusTitle = std::make_unique<Text>("Focus Traversal");
-  applyTypography(*focusTitle, theme.typography.body);
+  focusTitle->setTextRole(lcl::theme::TextRole::Body);
   auto focusHint = std::make_unique<Text>("Tab / Shift+Tab (normal window sırası)");
-  applyTypography(*focusHint, theme.typography.caption);
+  focusHint->setTextRole(lcl::theme::TextRole::Caption);
 
   auto focusButtonA = std::make_unique<Button>("Button A");
   auto focusFieldA = std::make_unique<TextField>();
@@ -338,7 +332,7 @@ int main() {
     std::string rowName =
         "Satır #" + std::to_string(i) + (i % 2 == 0 ? " (Çift)" : " (Tek)");
     auto rowBtn = std::make_unique<Button>(rowName);
-    rowBtn->useStyle(theme.quietButton);
+    rowBtn->useThemeStyle(lcl::theme::WidgetStyleRole::QuietButton);
     rowBtn->setHeight(metrics.compactControlHeight);
 
     rowBtn->setOnClick([i, textPtr]() {
@@ -368,7 +362,8 @@ int main() {
   auto edgePopoverButton =
       std::make_unique<Button>("Edge popover");
   Button *edgePopoverButtonPtr = edgePopoverButton.get();
-  edgePopoverButton->useStyle(theme.quietButton);
+  edgePopoverButton->useThemeStyle(
+      lcl::theme::WidgetStyleRole::QuietButton);
   edgePopoverButton->getYogaNode().setPositionType(YGPositionTypeAbsolute);
   edgePopoverButton->setPosition(YGEdgeLeft, 670.0f);
   edgePopoverButton->setPosition(YGEdgeTop, 530.0f);

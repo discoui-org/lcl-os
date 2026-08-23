@@ -23,13 +23,12 @@ uint32_t allocatePopupSurfaceId(uint32_t parentSurfaceId) noexcept {
 }
 
 std::unique_ptr<FocusScope> makePanel(std::unique_ptr<Widget> content,
-                                      const graphics::RectF& geometry,
-                                      const lcl::theme::Theme& theme) {
+                                      const graphics::RectF& geometry) {
     auto panel = std::make_unique<FocusScope>();
     panel->setWidth(geometry.width);
     panel->setHeight(geometry.height);
     panel->getYogaNode().setDirection(YGFlexDirectionColumn);
-    panel->useStyle(theme.popover);
+    panel->useThemeStyle(lcl::theme::WidgetStyleRole::Popover);
     if (content) {
         panel->addChild(std::move(content));
     }
@@ -134,8 +133,7 @@ PopoverOpenResult Popover::showImpl(
         popup->getTheme().popover, lcl::theme::StyleState::Normal);
     popup->setWindowCornerStyle(panelStyle.cornerRadius, 2.0f);
     popup->setRootWidget(makePanel(
-        std::move(content), {0.0f, 0.0f, geometry.width, geometry.height},
-        popup->getTheme()));
+        std::move(content), {0.0f, 0.0f, geometry.width, geometry.height}));
     WindowApp* popupWindow = popup.get();
     state->popupWindow = popupWindow;
     state->popupWindowLifetime = popupWindow->getLifetimeToken();

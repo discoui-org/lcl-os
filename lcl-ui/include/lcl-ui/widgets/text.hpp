@@ -22,7 +22,11 @@ public:
     const std::string& getText() const { return m_text; }
 
     void setFontSize(float size);
+    void resetFontSize();
     float getFontSize() const { return m_fontSize; }
+
+    void setTextRole(lcl::theme::TextRole role);
+    lcl::theme::TextRole getTextRole() const noexcept { return m_textRole; }
 
     void setFontFamily(graphics::FontFamily family);
     graphics::FontFamily getFontFamily() const { return m_fontFamily; }
@@ -49,6 +53,7 @@ private:
     graphics::Color m_textColor{255, 255, 255, 255};
     bool m_hasExplicitFontSize{false};
     bool m_hasExplicitTextColor{false};
+    lcl::theme::TextRole m_textRole{lcl::theme::TextRole::Body};
     TextAlign m_textAlign{TextAlign::Start};
 };
 

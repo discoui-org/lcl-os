@@ -103,6 +103,8 @@ public:
     void clearInteractionStyle(InteractionState state);
     /** Apply one explicit native style; no selector or cascade is involved. */
     void useStyle(lcl::theme::WidgetStyle style);
+    /** Bind to a semantic role that is resolved again whenever Theme changes. */
+    void useThemeStyle(lcl::theme::WidgetStyleRole role);
     void clearStyle();
     const lcl::theme::Theme& getTheme() const noexcept;
     void setInteractionEnabled(bool enabled);
@@ -161,6 +163,9 @@ protected:
     void endPresentation(graphics::Canvas& canvas) const;
     void drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect);
     const lcl::theme::WidgetStyle* resolvedStyle() const noexcept;
+    bool hasStyleOverride() const noexcept {
+        return m_explicitStyle.has_value() || m_themeStyleRole.has_value();
+    }
     virtual const lcl::theme::WidgetStyle* defaultStyle() const noexcept {
         return nullptr;
     }
@@ -204,6 +209,7 @@ protected:
     std::array<std::optional<InteractionStyle>, 5> m_interactionStyles;
     const lcl::theme::ThemeContext* m_themeContext{nullptr};
     std::optional<lcl::theme::WidgetStyle> m_explicitStyle;
+    std::optional<lcl::theme::WidgetStyleRole> m_themeStyleRole;
     std::function<void()> m_onClick{nullptr};
     bool m_interactionEnabled{true};
     bool m_declarativeHovered{false};

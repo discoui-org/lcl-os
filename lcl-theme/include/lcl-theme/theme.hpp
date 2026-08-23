@@ -14,6 +14,25 @@ enum class StyleState {
     Disabled,
 };
 
+enum class TextRole {
+    Title,
+    Body,
+    Description,
+    Caption,
+};
+
+enum class WidgetStyleRole {
+    PrimarySurface,
+    SecondarySurface,
+    GroupedSurface,
+    PrimaryButton,
+    QuietButton,
+    TextField,
+    Toggle,
+    MenuItem,
+    Popover,
+};
+
 struct StyleValues {
     std::optional<graphics::Color> background;
     std::optional<graphics::Color> foreground;
@@ -74,16 +93,16 @@ struct SemanticColors {
     graphics::Color windowTitleBlurred{72, 72, 74, 255};
 };
 
-struct TypographyRole {
+struct TypographyStyle {
     graphics::Color foreground{255, 255, 255, 255};
     float fontSize{14.0f};
 };
 
 struct Typography {
-    TypographyRole title;
-    TypographyRole body;
-    TypographyRole description;
-    TypographyRole caption;
+    TypographyStyle title;
+    TypographyStyle body;
+    TypographyStyle description;
+    TypographyStyle caption;
 };
 
 struct ThemeMetrics {
@@ -119,6 +138,9 @@ struct Theme {
 
 Theme createDefaultTheme();
 const Theme& defaultTheme();
+const TypographyStyle& typographyForRole(const Theme& theme, TextRole role);
+const WidgetStyle& widgetStyleForRole(const Theme& theme,
+                                      WidgetStyleRole role);
 ResolvedStyle resolveStyle(const WidgetStyle& style, StyleState state);
 
 class ThemeContext {

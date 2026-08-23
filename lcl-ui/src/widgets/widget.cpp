@@ -62,15 +62,25 @@ void Widget::clearInteractionStyle(InteractionState state) {
 }
 
 void Widget::useStyle(lcl::theme::WidgetStyle style) {
+    m_themeStyleRole.reset();
     m_explicitStyle = std::move(style);
     styleDidChange();
     applyDeclarativeInteractionState();
     markDirty();
 }
 
-void Widget::clearStyle() {
-    if (!m_explicitStyle) return;
+void Widget::useThemeStyle(lcl::theme::WidgetStyleRole role) {
     m_explicitStyle.reset();
+    m_themeStyleRole = role;
+    styleDidChange();
+    applyDeclarativeInteractionState();
+    markDirty();
+}
+
+void Widget::clearStyle() {
+    if (!m_explicitStyle && !m_themeStyleRole) return;
+    m_explicitStyle.reset();
+    m_themeStyleRole.reset();
     styleDidChange();
     applyDeclarativeInteractionState();
     markDirty();
@@ -81,7 +91,11 @@ const lcl::theme::Theme& Widget::getTheme() const noexcept {
 }
 
 const lcl::theme::WidgetStyle* Widget::resolvedStyle() const noexcept {
-    return m_explicitStyle ? &*m_explicitStyle : defaultStyle();
+    if (m_explicitStyle) return &*m_explicitStyle;
+    if (m_themeStyleRole) {
+        return &lcl::theme::widgetStyleForRole(getTheme(), *m_themeStyleRole);
+    }
+    return defaultStyle();
 }
 
 void Widget::setThemeContext(const lcl::theme::ThemeContext* context) {
