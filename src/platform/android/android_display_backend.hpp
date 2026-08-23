@@ -12,7 +12,7 @@ namespace lcl::platform::android {
 class AndroidHidlDisplayBackend;
 
 /**
- * @brief Android display facade selecting Composer3 AIDL or Composer 2.4 HIDL.
+ * @brief Android display facade selecting Composer3 AIDL or Composer 2.2/2.4 HIDL.
  *
  * Manages the selected Composer client session, display configuration discovery,
  * primary presentation layer lifecycle, and AHardwareBuffer presentation.
@@ -56,7 +56,7 @@ private:
     enum class BackendKind {
         None,
         AidlComposer3,
-        HidlComposer24,
+        HidlComposer,
     };
 
     bool initializeAidl();

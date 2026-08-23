@@ -9,7 +9,7 @@ struct AHardwareBuffer;
 
 namespace lcl::platform::android {
 
-/** Android Hardware Composer 2.4 HIDL presentation path. */
+/** Android Hardware Composer 2.2/2.4 HIDL presentation path. */
 class AndroidHidlDisplayBackend final {
 public:
     struct Impl;

@@ -58,7 +58,7 @@ LCL OS provides a unified CLI driver via `./main.py`:
 ```
 *Boots the Android Emulator directly attaching the exact, byte-for-byte canonical rootfs (`lcl-rootfs-x86_64.ext4`).*
 
-### 5. Run on a Rooted ARM64 Android Phone (Composer3 AIDL / Composer 2.4 HIDL)
+### 5. Run on a Rooted ARM64 Android Phone (Composer3 AIDL / Composer 2.2–2.4 HIDL)
 
 ```bash
 ./main.py android
@@ -102,7 +102,7 @@ When LCL OS boots, launch applications from the built-in terminal or using the `
 
 ## Key Architectural Principles
 
-1. **No X11 / No Wayland:** Direct EGL/DRM/KMS scanout on bare metal; native Composer3 AIDL or Composer 2.4 HIDL on mobile substrates.
+1. **No X11 / No Wayland:** Direct EGL/DRM/KMS scanout on bare metal; native Composer3 AIDL or Composer 2.2–2.4 HIDL on mobile substrates.
 2. **Platform-Independent Application Binaries (Same-Binary Invariant):** For the same CPU architecture, LCL application executables (`Terminal.app`, `lcl-desktop-shell`, `lcl-sessiond`, etc.) are 100% byte-for-byte identical across Linux DRM/KMS and Android AVD targets.
 3. **Decoupled Window Manager & Compositor:** Window Manager owns spatial coordinates and geometry state; Compositor acts as a pure presentation engine.
 4. **Secure Unix Domain Socket IPC:** Robust little-endian protocol over `SOCK_SEQPACKET` with `0600` permissions and kernel peer credential verification (`SO_PEERCRED`).

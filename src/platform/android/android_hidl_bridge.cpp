@@ -16,6 +16,8 @@
 #endif
 
 #define LOG_TAG "LclHidlDisplay"
+#include <android/hardware/graphics/composer/2.2/IComposer.h>
+#include <android/hardware/graphics/composer/2.2/IComposerClient.h>
 #include <android/hardware/graphics/composer/2.4/IComposer.h>
 #include <android/hardware/graphics/composer/2.4/IComposerClient.h>
 #include <android/hardware/graphics/composer/2.1/IComposerCallback.h>
@@ -25,10 +27,12 @@
 #include <unistd.h>
 
 #include <condition_variable>
+#include <array>
 #include <mutex>
 #include <vector>
 
 namespace composer21 = ::android::hardware::graphics::composer::V2_1;
+namespace composer22 = ::android::hardware::graphics::composer::V2_2;
 namespace composer24 = ::android::hardware::graphics::composer::V2_4;
 namespace common10 = ::android::hardware::graphics::common::V1_0;
 namespace common12 = ::android::hardware::graphics::common::V1_2;
@@ -71,16 +75,17 @@ public:
             case composer21::IComposerClient::Command::SET_CHANGED_COMPOSITION_TYPES:
                 parsed = length % 3 == 0;
                 while (parsed && length > 0) {
-                    (void)read64();
-                    (void)readSigned();
+                    const uint64_t layer = read64();
+                    const auto type = static_cast<composer21::IComposerClient::Composition>(
+                        readSigned());
+                    m_changedTypes.emplace_back(layer, type);
                     length -= 3;
-                    m_hasChangedTypes = true;
                 }
                 break;
             case composer21::IComposerClient::Command::SET_DISPLAY_REQUESTS:
                 parsed = length % 3 == 1;
                 if (parsed) {
-                    (void)read();
+                    m_displayRequestMask = read();
                     while (length > 1) {
                         (void)read64();
                         (void)read();
@@ -98,9 +103,9 @@ public:
             case composer21::IComposerClient::Command::SET_RELEASE_FENCES:
                 parsed = length % 3 == 0;
                 while (parsed && length > 0) {
-                    (void)read64();
+                    const uint64_t layer = read64();
                     const int fence = readFence();
-                    if (fence >= 0) close(fence);
+                    m_releaseFences.emplace_back(layer, fence);
                     length -= 3;
                 }
                 break;
@@ -128,33 +133,54 @@ public:
 
     void resetResults() {
         m_errors.clear();
-        m_hasChangedTypes = false;
+        m_changedTypes.clear();
+        m_displayRequestMask = 0;
         m_currentDisplay = 0;
         if (m_presentFence >= 0) {
             close(m_presentFence);
             m_presentFence = -1;
         }
+        for (const auto& [layer, fence] : m_releaseFences) {
+            (void)layer;
+            if (fence >= 0) close(fence);
+        }
+        m_releaseFences.clear();
     }
 
-    bool hasChangedTypes() const { return m_hasChangedTypes; }
+    bool hasChangedTypes() const { return !m_changedTypes.empty(); }
+    bool changedToClient(uint64_t layer) const {
+        for (const auto& [changedLayer, type] : m_changedTypes) {
+            if (changedLayer == layer && type == composer21::IComposerClient::Composition::CLIENT) {
+                return true;
+            }
+        }
+        return false;
+    }
+    uint32_t displayRequestMask() const { return m_displayRequestMask; }
     bool hasErrors() const { return !m_errors.empty(); }
     int takePresentFence() {
         const int fence = m_presentFence;
         m_presentFence = -1;
         return fence;
     }
+    std::vector<std::pair<uint64_t, int>> takeReleaseFences() {
+        return std::move(m_releaseFences);
+    }
     const std::vector<std::pair<uint32_t, composer21::Error>>& errors() const { return m_errors; }
 
 private:
     uint64_t m_currentDisplay{0};
-    bool m_hasChangedTypes{false};
+    uint32_t m_displayRequestMask{0};
     int m_presentFence{-1};
+    std::vector<std::pair<uint64_t, composer21::IComposerClient::Composition>> m_changedTypes;
+    std::vector<std::pair<uint64_t, int>> m_releaseFences;
     std::vector<std::pair<uint32_t, composer21::Error>> m_errors;
 };
 
 struct AndroidHidlDisplayBackend::Impl {
-    sp<composer24::IComposer> composer;
-    sp<composer24::IComposerClient> client;
+    sp<composer24::IComposer> composer24;
+    sp<composer22::IComposer> composer22;
+    sp<composer22::IComposerClient> client;
     sp<composer21::IComposerCallback> callback;
     composer24::CommandWriterBase writer{1024};
     HidlCommandReader reader;
@@ -163,6 +189,9 @@ struct AndroidHidlDisplayBackend::Impl {
     bool hotplugReceived{false};
     uint64_t hotplugDisplayId{0};
     bool hotplugConnected{false};
+    uint32_t composerMinorVersion{0};
+    std::array<const AHardwareBuffer*, 4> layerBufferSlots{};
+    uint32_t nextLayerBufferSlot{0};
 };
 
 class HidlComposerCallback final : public composer21::IComposerCallback {
@@ -223,28 +252,60 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale) {
     m_impl->hotplugConnected = false;
 
     ::android::hardware::configureRpcThreadpool(1, false);
-    m_impl->composer = composer24::IComposer::getService("default", false);
-    if (!m_impl->composer) {
-        std::cerr << "[AndroidHidlDisplayBackend] Composer 2.4 service not found\n";
-        return false;
+    composer21::Error createError = composer21::Error::NO_RESOURCES;
+    m_impl->composer24 = composer24::IComposer::tryGetService("default", false);
+    if (m_impl->composer24) {
+        for (int retry = 0; retry < 15 && !m_impl->client; ++retry) {
+            const auto result = m_impl->composer24->createClient_2_4(
+                [&](composer24::Error error, const sp<composer24::IComposerClient>& client) {
+                    createError = static_cast<composer21::Error>(error);
+                    m_impl->client = client;
+                });
+            if (!result.isOk()) {
+                std::cerr << "[AndroidHidlDisplayBackend] createClient_2_4 transaction failed: "
+                          << result.description() << "\n";
+            }
+            if (!m_impl->client) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        if (m_impl->client && createError == composer21::Error::NONE) {
+            m_impl->composerMinorVersion = 4;
+        }
     }
 
-    composer24::Error createError = composer24::Error::NO_RESOURCES;
-    for (int retry = 0; retry < 15 && !m_impl->client; ++retry) {
-        const auto result = m_impl->composer->createClient_2_4(
-            [&](composer24::Error error, const sp<composer24::IComposerClient>& client) {
-                createError = error;
-                m_impl->client = client;
-            });
-        if (!result.isOk()) {
-            std::cerr << "[AndroidHidlDisplayBackend] createClient_2_4 transaction failed: "
-                      << result.description() << "\n";
+    if (!m_impl->client) {
+        createError = composer21::Error::NO_RESOURCES;
+        m_impl->composer22 = composer22::IComposer::tryGetService("default", false);
+        if (m_impl->composer22) {
+            for (int retry = 0; retry < 15 && !m_impl->client; ++retry) {
+                const auto result = m_impl->composer22->createClient(
+                    [&](composer21::Error error,
+                        const sp<composer21::IComposerClient>& client21) {
+                        createError = error;
+                        if (!client21 || error != composer21::Error::NONE) return;
+                        const auto castResult = composer22::IComposerClient::castFrom(client21);
+                        if (!castResult.isOk()) {
+                            std::cerr << "[AndroidHidlDisplayBackend] Composer 2.2 client cast failed: "
+                                      << castResult.description() << "\n";
+                            return;
+                        }
+                        m_impl->client = castResult;
+                    });
+                if (!result.isOk()) {
+                    std::cerr << "[AndroidHidlDisplayBackend] createClient 2.2 transaction failed: "
+                              << result.description() << "\n";
+                }
+                if (!m_impl->client) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+            if (m_impl->client && createError == composer21::Error::NONE) {
+                m_impl->composerMinorVersion = 2;
+            }
         }
-        if (!m_impl->client) std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
-    if (!m_impl->client || createError != composer24::Error::NONE) {
-        std::cerr << "[AndroidHidlDisplayBackend] createClient_2_4 failed (likely owned by SurfaceFlinger): "
-                  << composer24::toString(createError) << "\n";
+
+    if (!m_impl->client || createError != composer21::Error::NONE) {
+        std::cerr << "[AndroidHidlDisplayBackend] Composer 2.4/2.2 client creation failed "
+                     "(likely owned by SurfaceFlinger): "
+                  << composer21::toString(createError) << "\n";
         shutdown();
         return false;
     }
@@ -271,6 +332,17 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale) {
     }
     m_displayId = m_impl->hotplugDisplayId;
     m_displayConnected = true;
+
+    // Client targets have a display-scoped buffer cache separate from layer
+    // buffers. Reserve the slots before any SET_CLIENT_TARGET command; older
+    // Composer 2.2 services reject otherwise valid handles as BAD_PARAMETER.
+    const auto clientTargetSlotsResult =
+        m_impl->client->setClientTargetSlotCount(m_displayId, 4);
+    if (!clientTargetSlotsResult.isOk() || !isNone(clientTargetSlotsResult)) {
+        std::cerr << "[AndroidHidlDisplayBackend] setClientTargetSlotCount failed\n";
+        shutdown();
+        return false;
+    }
 
     uint32_t activeConfig = 0;
     composer21::Error queryError = composer21::Error::NO_RESOURCES;
@@ -336,7 +408,8 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale) {
     }
     m_hasLayer = true;
     m_initialized = true;
-    std::cerr << "[AndroidHidlDisplayBackend] initialized Composer 2.4 on display "
+    std::cerr << "[AndroidHidlDisplayBackend] initialized Composer 2."
+              << m_impl->composerMinorVersion << " on display "
               << m_displayId << " at " << width << "x" << height << "\n";
     return true;
 #endif
@@ -351,10 +424,14 @@ void AndroidHidlDisplayBackend::shutdown() {
     m_impl->writer.reset();
     m_impl->callback.clear();
     m_impl->client.clear();
-    m_impl->composer.clear();
+    m_impl->composer24.clear();
+    m_impl->composer22.clear();
     m_impl->hotplugReceived = false;
     m_impl->hotplugDisplayId = 0;
     m_impl->hotplugConnected = false;
+    m_impl->composerMinorVersion = 0;
+    m_impl->layerBufferSlots.fill(nullptr);
+    m_impl->nextLayerBufferSlot = 0;
 #endif
     m_initialized = false;
     m_displayConnected = false;
@@ -378,6 +455,24 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
     const Client::Rect frame{0, 0, width, height};
     const Client::FRect crop{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)};
     const std::vector<Client::Rect> region{frame};
+
+    // Composer buffer handles are cached by slot. Keep each scanout AHB on a
+    // stable slot instead of replacing slot 0 with a different handle every frame.
+    uint32_t bufferSlot = 0;
+    bool knownBuffer = false;
+    for (uint32_t slot = 0; slot < m_impl->layerBufferSlots.size(); ++slot) {
+        if (m_impl->layerBufferSlots[slot] == buffer) {
+            bufferSlot = slot;
+            knownBuffer = true;
+            break;
+        }
+    }
+    if (!knownBuffer) {
+        bufferSlot = m_impl->nextLayerBufferSlot;
+        m_impl->layerBufferSlots[bufferSlot] = buffer;
+        m_impl->nextLayerBufferSlot =
+            (m_impl->nextLayerBufferSlot + 1) % m_impl->layerBufferSlots.size();
+    }
 
     auto execute = [&]() -> bool {
         bool inputQueueChanged = false;
@@ -426,7 +521,8 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
     m_impl->reader.resetResults();
     m_impl->writer.selectDisplay(m_displayId);
     m_impl->writer.selectLayer(m_layerId);
-    m_impl->writer.setLayerBuffer(0, handle, acquireFenceFd >= 0 ? dup(acquireFenceFd) : -1);
+    m_impl->writer.setLayerBuffer(bufferSlot, handle,
+                                  acquireFenceFd >= 0 ? dup(acquireFenceFd) : -1);
     m_impl->writer.setLayerSurfaceDamage(region);
     m_impl->writer.setLayerBlendMode(Client::BlendMode::NONE);
     m_impl->writer.setLayerCompositionType(Client::Composition::DEVICE);
@@ -441,16 +537,38 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
     if (!execute()) return false;
 
     const bool changedTypes = m_impl->reader.hasChangedTypes();
+    const bool needsClientTarget =
+        m_impl->reader.changedToClient(m_layerId) ||
+        (m_impl->reader.displayRequestMask() &
+         static_cast<uint32_t>(Client::DisplayRequest::FLIP_CLIENT_TARGET)) != 0;
     m_impl->reader.resetResults();
     m_impl->writer.selectDisplay(m_displayId);
     if (changedTypes) m_impl->writer.acceptDisplayChanges();
+    if (needsClientTarget) {
+        // LCL has already composited the full display into this buffer. If the
+        // HAL rejects DEVICE composition, that frame is the required client target.
+        m_impl->writer.setClientTarget(bufferSlot, handle,
+                                       acquireFenceFd >= 0 ? dup(acquireFenceFd) : -1,
+                                       common12::Dataspace::UNKNOWN, region);
+    }
     m_impl->writer.presentDisplay();
     if (!execute()) return false;
 
     const int presentFence = m_impl->reader.takePresentFence();
+    auto releaseFences = m_impl->reader.takeReleaseFences();
     if (presentFence >= 0) {
         (void)sync_wait(presentFence, 1000);
         close(presentFence);
+    }
+    // A present fence does not replace the per-layer release fence. Wait until
+    // HWC has stopped reading the previous scanout buffer before returning to
+    // the renderer, which may reuse that buffer on the following frame.
+    for (const auto& [layer, fence] : releaseFences) {
+        (void)layer;
+        if (fence >= 0) {
+            (void)sync_wait(fence, 1000);
+            close(fence);
+        }
     }
     return true;
 #endif

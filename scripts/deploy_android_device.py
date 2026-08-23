@@ -6,7 +6,7 @@ Deploys lcl-core-android to a rooted Android device via ADB.
 Workflow:
   1. Push lcl-core-android and the optional HIDL bridge to /data/local/tmp/
   2. Stop Android System UI (launcher takeover mode)
-  3. Launch lcl-core-android as root (Composer3 AIDL / Composer 2.4 HIDL)
+  3. Launch lcl-core-android as root (Composer3 AIDL / Composer 2.2-2.4 HIDL)
   4. Restore System UI on exit / Ctrl+C
 
 Usage:
