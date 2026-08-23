@@ -42,8 +42,11 @@ Use neutral tones as defaults. Avoid catppuccin-like saturated accents.
 
 ## Implementation Notes
 
-- CSD and SSD host the same renderer-independent `WindowChromeWidget` state;
-  only their painters differ.
+- CSD and SSD use the same renderer-independent `WindowChromeWidget` state and
+  produce the same logical chrome `DisplayList`; CSD records it through the
+  client `Canvas`, while SSD replays it in the compositor.
 - Keep all radius/border tokens centralized where possible.
 - Layout, hit testing, actions, interaction state, motion, and visual color
   resolution come from `lcl-window-chrome`; neither host may reimplement them.
+- Window motion and hit testing must share the same forward/inverse
+  `WindowGroupTransform`. Device scale is applied only during raster replay.

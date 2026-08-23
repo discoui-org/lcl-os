@@ -62,9 +62,10 @@ adapters over the shared channel engine.
 
 ## Compositor resize ownership
 
-Protocol v4 pairs `ConfigureBounds` and `AttachBuffer` with a monotonic
+Protocol v13 pairs `ConfigureBounds` and buffer attachment with a monotonic
 `configureSerial`. Maximize/restore retains the old mapped client buffer while
-the shared spring animates one window-group rect for client and chrome. A
+the shared spring animates one `WindowGroupTransform` for client, chrome,
+popups, effects, and inverse hit testing. A
 matching resized buffer crossfades in; stale serials are closed and rejected.
 If no matching buffer arrives within 750 ms, geometry and state roll back and
 a fresh rollback configure is issued.

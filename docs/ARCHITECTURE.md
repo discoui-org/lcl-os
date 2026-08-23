@@ -18,7 +18,7 @@ The LCL architecture consists of 5 main decoupled layers:
 +-----------------------------------------------------------------------+
 |  Application & IPC Layer (lcl-ui clients, compositor AF_UNIX IPC)    |
 +-----------------------------------------------------------------------+
-|  Graphics & Window Manager (LCL raster/stb_truetype, FontRenderer, PTY)     |
+|  Graphics & Window Manager (`lcl-graphics`, `lcl-raster`, FontRenderer)     |
 +-----------------------------------------------------------------------+
 |  Linux Kernel & Hardware Layer (DRM/KMS, virtio_gpu, evdev, io_uring) |
 +-----------------------------------------------------------------------+
@@ -37,8 +37,18 @@ The LCL architecture consists of 5 main decoupled layers:
 ### II. Rendering & Window Management Layer
 * **Location:** `src/render/`, `src/apps/`
 * **Language:** C++20
+* **Logical graphics model (`lcl-graphics`):** Widgets and window chrome emit
+  immutable backend-neutral `DisplayList` commands using float logical
+  coordinates, paths, paints, clips, layers, text, images, and cached-layer
+  references. No device-pixel conversion occurs while the list is recorded.
+* **Raster execution (`lcl-raster`):** `RasterCanvas` records one frame and
+  submits it once at `endFrame()`. `RasterRenderer` replays that list through
+  the GLES or software backend. `RenderTarget.deviceScale` is applied only at
+  this raster boundary.
 * **Font & Text Engine (`FontRenderer`):** TrueType vector font rasterization via `stb_truetype` featuring subpixel antialiasing, macOS-style gamma correction, font-agnostic metric queries (`getCellWidth()`, `getCellHeight()`), and UTF-8 multi-byte sequence handling.
-* **Window Manager:** Decoupled spatial window layout engine tracking z-index, spatial coordinates (`x, y, width, height`), focus, and window frame rendering.
+* **Window Manager:** Decoupled spatial engine tracking z-index, logical
+  coordinates (`x, y, width, height`), focus, drag/resize state, and window
+  presentation transforms. It does not paint window contents.
 * **Terminal Engine (`TerminalApp` & `PTYManager`):** Pseudo-terminal (`/dev/pts/`) controller spawning interactive GNU Bash shells. Features font-agnostic canvas layout, `TIOCSWINSZ` PTY window size synchronization, VT100 write-head overwrite state tracking, and typing-aware 500ms blinking inverted block cursor rendering.
 
 ### III. Session, IPC & Application Bundle Subsystem
@@ -150,7 +160,13 @@ Guest display boot args (when `NATIVE=1`):
 - 1x displays: `video=` = host resolution, `lcl.scale=1`
 - QEMU cocoa: `full-screen=on,zoom-to-fit=on` (fill screen if mode list is inexact)
 
-`DisplayManager` prefers the boot-requested mode. Output initialization turns `lcl.scale` into `RenderTarget.deviceScale`; widgets, chrome, paths, strokes and effects remain in logical units and receive that scale only during raster replay.
+`DisplayManager` prefers the boot-requested mode. Output initialization turns
+`lcl.scale` into `RenderTarget.deviceScale`; widgets, chrome, paths, strokes,
+text, images, and effects remain in logical units and receive that scale only
+during raster replay. `WindowGroupTransform` owns the forward and inverse
+presentation matrices shared by client content, chrome, popups, effects, and
+hit testing. Physical input is converted to output-logical coordinates once;
+window-local input then uses the inverse group transform.
 
 ---
 
@@ -158,9 +174,9 @@ Guest display boot args (when `NATIVE=1`):
 
 `lcl-os` grafik ve pencere katmanında sorumlulukların ayrıştırılması (Separation of Concerns) kesin kurallarla tanımlanmıştır:
 
-1. **Client Applications (User Space / UI Kits):** Kendi iç düzenini (Flexbox, Grid, Monospace Cell) yönetir. WM'den gelen pencere resize isteklerini (`RESIZE_REQUEST` / `ConfigureBounds`) alır. Kendi mantığına göre uygun boyutta SHM buffer allocate eder ve `ATTACH_BUFFER` ile sunar. WM veya Compositor'ün ekran koordinatları (\(X, Y\)) hakkında bilgi sahibi değildir.
+1. **Client Applications (User Space / UI Kits):** Kendi iç düzenini (Flexbox, Grid, Monospace Cell) yönetir. WM'den gelen `ConfigureBounds` isteklerini mantıksal ölçülerle alır. Uygun fiziksel DMA-BUF backing'i oluşturur; desteklenmeyen ortamlarda aynı sözleşmenin `memfd`/SHM fallback'ini kullanır. `bufferScale` yalnız buffer tahsisi ve eşleme sınırındadır. İstemci WM veya Compositor'ün ekran koordinatları (\(X, Y\)) hakkında bilgi sahibi değildir.
 2. **Window Manager (WM):** Pencere geometrisi, odak yönetimi, sürükleme/boyutlandırma durum makinelerinin (`WM Drag/Resize State`) tek sahibidir. Sürüklenen kenara (`ResizeEdge`) göre sabit kalacak anchor noktasını korur. Client'tan gelen gerçek tampon boyutunu (\(frameW, frameH\)) kabul eder, `commitSurfaceGeometry` metodu üzerinden offset hesabını yapar ve pencerenin nihai dünya koordinatlarını (\(X_{final}, Y_{final}\)) belirler. Uygulamaya özel kod barındıramaz.
-3. **Compositor (Presentation Engine):** "Kör Çizici" (Blind Renderer) olarak çalışır. Tamponların ekrana çizimi, z-index harmanlaması (blending) ve vSync eşzamanlamasını üstlenir. Pencere durum makinelerinden veya kenar hesaplarından bağımsızdır. WM'in onayladığı geometriyi ve Client'ın sunduğu tamponu vSync anında atomic olarak ekrana çeker.
+3. **Compositor (Presentation Engine):** Tamponların ekrana çizimi, z-index harmanlaması (blending), sistem chrome display list'lerinin replay'i ve vSync eşzamanlamasını üstlenir. Pencere durum makinelerinin sahibi değildir; WM'in onayladığı mantıksal geometriyi, ortak `WindowGroupTransform`u ve Client'ın sunduğu fiziksel tamponu vSync anında atomik olarak birleştirir. Compositor `lcl-ui`ya bağlanmaz; `lcl-graphics`, `lcl-raster` ve `lcl-window-chrome` sınırında kalır.
 
 Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı değildir. `WindowApp` içindeki widget-olmayan `TransientController` yalnız stable handle, dismissal ve teardown policy'sini yönetir; local transient primitive gerektiğinde tek normal WindowRoot ağacında absolute Widget sibling olarak çizilir. `Popover v1` ise her zaman parent-bound `PopupSurface v1` kullanır.
 
@@ -198,8 +214,10 @@ Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı deği
    - **Compositor WindowManager:** Varsayılan olarak `SSD` modunda pencere başlık çubuğunu çizer. İstemci `CSD` talep ederse başlık çubuğu çizimini devre dışı bırakarak tüm render alanını istemciye devreder.
    - Her iki mod da renderer bağımsız `lcl-window-chrome` hedefindeki aynı
      `WindowChromeWidget` layout, hit-test, aksiyon, interaction, motion ve
-     görsel renk çözümlemesini host eder; yalnızca CSD Canvas painter ile SSD
-     compositor painter birbirinden ayrıdır.
+     görsel renk çözümlemesini kullanır. Aynı stil girdileri aynı mantıksal
+     `DisplayList`i üretir: CSD bu listeyi client `Canvas`ına kaydeder, SSD ise
+     compositor raster hedefinde replay eder. İkinci bir chrome painter veya
+     kontrol ağacı yoktur.
    - Mobil shell gelecekte aynı compositor ve revisioned shell-state sözleşmesini tüketir; ayrı bir `lcl-mobile-wm` veya paralel pencere otoritesi yoktur.
 
 ---

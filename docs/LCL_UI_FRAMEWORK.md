@@ -10,7 +10,7 @@
    - [WindowApp](#windowapp)
    - [Widget](#widget)
    - [Built-In Widgets (Container, Button, Text)](#built-in-widgets)
-   - [Canvas](#lcluicanvas)
+   - [Canvas](#lclgraphicscanvas)
 3. [Building Your First Application](#3-building-your-first-application)
 4. [Custom Widget Development & Procedural Animations](#4-custom-widget-development--procedural-animations)
 5. [Event Handling & Input Pipeline](#5-event-handling--input-pipeline)
@@ -20,18 +20,18 @@
 
 ## 1. Architecture Overview
 
-`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v13 Unix Domain `SOCK_SEQPACKET` IPC (`/run/user/1000/lcl-compositor.sock`), DMA-BUF, and lazy shared-memory (`memfd`) fallback.
+`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v13 Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by default), DMA-BUF, and lazy shared-memory (`memfd`) fallback.
 
 ```text
 +-----------------------------------------------------------+
 |                      lcl-ui Application                   |
-|  (WindowApp -> Widget Tree -> Yoga -> injected Canvas)    |
+| (WindowApp -> Widget Tree -> Yoga -> logical DisplayList) |
 +-----------------------------+-----------------------------+
-                              | SHM (memfd) + Unix Domain Socket
+                              | DMA-BUF or SHM + Unix Domain Socket
                               v
 +-----------------------------------------------------------+
 |                      LCL Core Compositor                  |
-|          (Direct DRM/KMS Scanout & EGL LCL raster Renderer)     |
+|        (Direct DRM/KMS scanout + LCL raster replay)       |
 +-----------------------------------------------------------+
 ```
 
@@ -40,25 +40,28 @@
 ## 2. Key Framework Classes
 
 ### `lcl::ui::WindowApp`
-*Header:* [`lcl-ui/include/lcl-ui/core/window_app.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/core/window_app.hpp)
+*Header:* [`lcl-ui/include/lcl-ui/core/window_app.hpp`](../lcl-ui/include/lcl-ui/core/window_app.hpp)
 
-`WindowApp` is the top-level application container. It handles window surface creation, SHM pixel allocation, IPC message dispatching, and 144Hz frame pacing.
+`WindowApp` is the top-level application container. It handles window surface
+creation, DMA-BUF allocation with lazy SHM fallback, IPC message dispatching,
+and active-frame pacing.
 
 #### Public Methods
 - `WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height, const std::string& title = "lcl-ui Application")`: Constructs a logical-size window with an explicitly selected drawing backend.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Binds the top-level Flexbox widget container.
 - `Widget* getRootWidget() const`: Returns the root widget pointer.
 - `void setAppId(std::string appId)`: Sets the required canonical application identity before connecting.
-- `bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v13 normal or configured popup surface.
+- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v13 normal or configured popup surface.
 - `registerLocalTransient(...)`: Registers an ordinary absolute-positioned Widget in the single WindowRoot tree with generic lifecycle/dismissal policy.
 - `configurePopupSurface(parentSurfaceId, role, x, y)`: Configures this `WindowApp` as a compositor-level popup that reuses the normal configure and buffer path.
 - `hostSurface(...)`: Owns and ticks an additional generic `WindowApp` surface from the same event loop; it contains no Popover-specific policy.
 - `bool setEdgeToEdge(bool enabled)`: Extends the surface material beneath compositor-owned system insets. Desktop window controls or mobile system indicators remain foreground chrome while the client widget tree stays inside its safe content area.
 - `BackdropSurface::setEffectBounds(EffectBounds::OuterSurface)`: Uses the compositor-owned outer surface rather than the local safe content rect.
 - `BackdropSurface::setTint(Color color)`: Adds the tint to the same compositor filter chain as blur and color adjustment, preventing separate inset and content shades.
-- `BackdropSurface::addFilter(FilterType::Glass, thicknessPx, refractionFactor, dispersionGain)`: Uses logical pixels for thickness, which follows the surface buffer scale. Zero thickness or refraction disables Glass; zero dispersion preserves refraction without RGB color separation.
+- `BackdropSurface::addFilter(FilterType::Glass, thickness, refractionFactor, dispersionGain)`: Declares thickness in logical units; the raster boundary applies `RenderTarget.deviceScale`, and `WindowApp` does not multiply it by `bufferScale`. Zero thickness or refraction disables Glass; zero dispersion preserves refraction without RGB color separation.
 - `void runEventLoop()`: Executes the non-blocking main event loop at **144 Hz target frame pacing** (~6.9ms target period).
-- `uint32_t* getPixelBuffer()`: Returns raw pointer to the SHM pixel buffer (`uint32_t` ARGB format).
+- `uint32_t* getPixelBuffer()`: Returns the current raster backing/staging
+  buffer (`uint32_t` ARGB format) when CPU access is available.
 
 ### `Popover` v1
 
@@ -92,7 +95,7 @@ plain `Container` trees so window traversal can continue past them.
 ---
 
 ### `lcl::ui::Widget`
-*Header:* [`lcl-ui/include/lcl-ui/widgets/widget.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/widgets/widget.hpp)
+*Header:* [`lcl-ui/include/lcl-ui/widgets/widget.hpp`](../lcl-ui/include/lcl-ui/widgets/widget.hpp)
 
 Base polymorphic class for all UI components.
 
@@ -103,7 +106,7 @@ Base polymorphic class for all UI components.
 - `const std::vector<std::unique_ptr<Widget>>& getChildren() const`: Returns list of children.
 - `void markDirty()`: Registers dirty damage bounds with `RenderPass` to schedule a frame redraw.
 - `void setVisible(bool visible)`: Controls widget visibility.
-- `virtual void draw(Canvas& canvas, const Rect& damageRect)`: Virtual render method called during damage passes through the backend-neutral Canvas contract.
+- `virtual void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect)`: Virtual render method called during damage passes through the backend-neutral Canvas contract.
 - `void setInteractionStyle(InteractionState state, InteractionStyle style)`: Defines presentation-only pseudo-state values for custom controls.
 - `virtual void setOnClick(std::function<void()> callback)`: Makes any widget clickable without a pointer-event subclass.
 - `void setInteractionEnabled(bool enabled)`: Enables or disables declarative pointer behavior.
@@ -112,10 +115,10 @@ Base polymorphic class for all UI components.
 
 ### Built-In Widgets
 
-#### `lcl::ui::Container` ([`container.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/widgets/container.hpp))
+#### `lcl::ui::Container` ([`container.hpp`](../lcl-ui/include/lcl-ui/widgets/container.hpp))
 A layout container supporting background colors, border colors, padding, and corner rounding.
 
-#### `lcl::ui::Button` ([`button.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/widgets/button.hpp))
+#### `lcl::ui::Button` ([`button.hpp`](../lcl-ui/include/lcl-ui/widgets/button.hpp))
 An interactive button component supporting hover/pressed states and click callbacks:
 ```cpp
 auto btn = std::make_unique<Button>("Click Me");
@@ -124,7 +127,7 @@ btn->setOnClick([]() {
 });
 ```
 
-#### `lcl::ui::Text` ([`text.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/widgets/text.hpp))
+#### `lcl::ui::Text` ([`text.hpp`](../lcl-ui/include/lcl-ui/widgets/text.hpp))
 A vector typography label component supporting custom font sizes and text content:
 ```cpp
 auto label = std::make_unique<Text>("Hello LCL OS");
@@ -134,20 +137,26 @@ label->setTextColor(0xFF38BDF8); // Sky Cyan
 
 ---
 
-### `lcl::ui::Canvas`
-*Header:* [`lcl-ui/include/lcl-graphics/canvas.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-graphics/canvas.hpp)
+### `lcl::graphics::Canvas`
+*Header:* [`lcl-graphics/include/lcl-graphics/canvas.hpp`](../lcl-graphics/include/lcl-graphics/canvas.hpp)
 
 The backend-neutral 2D drawing contract available inside `Widget::draw(...)`:
 - `drawRect(rect, color)`
 - `drawRoundedRect(rect, radius, fillColor, borderColor, borderWidth, roundness)`
 - `drawTopRoundedRect(rect, radius, color, roundness)`
+- `drawPath(path, paint)` and `drawEllipse(rect, paint)`
 - `drawText(x, y, text, color, fontSize)`
 - `drawBuffer(...)`
 
-`RasterCanvas` is the standard client SHM raster adapter. Applications select it
-explicitly with `lcl::render::makeRasterCanvas()` and link `lcl-raster`.
-Widgets themselves depend only on `Canvas`; `lcl-ui` does not link EGL, DRM,
-GBM, or GLES.
+Geometry, text sizes, radii, strokes, clips, and effects use float logical
+units. `RasterCanvas` records them into one immutable `DisplayList`; only
+`endFrame()` asks `RasterRenderer` to replay that list with
+`RenderTarget.deviceScale`. Cached layers and animation-stable rasterized text
+are display-list commands rather than immediate renderer calls.
+
+Applications select the standard adapter explicitly with
+`lcl::render::makeRasterCanvas()` and link `lcl-raster`. Widgets themselves
+depend only on `Canvas`; `lcl-ui` does not link EGL, DRM, GBM, or GLES.
 
 ---
 
@@ -212,7 +221,7 @@ int main() {
 
 For continuous procedural 2D canvas drawing or custom animations:
 
-1. Inherit from `Widget` and override `draw(Canvas& canvas, const Rect& damageRect)`.
+1. Inherit from `Widget` and override `draw(graphics::Canvas& canvas, const graphics::RectF& damageRect)`.
 2. Use Canvas primitives such as `drawRect`, `drawRoundedRect`, `drawText`, and `drawBuffer`.
 3. Call `markDirty()` **inside** `draw(...)` to continuously request damage recalculation for the next 144Hz frame.
 4. Launch the application using `app.runEventLoop()`.
@@ -224,7 +233,8 @@ public:
         m_startTime = std::chrono::steady_clock::now();
     }
 
-    void draw(Canvas& canvas, const Rect& damageRect) override {
+    void draw(lcl::graphics::Canvas& canvas,
+              const lcl::graphics::RectF& damageRect) override {
         (void)damageRect;
 
         // Draw an animated pulse through the portable Canvas contract.

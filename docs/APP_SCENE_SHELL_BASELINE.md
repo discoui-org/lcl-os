@@ -4,6 +4,12 @@ This document freezes the behavioral and verification baseline for the app,
 scene, and shell refactor. Later steps must preserve this baseline unless a
 change is explicitly approved before implementation.
 
+The numbered implementation records below are historical checkpoints and keep
+the protocol versions and test totals that were true at each checkpoint. The
+current wire contract is protocol v13; current rendering uses backend-neutral
+logical display lists, `WindowGroupTransform`, and raster-boundary device
+scaling. Do not read an older step's version label as a compatibility promise.
+
 ## Baseline anchor
 
 - Git commit: `a44a46b898a2ffd28d81acd3bb6240e5c7c30b44`

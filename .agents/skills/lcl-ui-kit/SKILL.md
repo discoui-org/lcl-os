@@ -5,7 +5,7 @@ description: Complete technical reference, API contracts, and usage patterns for
 
 # LCL-UI Application Development Framework Guide
 
-`lcl-ui` is the backend-neutral C++20 user-space GUI framework for **LCL Core Linux (LCL OS)**. It runs in client processes over protocol-v3 Unix Domain `SOCK_SEQPACKET` IPC (`/run/user/1000/lcl-compositor.sock`) and shared memory (`memfd`). Applications explicitly inject a Canvas backend; the standard client backend is the software-only `lcl-canvas-skia` target.
+`lcl-ui` is the backend-neutral C++20 user-space GUI framework for **LCL Core Linux (LCL OS)**. It runs in client processes over protocol-v13 Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by default), using DMA-BUF transport with a lazy shared-memory (`memfd`) fallback. Applications explicitly inject a `lcl::graphics::Canvas`; the standard client adapter is provided by `lcl-raster`.
 
 ---
 
@@ -14,35 +14,40 @@ description: Complete technical reference, API contracts, and usage patterns for
 ```
 +-----------------------------------------------------------+
 |                      lcl-ui Application                   |
-|  (WindowApp -> Widget Tree -> Yoga -> injected Canvas)    |
+| (WindowApp -> Widget Tree -> Yoga -> logical DisplayList) |
 +-----------------------------+-----------------------------+
-                              | SHM (memfd) + Unix Domain Socket
+                              | DMA-BUF or SHM + Unix Domain Socket
                               v
 +-----------------------------------------------------------+
 |                      LCL Core Compositor                  |
-|          (Direct DRM/KMS Scanout & EGL Skia Renderer)     |
+|        (Direct DRM/KMS scanout + LCL raster replay)       |
 +-----------------------------------------------------------+
 ```
+
+Widgets, chrome, text, clips, and effects are described in float logical
+units. `RasterCanvas` records an immutable display list and
+`RasterRenderer` applies `RenderTarget.deviceScale` while replaying it through
+the GLES or software path. Do not multiply widget geometry by display scale.
 
 ---
 
 ## 2. Key Framework Classes
 
-### `lcl::ui::WindowApp` ([`window_app.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/core/window_app.hpp))
-Manages application initialization, window surface creation, SHM allocation, IPC event processing, and frame loop execution.
+### `lcl::ui::WindowApp` ([`window_app.hpp`](../../../lcl-ui/include/lcl-ui/core/window_app.hpp))
+Manages application initialization, window surface creation, DMA-BUF allocation with lazy SHM fallback, IPC event processing, and frame loop execution.
 
-- `WindowApp(std::unique_ptr<Canvas> canvas, uint32_t width, uint32_t height, const std::string& title)`: Constructor with an explicit backend.
+- `WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height, const std::string& title)`: Constructor with logical dimensions and an explicit backend-neutral Canvas.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Mounts the top-level widget container.
-- `bool connectCompositor(const std::string& socketPath = "/run/user/1000/lcl-compositor.sock")`: Connects to compositor IPC and registers a v3 surface.
+- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to compositor IPC and registers a v13 surface.
 - `void runEventLoop()`: Runs the main non-blocking event loop at **144 Hz target frame pacing** (~6.9ms period).
 
-### `lcl::ui::Widget` ([`widget.hpp`](file:///home/superb/Projects/lcl-os/lcl-ui/include/lcl-ui/widgets/widget.hpp))
+### `lcl::ui::Widget` ([`widget.hpp`](../../../lcl-ui/include/lcl-ui/widgets/widget.hpp))
 Base class for all UI elements.
 
 - `YogaNode& getYogaNode()`: Accesses the C++ Yoga Flexbox layout node.
 - `void addChild(std::unique_ptr<Widget> child)`: Appends a child widget.
 - `void markDirty()`: Registers dirty damage bounds with `RenderPass` to trigger a frame redraw.
-- `virtual void draw(Canvas& canvas, const Rect& damageRect)`: Backend-neutral render callback. Widgets must not cast the Canvas to a renderer implementation.
+- `virtual void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect)`: Backend-neutral render callback. Widgets must not cast the Canvas to a renderer implementation.
 - **Event Callbacks:**
   - `virtual bool onPointerEnter(const PointerEvent& event)`
   - `virtual bool onPointerLeave(const PointerEvent& event)`
@@ -68,13 +73,13 @@ Base class for all UI elements.
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/text.hpp"
-#include "render/skia_canvas.hpp"
+#include "render/raster_canvas.hpp"
 
 using namespace lcl::ui;
 
 int main() {
     // 1. Create 800x600 Window App instance
-    WindowApp app(lcl::render::makeSkiaCanvas(), 800, 600, "My LCL Application");
+    WindowApp app(lcl::render::makeRasterCanvas(), 800, 600, "My LCL Application");
 
     // 2. Build Flexbox layout hierarchy
     auto root = std::make_unique<Container>();
@@ -114,16 +119,17 @@ int main() {
 
 For custom 2D Canvas drawing or continuous procedural animations:
 
-1. Subclass `Widget` and override `draw(Canvas& canvas, const Rect& damageRect)`.
+1. Subclass `Widget` and override `draw(graphics::Canvas& canvas, const graphics::RectF& damageRect)`.
 2. Use only Canvas primitives such as `drawRect`, `drawRoundedRect`,
    `drawTopRoundedRect`, `drawText`, and `drawBuffer`.
 3. Call `markDirty()` when another frame is required; do not depend on a fixed
-   refresh rate or cast Canvas to `SkiaRenderer`.
+   refresh rate or cast Canvas to `RasterRenderer`.
 
 ```cpp
 class MyAnimatedWidget : public Widget {
 public:
-    void draw(Canvas& canvas, const Rect& damageRect) override {
+    void draw(lcl::graphics::Canvas& canvas,
+              const lcl::graphics::RectF& damageRect) override {
         (void)damageRect;
         canvas.drawRoundedRect(
             {60.0f, 60.0f, 80.0f, 80.0f}, 40.0f,
@@ -133,5 +139,6 @@ public:
 };
 ```
 
-Client applications link both `lcl-ui` and `lcl-canvas-skia`. Compositor code
-links `lcl-render`; EGL/DRM/GBM/GLES must never be added back to `lcl-ui`.
+Client applications link both `lcl-ui` and `lcl-raster`. Compositor code links
+the rendering, graphics, and chrome layers directly; it must not link `lcl-ui`.
+EGL/DRM/GBM/GLES remain below the `lcl-ui` boundary.
