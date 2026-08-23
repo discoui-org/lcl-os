@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace lcl::ui {
 namespace {
@@ -13,27 +14,73 @@ constexpr float kTrackWidth = 52.0f;
 constexpr float kTrackHeight = 32.0f;
 constexpr float kThumbInset = 3.0f;
 constexpr float kFocusInset = 3.0f;
+constexpr float kLabelGap = 8.0f;
+constexpr float kLabelFontSize = 14.0f;
+constexpr float kLabeledWidth = 220.0f;
+constexpr float kButtonWidth = 140.0f;
 
 } // namespace
 
-Toggle::Toggle(bool value)
-    : m_value(value), m_thumbProgress(value ? 1.0f : 0.0f) {
-    setWidth(kDefaultWidth);
+Toggle::Toggle(bool value) : Toggle(std::string{}, value) {}
+
+Toggle::Toggle(std::string label, bool value)
+    : m_value(value), m_thumbProgress(value ? 1.0f : 0.0f),
+      m_label(std::move(label)) {
+    m_yogaNode.setWidth(m_label.empty() ? kDefaultWidth : kLabeledWidth);
     m_yogaNode.setHeight(getTheme().metrics.largeControlHeight);
     setFocusable(true);
     styleDidChange();
 }
 
+void Toggle::setLabel(std::string label) {
+    if (m_label == label) return;
+    m_label = std::move(label);
+    markDirty();
+}
+
+void Toggle::setToggleStyle(ToggleStyle style) {
+    if (m_style == style) return;
+    const graphics::RectF previous = getVisiblePresentationPaintBounds();
+    m_style = style;
+    if (m_label.empty() && !m_hasWidth) {
+        m_yogaNode.setWidth(style == ToggleStyle::Button
+                                ? kButtonWidth
+                                : kDefaultWidth);
+    }
+    retargetThumb();
+    markPaintDirty(previous);
+}
+
 void Toggle::setValue(bool value) {
-    if (m_value == value) return;
+    if (m_value == value && !m_mixed) return;
 
     m_value = value;
+    m_mixed = false;
     markDirty();
     retargetThumb();
 
     // Keep notification last: callbacks may remove or destroy this Toggle.
     auto callback = m_onChange;
     if (callback) callback(m_value);
+}
+
+void Toggle::setMixed(bool mixed) {
+    if (m_mixed == mixed) return;
+    m_mixed = mixed;
+    markDirty();
+}
+
+void Toggle::toggleValue() {
+    const bool next = m_mixed ? true : !m_value;
+    const bool notify = m_mixed && m_value == next;
+    m_mixed = false;
+    if (notify) {
+        markDirty();
+        auto callback = m_onChange;
+        if (callback) callback(next);
+        return;
+    }
+    setValue(next);
 }
 
 void Toggle::setEnabled(bool enabled) {
@@ -96,7 +143,7 @@ bool Toggle::onPointerUp(const PointerEvent& event) {
         m_hovered = true;
     }
     markDirty();
-    if (activate) setValue(!m_value);
+    if (activate) toggleValue();
     return wasArmed;
 }
 
@@ -113,7 +160,7 @@ bool Toggle::onKeyDown(const KeyEvent& event) {
     if (!m_enabled || event.key != lcl::platform::PhysicalKey::Space) {
         return false;
     }
-    setValue(!m_value);
+    toggleValue();
     return true;
 }
 
@@ -137,11 +184,28 @@ graphics::RectF Toggle::trackRect() const noexcept {
     const float width = std::min(kTrackWidth, std::max(0.0f, m_absoluteBounds.width));
     const float height = std::min(kTrackHeight, std::max(0.0f, m_absoluteBounds.height));
     return {
-        m_absoluteBounds.x + (m_absoluteBounds.width - width) * 0.5f,
+        m_label.empty()
+            ? m_absoluteBounds.x + (m_absoluteBounds.width - width) * 0.5f
+            : m_absoluteBounds.x + m_absoluteBounds.width - width,
         m_absoluteBounds.y + (m_absoluteBounds.height - height) * 0.5f,
         width,
         height,
     };
+}
+
+graphics::RectF Toggle::checkboxRect() const noexcept {
+    const float size = std::min(getTheme().metrics.checkboxSize,
+                                std::max(0.0f, m_absoluteBounds.height));
+    return {
+        m_absoluteBounds.x,
+        m_absoluteBounds.y + (m_absoluteBounds.height - size) * 0.5f,
+        size,
+        size,
+    };
+}
+
+ToggleStyle Toggle::resolvedToggleStyle() const noexcept {
+    return m_style == ToggleStyle::Automatic ? ToggleStyle::Switch : m_style;
 }
 
 graphics::RectF Toggle::thumbRect() const noexcept {
@@ -229,9 +293,85 @@ void Toggle::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
 
     beginPresentation(canvas);
+    const VisualColors colors = visualColors();
+    const ToggleStyle style = resolvedToggleStyle();
+
+    if (style == ToggleStyle::Checkbox) {
+        const graphics::RectF box = checkboxRect();
+        const float radius = getTheme().metrics.compactCornerRadius * 0.55f;
+        if (m_focused && m_enabled) {
+            const graphics::RectF focus{box.x - kFocusInset, box.y - kFocusInset,
+                                       box.width + kFocusInset * 2.0f,
+                                       box.height + kFocusInset * 2.0f};
+            canvas.drawRoundedRect(focus, radius + kFocusInset,
+                                   graphics::Color{0, 0, 0, 0},
+                                   getTheme().colors.focusRing, 2.0f, 1.0f);
+        }
+        canvas.drawRoundedRect(box, radius,
+                               (m_value || m_mixed) ? colors.track
+                                                    : graphics::Color{0, 0, 0, 0},
+                               colors.trackBorder,
+                               m_value || m_mixed ? 0.0f : colors.trackBorderWidth,
+                               1.0f);
+        if (m_value || m_mixed) {
+            graphics::Path mark;
+            if (m_mixed) {
+                mark.moveTo(box.x + 4.0f, box.y + box.height * 0.5f)
+                    .lineTo(box.x + box.width - 4.0f,
+                            box.y + box.height * 0.5f);
+            } else {
+                mark.moveTo(box.x + 4.0f, box.y + box.height * 0.52f)
+                    .lineTo(box.x + box.width * 0.43f, box.y + box.height - 4.0f)
+                    .lineTo(box.x + box.width - 3.5f, box.y + 4.0f);
+            }
+            graphics::Paint paint;
+            paint.color = colors.thumb;
+            paint.style = graphics::PaintStyle::Stroke;
+            paint.stroke.width = 2.0f;
+            paint.stroke.cap = graphics::StrokeCap::Round;
+            paint.stroke.join = graphics::StrokeJoin::Round;
+            canvas.drawPath(mark, paint);
+        }
+        if (!m_label.empty()) {
+            canvas.drawText(box.x + box.width + kLabelGap,
+                            m_absoluteBounds.y +
+                                (m_absoluteBounds.height - kLabelFontSize * 1.2f) * 0.5f,
+                            m_label, colors.thumb, kLabelFontSize);
+        }
+        endPresentation(canvas);
+        return;
+    }
+
+    if (style == ToggleStyle::Button) {
+        const auto visual = lcl::theme::resolveStyle(
+            *resolvedStyle(), visualStyleState());
+        const graphics::Color fill = m_value ? visual.accent : visual.background;
+        if (m_focused && m_enabled) {
+            const graphics::RectF focus{
+                m_absoluteBounds.x - kFocusInset,
+                m_absoluteBounds.y - kFocusInset,
+                m_absoluteBounds.width + kFocusInset * 2.0f,
+                m_absoluteBounds.height + kFocusInset * 2.0f};
+            canvas.drawRoundedRect(focus, visual.cornerRadius + kFocusInset,
+                                   {}, getTheme().colors.focusRing,
+                                   2.0f, 1.0f);
+        }
+        canvas.drawRoundedRect(m_absoluteBounds, visual.cornerRadius, fill,
+                               visual.border, visual.borderWidth, 1.0f);
+        if (!m_label.empty()) {
+            const float width = canvas.measureText(m_label, kLabelFontSize);
+            canvas.drawText(m_absoluteBounds.x +
+                                std::max(0.0f, (m_absoluteBounds.width - width) * 0.5f),
+                            m_absoluteBounds.y +
+                                (m_absoluteBounds.height - kLabelFontSize * 1.2f) * 0.5f,
+                            m_label, visual.foreground, kLabelFontSize);
+        }
+        endPresentation(canvas);
+        return;
+    }
+
     const graphics::RectF track = trackRect();
     const graphics::RectF thumb = thumbRect();
-    const VisualColors colors = visualColors();
 
     if (m_focused && m_enabled) {
         const graphics::RectF focus{
@@ -253,6 +393,13 @@ void Toggle::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
                            graphics::Color{0, 0, 0, 0}, 0.0f, 1.0f);
     canvas.drawRoundedRect(thumb, thumb.height * 0.5f, colors.thumb,
                            colors.thumbBorder, 0.75f, 1.0f);
+
+    if (!m_label.empty()) {
+        canvas.drawText(m_absoluteBounds.x,
+                        m_absoluteBounds.y +
+                            (m_absoluteBounds.height - kLabelFontSize * 1.2f) * 0.5f,
+                        m_label, colors.thumb, kLabelFontSize);
+    }
 
     endPresentation(canvas);
 }

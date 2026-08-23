@@ -343,7 +343,7 @@ void Compositor::renderFrame() {
     for (auto& [surfaceKey, entry] : m_surfaces) {
         if (entry.clientFd < 0 || !entry.dmaBufTransportActive ||
             !entry.hasCommittedBuffer ||
-            !SurfaceRegistry::hasUnpresentedLiveFrame(entry)) continue;
+            !SurfaceRegistry::hasUnpresentedFrame(entry)) continue;
         protocol::LCLHeader header{};
         header.opcode = protocol::LCLOpcode::FramePresented;
         header.payloadSize = sizeof(protocol::LCLMsgFramePresented);
@@ -352,7 +352,7 @@ void Compositor::renderFrame() {
         message.timestampNs = presentedAtNs;
         message.refreshIntervalNs = m_refreshIntervalNs;
         if (protocol::sendMsgWithFd(entry.clientFd, header, &message)) {
-            SurfaceRegistry::completeLivePresentation(entry);
+            SurfaceRegistry::completePresentation(entry);
         }
     }
 

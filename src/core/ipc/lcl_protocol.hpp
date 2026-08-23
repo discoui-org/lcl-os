@@ -276,6 +276,9 @@ struct LCLMsgReleaseDmaBuf {
 };
 
 struct LCLMsgFramePresented {
+    // Sent after the compositor presents the latest accepted DMA-BUF commit.
+    // Clients keep at most one frame in flight and coalesce newer damage until
+    // this acknowledgement returns the presentation credit.
     uint32_t surfaceId{0};
     uint64_t timestampNs{0};
     uint64_t refreshIntervalNs{0};

@@ -16,6 +16,7 @@
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
 #include "lcl-ui/widgets/toggle.hpp"
+#include "lcl-ui/widgets/progress_view.hpp"
 #include "render/raster_renderer.hpp"
 #include "render/raster_canvas.hpp"
 #include "render/alpha_math.hpp"
@@ -650,6 +651,41 @@ TEST(LclUiTest, MotionCoordinatorPresentationRegistryTicksOnlyLiveEntries) {
     first.reset();
     EXPECT_FALSE(coordinator.hasActiveAnimations());
     EXPECT_FALSE(coordinator.tick(0.1f));
+}
+
+TEST(LclUiTest, MotionCoordinatorReportsPresentationOwnerAsAnimating) {
+    MotionCoordinator coordinator;
+    auto widget = std::make_unique<Widget>();
+    widget->setMotionCoordinator(&coordinator);
+
+    coordinator.registerPresentation(*widget, [](float) {});
+    EXPECT_TRUE(coordinator.isObjectAnimating(widget->getObjectId()));
+
+    coordinator.unregisterPresentation(widget->getObjectId());
+    EXPECT_FALSE(coordinator.isObjectAnimating(widget->getObjectId()));
+}
+
+TEST(LclUiTest, IndeterminateProgressUsesPresentationInvalidation) {
+    RecordingCanvas canvas;
+    RenderPass pass;
+    MotionCoordinator coordinator;
+    ProgressView progress;
+    progress.setRenderPass(&pass);
+    progress.setMotionCoordinator(&coordinator);
+    progress.getYogaNode().calculateLayout(22.0f, 22.0f);
+    progress.syncLayout();
+    progress.draw(canvas, {-10.0f, -10.0f, 42.0f, 42.0f});
+    pass.clear();
+
+    const uint64_t paintRevision = progress.getPaintRevision();
+    const uint64_t presentationRevision = progress.getPresentationRevision();
+    ASSERT_TRUE(coordinator.isObjectAnimating(progress.getObjectId()));
+
+    coordinator.tick(1.0f / 60.0f);
+
+    EXPECT_EQ(progress.getPaintRevision(), paintRevision);
+    EXPECT_GT(progress.getPresentationRevision(), presentationRevision);
+    EXPECT_TRUE(pass.hasDamage());
 }
 
 TEST(LclUiTest, TextFieldCaretPresentationResetsForEditingAndCaretActivity) {
@@ -2411,6 +2447,53 @@ TEST(LclUiTest, LiveGpuResizeCoalescesSerialsAvoidsShmAndWaitsForPresentation) {
     close(sockets[1]);
 }
 
+TEST(LclUiTest, NormalGpuFramesCoalesceUntilCompositorPresentation) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    recorded->dmaBufAvailable = true;
+    WindowApp app(std::move(canvas), 100, 80, "Presented GPU pacing");
+    app.setExternalIpcSocket(sockets[0]);
+    ASSERT_TRUE(recorded->configureDmaBufFrame(100, 80, 100, 80));
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(100.0f);
+    root->setHeight(80.0f);
+    Container* rootPtr = root.get();
+    app.setRootWidget(std::move(root));
+
+    ASSERT_TRUE(app.renderFrame());
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, lcl::protocol::LCLOpcode::AttachDmaBuf);
+    if (receivedFd >= 0) close(receivedFd);
+
+    rootPtr->markDirty();
+    EXPECT_FALSE(app.renderFrame());
+
+    lcl::protocol::LCLMsgFramePresented presented{};
+    presented.surfaceId = app.getSurfaceId();
+    presented.timestampNs = 1000000000ull;
+    presented.refreshIntervalNs = 16666667ull;
+    header = {};
+    header.opcode = lcl::protocol::LCLOpcode::FramePresented;
+    header.payloadSize = sizeof(presented);
+    ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[1], header, &presented));
+
+    ASSERT_TRUE(app.tick());
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, lcl::protocol::LCLOpcode::AttachDmaBuf);
+    if (receivedFd >= 0) close(receivedFd);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(LclUiTest, ResizeFirstFrameDamagesPostLayoutRootExtent) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
@@ -2433,6 +2516,16 @@ TEST(LclUiTest, ResizeFirstFrameDamagesPostLayoutRootExtent) {
     app.setRootWidget(std::move(root));
 
     ASSERT_TRUE(app.renderFrame());
+
+    lcl::protocol::LCLMsgFramePresented presented{};
+    presented.surfaceId = app.getSurfaceId();
+    presented.timestampNs = 1000000000ull;
+    presented.refreshIntervalNs = 16666667ull;
+    lcl::protocol::LCLHeader header{};
+    header.opcode = lcl::protocol::LCLOpcode::FramePresented;
+    header.payloadSize = sizeof(presented);
+    ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[1], header, &presented));
+    EXPECT_FALSE(app.tick());
 
     recorded->roundedRects.clear();
     recorded->texts.clear();
@@ -4240,6 +4333,37 @@ TEST(LclUiTest, ScrollViewDoesNotRerasterLongContentEachAnimationTick) {
     ASSERT_FALSE(childPtr->hasActiveAnimationInSubtree());
     scrollView->draw(canvas, fullDamage);
     EXPECT_EQ(canvas.cachedLayerBeginCount, 2);
+}
+
+TEST(LclUiTest, ScrollViewDefersOffscreenProceduralPresentationRaster) {
+    RecordingCanvas canvas;
+    MotionCoordinator coordinator;
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(100.0f);
+    scrollView->setMotionCoordinator(&coordinator);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    content->setHeight(400.0f);
+    auto spinner = std::make_unique<ProgressView>();
+    spinner->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    spinner->setPosition(YGEdgeTop, 300.0f);
+    content->addChild(std::move(spinner));
+    scrollView->setContent(std::move(content));
+    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->syncLayout();
+
+    const graphics::RectF fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
+    scrollView->draw(canvas, fullDamage);
+    ASSERT_EQ(canvas.cachedLayerBeginCount, 1);
+    ASSERT_TRUE(coordinator.hasActiveAnimations());
+
+    coordinator.tick(1.0f / 60.0f);
+    scrollView->draw(canvas, fullDamage);
+
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_EQ(canvas.cachedLayerDrawCount, 2);
 }
 
 TEST(LclUiTest, ScrollViewCachedLayerRespectsViewportClip) {

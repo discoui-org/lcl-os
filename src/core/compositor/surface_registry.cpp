@@ -109,7 +109,7 @@ void SurfaceRegistry::clear() noexcept {
 }
 
 void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
-    completeLivePresentation(entry);
+    completePresentation(entry);
     releasePreviousBuffer(entry);
     if (entry.dmaBufTexture != 0 || entry.dmaBufId != 0) {
         entry.pendingDmaBufReleases.push_back({entry.dmaBufId, entry.dmaBufTexture});
@@ -149,7 +149,7 @@ void SurfaceRegistry::interruptGeometryTransaction(SurfaceEntry& entry,
                                                    uint64_t newGeneration) noexcept {
     const bool preserveLiveFlight =
         entry.resizePresentation == protocol::LCLResizePresentationMode::Live &&
-        (hasOutstandingConfigure(entry) || hasUnpresentedLiveFrame(entry));
+        (hasOutstandingConfigure(entry) || hasUnpresentedFrame(entry));
     releasePreviousBuffer(entry);
     entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::None;
     entry.resizeCrossfadeElapsedSec = 0.0f;
@@ -224,20 +224,17 @@ bool SurfaceRegistry::hasOutstandingConfigure(const SurfaceEntry& entry) noexcep
            entry.pendingConfigureSerial != entry.acceptedConfigureSerial;
 }
 
-bool SurfaceRegistry::hasUnpresentedLiveFrame(const SurfaceEntry& entry) noexcept {
-    return entry.resizePresentation == protocol::LCLResizePresentationMode::Live &&
-           entry.livePresentationSerial != 0;
+bool SurfaceRegistry::hasUnpresentedFrame(const SurfaceEntry& entry) noexcept {
+    return entry.presentationSerial != 0;
 }
 
-void SurfaceRegistry::queueLivePresentation(SurfaceEntry& entry,
-                                            uint64_t configureSerial) noexcept {
-    if (entry.resizePresentation == protocol::LCLResizePresentationMode::Live) {
-        entry.livePresentationSerial = configureSerial;
-    }
+void SurfaceRegistry::queuePresentation(SurfaceEntry& entry,
+                                        uint64_t configureSerial) noexcept {
+    entry.presentationSerial = configureSerial;
 }
 
-void SurfaceRegistry::completeLivePresentation(SurfaceEntry& entry) noexcept {
-    entry.livePresentationSerial = 0;
+void SurfaceRegistry::completePresentation(SurfaceEntry& entry) noexcept {
+    entry.presentationSerial = 0;
 }
 
 bool SurfaceRegistry::isOwnedByClientConnection(const SurfaceEntry& entry,

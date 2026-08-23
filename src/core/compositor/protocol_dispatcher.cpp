@@ -566,7 +566,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
 
             if (entry.isPopup()) {
-                SurfaceRegistry::queueLivePresentation(entry, bufferMessage->configureSerial);
+                SurfaceRegistry::queuePresentation(entry, bufferMessage->configureSerial);
                 changed = true;
                 continue;
             }
@@ -602,7 +602,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                                                   preserveNewerTarget, entry.configuredX,
                                                   entry.configuredY,
                                                   entry.configuredGeometryGeneration);
-            SurfaceRegistry::queueLivePresentation(
+            SurfaceRegistry::queuePresentation(
                 entry, bufferMessage->configureSerial);
             changed = true;
 

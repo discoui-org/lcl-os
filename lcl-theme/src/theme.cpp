@@ -112,6 +112,30 @@ Theme createDefaultTheme() {
     theme.toggle.disabled.scale = 1.0f;
     theme.toggle.disabled.opacity = 0.48f;
 
+    theme.picker = theme.quietButton;
+    theme.picker.normal.accent = theme.colors.accent;
+    theme.picker.focused.border = theme.colors.focusRing;
+    theme.picker.focused.borderWidth = 2.0f;
+
+    theme.slider = theme.toggle;
+    theme.slider.normal.background = theme.colors.controlFill;
+    theme.slider.normal.accent = theme.colors.accent;
+    theme.slider.normal.foreground = theme.colors.primaryLabel;
+
+    theme.progressView = theme.slider;
+    theme.progressView.normal.scale = 1.0f;
+    theme.progressView.hover = {};
+    theme.progressView.pressed = {};
+    theme.progressView.focused = {};
+
+    theme.tabView.normal.background = theme.colors.elevatedSurface;
+    theme.tabView.normal.foreground = theme.colors.secondaryLabel;
+    theme.tabView.normal.accent = theme.colors.accent;
+    theme.tabView.normal.border = theme.colors.separator;
+    theme.tabView.normal.borderWidth = theme.metrics.separatorWidth;
+    theme.tabView.normal.opacity = 1.0f;
+    theme.tabView.disabled.opacity = 0.48f;
+
     theme.menuItem.normal.background = graphics::Color{0, 0, 0, 0};
     theme.menuItem.normal.foreground = theme.colors.primaryLabel;
     theme.menuItem.normal.border = graphics::Color{0, 0, 0, 0};
@@ -162,6 +186,10 @@ const WidgetStyle& widgetStyleForRole(const Theme& theme,
         case WidgetStyleRole::QuietButton: return theme.quietButton;
         case WidgetStyleRole::TextField: return theme.textField;
         case WidgetStyleRole::Toggle: return theme.toggle;
+        case WidgetStyleRole::Picker: return theme.picker;
+        case WidgetStyleRole::Slider: return theme.slider;
+        case WidgetStyleRole::ProgressView: return theme.progressView;
+        case WidgetStyleRole::TabView: return theme.tabView;
         case WidgetStyleRole::MenuItem: return theme.menuItem;
         case WidgetStyleRole::Popover: return theme.popover;
         case WidgetStyleRole::PrimaryButton:

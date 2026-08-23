@@ -143,7 +143,9 @@ bool MotionCoordinator::isObjectAnimating(uint64_t objectId) const {
     for (const auto& [channel, binding] : m_bindings) {
         if (binding.objectId == objectId && m_engine.isActive(channel)) return true;
     }
-    return false;
+    const auto presentation = m_presentationBindings.find(objectId);
+    return presentation != m_presentationBindings.end() &&
+        !presentation->second.lifetime.expired();
 }
 
 void MotionCoordinator::registerPresentation(Widget& widget,

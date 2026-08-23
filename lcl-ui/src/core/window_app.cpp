@@ -601,15 +601,15 @@ void WindowApp::pollIPC() {
                 const auto* release = reinterpret_cast<const lcl::protocol::LCLMsgReleaseDmaBuf*>(payload.data());
                 if (release->surfaceId == m_surfaceId) {
                     m_canvas->releaseDmaBufFrame(release->bufferId);
-                    if (release->bufferId == m_liveSubmittedBufferId) {
+                    if (release->bufferId == m_submittedDmaBufId) {
                         // The compositor returned the frame before presenting
                         // it (for example after a genuine transaction cancel).
-                        // Return the Live credit so the newest configure cannot
-                        // leave this client permanently gated.
-                        m_liveSubmittedBufferId = 0;
-                        m_liveFrameGateOpen = true;
+                        // Return the presentation credit so pending damage can
+                        // produce the newest frame instead of remaining gated.
+                        m_submittedDmaBufId = 0;
+                        m_dmaBufFrameGateOpen = true;
                         m_firstFrame = true;
-                        if (m_frameTraceEnabled) ++m_traceRejectedLiveFrames;
+                        if (m_frameTraceEnabled) ++m_traceRejectedDmaBufFrames;
                     }
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::FramePresented &&
@@ -618,8 +618,8 @@ void WindowApp::pollIPC() {
                 if (presented->surfaceId == m_surfaceId) {
                     m_lastPresentedTimestampNs = presented->timestampNs;
                     m_refreshIntervalNs = presented->refreshIntervalNs;
-                    m_liveSubmittedBufferId = 0;
-                    m_liveFrameGateOpen = true;
+                    m_submittedDmaBufId = 0;
+                    m_dmaBufFrameGateOpen = true;
                     if (m_frameTraceEnabled) ++m_tracePresentedFrames;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::AckResponse &&
@@ -632,8 +632,8 @@ void WindowApp::pollIPC() {
                     m_canvas->setDmaBufTransportEnabled(false);
                     allocateSHM(m_width, m_height);
                     m_firstFrame = true;
-                    m_liveSubmittedBufferId = 0;
-                    m_liveFrameGateOpen = true;
+                    m_submittedDmaBufId = 0;
+                    m_dmaBufFrameGateOpen = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
                 if (payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceDestroy)) {
@@ -699,7 +699,7 @@ void WindowApp::pollIPC() {
 
     // Throttled resize apply: demos update every pixel while dragging; applying each
     // configure causes SHM recreate storms. Keep latest target and apply at a bounded rate.
-    if (m_hasPendingResize && (!m_liveResizeFramePacing || m_liveFrameGateOpen) &&
+    if (m_hasPendingResize && (!m_liveResizeFramePacing || m_dmaBufFrameGateOpen) &&
         (m_pendingResizeWidth != m_width || m_pendingResizeHeight != m_height)) {
         const auto now = std::chrono::steady_clock::now();
         constexpr auto kMinResizeInterval = std::chrono::milliseconds(22);
@@ -721,7 +721,7 @@ void WindowApp::pollIPC() {
             m_hasPendingResize = false;
             m_lastResizeApply = now;
         }
-    } else if (m_hasPendingResize && (!m_liveResizeFramePacing || m_liveFrameGateOpen)) {
+    } else if (m_hasPendingResize && (!m_liveResizeFramePacing || m_dmaBufFrameGateOpen)) {
         // The compositor often confirms the initial logical size verbatim.
         // It requires no SHM reallocation, but it still needs one commit to
         // acknowledge the configure serial and release compositor backpressure.
@@ -1204,8 +1204,7 @@ bool WindowApp::renderFrame() {
     // SurfaceCreate's requested geometry has no valid serial and would be
     // discarded as stale when the initial ConfigureBounds is already queued.
     if (m_ipcConnected && m_waitingForInitialConfigure) return false;
-    if (m_liveResizeFramePacing && m_canvas->hasDmaBufTransport() &&
-        !m_liveFrameGateOpen) return false;
+    if (m_canvas->hasDmaBufTransport() && !m_dmaBufFrameGateOpen) return false;
 
     if (m_windowRoot && m_windowRoot->isLayoutDirty()) {
         updateLayout();
@@ -1465,9 +1464,9 @@ bool WindowApp::renderFrame() {
             if (!dmaBufAttached) {
                 m_canvas->cancelDmaBufFrame(frame->bufferId);
                 m_firstFrame = true;
-            } else if (m_liveResizeFramePacing) {
-                m_liveSubmittedBufferId = frame->bufferId;
-                m_liveFrameGateOpen = false;
+            } else {
+                m_submittedDmaBufId = frame->bufferId;
+                m_dmaBufFrameGateOpen = false;
             }
             if (dmaBufAttached && m_frameTraceEnabled) ++m_traceDmaBufAttaches;
         } else {
@@ -1530,9 +1529,9 @@ void WindowApp::logFrameTraceIfDue() {
               << " clear/copy=" << (m_traceClearedBytes / 1024) << '/' << (m_traceCopiedBytes / 1024) << " KiB"
               << " cfg=" << m_traceConfigureCount << " (interactive=" << m_traceInteractiveConfigureCount
               << ", transition=" << m_traceTransitionConfigureCount << ')'
-              << " live=(attach=" << m_traceDmaBufAttaches
+              << " dma=(attach=" << m_traceDmaBufAttaches
               << ", presented=" << m_tracePresentedFrames
-              << ", rejected=" << m_traceRejectedLiveFrames
+              << ", rejected=" << m_traceRejectedDmaBufFrames
               << ", pool-blocked=" << m_traceDmaBufPoolBlocks << ')'
               << " resize=" << m_traceResizeApplies
               << " shm=" << m_traceShmAllocations << " (" << average(m_traceShmMs, m_traceShmAllocations) << " ms)\n";
@@ -1544,7 +1543,7 @@ void WindowApp::logFrameTraceIfDue() {
     m_tracePresentedFrames = 0;
     m_traceDmaBufAttaches = 0;
     m_traceDmaBufPoolBlocks = 0;
-    m_traceRejectedLiveFrames = 0;
+    m_traceRejectedDmaBufFrames = 0;
     m_traceResizeApplies = 0;
     m_traceShmAllocations = 0;
     m_traceDamagePixels = 0;

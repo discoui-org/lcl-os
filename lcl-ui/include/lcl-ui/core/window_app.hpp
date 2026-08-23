@@ -275,10 +275,10 @@ private:
     // Both pointer resize and maximize/restore are frame-paced in Live mode.
     // Initial configure remains an immediate, content-sized transaction.
     bool m_liveResizeFramePacing{false};
-    bool m_liveFrameGateOpen{true};
+    bool m_dmaBufFrameGateOpen{true};
     uint64_t m_lastPresentedTimestampNs{0};
     uint64_t m_refreshIntervalNs{0};
-    uint32_t m_liveSubmittedBufferId{0};
+    uint32_t m_submittedDmaBufId{0};
     std::chrono::steady_clock::time_point m_lastResizeApply{};
     bool m_running{false};
     bool m_surfaceEnded{false};
@@ -305,7 +305,7 @@ private:
     uint64_t m_tracePresentedFrames{0};
     uint64_t m_traceDmaBufAttaches{0};
     uint64_t m_traceDmaBufPoolBlocks{0};
-    uint64_t m_traceRejectedLiveFrames{0};
+    uint64_t m_traceRejectedDmaBufFrames{0};
     uint64_t m_traceResizeApplies{0};
     uint64_t m_traceShmAllocations{0};
     uint64_t m_traceDamagePixels{0};

@@ -166,7 +166,7 @@ void InputRouter::sendPendingConfigures() {
                 entry.lastConfigureSent.time_since_epoch().count() != 0 &&
                 now - entry.lastConfigureSent < m_refreshInterval;
             if (SurfaceRegistry::hasOutstandingConfigure(entry) ||
-                SurfaceRegistry::hasUnpresentedLiveFrame(entry) ||
+                (live && SurfaceRegistry::hasUnpresentedFrame(entry)) ||
                 refreshLimited) {
                 break;
             }

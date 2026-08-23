@@ -37,6 +37,11 @@ add_library(lcl-ui STATIC
     src/widgets/popover.cpp
     src/widgets/menu.cpp
     src/widgets/toggle.cpp
+    src/widgets/picker.cpp
+    src/widgets/slider.cpp
+    src/widgets/progress_view.cpp
+    src/widgets/divider.cpp
+    src/widgets/tab_view.cpp
     src/widgets/window_chrome.cpp
     src/core/transient_controller.cpp
 )

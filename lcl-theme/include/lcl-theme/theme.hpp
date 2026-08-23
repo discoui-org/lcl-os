@@ -29,6 +29,10 @@ enum class WidgetStyleRole {
     QuietButton,
     TextField,
     Toggle,
+    Picker,
+    Slider,
+    ProgressView,
+    TabView,
     MenuItem,
     Popover,
 };
@@ -116,6 +120,12 @@ struct ThemeMetrics {
     float groupCornerRadius{12.0f};
     float cardCornerRadius{16.0f};
     float separatorWidth{1.0f};
+    float checkboxSize{18.0f};
+    float radioSize{18.0f};
+    float sliderTrackHeight{4.0f};
+    float sliderThumbSize{20.0f};
+    float progressTrackHeight{4.0f};
+    float tabBarHeight{54.0f};
     float groupPadding{8.0f};
     float cardPadding{20.0f};
 };
@@ -132,6 +142,10 @@ struct Theme {
     WidgetStyle quietButton;
     WidgetStyle textField;
     WidgetStyle toggle;
+    WidgetStyle picker;
+    WidgetStyle slider;
+    WidgetStyle progressView;
+    WidgetStyle tabView;
     WidgetStyle menuItem;
     WidgetStyle popover;
 };

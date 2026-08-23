@@ -344,22 +344,23 @@ TEST(SurfaceRegistryTest, LiveGeometryInterruptionPreservesInFlightSerial) {
     EXPECT_TRUE(entry.forceConfigure);
 }
 
-TEST(SurfaceRegistryTest, LivePresentationCreditIsQueuedAndCompletedOnce) {
+TEST(SurfaceRegistryTest, DmaBufPresentationCreditIsQueuedForEveryResizeMode) {
     SurfaceRegistry::SurfaceEntry entry;
     entry.resizePresentation = protocol::LCLResizePresentationMode::Live;
 
-    EXPECT_FALSE(SurfaceRegistry::hasUnpresentedLiveFrame(entry));
-    SurfaceRegistry::queueLivePresentation(entry, 21);
-    EXPECT_TRUE(SurfaceRegistry::hasUnpresentedLiveFrame(entry));
-    EXPECT_EQ(entry.livePresentationSerial, 21u);
+    EXPECT_FALSE(SurfaceRegistry::hasUnpresentedFrame(entry));
+    SurfaceRegistry::queuePresentation(entry, 21);
+    EXPECT_TRUE(SurfaceRegistry::hasUnpresentedFrame(entry));
+    EXPECT_EQ(entry.presentationSerial, 21u);
 
-    SurfaceRegistry::completeLivePresentation(entry);
-    EXPECT_FALSE(SurfaceRegistry::hasUnpresentedLiveFrame(entry));
-    EXPECT_EQ(entry.livePresentationSerial, 0u);
+    SurfaceRegistry::completePresentation(entry);
+    EXPECT_FALSE(SurfaceRegistry::hasUnpresentedFrame(entry));
+    EXPECT_EQ(entry.presentationSerial, 0u);
 
     entry.resizePresentation = protocol::LCLResizePresentationMode::CompositorMorph;
-    SurfaceRegistry::queueLivePresentation(entry, 22);
-    EXPECT_FALSE(SurfaceRegistry::hasUnpresentedLiveFrame(entry));
+    SurfaceRegistry::queuePresentation(entry, 22);
+    EXPECT_TRUE(SurfaceRegistry::hasUnpresentedFrame(entry));
+    EXPECT_EQ(entry.presentationSerial, 22u);
 }
 
 TEST(SurfaceRegistryTest, SurfaceKeyUsesPidWhenAvailableAndClientFdOtherwise) {
@@ -834,12 +835,12 @@ TEST(InputRouterTest, LiveResizeWaitsForPresentationThenPublishesLatestWithWorks
               protocol::ReceiveStatus::WouldBlock);
 
     surface.acceptedConfigureSerial = 5;
-    SurfaceRegistry::queueLivePresentation(surface, 5);
+    SurfaceRegistry::queuePresentation(surface, 5);
     router.syncWindowState();
     EXPECT_EQ(protocol::recvPacketWithFd(sockets[1], header, payload, fd),
               protocol::ReceiveStatus::WouldBlock);
 
-    SurfaceRegistry::completeLivePresentation(surface);
+    SurfaceRegistry::completePresentation(surface);
     surface.lastConfigureSent = {};
     router.syncWindowState();
     ASSERT_EQ(protocol::recvPacketWithFd(sockets[1], header, payload, fd),

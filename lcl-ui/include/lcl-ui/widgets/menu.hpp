@@ -14,6 +14,7 @@ struct MenuItem {
     std::string label;
     bool enabled{true};
     std::function<void()> onActivate;
+    bool selected{false};
 };
 
 struct MenuOptions {

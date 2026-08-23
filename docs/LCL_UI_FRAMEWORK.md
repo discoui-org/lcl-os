@@ -9,7 +9,7 @@
 2. [Key Framework Classes](#2-key-framework-classes)
    - [WindowApp](#windowapp)
    - [Widget](#widget)
-   - [Built-In Widgets (Container, Button, Text)](#built-in-widgets)
+   - [Built-In Views and Controls](#built-in-widgets)
    - [Canvas](#lclgraphicscanvas)
 3. [Building Your First Application](#3-building-your-first-application)
 4. [Custom Widget Development & Procedural Animations](#4-custom-widget-development--procedural-animations)
@@ -140,6 +140,27 @@ auto label = std::make_unique<Text>("Hello LCL OS");
 label->setFontSize(18.0f);
 label->setTextColor(0xFFFFFFFF);
 ```
+
+#### Selection and value controls
+
+- `Toggle` supports `Automatic`, `Switch`, `Checkbox`, and `Button`
+  presentation styles while keeping one Boolean value and change callback.
+- `Picker` owns one mutually-exclusive selection and supports `Menu` and
+  `RadioGroup` styles. The menu style reuses the parent-bound popup surface
+  path used by `Menu` and `Popover`.
+- `Slider` selects a value from a bounded range, supports optional step
+  quantization, live change callbacks, editing-state callbacks, pointer
+  capture, and keyboard adjustment.
+- `ProgressView` supports determinate and indeterminate progress with linear
+  and circular styles.
+- `TabView` switches between `Tab` content trees while preserving the state of
+  each tree and presents a persistent tab bar for top-level navigation.
+- `Divider` draws a semantic separator and adapts to its laid-out aspect.
+
+Checkboxes are a `Toggle` style rather than a separate value model. Radio
+groups and menu-based dropdown presentation are `Picker` styles rather than
+separate controls. All of these controls draw logical geometry through
+`graphics::Canvas`; no control type is exposed to the raster renderer.
 
 ---
 

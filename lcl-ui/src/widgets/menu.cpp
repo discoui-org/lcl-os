@@ -14,11 +14,14 @@ class MenuContent;
 
 class MenuItemButton final : public Button {
 public:
-    MenuItemButton(std::string label, MenuContent& menu, size_t index)
-        : Button(label), m_menu(menu), m_index(index) {}
+    MenuItemButton(std::string label, MenuContent& menu, size_t index,
+                   bool selected)
+        : Button(label), m_menu(menu), m_index(index), m_selected(selected) {}
 
     bool onPointerUp(const PointerEvent& event) override;
     bool onFocusGained(const FocusEvent& event) override;
+    void draw(graphics::Canvas& canvas,
+              const graphics::RectF& damageRect) override;
     bool shouldFocusOnTouchTap(const PointerEvent& event) const override {
         (void)event;
         // Activation closes the popup during PointerUp; do not re-focus a
@@ -33,6 +36,7 @@ private:
 
     MenuContent& m_menu;
     size_t m_index{0};
+    bool m_selected{false};
 };
 
 class MenuContent final : public Container {
@@ -48,7 +52,7 @@ public:
         m_items.reserve(items.size());
         for (size_t index = 0; index < items.size(); ++index) {
             auto button = std::make_unique<MenuItemButton>(
-                items[index].label, *this, index);
+                items[index].label, *this, index, items[index].selected);
             MenuItemButton* item = button.get();
             item->setWidth(width);
             item->setHeight(itemHeight);
@@ -130,6 +134,29 @@ bool MenuItemButton::onFocusGained(const FocusEvent& event) {
     return handled;
 }
 
+void MenuItemButton::draw(graphics::Canvas& canvas,
+                          const graphics::RectF& damageRect) {
+    Button::draw(canvas, damageRect);
+    if (!m_selected || !m_visible ||
+        !getPresentationPaintBounds().intersects(damageRect)) return;
+
+    beginPresentation(canvas);
+    const float right = m_absoluteBounds.x + m_absoluteBounds.width - 10.0f;
+    const float centerY = m_absoluteBounds.y + m_absoluteBounds.height * 0.5f;
+    graphics::Path mark;
+    mark.moveTo(right - 8.0f, centerY)
+        .lineTo(right - 5.0f, centerY + 3.0f)
+        .lineTo(right, centerY - 3.5f);
+    graphics::Paint paint;
+    paint.color = getTheme().colors.accent;
+    paint.style = graphics::PaintStyle::Stroke;
+    paint.stroke.width = 1.75f;
+    paint.stroke.cap = graphics::StrokeCap::Round;
+    paint.stroke.join = graphics::StrokeJoin::Round;
+    canvas.drawPath(mark, paint);
+    endPresentation(canvas);
+}
+
 } // namespace
 
 struct Menu::Session {
@@ -179,6 +206,7 @@ PopoverOpenResult Menu::show(Widget& anchor, std::vector<MenuItem> items,
         PopoverOptions{
             .width = options.width,
             .height = 24.0f + contentHeight,
+            .onOpened = {},
             .onDismissed = [weakSession, dismissed = std::move(dismissed)] {
                 if (auto active = weakSession.lock(); active &&
                     !active->menuLifetime.expired() &&

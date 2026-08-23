@@ -86,11 +86,10 @@ public:
         uint64_t pendingConfigureSerial{0};
         uint64_t acceptedConfigureSerial{0};
         uint64_t configuredGeometryGeneration{0};
-        // Non-zero only after a Live DMA-BUF commit has been accepted and
-        // before the compositor frame containing it has been presented.
-        // Keeping this separate from configure acknowledgement gives Live
-        // surfaces one complete configure -> commit -> presentation in flight.
-        uint64_t livePresentationSerial{0};
+        // Non-zero after any DMA-BUF commit has been accepted and before the
+        // compositor frame containing it has been presented. Live resize also
+        // uses this credit to serialize configure -> commit -> presentation.
+        uint64_t presentationSerial{0};
         bool forceConfigure{false};
         std::chrono::steady_clock::time_point lastConfigureSent{};
 
@@ -219,10 +218,10 @@ public:
                                         float requestedLogicalExtent,
                                         float bufferScale) noexcept;
     static bool hasOutstandingConfigure(const SurfaceEntry& entry) noexcept;
-    static bool hasUnpresentedLiveFrame(const SurfaceEntry& entry) noexcept;
-    static void queueLivePresentation(SurfaceEntry& entry,
-                                      uint64_t configureSerial) noexcept;
-    static void completeLivePresentation(SurfaceEntry& entry) noexcept;
+    static bool hasUnpresentedFrame(const SurfaceEntry& entry) noexcept;
+    static void queuePresentation(SurfaceEntry& entry,
+                                  uint64_t configureSerial) noexcept;
+    static void completePresentation(SurfaceEntry& entry) noexcept;
     /** A process may own several independent surface sockets; disconnect is per socket. */
     static bool isOwnedByClientConnection(const SurfaceEntry& entry,
                                           int clientFd) noexcept;

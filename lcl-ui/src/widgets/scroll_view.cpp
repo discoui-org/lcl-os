@@ -7,7 +7,9 @@ namespace {
 std::optional<graphics::RectF> activeAnimationPaintBounds(const Widget& widget) {
     const MotionCoordinator* coordinator = widget.getMotionCoordinator();
     if (coordinator && coordinator->isObjectAnimating(widget.getObjectId())) {
-        return widget.getPresentationSubtreePaintBounds();
+        const graphics::RectF bounds = widget.getPresentationSubtreePaintBounds();
+        if (!bounds.isEmpty()) return bounds;
+        return std::nullopt;
     }
 
     std::optional<graphics::RectF> result;
@@ -84,6 +86,10 @@ void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRec
     const uint64_t contentRevision = m_contentWidget->getPaintRevision();
     const uint64_t contentPresentationRevision =
         m_contentWidget->getPresentationRevision();
+    const bool paintChanged =
+        m_cachedContentPaintRevision != contentRevision;
+    const bool presentationChanged =
+        m_cachedContentPresentationRevision != contentPresentationRevision;
     const bool geometryChanged =
         m_cachedContentWidth != contentBounds.width ||
         m_cachedContentHeight != contentBounds.height ||
@@ -91,8 +97,7 @@ void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRec
         m_cachedViewportHeight != m_absoluteBounds.height;
     const bool subtreeAnimating = m_contentWidget->hasActiveAnimationInSubtree();
     const bool needsRaster = !m_cacheValid || geometryChanged ||
-        m_cachedContentPaintRevision != contentRevision ||
-        m_cachedContentPresentationRevision != contentPresentationRevision;
+        paintChanged || presentationChanged;
 
     const bool wasSubtreeAnimating = m_cachedSubtreeAnimating;
     const bool animationUpdate = subtreeAnimating ||
@@ -110,6 +115,7 @@ void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRec
     }
     m_cachedSubtreeAnimating = subtreeAnimating;
     m_cachedAnimationBounds = activeCacheBounds;
+    bool deferredOffscreenPresentationUpdate = false;
     if (m_cacheValid && !geometryChanged && animationUpdate) {
         const float rasterOutset = 1.0f /
             std::max(0.001f, canvas.renderTarget().deviceScale);
@@ -127,7 +133,14 @@ void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRec
         updateBounds = updateBounds
             .intersection(getPresentationBounds())
             .intersection(presentedContentBounds);
-        if (!updateBounds.isEmpty() &&
+        if (updateBounds.isEmpty() && subtreeAnimating &&
+            presentationChanged && !paintChanged) {
+            // The procedural presentation is outside the viewport. Keep the
+            // stable cached pixels and leave its presentation revision stale;
+            // once it becomes visible, the normal partial-update path catches
+            // up only that widget's bounds.
+            deferredOffscreenPresentationUpdate = true;
+        } else if (!updateBounds.isEmpty() &&
             canvas.beginCachedLayerUpdate(
                 getObjectId(), presentedContentBounds, updateBounds)) {
             m_contentWidget->draw(canvas, updateBounds);
@@ -148,9 +161,8 @@ void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRec
         return;
     }
 
-    const bool needsFullRaster = !m_cacheValid || geometryChanged ||
-        m_cachedContentPaintRevision != contentRevision ||
-        m_cachedContentPresentationRevision != contentPresentationRevision;
+    const bool needsFullRaster = !deferredOffscreenPresentationUpdate &&
+        (!m_cacheValid || geometryChanged || paintChanged || presentationChanged);
     if (needsFullRaster) {
         if (canvas.beginCachedLayer(getObjectId(), presentedContentBounds)) {
             // The cached target origin cancels the ScrollView-owned content

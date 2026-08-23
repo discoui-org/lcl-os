@@ -2,14 +2,20 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
+#include "lcl-ui/widgets/divider.hpp"
 #include "lcl-ui/widgets/menu.hpp"
+#include "lcl-ui/widgets/picker.hpp"
 #include "lcl-ui/widgets/popover.hpp"
+#include "lcl-ui/widgets/progress_view.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
+#include "lcl-ui/widgets/slider.hpp"
+#include "lcl-ui/widgets/tab_view.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
 #include "lcl-ui/widgets/toggle.hpp"
@@ -131,6 +137,7 @@ int main() {
             PopoverOptions{
                 .width = 240.0f,
                 .height = 150.0f,
+                .onOpened = {},
                 .onDismissed = [popoverStatusPtr] {
                   popoverStatusPtr->setText("Popover: dismissed");
                 },
@@ -262,6 +269,124 @@ int main() {
   scrollContent->addChild(makeToggleRow("Initially ON", true, true));
   scrollContent->addChild(makeToggleRow("Disabled", false, false));
 
+  auto dividerA = std::make_unique<Divider>();
+  dividerA->setWidth(300.0f);
+  dividerA->setHeight(metrics.separatorWidth);
+  scrollContent->addChild(std::move(dividerA));
+
+  auto checkboxTitle = std::make_unique<Text>("Toggle styles");
+  checkboxTitle->setTextRole(lcl::theme::TextRole::Body);
+  auto checkboxStatus = std::make_unique<Text>("Checkbox: Off");
+  Text* checkboxStatusPtr = checkboxStatus.get();
+  checkboxStatus->setTextRole(lcl::theme::TextRole::Description);
+  auto checkbox = std::make_unique<Toggle>("Include diagnostics", false);
+  checkbox->setToggleStyle(ToggleStyle::Checkbox);
+  checkbox->setWidth(300.0f);
+  checkbox->setOnChange([checkboxStatusPtr](bool value) {
+    checkboxStatusPtr->setText(value ? "Checkbox: On" : "Checkbox: Off");
+  });
+  auto mixedCheckbox = std::make_unique<Toggle>("Mixed selection", false);
+  mixedCheckbox->setToggleStyle(ToggleStyle::Checkbox);
+  mixedCheckbox->setMixed(true);
+  mixedCheckbox->setWidth(300.0f);
+  auto buttonToggle = std::make_unique<Toggle>("Pinned", true);
+  buttonToggle->setToggleStyle(ToggleStyle::Button);
+  buttonToggle->setWidth(140.0f);
+  scrollContent->addChild(std::move(checkboxTitle));
+  scrollContent->addChild(std::move(checkboxStatus));
+  scrollContent->addChild(std::move(checkbox));
+  scrollContent->addChild(std::move(mixedCheckbox));
+  scrollContent->addChild(std::move(buttonToggle));
+
+  auto pickerTitle = std::make_unique<Text>("Picker styles");
+  pickerTitle->setTextRole(lcl::theme::TextRole::Body);
+  auto pickerStatus = std::make_unique<Text>("Picker: Automatic");
+  Text* pickerStatusPtr = pickerStatus.get();
+  pickerStatus->setTextRole(lcl::theme::TextRole::Description);
+  const std::vector<PickerOption> pickerOptions{
+      {"Automatic", true}, {"Light", true}, {"Dark", true},
+      {"Unavailable", false}};
+  auto menuPicker = std::make_unique<Picker>(
+      app, [] { return lcl::render::makeRasterCanvas(); },
+      "Appearance", pickerOptions, 0);
+  menuPicker->setWidth(300.0f);
+  menuPicker->setOnChange([pickerStatusPtr, pickerOptions](size_t index) {
+    pickerStatusPtr->setText("Picker: " + pickerOptions[index].label);
+  });
+  auto radioPicker = std::make_unique<Picker>(
+      app, [] { return lcl::render::makeRasterCanvas(); },
+      "Quality", std::vector<PickerOption>{{"Standard", true},
+                                            {"High", true},
+                                            {"Lossless", true}}, 1);
+  radioPicker->setPickerStyle(PickerStyle::RadioGroup);
+  radioPicker->setWidth(300.0f);
+  scrollContent->addChild(std::move(pickerTitle));
+  scrollContent->addChild(std::move(pickerStatus));
+  scrollContent->addChild(std::move(menuPicker));
+  scrollContent->addChild(std::move(radioPicker));
+
+  auto sliderTitle = std::make_unique<Text>("Slider");
+  sliderTitle->setTextRole(lcl::theme::TextRole::Body);
+  auto sliderStatus = std::make_unique<Text>("Value: 35");
+  Text* sliderStatusPtr = sliderStatus.get();
+  sliderStatus->setTextRole(lcl::theme::TextRole::Description);
+  auto slider = std::make_unique<Slider>(35.0f, 0.0f, 100.0f, 1.0f);
+  slider->setWidth(300.0f);
+  slider->setOnChange([sliderStatusPtr](float value) {
+    sliderStatusPtr->setText("Value: " + std::to_string(static_cast<int>(value)));
+  });
+  scrollContent->addChild(std::move(sliderTitle));
+  scrollContent->addChild(std::move(sliderStatus));
+  scrollContent->addChild(std::move(slider));
+
+  auto progressTitle = std::make_unique<Text>("ProgressView styles");
+  progressTitle->setTextRole(lcl::theme::TextRole::Body);
+  auto linearProgress = std::make_unique<ProgressView>(0.62f);
+  linearProgress->setProgressViewStyle(ProgressViewStyle::Linear);
+  linearProgress->setWidth(300.0f);
+  auto progressRow = std::make_unique<Container>();
+  progressRow->setWidth(300.0f);
+  progressRow->setHeight(32.0f);
+  progressRow->getYogaNode().setDirection(YGFlexDirectionRow);
+  progressRow->getYogaNode().setGap(YGGutterAll, 16.0f);
+  auto spinner = std::make_unique<ProgressView>();
+  spinner->setProgressViewStyle(ProgressViewStyle::Circular);
+  auto circularProgress = std::make_unique<ProgressView>(0.72f);
+  circularProgress->setProgressViewStyle(ProgressViewStyle::Circular);
+  progressRow->addChild(std::move(spinner));
+  progressRow->addChild(std::move(circularProgress));
+  scrollContent->addChild(std::move(progressTitle));
+  scrollContent->addChild(std::move(linearProgress));
+  scrollContent->addChild(std::move(progressRow));
+
+  auto tabTitle = std::make_unique<Text>("TabView");
+  tabTitle->setTextRole(lcl::theme::TextRole::Body);
+  auto tabView = std::make_unique<TabView>();
+  tabView->setWidth(300.0f);
+  tabView->setHeight(170.0f);
+  const auto makeTabContent = [&metrics](const std::string& title,
+                                         const std::string& detail) {
+    auto panel = std::make_unique<Container>();
+    panel->getYogaNode().setDirection(YGFlexDirectionColumn);
+    panel->getYogaNode().setJustifyContent(YGJustifyCenter);
+    panel->getYogaNode().setAlignItems(YGAlignCenter);
+    panel->setGap(YGGutterAll, 6.0f);
+    panel->useThemeStyle(lcl::theme::WidgetStyleRole::SecondarySurface);
+    panel->setPadding(YGEdgeAll, metrics.groupPadding);
+    auto heading = std::make_unique<Text>(title);
+    heading->setTextRole(lcl::theme::TextRole::Body);
+    auto body = std::make_unique<Text>(detail);
+    body->setTextRole(lcl::theme::TextRole::Caption);
+    panel->addChild(std::move(heading));
+    panel->addChild(std::move(body));
+    return panel;
+  };
+  tabView->addTab(Tab{"Library", makeTabContent("Library", "Saved items")});
+  tabView->addTab(Tab{"Activity", makeTabContent("Activity", "Recent changes")});
+  tabView->addTab(Tab{"Settings", makeTabContent("Settings", "Preferences")});
+  scrollContent->addChild(std::move(tabTitle));
+  scrollContent->addChild(std::move(tabView));
+
   auto menuTitle = std::make_unique<Text>("Menu v1");
   menuTitle->setTextRole(lcl::theme::TextRole::Body);
   auto menuStatus = std::make_unique<Text>("Menu: henüz seçim yok");
@@ -379,6 +504,7 @@ int main() {
             PopoverOptions{
                 .width = 240.0f,
                 .height = 160.0f,
+                .onOpened = {},
                 .onDismissed = [popoverStatusPtr] {
                   popoverStatusPtr->setText("Popover: dismissed");
                 },
