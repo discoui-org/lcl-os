@@ -30,6 +30,7 @@ struct DrawImageCommand {
     uintptr_t resourceKey{0};
     int sourceWidth{0};
     int sourceHeight{0};
+    int stridePixels{0};
     float opacity{1.0f};
     float cornerRadius{0.0f};
     float cornerRoundness{2.0f};
@@ -68,7 +69,8 @@ public:
     void drawText(PointF origin, std::string text, Color color,
                   float fontSize, FontFamily fontFamily = FontFamily::Interface);
     void drawImage(const RectF& destination, uintptr_t resourceKey,
-                   int sourceWidth, int sourceHeight, float opacity,
+                   int sourceWidth, int sourceHeight, int stridePixels,
+                   float opacity,
                    float cornerRadius, float cornerRoundness,
                    bool squareTopCorners);
     DisplayList build() const;

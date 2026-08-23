@@ -167,9 +167,10 @@ public:
         return static_cast<float>(text.size()) * fontSize * 0.6f * measurementScale;
     }
 
-    void drawBuffer(const graphics::RectF&, int, int, const uint32_t*, int,
+    void drawBuffer(const graphics::RectF&, int, int, const uint32_t*, int stridePixels,
                     float, float, float, bool) override {
         ++bufferDrawCount;
+        bufferStrides.push_back(stridePixels);
     }
 
     bool initialized{false};
@@ -214,6 +215,7 @@ public:
     std::vector<float> borderWidths;
     std::vector<float> roundnesses;
     std::vector<float> fontSizes;
+    std::vector<int> bufferStrides;
     std::vector<graphics::FontFamily> fontFamilies;
     std::vector<graphics::Color> colors;
     std::vector<graphics::Color> clearColors;
@@ -334,6 +336,21 @@ TEST(LclGraphicsTest, CanvasHelperPathsRetainGpuPrimitiveMetadata) {
 
     rect.lineTo(100.0f, 100.0f);
     EXPECT_EQ(rect.primitive(), nullptr);
+}
+
+TEST(LclGraphicsTest, CanvasDisplayListReplayPreservesImageStride) {
+    RecordingCanvas canvas;
+    const uint32_t pixels[8]{};
+    graphics::DisplayListBuilder builder;
+    builder.drawImage({1.0f, 2.0f, 2.0f, 2.0f},
+                      reinterpret_cast<uintptr_t>(pixels),
+                      2, 2, 4, 1.0f, 0.0f, 2.0f, false);
+
+    canvas.drawDisplayList(builder.build());
+
+    EXPECT_EQ(canvas.bufferDrawCount, 1);
+    ASSERT_EQ(canvas.bufferStrides.size(), 1u);
+    EXPECT_EQ(canvas.bufferStrides.front(), 4);
 }
 
 TEST(LclGraphicsTest, NormalStrokeScalesButHairlineRemainsOneDevicePixel) {
@@ -3621,15 +3638,23 @@ TEST(LclUiTest, RendererMapsLogicalSubtreeToPhysicalOrigin) {
 }
 
 TEST(LclUiTest, TitlebarRadiusMatchesWindowMaskByDefault) {
+    lcl::ui::chrome::WindowChromeStyle style;
+    style.titleBarBackground = {17, 19, 23, 255};
     const auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
-        400.0f, 32.0f, 20.0f, "Window", 15.0f);
-    const auto& children = titleBar->getChildren();
-    ASSERT_GE(children.size(), 1u);
-
-    const auto* roundedBackground = dynamic_cast<const Container*>(children[0].get());
-    ASSERT_NE(roundedBackground, nullptr);
-    EXPECT_FLOAT_EQ(roundedBackground->getBorderRadius(), 20.0f);
-    EXPECT_TRUE(roundedBackground->hasTopOnlyBorderRadius());
+        400.0f, 32.0f, 20.0f, "Window", 15.0f, style);
+    const auto displayList = titleBar->buildChromeDisplayList(
+        {0.0f, 0.0f, 400.0f, 32.0f});
+    ASSERT_FALSE(displayList.commands().empty());
+    const auto* background = std::get_if<graphics::DrawPathCommand>(
+        &displayList.commands().front());
+    ASSERT_NE(background, nullptr);
+    ASSERT_NE(background->path.primitive(), nullptr);
+    EXPECT_EQ(background->path.primitive()->kind,
+              graphics::PathPrimitiveKind::TopRRect);
+    EXPECT_FLOAT_EQ(background->path.primitive()->radiusX, 20.0f);
+    EXPECT_FLOAT_EQ(background->path.primitive()->roundness,
+                    style.titleBarRoundness);
+    EXPECT_TRUE(titleBar->getChildren().empty());
 }
 
 TEST(LclUiTest, TitlebarLayoutComesFromSharedCsdAndSsdChromeCore) {
@@ -3637,7 +3662,7 @@ TEST(LclUiTest, TitlebarLayoutComesFromSharedCsdAndSsdChromeCore) {
     const auto layout = lcl::ui::chrome::calculateWindowTitlebarLayout(
         540.0f, 34.0f, 20.0f, 14.0f, style);
 
-    // CSD widget bounds and SSD hit testing consume this same core layout.
+    // CSD paint and SSD paint consume the exact same logical display list.
     EXPECT_FLOAT_EQ(layout.controlLeft, 12.0f);
     EXPECT_FLOAT_EQ(layout.controlTop, 12.0f);
 
@@ -3656,16 +3681,48 @@ TEST(LclUiTest, TitlebarLayoutComesFromSharedCsdAndSsdChromeCore) {
     titleBar->getYogaNode().calculateLayout(540.0f, 34.0f);
     titleBar->syncLayout();
 
-    const auto& children = titleBar->getChildren();
-    ASSERT_GE(children.size(), 4u);
-    EXPECT_FLOAT_EQ(children[1]->getBounds().x, layout.controlLeft);
-    EXPECT_FLOAT_EQ(children[1]->getBounds().y, layout.controlTop);
-    EXPECT_FLOAT_EQ(children[1]->getBounds().width, style.controlSize);
-    EXPECT_FLOAT_EQ(children[1]->getBounds().height, style.controlSize);
+    const graphics::RectF bounds{0.0f, 0.0f, 540.0f, 34.0f};
+    const auto csdList = titleBar->buildChromeDisplayList(bounds);
+    const auto ssdList = ssdChrome.buildDisplayList({
+        bounds, 34.0f, 20.0f, 14.0f, 1.0f, true,
+        style.titleBarBackground,
+    });
+    ASSERT_EQ(csdList.commands().size(), ssdList.commands().size());
+    for (size_t index = 0; index < csdList.commands().size(); ++index) {
+        const auto& csd = csdList.commands()[index];
+        const auto& ssd = ssdList.commands()[index];
+        ASSERT_EQ(csd.index(), ssd.index()) << "command " << index;
+        if (const auto* csdConcat = std::get_if<graphics::ConcatCommand>(&csd)) {
+            const auto& ssdTransform = std::get<graphics::ConcatCommand>(ssd).transform;
+            EXPECT_FLOAT_EQ(csdConcat->transform.a, ssdTransform.a);
+            EXPECT_FLOAT_EQ(csdConcat->transform.d, ssdTransform.d);
+            EXPECT_FLOAT_EQ(csdConcat->transform.tx, ssdTransform.tx);
+            EXPECT_FLOAT_EQ(csdConcat->transform.ty, ssdTransform.ty);
+        } else if (const auto* csdPath = std::get_if<graphics::DrawPathCommand>(&csd)) {
+            const auto& ssdPath = std::get<graphics::DrawPathCommand>(ssd);
+            ASSERT_NE(csdPath->path.primitive(), nullptr);
+            ASSERT_NE(ssdPath.path.primitive(), nullptr);
+            EXPECT_EQ(csdPath->path.primitive()->kind,
+                      ssdPath.path.primitive()->kind);
+            EXPECT_EQ(csdPath->paint.color.toARGB(), ssdPath.paint.color.toARGB());
+            EXPECT_EQ(csdPath->paint.style, ssdPath.paint.style);
+            EXPECT_FLOAT_EQ(csdPath->paint.stroke.width,
+                            ssdPath.paint.stroke.width);
+        } else if (const auto* csdText = std::get_if<graphics::DrawTextCommand>(&csd)) {
+            const auto& ssdText = std::get<graphics::DrawTextCommand>(ssd);
+            EXPECT_EQ(csdText->text, ssdText.text);
+            EXPECT_FLOAT_EQ(csdText->origin.x, ssdText.origin.x);
+            EXPECT_FLOAT_EQ(csdText->origin.y, ssdText.origin.y);
+            EXPECT_FLOAT_EQ(csdText->fontSize, ssdText.fontSize);
+            EXPECT_EQ(csdText->color.toARGB(), ssdText.color.toARGB());
+        }
+    }
+    EXPECT_TRUE(titleBar->getChildren().empty());
 }
 
 TEST(LclUiTest, WindowControlsAreGlyphFreeAndAnimateHoverPress) {
     auto canvas = std::make_unique<RecordingCanvas>();
+    auto* canvasPtr = canvas.get();
     WindowApp app(std::move(canvas), 240, 40, "Window controls");
     const lcl::ui::chrome::WindowChromeStyle style;
     const auto layout = lcl::ui::chrome::calculateWindowTitlebarLayout(
@@ -3673,39 +3730,47 @@ TEST(LclUiTest, WindowControlsAreGlyphFreeAndAnimateHoverPress) {
     auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
         240.0f, 40.0f, 20.0f, "Window", 14.0f, style);
     auto* titleBarPtr = titleBar.get();
-    auto* closeControl = dynamic_cast<lcl::ui::chrome::WindowControl*>(
-        titleBar->getChildren()[1].get());
-    ASSERT_NE(closeControl, nullptr);
-    EXPECT_TRUE(closeControl->getChildren().empty());
+    EXPECT_TRUE(titleBar->getChildren().empty());
 
     app.setRootWidget(std::move(titleBar));
     ASSERT_TRUE(app.renderFrame());
+    EXPECT_EQ(canvasPtr->pathDrawCount, 6);
+    ASSERT_FALSE(canvasPtr->texts.empty());
+    EXPECT_EQ(canvasPtr->texts.back(), "Window");
 
     const float controlX = layout.controlLeft + style.controlSize * 0.5f;
     const float controlY = layout.controlTop + style.controlSize * 0.5f;
     app.sendPointerMove(controlX, controlY);
     for (int index = 0; index < 60; ++index) app.advanceAnimations(1.0f / 240.0f);
-    EXPECT_GT(closeControl->getPresentationState().scaleX, 1.0f);
     const auto hoverVisual = titleBarPtr->sharedChrome().visual(0);
-    const auto hoverColor = closeControl->getPresentationBackgroundColor();
-    EXPECT_EQ(hoverColor.r, hoverVisual.background.r);
-    EXPECT_EQ(hoverColor.g, hoverVisual.background.g);
-    EXPECT_EQ(hoverColor.b, hoverVisual.background.b);
-    EXPECT_EQ(hoverColor.a, hoverVisual.background.a);
+    EXPECT_GT(hoverVisual.scale, 1.0f);
+    const auto hoverList = titleBarPtr->buildChromeDisplayList(
+        {0.0f, 0.0f, 240.0f, 40.0f});
+    ASSERT_GE(hoverList.commands().size(), 6u);
+    const auto& hoverScale = std::get<graphics::ConcatCommand>(
+        hoverList.commands()[2]).transform;
+    const auto& hoverFill = std::get<graphics::DrawPathCommand>(
+        hoverList.commands()[4]).paint;
+    const auto& hoverStroke = std::get<graphics::DrawPathCommand>(
+        hoverList.commands()[5]).paint;
+    EXPECT_FLOAT_EQ(hoverScale.a, hoverVisual.scale);
+    EXPECT_FLOAT_EQ(hoverScale.d, hoverVisual.scale);
+    EXPECT_EQ(hoverFill.color.toARGB(), hoverVisual.background.toARGB());
+    EXPECT_EQ(hoverStroke.color.toARGB(), hoverVisual.border.toARGB());
 
     EXPECT_TRUE(app.sendPointerDown(controlX, controlY));
     for (int index = 0; index < 60; ++index) app.advanceAnimations(1.0f / 240.0f);
-    EXPECT_LT(closeControl->getPresentationState().scaleX, 1.0f);
     const auto pressedVisual = titleBarPtr->sharedChrome().visual(0);
-    const auto pressedColor = closeControl->getPresentationBackgroundColor();
-    EXPECT_EQ(pressedColor.r, pressedVisual.background.r);
-    EXPECT_EQ(pressedColor.g, pressedVisual.background.g);
-    EXPECT_EQ(pressedColor.b, pressedVisual.background.b);
-    EXPECT_EQ(pressedColor.a, pressedVisual.background.a);
+    EXPECT_LT(pressedVisual.scale, 1.0f);
+    const auto pressedList = titleBarPtr->buildChromeDisplayList(
+        {0.0f, 0.0f, 240.0f, 40.0f});
+    const auto& pressedFill = std::get<graphics::DrawPathCommand>(
+        pressedList.commands()[4]).paint;
+    EXPECT_EQ(pressedFill.color.toARGB(), pressedVisual.background.toARGB());
 
     EXPECT_TRUE(app.sendPointerUp(controlX, controlY));
     for (int index = 0; index < 90; ++index) app.advanceAnimations(1.0f / 240.0f);
-    EXPECT_GT(closeControl->getPresentationState().scaleX, 1.0f);
+    EXPECT_GT(titleBarPtr->sharedChrome().visual(0).scale, 1.0f);
 }
 
 TEST(LclUiTest, TopRoundedRectDoesNotLeakBelowItsCornerArc) {

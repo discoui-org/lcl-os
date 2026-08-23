@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(lcl-graphics VERSION 0.1.0 LANGUAGES CXX)
 
 add_library(lcl-graphics STATIC
+    src/canvas.cpp
     src/path.cpp
     src/display_list.cpp
 )
@@ -11,4 +12,3 @@ target_include_directories(lcl-graphics PUBLIC
 )
 
 target_compile_features(lcl-graphics PUBLIC cxx_std_20)
-

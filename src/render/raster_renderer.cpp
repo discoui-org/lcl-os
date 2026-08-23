@@ -1203,8 +1203,10 @@ void RasterRenderer::replayDisplayList(
             } else if constexpr (std::is_same_v<T, lcl::graphics::DrawImageCommand>) {
                 const auto mapped = state.transform.mapRect(op.destination);
                 const auto* pixels = reinterpret_cast<const uint32_t*>(op.resourceKey);
+                const int stridePixels = op.stridePixels > 0
+                    ? op.stridePixels : op.sourceWidth;
                 drawBufferTransformed(mapped.x, mapped.y, op.sourceWidth, op.sourceHeight,
-                                      pixels, op.sourceWidth, op.opacity * state.opacity,
+                                      pixels, stridePixels, op.opacity * state.opacity,
                                       op.cornerRadius * state.transform.maxScale(),
                                       op.cornerRoundness, op.squareTopCorners,
                                       mapped.width, mapped.height);

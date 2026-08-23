@@ -93,10 +93,12 @@ lcl::graphics::DisplayList WindowChromeWidget::buildDisplayList(
 
     if (options.drawTitlebar && options.titlebarColor.a > 0) {
         lcl::graphics::Path titlebar;
-        const float r = std::clamp(options.cornerRadius, 0.0f, options.titleHeight);
+        const float r = std::clamp(
+            options.cornerRadius + m_style.titleBarCornerRadiusAdjust,
+            0.0f, options.titleHeight);
         titlebar.addTopRRect({options.bounds.x, options.bounds.y,
                               options.bounds.width, options.titleHeight},
-                             r, 2.0f);
+                             r, m_style.titleBarRoundness);
         builder.drawPath(titlebar, {{withOpacity(options.titlebarColor)},
                                     lcl::graphics::PaintStyle::Fill});
     }

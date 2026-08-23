@@ -1,13 +1,11 @@
 #pragma once
 
-#include <array>
 #include <functional>
 #include <memory>
 #include <string>
 
 #include "lcl-window-chrome/window_chrome.hpp"
-#include "lcl-ui/widgets/container.hpp"
-#include "lcl-ui/widgets/text.hpp"
+#include "lcl-ui/widgets/widget.hpp"
 
 namespace lcl::ui::chrome {
 
@@ -23,28 +21,8 @@ struct WindowChromeActions {
 
 class WindowChromeSurface;
 
-/** lcl-ui host for one control owned by the shared WindowChromeWidget. */
-class WindowControl final : public Container {
-public:
-    WindowControl(WindowChromeSurface& owner, size_t index,
-                  const WindowChromeStyle& style);
-
-    size_t controlIndex() const noexcept { return m_index; }
-
-    bool onPointerEnter(const PointerEvent& event) override;
-    bool onPointerLeave(const PointerEvent& event) override;
-    bool onPointerDown(const PointerEvent& event) override;
-    bool onPointerUp(const PointerEvent& event) override;
-    bool onPointerCancel(const PointerEvent& event) override;
-    bool onPointerMove(const PointerEvent& event) override;
-
-private:
-    WindowChromeSurface& m_owner;
-    size_t m_index{0};
-};
-
-/** CSD host for the same chrome state used by the compositor's SSD path. */
-class WindowChromeSurface final : public Container {
+/** CSD host that paints and hit-tests through the shared SSD chrome core. */
+class WindowChromeSurface final : public Widget {
 public:
     WindowChromeSurface(float width, float titleHeight, float cornerRadius,
                         std::string title, float titleFontSize,
@@ -55,32 +33,37 @@ public:
     const lcl::chrome::WindowChromeWidget& sharedChrome() const noexcept {
         return m_chrome;
     }
-    WindowControl* control(size_t index) const { return m_controls.at(index); }
     const WindowTitlebarLayout& chromeLayout() const noexcept { return m_layout; }
+    graphics::DisplayList buildChromeDisplayList(
+        const graphics::RectF& bounds) const;
 
-    bool controlPointerMove(size_t index, bool inside);
-    bool controlPointerDown(size_t index);
-    bool controlPointerUp(size_t index, bool inside, bool keepHovered);
-    bool controlPointerCancel();
+    void syncLayout(float parentAbsX = 0.0f,
+                    float parentAbsY = 0.0f) override;
+    void draw(graphics::Canvas& canvas,
+              const graphics::RectF& damageRect) override;
+    bool onPointerEnter(const PointerEvent& event) override;
+    bool onPointerLeave(const PointerEvent& event) override;
     bool onPointerDown(const PointerEvent& event) override;
+    bool onPointerUp(const PointerEvent& event) override;
+    bool onPointerCancel(const PointerEvent& event) override;
+    bool onPointerMove(const PointerEvent& event) override;
 
 private:
-    void syncControlPresentation();
+    int hitTest(const PointerEvent& event) const;
     void scheduleChromePresentation();
     bool activate(size_t index);
 
     lcl::chrome::WindowChromeWidget m_chrome;
     WindowChromeActions m_actions;
     WindowTitlebarLayout m_layout{};
-    std::array<WindowControl*, 3> m_controls{};
+    float m_titleHeight{0.0f};
+    float m_cornerRadius{0.0f};
+    float m_titleFontSize{0.0f};
 };
 
 WindowTitlebarLayout calculateWindowTitlebarLayout(
     float width, float titleHeight, float cornerRadius, float titleFontSize,
     const WindowChromeStyle& style = {});
-
-std::string truncateTitleToWidth(const std::string& title, float widthPx,
-                                 float fontSizePx);
 
 std::unique_ptr<WindowChromeSurface> buildWindowTitlebar(
     float width, float titleHeight, float cornerRadius, const std::string& title,

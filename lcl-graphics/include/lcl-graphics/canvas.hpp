@@ -56,6 +56,9 @@ public:
     virtual void endCachedLayer() {}
     virtual bool drawCachedLayer(CachedLayerId, const RectF&, float = 1.0f) { return false; }
 
+    /** Replay backend-neutral commands through this Canvas' current state. */
+    void drawDisplayList(const DisplayList& displayList);
+
     virtual void drawPath(const Path& path, const Paint& paint) = 0;
     virtual void drawRect(const RectF& rect, Color color) = 0;
     virtual void drawRoundedRect(const RectF& rect, float radius, Color color,

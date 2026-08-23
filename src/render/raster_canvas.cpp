@@ -466,7 +466,7 @@ void RasterCanvas::drawBuffer(const lcl::graphics::RectF& destination,
                             float cornerRadius, float cornerRoundness,
                             bool squareTopCorners) {
     m_displayListBuilder.drawImage(destination, reinterpret_cast<uintptr_t>(pixels),
-                                   srcWidth, srcHeight, opacity, cornerRadius,
+                                   srcWidth, srcHeight, stridePixels, opacity, cornerRadius,
                                    cornerRoundness, squareTopCorners);
     lcl::graphics::RectF mapped = mapRect(destination);
     if (m_state.clip && !m_state.clip->intersects(mapped)) return;

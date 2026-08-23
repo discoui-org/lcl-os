@@ -31,11 +31,12 @@ void DisplayListBuilder::drawText(PointF origin, std::string text, Color color,
                                             fontSize, fontFamily});
 }
 void DisplayListBuilder::drawImage(const RectF& destination, uintptr_t resourceKey,
-                                   int sourceWidth, int sourceHeight, float opacity,
+                                   int sourceWidth, int sourceHeight, int stridePixels,
+                                   float opacity,
                                    float cornerRadius, float cornerRoundness,
                                    bool squareTopCorners) {
     m_commands.emplace_back(DrawImageCommand{destination, resourceKey, sourceWidth,
-                                              sourceHeight, opacity, cornerRadius,
+                                              sourceHeight, stridePixels, opacity, cornerRadius,
                                               cornerRoundness, squareTopCorners});
 }
 DisplayList DisplayListBuilder::build() const {
