@@ -17,6 +17,8 @@ enum class StyleState {
 struct StyleValues {
     std::optional<graphics::Color> background;
     std::optional<graphics::Color> foreground;
+    std::optional<graphics::Color> secondaryForeground;
+    std::optional<graphics::Color> accent;
     std::optional<graphics::Color> border;
     std::optional<float> borderWidth;
     std::optional<float> cornerRadius;
@@ -37,6 +39,8 @@ struct WidgetStyle {
 struct ResolvedStyle {
     graphics::Color background{0, 0, 0, 0};
     graphics::Color foreground{255, 255, 255, 255};
+    graphics::Color secondaryForeground{255, 255, 255, 153};
+    graphics::Color accent{10, 132, 255, 255};
     graphics::Color border{0, 0, 0, 0};
     float borderWidth{0.0f};
     float cornerRadius{0.0f};
@@ -51,10 +55,17 @@ struct SemanticColors {
     graphics::Color separator{84, 84, 88, 128};
     graphics::Color primaryLabel{255, 255, 255, 255};
     graphics::Color secondaryLabel{235, 235, 245, 153};
+    graphics::Color tertiaryLabel{235, 235, 245, 76};
     graphics::Color accent{10, 132, 255, 255};
     graphics::Color accentHover{35, 145, 255, 255};
     graphics::Color accentPressed{0, 105, 220, 255};
     graphics::Color focusRing{100, 210, 255, 220};
+    graphics::Color controlFill{120, 120, 128, 82};
+    graphics::Color controlFillHover{132, 132, 140, 96};
+    graphics::Color controlFillPressed{99, 99, 102, 110};
+    graphics::Color controlShadow{0, 0, 0, 68};
+    graphics::Color selectionFill{84, 84, 88, 92};
+    graphics::Color selectionFillPressed{99, 99, 102, 128};
     graphics::Color disabledFill{72, 72, 74, 110};
     graphics::Color windowTitleFocused{10, 132, 255, 255};
     graphics::Color windowTitleBlurred{72, 72, 74, 255};
@@ -62,7 +73,12 @@ struct SemanticColors {
 
 struct Theme {
     SemanticColors colors;
+    WidgetStyle text;
     WidgetStyle button;
+    WidgetStyle textField;
+    WidgetStyle toggle;
+    WidgetStyle menuItem;
+    WidgetStyle popover;
 };
 
 Theme createDefaultTheme();

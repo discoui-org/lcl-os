@@ -35,6 +35,16 @@ Use neutral system tones as defaults with one restrained blue accent family.
 - Keep tint dark-neutral for terminal and tooling surfaces.
 - Prefer subtle blur/refraction with high text contrast.
 
+## Control Rules
+
+- Built-in controls resolve colors, borders, radii, and interaction values
+  through `lcl-theme`; drawing code must not embed a second palette.
+- Text fields use a restrained focus ring and an accent-colored caret.
+- Toggle selection uses the accent family; inactive tracks and menu selection
+  remain neutral.
+- Application-specific colors remain explicit overrides and must not mutate the
+  shared theme.
+
 ## Terminal Rules
 
 - Terminal background must be dark neutral, not transparent black-only and not saturated.

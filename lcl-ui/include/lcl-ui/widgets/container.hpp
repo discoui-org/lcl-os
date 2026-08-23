@@ -43,6 +43,9 @@ public:
 
     void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
 
+protected:
+    void styleDidChange() override;
+
 private:
     graphics::Color m_backgroundColor{0, 0, 0, 0};
     graphics::Color m_presentationBackgroundColor{0, 0, 0, 0};

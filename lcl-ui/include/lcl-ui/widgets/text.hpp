@@ -27,13 +27,18 @@ public:
     void setFontFamily(graphics::FontFamily family);
     graphics::FontFamily getFontFamily() const { return m_fontFamily; }
 
-    void setTextColor(const graphics::Color& color) { m_textColor = color; markDirty(); }
+    void setTextColor(const graphics::Color& color);
+    void resetTextColor();
     graphics::Color getTextColor() const { return m_textColor; }
 
     void setTextAlign(TextAlign align) { m_textAlign = align; markDirty(); }
     TextAlign getTextAlign() const { return m_textAlign; }
 
     void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
+
+protected:
+    const lcl::theme::WidgetStyle* defaultStyle() const noexcept override;
+    void styleDidChange() override;
 
 private:
     void updateMeasureFunc();
@@ -42,6 +47,7 @@ private:
     float m_fontSize{14.0f};
     graphics::FontFamily m_fontFamily{graphics::FontFamily::Interface};
     graphics::Color m_textColor{255, 255, 255, 255};
+    bool m_hasExplicitTextColor{false};
     TextAlign m_textAlign{TextAlign::Start};
 };
 

@@ -27,6 +27,10 @@ public:
     }
 
 private:
+    const lcl::theme::WidgetStyle* defaultStyle() const noexcept override {
+        return &getTheme().menuItem;
+    }
+
     MenuContent& m_menu;
     size_t m_index{0};
 };

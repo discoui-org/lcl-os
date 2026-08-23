@@ -4,6 +4,19 @@ namespace lcl::ui {
 
 Container::Container() = default;
 
+void Container::styleDidChange() {
+    const auto* style = resolvedStyle();
+    if (!style) return;
+    const auto visual = lcl::theme::resolveStyle(
+        *style, lcl::theme::StyleState::Normal);
+    setBackgroundColor(visual.background);
+    setBorderColor(visual.border);
+    setBorderWidth(visual.borderWidth);
+    setBorderRadius(visual.cornerRadius);
+    setPadding(YGEdgeHorizontal, style->horizontalPadding.value_or(0.0f));
+    setPadding(YGEdgeVertical, style->verticalPadding.value_or(0.0f));
+}
+
 void Container::setBackgroundColor(const graphics::Color& color) {
     m_backgroundColor = color;
     if (m_motionCoordinator) {

@@ -7,6 +7,7 @@ namespace lcl::ui {
 
 Text::Text(const std::string& content) : m_text(content) {
     updateMeasureFunc();
+    styleDidChange();
 }
 
 void Text::setText(const std::string& text) {
@@ -25,6 +26,31 @@ void Text::setFontFamily(graphics::FontFamily family) {
     if (m_fontFamily == family) return;
     m_fontFamily = family;
     updateMeasureFunc();
+    markDirty();
+}
+
+void Text::setTextColor(const graphics::Color& color) {
+    m_hasExplicitTextColor = true;
+    m_textColor = color;
+    markDirty();
+}
+
+void Text::resetTextColor() {
+    if (!m_hasExplicitTextColor) return;
+    m_hasExplicitTextColor = false;
+    styleDidChange();
+}
+
+const lcl::theme::WidgetStyle* Text::defaultStyle() const noexcept {
+    return &getTheme().text;
+}
+
+void Text::styleDidChange() {
+    if (m_hasExplicitTextColor) return;
+    const auto* style = resolvedStyle();
+    if (!style) return;
+    m_textColor = lcl::theme::resolveStyle(
+        *style, lcl::theme::StyleState::Normal).foreground;
     markDirty();
 }
 

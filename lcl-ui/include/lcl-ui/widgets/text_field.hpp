@@ -55,6 +55,9 @@ private:
     void tickCaretPresentation(float deltaSec);
     void resetCaretPresentation();
     void valueChanged();
+    lcl::theme::ResolvedStyle visualStyle() const noexcept;
+    float horizontalPadding() const noexcept;
+    const lcl::theme::WidgetStyle* defaultStyle() const noexcept override;
 
     std::string m_text;
     std::string m_placeholder;
@@ -66,7 +69,6 @@ private:
     std::vector<float> m_caretAdvances;
     bool m_caretAdvancesValid{false};
 
-    static constexpr float kHorizontalPadding = 8.0f;
     static constexpr float kFontSize = 14.0f;
     static constexpr float kCaretWidth = 1.0f;
     static constexpr graphics::FontFamily kFontFamily = graphics::FontFamily::Interface;

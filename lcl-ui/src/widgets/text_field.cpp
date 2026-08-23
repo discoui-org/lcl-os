@@ -115,16 +115,15 @@ void TextField::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect
     beginPresentation(canvas);
 
     const graphics::RectF field = m_absoluteBounds;
-    const graphics::Color border = m_focused
-        ? graphics::Color{96, 165, 250, 255}
-        : graphics::Color{100, 116, 139, 220};
-    canvas.drawRoundedRect(field, 6.0f, {24, 31, 42, 255}, border,
-                           1.0f, 3.2f);
+    const auto visual = visualStyle();
+    const float padding = horizontalPadding();
+    canvas.drawRoundedRect(field, visual.cornerRadius, visual.background,
+                           visual.border, visual.borderWidth, 3.2f);
 
     const graphics::RectF viewport{
-        field.x + kHorizontalPadding,
+        field.x + padding,
         field.y + 1.0f,
-        std::max(0.0f, field.width - kHorizontalPadding * 2.0f),
+        std::max(0.0f, field.width - padding * 2.0f),
         std::max(0.0f, field.height - 2.0f),
     };
     canvas.clipRect(viewport);
@@ -133,19 +132,21 @@ void TextField::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect
     if (m_text.empty()) {
         if (!m_placeholder.empty()) {
             canvas.drawText(viewport.x, textY, m_placeholder,
-                            {148, 163, 184, 255}, kFontSize, kFontFamily);
+                            visual.secondaryForeground, kFontSize, kFontFamily);
         }
     } else {
         canvas.drawText(viewport.x - m_horizontalScroll, textY, m_text,
-                        {241, 245, 249, 255}, kFontSize, kFontFamily);
+                        visual.foreground, kFontSize, kFontFamily);
     }
 
     const float caretOpacity = m_caretPresentation.opacity();
     if (m_focused && caretOpacity > 0.0f) {
         const float caretX = viewport.x + measurePrefix(m_caretIndex) - m_horizontalScroll;
         const float caretHeight = kFontSize * 1.2f;
-        canvas.drawRect({caretX, textY, kCaretWidth, caretHeight},
-                        {226, 232, 240, static_cast<uint8_t>(std::lround(255.0f * caretOpacity))});
+        graphics::Color caret = visual.accent;
+        caret.a = static_cast<uint8_t>(std::lround(
+            static_cast<float>(caret.a) * caretOpacity));
+        canvas.drawRect({caretX, textY, kCaretWidth, caretHeight}, caret);
     }
 
     endPresentation(canvas);
@@ -156,7 +157,7 @@ bool TextField::onPointerDown(const PointerEvent& event) {
         return true;
     }
     if (event.button != 0) return false;
-    const float contentX = event.x - (m_absoluteBounds.x + kHorizontalPadding) +
+    const float contentX = event.x - (m_absoluteBounds.x + horizontalPadding()) +
         m_horizontalScroll;
     m_caretIndex = characterIndexForX(std::max(0.0f, contentX));
     ensureCaretVisible();
@@ -167,7 +168,7 @@ bool TextField::onPointerDown(const PointerEvent& event) {
 
 bool TextField::onPointerUp(const PointerEvent& event) {
     if (event.source != PointerSource::Touch || !event.isTouchTapCompletion()) return false;
-    const float contentX = event.x - (m_absoluteBounds.x + kHorizontalPadding) +
+    const float contentX = event.x - (m_absoluteBounds.x + horizontalPadding()) +
         m_horizontalScroll;
     m_caretIndex = characterIndexForX(std::max(0.0f, contentX));
     ensureCaretVisible();
@@ -343,7 +344,7 @@ size_t TextField::characterIndexForX(float x) const {
 }
 
 void TextField::ensureCaretVisible() {
-    const float viewportWidth = m_absoluteBounds.width - kHorizontalPadding * 2.0f;
+    const float viewportWidth = m_absoluteBounds.width - horizontalPadding() * 2.0f;
     if (viewportWidth <= 0.0f) {
         m_horizontalScroll = 0.0f;
         return;
@@ -360,6 +361,24 @@ void TextField::ensureCaretVisible() {
     const float textWidth = measureTextWidth();
     const float maxScroll = std::max(0.0f, textWidth - usableWidth);
     m_horizontalScroll = std::clamp(m_horizontalScroll, 0.0f, maxScroll);
+}
+
+lcl::theme::ResolvedStyle TextField::visualStyle() const noexcept {
+    const auto* style = resolvedStyle();
+    if (!style) return {};
+    return lcl::theme::resolveStyle(
+        *style, m_focused ? lcl::theme::StyleState::Focused
+                          : lcl::theme::StyleState::Normal);
+}
+
+float TextField::horizontalPadding() const noexcept {
+    const auto* style = resolvedStyle();
+    return style ? std::max(0.0f, style->horizontalPadding.value_or(0.0f))
+                 : 0.0f;
+}
+
+const lcl::theme::WidgetStyle* TextField::defaultStyle() const noexcept {
+    return &getTheme().textField;
 }
 
 void TextField::registerCaretPresentation() {

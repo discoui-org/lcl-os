@@ -43,13 +43,17 @@ private:
         graphics::Color trackBorder;
         graphics::Color thumb;
         graphics::Color thumbBorder;
+        float trackBorderWidth{0.0f};
     };
 
     graphics::RectF trackRect() const noexcept;
     graphics::RectF thumbRect() const noexcept;
     VisualColors visualColors() const noexcept;
+    lcl::theme::StyleState visualStyleState() const noexcept;
     void setThumbPresentation(float progress);
     void retargetThumb();
+    const lcl::theme::WidgetStyle* defaultStyle() const noexcept override;
+    void styleDidChange() override;
 
     bool m_value{false};
     bool m_enabled{true};

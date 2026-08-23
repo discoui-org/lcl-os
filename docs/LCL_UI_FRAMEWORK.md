@@ -318,7 +318,10 @@ control.setOnClick(() => console.log("Activated"));
 
 `WindowApp` owns one `theme::ThemeContext`. Its semantic colors and control
 styles are inherited by the root widget, descendants, and hosted popup
-surfaces. Built-in controls resolve their default style from that context.
+surfaces. `Text`, `Button`, `TextField`, `Toggle`, menu items, and popover
+panels resolve their defaults from that context. TextField placeholder/caret
+colors and Toggle off/on track colors use the same semantic values rather than
+embedding palette constants in widget drawing code.
 
 Use `Widget::useStyle()` for a local code-defined override. It replaces the
 control's semantic default as one value object; there are no selectors,
@@ -337,3 +340,5 @@ quietButton->useStyle(std::move(quietStyle));
 Call `clearStyle()` to return to the active theme. Replacing the window theme
 with `WindowApp::setTheme()` refreshes the complete widget tree without
 introducing rendering-backend or device-scale knowledge into control code.
+`Text::setTextColor()` remains an explicit application override;
+`Text::resetTextColor()` returns that label to its inherited theme color.

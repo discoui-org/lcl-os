@@ -15,17 +15,6 @@ constexpr float kTrackHeight = 32.0f;
 constexpr float kThumbInset = 3.0f;
 constexpr float kFocusInset = 3.0f;
 
-graphics::Color mix(graphics::Color from, graphics::Color to, float amount) {
-    const auto channel = [amount](uint8_t a, uint8_t b) {
-        return static_cast<uint8_t>(std::clamp(
-            std::lround(static_cast<float>(a) +
-                        (static_cast<float>(b) - static_cast<float>(a)) * amount),
-            0l, 255l));
-    };
-    return {channel(from.r, to.r), channel(from.g, to.g),
-            channel(from.b, to.b), channel(from.a, to.a)};
-}
-
 } // namespace
 
 Toggle::Toggle(bool value)
@@ -33,17 +22,7 @@ Toggle::Toggle(bool value)
     setWidth(kDefaultWidth);
     setHeight(kDefaultHeight);
     setFocusable(true);
-
-    setInteractionStyle(InteractionState::Normal,
-        InteractionStyle{.scale = 1.0f, .opacity = 1.0f});
-    setInteractionStyle(InteractionState::Hover,
-        InteractionStyle{.scale = 1.015f, .opacity = 1.0f});
-    setInteractionStyle(InteractionState::Pressed,
-        InteractionStyle{.scale = 0.965f, .opacity = 0.96f});
-    setInteractionStyle(InteractionState::Focused,
-        InteractionStyle{.scale = 1.0f, .opacity = 1.0f});
-    setInteractionStyle(InteractionState::Disabled,
-        InteractionStyle{.scale = 1.0f, .opacity = 0.48f});
+    styleDidChange();
 }
 
 void Toggle::setValue(bool value) {
@@ -180,20 +159,48 @@ graphics::RectF Toggle::thumbRect() const noexcept {
 }
 
 Toggle::VisualColors Toggle::visualColors() const noexcept {
-    const graphics::Color offTrack{55, 61, 72, 235};
-    const graphics::Color onTrack{46, 126, 246, 245};
-    const graphics::Color hoverLift{255, 255, 255, 255};
-    const graphics::Color pressedShade{10, 14, 22, 255};
-
-    graphics::Color track = m_value ? onTrack : offTrack;
-    if (m_hovered) track = mix(track, hoverLift, 0.07f);
-    if (m_pressed) track = mix(track, pressedShade, 0.10f);
+    const auto* style = resolvedStyle();
+    const auto visual = style
+        ? lcl::theme::resolveStyle(*style, visualStyleState())
+        : lcl::theme::ResolvedStyle{};
     return {
-        track,
-        m_value ? graphics::Color{126, 177, 255, 190} : graphics::Color{111, 121, 137, 180},
-        graphics::Color{248, 250, 253, 255},
-        graphics::Color{207, 215, 226, 210},
+        m_value ? visual.accent : visual.background,
+        visual.border,
+        visual.foreground,
+        getTheme().colors.separator,
+        visual.borderWidth,
     };
+}
+
+lcl::theme::StyleState Toggle::visualStyleState() const noexcept {
+    if (!m_enabled) return lcl::theme::StyleState::Disabled;
+    if (m_pressed) return lcl::theme::StyleState::Pressed;
+    if (m_hovered) return lcl::theme::StyleState::Hover;
+    if (m_focused) return lcl::theme::StyleState::Focused;
+    return lcl::theme::StyleState::Normal;
+}
+
+const lcl::theme::WidgetStyle* Toggle::defaultStyle() const noexcept {
+    return &getTheme().toggle;
+}
+
+void Toggle::styleDidChange() {
+    const auto* style = resolvedStyle();
+    if (!style) return;
+    const auto sync = [this, style](InteractionState interaction,
+                                    lcl::theme::StyleState state) {
+        const auto visual = lcl::theme::resolveStyle(*style, state);
+        InteractionStyle interactionStyle;
+        interactionStyle.scale = visual.scale;
+        interactionStyle.opacity = visual.opacity;
+        setInteractionStyle(interaction, std::move(interactionStyle));
+    };
+    sync(InteractionState::Normal, lcl::theme::StyleState::Normal);
+    sync(InteractionState::Hover, lcl::theme::StyleState::Hover);
+    sync(InteractionState::Pressed, lcl::theme::StyleState::Pressed);
+    sync(InteractionState::Focused, lcl::theme::StyleState::Focused);
+    sync(InteractionState::Disabled, lcl::theme::StyleState::Disabled);
+    markDirty();
 }
 
 void Toggle::setThumbPresentation(float progress) {
@@ -231,16 +238,17 @@ void Toggle::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
             track.height + kFocusInset * 2.0f,
         };
         canvas.drawRoundedRect(focus, focus.height * 0.5f,
-                               graphics::Color{0, 0, 0, 0}, graphics::Color{112, 174, 255, 220},
+                               graphics::Color{0, 0, 0, 0}, getTheme().colors.focusRing,
                                2.0f, 1.0f);
     }
 
     canvas.drawRoundedRect(track, track.height * 0.5f, colors.track,
-                           colors.trackBorder, 1.0f, 1.0f);
+                           colors.trackBorder, colors.trackBorderWidth, 1.0f);
 
     const graphics::RectF shadow{thumb.x, thumb.y + 1.5f, thumb.width, thumb.height};
     canvas.drawRoundedRect(shadow, shadow.height * 0.5f,
-                           graphics::Color{0, 0, 0, 68}, graphics::Color{0, 0, 0, 0}, 0.0f, 1.0f);
+                           getTheme().colors.controlShadow,
+                           graphics::Color{0, 0, 0, 0}, 0.0f, 1.0f);
     canvas.drawRoundedRect(thumb, thumb.height * 0.5f, colors.thumb,
                            colors.thumbBorder, 0.75f, 1.0f);
 
