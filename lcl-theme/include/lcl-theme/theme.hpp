@@ -50,8 +50,11 @@ struct ResolvedStyle {
 
 struct SemanticColors {
     graphics::Color desktop{0, 0, 0, 255};
-    graphics::Color surface{28, 28, 30, 255};
+    graphics::Color primarySurface{28, 28, 30, 255};
+    graphics::Color secondarySurface{44, 44, 46, 255};
+    graphics::Color groupedSurface{18, 18, 20, 255};
     graphics::Color elevatedSurface{44, 44, 46, 242};
+    graphics::Color materialTint{20, 20, 24, 128};
     graphics::Color separator{84, 84, 88, 128};
     graphics::Color primaryLabel{255, 255, 255, 255};
     graphics::Color secondaryLabel{235, 235, 245, 153};
@@ -71,10 +74,43 @@ struct SemanticColors {
     graphics::Color windowTitleBlurred{72, 72, 74, 255};
 };
 
+struct TypographyRole {
+    graphics::Color foreground{255, 255, 255, 255};
+    float fontSize{14.0f};
+};
+
+struct Typography {
+    TypographyRole title;
+    TypographyRole body;
+    TypographyRole description;
+    TypographyRole caption;
+};
+
+struct ThemeMetrics {
+    float compactControlHeight{32.0f};
+    float regularControlHeight{38.0f};
+    float largeControlHeight{44.0f};
+    float controlHorizontalPadding{14.0f};
+    float controlVerticalPadding{8.0f};
+    float compactCornerRadius{6.0f};
+    float controlCornerRadius{10.0f};
+    float groupCornerRadius{12.0f};
+    float cardCornerRadius{16.0f};
+    float separatorWidth{1.0f};
+    float groupPadding{8.0f};
+    float cardPadding{20.0f};
+};
+
 struct Theme {
     SemanticColors colors;
+    Typography typography;
+    ThemeMetrics metrics;
     WidgetStyle text;
-    WidgetStyle button;
+    WidgetStyle primarySurface;
+    WidgetStyle secondarySurface;
+    WidgetStyle groupedSurface;
+    WidgetStyle primaryButton;
+    WidgetStyle quietButton;
     WidgetStyle textField;
     WidgetStyle toggle;
     WidgetStyle menuItem;

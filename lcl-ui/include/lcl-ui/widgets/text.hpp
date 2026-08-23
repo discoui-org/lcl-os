@@ -47,6 +47,7 @@ private:
     float m_fontSize{14.0f};
     graphics::FontFamily m_fontFamily{graphics::FontFamily::Interface};
     graphics::Color m_textColor{255, 255, 255, 255};
+    bool m_hasExplicitFontSize{false};
     bool m_hasExplicitTextColor{false};
     TextAlign m_textAlign{TextAlign::Start};
 };

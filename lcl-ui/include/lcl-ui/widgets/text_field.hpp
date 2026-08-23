@@ -58,6 +58,7 @@ private:
     lcl::theme::ResolvedStyle visualStyle() const noexcept;
     float horizontalPadding() const noexcept;
     const lcl::theme::WidgetStyle* defaultStyle() const noexcept override;
+    void styleDidChange() override;
 
     std::string m_text;
     std::string m_placeholder;

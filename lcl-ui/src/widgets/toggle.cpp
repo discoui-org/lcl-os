@@ -9,7 +9,6 @@ namespace lcl::ui {
 namespace {
 
 constexpr float kDefaultWidth = 60.0f;
-constexpr float kDefaultHeight = 44.0f;
 constexpr float kTrackWidth = 52.0f;
 constexpr float kTrackHeight = 32.0f;
 constexpr float kThumbInset = 3.0f;
@@ -20,7 +19,7 @@ constexpr float kFocusInset = 3.0f;
 Toggle::Toggle(bool value)
     : m_value(value), m_thumbProgress(value ? 1.0f : 0.0f) {
     setWidth(kDefaultWidth);
-    setHeight(kDefaultHeight);
+    m_yogaNode.setHeight(getTheme().metrics.largeControlHeight);
     setFocusable(true);
     styleDidChange();
 }
@@ -187,6 +186,9 @@ const lcl::theme::WidgetStyle* Toggle::defaultStyle() const noexcept {
 void Toggle::styleDidChange() {
     const auto* style = resolvedStyle();
     if (!style) return;
+    if (!m_hasHeight) {
+        m_yogaNode.setHeight(getTheme().metrics.largeControlHeight);
+    }
     const auto sync = [this, style](InteractionState interaction,
                                     lcl::theme::StyleState state) {
         const auto visual = lcl::theme::resolveStyle(*style, state);

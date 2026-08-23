@@ -90,12 +90,15 @@ void Button::applyStateMotion(ButtonState previous) {
 }
 
 const lcl::theme::WidgetStyle* Button::defaultStyle() const noexcept {
-    return &getTheme().button;
+    return &getTheme().primaryButton;
 }
 
 void Button::styleDidChange() {
     const auto* style = resolvedStyle();
     if (!style) return;
+    if (!m_hasHeight) {
+        m_yogaNode.setHeight(getTheme().metrics.regularControlHeight);
+    }
     setPadding(YGEdgeHorizontal, style->horizontalPadding.value_or(0.0f));
     setPadding(YGEdgeVertical, style->verticalPadding.value_or(0.0f));
     applyStateMotion(m_state);

@@ -29,48 +29,74 @@ T resolveValue(const std::optional<T>& selected,
 Theme createDefaultTheme() {
     Theme theme;
 
+    theme.typography.title = {theme.colors.primaryLabel, 18.0f};
+    theme.typography.body = {theme.colors.primaryLabel, 14.0f};
+    theme.typography.description = {theme.colors.secondaryLabel, 13.0f};
+    theme.typography.caption = {theme.colors.tertiaryLabel, 12.0f};
+
     theme.text.normal.foreground = theme.colors.primaryLabel;
 
-    theme.button.normal.background = theme.colors.accent;
-    theme.button.normal.foreground = theme.colors.primaryLabel;
-    theme.button.normal.border = graphics::Color{255, 255, 255, 46};
-    theme.button.normal.borderWidth = 1.0f;
-    theme.button.normal.cornerRadius = 10.0f;
-    theme.button.normal.scale = 1.0f;
-    theme.button.normal.opacity = 1.0f;
-    theme.button.hover.background = theme.colors.accentHover;
-    theme.button.hover.scale = 1.015f;
-    theme.button.pressed.background = theme.colors.accentPressed;
-    theme.button.pressed.scale = 0.965f;
-    theme.button.pressed.opacity = 0.96f;
-    theme.button.focused.border = theme.colors.focusRing;
-    theme.button.focused.borderWidth = 2.0f;
-    theme.button.disabled.background = theme.colors.disabledFill;
-    theme.button.disabled.foreground = graphics::Color{235, 235, 245, 120};
-    theme.button.disabled.border = graphics::Color{255, 255, 255, 24};
-    theme.button.disabled.scale = 1.0f;
-    theme.button.disabled.opacity = 1.0f;
-    theme.button.horizontalPadding = 14.0f;
-    theme.button.verticalPadding = 8.0f;
+    theme.primarySurface.normal.background = theme.colors.primarySurface;
+    theme.primarySurface.normal.border = theme.colors.separator;
+    theme.primarySurface.normal.borderWidth = theme.metrics.separatorWidth;
+    theme.primarySurface.normal.cornerRadius = theme.metrics.cardCornerRadius;
 
-    theme.textField.normal.background = theme.colors.elevatedSurface;
+    theme.secondarySurface.normal.background = theme.colors.secondarySurface;
+    theme.secondarySurface.normal.border = theme.colors.separator;
+    theme.secondarySurface.normal.borderWidth = theme.metrics.separatorWidth;
+    theme.secondarySurface.normal.cornerRadius = theme.metrics.controlCornerRadius;
+
+    theme.groupedSurface.normal.background = theme.colors.groupedSurface;
+    theme.groupedSurface.normal.border = theme.colors.separator;
+    theme.groupedSurface.normal.borderWidth = theme.metrics.separatorWidth;
+    theme.groupedSurface.normal.cornerRadius = theme.metrics.groupCornerRadius;
+
+    theme.primaryButton.normal.background = theme.colors.accent;
+    theme.primaryButton.normal.foreground = theme.colors.primaryLabel;
+    theme.primaryButton.normal.border = graphics::Color{255, 255, 255, 46};
+    theme.primaryButton.normal.borderWidth = theme.metrics.separatorWidth;
+    theme.primaryButton.normal.cornerRadius = theme.metrics.controlCornerRadius;
+    theme.primaryButton.normal.scale = 1.0f;
+    theme.primaryButton.normal.opacity = 1.0f;
+    theme.primaryButton.hover.background = theme.colors.accentHover;
+    theme.primaryButton.hover.scale = 1.015f;
+    theme.primaryButton.pressed.background = theme.colors.accentPressed;
+    theme.primaryButton.pressed.scale = 0.965f;
+    theme.primaryButton.pressed.opacity = 0.96f;
+    theme.primaryButton.focused.border = theme.colors.focusRing;
+    theme.primaryButton.focused.borderWidth = 2.0f;
+    theme.primaryButton.disabled.background = theme.colors.disabledFill;
+    theme.primaryButton.disabled.foreground = theme.colors.tertiaryLabel;
+    theme.primaryButton.disabled.border = graphics::Color{255, 255, 255, 24};
+    theme.primaryButton.disabled.scale = 1.0f;
+    theme.primaryButton.disabled.opacity = 1.0f;
+    theme.primaryButton.horizontalPadding = theme.metrics.controlHorizontalPadding;
+    theme.primaryButton.verticalPadding = theme.metrics.controlVerticalPadding;
+
+    theme.quietButton = theme.primaryButton;
+    theme.quietButton.normal.background = theme.colors.controlFill;
+    theme.quietButton.normal.border = theme.colors.separator;
+    theme.quietButton.hover.background = theme.colors.controlFillHover;
+    theme.quietButton.pressed.background = theme.colors.controlFillPressed;
+
+    theme.textField.normal.background = theme.colors.secondarySurface;
     theme.textField.normal.foreground = theme.colors.primaryLabel;
     theme.textField.normal.secondaryForeground = theme.colors.tertiaryLabel;
     theme.textField.normal.accent = theme.colors.accent;
     theme.textField.normal.border = theme.colors.separator;
-    theme.textField.normal.borderWidth = 1.0f;
-    theme.textField.normal.cornerRadius = 8.0f;
+    theme.textField.normal.borderWidth = theme.metrics.separatorWidth;
+    theme.textField.normal.cornerRadius = theme.metrics.controlCornerRadius;
     theme.textField.normal.scale = 1.0f;
     theme.textField.normal.opacity = 1.0f;
     theme.textField.focused.border = theme.colors.focusRing;
     theme.textField.focused.borderWidth = 2.0f;
-    theme.textField.horizontalPadding = 10.0f;
+    theme.textField.horizontalPadding = theme.metrics.controlHorizontalPadding;
 
     theme.toggle.normal.background = theme.colors.controlFill;
     theme.toggle.normal.foreground = theme.colors.primaryLabel;
     theme.toggle.normal.accent = theme.colors.accent;
     theme.toggle.normal.border = theme.colors.separator;
-    theme.toggle.normal.borderWidth = 1.0f;
+    theme.toggle.normal.borderWidth = theme.metrics.separatorWidth;
     theme.toggle.normal.scale = 1.0f;
     theme.toggle.normal.opacity = 1.0f;
     theme.toggle.hover.background = theme.colors.controlFillHover;
@@ -90,7 +116,7 @@ Theme createDefaultTheme() {
     theme.menuItem.normal.foreground = theme.colors.primaryLabel;
     theme.menuItem.normal.border = graphics::Color{0, 0, 0, 0};
     theme.menuItem.normal.borderWidth = 0.0f;
-    theme.menuItem.normal.cornerRadius = 6.0f;
+    theme.menuItem.normal.cornerRadius = theme.metrics.compactCornerRadius;
     theme.menuItem.normal.scale = 1.0f;
     theme.menuItem.normal.opacity = 1.0f;
     theme.menuItem.hover.background = theme.colors.selectionFill;
@@ -103,12 +129,12 @@ Theme createDefaultTheme() {
 
     theme.popover.normal.background = theme.colors.elevatedSurface;
     theme.popover.normal.border = theme.colors.separator;
-    theme.popover.normal.borderWidth = 1.0f;
-    theme.popover.normal.cornerRadius = 10.0f;
+    theme.popover.normal.borderWidth = theme.metrics.separatorWidth;
+    theme.popover.normal.cornerRadius = theme.metrics.controlCornerRadius;
     theme.popover.normal.scale = 1.0f;
     theme.popover.normal.opacity = 1.0f;
-    theme.popover.horizontalPadding = 12.0f;
-    theme.popover.verticalPadding = 12.0f;
+    theme.popover.horizontalPadding = theme.metrics.controlHorizontalPadding;
+    theme.popover.verticalPadding = theme.metrics.controlHorizontalPadding;
     return theme;
 }
 

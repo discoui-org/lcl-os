@@ -17,6 +17,7 @@ void Text::setText(const std::string& text) {
 }
 
 void Text::setFontSize(float size) {
+    m_hasExplicitFontSize = true;
     m_fontSize = size;
     updateMeasureFunc();
     markDirty();
@@ -46,11 +47,17 @@ const lcl::theme::WidgetStyle* Text::defaultStyle() const noexcept {
 }
 
 void Text::styleDidChange() {
-    if (m_hasExplicitTextColor) return;
-    const auto* style = resolvedStyle();
-    if (!style) return;
-    m_textColor = lcl::theme::resolveStyle(
-        *style, lcl::theme::StyleState::Normal).foreground;
+    if (!m_hasExplicitFontSize) {
+        m_fontSize = getTheme().typography.body.fontSize;
+        updateMeasureFunc();
+    }
+    if (!m_hasExplicitTextColor) {
+        const auto* style = resolvedStyle();
+        if (style) {
+            m_textColor = lcl::theme::resolveStyle(
+                *style, lcl::theme::StyleState::Normal).foreground;
+        }
+    }
     markDirty();
 }
 
