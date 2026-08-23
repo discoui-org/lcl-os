@@ -15,6 +15,7 @@
 4. [Custom Widget Development & Procedural Animations](#4-custom-widget-development--procedural-animations)
 5. [Event Handling & Input Pipeline](#5-event-handling--input-pipeline)
 6. [Declarative Interaction States](#6-declarative-interaction-states)
+7. [Native Themes and Explicit Styles](#7-native-themes-and-explicit-styles)
 
 ---
 
@@ -50,6 +51,8 @@ and active-frame pacing.
 - `WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height, const std::string& title = "lcl-ui Application")`: Constructs a logical-size window with an explicitly selected drawing backend.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Binds the top-level Flexbox widget container.
 - `Widget* getRootWidget() const`: Returns the root widget pointer.
+- `void setTheme(theme::Theme theme)`: Replaces the window-owned semantic theme and propagates it through the widget tree and hosted popup surfaces.
+- `const theme::Theme& getTheme() const`: Returns the active window theme.
 - `void setAppId(std::string appId)`: Sets the required canonical application identity before connecting.
 - `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v13 normal or configured popup surface.
 - `registerLocalTransient(...)`: Registers an ordinary absolute-positioned Widget in the single WindowRoot tree with generic lifecycle/dismissal policy.
@@ -108,6 +111,9 @@ Base polymorphic class for all UI components.
 - `void setVisible(bool visible)`: Controls widget visibility.
 - `virtual void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect)`: Virtual render method called during damage passes through the backend-neutral Canvas contract.
 - `void setInteractionStyle(InteractionState state, InteractionStyle style)`: Defines presentation-only pseudo-state values for custom controls.
+- `void useStyle(theme::WidgetStyle style)`: Applies one explicit native style to the widget; no selector matching or cascade is involved.
+- `void clearStyle()`: Restores the control's semantic theme style.
+- `const theme::Theme& getTheme() const`: Returns the inherited window theme.
 - `virtual void setOnClick(std::function<void()> callback)`: Makes any widget clickable without a pointer-event subclass.
 - `void setInteractionEnabled(bool enabled)`: Enables or disables declarative pointer behavior.
 
@@ -132,7 +138,7 @@ A vector typography label component supporting custom font sizes and text conten
 ```cpp
 auto label = std::make_unique<Text>("Hello LCL OS");
 label->setFontSize(18.0f);
-label->setTextColor(0xFF38BDF8); // Sky Cyan
+label->setTextColor(0xFFFFFFFF);
 ```
 
 ---
@@ -267,7 +273,7 @@ private:
 
 ## 6. Declarative Interaction States
 
-Any widget can opt into CSS-like `normal`, `hover`, `pressed`, `focused`, and
+Any widget can opt into native `normal`, `hover`, `pressed`, `focused`, and
 `disabled` presentation states. State changes retarget the shared motion engine,
 so rapid pointer movement preserves spring continuity. Model layout values are
 not mutated by these effects.
@@ -305,3 +311,29 @@ control.setInteractionStyle("pressed", {
 });
 control.setOnClick(() => console.log("Activated"));
 ```
+
+---
+
+## 7. Native Themes and Explicit Styles
+
+`WindowApp` owns one `theme::ThemeContext`. Its semantic colors and control
+styles are inherited by the root widget, descendants, and hosted popup
+surfaces. Built-in controls resolve their default style from that context.
+
+Use `Widget::useStyle()` for a local code-defined override. It replaces the
+control's semantic default as one value object; there are no selectors,
+specificity rules, stylesheets, or cascade.
+
+```cpp
+auto quietButton = std::make_unique<Button>("Details");
+auto quietStyle = app.getTheme().button;
+quietStyle.normal.background = app.getTheme().colors.elevatedSurface;
+quietStyle.normal.border = app.getTheme().colors.separator;
+quietStyle.hover.background = graphics::Color{58, 58, 60, 255};
+quietStyle.pressed.background = graphics::Color{36, 36, 38, 255};
+quietButton->useStyle(std::move(quietStyle));
+```
+
+Call `clearStyle()` to return to the active theme. Replacing the window theme
+with `WindowApp::setTheme()` refreshes the complete widget tree without
+introducing rendering-backend or device-scale knowledge into control code.

@@ -1,12 +1,14 @@
 #include "lcl-ui/widgets/widget.hpp"
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace lcl::ui {
 
 std::atomic<uint64_t> Widget::s_nextObjectId{1};
 
-Widget::Widget() : m_objectId(s_nextObjectId.fetch_add(1, std::memory_order_relaxed)) {
+Widget::Widget()
+    : m_objectId(s_nextObjectId.fetch_add(1, std::memory_order_relaxed)) {
     m_yogaNode.setLayoutInvalidationCallback([this] { invalidateLayout(); });
 }
 
@@ -21,6 +23,7 @@ void Widget::addChild(std::unique_ptr<Widget> child) {
     child->m_parent = this;
     child->setRenderPass(m_renderPass);
     child->setMotionCoordinator(m_motionCoordinator);
+    child->setThemeContext(m_themeContext);
     m_yogaNode.appendChild(&child->getYogaNode());
     m_children.push_back(std::move(child));
     markDirty();
@@ -58,6 +61,37 @@ void Widget::clearInteractionStyle(InteractionState state) {
     applyDeclarativeInteractionState();
 }
 
+void Widget::useStyle(lcl::theme::WidgetStyle style) {
+    m_explicitStyle = std::move(style);
+    styleDidChange();
+    applyDeclarativeInteractionState();
+    markDirty();
+}
+
+void Widget::clearStyle() {
+    if (!m_explicitStyle) return;
+    m_explicitStyle.reset();
+    styleDidChange();
+    applyDeclarativeInteractionState();
+    markDirty();
+}
+
+const lcl::theme::Theme& Widget::getTheme() const noexcept {
+    return m_themeContext ? m_themeContext->value() : lcl::theme::defaultTheme();
+}
+
+const lcl::theme::WidgetStyle* Widget::resolvedStyle() const noexcept {
+    return m_explicitStyle ? &*m_explicitStyle : defaultStyle();
+}
+
+void Widget::setThemeContext(const lcl::theme::ThemeContext* context) {
+    m_themeContext = context;
+    styleDidChange();
+    applyDeclarativeInteractionState();
+    for (auto& child : m_children) child->setThemeContext(context);
+    markDirty();
+}
+
 void Widget::setInteractionEnabled(bool enabled) {
     if (m_interactionEnabled == enabled) return;
     m_interactionEnabled = enabled;
@@ -89,8 +123,20 @@ void Widget::applyDeclarativeInteractionState() {
         if (normal && ((*normal).*member)) return *((*normal).*member);
         return fallback;
     };
-    const float scale = resolve(&InteractionStyle::scale, m_modelTransform.scaleX);
-    const float opacity = resolve(&InteractionStyle::opacity, m_opacity);
+    float styleScale = m_modelTransform.scaleX;
+    float styleOpacity = m_opacity;
+    if (const auto* style = resolvedStyle()) {
+        lcl::theme::StyleState styleState = lcl::theme::StyleState::Normal;
+        if (state == InteractionState::Hover) styleState = lcl::theme::StyleState::Hover;
+        else if (state == InteractionState::Pressed) styleState = lcl::theme::StyleState::Pressed;
+        else if (state == InteractionState::Focused) styleState = lcl::theme::StyleState::Focused;
+        else if (state == InteractionState::Disabled) styleState = lcl::theme::StyleState::Disabled;
+        const auto visual = lcl::theme::resolveStyle(*style, styleState);
+        styleScale = visual.scale;
+        styleOpacity = visual.opacity;
+    }
+    const float scale = resolve(&InteractionStyle::scale, styleScale);
+    const float opacity = resolve(&InteractionStyle::opacity, styleOpacity);
 
     lcl::motion::Motion motion = interactionMotionTheme().hover;
     if (state == InteractionState::Pressed) motion = interactionMotionTheme().pressed;

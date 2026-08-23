@@ -1,6 +1,6 @@
 #include "render/window_manager.hpp"
 #include "render/window_group_transform.hpp"
-#include "theme/palette.hpp"
+#include "lcl-theme/theme.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cmath>
@@ -30,7 +30,7 @@ void WindowManager::unfocusAll() {
     for (auto& w : m_windows) {
         if (w.isFocused) {
             w.isFocused = false;
-            w.headerColor = lcl::theme::UI::WindowTitleBlurred;
+            w.headerColor = lcl::theme::defaultTheme().colors.windowTitleBlurred.toARGB();
             w.markDirty();
         }
     }
@@ -90,7 +90,7 @@ bool WindowManager::removeWindow(uint32_t windowId) {
             for (auto revIt = m_windows.rbegin(); revIt != m_windows.rend(); ++revIt) {
                 if (!revIt->isUnfocusable && !revIt->isMinimized) {
                     revIt->isFocused = true;
-                    revIt->headerColor = lcl::theme::UI::WindowTitleFocused;
+                    revIt->headerColor = lcl::theme::defaultTheme().colors.windowTitleFocused.toARGB();
                     break;
                 }
             }
@@ -867,7 +867,7 @@ void WindowManager::setWindowLayer(uint32_t windowId, protocol::LCLWindowLayer l
             win.isUnfocusable = unfocusable;
             if (unfocusable && win.isFocused) {
                 win.isFocused = false;
-                win.headerColor = lcl::theme::UI::WindowTitleBlurred;
+                win.headerColor = lcl::theme::defaultTheme().colors.windowTitleBlurred.toARGB();
             }
             win.markDirty();
             break;
@@ -1177,7 +1177,7 @@ void WindowManager::focusWindow(uint32_t windowId) {
         if (!target.isUnfocusable) {
             unfocusAll();
             target.isFocused = true;
-            target.headerColor = lcl::theme::UI::WindowTitleFocused;
+            target.headerColor = lcl::theme::defaultTheme().colors.windowTitleFocused.toARGB();
         }
 
         target.markDirty();
@@ -1191,7 +1191,7 @@ void WindowManager::focusTopmostVisibleWindow() {
     for (auto it = m_windows.rbegin(); it != m_windows.rend(); ++it) {
         if (!it->isMinimized && !it->isUnfocusable) {
             it->isFocused = true;
-            it->headerColor = lcl::theme::UI::WindowTitleFocused;
+            it->headerColor = lcl::theme::defaultTheme().colors.windowTitleFocused.toARGB();
             it->markDirty();
             break;
         }

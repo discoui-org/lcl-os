@@ -4,7 +4,6 @@
 #include "core/compositor/window_chrome_material.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
 #include "render/window_group_transform.hpp"
-#include "theme/palette.hpp"
 
 #include <algorithm>
 #include <cmath>

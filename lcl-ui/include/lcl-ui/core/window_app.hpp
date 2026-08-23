@@ -8,6 +8,7 @@
 #include "lcl-ui/core/transient_controller.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-ui/widgets/container.hpp"
+#include "lcl-theme/theme.hpp"
 #include <memory>
 #include <string>
 #include <vector>
@@ -54,6 +55,10 @@ public:
 
     void setRootWidget(std::unique_ptr<Widget> root);
     Widget* getRootWidget() const { return m_rootWidget; }
+    void setTheme(lcl::theme::Theme theme);
+    const lcl::theme::Theme& getTheme() const noexcept {
+        return m_themeContext.value();
+    }
     TransientController& getTransientController() { return m_transients; }
     const TransientController& getTransientController() const { return m_transients; }
     TransientHandle registerLocalTransient(std::unique_ptr<Widget> widget,
@@ -213,6 +218,7 @@ private:
     std::string m_title;
     std::shared_ptr<uint8_t> m_lifetimeToken{std::make_shared<uint8_t>(0)};
 
+    lcl::theme::ThemeContext m_themeContext;
     std::unique_ptr<Container> m_windowRoot;
     Widget* m_rootWidget{nullptr};
     RenderPass m_renderPass;

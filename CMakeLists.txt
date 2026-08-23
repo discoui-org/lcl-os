@@ -63,6 +63,9 @@ target_include_directories(lcl-protocol PUBLIC
 # Backend-neutral logical geometry, path, paint and display-list contracts.
 add_subdirectory(lcl-graphics)
 
+# Backend-neutral semantic colors and native widget style values.
+add_subdirectory(lcl-theme)
+
 add_library(lcl-path-raster STATIC
     src/render/path_rasterizer.cpp
 )
@@ -153,6 +156,7 @@ if(ANDROID)
     target_link_libraries(lcl-render PUBLIC
         lcl-motion
         lcl-graphics
+        lcl-theme
         lcl-path-raster
         lcl-window-chrome
         lcl-protocol
@@ -170,6 +174,7 @@ else()
     target_link_libraries(lcl-render PUBLIC
         lcl-motion
         lcl-graphics
+        lcl-theme
         lcl-path-raster
         lcl-window-chrome
         lcl-protocol
@@ -207,6 +212,7 @@ target_link_libraries(lcl-core-engine PUBLIC
     lcl-render
     lcl-platform-common
     lcl-protocol
+    lcl-theme
     lcl-session
         lcl-motion
         lcl-graphics

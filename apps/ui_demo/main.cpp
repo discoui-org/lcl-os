@@ -258,6 +258,35 @@ int main() {
   scrollContent->addChild(std::move(utf8TextField));
   scrollContent->addChild(std::move(textFieldStatus));
 
+  auto buttonStyleTitle = std::make_unique<Text>("Native Button Styles");
+  buttonStyleTitle->setFontSize(15.0f);
+  buttonStyleTitle->setTextColor(app.getTheme().colors.primaryLabel);
+
+  auto buttonStyleRow = std::make_unique<Container>();
+  buttonStyleRow->setWidth(300.0f);
+  buttonStyleRow->setHeight(42.0f);
+  buttonStyleRow->getYogaNode().setDirection(YGFlexDirectionRow);
+  buttonStyleRow->getYogaNode().setGap(YGGutterAll, 10.0f);
+
+  auto defaultButton = std::make_unique<Button>("Default");
+  defaultButton->setWidth(140.0f);
+  defaultButton->setHeight(38.0f);
+
+  lcl::theme::WidgetStyle quietButtonStyle = app.getTheme().button;
+  quietButtonStyle.normal.background = app.getTheme().colors.elevatedSurface;
+  quietButtonStyle.normal.border = app.getTheme().colors.separator;
+  quietButtonStyle.hover.background = Color{58, 58, 60, 250};
+  quietButtonStyle.pressed.background = Color{36, 36, 38, 255};
+  auto styledButton = std::make_unique<Button>("useStyle");
+  styledButton->setWidth(140.0f);
+  styledButton->setHeight(38.0f);
+  styledButton->useStyle(std::move(quietButtonStyle));
+
+  buttonStyleRow->addChild(std::move(defaultButton));
+  buttonStyleRow->addChild(std::move(styledButton));
+  scrollContent->addChild(std::move(buttonStyleTitle));
+  scrollContent->addChild(std::move(buttonStyleRow));
+
   auto toggleTitle = std::make_unique<Text>("Toggle v1");
   toggleTitle->setFontSize(15.0f);
   toggleTitle->setTextColor(Color{236, 239, 244, 255});

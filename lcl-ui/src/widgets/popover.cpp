@@ -122,6 +122,7 @@ PopoverOpenResult Popover::showImpl(
 
     auto popup = std::make_unique<WindowApp>(
         std::move(canvas), geometry.width, geometry.height, "LCL Popover");
+    popup->setTheme(m_window.getTheme());
     const uint32_t popupSurfaceId = allocatePopupSurfaceId(m_window.getSurfaceId());
     popup->setSurfaceId(popupSurfaceId);
     popup->setAppId(m_window.getAppId().empty()

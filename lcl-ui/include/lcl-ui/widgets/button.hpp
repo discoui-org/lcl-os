@@ -46,6 +46,8 @@ private:
     void setState(ButtonState newState);
     void updateComposedState();
     void applyStateMotion(ButtonState previous);
+    const lcl::theme::WidgetStyle* defaultStyle() const noexcept override;
+    void styleDidChange() override;
 
     ButtonState m_state{ButtonState::Normal};
     Text* m_textWidget{nullptr};

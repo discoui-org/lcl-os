@@ -7,16 +7,10 @@ Button::Button(const std::string& label) {
     m_textWidget = text.get();
     addChild(std::move(text));
 
-    m_yogaNode.setPadding(YGEdgeHorizontal, 12.0f);
-    m_yogaNode.setPadding(YGEdgeVertical, 8.0f);
     m_yogaNode.setJustifyContent(YGJustifyCenter);
     m_yogaNode.setAlignItems(YGAlignCenter);
-    setBorderRadius(8.0f);
-    setBackgroundColor({37, 99, 235, 255});
-    setBorderColor({147, 197, 253, 200});
-    setBorderWidth(1.5f);
-
     setFocusable(true);
+    styleDidChange();
 }
 
 void Button::setLabel(const std::string& label) {
@@ -56,29 +50,55 @@ void Button::updateComposedState() {
 }
 
 void Button::applyStateMotion(ButtonState previous) {
+    const auto* style = resolvedStyle();
+    if (!style) return;
+
+    lcl::theme::StyleState styleState = lcl::theme::StyleState::Normal;
+    if (m_state == ButtonState::Hover) styleState = lcl::theme::StyleState::Hover;
+    else if (m_state == ButtonState::Active) styleState = lcl::theme::StyleState::Pressed;
+    else if (m_state == ButtonState::Focused) styleState = lcl::theme::StyleState::Focused;
+    else if (m_state == ButtonState::Disabled) styleState = lcl::theme::StyleState::Disabled;
+    const auto visual = lcl::theme::resolveStyle(*style, styleState);
+
     const auto& theme = interactionMotionTheme();
-    float targetScale = 1.0f;
-    graphics::Color targetColor{37, 99, 235, 255};
     const lcl::motion::Motion* scaleMotion = &theme.hover;
-    if (m_state == ButtonState::Hover) { targetScale = theme.hoverScale; targetColor = {59, 130, 246, 255}; }
-    else if (m_state == ButtonState::Active) { targetScale = theme.pressedScale; targetColor = {29, 78, 216, 255}; scaleMotion = &theme.pressed; }
-    else if (m_state == ButtonState::Focused) { targetColor = {45, 110, 238, 255}; }
-    else if (m_state == ButtonState::Disabled) { targetColor = {71, 85, 105, 160}; }
+    if (m_state == ButtonState::Active) scaleMotion = &theme.pressed;
     if (previous == ButtonState::Active && m_state != ButtonState::Active) scaleMotion = &theme.release;
 
+    setBorderColor(visual.border);
+    setBorderWidth(visual.borderWidth);
+    setBorderRadius(visual.cornerRadius);
+    if (m_textWidget) m_textWidget->setTextColor(visual.foreground);
+
     if (!theme.enabled || !m_motionCoordinator) {
-        setScale(targetScale);
-        setBackgroundColor(targetColor);
+        setScale(visual.scale);
+        setOpacity(visual.opacity);
+        setBackgroundColor(visual.background);
     } else {
         m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleX,
-            m_presentation.scaleX, targetScale, *scaleMotion,
+            m_presentation.scaleX, visual.scale, *scaleMotion,
             [this](float value) { applyPresentationValue(AnimatableProperty::ScaleX, value); });
         m_motionCoordinator->animateFloat(*this, AnimatableProperty::ScaleY,
-            m_presentation.scaleY, targetScale, *scaleMotion,
+            m_presentation.scaleY, visual.scale, *scaleMotion,
             [this](float value) { applyPresentationValue(AnimatableProperty::ScaleY, value); });
-        animateBackgroundColor(targetColor, theme.focusTransition);
+        m_motionCoordinator->animateFloat(*this, AnimatableProperty::Opacity,
+            m_presentation.opacity, visual.opacity, *scaleMotion,
+            [this](float value) { applyPresentationValue(AnimatableProperty::Opacity, value); });
+        animateBackgroundColor(visual.background, theme.focusTransition);
     }
     markDirty();
+}
+
+const lcl::theme::WidgetStyle* Button::defaultStyle() const noexcept {
+    return &getTheme().button;
+}
+
+void Button::styleDidChange() {
+    const auto* style = resolvedStyle();
+    if (!style) return;
+    setPadding(YGEdgeHorizontal, style->horizontalPadding.value_or(0.0f));
+    setPadding(YGEdgeVertical, style->verticalPadding.value_or(0.0f));
+    applyStateMotion(m_state);
 }
 
 bool Button::onPointerEnter(const PointerEvent& event) {

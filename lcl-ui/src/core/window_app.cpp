@@ -164,6 +164,7 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     m_transients.setWindowRoot(nullptr);
 
     auto windowRoot = std::make_unique<Container>();
+    windowRoot->setThemeContext(&m_themeContext);
     windowRoot->getYogaNode().setWidth(static_cast<float>(m_width));
     windowRoot->getYogaNode().setHeight(static_cast<float>(m_height));
     // A normal application root represents the complete client surface.
@@ -193,6 +194,16 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     // absolute bounds are still empty and markDirty() cannot produce damage.
     // Force one full frame after layout; runtime root replacement must not
     // leave old pixels in the client buffer.
+    m_firstFrame = true;
+}
+
+void WindowApp::setTheme(lcl::theme::Theme theme) {
+    m_themeContext.setTheme(std::move(theme));
+    if (m_windowRoot) {
+        m_windowRoot->setThemeContext(&m_themeContext);
+        m_windowRoot->markLayoutDirty();
+        m_windowRoot->markDirty();
+    }
     m_firstFrame = true;
 }
 

@@ -164,7 +164,7 @@ struct Window {
     protocol::LCLResizePresentationMode resizePresentation{
         protocol::LCLResizePresentationMode::CompositorMorph};
 
-    uint32_t headerColor{0xFF38BDF8};
+    uint32_t headerColor{0xFF0A84FF};
     // Window is the parent presentation group. The compositor-owned titlebar
     // widget and the attached client surface are its two children.
     lcl::chrome::WindowChromeWidget chrome{};
@@ -238,7 +238,7 @@ public:
      * @brief Create a new window dynamically.
      */
     uint32_t createWindow(const std::string& title, float x, float y, float width, float height,
-                          uint32_t headerColor = 0xFF38BDF8, bool focus = true);
+                          uint32_t headerColor = 0xFF0A84FF, bool focus = true);
 
     /**
      * @brief Remove / close a window by ID.

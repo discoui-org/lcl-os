@@ -6,6 +6,7 @@
 #include "lcl-ui/core/events.hpp"
 #include "lcl-ui/core/motion.hpp"
 #include "lcl-ui/layout/yoga_node.hpp"
+#include "lcl-theme/theme.hpp"
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -94,6 +95,10 @@ public:
     const InteractionMotionTheme& interactionMotionTheme() const;
     void setInteractionStyle(InteractionState state, InteractionStyle style);
     void clearInteractionStyle(InteractionState state);
+    /** Apply one explicit native style; no selector or cascade is involved. */
+    void useStyle(lcl::theme::WidgetStyle style);
+    void clearStyle();
+    const lcl::theme::Theme& getTheme() const noexcept;
     void setInteractionEnabled(bool enabled);
     bool isInteractionEnabled() const noexcept { return m_interactionEnabled; }
     virtual void setOnClick(std::function<void()> callback) {
@@ -147,6 +152,11 @@ protected:
     void beginPresentation(graphics::Canvas& canvas) const;
     void endPresentation(graphics::Canvas& canvas) const;
     void drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect);
+    const lcl::theme::WidgetStyle* resolvedStyle() const noexcept;
+    virtual const lcl::theme::WidgetStyle* defaultStyle() const noexcept {
+        return nullptr;
+    }
+    virtual void styleDidChange() {}
 
     YogaNode m_yogaNode;
     Widget* m_parent{nullptr};
@@ -181,6 +191,8 @@ protected:
     std::shared_ptr<uint8_t> m_lifetimeToken{std::make_shared<uint8_t>(0)};
     std::optional<InteractionMotionTheme> m_interactionTheme;
     std::array<std::optional<InteractionStyle>, 5> m_interactionStyles;
+    const lcl::theme::ThemeContext* m_themeContext{nullptr};
+    std::optional<lcl::theme::WidgetStyle> m_explicitStyle;
     std::function<void()> m_onClick{nullptr};
     bool m_interactionEnabled{true};
     bool m_declarativeHovered{false};
@@ -197,6 +209,7 @@ private:
     void markLayoutDirty();
     void clearLayoutDirty();
     void setParentControlledTranslationY(float value);
+    void setThemeContext(const lcl::theme::ThemeContext* context);
     bool hasDeclarativeInteraction() const;
     void applyDeclarativeInteractionState();
     static std::atomic<uint64_t> s_nextObjectId;

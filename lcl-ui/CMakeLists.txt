@@ -51,6 +51,7 @@ target_link_libraries(lcl-ui PUBLIC
     lcl-platform-common
     lcl-motion
     lcl-graphics
+    lcl-theme
     lcl-window-chrome
     lcl-protocol
     lcl-font-metrics

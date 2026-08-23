@@ -10,20 +10,21 @@ Blend clear hierarchy with glassmorphism depth.
 
 ## Core Palette
 
-Use neutral tones as defaults. Avoid catppuccin-like saturated accents.
+Use neutral system tones as defaults with one restrained blue accent family.
 
-- `bg/base`: `#111317`
-- `bg/elevated`: `#1A1E24`
-- `bg/glass-tint`: `rgba(17, 19, 23, 0.72)`
-- `text/primary`: `#ECEFF4`
-- `text/secondary`: `#C4CAD3`
-- `text/muted`: `#9AA3AF`
-- `border/outer`: `rgba(10, 12, 16, 0.47)`
-- `border/inner`: `rgba(245, 248, 252, 0.34)`
+- `bg/base`: `#000000`
+- `bg/surface`: `#1C1C1E`
+- `bg/elevated`: `rgba(44, 44, 46, 0.95)`
+- `bg/glass-tint`: `rgba(28, 28, 30, 0.72)`
+- `text/primary`: `#FFFFFF`
+- `text/secondary`: `rgba(235, 235, 245, 0.60)`
+- `separator`: `rgba(84, 84, 88, 0.50)`
+- `accent`: `#0A84FF`
+- `focus`: `rgba(100, 210, 255, 0.86)`
 
 ## Window Chrome
 
-- Corner radius baseline: `20px`
+- Corner radius baseline: `20` logical units
 - Header controls: circular (`roundness = 2.0`), neutral fill, subtle border
 - No hard separator line between titlebar and content
 - Use inset dual-border (dark outer + light inner) for depth

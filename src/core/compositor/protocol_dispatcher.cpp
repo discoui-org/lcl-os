@@ -1,7 +1,7 @@
 #include "core/compositor/protocol_dispatcher.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "lcl-motion/motion.hpp"
-#include "theme/palette.hpp"
+#include "lcl-theme/theme.hpp"
 #include "platform/common/native_buffer.hpp"
 
 #include <algorithm>
@@ -123,7 +123,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             entry.title, entry.initialX, entry.initialY,
             entry.initialWidth,
             entry.initialHeight + static_cast<float>(titleOffset),
-            ::lcl::theme::UI::WindowTitleFocused, !entry.unfocusable);
+            ::lcl::theme::defaultTheme().colors.windowTitleFocused.toARGB(),
+            !entry.unfocusable);
         m_windowManager.setDecorationMode(entry.windowId, decorationMode);
         m_windowManager.setEdgeToEdge(entry.windowId, entry.edgeToEdge);
         m_windowManager.setWindowLayer(entry.windowId, entry.layer, entry.unfocusable);
