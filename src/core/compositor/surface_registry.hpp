@@ -124,6 +124,7 @@ public:
         float launchMorphWidth{0.0f};
         float launchMorphHeight{0.0f};
         float launchMorphCornerRadius{0.0f};
+        float launchMorphCornerRoundness{2.0f};
         uint64_t launchToken{0};
         int launchOwnerFd{-1};
         bool launchIconRevealPending{false};

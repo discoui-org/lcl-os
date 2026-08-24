@@ -11,7 +11,7 @@ namespace mobile {
 // Canonical application-icon geometry in logical units. Icon assets remain
 // square; system UI applies this continuous rounded-rectangle silhouette.
 inline constexpr float kAppIconSize = 60.0f;
-inline constexpr float kAppIconCornerRadius = 14.0f;
+inline constexpr float kAppIconCornerRadius = 16.0f;
 inline constexpr float kAppIconCornerRoundness = 3.2f;
 
 } // namespace mobile

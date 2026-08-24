@@ -15,10 +15,10 @@
       "left": 0
     },
     "corners": {
-      "topLeft": { "radiusX": 0, "radiusY": 0, "roundness": 2.0 },
-      "topRight": { "radiusX": 0, "radiusY": 0, "roundness": 2.0 },
-      "bottomLeft": { "radiusX": 0, "radiusY": 0, "roundness": 2.0 },
-      "bottomRight": { "radiusX": 0, "radiusY": 0, "roundness": 2.0 }
+      "topLeft": { "radiusX": 100, "radiusY": 100, "roundness": 2.0 },
+      "topRight": { "radiusX": 100, "radiusY": 100, "roundness": 2.0 },
+      "bottomLeft": { "radiusX": 100, "radiusY": 100, "roundness": 2.0 },
+      "bottomRight": { "radiusX": 100, "radiusY": 100, "roundness": 2.0 }
     },
     "cutouts": []
   }

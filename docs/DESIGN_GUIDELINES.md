@@ -35,7 +35,7 @@ Use neutral system tones as defaults with one restrained blue accent family.
 
 - The canonical launcher icon is a `60 x 60` logical-unit square.
 - System UI owns its continuous rounded-rectangle silhouette: corner radius is
-  `14` logical units (`14 / 60`) and corner roundness is `3.2`.
+  `16` logical units (`16 / 60`) and corner roundness is `3.2`.
 - Application icon assets must be square and must not bake in a rounded mask.
   Launcher, placeholders, and transition proxies apply the same border-radius
   contract.

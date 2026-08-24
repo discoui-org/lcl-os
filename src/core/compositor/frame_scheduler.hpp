@@ -14,6 +14,9 @@ class FrameScheduler {
 public:
     void reset(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 
+    /** Set the physical display silhouette in compositor logical units. */
+    void setDisplayCornerStyle(float radius, float roundness) noexcept;
+
     bool advanceTransitions(SurfaceRegistry& surfaces,
                             std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
@@ -42,6 +45,8 @@ private:
                            SurfaceRegistry::SurfaceEntry& entry);
 
     std::chrono::steady_clock::time_point m_lastTransitionTick{};
+    float m_displayCornerRadius{0.0f};
+    float m_displayCornerRoundness{2.0f};
     lcl::motion::AnimationEngine m_launchMotion;
     std::unordered_map<SurfaceRegistry::Key, LaunchMorphState> m_launchMorphs;
 };

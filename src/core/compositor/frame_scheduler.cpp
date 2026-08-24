@@ -4,6 +4,7 @@
 #include <cmath>
 #include <thread>
 #include "lcl-motion/motion.hpp"
+#include "lcl-theme/theme.hpp"
 
 namespace lcl::core {
 
@@ -53,6 +54,12 @@ SurfaceRegistry::Key launchMotionKey(
 
 void FrameScheduler::reset(std::chrono::steady_clock::time_point now) noexcept {
     m_lastTransitionTick = now;
+}
+
+void FrameScheduler::setDisplayCornerStyle(float radius,
+                                           float roundness) noexcept {
+    m_displayCornerRadius = std::max(0.0f, radius);
+    m_displayCornerRoundness = std::clamp(roundness, 2.0f, 8.0f);
 }
 
 void FrameScheduler::prepareLaunchMorph(
@@ -198,22 +205,19 @@ bool FrameScheduler::updateLaunchMorph(
     const float presentedWidth = std::max(1.0f, rawWidth * perspectiveScale);
     const float presentedHeight = std::max(1.0f, rawHeight * perspectiveScale);
 
-    // Preserve the prototype's aspect-aware interpolation while ending at a
-    // square fullscreen surface. Reversing the same spring therefore grows
-    // the radius continuously from zero back into the launcher icon radius.
-    constexpr float kDisplayRadius = 0.0f;
-    float cornerRadius = 0.0f;
-    if (screenRatio < iconRatio) {
-        const float scale = rawHeight / iconHeight;
-        cornerRadius = scale * (entry.launchOriginCornerRadius +
-            (kDisplayRadius / screenHeight * rawHeight -
-             entry.launchOriginCornerRadius) * std::pow(expand, 1.5f));
-    } else {
-        const float scale = rawWidth / iconWidth;
-        cornerRadius = scale * (entry.launchOriginCornerRadius +
-            (kDisplayRadius / screenWidth * rawWidth -
-             entry.launchOriginCornerRadius) * std::pow(expand, 1.5f));
-    }
+    // Preserve the aspect-aware interpolation while converging on the actual
+    // physical display silhouette supplied by Gestalt. Reversing the same
+    // spring grows continuously back into the launcher icon shape.
+    const float shapeProgress =
+        std::clamp(std::pow(expand, 1.5f), 0.0f, 1.0f);
+    const float radiusScale = perspectiveScale *
+        (screenRatio < iconRatio
+            ? rawHeight / iconHeight
+            : rawWidth / iconWidth);
+    const float scaledIconRadius =
+        entry.launchOriginCornerRadius * radiusScale;
+    float cornerRadius = scaledIconRadius +
+        (m_displayCornerRadius - scaledIconRadius) * shapeProgress;
 
     entry.launchMorphX = positionX.value - presentedWidth * 0.5f;
     entry.launchMorphY = positionY.value - presentedHeight * 0.5f;
@@ -221,10 +225,13 @@ bool FrameScheduler::updateLaunchMorph(
     entry.launchMorphHeight = presentedHeight;
     if (entry.transitionPhase == TransitionPhase::Interactive) {
         cornerRadius += (1.0f - std::clamp(perspective, 0.0f, 1.0f)) *
-            entry.launchOriginCornerRadius;
+            entry.launchOriginCornerRadius * perspectiveScale;
     }
-    entry.launchMorphCornerRadius = std::max(
-        0.0f, cornerRadius * perspectiveScale);
+    entry.launchMorphCornerRadius = std::max(0.0f, cornerRadius);
+    entry.launchMorphCornerRoundness =
+        lcl::theme::mobile::kAppIconCornerRoundness +
+        (m_displayCornerRoundness -
+         lcl::theme::mobile::kAppIconCornerRoundness) * shapeProgress;
     entry.transitionOpacity = std::clamp(expand * 2.0f - 0.25f, 0.0f, 1.0f);
     entry.transitionScale = 1.0f;
     entry.launchMorphActive = true;
@@ -241,7 +248,8 @@ bool FrameScheduler::updateLaunchMorph(
                               phase == TransitionPhase::Restoring
         ? 1.0f : 0.0f;
     if (phase == TransitionPhase::Entering || phase == TransitionPhase::Restoring) {
-        entry.launchMorphCornerRadius = 0.0f;
+        entry.launchMorphCornerRadius = m_displayCornerRadius;
+        entry.launchMorphCornerRoundness = m_displayCornerRoundness;
         entry.launchMorphActive = false;
         entry.launchIconHandoffActive = false;
         entry.launchIconHandoffDeadline = {};

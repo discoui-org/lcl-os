@@ -254,7 +254,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 static_cast<int>(surface.launchIconHeight),
                 1.0f,
                 surface.launchMorphCornerRadius,
-                lcl::theme::mobile::kAppIconCornerRoundness, false,
+                surface.launchMorphCornerRoundness, false,
                 surface.launchMorphWidth, surface.launchMorphHeight,
                 render::RasterBufferSampling::
                     TopLeftAnchoredExtendTrailingEdge);
@@ -285,7 +285,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 surface.launchMorphX, surface.launchMorphY,
                 sourceWidth, sourceHeight, pixels, stridePixels, 1.0f,
                 surface.launchMorphCornerRadius,
-                lcl::theme::mobile::kAppIconCornerRoundness, false,
+                surface.launchMorphCornerRoundness, false,
                 surface.launchMorphWidth, surface.launchMorphHeight,
                 render::RasterBufferSampling::
                     TopLeftAnchoredExtendTrailingEdge);
@@ -299,7 +299,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 sourceX, sourceY, sourceWidth, sourceHeight,
                 home.dmaBufTexture, 1.0f,
                 surface.launchMorphCornerRadius,
-                lcl::theme::mobile::kAppIconCornerRoundness);
+                surface.launchMorphCornerRoundness);
         }
     };
 
@@ -354,7 +354,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     ? surface.launchMorphCornerRadius
                     : group.mapLength(resolveWindowCornerRadiusLogical(win));
                 cornerRoundness = surface.launchMorphActive
-                    ? lcl::theme::mobile::kAppIconCornerRoundness
+                    ? surface.launchMorphCornerRoundness
                     : resolveWindowCornerRoundness(win);
             } else {
                 const auto local = resolveLocalEffectGeometry(
@@ -466,7 +466,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 : group.mapLength(windowCornerRadius);
             const float presentedCornerRoundness =
                 matchingSurface->launchMorphActive
-                ? lcl::theme::mobile::kAppIconCornerRoundness
+                ? matchingSurface->launchMorphCornerRoundness
                 : resolveWindowCornerRoundness(win);
             const render::RasterBufferSampling contentSampling =
                 matchingSurface->launchMorphActive

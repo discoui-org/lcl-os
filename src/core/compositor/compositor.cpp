@@ -151,6 +151,14 @@ bool Compositor::initialize() {
     m_windowManager.initialize(
         static_cast<float>(m_renderer.getWidth()) / outputScale,
         static_cast<float>(m_renderer.getHeight()) / outputScale);
+    const auto& displayCorner =
+        m_platformServices.gestalt().display.corners.topLeft;
+    // Gestalt display geometry is expressed in physical pixels; compositor
+    // transitions operate in logical units. WindowGroup currently has one
+    // uniform corner style, and checked-in device profiles are symmetric.
+    m_frameScheduler.setDisplayCornerStyle(
+        std::min(displayCorner.radiusX, displayCorner.radiusY) / outputScale,
+        displayCorner.roundness);
     m_windowingPolicy = makeWindowingPolicy(m_platformServices.gestalt().shell);
     m_protocolDispatcher = std::make_unique<ProtocolDispatcher>(
         m_renderer, m_windowManager, m_surfaces, m_sceneRegistry,

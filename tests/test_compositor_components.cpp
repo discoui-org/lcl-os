@@ -23,6 +23,7 @@
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
 #include "core/scene/shell_state_broker.hpp"
+#include "lcl-theme/theme.hpp"
 #include "render/window_manager.hpp"
 #include "render/dma_buf_crop.hpp"
 #include "render/raster_destination.hpp"
@@ -1630,6 +1631,7 @@ TEST(FrameSchedulerTest, LaunchOriginSpringsBetweenIconAndFullscreenSurface) {
     using Clock = std::chrono::steady_clock;
     const auto start = Clock::time_point{};
     FrameScheduler scheduler;
+    scheduler.setDisplayCornerStyle(24.0f, 2.5f);
     scheduler.reset(start);
 
     SurfaceRegistry registry;
@@ -1642,7 +1644,8 @@ TEST(FrameSchedulerTest, LaunchOriginSpringsBetweenIconAndFullscreenSurface) {
     surface.launchOriginY = 40.0f;
     surface.launchOriginWidth = 60.0f;
     surface.launchOriginHeight = 60.0f;
-    surface.launchOriginCornerRadius = 14.0f;
+    surface.launchOriginCornerRadius =
+        lcl::theme::mobile::kAppIconCornerRadius;
     surface.configuredWidth = 390.0f;
     surface.configuredHeight = 844.0f;
 
@@ -1660,7 +1663,8 @@ TEST(FrameSchedulerTest, LaunchOriginSpringsBetweenIconAndFullscreenSurface) {
     EXPECT_EQ(surface.transitionPhase,
               SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
     EXPECT_FALSE(surface.launchMorphActive);
-    EXPECT_FLOAT_EQ(surface.launchMorphCornerRadius, 0.0f);
+    EXPECT_FLOAT_EQ(surface.launchMorphCornerRadius, 24.0f);
+    EXPECT_FLOAT_EQ(surface.launchMorphCornerRoundness, 2.5f);
     EXPECT_FLOAT_EQ(surface.transitionOpacity, 1.0f);
 
     surface.transitionPhase =
@@ -1693,7 +1697,8 @@ TEST(FrameSchedulerTest, LaunchMorphCanReverseBeforeOpeningSettles) {
     surface.launchOriginY = 40.0f;
     surface.launchOriginWidth = 60.0f;
     surface.launchOriginHeight = 60.0f;
-    surface.launchOriginCornerRadius = 14.0f;
+    surface.launchOriginCornerRadius =
+        lcl::theme::mobile::kAppIconCornerRadius;
     surface.configuredWidth = 390.0f;
     surface.configuredHeight = 844.0f;
 
@@ -1747,7 +1752,8 @@ TEST(FrameSchedulerTest, LaunchMorphHasDeterministicExitDeadline) {
     surface.launchOriginY = 40.0f;
     surface.launchOriginWidth = 60.0f;
     surface.launchOriginHeight = 60.0f;
-    surface.launchOriginCornerRadius = 14.0f;
+    surface.launchOriginCornerRadius =
+        lcl::theme::mobile::kAppIconCornerRadius;
     surface.configuredWidth = 1000000000.0f;
     surface.configuredHeight = 1000000000.0f;
 
@@ -1812,7 +1818,8 @@ TEST(FrameSchedulerTest, LaunchTokenPreservesSpringAcrossSurfaceHandoff) {
     placeholder.launchOriginY = 40.0f;
     placeholder.launchOriginWidth = 60.0f;
     placeholder.launchOriginHeight = 60.0f;
-    placeholder.launchOriginCornerRadius = 14.0f;
+    placeholder.launchOriginCornerRadius =
+        lcl::theme::mobile::kAppIconCornerRadius;
     placeholder.configuredWidth = 390.0f;
     placeholder.configuredHeight = 844.0f;
 
