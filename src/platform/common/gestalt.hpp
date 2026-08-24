@@ -14,6 +14,11 @@ enum class NaturalOrientation : uint8_t {
     Landscape,
 };
 
+enum class ShellKind : uint8_t {
+    Desktop,
+    Mobile,
+};
+
 struct GestaltInsets {
     float top{0.0f};
     float right{0.0f};
@@ -60,6 +65,7 @@ struct DisplayGestalt {
 struct DeviceGestalt {
     uint32_t version{1};
     std::string name{"LCL Default"};
+    ShellKind shell{ShellKind::Desktop};
     DisplayGestalt display;
 };
 

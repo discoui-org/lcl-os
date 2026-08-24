@@ -32,6 +32,7 @@ TEST(GestaltTest, ParsesVersionedDisplayGeometryAndPolicy) {
     constexpr std::string_view json = R"json({
         "version": 1,
         "name": "Test Tablet",
+        "shell": "mobile",
         "display": {
             "width": 1440,
             "height": 2960,
@@ -55,6 +56,7 @@ TEST(GestaltTest, ParsesVersionedDisplayGeometryAndPolicy) {
     ASSERT_TRUE(parseGestaltJson(json, gestalt, error)) << error;
     EXPECT_EQ(gestalt.version, 1u);
     EXPECT_EQ(gestalt.name, "Test Tablet");
+    EXPECT_EQ(gestalt.shell, ShellKind::Mobile);
     ASSERT_TRUE(gestalt.display.hasPreferredResolution());
     EXPECT_EQ(*gestalt.display.width, 1440u);
     EXPECT_EQ(*gestalt.display.height, 2960u);
@@ -66,6 +68,19 @@ TEST(GestaltTest, ParsesVersionedDisplayGeometryAndPolicy) {
     EXPECT_FLOAT_EQ(gestalt.display.corners.topLeft.roundness, 2.5f);
     ASSERT_EQ(gestalt.display.cutouts.size(), 1u);
     EXPECT_FLOAT_EQ(gestalt.display.cutouts.front().width, 240.0f);
+}
+
+TEST(GestaltTest, ShellDefaultsToDesktopAndRejectsUnknownKinds) {
+    DeviceGestalt gestalt;
+    std::string error;
+    ASSERT_TRUE(parseGestaltJson(
+        R"json({"version":1,"display":{}})json", gestalt, error)) << error;
+    EXPECT_EQ(gestalt.shell, ShellKind::Desktop);
+
+    EXPECT_FALSE(parseGestaltJson(
+        R"json({"version":1,"shell":"tablet","display":{}})json",
+        gestalt, error));
+    EXPECT_NE(error.find("desktop or mobile"), std::string::npos);
 }
 
 TEST(GestaltTest, RequiresResolutionDimensionsAsAPair) {
@@ -97,6 +112,7 @@ TEST(GestaltTest, MissingPlatformFileUsesBuiltInRectangularDefault) {
     EXPECT_FALSE(result.loadedFromFile);
     EXPECT_FALSE(result.explicitOverride);
     EXPECT_FALSE(result.gestalt.display.hasPreferredResolution());
+    EXPECT_EQ(result.gestalt.shell, ShellKind::Desktop);
     EXPECT_FALSE(result.gestalt.display.scale.has_value());
     EXPECT_TRUE(result.gestalt.display.cutouts.empty());
     EXPECT_FLOAT_EQ(result.gestalt.display.corners.topLeft.radiusX, 0.0f);
@@ -123,11 +139,31 @@ TEST(GestaltTest, CheckedInGalaxyTabS7ProfileMatchesStrictSchema) {
     std::string error;
     ASSERT_TRUE(parseGestaltJson(contents.str(), gestalt, error)) << error;
     EXPECT_EQ(gestalt.name, "Samsung Galaxy Tab S7 (SM-T870)");
+    EXPECT_EQ(gestalt.shell, ShellKind::Mobile);
     EXPECT_EQ(gestalt.display.width, 1600u);
     EXPECT_EQ(gestalt.display.height, 2560u);
     EXPECT_EQ(gestalt.display.refreshRateHz, 120u);
     EXPECT_EQ(gestalt.display.scale, 2.0f);
     EXPECT_FLOAT_EQ(gestalt.display.corners.topLeft.radiusX, 28.0f);
+}
+
+TEST(GestaltTest, CheckedInMobileDefaultProfileMatchesStrictSchema) {
+    const auto profilePath = std::filesystem::path(__FILE__).parent_path().parent_path() /
+        "config" / "gestalt" / "mobile.json";
+    std::ifstream profile(profilePath, std::ios::binary);
+    ASSERT_TRUE(profile.is_open()) << profilePath;
+    std::ostringstream contents;
+    contents << profile.rdbuf();
+
+    DeviceGestalt gestalt;
+    std::string error;
+    ASSERT_TRUE(parseGestaltJson(contents.str(), gestalt, error)) << error;
+    EXPECT_EQ(gestalt.name, "LCL Mobile Default");
+    EXPECT_EQ(gestalt.shell, ShellKind::Mobile);
+    EXPECT_EQ(gestalt.display.width, 1179u);
+    EXPECT_EQ(gestalt.display.height, 2556u);
+    EXPECT_EQ(gestalt.display.scale, 2.0f);
+    EXPECT_EQ(gestalt.display.naturalOrientation, NaturalOrientation::Portrait);
 }
 
 TEST(GestaltTest, EveryCheckedInDeviceProfileMatchesStrictSchema) {
@@ -147,6 +183,7 @@ TEST(GestaltTest, EveryCheckedInDeviceProfileMatchesStrictSchema) {
         ASSERT_TRUE(parseGestaltJson(contents.str(), gestalt, error))
             << entry.path() << ": " << error;
         EXPECT_FALSE(gestalt.name.empty()) << entry.path();
+        EXPECT_EQ(gestalt.shell, ShellKind::Mobile) << entry.path();
         EXPECT_TRUE(gestalt.display.hasPreferredResolution()) << entry.path();
         ++profileCount;
     }

@@ -60,7 +60,7 @@ DEVICE_SESSION_LAUNCHER = f"{DEVICE_TMP_DIR}/lcl-android-rootfs-session.sh"
 NATIVE_CLIENT_WRAPPER = ROOT_DIR / "scripts" / "lcl_android_native_client_wrapper.sh"
 DEVICE_NATIVE_CLIENT_DIR = f"{DEVICE_TMP_DIR}/lcl-native-clients"
 DEVICE_NATIVE_CLIENT_WRAPPER = f"{DEVICE_NATIVE_CLIENT_DIR}/launch"
-NATIVE_CLIENT_BINARIES = ("lcl-desktop-shell", "lcl-terminal")
+NATIVE_CLIENT_BINARIES = ("lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal")
 ANDROID_NATIVE_LD_LIBRARY_PATH = (
     "/apex/com.android.i18n/lib64:/apex/com.android.runtime/lib64/bionic:"
     "/system/lib64:/vendor/lib64:/system_ext/lib64"
@@ -236,7 +236,7 @@ def stop_lcl_process() -> None:
 def stop_rootfs_session() -> None:
     """Stop canonical userspace processes before unmounting its rootfs."""
     process_names = (
-        "lcl-desktop-shell", "lcl-sessiond", "lcl-terminal", "lcl-open",
+        "lcl-desktop-shell", "lcl-mobile-shell", "lcl-sessiond", "lcl-terminal", "lcl-open",
         "lcl-js", "lcl_ui_demo",
     )
     pids: list[str] = []
@@ -431,6 +431,7 @@ def push_native_clients() -> None:
     run_adb("push", str(NATIVE_CLIENT_WRAPPER), DEVICE_NATIVE_CLIENT_WRAPPER)
     adb_shell(
         f"chmod 0755 {DEVICE_NATIVE_CLIENT_DIR}/lcl-desktop-shell "
+        f"{DEVICE_NATIVE_CLIENT_DIR}/lcl-mobile-shell "
         f"{DEVICE_NATIVE_CLIENT_DIR}/lcl-terminal {DEVICE_NATIVE_CLIENT_WRAPPER}",
         as_root=True,
     )
@@ -554,6 +555,7 @@ def mount_rootfs(native_clients: bool = False) -> None:
         make_mount_rslave(native_root)
         wrapper_targets = (
             f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-desktop-shell",
+            f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-mobile-shell",
             f"{DEVICE_ROOTFS_MOUNT}/System/Applications/Terminal.app/Executables/Terminal",
         )
         for target in wrapper_targets:
@@ -602,7 +604,10 @@ def push_rootfs_session_launcher() -> None:
 
 def prepare_runtime_for_launch() -> None:
     """Stop an existing LCL session, then clear its private runtime sockets."""
-    process_names = ("lcl-core-android", "lcl-sessiond", "lcl-desktop-shell", "lcl-terminal")
+    process_names = (
+        "lcl-core-android", "lcl-sessiond", "lcl-desktop-shell",
+        "lcl-mobile-shell", "lcl-terminal",
+    )
 
     def active_processes() -> list[str]:
         active: list[str] = []
@@ -757,6 +762,10 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
     prepare_runtime_for_launch()
     if selected_gestalt_path is not None:
         push_gestalt(selected_gestalt_path)
+    else:
+        # The shell launcher reads the same runtime profile through the rootfs
+        # bind mount. Do not let a previous device/session select a stale shell.
+        adb_shell(f"rm -f {DEVICE_GESTALT_PATH}", as_root=True)
 
     # 4b. Push binary
     push_binary()

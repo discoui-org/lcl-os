@@ -10,7 +10,7 @@ The Android system image contains ONLY platform-specific substrate components:
 - lcl.rc and lcl-bootstrap.sh init scripts
 
 All canonical userspace applications (Terminal.app, UIDemo.app, UIDemoJS.app),
-daemons (lcl-sessiond, lcl-desktop-shell), shell (Bash), fonts, and user home (/Users/Rei)
+daemons, both Gestalt-selectable shells, Bash, fonts, and user home (/Users/Rei)
 reside exclusively in the shared, byte-for-byte canonical rootfs:
     build/rootfs/lcl-rootfs-x86_64.ext4
 """
@@ -239,6 +239,10 @@ if mount | grep -q " /Runtime "; then
     ln -sf /Runtime/lcl-sessiond.log /data/local/tmp/lcl-sessiond.log 2>/dev/null
     ln -sf /Runtime/lcl-shell.log /data/local/tmp/lcl-shell.log 2>/dev/null
     ln -sf /Runtime/lcl-session-runner.log /data/local/tmp/lcl-session-runner.log 2>/dev/null
+    if [ -f /vendor/etc/lcl/gestalt.json ]; then
+        cp /vendor/etc/lcl/gestalt.json /Runtime/gestalt.json 2>/dev/null || true
+        chmod 0600 /Runtime/gestalt.json 2>/dev/null || true
+    fi
     log_boot "Runtime mount = /Runtime (tmpfs ready, stale sockets purged)"
 else
     log_boot "ERROR: tmpfs mount on /Runtime failed: $TMPFS_MOUNT_ERR"
@@ -436,10 +440,10 @@ for ((i=0; i<100; i++)); do
     sleep 0.05
 done
 
-echo "[LCL SESSION] Starting desktop shell..."
-/System/Core/lcl-desktop-shell > /Runtime/lcl-shell.log 2>&1 &
+echo "[LCL SESSION] Starting Gestalt-selected shell..."
+/System/Core/lcl-shell-launcher > /Runtime/lcl-shell.log 2>&1 &
 SHELL_PID=$!
-echo "[LCL SESSION] lcl-desktop-shell spawned (PID=$SHELL_PID)"
+echo "[LCL SESSION] shell launcher spawned (PID=$SHELL_PID)"
 
 wait $SESSIOND_PID $SHELL_PID
 EOF

@@ -1,6 +1,7 @@
 {
   "version": 1,
   "name": "Samsung Galaxy Note8 (SM-N950F)",
+  "shell": "mobile",
   "display": {
     "width": 1440,
     "height": 2960,

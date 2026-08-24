@@ -1,10 +1,12 @@
 {
   "version": 1,
-  "name": "LCL Desktop Default",
-  "shell": "desktop",
+  "name": "LCL Mobile Default",
+  "shell": "mobile",
   "display": {
-    "scale": 1.0,
-    "naturalOrientation": "auto",
+    "width": 1179,
+    "height": 2556,
+    "scale": 3.0,
+    "naturalOrientation": "portrait",
     "defaultRotation": 0,
     "safeArea": {
       "top": 0,

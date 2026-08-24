@@ -1,6 +1,7 @@
 {
   "version": 1,
   "name": "Xiaomi Redmi Note 13 Pro 5G (2312DRA50G)",
+  "shell": "mobile",
   "display": {
     "width": 1220,
     "height": 2712,

@@ -411,7 +411,7 @@ bool parseGestaltJson(std::string_view json, DeviceGestalt& destination,
     try {
         const JsonValue rootValue = JsonParser(json).parse();
         const auto& root = requireObject(rootValue, "Gestalt root");
-        rejectUnknownKeys(root, {"version", "name", "display"}, "Gestalt root");
+        rejectUnknownKeys(root, {"version", "name", "shell", "display"}, "Gestalt root");
         const auto version = root.find("version");
         const auto display = root.find("display");
         if (version == root.end()) throw std::runtime_error("Gestalt version is required");
@@ -424,6 +424,12 @@ bool parseGestaltJson(std::string_view json, DeviceGestalt& destination,
             if (parsed.name.empty() || parsed.name.size() > 256) {
                 throw std::runtime_error("name must contain 1 to 256 bytes");
             }
+        }
+        if (auto shell = root.find("shell"); shell != root.end()) {
+            const std::string kind = requireString(shell->second, "shell");
+            if (kind == "desktop") parsed.shell = ShellKind::Desktop;
+            else if (kind == "mobile") parsed.shell = ShellKind::Mobile;
+            else throw std::runtime_error("shell must be desktop or mobile");
         }
         parsed.display = parseDisplay(display->second);
         destination = std::move(parsed);

@@ -102,6 +102,8 @@ def is_rootfs_stale(rootfs_img: Path) -> bool:
     candidates = [
         BUILD_DIR / "lcl-core",
         BUILD_DIR / "lcl-desktop-shell",
+        BUILD_DIR / "lcl-mobile-shell",
+        BUILD_DIR / "lcl-shell-launcher",
         BUILD_DIR / "lcl-sessiond",
         BUILD_DIR / "lcl-open",
         BUILD_DIR / "lcl-js",

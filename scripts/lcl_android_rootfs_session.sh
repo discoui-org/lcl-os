@@ -6,7 +6,7 @@ RUNTIME_DIR=${LCL_RUNTIME_DIR:-/data/local/tmp/lcl-runtime}
 SESSION_SCRIPT="$RUNTIME_DIR/lcl-session-start.sh"
 
 if [ ! -x "$ROOTFS_MOUNT/System/Core/lcl-sessiond" ] || \
-   [ ! -x "$ROOTFS_MOUNT/System/Core/lcl-desktop-shell" ]; then
+   [ ! -x "$ROOTFS_MOUNT/System/Core/lcl-shell-launcher" ]; then
     echo "[LCL ROOTFS] Canonical session binaries are missing under $ROOTFS_MOUNT" >&2
     exit 1
 fi
@@ -52,9 +52,9 @@ if ! /System/Tools/grep -F /Runtime/lcl-sessiond.sock /proc/net/unix |
     exit 1
 fi
 
-/System/Core/lcl-desktop-shell > /Runtime/lcl-shell.log 2>&1 &
+/System/Core/lcl-shell-launcher > /Runtime/lcl-shell.log 2>&1 &
 SHELL_PID=$!
-echo "[LCL SESSION] desktop shell started (pid=$SHELL_PID)"
+echo "[LCL SESSION] Gestalt-selected shell started (pid=$SHELL_PID)"
 
 wait "$SESSIOND_PID" "$SHELL_PID"
 EOF

@@ -1,6 +1,7 @@
 {
   "version": 1,
   "name": "Samsung Galaxy Tab S7 (SM-T870)",
+  "shell": "mobile",
   "display": {
     "width": 1600,
     "height": 2560,

@@ -168,12 +168,21 @@ path with the `--gestalt /absolute/profile.json` option (or the equivalent
 startup fails if it is missing or invalid. A missing platform-default file is
 not fatal and selects the built-in rectangular 1x profile.
 
+The version 1 root accepts an optional `shell` value (`desktop` or `mobile`),
+defaulting to `desktop` for older profiles. Both executables are installed in
+the canonical rootfs; `lcl-shell-launcher` reads the same Gestalt document as
+the platform and replaces itself with exactly one selected shell. Emulator
+viewer flags do not form a second shell-selection authority.
+
 The version 1 `display` object accepts the optional `width`, `height`,
 `refreshRateHz`, and `scale` mode fields, plus `naturalOrientation`,
 `defaultRotation`, `safeArea`, per-corner geometry in `corners`, and rectangular
 `cutouts`. Unknown fields are rejected so a misspelled ROM profile cannot be
-silently accepted. The canonical desktop example is
-`config/gestalt/default.json`.
+silently accepted. The canonical desktop source profile is
+`config/gestalt/default.json`; the QEMU mobile source profile is
+`config/gestalt/mobile.json`. The launcher derives an instance-local runtime
+copy from the selected source and applies only the current output mode and
+explicit command-line overrides to that copy.
 
 The active `IDisplayBackend` prefers the Gestalt mode when the platform exposes
 that mode, and stores the Gestalt scale in its `DisplayMode.scaleFactor`. If

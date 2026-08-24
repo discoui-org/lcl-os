@@ -373,6 +373,20 @@ if(ANDROID)
         Threads::Threads
     )
 
+    add_executable(lcl-mobile-shell
+        src/apps/mobile_shell/ui_main.cpp
+    )
+    target_include_directories(lcl-mobile-shell PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+    target_link_libraries(lcl-mobile-shell PRIVATE
+        lcl-ui
+        lcl-raster
+        lcl-protocol
+        Threads::Threads
+    )
+
     add_executable(lcl-terminal
         src/tools/terminal_main.cpp
         src/apps/terminal/terminal_app.cpp
@@ -525,6 +539,18 @@ else()
         Threads::Threads
     )
 
+    # Selects exactly one installed shell from the canonical Gestalt profile,
+    # then replaces itself with that shell process.
+    add_executable(lcl-shell-launcher
+        src/tools/shell_launcher_main.cpp
+    )
+    target_include_directories(lcl-shell-launcher PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(lcl-shell-launcher PRIVATE
+        lcl-platform-common
+    )
+
     # Native CLI App Launcher Target (lcl-open). It never forks applications;
     # all process lifecycle is delegated to lcl-sessiond.
     add_executable(lcl-open
@@ -556,6 +582,24 @@ else()
         lcl-protocol
         lcl-shell-state
         lcl-session
+        Threads::Threads
+    )
+
+    # Mobile shell presentation target. It shares compositor-owned state and
+    # lcl-ui with desktop while keeping form-factor UI policy independent.
+    add_executable(lcl-mobile-shell
+        src/apps/mobile_shell/ui_main.cpp
+    )
+
+    target_include_directories(lcl-mobile-shell PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+
+    target_link_libraries(lcl-mobile-shell PRIVATE
+        lcl-ui
+        lcl-raster
+        lcl-protocol
         Threads::Threads
     )
 

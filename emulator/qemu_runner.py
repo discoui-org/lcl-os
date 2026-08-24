@@ -77,7 +77,7 @@ class QemuRunner:
 
         # The directory is private to this runner.  Remove only this exact
         # endpoint in case a previous launch in the same instance left it behind.
-        self._remove_sockets()
+        self._remove_runtime_files()
         self._stopping = False
         command = [
             sys.executable,
@@ -91,6 +91,8 @@ class QemuRunner:
             str(self.spice_socket_path),
             "--qmp-unix",
             str(self.qmp_socket_path),
+            "--runtime-dir",
+            str(self._runtime_dir),
         ]
         if self._build:
             if self._rebuild:
@@ -139,16 +141,20 @@ class QemuRunner:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-        self._remove_sockets()
+        self._remove_runtime_files()
         try:
             self._runtime_dir.rmdir()
         except OSError:
             pass
 
-    def _remove_sockets(self) -> None:
-        for socket_path in (self.spice_socket_path, self.qmp_socket_path):
+    def _remove_runtime_files(self) -> None:
+        for runtime_path in (
+            self.spice_socket_path,
+            self.qmp_socket_path,
+            self._runtime_dir / "gestalt.json",
+        ):
             try:
-                socket_path.unlink()
+                runtime_path.unlink()
             except FileNotFoundError:
                 pass
 

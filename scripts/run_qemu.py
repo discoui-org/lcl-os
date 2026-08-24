@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,8 @@ BINARY = BUILD_DIR / "lcl-core"
 OPEN_BIN = BUILD_DIR / "lcl-open"
 SESSIOND_BIN = BUILD_DIR / "lcl-sessiond"
 SHELL_BIN = BUILD_DIR / "lcl-desktop-shell"
+MOBILE_SHELL_BIN = BUILD_DIR / "lcl-mobile-shell"
+SHELL_LAUNCHER_BIN = BUILD_DIR / "lcl-shell-launcher"
 TERM_BIN = BUILD_DIR / "lcl-terminal"
 DEMO_BIN = BUILD_DIR / "apps" / "ui_demo" / "lcl_ui_demo"
 JS_BIN = BUILD_DIR / "lcl-js"
@@ -33,6 +36,8 @@ KERNEL_CACHE = CACHE_DIR / "vmlinuz"
 KERNEL_KVER_STAMP = CACHE_DIR / "kver"
 DOCKER_IMAGE = "lcl-os-qemu-builder:latest"
 DOCKERFILE = SCRIPT_DIR / "Dockerfile.qemu"
+DEFAULT_GESTALT_PATH = ROOT_DIR / "config" / "gestalt" / "default.json"
+MOBILE_GESTALT_PATH = ROOT_DIR / "config" / "gestalt" / "mobile.json"
 
 
 def log(msg: str) -> None:
@@ -41,6 +46,38 @@ def log(msg: str) -> None:
 
 def err(msg: str) -> None:
     print(f"[LCL QEMU ERROR] {msg}", file=sys.stderr)
+
+
+def cached_qemu_gestalt_transport_available() -> bool:
+    """Whether cached boot artifacts can expose QEMU fw_cfg to userspace."""
+    modules_root = CACHE_DIR / "modules"
+    if not modules_root.is_dir():
+        return False
+    if any(modules_root.rglob("qemu_fw_cfg.ko*")):
+        return True
+    for builtins in modules_root.rglob("modules.builtin"):
+        try:
+            if "qemu_fw_cfg" in builtins.read_text(encoding="utf-8", errors="ignore"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def load_source_gestalt(path: Path) -> dict:
+    """Load a checked-in Gestalt source profile used to derive a runtime copy."""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        err(f"Cannot read source Gestalt JSON {path}: {error}")
+        sys.exit(2)
+    if not isinstance(document, dict) or document.get("version") != 1:
+        err(f"Source Gestalt must be a version 1 JSON object: {path}")
+        sys.exit(2)
+    if not isinstance(document.get("display"), dict):
+        err(f"Source Gestalt display must be a JSON object: {path}")
+        sys.exit(2)
+    return document
 
 
 def host_os() -> str:
@@ -343,8 +380,15 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
             shutil.copy2(src, dst, follow_symlinks=True)
             copied_any = True
 
-    # Also pull any virtio_gpu*.ko* wherever it lives
-    for pattern in ("**/virtio_gpu.ko*", "**/virtio-gpu.ko*", "**/drm.ko*", "**/virtio_pci.ko*"):
+    # Pull individual QEMU-critical modules wherever the distro places them.
+    # qemu_fw_cfg exposes the launch-time Gestalt document under sysfs.
+    for pattern in (
+        "**/virtio_gpu.ko*",
+        "**/virtio-gpu.ko*",
+        "**/drm.ko*",
+        "**/virtio_pci.ko*",
+        "**/qemu_fw_cfg.ko*",
+    ):
         for src in kmod_base.glob(pattern):
             rel = src.relative_to(kmod_base)
             dst = target / rel
@@ -375,12 +419,14 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
             pass
 
     has_virtio_gpu = any(target.rglob("virtio_gpu.ko*")) or any(target.rglob("virtio-gpu.ko*"))
+    has_qemu_fw_cfg = any(target.rglob("qemu_fw_cfg.ko*"))
     builtin_txt = ""
     builtin_path = kmod_base / "modules.builtin"
     if builtin_path.is_file():
         builtin_txt = builtin_path.read_text(encoding="utf-8", errors="ignore")
         shutil.copy2(builtin_path, target / "modules.builtin", follow_symlinks=True)
     virtio_builtin = "virtio_gpu" in builtin_txt or "virtio-gpu" in builtin_txt
+    qemu_fw_cfg_builtin = "qemu_fw_cfg" in builtin_txt
 
     if not copied_any and not virtio_builtin:
         err(f"No kernel modules copied from {kmod_base}")
@@ -391,6 +437,16 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
         log("virtio_gpu is built-in to this kernel (no .ko needed)")
     else:
         log(f"WARNING: virtio_gpu not found under {kmod_base} — DRM may be unavailable")
+    if has_qemu_fw_cfg:
+        log("qemu_fw_cfg module packaged OK")
+    elif qemu_fw_cfg_builtin:
+        log("qemu_fw_cfg is built-in to this kernel (no .ko needed)")
+    else:
+        err(
+            f"qemu_fw_cfg not found under {kmod_base}; "
+            "QEMU cannot deliver the runtime Gestalt profile"
+        )
+        sys.exit(1)
 
     # Persist matching cache pair
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -499,7 +555,9 @@ modprobe virtio_pci 2>/dev/null || true
 modprobe virtio_blk 2>/dev/null || true
 modprobe virtio_gpu 2>/dev/null || true
 modprobe virtio_input 2>/dev/null || true
-modprobe qemu_fw_cfg 2>/dev/null || true
+if ! modprobe qemu_fw_cfg 2>/dev/null; then
+    echo "[bootstrap] ERROR: qemu_fw_cfg unavailable; runtime Gestalt cannot be loaded"
+fi
 modprobe ext4 2>/dev/null || true
 
 # Auto-probe hardware drivers via /sys modaliases
@@ -1104,6 +1162,8 @@ def is_rootfs_stale(rootfs_img: Path, arch: str = "x86_64") -> bool:
         BINARY,
         SESSIOND_BIN,
         SHELL_BIN,
+        MOBILE_SHELL_BIN,
+        SHELL_LAUNCHER_BIN,
         OPEN_BIN,
         JS_BIN,
         TERM_BIN,
@@ -1139,6 +1199,7 @@ def launch_qemu(
     width_override: int | None = None,
     height_override: int | None = None,
     gestalt_path: Path | None = None,
+    runtime_dir: Path | None = None,
     no_build: bool = False,
     rebuild: bool = False,
     spice_unix: Path | None = None,
@@ -1146,6 +1207,12 @@ def launch_qemu(
 ) -> None:
     qemu = find_qemu(arch)
     host = detect_host_display()
+
+    source_gestalt: dict | None = None
+    if gestalt_path is None:
+        source_gestalt = load_source_gestalt(
+            MOBILE_GESTALT_PATH if mobile else DEFAULT_GESTALT_PATH
+        )
 
     memory = os.environ.get("LCL_QEMU_MEM") or "2G"
     cpus = os.environ.get("LCL_QEMU_CPUS", "2")
@@ -1173,10 +1240,13 @@ def launch_qemu(
             pass
 
     if mobile:
-        # Portrait mobile display: 1179x2556 physical at a readable 2x UI scale.
-        width = width_override or 1179
-        height = height_override or 2556
-        scale = scale_override or 2.0
+        # Mobile defaults come from the canonical source Gestalt. CLI values
+        # only override the per-launch runtime copy.
+        assert source_gestalt is not None or gestalt_path is not None
+        mobile_display = source_gestalt["display"] if source_gestalt is not None else {}
+        width = width_override or int(mobile_display["width"] if source_gestalt else 1179)
+        height = height_override or int(mobile_display["height"] if source_gestalt else 2556)
+        scale = scale_override or float(mobile_display["scale"] if source_gestalt else 2.0)
         host_dpr = scale
         host.logical_width = round(width / scale)
         host.logical_height = round(height / scale)
@@ -1453,33 +1523,31 @@ def launch_qemu(
     # The standard kernel video= argument establishes the early DRM/KMS mode.
     # LCL display policy travels as a versioned Gestalt document via fw_cfg.
     if qemu_gestalt is None:
-        qemu_gestalt = BUILD_DIR / "qemu-gestalt.json"
+        if runtime_dir is None:
+            err("QEMU runtime directory is required for the generated Gestalt profile")
+            sys.exit(2)
+        if source_gestalt is None:
+            err("Source Gestalt is required for the generated runtime profile")
+            sys.exit(2)
+        qemu_gestalt = runtime_dir / "gestalt.json"
+        runtime_gestalt = dict(source_gestalt)
+        runtime_display = dict(source_gestalt["display"])
+        runtime_display.update(
+            {
+                "width": width,
+                "height": height,
+                "refreshRateHz": refresh_hz,
+                "scale": scale,
+                "naturalOrientation": "portrait" if height > width else "landscape",
+            }
+        )
+        runtime_gestalt["display"] = runtime_display
         write_text(
             qemu_gestalt,
-            json.dumps(
-                {
-                    "version": 1,
-                    "name": "LCL QEMU Output",
-                    "display": {
-                        "width": width,
-                        "height": height,
-                        "refreshRateHz": refresh_hz,
-                        "scale": scale,
-                        "naturalOrientation": "portrait" if height > width else "landscape",
-                        "defaultRotation": 0,
-                        "safeArea": {"top": 0, "right": 0, "bottom": 0, "left": 0},
-                        "corners": {
-                            "topLeft": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
-                            "topRight": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
-                            "bottomLeft": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
-                            "bottomRight": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
-                        },
-                        "cutouts": [],
-                    },
-                },
-                indent=2,
-            ) + "\n",
+            json.dumps(runtime_gestalt, indent=2) + "\n",
         )
+        source_path = MOBILE_GESTALT_PATH if mobile else DEFAULT_GESTALT_PATH
+        log(f"Generated runtime Gestalt from {source_path}: {qemu_gestalt}")
 
     video_mode = f"video={width}x{height}-32@{refresh_hz}"
 
@@ -1621,6 +1689,11 @@ def main() -> None:
         help="Use an explicit Gestalt JSON and pass it to the guest through fw_cfg",
     )
     parser.add_argument(
+        "--runtime-dir",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--scale",
         type=float,
         metavar="FACTOR",
@@ -1696,6 +1769,24 @@ def main() -> None:
     if getattr(args, "rebuild", False) and getattr(args, "no_build", False):
         parser.error("Cannot specify both --rebuild and --no-build.")
 
+    # Keep launch-time state outside build/. The wrapper owns this directory
+    # until QEMU exits; viewer launches pass their already-owned runtime dir.
+    if args.run and not args.inside_docker and args.runtime_dir is None:
+        with tempfile.TemporaryDirectory(prefix="lcl-qemu-") as runtime_dir:
+            command = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                *sys.argv[1:],
+                "--runtime-dir",
+                runtime_dir,
+            ]
+            raise SystemExit(subprocess.call(command))
+
+    if args.runtime_dir is not None:
+        args.runtime_dir = args.runtime_dir.expanduser().resolve()
+        if not args.runtime_dir.is_dir():
+            parser.error(f"QEMU runtime directory does not exist: {args.runtime_dir}")
+
     arch = normalize_arch(args.arch or os.environ.get("ARCH"))
 
     if args.gpu:
@@ -1735,6 +1826,23 @@ def main() -> None:
                 "Run without --no-build first to build them."
             )
             sys.exit(1)
+        gestalt_required = (
+            args.mobile
+            or args.native
+            or args.retina
+            or args.gestalt is not None
+            or args.scale is not None
+        )
+        if gestalt_required and not cached_qemu_gestalt_transport_available():
+            err(
+                "Cached QEMU artifacts cannot expose the runtime Gestalt profile "
+                "(qemu_fw_cfg is missing)."
+            )
+            err(
+                "Refusing to launch with ignored shell/scale settings. Package compatible "
+                "boot artifacts once, then subsequent Gestalt changes work with --no-build."
+            )
+            sys.exit(1)
         kernel = KERNEL_CACHE
         log(f"[--no-build] Skipping Docker build. Using cached kernel: {kernel}")
     else:
@@ -1760,6 +1868,7 @@ def main() -> None:
             width_override=args.width,
             height_override=args.height,
             gestalt_path=args.gestalt,
+            runtime_dir=args.runtime_dir,
             no_build=args.no_build,
             rebuild=args.rebuild,
             spice_unix=args.spice_unix,

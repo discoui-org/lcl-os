@@ -6,6 +6,11 @@ Android port installs its selected profile as
 `/vendor/etc/lcl/gestalt.json`; the runtime does not identify models or query
 Android framework display policy.
 
+The root-level `shell` field is the session presentation profile. Phone and
+tablet profiles use `"mobile"`; the canonical desktop profile uses
+`"desktop"`. Both shell executables remain in the same rootfs and the session
+launcher starts exactly one of them from this field.
+
 `main.py android` reads the connected device model through ADB and uses the
 matching profile when present. `--gestalt` remains available as an explicit
 override. Profiles can also be passed to QEMU:

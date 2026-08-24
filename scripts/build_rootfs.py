@@ -14,7 +14,7 @@ Canonical Root Namespace:
     /Runtime/                   # Boot & session runtime state (/Runtime/Sessions/Rei, /Runtime/Temporary)
     /System/                    # Immutable OS content (Applications, Core, Tools, Library)
         /System/Applications/   # Built-in .app bundles (Terminal.app, UIDemo.app, UIDemoJS.app)
-        /System/Core/           # LCL system daemons & tools (lcl-core, lcl-desktop-shell, lcl-sessiond, lcl-open, lcl-js)
+        /System/Core/           # LCL daemons/tools and both Gestalt-selectable shells
         /System/Tools/          # Core utilities & Bash (/System/Tools/bash, coreutils)
         /System/Library/        # Fonts, Wallpapers, Libraries (Mesa drivers, glibc, etc.)
     /Users/                     # User home directories (/Users/Rei, /Users/Shared)
@@ -184,6 +184,8 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
     norm_arch = normalize_arch(arch)
     targets = [
         "lcl-desktop-shell",
+        "lcl-mobile-shell",
+        "lcl-shell-launcher",
         "lcl-terminal",
         "lcl-sessiond",
         "lcl-open",
@@ -333,6 +335,8 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
     sha_map: dict[str, str] = {}
     core_daemons = {
         "lcl-desktop-shell": dest_system_core / "lcl-desktop-shell",
+        "lcl-mobile-shell": dest_system_core / "lcl-mobile-shell",
+        "lcl-shell-launcher": dest_system_core / "lcl-shell-launcher",
         "lcl-sessiond": dest_system_core / "lcl-sessiond",
         "lcl-open": dest_system_core / "lcl-open",
         "lcl-core": dest_system_core / "lcl-core",
@@ -683,10 +687,10 @@ if [ -x /System/Core/lcl-sessiond ]; then
     sleep 0.1
 fi
 
-# Start LCL Desktop Shell
-if [ -x /System/Core/lcl-desktop-shell ]; then
-    echo "[init] Starting lcl-desktop-shell..."
-    /System/Core/lcl-desktop-shell 2>&1 | tee /var/log/lcl_desktop_shell.log &
+# Start the one shell selected by the canonical Gestalt profile.
+if [ -x /System/Core/lcl-shell-launcher ]; then
+    echo "[init] Starting Gestalt-selected LCL shell..."
+    /System/Core/lcl-shell-launcher 2>&1 | tee /var/log/lcl_shell.log &
 fi
 
 wait
@@ -799,6 +803,8 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
     required_files = [
         "/System/Core/lcl-core",
         "/System/Core/lcl-desktop-shell",
+        "/System/Core/lcl-mobile-shell",
+        "/System/Core/lcl-shell-launcher",
         "/System/Core/lcl-sessiond",
         "/System/Core/lcl-open",
         "/System/Core/lcl-js",

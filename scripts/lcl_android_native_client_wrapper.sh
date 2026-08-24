@@ -8,6 +8,9 @@ case "$0" in
     */lcl-desktop-shell)
         exec /AndroidClients/lcl-desktop-shell "$@"
         ;;
+    */lcl-mobile-shell)
+        exec /AndroidClients/lcl-mobile-shell "$@"
+        ;;
     */Terminal)
         exec /AndroidClients/lcl-terminal "$@"
         ;;

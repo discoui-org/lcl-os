@@ -234,7 +234,7 @@ def build_android_phone_artifacts(args: argparse.Namespace, use_rootfs: bool) ->
     jobs = max(1, int(args.jobs))
     android_targets = ["lcl-core-android"]
     if use_rootfs and not args.software_clients:
-        android_targets.extend(("lcl-desktop-shell", "lcl-terminal"))
+        android_targets.extend(("lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal"))
     build_args = [
         "cmake", "--build", str(ANDROID_BUILD_DIR),
         "--target", *android_targets, "-j", str(jobs),
@@ -263,6 +263,7 @@ def require_android_phone_artifacts(use_rootfs: bool, native_clients: bool) -> N
     if use_rootfs and native_clients:
         required.extend((
             ANDROID_BUILD_DIR / "lcl-desktop-shell",
+            ANDROID_BUILD_DIR / "lcl-mobile-shell",
             ANDROID_BUILD_DIR / "lcl-terminal",
         ))
     missing = [path for path in required if not path.is_file()]
