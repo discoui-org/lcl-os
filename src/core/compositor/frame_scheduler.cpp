@@ -21,6 +21,9 @@ constexpr float kLaunchSpringStiffnessScale =
 constexpr float kSpringyMinimizeDampingRatio = 0.72f;
 constexpr float kSlowFlingScreenLengthsPerSecond = 0.5f;
 constexpr float kFastFlingScreenLengthsPerSecond = 4.0f;
+constexpr float kInteractiveHomeEffectProgress = 0.25f;
+constexpr float kHomeEffectOpeningStiffness = 140.0f;
+constexpr float kHomeEffectClosingStiffness = 45.0f;
 
 bool isLaunchMorphPhase(TransitionPhase phase) {
     return phase == TransitionPhase::Entering ||
@@ -155,8 +158,10 @@ void FrameScheduler::prepareLaunchMorph(
         state.positionY = m_launchMotion.createChannel({key, 2}, initialY);
         state.expand = m_launchMotion.createChannel({key, 3}, initialProgress);
         state.perspective = m_launchMotion.createChannel({key, 4}, initialProgress);
+        state.homeEffect = m_launchMotion.createChannel({key, 5}, initialProgress);
     }
-    if (!inserted && state.phase != entry.transitionPhase) {
+    const bool phaseChanged = !inserted && state.phase != entry.transitionPhase;
+    if (phaseChanged) {
         entry.transitionElapsedSec = 0.0f;
     }
     const bool flingToHome = entry.launchGestureFlingPending &&
@@ -182,10 +187,20 @@ void FrameScheduler::prepareLaunchMorph(
     const auto perspectiveMotion = interactive
         ? draggingMotion
         : launchSpring(100.0f, dampingRatio, 0.001f, 0.01f);
+    // Launcher scale and blur have their own critically damped spring. Fling
+    // velocity remains owned by the app thumbnail trajectory.
+    const auto homeEffectMotion = interactive
+        ? draggingMotion
+        : launchSpring(
+              opening
+                  ? kHomeEffectOpeningStiffness
+                  : kHomeEffectClosingStiffness,
+              1.0f, 0.001f, 0.01f);
     float positionTargetX = opening ? targetCenterX : originCenterX;
     float positionTargetY = opening ? targetCenterY : originCenterY;
     float expandTarget = opening ? 1.0f : 0.0f;
     float perspectiveTarget = opening ? 1.0f : 0.0f;
+    float homeEffectTarget = opening ? 1.0f : 0.0f;
     if (interactive) {
         const float deltaX = entry.launchGestureX - entry.launchGestureStartX;
         const float deltaY = entry.launchGestureStartY - entry.launchGestureY;
@@ -198,16 +213,26 @@ void FrameScheduler::prepareLaunchMorph(
                         (10.0f * targetHeight));
         expandTarget = 1.0f;
         perspectiveTarget = 1.0f - deltaY / (targetHeight * 2.0f / 3.0f);
+        const float thumbnailProgress =
+            std::clamp(perspectiveTarget, 0.0f, 1.0f);
+        homeEffectTarget = 1.0f -
+            (1.0f - thumbnailProgress) *
+                kInteractiveHomeEffectProgress;
     }
     m_launchMotion.setSpec(state.positionX, positionMotion);
     m_launchMotion.setSpec(state.positionY, positionMotion);
     m_launchMotion.setSpec(state.expand, expandMotion);
     m_launchMotion.setSpec(state.perspective, perspectiveMotion);
+    m_launchMotion.setSpec(
+        state.homeEffect, homeEffectMotion,
+        !(phaseChanged && !interactive));
     m_launchMotion.animateTo(state.positionX, positionTargetX, positionMotion);
     m_launchMotion.animateTo(state.positionY, positionTargetY, positionMotion);
     m_launchMotion.animateTo(state.expand, expandTarget, expandMotion);
     m_launchMotion.animateTo(
         state.perspective, perspectiveTarget, perspectiveMotion);
+    m_launchMotion.animateTo(
+        state.homeEffect, homeEffectTarget, homeEffectMotion);
     if (flingToHome) {
         const auto fling = resolveLaunchFlingVelocity(
             entry, targetX, targetWidth, targetHeight);
@@ -249,13 +274,17 @@ bool FrameScheduler::updateLaunchMorph(
             state.positionY, opening ? targetCenterY : originCenterY);
         m_launchMotion.setValue(state.expand, opening ? 1.0f : 0.0f);
         m_launchMotion.setValue(state.perspective, opening ? 1.0f : 0.0f);
+        m_launchMotion.setValue(state.homeEffect, opening ? 1.0f : 0.0f);
     }
     const auto positionX = m_launchMotion.sample(state.positionX);
     const auto positionY = m_launchMotion.sample(state.positionY);
     const auto expandSample = m_launchMotion.sample(state.expand);
     const auto perspectiveSample = m_launchMotion.sample(state.perspective);
+    const auto homeEffectSample = m_launchMotion.sample(state.homeEffect);
     const float expand = std::max(0.0f, expandSample.value);
     const float perspective = perspectiveSample.value;
+    entry.launchHomeTransitionProgress =
+        std::clamp(homeEffectSample.value, 0.0f, 1.0f);
     const float iconWidth = std::max(1.0f, entry.launchOriginWidth);
     const float iconHeight = std::max(1.0f, entry.launchOriginHeight);
     const float screenWidth = state.targetWidth;
@@ -313,7 +342,8 @@ bool FrameScheduler::updateLaunchMorph(
     entry.launchMorphActive = true;
 
     const bool moving = positionX.active || positionY.active ||
-                        expandSample.active || perspectiveSample.active;
+                        expandSample.active || perspectiveSample.active ||
+                        homeEffectSample.active;
     if (entry.transitionPhase == TransitionPhase::Interactive) {
         return moving;
     }

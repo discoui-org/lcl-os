@@ -3415,6 +3415,7 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
     for (auto& filter : scaledFilters) {
         if (filter.type == protocol::FilterType::Blur) {
             filter.value *= m_deviceScale;
+            filter.params[0] *= m_deviceScale;
         } else if (filter.type == protocol::FilterType::Glass) {
             filter.params[0] *= m_deviceScale;
         }
@@ -3470,11 +3471,13 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
         const int captureH = geometry.capture.height;
 
         int logScale = 1;
+        float filteredOutputMix = 1.0f;
         if (gpuBlurAvailable) {
             for (const auto& op : filters) {
-                if (op.type == protocol::FilterType::Blur && op.value > 8.0f) {
-                    logScale = std::clamp(1 + static_cast<int>(std::floor(std::log2(op.value / 8.0f))), 1, 4);
-                }
+                if (op.type != protocol::FilterType::Blur) continue;
+                const auto plan = computeBackdropBlurPlan(op.value, op.params[0]);
+                logScale = std::max(logScale, plan.downsampleDivisor);
+                filteredOutputMix = std::min(filteredOutputMix, plan.filteredMix);
             }
         }
 
@@ -3596,7 +3599,9 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
             pendingColorMatrix.reset();
         };
 
-        auto runBlurPass = [&](float blurValue) {
+        auto runBlurPass = [&](const protocol::FilterOp& blur) {
+            const auto plan = computeBackdropBlurPlan(blur.value, blur.params[0]);
+            const float blurValue = plan.gaussianValuePx;
             if (blurValue <= 0.05f) {
                 return;
             }
@@ -3740,7 +3745,7 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
                     // renderers (VirGL/virtio), not on that emulated GL path.
                     if (gpuBlurAvailable) {
                         renderColorPass();
-                        runBlurPass(op.value);
+                        runBlurPass(op);
                     }
                     break;
                 }
@@ -3783,7 +3788,7 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
                       static_cast<float>(effectH),
                       cornerRadius,
                       clampedRoundness,
-                      opacity,
+                      opacity * filteredOutputMix,
                       false,
                       outputUScale,
                       outputVScale,

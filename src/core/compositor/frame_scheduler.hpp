@@ -31,6 +31,7 @@ private:
         lcl::motion::ChannelId positionY{0};
         lcl::motion::ChannelId expand{0};
         lcl::motion::ChannelId perspective{0};
+        lcl::motion::ChannelId homeEffect{0};
         SurfaceRegistry::SurfaceEntry::TransitionPhase phase{
             SurfaceRegistry::SurfaceEntry::TransitionPhase::None};
         float targetX{0.0f};

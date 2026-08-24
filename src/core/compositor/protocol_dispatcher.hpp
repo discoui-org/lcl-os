@@ -40,6 +40,10 @@ public:
     bool publishLaunchIconVisibility(const SurfaceRegistry::SurfaceEntry& entry,
                                      bool visible) const;
 
+    /** Synchronize launcher background presentation with an app icon morph. */
+    bool publishLaunchHomeTransition(
+        const SurfaceRegistry::SurfaceEntry& entry, float progress) const;
+
 private:
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     using SurfaceEffectRegion = SurfaceRegistry::SurfaceEffectRegion;

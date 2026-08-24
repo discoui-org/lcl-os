@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "LCL Mobile Default",
+  "shell": "mobile",
+  "display": {
+    "width": 393,
+    "height": 852,
+    "scale": 1.0,
+    "naturalOrientation": "portrait",
+    "defaultRotation": 0,
+    "safeArea": {
+      "top": 0,
+      "right": 0,
+      "bottom": 0,
+      "left": 0
+    },
+    "corners": {
+      "topLeft": { "radiusX": 30, "radiusY": 30, "roundness": 2.0 },
+      "topRight": { "radiusX": 30, "radiusY": 30, "roundness": 2.0 },
+      "bottomLeft": { "radiusX": 30, "radiusY": 30, "roundness": 2.0 },
+      "bottomRight": { "radiusX": 30, "radiusY": 30, "roundness": 2.0 }
+    },
+    "cutouts": []
+  }
+}

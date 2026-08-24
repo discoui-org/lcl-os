@@ -1655,6 +1655,7 @@ TEST(FrameSchedulerTest, LaunchOriginSpringsBetweenIconAndFullscreenSurface) {
     EXPECT_LT(surface.launchMorphWidth, surface.configuredWidth);
     EXPECT_LT(surface.launchMorphHeight, surface.configuredHeight);
     EXPECT_GE(surface.transitionOpacity, 0.0f);
+    EXPECT_GT(surface.launchHomeTransitionProgress, 0.0f);
 
     for (int frame = 2; frame <= 180; ++frame) {
         scheduler.advanceTransitions(
@@ -1666,6 +1667,7 @@ TEST(FrameSchedulerTest, LaunchOriginSpringsBetweenIconAndFullscreenSurface) {
     EXPECT_FLOAT_EQ(surface.launchMorphCornerRadius, 24.0f);
     EXPECT_FLOAT_EQ(surface.launchMorphCornerRoundness, 2.5f);
     EXPECT_FLOAT_EQ(surface.transitionOpacity, 1.0f);
+    EXPECT_FLOAT_EQ(surface.launchHomeTransitionProgress, 1.0f);
 
     surface.transitionPhase =
         SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
@@ -1679,6 +1681,7 @@ TEST(FrameSchedulerTest, LaunchOriginSpringsBetweenIconAndFullscreenSurface) {
     EXPECT_TRUE(surface.launchMorphActive);
     EXPECT_EQ(surface.transitionPhase,
               SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+    EXPECT_FLOAT_EQ(surface.launchHomeTransitionProgress, 0.0f);
 }
 
 TEST(FrameSchedulerTest, LaunchMorphCanReverseBeforeOpeningSettles) {
@@ -1736,6 +1739,112 @@ TEST(FrameSchedulerTest, LaunchMorphCanReverseBeforeOpeningSettles) {
     EXPECT_FALSE(surface.launchGestureFlingPending);
     EXPECT_EQ(surface.transitionPhase,
               SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+}
+
+TEST(FrameSchedulerTest, InteractiveGestureQuartersOnlyHomeEffectProgress) {
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::time_point{};
+    FrameScheduler scheduler;
+    scheduler.reset(start);
+
+    SurfaceRegistry registry;
+    auto configureInteractiveSurface = [](auto& surface, uint64_t token) {
+        surface.launchToken = token;
+        surface.transitionPhase =
+            SurfaceRegistry::SurfaceEntry::TransitionPhase::Interactive;
+        surface.hasLaunchOrigin = true;
+        surface.launchOriginX = 24.0f;
+        surface.launchOriginY = 40.0f;
+        surface.launchOriginWidth = 60.0f;
+        surface.launchOriginHeight = 60.0f;
+        surface.launchOriginCornerRadius =
+            lcl::theme::mobile::kAppIconCornerRadius;
+        surface.configuredWidth = 390.0f;
+        surface.configuredHeight = 844.0f;
+        surface.launchGestureActive = true;
+        surface.launchGestureStartX = 195.0f;
+        surface.launchGestureStartY = 840.0f;
+        surface.launchGestureX = 195.0f;
+        surface.launchGestureY = 700.0f;
+    };
+
+    auto& slowFling = registry[44];
+    auto& fastFling = registry[45];
+    configureInteractiveSurface(slowFling, 44);
+    configureInteractiveSurface(fastFling, 45);
+    for (int frame = 1; frame <= 180; ++frame) {
+        scheduler.advanceTransitions(
+            registry, start + std::chrono::milliseconds(frame * 16));
+    }
+
+    constexpr float deltaY = 140.0f;
+    const float thumbnailProgress = 1.0f -
+        deltaY / (slowFling.configuredHeight * 2.0f / 3.0f);
+    const float expectedThumbnailWidth = slowFling.launchOriginWidth *
+        (1.0f +
+         (slowFling.configuredWidth - slowFling.launchOriginWidth) /
+             slowFling.launchOriginWidth * thumbnailProgress);
+    const float expectedHomeProgress =
+        1.0f - (1.0f - thumbnailProgress) * 0.25f;
+    EXPECT_NEAR(slowFling.launchMorphWidth, expectedThumbnailWidth, 0.05f);
+    EXPECT_NEAR(slowFling.launchHomeTransitionProgress,
+                expectedHomeProgress, 0.001f);
+
+    slowFling.transitionPhase =
+        SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
+    slowFling.launchGestureActive = false;
+    slowFling.launchGestureVelocityY = -600.0f;
+    slowFling.launchGestureFlingPending = true;
+    fastFling.transitionPhase =
+        SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
+    fastFling.launchGestureActive = false;
+    fastFling.launchGestureVelocityY = -6000.0f;
+    fastFling.launchGestureFlingPending = true;
+
+    scheduler.advanceTransitions(
+        registry, start + std::chrono::milliseconds(181 * 16));
+
+    EXPECT_NEAR(slowFling.launchHomeTransitionProgress,
+                fastFling.launchHomeTransitionProgress, 0.001f);
+    EXPECT_NE(slowFling.launchMorphWidth, fastFling.launchMorphWidth);
+}
+
+TEST(FrameSchedulerTest, HomeEffectOpensFasterThanItCloses) {
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::time_point{};
+    FrameScheduler scheduler;
+    scheduler.reset(start);
+
+    SurfaceRegistry registry;
+    auto configureSurface = [](auto& surface, uint64_t token) {
+        surface.launchToken = token;
+        surface.hasLaunchOrigin = true;
+        surface.launchOriginX = 24.0f;
+        surface.launchOriginY = 40.0f;
+        surface.launchOriginWidth = 60.0f;
+        surface.launchOriginHeight = 60.0f;
+        surface.launchOriginCornerRadius =
+            lcl::theme::mobile::kAppIconCornerRadius;
+        surface.configuredWidth = 390.0f;
+        surface.configuredHeight = 844.0f;
+    };
+
+    auto& opening = registry[46];
+    auto& closing = registry[47];
+    configureSurface(opening, 46);
+    configureSurface(closing, 47);
+    opening.transitionPhase =
+        SurfaceRegistry::SurfaceEntry::TransitionPhase::Entering;
+    closing.transitionPhase =
+        SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
+
+    scheduler.advanceTransitions(
+        registry, start + std::chrono::milliseconds(16));
+
+    const float openingDistance = opening.launchHomeTransitionProgress;
+    const float closingDistance =
+        1.0f - closing.launchHomeTransitionProgress;
+    EXPECT_GT(openingDistance, closingDistance);
 }
 
 TEST(FrameSchedulerTest, LaunchMorphHasDeterministicExitDeadline) {

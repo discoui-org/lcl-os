@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 20;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 21;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint64_t LCL_CAPABILITY_AHB_V1 = 1ull << 0;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
@@ -65,7 +65,8 @@ enum class LCLOpcode : uint32_t {
     ResolveLaunchPlaceholder = 34,
     CancelLaunchPlaceholder = 35,
     LaunchIconVisibility = 36,
-    LaunchIconVisibilityAck = 37
+    LaunchIconVisibilityAck = 37,
+    LaunchHomeTransition = 38
 };
 
 enum class LCLNativeBufferTransport : uint32_t {
@@ -193,6 +194,10 @@ struct FilterOp {
     // Tint mapping:
     // value = alpha in [0, 1]
     // params[0..2] = red, green, blue in [0, 255]
+    // Blur mapping:
+    // params[0] = logical transitional floor. Below this radius the renderer
+    // holds the Gaussian kernel at the floor and blends the filtered mip with
+    // the sharp scene. Zero keeps the ordinary variable-radius blur path.
     float params[3]{0.0f, 0.0f, 0.0f};
 };
 
@@ -284,6 +289,15 @@ struct LCLMsgLaunchIconVisibility {
 struct LCLMsgLaunchIconVisibilityAck {
     uint64_t launchToken{0};
     char appId[64]{0};
+};
+
+/**
+ * Compositor-owned morph progress for the trusted HomeScreen background.
+ * Zero is the launcher/icon silhouette; one is fullscreen app coverage.
+ */
+struct LCLMsgLaunchHomeTransition {
+    uint64_t launchToken{0};
+    float progress{0.0f};
 };
 
 /**

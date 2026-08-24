@@ -3592,6 +3592,30 @@ TEST(LclUiTest, GlassRefractionPassScalePreservesLogicalDisplacementAcrossDpr) {
     EXPECT_FLOAT_EQ(downsampled.y, 1.0f);
 }
 
+TEST(LclUiTest, TransitionalBlurHoldsFirstMipAndBlendsBelowFloor) {
+    const auto full = lcl::render::computeBackdropBlurPlan(50.0f, 15.0f);
+    EXPECT_FLOAT_EQ(full.gaussianValuePx, 50.0f);
+    EXPECT_FLOAT_EQ(full.filteredMix, 1.0f);
+    EXPECT_EQ(full.downsampleDivisor, 3);
+
+    const auto halfway = lcl::render::computeBackdropBlurPlan(7.5f, 15.0f);
+    EXPECT_FLOAT_EQ(halfway.gaussianValuePx, 15.0f);
+    EXPECT_FLOAT_EQ(halfway.filteredMix, 0.5f);
+    EXPECT_EQ(halfway.downsampleDivisor, 2);
+
+    const auto nearSharp = lcl::render::computeBackdropBlurPlan(1.0f, 15.0f);
+    EXPECT_FLOAT_EQ(nearSharp.gaussianValuePx, 15.0f);
+    EXPECT_NEAR(nearSharp.filteredMix, 1.0f / 15.0f, 0.0001f);
+    EXPECT_EQ(nearSharp.downsampleDivisor, 2);
+}
+
+TEST(LclUiTest, OrdinaryBlurKeepsVariableRadiusPath) {
+    const auto blur = lcl::render::computeBackdropBlurPlan(7.5f);
+    EXPECT_FLOAT_EQ(blur.gaussianValuePx, 7.5f);
+    EXPECT_FLOAT_EQ(blur.filteredMix, 1.0f);
+    EXPECT_EQ(blur.downsampleDivisor, 1);
+}
+
 TEST(LclUiTest, WindowAppKeepsEffectControlsInLogicalUnits) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);

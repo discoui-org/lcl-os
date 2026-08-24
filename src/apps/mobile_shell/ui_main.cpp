@@ -11,8 +11,10 @@
 
 #include "core/ipc/lcl_protocol.hpp"
 #include "core/session/session_client.hpp"
+#include "lcl-ui/core/motion.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
+#include "lcl-ui/widgets/filter_group.hpp"
 #include "lcl-ui/widgets/image.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text.hpp"
@@ -33,7 +35,28 @@ constexpr float kIconRoundness =
     lcl::theme::mobile::kAppIconCornerRoundness;
 constexpr float kColumnGap = 18.0f;
 constexpr float kRowGap = 22.0f;
+constexpr float kLauncherCoveredScale = 0.94f;
+constexpr float kWallpaperCoveredScale = 1.06f;
+constexpr float kLauncherBackdropBlur = 50.0f;
+constexpr float kLauncherTransitionBlurFloor = 5.0f;
+constexpr float kLauncherCoveredSaturation = 1.6f;
+constexpr float kLauncherCoveredBrightness = 0.82f;
+constexpr float kWallpaperOpeningStiffness = 70.0f;
+constexpr float kWallpaperClosingStiffness = 30.0f;
 constexpr uint64_t kLaunchTokenMask = (uint64_t{1} << 63) - 1;
+constexpr uint32_t kHomeSurfaceId = 1;
+constexpr uint32_t kWallpaperSurfaceId = 2;
+
+lcl::motion::Motion wallpaperScaleMotion(bool appOpening) {
+    const float stiffness = appOpening
+        ? kWallpaperOpeningStiffness
+        : kWallpaperClosingStiffness;
+    auto motion = lcl::motion::Motion::spring(
+        1.0f, stiffness, 2.0f * std::sqrt(stiffness));
+    motion.springParams.settlePosEpsilon = 0.0001f;
+    motion.springParams.settleVelEpsilon = 0.001f;
+    return motion;
+}
 
 struct LauncherIcon {
     std::unique_ptr<lcl::ui::Widget> widget;
@@ -42,7 +65,31 @@ struct LauncherIcon {
 
 class LauncherState {
 public:
-    void beginRootRebuild() { m_iconViews.clear(); }
+    void beginRootRebuild() {
+        m_iconViews.clear();
+        m_homeFilter = nullptr;
+        m_iconParent = nullptr;
+    }
+
+    void bindWallpaper(lcl::ui::Widget& wallpaper) {
+        m_wallpaper = &wallpaper;
+        applyHomeTransition(false, false);
+    }
+
+    void bindHomeLayers(lcl::ui::FilterGroup& homeFilter,
+                        lcl::ui::Widget& iconParent) {
+        m_homeFilter = &homeFilter;
+        m_iconParent = &iconParent;
+        applyHomeTransition(false, false);
+    }
+
+    void setHomeTransition(uint64_t launchToken, float progress) {
+        if (launchToken == 0) return;
+        const float nextProgress = std::clamp(progress, 0.0f, 1.0f);
+        const bool appOpening = nextProgress >= m_homeTransitionProgress;
+        m_homeTransitionProgress = nextProgress;
+        applyHomeTransition(true, appOpening);
+    }
 
     void bindIcon(const std::string& appId, lcl::ui::Widget& icon) {
         m_iconViews[appId] = &icon;
@@ -71,8 +118,58 @@ public:
     }
 
 private:
+    void applyHomeTransition(bool animateWallpaper, bool appOpening) {
+        const float progress = m_homeTransitionProgress;
+        if (m_wallpaper) {
+            const float scale =
+                1.0f + (kWallpaperCoveredScale - 1.0f) * progress;
+            auto* coordinator = m_wallpaper->getMotionCoordinator();
+            if (animateWallpaper && coordinator) {
+                coordinator->beginTransaction(
+                    wallpaperScaleMotion(appOpening), {});
+                m_wallpaper->setScale(scale);
+                coordinator->endTransaction();
+            } else {
+                m_wallpaper->setScale(scale);
+            }
+        }
+        if (m_iconParent) {
+            m_iconParent->setScale(
+                1.0f + (kLauncherCoveredScale - 1.0f) * progress);
+        }
+        if (m_homeFilter) {
+            const float blur = kLauncherBackdropBlur * progress;
+            if (blur > 0.0001f) {
+                lcl::protocol::FilterOp blurFilter{};
+                blurFilter.type = lcl::protocol::FilterType::Blur;
+                blurFilter.value = blur;
+                blurFilter.params[0] = kLauncherTransitionBlurFloor;
+                lcl::protocol::FilterOp saturationFilter{};
+                saturationFilter.type =
+                    lcl::protocol::FilterType::Saturation;
+                saturationFilter.value = 1.0f +
+                    (kLauncherCoveredSaturation - 1.0f) * progress;
+                lcl::protocol::FilterOp brightnessFilter{};
+                brightnessFilter.type =
+                    lcl::protocol::FilterType::Brightness;
+                brightnessFilter.value = 1.0f +
+                    (kLauncherCoveredBrightness - 1.0f) * progress;
+                m_homeFilter->setVisible(true);
+                m_homeFilter->setFilters(
+                    {blurFilter, saturationFilter, brightnessFilter});
+            } else {
+                m_homeFilter->clearFilters();
+                m_homeFilter->setVisible(false);
+            }
+        }
+    }
+
     std::unordered_map<std::string, lcl::ui::Widget*> m_iconViews;
     std::unordered_map<std::string, uint64_t> m_activeLaunchTokens;
+    lcl::ui::Widget* m_wallpaper{nullptr};
+    lcl::ui::FilterGroup* m_homeFilter{nullptr};
+    lcl::ui::Widget* m_iconParent{nullptr};
+    float m_homeTransitionProgress{0.0f};
 };
 
 std::vector<uint32_t> makeContainedIconSnapshot(
@@ -248,8 +345,20 @@ std::unique_ptr<lcl::ui::Container> makeLauncherTile(
     return tile;
 }
 
-std::unique_ptr<lcl::ui::Container> makeHomeRoot(
+std::unique_ptr<lcl::ui::Widget> makeWallpaperRoot(
     const std::string& wallpaperPath,
+    uint32_t width,
+    uint32_t height,
+    LauncherState& launcherState) {
+    auto wallpaper = std::make_unique<lcl::ui::Image>(wallpaperPath);
+    wallpaper->setFit(lcl::ui::ImageFit::Cover);
+    wallpaper->getYogaNode().setWidth(static_cast<float>(width));
+    wallpaper->getYogaNode().setHeight(static_cast<float>(height));
+    launcherState.bindWallpaper(*wallpaper);
+    return wallpaper;
+}
+
+std::unique_ptr<lcl::ui::Container> makeHomeRoot(
     uint32_t width,
     uint32_t height,
     const std::vector<lcl::session::CatalogEntry>& apps,
@@ -261,11 +370,17 @@ std::unique_ptr<lcl::ui::Container> makeHomeRoot(
     root->getYogaNode().setWidth(static_cast<float>(width));
     root->getYogaNode().setHeight(static_cast<float>(height));
 
-    auto wallpaper = std::make_unique<lcl::ui::Image>(wallpaperPath);
-    wallpaper->setFit(lcl::ui::ImageFit::Cover);
-    absolute(*wallpaper, 0.0f, 0.0f,
+    // FilterGroup emits a foreground lcl-ui effect. The compositor applies it
+    // after drawing this HomeScreen buffer, so both the wallpaper below and
+    // launcher icons inside the buffer are blurred together.
+    auto homeFilter = std::make_unique<lcl::ui::FilterGroup>();
+    auto* homeFilterView = homeFilter.get();
+    homeFilter->setInteractionEnabled(false);
+    homeFilter->setOpacity(1.0f);
+    homeFilter->setVisible(false);
+    absolute(*homeFilter, 0.0f, 0.0f,
              static_cast<float>(width), static_cast<float>(height));
-    root->addChild(std::move(wallpaper));
+    root->addChild(std::move(homeFilter));
 
     auto grid = std::make_unique<lcl::ui::Container>();
     grid->getYogaNode().setDirection(YGFlexDirectionRow);
@@ -282,10 +397,12 @@ std::unique_ptr<lcl::ui::Container> makeHomeRoot(
     }
 
     auto launcher = std::make_unique<lcl::ui::ScrollView>();
+    auto* launcherView = launcher.get();
     absolute(*launcher, 0.0f, 0.0f,
              static_cast<float>(width), static_cast<float>(height));
     launcher->setContent(std::move(grid));
     root->addChild(std::move(launcher));
+    launcherState.bindHomeLayers(*homeFilterView, *launcherView);
     return root;
 }
 
@@ -309,39 +426,69 @@ int main() {
                   << catalogError << "\n";
     }
 
+    LauncherState launcherState;
+    auto wallpaper = std::make_unique<lcl::ui::WindowApp>(
+        lcl::render::makeRasterCanvas(), width, height,
+        "LCL Mobile Wallpaper");
+    auto* wallpaperApp = wallpaper.get();
+    // Surface IDs are process-scoped even when each WindowApp owns a separate
+    // compositor connection.
+    wallpaper->setSurfaceId(kWallpaperSurfaceId);
+    wallpaper->setSystemSurfaceKind(
+        lcl::protocol::LCLSystemSurfaceKind::Wallpaper);
+    wallpaper->setAppId("org.lcl.mobile-shell");
+    wallpaper->setInputEnabled(false);
+    wallpaper->setInitialBounds(0, 0, width, height);
+    wallpaper->setRootWidget(
+        makeWallpaperRoot(wallpaperPath, width, height, launcherState));
+    wallpaper->setOnResize([&, wallpaperApp](
+            uint32_t resizedWidth, uint32_t resizedHeight) {
+        wallpaperApp->setRootWidget(makeWallpaperRoot(
+            wallpaperPath, resizedWidth, resizedHeight, launcherState));
+    });
+    wallpaper->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
+
     lcl::ui::WindowApp home(lcl::render::makeRasterCanvas(), width, height,
                             "LCL Mobile Home");
-    LauncherState launcherState;
-    home.setSurfaceId(1);
+    home.setSurfaceId(kHomeSurfaceId);
     home.setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::HomeScreen);
     home.setAppId("org.lcl.mobile-shell");
     home.setInputEnabled(true);
     home.setInitialBounds(0, 0, width, height);
     home.setRootWidget(
-        makeHomeRoot(wallpaperPath, width, height, apps, session, home,
-                     launcherState));
+        makeHomeRoot(width, height, apps, session, home, launcherState));
     home.setOnIpcMessage([&launcherState](
             const lcl::protocol::LCLHeader& header,
             const std::vector<uint8_t>& payload) {
-        if (header.opcode !=
-                lcl::protocol::LCLOpcode::LaunchIconVisibility ||
-            payload.size() !=
-                sizeof(lcl::protocol::LCLMsgLaunchIconVisibility)) return;
-        const auto* message = reinterpret_cast<const
-            lcl::protocol::LCLMsgLaunchIconVisibility*>(payload.data());
-        if (message->visible != 0) {
-            launcherState.reveal(message->appId, message->launchToken);
+        if (header.opcode ==
+                lcl::protocol::LCLOpcode::LaunchIconVisibility &&
+            payload.size() ==
+                sizeof(lcl::protocol::LCLMsgLaunchIconVisibility)) {
+            const auto* message = reinterpret_cast<const
+                lcl::protocol::LCLMsgLaunchIconVisibility*>(payload.data());
+            if (message->visible != 0) {
+                launcherState.reveal(message->appId, message->launchToken);
+            }
+        } else if (header.opcode ==
+                       lcl::protocol::LCLOpcode::LaunchHomeTransition &&
+                   payload.size() == sizeof(
+                       lcl::protocol::LCLMsgLaunchHomeTransition)) {
+            const auto* message = reinterpret_cast<const
+                lcl::protocol::LCLMsgLaunchHomeTransition*>(payload.data());
+            launcherState.setHomeTransition(
+                message->launchToken, message->progress);
         }
     });
     home.setOnResize([&](uint32_t resizedWidth, uint32_t resizedHeight) {
         width = resizedWidth;
         height = resizedHeight;
         home.setRootWidget(
-            makeHomeRoot(wallpaperPath, width, height, apps, session, home,
-                         launcherState));
+            makeHomeRoot(width, height, apps, session, home, launcherState));
     });
     home.setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 
+    if (!wallpaper->connectCompositor()) return 1;
+    home.hostSurface(std::move(wallpaper));
     if (!home.connectCompositor()) return 1;
     home.runEventLoop();
     return 0;
