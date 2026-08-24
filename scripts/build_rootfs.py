@@ -45,7 +45,21 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 BUILD_DIR = PROJECT_ROOT / "build"
 ROOTFS_BASE_DIR = BUILD_DIR / "rootfs"
+QEMU_CACHE_DIR = BUILD_DIR / "qemu-cache"
 DOCKERFILE = SCRIPT_DIR / "Dockerfile.qemu"
+ROOTFS_FINGERPRINT_VERSION = 1
+
+CANONICAL_TARGETS = (
+    "lcl-desktop-shell",
+    "lcl-mobile-shell",
+    "lcl-shell-launcher",
+    "lcl-terminal",
+    "lcl-sessiond",
+    "lcl-open",
+    "lcl-core",
+    "lcl-js",
+    "lcl_ui_demo",
+)
 
 ARCH_META: dict[str, dict] = {
     "x86_64": {
@@ -158,7 +172,9 @@ def is_binary_matching_arch(binary_path: Path | None, arch: str) -> bool:
 
 
 def canonical_build_dir(arch: str) -> Path:
-    return BUILD_DIR / "rootfs-build" / normalize_arch(arch)
+    # A dedicated QEMU tree permits Ninja without deleting a developer-owned
+    # Unix Makefiles cache and keeps test builds out of the packaged binaries.
+    return BUILD_DIR / "qemu-build" / normalize_arch(arch)
 
 
 def find_built_binary(name: str, arch: str | None = None) -> Path | None:
@@ -182,36 +198,34 @@ def find_built_binary(name: str, arch: str | None = None) -> Path | None:
 def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
     """Ensures that required canonical LCL application and tool binaries exist for the target architecture."""
     norm_arch = normalize_arch(arch)
-    targets = [
-        "lcl-desktop-shell",
-        "lcl-mobile-shell",
-        "lcl-shell-launcher",
-        "lcl-terminal",
-        "lcl-sessiond",
-        "lcl-open",
-        "lcl-core",
-        "lcl-js",
-        "lcl_ui_demo",
-    ]
 
     # Existence alone is not freshness. Always let CMake's dependency graph
     # update these targets so a protocol/header change cannot be packaged with
     # stale canonical userspace binaries.
     target_build_dir = canonical_build_dir(norm_arch)
     if not (target_build_dir / "CMakeCache.txt").is_file():
-        subprocess.run(
-            ["cmake", "-B", str(target_build_dir), "-S", str(PROJECT_ROOT)],
-            check=True,
-        )
+        configure = [
+            "cmake", "-B", str(target_build_dir), "-S", str(PROJECT_ROOT),
+            "-DBUILD_TESTS=OFF",
+        ]
+        if shutil.which("ninja"):
+            configure.extend(["-G", "Ninja"])
+        if shutil.which("ccache"):
+            configure.extend([
+                "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+            ])
+        subprocess.run(configure, check=True)
     log(f"Updating canonical targets for {norm_arch}...")
     subprocess.run(
-        ["cmake", "--build", str(target_build_dir), "--target"] +
-        targets + ["-j", str(os.cpu_count() or 4)],
+        ["cmake", "--build", str(target_build_dir),
+         "--parallel", str(os.cpu_count() or 4), "--target"] +
+        list(CANONICAL_TARGETS),
         check=True,
     )
 
     binaries: dict[str, Path] = {}
-    for name in targets:
+    for name in CANONICAL_TARGETS:
         p = find_built_binary(name, norm_arch)
         if not p or not p.is_file():
             raise RuntimeError(f"Required canonical binary '{name}' was not found or is not {norm_arch} after build.")
@@ -220,7 +234,74 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
     return binaries
 
 
-def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str, str]:
+def _hash_input_path(digest, path: Path) -> None:
+    """Add one project-controlled rootfs input to a stable content digest."""
+    relative = path.relative_to(PROJECT_ROOT).as_posix()
+    digest.update(relative.encode("utf-8"))
+    digest.update(b"\0")
+    if path.is_symlink():
+        digest.update(b"link\0")
+        digest.update(os.readlink(path).encode("utf-8"))
+        digest.update(b"\0")
+        return
+    digest.update(b"file\0")
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    digest.update(b"\0")
+
+
+def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
+    """Hash every project-controlled input embedded in the canonical rootfs."""
+    norm_arch = normalize_arch(arch)
+    digest = hashlib.sha256()
+    digest.update(f"lcl-rootfs-v{ROOTFS_FINGERPRINT_VERSION}\0{norm_arch}\0".encode("utf-8"))
+    digest.update(os.environ.get("LCL_QEMU_BUILDER_IMAGE_ID", "unmanaged-host").encode("utf-8"))
+    digest.update(b"\0")
+
+    source_inputs = (
+        Path(__file__).resolve(),
+        PROJECT_ROOT / "assets" / "fonts",
+        PROJECT_ROOT / "wallpaper.jpg",
+        PROJECT_ROOT / "wallpaper.png",
+        # mobile.json is intentionally absent: QEMU transports that profile at
+        # launch time through fw_cfg, so editing it never invalidates rootfs.
+        PROJECT_ROOT / "config" / "gestalt" / "default.json",
+        PROJECT_ROOT / "src" / "apps" / "terminal" / "Manifest.json",
+        PROJECT_ROOT / "src" / "apps" / "terminal" / "Resources" / "Icon.png",
+        PROJECT_ROOT / "apps" / "ui_demo" / "Manifest.json",
+        PROJECT_ROOT / "apps" / "ui_demo" / "Resources" / "Icon.png",
+        PROJECT_ROOT / "apps" / "ui_demo_js" / "Manifest.json",
+        PROJECT_ROOT / "apps" / "ui_demo_js" / "Resources" / "Icon.png",
+        PROJECT_ROOT / "apps" / "ui_demo_js" / "main.js",
+    )
+    for source_input in source_inputs:
+        if source_input.is_dir():
+            for child in sorted(source_input.rglob("*")):
+                if child.is_file() or child.is_symlink():
+                    _hash_input_path(digest, child)
+        elif source_input.is_file() or source_input.is_symlink():
+            _hash_input_path(digest, source_input)
+        else:
+            missing = source_input.relative_to(PROJECT_ROOT).as_posix()
+            digest.update(f"missing:{missing}\0".encode("utf-8"))
+
+    for name in sorted(binaries):
+        digest.update(f"binary:{name}\0".encode("utf-8"))
+        digest.update(get_sha256(binaries[name]).encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def rootfs_fingerprint_path(arch: str) -> Path:
+    return QEMU_CACHE_DIR / f"rootfs-{normalize_arch(arch)}.sha256"
+
+
+def stage_canonical_rootfs(
+    staging_dir: Path,
+    arch: str = "x86_64",
+    binaries: dict[str, Path] | None = None,
+) -> dict[str, str]:
     """Populates the deterministic canonical userspace filesystem layout."""
     norm_arch = normalize_arch(arch)
     meta = ARCH_META[norm_arch]
@@ -331,7 +412,7 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
             lib64_ld.symlink_to(f"../System/Library/Libraries/{loader_name}")
 
     # 4. Canonical LCL Core Daemons & Tools
-    binaries = ensure_binaries(norm_arch)
+    binaries = binaries or ensure_binaries(norm_arch)
     sha_map: dict[str, str] = {}
     core_daemons = {
         "lcl-desktop-shell": dest_system_core / "lcl-desktop-shell",
@@ -872,7 +953,11 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
     log(f"✓ All required canonical userspace files, {loader_name}, manifests, and /init entrypoint verified successfully.")
 
 
-def run_inside_docker(arch: str = "aarch64", image_size_mb: int = 1024) -> tuple[Path, Path, dict[str, str]]:
+def run_inside_docker(
+    arch: str = "aarch64",
+    image_size_mb: int = 1024,
+    force: bool = False,
+) -> tuple[Path, Path, dict[str, str]]:
     """Dispatches rootfs generation inside multi-arch Docker container."""
     norm_arch = normalize_arch(arch)
     plat = ARCH_META[norm_arch]["docker_platform"]
@@ -888,9 +973,13 @@ def run_inside_docker(arch: str = "aarch64", image_size_mb: int = 1024) -> tuple
             "docker", "build", "--platform", plat, "-t", image_tag, "-f", str(DOCKERFILE), str(SCRIPT_DIR)
         ], check=True)
 
-    env_args: list[str] = []
+    image_id = subprocess.check_output(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", image_tag],
+        text=True,
+    ).strip()
+    env_args: list[str] = ["-e", f"LCL_QEMU_BUILDER_IMAGE_ID={image_id}"]
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
-        env_args = ["-e", f"HOST_UID={os.getuid()}", "-e", f"HOST_GID={os.getgid()}"]
+        env_args.extend(["-e", f"HOST_UID={os.getuid()}", "-e", f"HOST_GID={os.getgid()}"])
 
     cmd = [
         "docker", "run", "--rm",
@@ -904,6 +993,8 @@ def run_inside_docker(arch: str = "aarch64", image_size_mb: int = 1024) -> tuple
         "--size", str(image_size_mb),
         "--inside-docker",
     ]
+    if force:
+        cmd.append("--force")
     subprocess.run(cmd, check=True)
 
     staging_dir = ROOTFS_BASE_DIR / norm_arch
@@ -924,20 +1015,38 @@ def fix_permissions() -> None:
             pass
 
 
-def build_rootfs_ext4(arch: str = "x86_64", image_size_mb: int = 1024, inside_docker: bool = False) -> tuple[Path, Path, dict[str, str]]:
+def build_rootfs_ext4(
+    arch: str = "x86_64",
+    image_size_mb: int = 1024,
+    inside_docker: bool = False,
+    force: bool = False,
+) -> tuple[Path, Path, dict[str, str]]:
     """Builds the canonical ext4 rootfs image from the staging tree."""
     norm_arch = normalize_arch(arch)
     host_arch = normalize_arch(platform.machine())
 
     # If cross-building on host machine (e.g. host is x86_64, target is aarch64) and not already inside docker, delegate to Docker
     if not inside_docker and host_arch != norm_arch:
-        return run_inside_docker(norm_arch, image_size_mb)
+        return run_inside_docker(norm_arch, image_size_mb, force=force)
 
     ROOTFS_BASE_DIR.mkdir(parents=True, exist_ok=True)
     staging_dir = ROOTFS_BASE_DIR / norm_arch
     out_ext4 = ROOTFS_BASE_DIR / f"lcl-rootfs-{norm_arch}.ext4"
+    target_build_dir = canonical_build_dir(norm_arch)
+    if force and target_build_dir.exists():
+        log(f"Removing canonical QEMU build tree for forced rebuild: {target_build_dir}")
+        shutil.rmtree(target_build_dir)
+    binaries = ensure_binaries(norm_arch)
+    fingerprint = rootfs_input_fingerprint(norm_arch, binaries)
+    fingerprint_path = rootfs_fingerprint_path(norm_arch)
+    cache_allowed = inside_docker and bool(os.environ.get("LCL_QEMU_BUILDER_IMAGE_ID"))
 
-    sha_map = stage_canonical_rootfs(staging_dir, norm_arch)
+    if cache_allowed and not force and out_ext4.is_file() and fingerprint_path.is_file():
+        if fingerprint_path.read_text(encoding="utf-8").strip() == fingerprint:
+            log(f"Reusing current {out_ext4.name}; packaged inputs are unchanged.")
+            return staging_dir, out_ext4, {}
+
+    sha_map = stage_canonical_rootfs(staging_dir, norm_arch, binaries=binaries)
 
     log(f"Creating ext4 rootfs image at {out_ext4} ({image_size_mb} MB)...")
     if out_ext4.exists():
@@ -965,6 +1074,12 @@ def build_rootfs_ext4(arch: str = "x86_64", image_size_mb: int = 1024, inside_do
     # Verify content inside ext4 image using debugfs
     verify_rootfs_image(out_ext4, norm_arch)
 
+    if cache_allowed:
+        fingerprint_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_fingerprint = fingerprint_path.with_suffix(".sha256.tmp")
+        temporary_fingerprint.write_text(fingerprint + "\n", encoding="utf-8")
+        temporary_fingerprint.replace(fingerprint_path)
+
     if inside_docker:
         fix_permissions()
 
@@ -976,10 +1091,16 @@ def main() -> None:
     parser.add_argument("--arch", default="x86_64", help="Target architecture (x86_64 or aarch64)")
     parser.add_argument("--size", type=int, default=1024, help="Filesystem size in MB (default: 1024)")
     parser.add_argument("--inside-docker", action="store_true", help="Internal flag when running inside container")
+    parser.add_argument("--force", action="store_true", help="Ignore cached input fingerprints and rebuild the rootfs")
     args = parser.parse_args()
 
     norm_arch = normalize_arch(args.arch)
-    staging_dir, out_ext4, sha_map = build_rootfs_ext4(arch=norm_arch, image_size_mb=args.size, inside_docker=args.inside_docker)
+    staging_dir, out_ext4, sha_map = build_rootfs_ext4(
+        arch=norm_arch,
+        image_size_mb=args.size,
+        inside_docker=args.inside_docker,
+        force=args.force,
+    )
     print("\n--- Summary ---")
     print(f"Target architecture: {norm_arch}")
     print(f"Staging tree: {staging_dir}")

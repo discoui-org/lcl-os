@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -19,16 +20,6 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent
 BUILD_DIR = ROOT_DIR / "build"
-BINARY = BUILD_DIR / "lcl-core"
-OPEN_BIN = BUILD_DIR / "lcl-open"
-SESSIOND_BIN = BUILD_DIR / "lcl-sessiond"
-SHELL_BIN = BUILD_DIR / "lcl-desktop-shell"
-MOBILE_SHELL_BIN = BUILD_DIR / "lcl-mobile-shell"
-SHELL_LAUNCHER_BIN = BUILD_DIR / "lcl-shell-launcher"
-TERM_BIN = BUILD_DIR / "lcl-terminal"
-DEMO_BIN = BUILD_DIR / "apps" / "ui_demo" / "lcl_ui_demo"
-JS_BIN = BUILD_DIR / "lcl-js"
-DEMO_JS_DIR = BUILD_DIR / "apps" / "ui_demo_js"
 INITRAMFS_DIR = BUILD_DIR / "initramfs_root"
 INITRAMFS_IMG = BUILD_DIR / "initramfs.cpio.gz"
 CACHE_DIR = BUILD_DIR / "qemu-cache"
@@ -38,6 +29,7 @@ DOCKER_IMAGE = "lcl-os-qemu-builder:latest"
 DOCKERFILE = SCRIPT_DIR / "Dockerfile.qemu"
 DEFAULT_GESTALT_PATH = ROOT_DIR / "config" / "gestalt" / "default.json"
 MOBILE_GESTALT_PATH = ROOT_DIR / "config" / "gestalt" / "mobile.json"
+INITRAMFS_FINGERPRINT_VERSION = 1
 
 
 def log(msg: str) -> None:
@@ -203,9 +195,19 @@ def cmake_build() -> None:
             "-S",
             str(ROOT_DIR),
             "-DCMAKE_BUILD_TYPE=Debug",
+            "-DBUILD_TESTS=OFF",
         ]
     )
-    run(["cmake", "--build", str(BUILD_DIR)])
+    if which("ccache"):
+        run([
+            "cmake", "-B", str(BUILD_DIR),
+            "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+            "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+        ])
+    run([
+        "cmake", "--build", str(BUILD_DIR),
+        "--parallel", str(os.cpu_count() or 4),
+    ])
 
 
 def _readable_kernel(path: Path) -> Path | None:
@@ -459,10 +461,6 @@ def package_kernel_modules(kernel_path: Path, init_root: Path) -> None:
 
 def package_initramfs(kernel_path: Path, *, trace_frames: bool = False,
                       debug_layout: bool = False, debug_overlay: bool = False) -> None:
-    log("Building canonical LCL rootfs ext4 image...")
-    from build_rootfs import build_rootfs_ext4
-    build_rootfs_ext4(arch="x86_64")
-
     log("Preparing minimal bootstrap initramfs root directory structure...")
     if INITRAMFS_DIR.exists():
         shutil.rmtree(INITRAMFS_DIR)
@@ -646,6 +644,59 @@ exec switch_root /sysroot /init
     log(f"Initramfs image built at: {INITRAMFS_IMG}")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def initramfs_fingerprint_path(arch: str) -> Path:
+    return CACHE_DIR / f"initramfs-{normalize_arch(arch)}.sha256"
+
+
+def initramfs_input_fingerprint(
+    kernel: Path,
+    arch: str,
+    *,
+    trace_frames: bool,
+    debug_layout: bool,
+    debug_overlay: bool,
+) -> str:
+    """Hash immutable-builder and launch inputs embedded in the initramfs."""
+    digest = hashlib.sha256()
+    digest.update(
+        f"lcl-initramfs-v{INITRAMFS_FINGERPRINT_VERSION}\0{normalize_arch(arch)}\0".encode("utf-8")
+    )
+    digest.update(os.environ.get("LCL_QEMU_BUILDER_IMAGE_ID", "unmanaged-host").encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(_sha256_file(Path(__file__).resolve()).encode("ascii"))
+    digest.update(b"\0")
+    digest.update(_sha256_file(kernel.resolve()).encode("ascii"))
+    digest.update(b"\0")
+    digest.update(
+        f"trace={int(trace_frames)};layout={int(debug_layout)};overlay={int(debug_overlay)}".encode("ascii")
+    )
+    return digest.hexdigest()
+
+
+def initramfs_is_current(arch: str, fingerprint: str) -> bool:
+    stamp = initramfs_fingerprint_path(arch)
+    required = (INITRAMFS_IMG, KERNEL_CACHE, KERNEL_KVER_STAMP)
+    if not all(path.is_file() for path in required) or not stamp.is_file():
+        return False
+    return stamp.read_text(encoding="utf-8").strip() == fingerprint
+
+
+def store_initramfs_fingerprint(arch: str, fingerprint: str) -> None:
+    stamp = initramfs_fingerprint_path(arch)
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    temporary_stamp = stamp.with_suffix(".sha256.tmp")
+    temporary_stamp.write_text(fingerprint + "\n", encoding="utf-8")
+    temporary_stamp.replace(stamp)
+
+
 def docker_available() -> bool:
     if not which("docker"):
         return False
@@ -668,7 +719,7 @@ def ensure_docker_image(arch: str = "x86_64") -> None:
     log(f"Ensuring Docker image {image_tag} ({plat})...")
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     stamp = CACHE_DIR / f"docker-image-{arch}.stamp"
-    df_mtime = str(DOCKERFILE.stat().st_mtime)
+    dockerfile_fingerprint = _sha256_file(DOCKERFILE)
 
     inspect = subprocess.run(
         ["docker", "image", "inspect", image_tag],
@@ -677,7 +728,7 @@ def ensure_docker_image(arch: str = "x86_64") -> None:
     )
     need_build = inspect.returncode != 0
     if not need_build and stamp.is_file():
-        need_build = stamp.read_text(encoding="utf-8").strip() != df_mtime
+        need_build = stamp.read_text(encoding="utf-8").strip() != dockerfile_fingerprint
     elif not need_build and not stamp.is_file():
         need_build = True
 
@@ -707,7 +758,7 @@ def ensure_docker_image(arch: str = "x86_64") -> None:
         except Exception:
             pass
         try:
-            stamp.write_text(df_mtime + "\n", encoding="utf-8")
+            stamp.write_text(dockerfile_fingerprint + "\n", encoding="utf-8")
         except PermissionError:
             log(
                 f"[WARN] Could not write stamp {stamp} (permission denied). "
@@ -758,9 +809,13 @@ def docker_run(args: list[str], arch: str = "x86_64") -> None:
     image_tag = docker_image_name(arch)
     plat = docker_platform(arch)
     mount = str(ROOT_DIR)
-    env_args: list[str] = []
+    image_id = subprocess.check_output(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", image_tag],
+        text=True,
+    ).strip()
+    env_args: list[str] = ["-e", f"LCL_QEMU_BUILDER_IMAGE_ID={image_id}"]
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
-        env_args = ["-e", f"HOST_UID={os.getuid()}", "-e", f"HOST_GID={os.getgid()}"]
+        env_args.extend(["-e", f"HOST_UID={os.getuid()}", "-e", f"HOST_GID={os.getgid()}"])
     cmd = [
         "docker",
         "run",
@@ -799,17 +854,33 @@ def docker_build_and_package(diagnostic_args: list[str], arch: str = "x86_64") -
 
 
 def package_inside_docker(args: argparse.Namespace) -> Path:
-    """Runs only with --inside-docker: cmake + initramfs from image kernel/modules."""
+    """Incrementally build canonical userspace and package boot artifacts."""
     ensure_dirs()
-    cmake_build()
+    log("Updating canonical QEMU userspace and rootfs...")
+    from build_rootfs import build_rootfs_ext4
+    build_rootfs_ext4(
+        arch=args.arch,
+        inside_docker=True,
+        force=args.rebuild,
+    )
     kernel = locate_kernel()
     log(f"Docker image kernel: {kernel}")
-    package_initramfs(
-        kernel,
+    fingerprint = initramfs_input_fingerprint(
+        kernel, args.arch,
         trace_frames=args.trace_frames,
         debug_layout=args.debug_layout,
         debug_overlay=args.debug_overlay,
     )
+    if args.rebuild or not initramfs_is_current(args.arch, fingerprint):
+        package_initramfs(
+            kernel,
+            trace_frames=args.trace_frames,
+            debug_layout=args.debug_layout,
+            debug_overlay=args.debug_overlay,
+        )
+        store_initramfs_fingerprint(args.arch, fingerprint)
+    else:
+        log("Reusing current initramfs; kernel, builder, and bootstrap inputs are unchanged.")
     res = KERNEL_CACHE if KERNEL_CACHE.is_file() else kernel
     fix_permissions()
     return res
@@ -824,6 +895,8 @@ def prepare_artifacts(args: argparse.Namespace, arch: str = "x86_64") -> Path:
         diagnostic_args.append("--debug-layout")
     if args.debug_overlay:
         diagnostic_args.append("--debug-overlay")
+    if args.rebuild:
+        diagnostic_args.append("--rebuild")
     return docker_build_and_package(diagnostic_args, arch=arch)
 
 
@@ -1151,41 +1224,6 @@ def find_ovmf_firmware(arch: str = "x86_64") -> Path | None:
     return None
 
 
-def is_rootfs_stale(rootfs_img: Path, arch: str = "x86_64") -> bool:
-    """Check if the canonical ext4 rootfs image is missing or older than any compiled binary or asset."""
-    if not rootfs_img.is_file():
-        return True
-
-    rootfs_mtime = rootfs_img.stat().st_mtime
-
-    candidate_binaries = [
-        BINARY,
-        SESSIOND_BIN,
-        SHELL_BIN,
-        MOBILE_SHELL_BIN,
-        SHELL_LAUNCHER_BIN,
-        OPEN_BIN,
-        JS_BIN,
-        TERM_BIN,
-        DEMO_BIN,
-        BUILD_DIR / "UIDemo",
-        BUILD_DIR / "Terminal",
-        BUILD_DIR / "apps" / "ui_demo" / "UIDemo",
-        BUILD_DIR / "apps" / "terminal" / "Terminal",
-    ]
-    for b in candidate_binaries:
-        if b.is_file() and b.stat().st_mtime > rootfs_mtime:
-            return True
-
-    for directory in (ROOT_DIR / "apps", ROOT_DIR / "assets"):
-        if directory.is_dir():
-            for p in directory.rglob("*"):
-                if p.is_file() and p.stat().st_mtime > rootfs_mtime:
-                    return True
-
-    return False
-
-
 def launch_qemu(
     kernel: Path,
     arch: str = "x86_64",
@@ -1201,7 +1239,6 @@ def launch_qemu(
     gestalt_path: Path | None = None,
     runtime_dir: Path | None = None,
     no_build: bool = False,
-    rebuild: bool = False,
     spice_unix: Path | None = None,
     qmp_unix: Path | None = None,
 ) -> None:
@@ -1593,17 +1630,11 @@ def launch_qemu(
         cmd.extend(["-boot", "d", "-cdrom", str(iso_path)])
     else:
         rootfs_img = BUILD_DIR / "rootfs" / f"lcl-rootfs-{arch}.ext4"
-        if rebuild:
-            log(f"Force rebuild requested (--rebuild). Rebuilding canonical rootfs ({rootfs_img.name})...")
-            sys.path.insert(0, str(SCRIPT_DIR))
-            from build_rootfs import build_rootfs_ext4
-            build_rootfs_ext4(arch=arch)
-        elif not no_build and is_rootfs_stale(rootfs_img, arch=arch):
-            log(f"Canonical rootfs artifact ({rootfs_img.name}) is missing or stale. Rebuilding...")
-            sys.path.insert(0, str(SCRIPT_DIR))
-            from build_rootfs import build_rootfs_ext4
-            build_rootfs_ext4(arch=arch)
-        elif not rootfs_img.is_file():
+        if not rootfs_img.is_file() and no_build:
+            err(f"--no-build requires the canonical rootfs artifact: {rootfs_img}")
+            sys.exit(1)
+        if not rootfs_img.is_file():
+            log(f"Canonical rootfs artifact ({rootfs_img.name}) is missing. Building...")
             sys.path.insert(0, str(SCRIPT_DIR))
             from build_rootfs import build_rootfs_ext4
             build_rootfs_ext4(arch=arch)
@@ -1870,7 +1901,6 @@ def main() -> None:
             gestalt_path=args.gestalt,
             runtime_dir=args.runtime_dir,
             no_build=args.no_build,
-            rebuild=args.rebuild,
             spice_unix=args.spice_unix,
             qmp_unix=args.qmp_unix,
         )

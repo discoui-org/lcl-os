@@ -234,27 +234,47 @@ def stop_lcl_process() -> None:
         adb_shell("kill -KILL " + " ".join(remaining), as_root=True)
 
 
+def rootfs_process_ids() -> list[str]:
+    """Return processes whose root, cwd, or executable is inside LCL rootfs."""
+    result = adb_shell(
+        "ls -l /proc/[0-9]*/root /proc/[0-9]*/cwd "
+        "/proc/[0-9]*/exe 2>/dev/null",
+        as_root=True,
+    )
+    prefix = DEVICE_ROOTFS_MOUNT + "/"
+    pids: list[str] = []
+    for line in result.stdout.splitlines():
+        source, separator, target = line.partition(" -> ")
+        if not separator:
+            continue
+        match = re.search(r"/proc/(\d+)/(?:root|cwd|exe)$", source)
+        if match is None:
+            continue
+        if target == DEVICE_ROOTFS_MOUNT or target.startswith(prefix):
+            pids.append(match.group(1))
+    return list(dict.fromkeys(pids))
+
+
 def stop_rootfs_session() -> None:
     """Stop canonical userspace processes before unmounting its rootfs."""
     process_names = (
         "lcl-desktop-shell", "lcl-mobile-shell", "lcl-sessiond", "lcl-terminal", "lcl-open",
         "lcl-js", "lcl_ui_demo",
     )
-    pids: list[str] = []
-    for name in process_names:
-        result = adb_shell(f"pidof {name}", as_root=True)
-        pids.extend(value for value in result.stdout.split() if value.isdigit())
-    pids = list(dict.fromkeys(pids))
+    def active_pids() -> list[str]:
+        pids = rootfs_process_ids()
+        for name in process_names:
+            result = adb_shell(f"pidof {name}", as_root=True)
+            pids.extend(value for value in result.stdout.split() if value.isdigit())
+        return list(dict.fromkeys(pids))
+
+    pids = active_pids()
     if not pids:
         return
     log("Stopping canonical rootfs session...")
     adb_shell("kill -TERM " + " ".join(pids), as_root=True)
     time.sleep(0.7)
-    remaining: list[str] = []
-    for name in process_names:
-        result = adb_shell(f"pidof {name}", as_root=True)
-        remaining.extend(value for value in result.stdout.split() if value.isdigit())
-    remaining = list(dict.fromkeys(remaining))
+    remaining = active_pids()
     if remaining:
         adb_shell("kill -KILL " + " ".join(remaining), as_root=True)
 

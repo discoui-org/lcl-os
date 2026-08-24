@@ -6,6 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
+    ninja-build \
+    ccache \
     pkg-config \
     python3 \
     libdrm-dev \
@@ -37,5 +39,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && apt-get install -y linux-image-generic linux-firmware \
     && rm -rf /var/lib/apt/lists/*
+
+# Keep compiler objects in the bind-mounted build tree so they survive the
+# short-lived QEMU builder container.  CMAKE_*_COMPILER_LAUNCHER selects
+# ccache only when it is available, so host-side rootfs tooling still works.
+ENV CCACHE_DIR=/src/build/ccache \
+    CCACHE_BASEDIR=/src \
+    CCACHE_MAXSIZE=5G
 
 WORKDIR /src
