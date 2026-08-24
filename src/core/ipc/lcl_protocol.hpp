@@ -12,6 +12,7 @@ namespace lcl::protocol {
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
 constexpr uint32_t LCL_PROTOCOL_VERSION = 15;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
+constexpr uint64_t LCL_CAPABILITY_AHB_V1 = 1ull << 0;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 
@@ -50,7 +51,19 @@ enum class LCLOpcode : uint32_t {
     PopupSurfaceCreate = 28,
     // Returns the single-frame presentation credit when a commit cannot be
     // presented, commonly because a newer configure serial superseded it.
-    FrameDiscarded = 29
+    FrameDiscarded = 29,
+    // Negotiates optional transports without making the base surface ABI
+    // depend on a concrete platform graphics stack.
+    QueryCapabilities = 30,
+    Capabilities = 31,
+    // Opaque native-buffer commit. AndroidHardwareBufferV1 transfers the
+    // AHardwareBuffer handle over the negotiated side channel; an optional
+    // acquire-fence fd accompanies this commit through SCM_RIGHTS.
+    AttachNativeBuffer = 32
+};
+
+enum class LCLNativeBufferTransport : uint32_t {
+    AndroidHardwareBufferV1 = 1,
 };
 
 /** Minimal v1 popup role. Feature semantics remain in client-side UI policy. */
@@ -277,6 +290,27 @@ struct LCLMsgAttachDmaBuf {
     // distinct from the straight-alpha SHM buffer contract above.
     uint32_t format{0}; // Premultiplied-alpha LCL_BUFFER_FORMAT_ARGB8888
     uint64_t modifier{~uint64_t{0}}; // DRM_FORMAT_MOD_INVALID when unspecified
+};
+
+struct LCLMsgQueryCapabilities {
+    uint64_t requested{0};
+};
+
+struct LCLMsgCapabilities {
+    uint64_t supported{0};
+};
+
+struct LCLMsgAttachNativeBuffer {
+    uint32_t surfaceId{0};
+    uint64_t configureSerial{0};
+    uint32_t bufferId{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t backingWidth{0};
+    uint32_t backingHeight{0};
+    uint32_t format{0};
+    LCLNativeBufferTransport transport{
+        LCLNativeBufferTransport::AndroidHardwareBufferV1};
 };
 
 struct LCLMsgReleaseDmaBuf {

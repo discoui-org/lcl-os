@@ -99,6 +99,10 @@ bool PTYManager::spawnShell(const std::string& shellPath) {
         }
         setenv("TERM", "xterm-256color", 1);
         setenv("PS1", "\\W \xe2\x9d\xaf ", 1);
+        // The Android-native terminal client enters the canonical rootfs
+        // through a bionic wrapper. Its child shell is still the canonical
+        // glibc artifact and must resolve libraries from the rootfs again.
+        setenv("LD_LIBRARY_PATH", "/System/Library/Libraries", 1);
 
         const char* currentHome = getenv("HOME") ? getenv("HOME") : "/Users/Rei";
         std::string bashrcPath = std::string(currentHome) + "/.bashrc";

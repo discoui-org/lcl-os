@@ -32,8 +32,12 @@ public:
                               uint32_t backingWidth, uint32_t backingHeight) override;
     bool isDmaBufFrameBlocked() const override;
     std::optional<lcl::graphics::DmaBufFrame> takeDmaBufFrame() override;
+    bool supportsNativeBufferTransport(
+        lcl::graphics::NativeBufferTransport transport) const override;
+    bool sendNativeBufferHandle(int socketFd, uint32_t bufferId) override;
     void cancelDmaBufFrame(uint32_t bufferId) override;
     void releaseDmaBufFrame(uint32_t bufferId) override;
+    bool releaseDmaBufFrameWithFence(uint32_t bufferId, int releaseFenceFd) override;
 
     void saveState() override;
     void restoreState() override;

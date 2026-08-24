@@ -36,6 +36,8 @@ public:
     uint64_t getRenderedFrames() const { return m_renderedFrames; }
     RasterRenderer* getRasterRenderer() { return &m_rasterRenderer; }
     const RasterRenderer* getRasterRenderer() const { return &m_rasterRenderer; }
+    bool waitNativeFence(int fenceFd);
+    int createNativeFence();
 
 private:
     platform::IGraphicsContext* m_graphicsContext{nullptr};

@@ -25,6 +25,7 @@ public:
                        ShellStateBroker& shellState)
         : m_renderer(renderer), m_windowManager(windowManager), m_surfaces(surfaces),
           m_scenes(scenes), m_focus(focus), m_shellState(shellState) {}
+    ~ProtocolDispatcher();
 
     /** Process every queued IPC message and report whether a frame is required. */
     bool process(IPCManager& ipcManager);
@@ -45,6 +46,7 @@ private:
     ShellStateBroker& m_shellState;
     uint64_t m_nextShmContentSerial{1};
     std::unordered_map<int, protocol::LCLSystemSurfaceKind> m_pendingSystemSurfaceKinds;
+    std::unordered_map<int, int> m_nativeBufferChannels;
     struct ShellSubscription {
         uint64_t revision{0};
         bool hasDeliveredState{false};

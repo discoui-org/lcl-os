@@ -365,6 +365,7 @@ private:
 
     // GPU FBO & Shader Handles for Backdrop Filters & Scene Compositing
     bool m_glFBOReady{false};
+    bool m_glSupportsUnpackRowLength{false};
     uint32_t m_glFBO[2]{0, 0};
     uint32_t m_glFBOTexture[2]{0, 0};
     uint32_t m_glFBOCapacityWidth{0};

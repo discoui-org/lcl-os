@@ -165,6 +165,9 @@ bool validSystemSurfaceKind(LCLSystemSurfaceKind value) {
 bool validPopupRole(LCLPopupRole value) {
     return value == LCLPopupRole::Transient;
 }
+bool validNativeBufferTransport(LCLNativeBufferTransport value) {
+    return value == LCLNativeBufferTransport::AndroidHardwareBufferV1;
+}
 bool validFilter(FilterType value) {
     return value >= FilterType::None && value <= FilterType::Tint;
 }
@@ -192,6 +195,9 @@ bool validOpcode(LCLOpcode value) {
     case LCLOpcode::ReleaseDmaBuf:
     case LCLOpcode::FramePresented:
     case LCLOpcode::FrameDiscarded:
+    case LCLOpcode::QueryCapabilities:
+    case LCLOpcode::Capabilities:
+    case LCLOpcode::AttachNativeBuffer:
     case LCLOpcode::InputEvent:
     case LCLOpcode::AckResponse:
     case LCLOpcode::SetDecorationMode:
@@ -436,6 +442,37 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.u32(msg.stride);
         out.u32(msg.format);
         out.u64(msg.modifier);
+        return true;
+    }
+    case LCLOpcode::QueryCapabilities: {
+        LOAD_ONE(LCLMsgQueryCapabilities, msg);
+        if ((msg.requested & ~LCL_CAPABILITY_AHB_V1) != 0) return false;
+        out.u64(msg.requested);
+        return true;
+    }
+    case LCLOpcode::Capabilities: {
+        LOAD_ONE(LCLMsgCapabilities, msg);
+        if ((msg.supported & ~LCL_CAPABILITY_AHB_V1) != 0) return false;
+        out.u64(msg.supported);
+        return true;
+    }
+    case LCLOpcode::AttachNativeBuffer: {
+        LOAD_ONE(LCLMsgAttachNativeBuffer, msg);
+        if (msg.surfaceId == 0 || msg.configureSerial == 0 || msg.bufferId == 0 ||
+            msg.width == 0 || msg.height == 0 ||
+            msg.backingWidth < msg.width || msg.backingHeight < msg.height ||
+            msg.format != LCL_BUFFER_FORMAT_ARGB8888 ||
+            !validNativeBufferTransport(msg.transport))
+            return false;
+        out.u32(msg.surfaceId);
+        out.u64(msg.configureSerial);
+        out.u32(msg.bufferId);
+        out.u32(msg.width);
+        out.u32(msg.height);
+        out.u32(msg.backingWidth);
+        out.u32(msg.backingHeight);
+        out.u32(msg.format);
+        out.u32(static_cast<uint32_t>(msg.transport));
         return true;
     }
     case LCLOpcode::ReleaseDmaBuf: {
@@ -770,6 +807,40 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             m.format != LCL_BUFFER_FORMAT_ARGB8888 ||
             m.backingWidth > std::numeric_limits<uint32_t>::max() / 4 ||
             m.stride < m.backingWidth * 4)
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::QueryCapabilities: {
+        LCLMsgQueryCapabilities m{};
+        if (!in.u64(m.requested) ||
+            (m.requested & ~LCL_CAPABILITY_AHB_V1) != 0)
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::Capabilities: {
+        LCLMsgCapabilities m{};
+        if (!in.u64(m.supported) ||
+            (m.supported & ~LCL_CAPABILITY_AHB_V1) != 0)
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::AttachNativeBuffer: {
+        LCLMsgAttachNativeBuffer m{};
+        uint32_t transport = 0;
+        if (!in.u32(m.surfaceId) || !in.u64(m.configureSerial) ||
+            !in.u32(m.bufferId) || !in.u32(m.width) || !in.u32(m.height) ||
+            !in.u32(m.backingWidth) || !in.u32(m.backingHeight) ||
+            !in.u32(m.format) || !in.u32(transport))
+            return false;
+        m.transport = static_cast<LCLNativeBufferTransport>(transport);
+        if (m.surfaceId == 0 || m.configureSerial == 0 || m.bufferId == 0 ||
+            m.width == 0 || m.height == 0 ||
+            m.backingWidth < m.width || m.backingHeight < m.height ||
+            m.format != LCL_BUFFER_FORMAT_ARGB8888 ||
+            !validNativeBufferTransport(m.transport))
             return false;
         appendNative(payload, m);
         break;
@@ -1152,7 +1223,10 @@ bool sendMsgWithFd(int socketFd, const LCLHeader& header, const void* payload,
     if (socketFd < 0)
         return false;
     const bool acceptsFd = header.opcode == LCLOpcode::AttachBuffer ||
-                           header.opcode == LCLOpcode::AttachDmaBuf;
+                           header.opcode == LCLOpcode::AttachDmaBuf ||
+                           header.opcode == LCLOpcode::AttachNativeBuffer ||
+                           header.opcode == LCLOpcode::ReleaseDmaBuf ||
+                           header.opcode == LCLOpcode::Capabilities;
     if ((passedFd >= 0 && !acceptsFd) ||
         (acceptsFd && passedFd < -1)) {
         errno = EPROTO;
@@ -1231,7 +1305,10 @@ ReceiveStatus recvPacketWithFd(int socketFd, LCLHeader& header,
     if (!decodePacket(packet.data(), static_cast<size_t>(count), header, payload))
         return reject();
     if ((!descriptors.empty() && header.opcode != LCLOpcode::AttachBuffer &&
-         header.opcode != LCLOpcode::AttachDmaBuf))
+         header.opcode != LCLOpcode::AttachDmaBuf &&
+         header.opcode != LCLOpcode::AttachNativeBuffer &&
+         header.opcode != LCLOpcode::ReleaseDmaBuf &&
+         header.opcode != LCLOpcode::Capabilities))
         return reject();
     if (!descriptors.empty())
         receivedFd = descriptors.front();

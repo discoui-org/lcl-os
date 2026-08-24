@@ -222,6 +222,32 @@ target_link_libraries(lcl-core-engine PUBLIC
 if(ANDROID)
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
+    # Android-native client raster target. Widgets and Canvas remain unchanged;
+    # only this lowest graphics producer swaps GBM for AHardwareBuffer.
+    add_library(lcl-raster STATIC
+        src/render/client_egl_context.cpp
+        src/render/raster_canvas.cpp
+        src/render/raster_renderer.cpp
+    )
+    target_include_directories(lcl-raster PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+    target_link_libraries(lcl-raster PUBLIC
+        lcl-graphics
+        lcl-path-raster
+        lcl-font-metrics
+        lcl-protocol
+        EGL
+        GLESv3
+        android
+        Threads::Threads
+    )
+
+    # Android-native clients reuse the exact widget/layout/Canvas sources. The
+    # only target-specific code is the lcl-raster producer above.
+    add_subdirectory(lcl-ui)
+
     set(LCL_ANDROID_HIDL_ROOT "" CACHE PATH
         "Prepared Android HIDL dependency root from scripts/prepare_android_hidl.py")
     if(LCL_ANDROID_HIDL_ROOT)
@@ -303,6 +329,64 @@ if(ANDROID)
     )
     target_link_libraries(test_android_platform_services PRIVATE
         lcl-platform-android
+    )
+
+    add_executable(test_android_client_raster
+        tests/android/test_android_client_raster.cpp
+    )
+    target_include_directories(test_android_client_raster PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(test_android_client_raster PRIVATE
+        lcl-raster
+    )
+
+    add_executable(test_android_window_client
+        tests/android/test_android_window_client.cpp
+    )
+    target_include_directories(test_android_window_client PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+    target_link_libraries(test_android_window_client PRIVATE
+        lcl-ui
+        lcl-raster
+        lcl-protocol
+        Threads::Threads
+    )
+
+    add_executable(lcl-desktop-shell
+        src/apps/desktop_shell/ui_main.cpp
+        src/core/ipc/ipc_manager.cpp
+    )
+    target_include_directories(lcl-desktop-shell PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+    target_link_libraries(lcl-desktop-shell PRIVATE
+        lcl-ui
+        lcl-raster
+        lcl-protocol
+        lcl-shell-state
+        lcl-session
+        Threads::Threads
+    )
+
+    add_executable(lcl-terminal
+        src/tools/terminal_main.cpp
+        src/apps/terminal/terminal_app.cpp
+        src/apps/terminal/terminal_view.cpp
+        src/core/terminal/pty_manager.cpp
+    )
+    target_include_directories(lcl-terminal PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+    )
+    target_link_libraries(lcl-terminal PRIVATE
+        lcl-ui
+        lcl-raster
+        lcl-protocol
+        Threads::Threads
     )
 
     # Android Compositor Runtime (Composition Root)

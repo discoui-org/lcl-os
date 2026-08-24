@@ -237,6 +237,9 @@ private:
 
     std::vector<uint32_t> m_pixelBuffer;
     int m_socketFd{-1};
+    // Optional platform-native handle channel negotiated over the compositor
+    // protocol. It is never exposed to widgets or application code.
+    int m_nativeBufferSocketFd{-1};
     int m_shmFd{-1};
     size_t m_shmSize{0};
     uint32_t* m_shmPixels{nullptr};

@@ -49,6 +49,8 @@ public:
 
     lcl::platform::TextureHandle importTexture(const lcl::platform::INativeBuffer& buffer) override;
     void releaseTexture(lcl::platform::TextureHandle texture) override;
+    bool waitNativeFence(int fenceFd) override;
+    int createNativeFence() override;
 
     // EGL/GLES state accessors
     EGLDisplay getEglDisplay() const { return m_eglDisplay; }

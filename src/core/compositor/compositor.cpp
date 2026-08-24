@@ -6,6 +6,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <unistd.h>
 
 namespace lcl::core {
 
@@ -286,6 +287,12 @@ void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
 
     const bool hasActiveTransitions = m_frameScheduler.advanceTransitions(m_surfaces);
+    const bool hasPendingGpuRelease = std::any_of(
+        m_surfaces.begin(), m_surfaces.end(), [](const auto& pair) {
+            return !pair.second.pendingDmaBufReleases.empty();
+        });
+    const int releaseFenceFd = hasPendingGpuRelease
+        ? m_renderer.createNativeFence() : -1;
     for (auto& [surfaceKey, entry] : m_surfaces) {
         if (entry.pendingMinimize) {
             m_windowManager.minimizeWindow(entry.windowId);
@@ -328,11 +335,13 @@ void Compositor::renderFrame() {
                 protocol::LCLMsgReleaseDmaBuf message{};
                 message.surfaceId = static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu);
                 message.bufferId = release.bufferId;
-                protocol::sendMsgWithFd(entry.clientFd, header, &message);
+                protocol::sendMsgWithFd(
+                    entry.clientFd, header, &message, releaseFenceFd);
             }
         }
         entry.pendingDmaBufReleases.clear();
     }
+    if (releaseFenceFd >= 0) close(releaseFenceFd);
 
     const uint64_t presentedAtNs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(

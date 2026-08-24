@@ -113,7 +113,24 @@ std::optional<lcl::graphics::DmaBufFrame> RasterCanvas::takeDmaBufFrame() {
     return lcl::graphics::DmaBufFrame{exported->bufferId, m_dmaBufContentWidth, m_dmaBufContentHeight,
                                 exported->width, exported->height,
                                 exported->stride, exported->format, exported->modifier,
-                                exported->fd};
+                                exported->fd,
+                                exported->androidHardwareBuffer
+                                    ? lcl::graphics::NativeBufferTransport::AndroidHardwareBufferV1
+                                    : lcl::graphics::NativeBufferTransport::DmaBuf,
+                                exported->acquireFenceFd};
+}
+
+bool RasterCanvas::supportsNativeBufferTransport(
+    lcl::graphics::NativeBufferTransport transport) const {
+    return transport ==
+               lcl::graphics::NativeBufferTransport::AndroidHardwareBufferV1 &&
+           m_clientEglContext &&
+           m_clientEglContext->usesAndroidHardwareBuffer();
+}
+
+bool RasterCanvas::sendNativeBufferHandle(int socketFd, uint32_t bufferId) {
+    return m_clientEglContext &&
+           m_clientEglContext->sendNativeBufferHandle(socketFd, bufferId);
 }
 
 void RasterCanvas::cancelDmaBufFrame(uint32_t bufferId) {
@@ -124,6 +141,13 @@ void RasterCanvas::cancelDmaBufFrame(uint32_t bufferId) {
 
 void RasterCanvas::releaseDmaBufFrame(uint32_t bufferId) {
     if (m_clientEglContext) m_clientEglContext->releaseDmaBuf(bufferId);
+}
+
+bool RasterCanvas::releaseDmaBufFrameWithFence(uint32_t bufferId,
+                                                int releaseFenceFd) {
+    if (!m_clientEglContext) return false;
+    m_clientEglContext->releaseDmaBuf(bufferId, releaseFenceFd);
+    return true;
 }
 
 void RasterCanvas::saveState() {

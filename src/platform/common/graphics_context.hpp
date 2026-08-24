@@ -46,6 +46,12 @@ public:
     virtual TextureHandle importTexture(const INativeBuffer& buffer) = 0;
     virtual void releaseTexture(TextureHandle texture) = 0;
 
+    // Optional explicit-sync hooks for native buffers. A successful wait
+    // consumes the supplied sync-file fd. A returned fence fd is owned by the
+    // caller. Backends without explicit sync retain their existing contract.
+    virtual bool waitNativeFence(int) { return false; }
+    virtual int createNativeFence() { return -1; }
+
     // IPC DMA-BUF descriptor convenience import
     virtual TextureHandle importDmaBuf(const DmaBufDescriptor& descriptor) {
         (void)descriptor;

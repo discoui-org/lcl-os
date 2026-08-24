@@ -462,6 +462,77 @@ TEST(LCLProtocolTest, DmaBufReleaseNeedsNoFileDescriptor) {
     EXPECT_EQ(decoded->bufferId, release.bufferId);
 }
 
+TEST(LCLProtocolTest, AhbV1CapabilityCarriesDedicatedTransportSocket) {
+    int sockets[2];
+    int transport[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, transport), 0);
+
+    LCLMsgCapabilities sent{};
+    sent.supported = LCL_CAPABILITY_AHB_V1;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::Capabilities;
+    header.payloadSize = sizeof(sent);
+    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &sent, transport[1]));
+
+    LCLHeader receivedHeader{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sockets[1], receivedHeader, payload, receivedFd));
+    ASSERT_EQ(receivedHeader.opcode, LCLOpcode::Capabilities);
+    ASSERT_EQ(payload.size(), sizeof(LCLMsgCapabilities));
+    EXPECT_EQ(reinterpret_cast<const LCLMsgCapabilities*>(payload.data())->supported,
+              LCL_CAPABILITY_AHB_V1);
+    EXPECT_GE(receivedFd, 0);
+
+    close(receivedFd);
+    close(transport[0]);
+    close(transport[1]);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(LCLProtocolTest, NativeBufferAttachRoundTripsWithAcquireFence) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+    const int fence = dup(STDIN_FILENO);
+    ASSERT_GE(fence, 0);
+
+    LCLMsgAttachNativeBuffer sent{};
+    sent.surfaceId = 9;
+    sent.configureSerial = 123;
+    sent.bufferId = 7;
+    sent.width = 640;
+    sent.height = 480;
+    sent.backingWidth = 800;
+    sent.backingHeight = 600;
+    sent.format = LCL_BUFFER_FORMAT_ARGB8888;
+    sent.transport = LCLNativeBufferTransport::AndroidHardwareBufferV1;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::AttachNativeBuffer;
+    header.payloadSize = sizeof(sent);
+    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &sent, fence));
+
+    LCLHeader receivedHeader{};
+    std::vector<uint8_t> payload;
+    int receivedFence = -1;
+    ASSERT_TRUE(recvMsgWithFd(sockets[1], receivedHeader, payload, receivedFence));
+    ASSERT_EQ(receivedHeader.opcode, LCLOpcode::AttachNativeBuffer);
+    ASSERT_EQ(payload.size(), sizeof(LCLMsgAttachNativeBuffer));
+    const auto* received =
+        reinterpret_cast<const LCLMsgAttachNativeBuffer*>(payload.data());
+    EXPECT_EQ(received->bufferId, sent.bufferId);
+    EXPECT_EQ(received->backingWidth, sent.backingWidth);
+    EXPECT_EQ(received->transport,
+              LCLNativeBufferTransport::AndroidHardwareBufferV1);
+    EXPECT_GE(receivedFence, 0);
+
+    close(receivedFence);
+    close(fence);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(LCLProtocolTest, ContentExtentMustFitInsideGpuBacking) {
     LCLMsgConfigureBounds configure{};
     configure.surfaceId = 1;

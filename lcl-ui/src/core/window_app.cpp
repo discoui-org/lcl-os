@@ -139,6 +139,10 @@ WindowApp::~WindowApp() {
         close(m_socketFd);
         m_socketFd = -1;
     }
+    if (m_nativeBufferSocketFd >= 0) {
+        close(m_nativeBufferSocketFd);
+        m_nativeBufferSocketFd = -1;
+    }
 }
 
 uint32_t WindowApp::getPixelWidth() const {
@@ -388,6 +392,17 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // 1. System-surface policy is declared separately. The compositor verifies
     // the declaration against the trusted shell peer; normal clients have no
     // role-selection protocol.
+    if (m_canvas->supportsNativeBufferTransport(
+            lcl::graphics::NativeBufferTransport::AndroidHardwareBufferV1)) {
+        lcl::protocol::LCLMsgQueryCapabilities capabilityQuery{};
+        capabilityQuery.requested = lcl::protocol::LCL_CAPABILITY_AHB_V1;
+        if (!sendProtocolMessage(lcl::protocol::LCLOpcode::QueryCapabilities,
+                                 &capabilityQuery, sizeof(capabilityQuery))) {
+            std::cerr << "[lcl-ui ERROR] Failed to query compositor capabilities\n";
+            return false;
+        }
+    }
+
     if (!isPopupSurface() &&
         m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::None) {
         lcl::protocol::LCLMsgSetSystemSurfaceKind systemSurface{};
@@ -551,10 +566,7 @@ void WindowApp::pollIPC() {
         const auto receiveStatus =
             lcl::protocol::recvPacketWithFd(m_socketFd, header, payload, receivedFd);
         if (receiveStatus == lcl::protocol::ReceiveStatus::Received) {
-            if (receivedFd >= 0) {
-                close(receivedFd);
-                receivedFd = -1;
-            }
+            bool receivedFdConsumed = false;
             if (header.opcode == lcl::protocol::LCLOpcode::InputEvent &&
                 payload.size() >= sizeof(lcl::protocol::LCLMsgInputEvent)) {
                 auto* inputMsg = reinterpret_cast<const lcl::protocol::LCLMsgInputEvent*>(payload.data());
@@ -626,11 +638,27 @@ void WindowApp::pollIPC() {
                     receivedInitialConfigure = receivedInitialConfigure || m_waitingForInitialConfigure;
                     pendingResize = true;
                 }
+            } else if (header.opcode == lcl::protocol::LCLOpcode::Capabilities &&
+                       payload.size() == sizeof(lcl::protocol::LCLMsgCapabilities)) {
+                const auto* capabilities = reinterpret_cast<
+                    const lcl::protocol::LCLMsgCapabilities*>(payload.data());
+                if ((capabilities->supported & lcl::protocol::LCL_CAPABILITY_AHB_V1) != 0 &&
+                    receivedFd >= 0) {
+                    if (m_nativeBufferSocketFd >= 0) close(m_nativeBufferSocketFd);
+                    m_nativeBufferSocketFd = receivedFd;
+                    receivedFdConsumed = true;
+                } else if (m_canvas->hasDmaBufTransport()) {
+#if defined(__ANDROID__)
+                    m_canvas->setDmaBufTransportEnabled(false);
+                    allocateSHM(m_width, m_height);
+#endif
+                }
             } else if (header.opcode == lcl::protocol::LCLOpcode::ReleaseDmaBuf &&
                        payload.size() == sizeof(lcl::protocol::LCLMsgReleaseDmaBuf)) {
                 const auto* release = reinterpret_cast<const lcl::protocol::LCLMsgReleaseDmaBuf*>(payload.data());
                 if (release->surfaceId == m_surfaceId) {
-                    m_canvas->releaseDmaBufFrame(release->bufferId);
+                    receivedFdConsumed = m_canvas->releaseDmaBufFrameWithFence(
+                        release->bufferId, receivedFd);
                     if (release->bufferId == m_submittedDmaBufId) {
                         // The compositor returned the frame before presenting
                         // it (for example after a genuine transaction cancel).
@@ -691,6 +719,7 @@ void WindowApp::pollIPC() {
                     }
                 }
             }
+            if (receivedFd >= 0 && !receivedFdConsumed) close(receivedFd);
             if (m_onIpcMessage) m_onIpcMessage(header, payload);
         } else if (receiveStatus == lcl::protocol::ReceiveStatus::WouldBlock) {
             break;
@@ -810,6 +839,10 @@ void WindowApp::runEventLoop() {
         lcl::protocol::discardPendingWrites(m_socketFd);
         close(m_socketFd);
         m_socketFd = -1;
+    }
+    if (m_nativeBufferSocketFd >= 0) {
+        close(m_nativeBufferSocketFd);
+        m_nativeBufferSocketFd = -1;
     }
 }
 
@@ -1522,22 +1555,55 @@ bool WindowApp::renderFrame() {
     const auto attachStarted = std::chrono::steady_clock::now();
     if (m_ipcConnected && m_socketFd >= 0 && dmaBufFrame) {
         if (auto frame = m_canvas->takeDmaBufFrame()) {
-            lcl::protocol::LCLMsgAttachDmaBuf attachMsg{};
-            attachMsg.surfaceId = m_surfaceId;
-            attachMsg.configureSerial = m_configureSerial;
-            attachMsg.bufferId = frame->bufferId;
-            attachMsg.width = frame->width;
-            attachMsg.height = frame->height;
-            attachMsg.backingWidth = frame->backingWidth;
-            attachMsg.backingHeight = frame->backingHeight;
-            attachMsg.stride = frame->stride;
-            attachMsg.format = frame->format;
-            attachMsg.modifier = frame->modifier;
-            const bool dmaBufAttached = sendProtocolMessage(
-                lcl::protocol::LCLOpcode::AttachDmaBuf, &attachMsg, sizeof(attachMsg), frame->fd);
-            close(frame->fd);
+            bool dmaBufAttached = false;
+            if (frame->transport ==
+                lcl::graphics::NativeBufferTransport::AndroidHardwareBufferV1) {
+                lcl::protocol::LCLMsgAttachNativeBuffer attachMsg{};
+                attachMsg.surfaceId = m_surfaceId;
+                attachMsg.configureSerial = m_configureSerial;
+                attachMsg.bufferId = frame->bufferId;
+                attachMsg.width = frame->width;
+                attachMsg.height = frame->height;
+                attachMsg.backingWidth = frame->backingWidth;
+                attachMsg.backingHeight = frame->backingHeight;
+                attachMsg.format = frame->format;
+                attachMsg.transport =
+                    lcl::protocol::LCLNativeBufferTransport::AndroidHardwareBufferV1;
+                const bool handleSent = m_nativeBufferSocketFd >= 0 &&
+                    m_canvas->sendNativeBufferHandle(
+                        m_nativeBufferSocketFd, frame->bufferId);
+                dmaBufAttached = handleSent && sendProtocolMessage(
+                    lcl::protocol::LCLOpcode::AttachNativeBuffer,
+                    &attachMsg, sizeof(attachMsg), frame->acquireFenceFd);
+            } else {
+                lcl::protocol::LCLMsgAttachDmaBuf attachMsg{};
+                attachMsg.surfaceId = m_surfaceId;
+                attachMsg.configureSerial = m_configureSerial;
+                attachMsg.bufferId = frame->bufferId;
+                attachMsg.width = frame->width;
+                attachMsg.height = frame->height;
+                attachMsg.backingWidth = frame->backingWidth;
+                attachMsg.backingHeight = frame->backingHeight;
+                attachMsg.stride = frame->stride;
+                attachMsg.format = frame->format;
+                attachMsg.modifier = frame->modifier;
+                dmaBufAttached = sendProtocolMessage(
+                    lcl::protocol::LCLOpcode::AttachDmaBuf,
+                    &attachMsg, sizeof(attachMsg), frame->fd);
+            }
+            if (frame->fd >= 0) close(frame->fd);
+            if (frame->acquireFenceFd >= 0) close(frame->acquireFenceFd);
             if (!dmaBufAttached) {
                 m_canvas->cancelDmaBufFrame(frame->bufferId);
+                if (frame->transport ==
+                    lcl::graphics::NativeBufferTransport::AndroidHardwareBufferV1) {
+                    m_canvas->setDmaBufTransportEnabled(false);
+                    allocateSHM(m_width, m_height);
+                    if (m_nativeBufferSocketFd >= 0) {
+                        close(m_nativeBufferSocketFd);
+                        m_nativeBufferSocketFd = -1;
+                    }
+                }
                 m_firstFrame = true;
             } else {
                 m_submittedConfigureSerial = m_configureSerial;

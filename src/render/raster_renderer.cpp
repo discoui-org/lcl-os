@@ -7,6 +7,7 @@
 #include "render/raster_destination.hpp"
 #ifndef LCL_SOFTWARE_ONLY
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #endif
 #include <iostream>
 #include <cmath>
@@ -17,6 +18,40 @@
 namespace lcl::render {
 
 #ifndef LCL_SOFTWARE_ONLY
+namespace {
+
+bool hasGlExtension(const char* extensions, const char* requested) {
+    if (!extensions || !requested || *requested == '\0' || std::strchr(requested, ' ')) {
+        return false;
+    }
+
+    const size_t requestedLength = std::strlen(requested);
+    const char* match = extensions;
+    while ((match = std::strstr(match, requested)) != nullptr) {
+        const bool startsToken = match == extensions || match[-1] == ' ';
+        const char following = match[requestedLength];
+        const bool endsToken = following == '\0' || following == ' ';
+        if (startsToken && endsToken) return true;
+        match += requestedLength;
+    }
+    return false;
+}
+
+bool supportsUnpackRowLength() {
+    const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    constexpr char kEsVersionPrefix[] = "OpenGL ES ";
+    if (version && std::strncmp(version, kEsVersionPrefix,
+                                sizeof(kEsVersionPrefix) - 1) == 0) {
+        const char major = version[sizeof(kEsVersionPrefix) - 1];
+        if (major >= '3' && major <= '9') return true;
+    }
+
+    const char* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+    return hasGlExtension(extensions, "GL_EXT_unpack_subimage");
+}
+
+} // namespace
+
 static GLuint compileShader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
@@ -629,6 +664,7 @@ bool RasterRenderer::initialize(uint32_t width, uint32_t height,
     if (m_eglBackend && m_eglBackend->isInitialized()) {
         m_backendType = RasterBackend::OpenGL_EGL;
         m_eglBackend->makeCurrent();
+        m_glSupportsUnpackRowLength = supportsUnpackRowLength();
 
         initGLShader();
 
@@ -2630,10 +2666,20 @@ void RasterRenderer::drawCachedShmBufferTransformed(uint64_t cacheKey,
                 glTexSubImage2D(GL_TEXTURE_2D, 0,
                                 uploadX, uploadY, uploadW, uploadH,
                                 GL_RGBA, GL_UNSIGNED_BYTE, uploadPixels);
+            } else if (m_glSupportsUnpackRowLength) {
+                // The Android compositor owns a GLES3 context, while GBM may
+                // expose the same facility through GL_EXT_unpack_subimage.
+                // Preserve the SHM backing stride and upload the dirty block
+                // once instead of issuing one synchronous driver call per row.
+                glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, uploadStride);
+                glTexSubImage2D(GL_TEXTURE_2D, 0,
+                                uploadX, uploadY, uploadW, uploadH,
+                                GL_RGBA, GL_UNSIGNED_BYTE, uploadPixels);
+                glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, 0);
             } else {
                 // GLES2-compatible fallback for tightly bounded damage. The
-                // Android client path typically produces short dirty spans,
-                // so this remains much cheaper than uploading the full frame.
+                // capability check keeps this path valid on older GBM GLES2
+                // drivers that do not expose strided pixel unpacking.
                 for (int y = 0; y < uploadH; ++y) {
                     glTexSubImage2D(
                         GL_TEXTURE_2D, 0, uploadX, uploadY + y, uploadW, 1,

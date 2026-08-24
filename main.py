@@ -228,9 +228,12 @@ def build_android_phone_artifacts(args: argparse.Namespace, use_rootfs: bool) ->
     subprocess.check_call(configure_args, cwd=ROOT_DIR)
 
     jobs = max(1, int(args.jobs))
+    android_targets = ["lcl-core-android"]
+    if use_rootfs and not args.software_clients:
+        android_targets.extend(("lcl-desktop-shell", "lcl-terminal"))
     build_args = [
         "cmake", "--build", str(ANDROID_BUILD_DIR),
-        "--target", "lcl-core-android", "-j", str(jobs),
+        "--target", *android_targets, "-j", str(jobs),
     ]
     if args.rebuild:
         build_args.append("--clean-first")
@@ -248,11 +251,16 @@ def build_android_phone_artifacts(args: argparse.Namespace, use_rootfs: bool) ->
         )
 
 
-def require_android_phone_artifacts(use_rootfs: bool) -> None:
+def require_android_phone_artifacts(use_rootfs: bool, native_clients: bool) -> None:
     """Make --no-build strict instead of silently building missing files."""
     required = [ANDROID_BUILD_DIR / "lcl-core-android"]
     if use_rootfs:
         required.extend((ANDROID_ROOTFS_IMAGE, ANDROID_ZSTD_BINARY))
+    if use_rootfs and native_clients:
+        required.extend((
+            ANDROID_BUILD_DIR / "lcl-desktop-shell",
+            ANDROID_BUILD_DIR / "lcl-terminal",
+        ))
     missing = [path for path in required if not path.is_file()]
     if missing:
         formatted = "\n".join(f"  - {path}" for path in missing)
@@ -266,12 +274,13 @@ def cmd_android(args: argparse.Namespace) -> None:
     """Build and launch LCL OS on a connected rooted ARM64 Android phone."""
     deploy_args = [sys.executable, str(SCRIPTS_DIR / "deploy_android_device.py")]
     if args.restore_only:
-        subprocess.check_call([*deploy_args, "--restore-only"], cwd=ROOT_DIR)
+        run_android_deploy([*deploy_args, "--restore-only"])
         return
 
     use_rootfs = not args.compositor_only
+    native_clients = use_rootfs and not args.software_clients
     if args.no_build:
-        require_android_phone_artifacts(use_rootfs)
+        require_android_phone_artifacts(use_rootfs, native_clients)
         log("Skipping Android compositor and rootfs build (--no-build).")
     else:
         build_android_phone_artifacts(args, use_rootfs)
@@ -282,8 +291,27 @@ def cmd_android(args: argparse.Namespace) -> None:
         deploy_args.append("--no-stop-sysui")
     if args.logcat:
         deploy_args.append("--logcat")
+    if args.software_clients:
+        deploy_args.append("--software-clients")
 
-    subprocess.check_call(deploy_args, cwd=ROOT_DIR)
+    run_android_deploy(deploy_args)
+
+
+def run_android_deploy(command: list[str]) -> None:
+    """Let the deployment child finish device cleanup after terminal SIGINT."""
+    process = subprocess.Popen(command, cwd=ROOT_DIR)
+    interrupted = False
+    while True:
+        try:
+            return_code = process.wait()
+            break
+        except KeyboardInterrupt:
+            interrupted = True
+            log("Waiting for Android deployment cleanup to finish...")
+    if return_code != 0:
+        if interrupted and return_code == 130:
+            return
+        raise subprocess.CalledProcessError(return_code, command)
 
 
 def cmd_build(args: argparse.Namespace) -> None:
@@ -442,6 +470,10 @@ def main() -> None:
     p_android.add_argument(
         "--restore-only", action="store_true",
         help="Stop LCL and restore Android UI without building or launching",
+    )
+    p_android.add_argument(
+        "--software-clients", action="store_true",
+        help="Use canonical glibc SHM clients instead of Android AHardwareBuffer clients",
     )
 
     # ---- build ----

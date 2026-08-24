@@ -9,6 +9,11 @@
 
 namespace lcl::graphics {
 
+enum class NativeBufferTransport : uint8_t {
+    DmaBuf = 0,
+    AndroidHardwareBufferV1 = 1,
+};
+
 /** A GPU-native frame whose color channels are premultiplied by alpha. */
 struct DmaBufFrame {
     uint32_t bufferId{0};
@@ -20,6 +25,8 @@ struct DmaBufFrame {
     uint32_t format{0};
     uint64_t modifier{~uint64_t{0}};
     int fd{-1};
+    NativeBufferTransport transport{NativeBufferTransport::DmaBuf};
+    int acquireFenceFd{-1};
 };
 
 class Canvas {
@@ -41,8 +48,16 @@ public:
     virtual bool configureDmaBufFrame(uint32_t, uint32_t, uint32_t, uint32_t) { return false; }
     virtual bool isDmaBufFrameBlocked() const { return false; }
     virtual std::optional<DmaBufFrame> takeDmaBufFrame() { return std::nullopt; }
+    virtual bool supportsNativeBufferTransport(NativeBufferTransport) const {
+        return false;
+    }
+    virtual bool sendNativeBufferHandle(int, uint32_t) { return false; }
     virtual void cancelDmaBufFrame(uint32_t) {}
     virtual void releaseDmaBufFrame(uint32_t) {}
+    virtual bool releaseDmaBufFrameWithFence(uint32_t bufferId, int) {
+        releaseDmaBufFrame(bufferId);
+        return false;
+    }
 
     virtual void saveState() {}
     virtual void restoreState() {}

@@ -54,6 +54,14 @@ void Renderer::swapBuffers() {
     }
 }
 
+bool Renderer::waitNativeFence(int fenceFd) {
+    return m_graphicsContext && m_graphicsContext->waitNativeFence(fenceFd);
+}
+
+int Renderer::createNativeFence() {
+    return m_graphicsContext ? m_graphicsContext->createNativeFence() : -1;
+}
+
 void Renderer::shutdown() {
     if (!m_initialized) return;
     m_rasterRenderer.shutdown();

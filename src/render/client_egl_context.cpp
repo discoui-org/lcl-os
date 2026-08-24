@@ -11,9 +11,14 @@
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
+#include <poll.h>
 #include <string>
 #include <unistd.h>
 #include <vector>
+
+#if defined(__ANDROID__)
+#include <android/hardware_buffer.h>
+#endif
 
 namespace lcl::render {
 namespace {
@@ -85,9 +90,17 @@ bool ClientEGLContext::createSurface(uint32_t width, uint32_t height) {
 
 bool ClientEGLContext::initialize(uint32_t width, uint32_t height) {
 #if defined(__ANDROID__)
-    (void)width;
-    (void)height;
-    return unavailable("Android client uses CPU software raster + SHM transport");
+    if (m_initialized) return resize(width, height);
+    if (width == 0 || height == 0) return unavailable("invalid surface size");
+    m_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (m_display == EGL_NO_DISPLAY || !eglInitialize(m_display, nullptr, nullptr)) {
+        shutdown();
+        return unavailable("could not initialize Android EGL");
+    }
+    if (!eglBindAPI(EGL_OPENGL_ES_API)) {
+        shutdown();
+        return unavailable("could not bind the OpenGL ES API");
+    }
 #else
     if (m_initialized) return resize(width, height);
     if (width == 0 || height == 0) return unavailable("invalid surface size");
@@ -235,9 +248,94 @@ bool ClientEGLContext::createDmaBufPool(uint32_t width, uint32_t height) {
 
 bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
 #if defined(__ANDROID__)
-    (void)width;
-    (void)height;
-    return false;
+    if (!m_initialized || width == 0 || height == 0 || !makeCurrent()) return false;
+
+    using GetNativeClientBuffer = EGLClientBuffer (*)(const AHardwareBuffer*);
+    const auto getNativeClientBuffer = reinterpret_cast<GetNativeClientBuffer>(
+        eglGetProcAddress("eglGetNativeClientBufferANDROID"));
+    const auto createImage = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(
+        eglGetProcAddress("eglCreateImageKHR"));
+    const auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(
+        eglGetProcAddress("eglDestroyImageKHR"));
+    const auto imageTarget = reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(
+        eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+    if (!getNativeClientBuffer || !createImage || !destroyImage || !imageTarget) return false;
+
+    for (size_t index = m_dmaBufs.size(); index > 0; --index) {
+        auto& slot = m_dmaBufs[index - 1];
+        if (slot.busy) {
+            slot.retired = true;
+        } else {
+            destroyDmaBufSlot(slot);
+            m_dmaBufs.erase(m_dmaBufs.begin() + static_cast<std::ptrdiff_t>(index - 1));
+        }
+    }
+    const size_t retainedPoolSize = m_dmaBufs.size();
+    for (uint32_t index = 0; index < 3; ++index) {
+        DmaBufSlot slot{};
+        slot.id = m_nextDmaBufId++;
+        slot.width = width;
+        slot.height = height;
+        AHardwareBuffer_Desc desc{};
+        desc.width = width;
+        desc.height = height;
+        desc.layers = 1;
+        desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+        desc.usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
+                     AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
+        if (AHardwareBuffer_allocate(&desc, &slot.ahb) != 0 || !slot.ahb) {
+            while (m_dmaBufs.size() > retainedPoolSize) {
+                destroyDmaBufSlot(m_dmaBufs.back());
+                m_dmaBufs.pop_back();
+            }
+            for (auto& existing : m_dmaBufs) existing.retired = false;
+            return false;
+        }
+        AHardwareBuffer_describe(slot.ahb, &desc);
+        slot.stride = desc.stride * 4u;
+        const EGLint attributes[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
+        slot.image = createImage(m_display, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID,
+                                 getNativeClientBuffer(slot.ahb), attributes);
+        if (slot.image == EGL_NO_IMAGE_KHR) {
+            destroyDmaBufSlot(slot);
+            while (m_dmaBufs.size() > retainedPoolSize) {
+                destroyDmaBufSlot(m_dmaBufs.back());
+                m_dmaBufs.pop_back();
+            }
+            for (auto& existing : m_dmaBufs) existing.retired = false;
+            return false;
+        }
+        glGenTextures(1, &slot.texture);
+        glBindTexture(GL_TEXTURE_2D, slot.texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        imageTarget(GL_TEXTURE_2D, slot.image);
+        glGenFramebuffers(1, &slot.framebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, slot.framebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, slot.texture, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            destroyDmaBufSlot(slot);
+            while (m_dmaBufs.size() > retainedPoolSize) {
+                destroyDmaBufSlot(m_dmaBufs.back());
+                m_dmaBufs.pop_back();
+            }
+            for (auto& existing : m_dmaBufs) existing.retired = false;
+            return false;
+        }
+        m_dmaBufs.push_back(slot);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    m_dmaBufCapacityWidth = width;
+    m_dmaBufCapacityHeight = height;
+    if (!m_dmaBufTransportLogged) {
+        std::cerr << "[LCL Canvas] Client AHardwareBuffer transport active (3 buffers)\n";
+        m_dmaBufTransportLogged = true;
+    }
+    return true;
 #else
     if (!m_initialized || !m_gbmDevice || width == 0 || height == 0 || !makeCurrent()) return false;
 
@@ -328,17 +426,11 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
 }
 
 bool ClientEGLContext::ensureDmaBufCapacity(uint32_t width, uint32_t height) {
-#if defined(__ANDROID__)
-    (void)width;
-    (void)height;
-    return false;
-#else
     if (!m_initialized || width == 0 || height == 0) return false;
     if (!m_dmaBufs.empty() && width <= m_dmaBufCapacityWidth &&
         height <= m_dmaBufCapacityHeight) return true;
     return appendDmaBufPool(std::max(width, m_dmaBufCapacityWidth),
                             std::max(height, m_dmaBufCapacityHeight));
-#endif
 }
 
 void ClientEGLContext::destroyDmaBufSlot(DmaBufSlot& slot) {
@@ -347,9 +439,13 @@ void ClientEGLContext::destroyDmaBufSlot(DmaBufSlot& slot) {
     if (slot.framebuffer) glDeleteFramebuffers(1, &slot.framebuffer);
     if (slot.texture) glDeleteTextures(1, &slot.texture);
     if (slot.image != EGL_NO_IMAGE_KHR && destroyImage) destroyImage(m_display, slot.image);
+#if defined(__ANDROID__)
+    if (slot.ahb) AHardwareBuffer_release(slot.ahb);
+#endif
 #if !defined(__ANDROID__)
     if (slot.bo) gbm_bo_destroy(slot.bo);
 #endif
+    if (slot.releaseFenceFd >= 0) close(slot.releaseFenceFd);
     slot = {};
 }
 
@@ -362,10 +458,8 @@ void ClientEGLContext::destroyDmaBufPool() {
     }
     m_dmaBufs.clear();
     m_currentDmaBuf = -1;
-#if !defined(__ANDROID__)
     m_dmaBufCapacityWidth = 0;
     m_dmaBufCapacityHeight = 0;
-#endif
 }
 
 std::optional<ClientEGLContext::DmaBufTarget> ClientEGLContext::acquireDmaBufTarget() {
@@ -373,6 +467,34 @@ std::optional<ClientEGLContext::DmaBufTarget> ClientEGLContext::acquireDmaBufTar
     for (size_t index = 0; index < m_dmaBufs.size(); ++index) {
         auto& slot = m_dmaBufs[index];
         if (slot.busy || slot.retired) continue;
+#if defined(__ANDROID__)
+        if (slot.releaseFenceFd >= 0) {
+            using CreateSync = EGLSyncKHR (*)(EGLDisplay, EGLenum, const EGLint*);
+            using DestroySync = EGLBoolean (*)(EGLDisplay, EGLSyncKHR);
+            using WaitSync = EGLBoolean (*)(EGLDisplay, EGLSyncKHR, EGLint);
+            const auto createSync = reinterpret_cast<CreateSync>(
+                eglGetProcAddress("eglCreateSyncKHR"));
+            const auto destroySync = reinterpret_cast<DestroySync>(
+                eglGetProcAddress("eglDestroySyncKHR"));
+            const auto waitSync = reinterpret_cast<WaitSync>(
+                eglGetProcAddress("eglWaitSyncKHR"));
+            const EGLint attributes[] = {
+                EGL_SYNC_NATIVE_FENCE_FD_ANDROID, slot.releaseFenceFd, EGL_NONE};
+            EGLSyncKHR sync = createSync
+                ? createSync(m_display, EGL_SYNC_NATIVE_FENCE_ANDROID, attributes)
+                : EGL_NO_SYNC_KHR;
+            if (sync != EGL_NO_SYNC_KHR && waitSync && destroySync) {
+                slot.releaseFenceFd = -1; // EGL owns the imported fd.
+                waitSync(m_display, sync, 0);
+                destroySync(m_display, sync);
+            } else {
+                pollfd descriptor{slot.releaseFenceFd, POLLIN, 0};
+                (void)poll(&descriptor, 1, 3000);
+                close(slot.releaseFenceFd);
+                slot.releaseFenceFd = -1;
+            }
+        }
+#endif
         slot.busy = true;
         m_currentDmaBuf = static_cast<int>(index);
         return DmaBufTarget{slot.id, slot.framebuffer, slot.texture, slot.width, slot.height};
@@ -382,7 +504,35 @@ std::optional<ClientEGLContext::DmaBufTarget> ClientEGLContext::acquireDmaBufTar
 
 std::optional<ClientEGLContext::DmaBufExport> ClientEGLContext::exportCurrentDmaBuf() {
 #if defined(__ANDROID__)
-    return std::nullopt;
+    if (m_currentDmaBuf < 0 ||
+        static_cast<size_t>(m_currentDmaBuf) >= m_dmaBufs.size())
+        return std::nullopt;
+    auto& slot = m_dmaBufs[static_cast<size_t>(m_currentDmaBuf)];
+    m_currentDmaBuf = -1;
+    int acquireFenceFd = -1;
+    using CreateSync = EGLSyncKHR (*)(EGLDisplay, EGLenum, const EGLint*);
+    using DestroySync = EGLBoolean (*)(EGLDisplay, EGLSyncKHR);
+    using DupFence = EGLint (*)(EGLDisplay, EGLSyncKHR);
+    const auto createSync = reinterpret_cast<CreateSync>(
+        eglGetProcAddress("eglCreateSyncKHR"));
+    const auto destroySync = reinterpret_cast<DestroySync>(
+        eglGetProcAddress("eglDestroySyncKHR"));
+    const auto dupFence = reinterpret_cast<DupFence>(
+        eglGetProcAddress("eglDupNativeFenceFDANDROID"));
+    if (createSync && destroySync && dupFence) {
+        const EGLint attributes[] = {EGL_NONE};
+        EGLSyncKHR sync = createSync(
+            m_display, EGL_SYNC_NATIVE_FENCE_ANDROID, attributes);
+        if (sync != EGL_NO_SYNC_KHR) {
+            glFlush();
+            acquireFenceFd = dupFence(m_display, sync);
+            destroySync(m_display, sync);
+        }
+    }
+    if (acquireFenceFd < 0) glFinish();
+    return DmaBufExport{slot.id, slot.width, slot.height, slot.stride,
+                        lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888,
+                        ~uint64_t{0}, -1, true, acquireFenceFd};
 #else
     if (m_currentDmaBuf < 0 || static_cast<size_t>(m_currentDmaBuf) >= m_dmaBufs.size()) return std::nullopt;
     auto& slot = m_dmaBufs[static_cast<size_t>(m_currentDmaBuf)];
@@ -394,8 +544,24 @@ std::optional<ClientEGLContext::DmaBufExport> ClientEGLContext::exportCurrentDma
     }
     glFlush();
     return DmaBufExport{slot.id, slot.width, slot.height, slot.stride,
-                        lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888, slot.modifier, fd};
+                        lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888, slot.modifier,
+                        fd, false, -1};
 #endif
+}
+
+bool ClientEGLContext::sendNativeBufferHandle(int socketFd, uint32_t bufferId) {
+#if defined(__ANDROID__)
+    if (socketFd < 0) return false;
+    for (const auto& slot : m_dmaBufs) {
+        if (slot.id == bufferId && slot.ahb) {
+            return AHardwareBuffer_sendHandleToUnixSocket(slot.ahb, socketFd) == 0;
+        }
+    }
+#else
+    (void)socketFd;
+    (void)bufferId;
+#endif
+    return false;
 }
 
 void ClientEGLContext::cancelCurrentDmaBuf() {
@@ -405,10 +571,12 @@ void ClientEGLContext::cancelCurrentDmaBuf() {
     m_currentDmaBuf = -1;
 }
 
-void ClientEGLContext::releaseDmaBuf(uint32_t bufferId) {
+void ClientEGLContext::releaseDmaBuf(uint32_t bufferId, int releaseFenceFd) {
     for (size_t index = 0; index < m_dmaBufs.size(); ++index) {
         auto& slot = m_dmaBufs[index];
         if (slot.id != bufferId) continue;
+        if (slot.releaseFenceFd >= 0) close(slot.releaseFenceFd);
+        slot.releaseFenceFd = releaseFenceFd;
         slot.busy = false;
         if (slot.retired) {
             if (makeCurrent()) destroyDmaBufSlot(slot);
@@ -416,6 +584,7 @@ void ClientEGLContext::releaseDmaBuf(uint32_t bufferId) {
         }
         return;
     }
+    if (releaseFenceFd >= 0) close(releaseFenceFd);
 }
 
 bool ClientEGLContext::readback(uint32_t* destination, uint32_t width, uint32_t height) {

@@ -10,9 +10,16 @@
 #include <cstddef>
 #include <cstring>
 #include <iostream>
+#include <poll.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#if defined(__ANDROID__)
+#include <android/hardware_buffer.h>
+#include "platform/android/ahardware_native_buffer.hpp"
+#endif
 
 namespace lcl::core {
 namespace {
@@ -99,6 +106,13 @@ private:
     std::string m_message{"ok"};
 };
 } // namespace
+
+ProtocolDispatcher::~ProtocolDispatcher() {
+    for (const auto& [clientFd, channelFd] : m_nativeBufferChannels) {
+        (void)clientFd;
+        if (channelFd >= 0) close(channelFd);
+    }
+}
 
 bool ProtocolDispatcher::process(IPCManager& ipcManager) {
     bool changed = false;
@@ -220,6 +234,11 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         if (msg.disconnected) {
             m_pendingSystemSurfaceKinds.erase(msg.clientFd);
             m_shellSubscriptions.erase(msg.clientFd);
+            if (const auto channel = m_nativeBufferChannels.find(msg.clientFd);
+                channel != m_nativeBufferChannels.end()) {
+                if (channel->second >= 0) close(channel->second);
+                m_nativeBufferChannels.erase(channel);
+            }
             std::vector<uint64_t> surfacesToRemove;
             std::vector<uint64_t> ownedParentSurfaces;
             for (const auto& [surfKey, entry] : m_surfaces) {
@@ -267,6 +286,48 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             msg.header.opcode == lcl::protocol::LCLOpcode::PopupSurfaceCreate;
         const bool isAttachBuffer = msg.header.opcode == lcl::protocol::LCLOpcode::AttachBuffer;
         const bool isAttachDmaBuf = msg.header.opcode == lcl::protocol::LCLOpcode::AttachDmaBuf;
+        const bool isAttachNativeBuffer =
+            msg.header.opcode == lcl::protocol::LCLOpcode::AttachNativeBuffer;
+
+        if (msg.header.opcode == lcl::protocol::LCLOpcode::QueryCapabilities) {
+            if (msg.payload.size() !=
+                sizeof(lcl::protocol::LCLMsgQueryCapabilities)) {
+                requestAck.error(3, "invalid capability query");
+                continue;
+            }
+            const auto* query = reinterpret_cast<const
+                lcl::protocol::LCLMsgQueryCapabilities*>(msg.payload.data());
+            lcl::protocol::LCLMsgCapabilities capabilities{};
+            int clientChannelFd = -1;
+#if defined(__ANDROID__)
+            if ((query->requested & lcl::protocol::LCL_CAPABILITY_AHB_V1) != 0) {
+                int channels[2]{-1, -1};
+                if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC,
+                               0, channels) == 0) {
+                    if (const auto old = m_nativeBufferChannels.find(msg.clientFd);
+                        old != m_nativeBufferChannels.end()) {
+                        if (old->second >= 0) close(old->second);
+                        m_nativeBufferChannels.erase(old);
+                    }
+                    m_nativeBufferChannels[msg.clientFd] = channels[0];
+                    clientChannelFd = channels[1];
+                    capabilities.supported |=
+                        lcl::protocol::LCL_CAPABILITY_AHB_V1;
+                }
+            }
+#else
+            (void)query;
+#endif
+            lcl::protocol::LCLHeader response{};
+            response.opcode = lcl::protocol::LCLOpcode::Capabilities;
+            response.payloadSize = sizeof(capabilities);
+            if (!lcl::protocol::sendMsgWithFd(
+                    msg.clientFd, response, &capabilities, clientChannelFd)) {
+                requestAck.error(4, "capability response unavailable");
+            }
+            if (clientChannelFd >= 0) close(clientChannelFd);
+            continue;
+        }
 
         if (msg.header.opcode == lcl::protocol::LCLOpcode::SetSystemSurfaceKind) {
             if (msg.payload.size() != sizeof(lcl::protocol::LCLMsgSetSystemSurfaceKind)) {
@@ -609,6 +670,204 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             SurfaceRegistry::queuePresentation(
                 entry, bufferMessage->configureSerial);
             changed = true;
+
+        // --- ATTACH_NATIVE_BUFFER: import an opaque AHB as a GPU texture ---
+        } else if (isAttachNativeBuffer) {
+#if defined(__ANDROID__)
+            if (msg.payload.size() !=
+                sizeof(lcl::protocol::LCLMsgAttachNativeBuffer)) {
+                if (msg.passedFd >= 0) close(msg.passedFd);
+                requestAck.error(3, "invalid native-buffer attach");
+                continue;
+            }
+            const auto* bufferMessage = reinterpret_cast<const
+                lcl::protocol::LCLMsgAttachNativeBuffer*>(msg.payload.data());
+            const auto channel = m_nativeBufferChannels.find(msg.clientFd);
+            if (channel == m_nativeBufferChannels.end() || channel->second < 0 ||
+                bufferMessage->transport != lcl::protocol::
+                    LCLNativeBufferTransport::AndroidHardwareBufferV1) {
+                if (msg.passedFd >= 0) close(msg.passedFd);
+                requestAck.error(4, "AHB_V1 transport unavailable");
+                continue;
+            }
+
+            AHardwareBuffer* hardwareBuffer = nullptr;
+            if (AHardwareBuffer_recvHandleFromUnixSocket(
+                    channel->second, &hardwareBuffer) != 0 || !hardwareBuffer) {
+                if (msg.passedFd >= 0) close(msg.passedFd);
+                requestAck.error(4, "AHB_V1 handle receive failed");
+                continue;
+            }
+            if (msg.passedFd >= 0) {
+                const int acquireFenceFd = msg.passedFd;
+                if (!m_renderer.waitNativeFence(acquireFenceFd)) {
+                    pollfd descriptor{acquireFenceFd, POLLIN, 0};
+                    (void)poll(&descriptor, 1, 3000);
+                    close(acquireFenceFd);
+                }
+            }
+
+            AHardwareBuffer_Desc hardwareDesc{};
+            AHardwareBuffer_describe(hardwareBuffer, &hardwareDesc);
+            const uint64_t surfaceKey =
+                (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) |
+                bufferMessage->surfaceId;
+            auto surfaceIt = m_surfaces.find(surfaceKey);
+            const auto releaseRejected = [&] {
+                lcl::protocol::LCLHeader releaseHeader{};
+                releaseHeader.opcode = lcl::protocol::LCLOpcode::ReleaseDmaBuf;
+                releaseHeader.payloadSize =
+                    sizeof(lcl::protocol::LCLMsgReleaseDmaBuf);
+                lcl::protocol::LCLMsgReleaseDmaBuf release{};
+                release.surfaceId = bufferMessage->surfaceId;
+                release.bufferId = bufferMessage->bufferId;
+                lcl::protocol::sendMsgWithFd(
+                    msg.clientFd, releaseHeader, &release);
+            };
+            if (surfaceIt == m_surfaces.end()) {
+                AHardwareBuffer_release(hardwareBuffer);
+                continue;
+            }
+            auto& entry = surfaceIt->second;
+            if (hardwareDesc.width < bufferMessage->backingWidth ||
+                hardwareDesc.height < bufferMessage->backingHeight ||
+                entry.ignoreBufferCommits ||
+                entry.transitionPhase == SurfaceEntry::TransitionPhase::Closing ||
+                !SurfaceRegistry::acceptsBufferCommit(
+                    entry, bufferMessage->configureSerial)) {
+                AHardwareBuffer_release(hardwareBuffer);
+                releaseRejected();
+                continue;
+            }
+
+            lcl::platform::android::AHardwareNativeBuffer nativeBuffer(
+                hardwareBuffer, false);
+            const uint32_t texture =
+                m_renderer.getRasterRenderer()->importTexture(nativeBuffer);
+            AHardwareBuffer_release(hardwareBuffer);
+            if (texture == 0) {
+                releaseRejected();
+                requestAck.error(4, "AHB_V1 import unavailable");
+                continue;
+            }
+
+            if (entry.resizeTransitionPhase ==
+                    SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer &&
+                entry.hasRenderableBuffer()) {
+                SurfaceRegistry::releasePreviousBuffer(entry);
+                entry.previousPixels = entry.pixels;
+                entry.previousShmSize = entry.shmSize;
+                entry.previousShmFd = entry.shmFd;
+                entry.previousWidth = entry.width;
+                entry.previousHeight = entry.height;
+                entry.previousBackingWidth = entry.backingWidth;
+                entry.previousBackingHeight = entry.backingHeight;
+                entry.previousStride = entry.stride;
+                entry.previousShmContentSerial = entry.shmContentSerial;
+                entry.previousDmaBufId = entry.dmaBufId;
+                entry.previousDmaBufTexture = entry.dmaBufTexture;
+                entry.pixels = nullptr;
+                entry.shmSize = 0;
+                entry.shmFd = -1;
+                entry.shmContentSerial = 0;
+                entry.dmaBufId = 0;
+                entry.dmaBufTexture = 0;
+            } else {
+                if (entry.dmaBufTexture != 0 || entry.dmaBufId != 0) {
+                    entry.pendingDmaBufReleases.push_back(
+                        {entry.dmaBufId, entry.dmaBufTexture});
+                }
+                if (entry.pixels && entry.shmSize > 0)
+                    munmap(entry.pixels, entry.shmSize);
+                if (entry.shmFd >= 0) close(entry.shmFd);
+                entry.pixels = nullptr;
+                entry.shmSize = 0;
+                entry.shmFd = -1;
+                entry.shmContentSerial = 0;
+                entry.dmaBufId = 0;
+                entry.dmaBufTexture = 0;
+            }
+            entry.clientFd = msg.clientFd;
+            entry.dmaBufId = bufferMessage->bufferId;
+            entry.dmaBufTexture = texture;
+            if (!entry.dmaBufTransportActive) {
+                entry.dmaBufTransportActive = true;
+                std::cerr << "[LCL AHB] Surface " << bufferMessage->surfaceId
+                          << " zero-copy import active\n";
+            }
+            entry.width = bufferMessage->width;
+            entry.height = bufferMessage->height;
+            entry.backingWidth = bufferMessage->backingWidth;
+            entry.backingHeight = bufferMessage->backingHeight;
+            entry.stride = hardwareDesc.stride * 4u;
+            entry.acceptedConfigureSerial = bufferMessage->configureSerial;
+            if (entry.resizeTransitionPhase ==
+                SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer) {
+                entry.resizeTransitionPhase =
+                    SurfaceEntry::ResizeTransitionPhase::Crossfading;
+                entry.resizeCrossfadeElapsedSec = 0.0f;
+                entry.resizeCrossfadeProgress = 0.0f;
+            }
+            if (entry.isPopup()) {
+                entry.hasCommittedBuffer = true;
+            } else if (entry.windowId == 0 &&
+                       !mapSurface(surfaceKey, entry, msg.pid)) {
+                continue;
+            }
+            if (entry.isPopup()) {
+                SurfaceRegistry::queuePresentation(
+                    entry, bufferMessage->configureSerial);
+                changed = true;
+                continue;
+            }
+
+            int titleOffset = 0;
+            for (const auto& win : m_windowManager.getWindows()) {
+                if (win.id == entry.windowId &&
+                    win.decorationMode == render::DecorationMode::SSD) {
+                    titleOffset = 32;
+                    break;
+                }
+            }
+            const float requestedContentW = entry.configuredWidth;
+            const float requestedContentH = entry.configuredHeight;
+            const float committedContentW =
+                SurfaceRegistry::committedLogicalExtent(
+                    entry.width, requestedContentW, entry.bufferScale);
+            const float committedContentH =
+                SurfaceRegistry::committedLogicalExtent(
+                    entry.height, requestedContentH, entry.bufferScale);
+            const float frameW = committedContentW;
+            const float frameH = committedContentH +
+                static_cast<float>(titleOffset);
+            bool preserveNewerTarget = false;
+            const auto configuredWindow = std::find_if(
+                m_windowManager.getWindows().begin(),
+                m_windowManager.getWindows().end(),
+                [&entry](const auto& window) {
+                    return window.id == entry.windowId;
+                });
+            if (configuredWindow != m_windowManager.getWindows().end()) {
+                const float configuredFrameHeight = requestedContentH +
+                    static_cast<float>(titleOffset);
+                preserveNewerTarget =
+                    configuredWindow->pendingWidth != requestedContentW ||
+                    configuredWindow->pendingHeight != configuredFrameHeight;
+            }
+            entry.configuredWidth = committedContentW;
+            entry.configuredHeight = committedContentH;
+            m_windowManager.commitSurfaceGeometry(
+                entry.windowId, frameW, frameH, preserveNewerTarget,
+                entry.configuredX, entry.configuredY,
+                entry.configuredGeometryGeneration);
+            SurfaceRegistry::queuePresentation(
+                entry, bufferMessage->configureSerial);
+            changed = true;
+#else
+            if (msg.passedFd >= 0) close(msg.passedFd);
+            requestAck.error(4, "AHB_V1 import unavailable");
+            continue;
+#endif
 
         // --- ATTACH_BUFFER: mmap the SCM_RIGHTS memfd into compositor address space ---
         } else if (isAttachBuffer) {

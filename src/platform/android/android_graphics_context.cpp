@@ -14,6 +14,7 @@ typedef void (*pfn_glEGLImageTargetTexture2DOES)(GLenum target, void* image);
 typedef EGLSyncKHR (*pfn_eglCreateSyncKHR)(EGLDisplay, EGLenum, const EGLint*);
 typedef EGLBoolean (*pfn_eglDestroySyncKHR)(EGLDisplay, EGLSyncKHR);
 typedef EGLint (*pfn_eglDupNativeFenceFDANDROID)(EGLDisplay, EGLSyncKHR);
+typedef EGLBoolean (*pfn_eglWaitSyncKHR)(EGLDisplay, EGLSyncKHR, EGLint);
 
 namespace lcl::platform::android {
 
@@ -370,6 +371,52 @@ void AndroidGraphicsContext::releaseTexture(lcl::platform::TextureHandle texture
         m_importedImages.erase(it);
     }
     glDeleteTextures(1, &tex);
+}
+
+bool AndroidGraphicsContext::waitNativeFence(int fenceFd) {
+    if (fenceFd < 0 || !makeCurrent()) return false;
+    auto createSync = reinterpret_cast<pfn_eglCreateSyncKHR>(
+        eglGetProcAddress("eglCreateSyncKHR"));
+    auto destroySync = reinterpret_cast<pfn_eglDestroySyncKHR>(
+        eglGetProcAddress("eglDestroySyncKHR"));
+    auto waitSync = reinterpret_cast<pfn_eglWaitSyncKHR>(
+        eglGetProcAddress("eglWaitSyncKHR"));
+    if (!createSync || !destroySync || !waitSync) return false;
+    const EGLint attributes[] = {
+        EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fenceFd, EGL_NONE};
+    EGLSyncKHR sync = createSync(
+        m_eglDisplay, EGL_SYNC_NATIVE_FENCE_ANDROID, attributes);
+    if (sync == EGL_NO_SYNC_KHR) return false;
+    // EGL owns fenceFd after a successful native-fence import.
+    const bool waited = waitSync(m_eglDisplay, sync, 0) == EGL_TRUE;
+    destroySync(m_eglDisplay, sync);
+    return waited;
+}
+
+int AndroidGraphicsContext::createNativeFence() {
+    if (!makeCurrent()) return -1;
+    auto createSync = reinterpret_cast<pfn_eglCreateSyncKHR>(
+        eglGetProcAddress("eglCreateSyncKHR"));
+    auto destroySync = reinterpret_cast<pfn_eglDestroySyncKHR>(
+        eglGetProcAddress("eglDestroySyncKHR"));
+    auto dupFence = reinterpret_cast<pfn_eglDupNativeFenceFDANDROID>(
+        eglGetProcAddress("eglDupNativeFenceFDANDROID"));
+    if (!createSync || !destroySync || !dupFence) {
+        glFinish();
+        return -1;
+    }
+    const EGLint attributes[] = {EGL_NONE};
+    EGLSyncKHR sync = createSync(
+        m_eglDisplay, EGL_SYNC_NATIVE_FENCE_ANDROID, attributes);
+    if (sync == EGL_NO_SYNC_KHR) {
+        glFinish();
+        return -1;
+    }
+    glFlush();
+    const int fenceFd = dupFence(m_eglDisplay, sync);
+    destroySync(m_eglDisplay, sync);
+    if (fenceFd < 0) glFinish();
+    return fenceFd;
 }
 
 } // namespace lcl::platform::android
