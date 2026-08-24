@@ -10,8 +10,18 @@ enum class SystemGestureDecision {
     PassThrough,
     Tracking,
     Claim,
+    Update,
     Consume,
+    Cancel,
     Home
+};
+
+struct SystemGestureProgress {
+    uint32_t pointerId{0};
+    float startX{0.0f};
+    float startY{0.0f};
+    float x{0.0f};
+    float y{0.0f};
 };
 
 struct SystemGestureConfig {
@@ -28,7 +38,8 @@ public:
     explicit SystemGestureArena(SystemGestureConfig config = {})
         : m_config(config) {}
 
-    SystemGestureDecision process(const InputEvent& event, float outputHeight);
+    SystemGestureDecision process(const InputEvent& event, float outputHeight,
+                                  SystemGestureProgress* progress = nullptr);
     void reset() noexcept;
     bool isTracking(uint32_t pointerId) const noexcept;
     bool hasClaimed(uint32_t pointerId) const noexcept;

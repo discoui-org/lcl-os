@@ -72,6 +72,8 @@ private:
     void renderFrame();
     void renderDiagnosticOverlay();
     void synchronizeShellState();
+    bool handleSystemGesture(SystemGestureDecision decision,
+                             const SystemGestureProgress& gesture);
 
     // Injected Platform Services reference
     lcl::platform::IPlatformServices& m_platformServices;

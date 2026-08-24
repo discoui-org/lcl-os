@@ -407,6 +407,25 @@ if(ANDROID)
         Threads::Threads
     )
 
+    add_executable(lcl-js
+        src/tools/js_main.cpp
+        src/binding/js_runtime.cpp
+    )
+    target_include_directories(lcl-js PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+        ${quickjs_SOURCE_DIR}
+    )
+    target_link_libraries(lcl-js PRIVATE
+        lcl-ui
+        lcl-raster
+        qjs
+        Threads::Threads
+    )
+
+    add_subdirectory(apps/ui_demo)
+    add_subdirectory(apps/ui_demo_js)
+
     # Android Compositor Runtime (Composition Root)
     add_executable(lcl-core-android
         src/platform/android/main_android.cpp

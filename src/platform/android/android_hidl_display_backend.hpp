@@ -2,6 +2,7 @@
 
 #include "platform/common/display_backend.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 
@@ -22,6 +23,7 @@ public:
     void shutdown();
     bool prepareBufferForRender(AHardwareBuffer* buffer);
     bool presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd = -1);
+    bool waitForVsync(std::chrono::nanoseconds timeout);
 
     bool isInitialized() const { return m_initialized; }
     int64_t displayId() const { return static_cast<int64_t>(m_displayId); }

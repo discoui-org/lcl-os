@@ -18,6 +18,7 @@ struct AndroidHidlDisplayBackend::Impl {
     using Shutdown = void (*)(void*);
     using PrepareBuffer = int (*)(void*, AHardwareBuffer*);
     using Present = int (*)(void*, AHardwareBuffer*, int);
+    using WaitVsync = int (*)(void*, int64_t);
 
     void* library{nullptr};
     void* instance{nullptr};
@@ -27,6 +28,7 @@ struct AndroidHidlDisplayBackend::Impl {
     Shutdown shutdown{nullptr};
     PrepareBuffer prepareBuffer{nullptr};
     Present present{nullptr};
+    WaitVsync waitVsync{nullptr};
 };
 
 namespace {
@@ -90,7 +92,9 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale,
             !loadSymbol(m_impl->library, "lcl_android_hidl_shutdown", &m_impl->shutdown) ||
             !loadSymbol(m_impl->library, "lcl_android_hidl_prepare_buffer",
                         &m_impl->prepareBuffer) ||
-            !loadSymbol(m_impl->library, "lcl_android_hidl_present", &m_impl->present)) {
+            !loadSymbol(m_impl->library, "lcl_android_hidl_present", &m_impl->present) ||
+            !loadSymbol(m_impl->library, "lcl_android_hidl_wait_vsync",
+                        &m_impl->waitVsync)) {
             return false;
         }
         m_impl->instance = m_impl->create();
@@ -133,6 +137,12 @@ bool AndroidHidlDisplayBackend::prepareBufferForRender(AHardwareBuffer* buffer) 
 bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd) {
     return m_initialized && m_impl->instance && m_impl->present &&
            m_impl->present(m_impl->instance, buffer, acquireFenceFd) != 0;
+}
+
+bool AndroidHidlDisplayBackend::waitForVsync(std::chrono::nanoseconds timeout) {
+    return m_initialized && m_impl->instance && m_impl->waitVsync &&
+           timeout.count() > 0 &&
+           m_impl->waitVsync(m_impl->instance, timeout.count()) != 0;
 }
 
 } // namespace lcl::platform::android

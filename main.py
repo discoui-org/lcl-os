@@ -33,6 +33,14 @@ ANDROID_BUILD_DIR = ROOT_DIR / "build-android-arm64"
 ANDROID_HIDL_ROOT = BUILD_DIR / "android-hidl-v31"
 ANDROID_ROOTFS_IMAGE = BUILD_DIR / "rootfs" / "lcl-rootfs-aarch64.ext4"
 ANDROID_ZSTD_BINARY = BUILD_DIR / "android-tools-arm64" / "zstd"
+ANDROID_NATIVE_CLIENT_ARTIFACTS = {
+    "lcl-desktop-shell": Path("lcl-desktop-shell"),
+    "lcl-mobile-shell": Path("lcl-mobile-shell"),
+    "lcl-terminal": Path("lcl-terminal"),
+    "lcl_ui_demo": Path("apps/ui_demo/lcl_ui_demo"),
+    "lcl-js": Path("lcl-js"),
+}
+ANDROID_NATIVE_CLIENT_TARGETS = tuple(ANDROID_NATIVE_CLIENT_ARTIFACTS)
 
 
 def log(msg: str) -> None:
@@ -234,7 +242,7 @@ def build_android_phone_artifacts(args: argparse.Namespace, use_rootfs: bool) ->
     jobs = max(1, int(args.jobs))
     android_targets = ["lcl-core-android"]
     if use_rootfs and not args.software_clients:
-        android_targets.extend(("lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal"))
+        android_targets.extend(ANDROID_NATIVE_CLIENT_TARGETS)
     build_args = [
         "cmake", "--build", str(ANDROID_BUILD_DIR),
         "--target", *android_targets, "-j", str(jobs),
@@ -261,11 +269,10 @@ def require_android_phone_artifacts(use_rootfs: bool, native_clients: bool) -> N
     if use_rootfs:
         required.extend((ANDROID_ROOTFS_IMAGE, ANDROID_ZSTD_BINARY))
     if use_rootfs and native_clients:
-        required.extend((
-            ANDROID_BUILD_DIR / "lcl-desktop-shell",
-            ANDROID_BUILD_DIR / "lcl-mobile-shell",
-            ANDROID_BUILD_DIR / "lcl-terminal",
-        ))
+        required.extend(
+            ANDROID_BUILD_DIR / relative_path
+            for relative_path in ANDROID_NATIVE_CLIENT_ARTIFACTS.values()
+        )
     missing = [path for path in required if not path.is_file()]
     if missing:
         formatted = "\n".join(f"  - {path}" for path in missing)

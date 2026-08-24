@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -35,6 +36,9 @@ public:
                                     float deviceScale = 1.0f) = 0;
     virtual bool moveHardwareCursor(int x, int y) = 0;
     virtual bool isHardwareCursorActive() const = 0;
+
+    /** Wait for the next hardware display timing edge when the backend exposes it. */
+    virtual bool waitForVsync(std::chrono::nanoseconds) { return false; }
 };
 
 } // namespace lcl::platform

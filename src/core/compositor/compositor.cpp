@@ -43,6 +43,64 @@ Compositor::~Compositor() {
 // Initialization
 // ============================================================
 
+bool Compositor::handleSystemGesture(
+        SystemGestureDecision decision,
+        const SystemGestureProgress& gesture) {
+    const uint32_t windowId = m_windowManager.getFocusedWindowId();
+    if (windowId == 0) return false;
+
+    const auto surface = std::find_if(
+        m_surfaces.begin(), m_surfaces.end(), [windowId](const auto& item) {
+            return !item.second.isPopup() &&
+                item.second.systemSurfaceKind ==
+                    protocol::LCLSystemSurfaceKind::None &&
+                item.second.windowId == windowId;
+        });
+    if (surface == m_surfaces.end()) return false;
+
+    auto& entry = surface->second;
+    if ((decision == SystemGestureDecision::Claim ||
+         decision == SystemGestureDecision::Update) &&
+        entry.hasLaunchOrigin) {
+        entry.launchGestureActive = true;
+        entry.launchGestureStartX = gesture.startX;
+        entry.launchGestureStartY = gesture.startY;
+        entry.launchGestureX = gesture.x;
+        entry.launchGestureY = gesture.y;
+        entry.transitionPhase =
+            SurfaceRegistry::SurfaceEntry::TransitionPhase::Interactive;
+        return true;
+    }
+
+    if (decision == SystemGestureDecision::Cancel) {
+        if (!entry.launchGestureActive) return false;
+        entry.launchGestureActive = false;
+        entry.transitionPhase =
+            SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring;
+        return true;
+    }
+
+    if (decision != SystemGestureDecision::Home) return false;
+
+    const auto phase = entry.transitionPhase;
+    if (phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing ||
+        phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing) {
+        return true;
+    }
+
+    // Entering/restoring launch morphs are velocity-preserving channels.
+    // Retargeting them here makes Home responsive even before the opening
+    // animation has settled.
+    entry.launchGestureActive = false;
+    entry.transitionPhase =
+        SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
+    entry.transitionElapsedSec = 0.0f;
+    entry.transitionDurationSec = 0.18f;
+    entry.transitionOpacity = 1.0f;
+    entry.transitionScale = 1.0f;
+    return true;
+}
+
 bool Compositor::initialize() {
     if (m_initialized) return true;
 
@@ -90,36 +148,11 @@ bool Compositor::initialize() {
         m_windowManager, m_surfaces, m_sceneRegistry, outputScale,
         m_windowingPolicy->usesSystemGestures(),
         m_windowingPolicy->usesDesktopWindowManagement());
-    m_inputRouter->setSystemGestureHandler([this](SystemGestureDecision decision) {
-        if (decision != SystemGestureDecision::Home) return false;
-        const uint32_t windowId = m_windowManager.getFocusedWindowId();
-        if (windowId == 0) return false;
-        const auto surface = std::find_if(
-            m_surfaces.begin(), m_surfaces.end(), [windowId](const auto& item) {
-                return !item.second.isPopup() &&
-                    item.second.systemSurfaceKind ==
-                        protocol::LCLSystemSurfaceKind::None &&
-                    item.second.windowId == windowId;
-            });
-        if (surface == m_surfaces.end()) {
-            return false;
-        }
-        const auto phase = surface->second.transitionPhase;
-        if (phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing ||
-            phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing) {
-            return true;
-        }
-        // Entering/restoring launch morphs are velocity-preserving channels.
-        // Retargeting them here makes Home responsive even before the opening
-        // animation has settled.
-        surface->second.transitionPhase =
-            SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
-        surface->second.transitionElapsedSec = 0.0f;
-        surface->second.transitionDurationSec = 0.18f;
-        surface->second.transitionOpacity = 1.0f;
-        surface->second.transitionScale = 1.0f;
-        return true;
-    });
+    m_inputRouter->setSystemGestureHandler(
+        [this](SystemGestureDecision decision,
+               const SystemGestureProgress& gesture) {
+            return handleSystemGesture(decision, gesture);
+        });
     input.initialize([this](const lcl::platform::RawInputEvent& event) {
         if (m_inputRouter && m_inputRouter->route(event)) {
             m_needsRedraw = true;
@@ -184,8 +217,9 @@ void Compositor::run() {
     if (!m_initialized) return;
 
     // 1. Query dynamic monitor refresh rate (default to 60Hz if undetected)
-    const auto& mode = m_platformServices.display().activeMode();
-    uint32_t refreshHz = (m_platformServices.display().isInitialized() && mode.refreshRate > 0)
+    auto& display = m_platformServices.display();
+    const auto& mode = display.activeMode();
+    uint32_t refreshHz = (display.isInitialized() && mode.refreshRate > 0)
                          ? mode.refreshRate : 60;
 
     // 2. Calculate dynamic frame period & headroom allowance (~0.5ms safety budget)
@@ -220,6 +254,11 @@ void Compositor::run() {
         bool willDraw = m_needsRedraw || m_windowManager.isAnyWindowDirty();
 
         if (willDraw) {
+            // Hardware-backed displays provide the authoritative presentation
+            // cadence. Waiting here keeps compositor spring frames from
+            // free-running across an active scanout.
+            (void)display.waitForVsync(
+                std::chrono::nanoseconds(m_refreshIntervalNs * 2));
             renderFrame();
 
             m_frameScheduler.waitForFrame(frameStart, targetFrameDuration);

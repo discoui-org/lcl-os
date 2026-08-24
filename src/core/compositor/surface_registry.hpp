@@ -33,6 +33,7 @@ public:
             Closing,
             Minimizing,
             Restoring,
+            Interactive,
         };
 
         enum class ResizeTransitionPhase { None, AwaitingBuffer, Crossfading };
@@ -82,6 +83,7 @@ public:
         float cornerRadius{-1.0f};
         float cornerRoundness{2.0f};
         bool suppressInitialTransition{false};
+        bool forceOpaque{false};
         std::string appId;
         std::vector<SurfaceEffectRegion> effectRegions;
 
@@ -118,6 +120,11 @@ public:
         float launchMorphWidth{0.0f};
         float launchMorphHeight{0.0f};
         float launchMorphCornerRadius{0.0f};
+        bool launchGestureActive{false};
+        float launchGestureStartX{0.0f};
+        float launchGestureStartY{0.0f};
+        float launchGestureX{0.0f};
+        float launchGestureY{0.0f};
         bool hasCommittedBuffer{false};
         bool ignoreBufferCommits{false};
         bool pendingDestroy{false};

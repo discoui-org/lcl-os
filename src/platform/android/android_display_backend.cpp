@@ -103,6 +103,8 @@ struct AndroidDisplayBackend::Impl {
     bool hotplugReceived{false};
     int64_t hotplugDisplayId{-1};
     bool hotplugConnected{false};
+    uint64_t vsyncSerial{0};
+    bool vsyncEnabled{false};
     std::array<const AHardwareBuffer*, 4> layerBufferSlots{};
     std::array<bool, 4> layerBufferHandlesSent{};
     std::array<std::vector<int>, 4> pendingSlotFences{};
@@ -150,6 +152,11 @@ public:
     }
 
     ::ndk::ScopedAStatus onVsync(int64_t /*in_display*/, int64_t /*in_timestamp*/, int32_t /*in_vsyncPeriodNanos*/) override {
+        if (m_impl) {
+            std::lock_guard<std::mutex> lock(m_impl->mutex);
+            ++m_impl->vsyncSerial;
+            m_impl->cv.notify_all();
+        }
         return ::ndk::ScopedAStatus::ok();
     }
 
@@ -369,6 +376,13 @@ bool AndroidDisplayBackend::initializeAidl() {
     }
     m_layerId = createdLayerId;
 
+    const auto vsyncStatus = m_impl->client->setVsyncEnabled(m_displayId, true);
+    m_impl->vsyncEnabled = vsyncStatus.isOk();
+    if (!vsyncStatus.isOk()) {
+        std::cerr << "[AndroidDisplayBackend] Composer VSync callback unavailable: "
+                  << vsyncStatus.getDescription() << "\n";
+    }
+
     m_initialized = true;
     return true;
 }
@@ -379,6 +393,9 @@ void AndroidDisplayBackend::shutdownAidl() {
         waitAndClearFenceFds(fences);
     }
 
+    if (m_impl->client) {
+        (void)m_impl->client->setVsyncEnabled(m_displayId, false);
+    }
     if (m_layerId >= 0 && m_impl->client) {
         m_impl->client->destroyLayer(m_displayId, m_layerId);
         m_layerId = -1;
@@ -396,6 +413,8 @@ void AndroidDisplayBackend::shutdownAidl() {
     m_impl->layerBufferSlots.fill(nullptr);
     m_impl->layerBufferHandlesSent.fill(false);
     m_impl->nextLayerBufferSlot = 0;
+    m_impl->vsyncSerial = 0;
+    m_impl->vsyncEnabled = false;
 
     m_initialized = false;
 }
@@ -428,6 +447,23 @@ bool AndroidDisplayBackend::initHardwareCursor(uint32_t /*width*/, uint32_t /*he
 
 bool AndroidDisplayBackend::moveHardwareCursor(int /*x*/, int /*y*/) {
     return false;
+}
+
+bool AndroidDisplayBackend::waitForVsync(std::chrono::nanoseconds timeout) {
+    if (m_backendKind == BackendKind::HidlComposer) {
+        return m_hidlBackend->waitForVsync(timeout);
+    }
+    return waitForVsyncAidl(timeout);
+}
+
+bool AndroidDisplayBackend::waitForVsyncAidl(std::chrono::nanoseconds timeout) {
+    if (!m_initialized || !m_impl->client || !m_impl->vsyncEnabled ||
+        timeout.count() <= 0) return false;
+    std::unique_lock<std::mutex> lock(m_impl->mutex);
+    const uint64_t observed = m_impl->vsyncSerial;
+    return m_impl->cv.wait_for(lock, timeout, [this, observed] {
+        return m_impl->vsyncSerial != observed;
+    }) && m_impl->vsyncSerial != observed;
 }
 
 bool AndroidDisplayBackend::prepareBufferForRender(AHardwareBuffer* buffer) {

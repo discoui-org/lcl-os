@@ -27,7 +27,8 @@ public:
           m_systemGesturesEnabled(systemGesturesEnabled),
           m_desktopWindowManagementEnabled(desktopWindowManagementEnabled) {}
 
-    using SystemGestureHandler = std::function<bool(SystemGestureDecision)>;
+    using SystemGestureHandler = std::function<bool(
+        SystemGestureDecision, const SystemGestureProgress&)>;
     void setSystemGestureHandler(SystemGestureHandler handler) {
         m_systemGestureHandler = std::move(handler);
     }

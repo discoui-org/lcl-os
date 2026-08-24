@@ -194,6 +194,8 @@ struct AndroidHidlDisplayBackend::Impl {
     bool hotplugReceived{false};
     uint64_t hotplugDisplayId{0};
     bool hotplugConnected{false};
+    uint64_t vsyncSerial{0};
+    bool vsyncEnabled{false};
     uint32_t composerMinorVersion{0};
     std::array<const AHardwareBuffer*, 4> layerBufferSlots{};
     std::array<std::vector<int>, 4> pendingSlotFences{};
@@ -225,7 +227,14 @@ public:
         return {};
     }
     Return<void> onRefresh(uint64_t) override { return {}; }
-    Return<void> onVsync(uint64_t, int64_t) override { return {}; }
+    Return<void> onVsync(uint64_t, int64_t) override {
+        if (m_impl) {
+            std::lock_guard<std::mutex> lock(m_impl->mutex);
+            ++m_impl->vsyncSerial;
+            m_impl->cv.notify_all();
+        }
+        return {};
+    }
 
 private:
     AndroidHidlDisplayBackend::Impl* m_impl;
@@ -272,6 +281,8 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale,
     m_impl->hotplugReceived = false;
     m_impl->hotplugDisplayId = 0;
     m_impl->hotplugConnected = false;
+    m_impl->vsyncSerial = 0;
+    m_impl->vsyncEnabled = false;
 
     ::android::hardware::configureRpcThreadpool(1, false);
     composer21::Error createError = composer21::Error::NO_RESOURCES;
@@ -472,6 +483,13 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale,
         std::cerr << "[AndroidHidlDisplayBackend] setPowerMode(ON) failed\n";
     }
 
+    const auto vsyncResult = m_impl->client->setVsyncEnabled(
+        m_displayId, composer21::IComposerClient::Vsync::ENABLE);
+    m_impl->vsyncEnabled = vsyncResult.isOk() && isNone(vsyncResult);
+    if (!vsyncResult.isOk() || !isNone(vsyncResult)) {
+        std::cerr << "[AndroidHidlDisplayBackend] Composer VSync callback unavailable\n";
+    }
+
     composer21::Error layerError = composer21::Error::NO_RESOURCES;
     m_impl->client->createLayer(
         m_displayId, 4,
@@ -501,6 +519,10 @@ void AndroidHidlDisplayBackend::shutdown() {
     for (auto& fences : m_impl->pendingSlotFences) {
         waitAndClearFences(fences);
     }
+    if (m_impl->client) {
+        (void)m_impl->client->setVsyncEnabled(
+            m_displayId, composer21::IComposerClient::Vsync::DISABLE);
+    }
     if (m_hasLayer && m_impl->client) {
         (void)m_impl->client->destroyLayer(m_displayId, m_layerId);
     }
@@ -513,6 +535,8 @@ void AndroidHidlDisplayBackend::shutdown() {
     m_impl->hotplugReceived = false;
     m_impl->hotplugDisplayId = 0;
     m_impl->hotplugConnected = false;
+    m_impl->vsyncSerial = 0;
+    m_impl->vsyncEnabled = false;
     m_impl->composerMinorVersion = 0;
     m_impl->layerBufferSlots.fill(nullptr);
     for (auto& fences : m_impl->pendingSlotFences) fences.clear();
@@ -695,6 +719,21 @@ bool AndroidHidlDisplayBackend::prepareBufferForRender(AHardwareBuffer* buffer) 
 #endif
 }
 
+bool AndroidHidlDisplayBackend::waitForVsync(std::chrono::nanoseconds timeout) {
+#if !defined(LCL_HAS_ANDROID_HIDL)
+    (void)timeout;
+    return false;
+#else
+    if (!m_initialized || !m_impl->client || !m_impl->vsyncEnabled ||
+        timeout.count() <= 0) return false;
+    std::unique_lock<std::mutex> lock(m_impl->mutex);
+    const uint64_t observed = m_impl->vsyncSerial;
+    return m_impl->cv.wait_for(lock, timeout, [this, observed] {
+        return m_impl->vsyncSerial != observed;
+    }) && m_impl->vsyncSerial != observed;
+#endif
+}
+
 } // namespace lcl::platform::android
 
 #define LCL_HIDL_BRIDGE_EXPORT __attribute__((visibility("default")))
@@ -742,4 +781,11 @@ extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_present(
     void* instance, AHardwareBuffer* buffer, int acquireFenceFd) {
     auto* backend = static_cast<lcl::platform::android::AndroidHidlDisplayBackend*>(instance);
     return backend && backend->presentBuffer(buffer, acquireFenceFd) ? 1 : 0;
+}
+
+extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_wait_vsync(
+    void* instance, int64_t timeoutNs) {
+    auto* backend = static_cast<lcl::platform::android::AndroidHidlDisplayBackend*>(instance);
+    return backend && timeoutNs > 0 && backend->waitForVsync(
+        std::chrono::nanoseconds(timeoutNs)) ? 1 : 0;
 }

@@ -485,6 +485,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.insetBorderEnabled = systemPolicy.isSystemSurface
                     ? systemPolicy.insetBorderEnabled
                     : initialInsetBorderEnabled;
+                entry.forceOpaque = !systemPolicy.isSystemSurface &&
+                    m_windowingPolicy.forcesOpaqueNormalSurfaces();
+                if (entry.forceOpaque) entry.cornerRadius = 0.0f;
                 if (systemPolicy.isSystemSurface) {
                     entry.layer = systemPolicy.layer;
                     entry.unfocusable = systemPolicy.unfocusable;
@@ -1349,7 +1352,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | radiusMsg->surfaceId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
-                    it->second.cornerRadius = radiusMsg->radius;
+                    it->second.cornerRadius =
+                        m_windowingPolicy.resolveWindowCornerRadius(
+                            radiusMsg->radius);
                     if (it->second.windowId != 0) {
                         m_windowManager.setWindowCornerStyle(it->second.windowId,
                                                               it->second.cornerRadius,
@@ -1365,7 +1370,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | styleMsg->surfaceId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
-                    it->second.cornerRadius = styleMsg->radius;
+                    it->second.cornerRadius =
+                        m_windowingPolicy.resolveWindowCornerRadius(
+                            styleMsg->radius);
                     it->second.cornerRoundness = std::clamp(styleMsg->roundness, 2.0f, 8.0f);
                     if (it->second.windowId != 0) {
                         m_windowManager.setWindowCornerStyle(it->second.windowId,
@@ -1407,6 +1414,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | graphHeader->surfaceId;
                     auto it = m_surfaces.find(surfaceKey);
                     if (it != m_surfaces.end()) {
+                        if (it->second.forceOpaque) {
+                            it->second.effectRegions.clear();
+                            continue;
+                        }
                         std::vector<SurfaceEffectRegion> parsed;
                         parsed.reserve(graphHeader->regionCount);
 

@@ -61,7 +61,14 @@ DEVICE_SESSION_LAUNCHER = f"{DEVICE_TMP_DIR}/lcl-android-rootfs-session.sh"
 NATIVE_CLIENT_WRAPPER = ROOT_DIR / "scripts" / "lcl_android_native_client_wrapper.sh"
 DEVICE_NATIVE_CLIENT_DIR = f"{DEVICE_TMP_DIR}/lcl-native-clients"
 DEVICE_NATIVE_CLIENT_WRAPPER = f"{DEVICE_NATIVE_CLIENT_DIR}/launch"
-NATIVE_CLIENT_BINARIES = ("lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal")
+NATIVE_CLIENT_ARTIFACTS = {
+    "lcl-desktop-shell": Path("lcl-desktop-shell"),
+    "lcl-mobile-shell": Path("lcl-mobile-shell"),
+    "lcl-terminal": Path("lcl-terminal"),
+    "lcl_ui_demo": Path("apps/ui_demo/lcl_ui_demo"),
+    "lcl-js": Path("lcl-js"),
+}
+NATIVE_CLIENT_BINARIES = tuple(NATIVE_CLIENT_ARTIFACTS)
 ANDROID_NATIVE_LD_LIBRARY_PATH = (
     "/apex/com.android.i18n/lib64:/apex/com.android.runtime/lib64/bionic:"
     "/system/lib64:/vendor/lib64:/system_ext/lib64"
@@ -582,8 +589,8 @@ def push_native_clients() -> None:
     if not NATIVE_CLIENT_WRAPPER.is_file():
         raise RuntimeError(f"Native-client wrapper missing: {NATIVE_CLIENT_WRAPPER}")
     missing = [
-        name for name in NATIVE_CLIENT_BINARIES
-        if not (BUILD_ANDROID_ARM64_DIR / name).is_file()
+        name for name, relative_path in NATIVE_CLIENT_ARTIFACTS.items()
+        if not (BUILD_ANDROID_ARM64_DIR / relative_path).is_file()
     ]
     if missing:
         raise RuntimeError(
@@ -591,14 +598,16 @@ def push_native_clients() -> None:
             ". Build them in build-android-arm64 first."
         )
     adb_shell(f"mkdir -p {DEVICE_NATIVE_CLIENT_DIR}", as_root=False)
-    for name in NATIVE_CLIENT_BINARIES:
-        run_adb("push", str(BUILD_ANDROID_ARM64_DIR / name),
+    for name, relative_path in NATIVE_CLIENT_ARTIFACTS.items():
+        run_adb("push", str(BUILD_ANDROID_ARM64_DIR / relative_path),
                 f"{DEVICE_NATIVE_CLIENT_DIR}/{name}")
     run_adb("push", str(NATIVE_CLIENT_WRAPPER), DEVICE_NATIVE_CLIENT_WRAPPER)
+    native_paths = " ".join(
+        f"{DEVICE_NATIVE_CLIENT_DIR}/{name}"
+        for name in NATIVE_CLIENT_BINARIES
+    )
     adb_shell(
-        f"chmod 0755 {DEVICE_NATIVE_CLIENT_DIR}/lcl-desktop-shell "
-        f"{DEVICE_NATIVE_CLIENT_DIR}/lcl-mobile-shell "
-        f"{DEVICE_NATIVE_CLIENT_DIR}/lcl-terminal {DEVICE_NATIVE_CLIENT_WRAPPER}",
+        f"chmod 0755 {native_paths} {DEVICE_NATIVE_CLIENT_WRAPPER}",
         as_root=True,
     )
     log("Android-native AHardwareBuffer clients staged.")
@@ -721,7 +730,9 @@ def mount_rootfs(native_clients: bool = False) -> None:
         wrapper_targets = (
             f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-desktop-shell",
             f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-mobile-shell",
+            f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-js",
             f"{DEVICE_ROOTFS_MOUNT}/System/Applications/Terminal.app/Executables/Terminal",
+            f"{DEVICE_ROOTFS_MOUNT}/System/Applications/UIDemo.app/Executables/UIDemo",
         )
         for target in wrapper_targets:
             result = adb_shell(

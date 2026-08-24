@@ -37,8 +37,9 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
     }
 
     if (m_systemGesturesEnabled) {
+        SystemGestureProgress progress{};
         const auto decision = m_systemGestureArena.process(
-            event, m_windowManager.getScreenHeight());
+            event, m_windowManager.getScreenHeight(), &progress);
         if (decision == SystemGestureDecision::Claim) {
             const auto target = m_touchTargets.find(event.pointerId);
             if (target != m_touchTargets.end()) {
@@ -47,7 +48,20 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
                 cancel.pressed = false;
                 forwardToSurface(cancel, target->second);
             }
-            return false;
+            return m_systemGestureHandler
+                ? m_systemGestureHandler(decision, progress)
+                : false;
+        }
+        if (decision == SystemGestureDecision::Update) {
+            return m_systemGestureHandler
+                ? m_systemGestureHandler(decision, progress)
+                : false;
+        }
+        if (decision == SystemGestureDecision::Cancel) {
+            m_touchTargets.erase(event.pointerId);
+            return m_systemGestureHandler
+                ? m_systemGestureHandler(decision, progress)
+                : false;
         }
         if (decision == SystemGestureDecision::Consume) {
             if (event.type == InputEventType::PointerCancel) {
@@ -58,7 +72,7 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
         if (decision == SystemGestureDecision::Home) {
             m_touchTargets.erase(event.pointerId);
             return m_systemGestureHandler
-                ? m_systemGestureHandler(SystemGestureDecision::Home)
+                ? m_systemGestureHandler(SystemGestureDecision::Home, progress)
                 : false;
         }
     }

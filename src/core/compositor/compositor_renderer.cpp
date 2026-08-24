@@ -3,6 +3,7 @@
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/window_chrome_material.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
+#include "lcl-theme/theme.hpp"
 #include "render/window_group_transform.hpp"
 
 #include <algorithm>
@@ -423,6 +424,18 @@ void CompositorRenderer::render(render::Renderer& renderer,
             const float presentedCornerRadius = matchingSurface->launchMorphActive
                 ? windowCornerRadius
                 : group.mapLength(windowCornerRadius);
+
+            if (matchingSurface->forceOpaque) {
+                const auto background =
+                    lcl::theme::defaultTheme().colors.primarySurface;
+                raster->drawRoundedRect(
+                    {drawX, drawY, drawW, drawH},
+                    maskToWindowShape ? presentedCornerRadius : 0.0f,
+                    {background.r, background.g, background.b,
+                     static_cast<uint8_t>(std::clamp(
+                         std::lround(windowOpacity * 255.0f), 0l, 255l))},
+                    {}, 0.0f, resolveWindowCornerRoundness(win));
+            }
 
             const bool hasPrevious = matchingSurface->previousPixels ||
                                      matchingSurface->previousDmaBufTexture != 0;

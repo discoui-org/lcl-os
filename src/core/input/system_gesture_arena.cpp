@@ -6,7 +6,8 @@
 namespace lcl::core {
 
 SystemGestureDecision SystemGestureArena::process(const InputEvent& event,
-                                                  float outputHeight) {
+                                                  float outputHeight,
+                                                  SystemGestureProgress* progress) {
     if (event.source != lcl::platform::PointerSource::Touch) {
         return SystemGestureDecision::PassThrough;
     }
@@ -29,14 +30,21 @@ SystemGestureDecision SystemGestureArena::process(const InputEvent& event,
     if (event.pointerId != m_pointerId) {
         return SystemGestureDecision::PassThrough;
     }
+    if (progress) {
+        progress->pointerId = m_pointerId;
+        progress->startX = m_startX;
+        progress->startY = m_startY;
+        progress->x = static_cast<float>(event.absoluteX);
+        progress->y = static_cast<float>(event.absoluteY);
+    }
     if (event.type == InputEventType::PointerCancel) {
         const bool claimed = m_state == State::Claimed;
         reset();
-        return claimed ? SystemGestureDecision::Consume
+        return claimed ? SystemGestureDecision::Cancel
                        : SystemGestureDecision::PassThrough;
     }
     if (event.type == InputEventType::PointerMotion) {
-        if (m_state == State::Claimed) return SystemGestureDecision::Consume;
+        if (m_state == State::Claimed) return SystemGestureDecision::Update;
         const float deltaX = static_cast<float>(event.absoluteX) - m_startX;
         const float deltaY = static_cast<float>(event.absoluteY) - m_startY;
         if (std::abs(deltaX) >= m_config.claimDistance &&

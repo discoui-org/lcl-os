@@ -15,7 +15,8 @@ bool isLaunchMorphPhase(TransitionPhase phase) {
     return phase == TransitionPhase::Entering ||
            phase == TransitionPhase::Closing ||
            phase == TransitionPhase::Minimizing ||
-           phase == TransitionPhase::Restoring;
+           phase == TransitionPhase::Restoring ||
+           phase == TransitionPhase::Interactive;
 }
 
 lcl::motion::Motion criticalSpring(float stiffness) {
@@ -49,6 +50,8 @@ void FrameScheduler::prepareLaunchMorph(
     const float targetCenterY = targetY + targetHeight * 0.5f;
     const bool opening = entry.transitionPhase == TransitionPhase::Entering ||
                          entry.transitionPhase == TransitionPhase::Restoring;
+    const bool interactive =
+        entry.transitionPhase == TransitionPhase::Interactive;
 
     auto [found, inserted] = m_launchMorphs.try_emplace(key);
     auto& state = found->second;
@@ -65,22 +68,41 @@ void FrameScheduler::prepareLaunchMorph(
         state.expand = m_launchMotion.createChannel({key, 3}, initialProgress);
         state.perspective = m_launchMotion.createChannel({key, 4}, initialProgress);
     }
-    if (!inserted && state.phase == entry.transitionPhase) return;
+    if (!inserted && state.phase == entry.transitionPhase && !interactive) return;
 
-    const auto positionMotion = criticalSpring(opening ? 150.0f : 120.0f);
+    const auto draggingMotion = lcl::motion::Motion::spring(
+        1.0f, 320.0f, 1.25f * std::sqrt(320.0f));
+    const auto positionMotion = interactive
+        ? draggingMotion : criticalSpring(opening ? 150.0f : 120.0f);
     const auto expandMotion = criticalSpring(opening ? 200.0f : 70.0f);
-    const auto perspectiveMotion = criticalSpring(100.0f);
+    const auto perspectiveMotion = interactive
+        ? draggingMotion : criticalSpring(100.0f);
+    float positionTargetX = opening ? targetCenterX : originCenterX;
+    float positionTargetY = opening ? targetCenterY : originCenterY;
+    float expandTarget = opening ? 1.0f : 0.0f;
+    float perspectiveTarget = opening ? 1.0f : 0.0f;
+    if (interactive) {
+        const float deltaX = entry.launchGestureX - entry.launchGestureStartX;
+        const float deltaY = entry.launchGestureStartY - entry.launchGestureY;
+        const float normalizedStartX = std::clamp(
+            (entry.launchGestureStartX - targetX) / targetWidth, 0.0f, 1.0f);
+        positionTargetX = targetCenterX + deltaX +
+            deltaY * (normalizedStartX - 0.5f) * targetWidth * 0.00125f;
+        positionTargetY = targetY + targetHeight /
+            (2.0f + std::pow(std::abs(deltaY), 1.5f) /
+                        (10.0f * targetHeight));
+        expandTarget = 1.0f;
+        perspectiveTarget = 1.0f - deltaY / (targetHeight * 2.0f / 3.0f);
+    }
     m_launchMotion.setSpec(state.positionX, positionMotion);
     m_launchMotion.setSpec(state.positionY, positionMotion);
     m_launchMotion.setSpec(state.expand, expandMotion);
     m_launchMotion.setSpec(state.perspective, perspectiveMotion);
+    m_launchMotion.animateTo(state.positionX, positionTargetX, positionMotion);
+    m_launchMotion.animateTo(state.positionY, positionTargetY, positionMotion);
+    m_launchMotion.animateTo(state.expand, expandTarget, expandMotion);
     m_launchMotion.animateTo(
-        state.positionX, opening ? targetCenterX : originCenterX, positionMotion);
-    m_launchMotion.animateTo(
-        state.positionY, opening ? targetCenterY : originCenterY, positionMotion);
-    m_launchMotion.animateTo(state.expand, opening ? 1.0f : 0.0f, expandMotion);
-    m_launchMotion.animateTo(
-        state.perspective, opening ? 1.0f : 0.0f, perspectiveMotion);
+        state.perspective, perspectiveTarget, perspectiveMotion);
     state.phase = entry.transitionPhase;
     entry.launchMorphActive = true;
 }
@@ -142,13 +164,21 @@ bool FrameScheduler::updateLaunchMorph(
     entry.launchMorphY = positionY.value - presentedHeight * 0.5f;
     entry.launchMorphWidth = presentedWidth;
     entry.launchMorphHeight = presentedHeight;
-    entry.launchMorphCornerRadius = std::max(0.0f, cornerRadius * perspectiveScale);
+    if (entry.transitionPhase == TransitionPhase::Interactive) {
+        cornerRadius += (1.0f - std::clamp(perspective, 0.0f, 1.0f)) *
+            entry.launchOriginCornerRadius;
+    }
+    entry.launchMorphCornerRadius = std::max(
+        0.0f, cornerRadius * perspectiveScale);
     entry.transitionOpacity = std::clamp(expand * 2.0f - 0.25f, 0.0f, 1.0f);
     entry.transitionScale = 1.0f;
     entry.launchMorphActive = true;
 
     const bool moving = positionX.active || positionY.active ||
                         expandSample.active || perspectiveSample.active;
+    if (entry.transitionPhase == TransitionPhase::Interactive) {
+        return moving;
+    }
     if (moving) return true;
 
     const auto phase = entry.transitionPhase;

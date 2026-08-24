@@ -33,12 +33,30 @@ TEST(SystemGestureArenaTest, ClaimsVerticalBottomEdgeSwipeAndEmitsHomeOnRelease)
     EXPECT_EQ(arena.process(
                   touchEvent(InputEventType::PointerMotion, 104.0f, 730.0f, 9),
                   800.0f),
-              SystemGestureDecision::Consume);
+              SystemGestureDecision::Update);
     EXPECT_EQ(arena.process(
                   touchEvent(InputEventType::PointerButton, 104.0f, 730.0f, 9, false),
                   800.0f),
               SystemGestureDecision::Home);
     EXPECT_FALSE(arena.isTracking(9));
+}
+
+TEST(SystemGestureArenaTest, ReportsClaimedGestureProgressBeforeRelease) {
+    SystemGestureArena arena;
+    SystemGestureProgress progress{};
+
+    EXPECT_EQ(arena.process(
+                  touchEvent(InputEventType::PointerButton, 120.0f, 795.0f, 10, true),
+                  800.0f, &progress),
+              SystemGestureDecision::Tracking);
+    EXPECT_EQ(arena.process(
+                  touchEvent(InputEventType::PointerMotion, 126.0f, 750.0f, 10),
+                  800.0f, &progress),
+              SystemGestureDecision::Claim);
+    EXPECT_FLOAT_EQ(progress.startX, 120.0f);
+    EXPECT_FLOAT_EQ(progress.startY, 795.0f);
+    EXPECT_FLOAT_EQ(progress.x, 126.0f);
+    EXPECT_FLOAT_EQ(progress.y, 750.0f);
 }
 
 TEST(SystemGestureArenaTest, LeavesHorizontalAndNonEdgeStreamsToApplications) {

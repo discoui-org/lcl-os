@@ -1131,7 +1131,8 @@ TEST(InputRouterTest, MobileBottomEdgeClaimCancelsClientThenTriggersHome) {
     SceneRegistry scenes;
     InputRouter router(manager, registry, scenes, 1.0f, true, false);
     int homeEvents = 0;
-    router.setSystemGestureHandler([&](SystemGestureDecision decision) {
+    router.setSystemGestureHandler([&](SystemGestureDecision decision,
+                                       const SystemGestureProgress&) {
         if (decision == SystemGestureDecision::Home) ++homeEvents;
         return true;
     });
@@ -1161,7 +1162,7 @@ TEST(InputRouterTest, MobileBottomEdgeClaimCancelsClientThenTriggersHome) {
     move.type = InputEventType::PointerMotion;
     move.pressed = false;
     move.absoluteY = 660.0;
-    EXPECT_FALSE(router.route(move));
+    EXPECT_TRUE(router.route(move));
 
     ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
     ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
@@ -1657,10 +1658,25 @@ TEST(FrameSchedulerTest, LaunchMorphCanReverseBeforeOpeningSettles) {
     ASSERT_TRUE(scheduler.advanceTransitions(
         registry, start + std::chrono::milliseconds(16)));
     ASSERT_TRUE(surface.launchMorphActive);
+    surface.launchGestureActive = true;
+    surface.launchGestureStartX = 195.0f;
+    surface.launchGestureStartY = 840.0f;
+    surface.launchGestureX = 195.0f;
+    surface.launchGestureY = 700.0f;
+    surface.transitionPhase =
+        SurfaceRegistry::SurfaceEntry::TransitionPhase::Interactive;
+    for (int frame = 2; frame <= 12; ++frame) {
+        scheduler.advanceTransitions(
+            registry, start + std::chrono::milliseconds(frame * 16));
+    }
+    EXPECT_TRUE(surface.launchMorphActive);
+    EXPECT_LT(surface.launchMorphWidth, surface.configuredWidth);
+
+    surface.launchGestureActive = false;
     surface.transitionPhase =
         SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
 
-    for (int frame = 2; frame <= 180; ++frame) {
+    for (int frame = 13; frame <= 190; ++frame) {
         scheduler.advanceTransitions(
             registry, start + std::chrono::milliseconds(frame * 16));
     }

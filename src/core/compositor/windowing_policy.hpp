@@ -23,9 +23,11 @@ public:
     virtual protocol::LCLDecorationMode resolveDecorationMode(
         protocol::LCLDecorationMode requestedMode) const noexcept = 0;
     virtual bool resolveInsetBorderEnabled(bool requestedEnabled) const noexcept = 0;
+    virtual float resolveWindowCornerRadius(float requestedRadius) const noexcept = 0;
 
     virtual bool usesDesktopWindowManagement() const noexcept = 0;
     virtual bool usesSystemGestures() const noexcept = 0;
+    virtual bool forcesOpaqueNormalSurfaces() const noexcept = 0;
 };
 
 class DesktopWindowPolicy final : public WindowingPolicy {
@@ -39,8 +41,10 @@ public:
     protocol::LCLDecorationMode resolveDecorationMode(
         protocol::LCLDecorationMode requestedMode) const noexcept override;
     bool resolveInsetBorderEnabled(bool requestedEnabled) const noexcept override;
+    float resolveWindowCornerRadius(float requestedRadius) const noexcept override;
     bool usesDesktopWindowManagement() const noexcept override;
     bool usesSystemGestures() const noexcept override;
+    bool forcesOpaqueNormalSurfaces() const noexcept override;
 };
 
 class MobileWindowPolicy final : public WindowingPolicy {
@@ -54,8 +58,10 @@ public:
     protocol::LCLDecorationMode resolveDecorationMode(
         protocol::LCLDecorationMode requestedMode) const noexcept override;
     bool resolveInsetBorderEnabled(bool requestedEnabled) const noexcept override;
+    float resolveWindowCornerRadius(float requestedRadius) const noexcept override;
     bool usesDesktopWindowManagement() const noexcept override;
     bool usesSystemGestures() const noexcept override;
+    bool forcesOpaqueNormalSurfaces() const noexcept override;
 };
 
 std::unique_ptr<WindowingPolicy> makeWindowingPolicy(

@@ -27,8 +27,10 @@ TEST(WindowingPolicyTest, DesktopPreservesRequestedWindowContract) {
     EXPECT_EQ(policy.resolveDecorationMode(protocol::LCLDecorationMode::SSD),
               protocol::LCLDecorationMode::SSD);
     EXPECT_TRUE(policy.resolveInsetBorderEnabled(true));
+    EXPECT_FLOAT_EQ(policy.resolveWindowCornerRadius(14.0f), 14.0f);
     EXPECT_TRUE(policy.usesDesktopWindowManagement());
     EXPECT_FALSE(policy.usesSystemGestures());
+    EXPECT_FALSE(policy.forcesOpaqueNormalSurfaces());
 }
 
 TEST(WindowingPolicyTest, MobileForcesFullscreenFramelessWindowContract) {
@@ -55,8 +57,10 @@ TEST(WindowingPolicyTest, MobileForcesFullscreenFramelessWindowContract) {
     EXPECT_EQ(policy.resolveDecorationMode(protocol::LCLDecorationMode::CSD),
               protocol::LCLDecorationMode::None);
     EXPECT_FALSE(policy.resolveInsetBorderEnabled(true));
+    EXPECT_FLOAT_EQ(policy.resolveWindowCornerRadius(20.0f), 0.0f);
     EXPECT_FALSE(policy.usesDesktopWindowManagement());
     EXPECT_TRUE(policy.usesSystemGestures());
+    EXPECT_TRUE(policy.forcesOpaqueNormalSurfaces());
 }
 
 TEST(WindowingPolicyTest, GestaltShellKindSelectsMatchingPolicy) {

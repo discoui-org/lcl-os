@@ -20,11 +20,20 @@ bool DesktopWindowPolicy::resolveInsetBorderEnabled(
     return requestedEnabled;
 }
 
+float DesktopWindowPolicy::resolveWindowCornerRadius(
+    float requestedRadius) const noexcept {
+    return requestedRadius;
+}
+
 bool DesktopWindowPolicy::usesDesktopWindowManagement() const noexcept {
     return true;
 }
 
 bool DesktopWindowPolicy::usesSystemGestures() const noexcept {
+    return false;
+}
+
+bool DesktopWindowPolicy::forcesOpaqueNormalSurfaces() const noexcept {
     return false;
 }
 
@@ -54,11 +63,19 @@ bool MobileWindowPolicy::resolveInsetBorderEnabled(bool) const noexcept {
     return false;
 }
 
+float MobileWindowPolicy::resolveWindowCornerRadius(float) const noexcept {
+    return 0.0f;
+}
+
 bool MobileWindowPolicy::usesDesktopWindowManagement() const noexcept {
     return false;
 }
 
 bool MobileWindowPolicy::usesSystemGestures() const noexcept {
+    return true;
+}
+
+bool MobileWindowPolicy::forcesOpaqueNormalSurfaces() const noexcept {
     return true;
 }
 

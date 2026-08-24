@@ -31,6 +31,7 @@ int lcl_android_hidl_prepare_buffer(void* instance,
                                     struct AHardwareBuffer* buffer);
 int lcl_android_hidl_present(void* instance, struct AHardwareBuffer* buffer,
                              int acquire_fence_fd);
+int lcl_android_hidl_wait_vsync(void* instance, int64_t timeout_ns);
 
 #ifdef __cplusplus
 }

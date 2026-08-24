@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <cstdint>
+#include <chrono>
 
 struct AHardwareBuffer;
 
@@ -36,6 +37,7 @@ public:
                             float deviceScale = 1.0f) override;
     bool moveHardwareCursor(int x, int y) override;
     bool isHardwareCursorActive() const override { return false; }
+    bool waitForVsync(std::chrono::nanoseconds timeout) override;
 
     int64_t displayId() const { return m_displayId; }
     int64_t layerId() const { return m_layerId; }
@@ -72,6 +74,7 @@ private:
     void shutdownAidl();
     bool prepareBufferForRenderAidl(AHardwareBuffer* buffer);
     bool presentBufferAidl(AHardwareBuffer* buffer, int acquireFenceFd);
+    bool waitForVsyncAidl(std::chrono::nanoseconds timeout);
 
     std::unique_ptr<Impl> m_impl;
     std::unique_ptr<AndroidHidlDisplayBackend> m_hidlBackend;
