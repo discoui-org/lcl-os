@@ -40,7 +40,13 @@ class QmpEndpoint:
 class QemuRunner:
     """Own a mobile LCL QEMU process and its private viewer sockets."""
 
-    def __init__(self, *, build: bool = False, rebuild: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        build: bool = False,
+        rebuild: bool = False,
+        gestalt_path: Path | None = None,
+    ) -> None:
         self._runtime_dir = Path(tempfile.mkdtemp(prefix="lcl-viewer-"))
         self.endpoint = SpiceEndpoint(self._runtime_dir / "spice.sock")
         self.qmp_endpoint = QmpEndpoint(self._runtime_dir / "qmp.sock")
@@ -48,6 +54,7 @@ class QemuRunner:
         self._stopping = False
         self._build = build
         self._rebuild = rebuild
+        self._gestalt_path = gestalt_path
 
     @property
     def spice_socket_path(self) -> Path:
@@ -90,6 +97,8 @@ class QemuRunner:
                 command.append("--rebuild")
         else:
             command.append("--no-build")
+        if self._gestalt_path is not None:
+            command.extend(["--gestalt", str(self._gestalt_path)])
         try:
             self._process = subprocess.Popen(
                 command,

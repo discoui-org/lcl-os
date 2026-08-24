@@ -1138,6 +1138,7 @@ def launch_qemu(
     scale_override: float | None = None,
     width_override: int | None = None,
     height_override: int | None = None,
+    gestalt_path: Path | None = None,
     no_build: bool = False,
     rebuild: bool = False,
     spice_unix: Path | None = None,
@@ -1172,13 +1173,13 @@ def launch_qemu(
             pass
 
     if mobile:
-        # Portrait iPhone-like display: 1179x2556 physical, 393x852 logical, 3.0x UI scale
+        # Portrait mobile display: 1179x2556 physical at a readable 2x UI scale.
         width = width_override or 1179
         height = height_override or 2556
-        scale = scale_override or 3.0
+        scale = scale_override or 2.0
         host_dpr = scale
-        host.logical_width = 393
-        host.logical_height = 852
+        host.logical_width = round(width / scale)
+        host.logical_height = round(height / scale)
         host.physical_width = width
         host.physical_height = height
     elif retina:
@@ -1213,6 +1214,59 @@ def launch_qemu(
         height = height_override or 800
         scale = scale_override or 1.0
         host_dpr = scale
+
+    qemu_gestalt: Path | None = None
+    if gestalt_path is not None:
+        qemu_gestalt = gestalt_path.expanduser().resolve()
+        if not qemu_gestalt.is_file():
+            err(f"Gestalt file not found: {qemu_gestalt}")
+            sys.exit(2)
+        try:
+            gestalt_document = json.loads(qemu_gestalt.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            err(f"Cannot read Gestalt JSON {qemu_gestalt}: {error}")
+            sys.exit(2)
+        if not isinstance(gestalt_document, dict) or gestalt_document.get("version") != 1:
+            err(f"Gestalt must be a version 1 JSON object: {qemu_gestalt}")
+            sys.exit(2)
+        gestalt_display = gestalt_document.get("display")
+        if not isinstance(gestalt_display, dict):
+            err(f"Gestalt display must be a JSON object: {qemu_gestalt}")
+            sys.exit(2)
+        profile_width = gestalt_display.get("width")
+        profile_height = gestalt_display.get("height")
+        if (profile_width is None) != (profile_height is None):
+            err("Gestalt display.width and display.height must be specified together")
+            sys.exit(2)
+        if profile_width is not None:
+            if (not isinstance(profile_width, int) or isinstance(profile_width, bool)
+                    or not isinstance(profile_height, int) or isinstance(profile_height, bool)
+                    or profile_width <= 0 or profile_height <= 0):
+                err("Gestalt display width and height must be positive integers")
+                sys.exit(2)
+            width, height = profile_width, profile_height
+        profile_refresh = gestalt_display.get("refreshRateHz")
+        if profile_refresh is not None:
+            if (not isinstance(profile_refresh, int) or isinstance(profile_refresh, bool)
+                    or profile_refresh <= 0):
+                err("Gestalt display.refreshRateHz must be a positive integer")
+                sys.exit(2)
+            refresh_hz = profile_refresh
+        profile_scale = gestalt_display.get("scale")
+        if profile_scale is not None:
+            if (not isinstance(profile_scale, (int, float)) or isinstance(profile_scale, bool)
+                    or not 0.5 <= float(profile_scale) <= 4.0):
+                err("Gestalt display.scale must be between 0.5 and 4.0")
+                sys.exit(2)
+            scale = float(profile_scale)
+        else:
+            scale = 1.0
+        host.logical_width = round(width / scale)
+        host.logical_height = round(height / scale)
+        host.physical_width = width
+        host.physical_height = height
+        host_dpr = scale
+        log(f"Using explicit Gestalt: {qemu_gestalt}")
 
     host_m = platform.machine().lower()
     host_is_arm = host_m in ("aarch64", "arm64", "armv8", "armv9")
@@ -1369,7 +1423,7 @@ def launch_qemu(
     print(f"  - Guest video: {width}x{height}@{refresh_hz}")
     print(f"  - UI scale: {scale} (Gestalt)")
     if mobile:
-        print("  - Mode: mobile portrait display (1179x2556 @ 3x scale)")
+        print(f"  - Mode: mobile portrait display ({width}x{height} @ {scale:g}x scale)")
         print(f"  - Logical viewport: {host.logical_width}x{host.logical_height}")
     elif native:
         print("  - Mode: native host display (fullscreen)")
@@ -1398,34 +1452,36 @@ def launch_qemu(
 
     # The standard kernel video= argument establishes the early DRM/KMS mode.
     # LCL display policy travels as a versioned Gestalt document via fw_cfg.
-    video_mode = f"video={width}x{height}-32@{refresh_hz}"
-    qemu_gestalt = BUILD_DIR / "qemu-gestalt.json"
-    write_text(
-        qemu_gestalt,
-        json.dumps(
-            {
-                "version": 1,
-                "name": "LCL QEMU Output",
-                "display": {
-                    "width": width,
-                    "height": height,
-                    "refreshRateHz": refresh_hz,
-                    "scale": scale,
-                    "naturalOrientation": "portrait" if height > width else "landscape",
-                    "defaultRotation": 0,
-                    "safeArea": {"top": 0, "right": 0, "bottom": 0, "left": 0},
-                    "corners": {
-                        "topLeft": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
-                        "topRight": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
-                        "bottomLeft": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
-                        "bottomRight": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
+    if qemu_gestalt is None:
+        qemu_gestalt = BUILD_DIR / "qemu-gestalt.json"
+        write_text(
+            qemu_gestalt,
+            json.dumps(
+                {
+                    "version": 1,
+                    "name": "LCL QEMU Output",
+                    "display": {
+                        "width": width,
+                        "height": height,
+                        "refreshRateHz": refresh_hz,
+                        "scale": scale,
+                        "naturalOrientation": "portrait" if height > width else "landscape",
+                        "defaultRotation": 0,
+                        "safeArea": {"top": 0, "right": 0, "bottom": 0, "left": 0},
+                        "corners": {
+                            "topLeft": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
+                            "topRight": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
+                            "bottomLeft": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
+                            "bottomRight": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
+                        },
+                        "cutouts": [],
                     },
-                    "cutouts": [],
                 },
-            },
-            indent=2,
-        ) + "\n",
-    )
+                indent=2,
+            ) + "\n",
+        )
+
+    video_mode = f"video={width}x{height}-32@{refresh_hz}"
 
     serial_console = (
         "console=ttyAMA0,115200 console=tty0 earlycon"
@@ -1556,7 +1612,13 @@ def main() -> None:
     parser.add_argument(
         "--mobile",
         action="store_true",
-        help="Portrait iPhone-like display mode (1179x2556 physical @ 3.0x UI scale)",
+        help="Portrait mobile display mode (1179x2556 physical @ 2.0x UI scale)",
+    )
+    parser.add_argument(
+        "--gestalt",
+        type=Path,
+        metavar="JSON",
+        help="Use an explicit Gestalt JSON and pass it to the guest through fw_cfg",
     )
     parser.add_argument(
         "--scale",
@@ -1697,6 +1759,7 @@ def main() -> None:
             scale_override=args.scale,
             width_override=args.width,
             height_override=args.height,
+            gestalt_path=args.gestalt,
             no_build=args.no_build,
             rebuild=args.rebuild,
             spice_unix=args.spice_unix,

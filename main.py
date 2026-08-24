@@ -5,7 +5,7 @@ Provides a clean, cross-platform CLI for building, running QEMU, ISO generation,
 
 Usage:
   ./main.py qemu [--native] [--gpu] [--arch aarch64|x86_64]
-  ./main.py qemu --mobile [--skin pixel_8_pro]
+  ./main.py qemu --mobile [--skin pixel_8_pro] [--gestalt profile.json]
   ./main.py avd [--avd-name lcl-phone] [--no-window] [--rebuild]
   ./main.py android [--no-build] [--rebuild] [--push-rootfs]
   ./main.py build [--arch ...]
@@ -70,6 +70,8 @@ def cmd_qemu(args: argparse.Namespace) -> None:
         viewer_args = [sys.executable, str(ROOT_DIR / "emulator" / "main.py")]
         if args.skin:
             viewer_args.extend(["--skin", args.skin])
+        if args.gestalt:
+            viewer_args.extend(["--gestalt", str(args.gestalt)])
         if not args.no_build:
             viewer_args.append("--build")
         if args.rebuild:
@@ -105,6 +107,8 @@ def cmd_qemu(args: argparse.Namespace) -> None:
         qemu_args.extend(["--width", str(args.width)])
     if args.height is not None:
         qemu_args.extend(["--height", str(args.height)])
+    if args.gestalt:
+        qemu_args.extend(["--gestalt", str(args.gestalt)])
     if args.usb:
         qemu_args.extend(["--usb", str(args.usb)])
     if args.trace_frames:
@@ -403,8 +407,9 @@ def main() -> None:
     p_qemu.add_argument("--native", "-n", action="store_true", help="Match host resolution + fullscreen")
     p_qemu.add_argument("--gpu", "-g", action="store_true", help="Enable 3D VirGL GPU acceleration")
     p_qemu.add_argument("--retina", action="store_true", help="13\" MacBook Air Retina (2560x1600 @ 2.0x)")
-    p_qemu.add_argument("--mobile", action="store_true", help="Portrait iPhone-like display (1179x2556 @ 3.0x)")
+    p_qemu.add_argument("--mobile", action="store_true", help="Portrait mobile display (1179x2556 @ 2.0x)")
     p_qemu.add_argument("--skin", metavar="PIXEL_SKIN", help="Pixel skin for --mobile Device Viewer (e.g. pixel_8_pro)")
+    p_qemu.add_argument("--gestalt", type=Path, metavar="JSON", help="Use an explicit Gestalt JSON in the guest")
     p_qemu.add_argument("--scale", type=float, metavar="FACTOR", help="UI scale factor (e.g. 1.5, 2.0)")
     p_qemu.add_argument("--width", type=int, metavar="PX", help="Display width in pixels")
     p_qemu.add_argument("--height", type=int, metavar="PX", help="Display height in pixels")

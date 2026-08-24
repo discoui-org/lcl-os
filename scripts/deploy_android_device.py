@@ -41,6 +41,7 @@ DEVICE_BINARY_PATH = f"{DEVICE_TMP_DIR}/{BINARY_NAME}"
 DEVICE_HIDL_BRIDGE_PATH = f"{DEVICE_TMP_DIR}/{HIDL_BRIDGE_NAME}"
 DEVICE_LOG_PATH = f"{DEVICE_TMP_DIR}/lcl-core.log"
 DEVICE_RUNTIME_DIR = f"{DEVICE_TMP_DIR}/lcl-runtime"
+DEVICE_GESTALT_UPLOAD_PATH = f"{DEVICE_TMP_DIR}/lcl-gestalt.json.upload"
 DEVICE_GESTALT_PATH = f"{DEVICE_RUNTIME_DIR}/gestalt.json"
 DEVICE_COMPOSITOR_SOCKET = f"{DEVICE_RUNTIME_DIR}/lcl-compositor.sock"
 DEVICE_SESSION_SOCKET = f"{DEVICE_RUNTIME_DIR}/lcl-sessiond.sock"
@@ -524,19 +525,33 @@ def push_rootfs_session_launcher() -> None:
 
 
 def prepare_runtime_for_launch() -> None:
-    """Reject overlapping sessions and remove sockets left by dead processes."""
+    """Stop an existing LCL session, then clear its private runtime sockets."""
     process_names = ("lcl-core-android", "lcl-sessiond", "lcl-desktop-shell", "lcl-terminal")
-    active: list[str] = []
-    for name in process_names:
-        result = adb_shell(f"pidof {name}", as_root=True)
-        pids = [value for value in result.stdout.split() if value.isdigit()]
-        if pids:
-            active.append(f"{name} ({', '.join(pids)})")
-    if active:
-        raise RuntimeError(
-            "An LCL session is already running on the phone: " + ", ".join(active) +
-            ". Stop its current launcher with Ctrl+C or run './main.py android --restore-only'."
-        )
+
+    def active_processes() -> list[str]:
+        active: list[str] = []
+        for name in process_names:
+            result = adb_shell(f"pidof {name}", as_root=True)
+            pids = [value for value in result.stdout.split() if value.isdigit()]
+            if pids:
+                active.append(f"{name} ({', '.join(pids)})")
+        return active
+
+    active = active_processes()
+    restarted = bool(active)
+    if restarted:
+        log("Existing LCL session detected; restarting it...")
+        log("  " + ", ".join(active))
+        stop_rootfs_session()
+        stop_lcl_process()
+        unmount_rootfs()
+        remove_native_clients()
+
+        remaining = active_processes()
+        if remaining:
+            raise RuntimeError(
+                "Could not stop the existing LCL session: " + ", ".join(remaining)
+            )
 
     result = adb_shell(
         f"rm -f {DEVICE_COMPOSITOR_SOCKET} {DEVICE_SESSION_SOCKET}",
@@ -544,7 +559,10 @@ def prepare_runtime_for_launch() -> None:
     )
     if result.returncode != 0:
         raise RuntimeError("Could not remove stale LCL runtime sockets: " + result.stderr.strip())
-    log("Stale runtime sockets cleared; no overlapping LCL session found.")
+    if restarted:
+        log("Previous LCL session stopped; runtime is ready for relaunch.")
+    else:
+        log("Stale runtime sockets cleared; no overlapping LCL session found.")
 
 
 def wait_for_compositor_socket(
@@ -605,8 +623,19 @@ def push_gestalt(gestalt_path: Path) -> None:
         err(f"Gestalt file not found: {resolved}")
         sys.exit(1)
     log(f"Pushing Gestalt: {resolved}")
-    run_adb("push", str(resolved), DEVICE_GESTALT_PATH)
-    adb_shell(f"chmod 600 {DEVICE_GESTALT_PATH}", as_root=True)
+    # `adb push` runs as Android's shell user, which cannot traverse the
+    # root-owned 0700 runtime directory. Stage in /data/local/tmp, then install
+    # atomically as root without weakening runtime-directory permissions.
+    adb_shell(f"rm -f {DEVICE_GESTALT_UPLOAD_PATH}", as_root=True)
+    run_adb("push", str(resolved), DEVICE_GESTALT_UPLOAD_PATH)
+    install = adb_shell(
+        f"mv {DEVICE_GESTALT_UPLOAD_PATH} {DEVICE_GESTALT_PATH} && "
+        f"chown root:root {DEVICE_GESTALT_PATH} && chmod 600 {DEVICE_GESTALT_PATH}",
+        as_root=True,
+    )
+    if install.returncode != 0:
+        err(f"Failed to install Gestalt at {DEVICE_GESTALT_PATH}: {install.stderr.strip()}")
+        sys.exit(1)
 
 
 def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,

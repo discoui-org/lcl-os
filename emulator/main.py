@@ -308,6 +308,12 @@ def main() -> int:
         action="store_true",
         help="Force the viewer QEMU process to rebuild its LCL artifacts",
     )
+    parser.add_argument(
+        "--gestalt",
+        type=Path,
+        metavar="JSON",
+        help="Use an explicit Gestalt JSON for the viewer QEMU guest",
+    )
     args = parser.parse_args()
     if args.rebuild and not args.build:
         parser.error("--rebuild requires --build")
@@ -330,7 +336,11 @@ def main() -> int:
     window.resize(460, 940)
     window.show()
 
-    runner = QemuRunner(build=args.build, rebuild=args.rebuild)
+    runner = QemuRunner(
+        build=args.build,
+        rebuild=args.rebuild,
+        gestalt_path=args.gestalt,
+    )
     qmp_input = QmpInputClient(runner.qmp_socket_path)
     input_bridge = ViewerInputBridge(viewer.input_widget, qmp_input)
     spice_probe = SpiceScanoutProbe(runner.spice_socket_path, viewer.submit_spice_draw)

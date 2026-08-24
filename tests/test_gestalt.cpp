@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <optional>
+#include <sstream>
 
 #include "platform/common/gestalt.hpp"
 
@@ -106,6 +109,25 @@ TEST(GestaltTest, MissingExplicitOverrideIsAnError) {
     EXPECT_FALSE(result.ok());
     EXPECT_TRUE(result.explicitOverride);
     EXPECT_NE(result.error.find("explicit Gestalt"), std::string::npos);
+}
+
+TEST(GestaltTest, CheckedInGalaxyTabS7ProfileMatchesStrictSchema) {
+    const auto profilePath = std::filesystem::path(__FILE__).parent_path().parent_path() /
+        "test-devices" / "galaxy-tab-s7-sm-t870.json";
+    std::ifstream profile(profilePath, std::ios::binary);
+    ASSERT_TRUE(profile.is_open()) << profilePath;
+    std::ostringstream contents;
+    contents << profile.rdbuf();
+
+    DeviceGestalt gestalt;
+    std::string error;
+    ASSERT_TRUE(parseGestaltJson(contents.str(), gestalt, error)) << error;
+    EXPECT_EQ(gestalt.name, "Samsung Galaxy Tab S7 (SM-T870)");
+    EXPECT_EQ(gestalt.display.width, 1600u);
+    EXPECT_EQ(gestalt.display.height, 2560u);
+    EXPECT_EQ(gestalt.display.refreshRateHz, 120u);
+    EXPECT_EQ(gestalt.display.scale, 2.0f);
+    EXPECT_FLOAT_EQ(gestalt.display.corners.topLeft.radiusX, 28.0f);
 }
 
 } // namespace lcl::platform
