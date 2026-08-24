@@ -10,23 +10,26 @@ The result should feel confident at launcher size: one recognisable idea, a
 strong colour field, and a simple foreground mark. It must not depend on
 third-party product imagery, symbol libraries, or reproduced system artwork.
 
-## Presentation: circular mask
+## Presentation: continuous rounded-rectangle mask
 
-LCL presents application icons inside a **circular mask**. The mask belongs to
-the launcher or icon-view component, not to the asset.
+LCL presents application icons inside a system-owned **continuous
+rounded-rectangle mask**. The mask belongs to the launcher or icon-view
+component, not to the asset.
 
-- Display shape: circle (`50%` corner radius).
 - Reference display size: `60 x 60` logical units in the mobile launcher.
-- Larger grids and dock views scale the same asset; they do not use a second
-  shape or a separately cropped file.
+- Canonical corner radius: `22` logical units at the reference size.
+- Canonical corner roundness: `3.2`, the exponent used by LCL's continuous
+  superellipse corner model.
+- Larger grids and dock views scale the same mask proportions and asset; they
+  do not use a second shape or a separately cropped file.
 - Source SVGs stay square and unmasked. A full-bleed background must extend to
   all four edges of the square canvas, so the launcher can clip it cleanly.
-- Never draw an opaque circular edge, outer shadow, or baked corner treatment
+- Never draw an opaque mask edge, outer shadow, or baked corner treatment
   into the SVG. Those create a visible double edge after masking.
 
-The currently documented mobile-shell launcher uses a continuous rounded
-rectangle. This file records the proposed circular-icon direction only; the
-shell mask must be changed deliberately when this direction is implemented.
+The same canonical radius and roundness are used by the static launcher icon
+and the opening transition's initial silhouette. Do not duplicate or override
+the mask geometry in individual assets.
 
 ## Asset format and geometry
 
@@ -43,7 +46,7 @@ Every icon lives in this directory and uses this baseline:
 | Text | None, except an inseparable brand monogram |
 | Strokes | Avoid hairlines; use filled shapes or strokes at least `56` units |
 
-Design against the final circle, not only the square artboard. No meaningful
+Design against the final system mask, not only the square artboard. No meaningful
 detail may sit near a corner or depend on the square’s corners being visible.
 At `60` logical units, the foreground mark should read at a glance; if it needs
 an explanation, simplify it.
@@ -127,9 +130,9 @@ colour field. Do not replace the core symbol between variants.
 
 Before adding an icon, check it at `60`, `40`, and `24` logical units:
 
-- Does the central mark remain recognizable after the circular crop?
+- Does the central mark remain recognizable after the continuous rounded crop?
 - Is the mark clearly distinct from other LCL applications in grayscale?
-- Does the source fill the square canvas without baking in the circle mask?
+- Does the source fill the square canvas without baking in the system mask?
 - Are all meaningful shapes inside the safe zone?
 - Does one colour family dominate and retain sufficient foreground contrast?
 - Are there no embedded raster assets, external SVG dependencies, text labels,
