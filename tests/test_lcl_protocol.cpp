@@ -1044,19 +1044,6 @@ TEST(LCLProtocolTest, LaunchPlaceholderCommandsRoundTrip) {
     EXPECT_EQ(decodedVisibilityAck->launchToken, 73u);
     EXPECT_STREQ(decodedVisibilityAck->appId, "org.lcl.test");
 
-    LCLMsgLaunchHomeTransition homeTransition{};
-    homeTransition.launchToken = 73;
-    homeTransition.progress = 0.625f;
-    header.opcode = LCLOpcode::LaunchHomeTransition;
-    header.payloadSize = sizeof(homeTransition);
-    ASSERT_TRUE(encodePacket(header, &homeTransition, packet));
-    ASSERT_TRUE(decodePacket(
-        packet.data(), packet.size(), decodedHeader, payload));
-    ASSERT_EQ(payload.size(), sizeof(homeTransition));
-    const auto* decodedHomeTransition = reinterpret_cast<const
-        LCLMsgLaunchHomeTransition*>(payload.data());
-    EXPECT_EQ(decodedHomeTransition->launchToken, 73u);
-    EXPECT_FLOAT_EQ(decodedHomeTransition->progress, 0.625f);
 }
 
 TEST(LCLProtocolTest, SurfaceCreateRequiresCanonicalAppId) {

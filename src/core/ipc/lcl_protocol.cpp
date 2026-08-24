@@ -223,7 +223,6 @@ bool validOpcode(LCLOpcode value) {
     case LCLOpcode::CancelLaunchPlaceholder:
     case LCLOpcode::LaunchIconVisibility:
     case LCLOpcode::LaunchIconVisibilityAck:
-    case LCLOpcode::LaunchHomeTransition:
         return true;
     }
     return false;
@@ -809,15 +808,6 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.fixed(msg.appId, sizeof(msg.appId));
         return true;
     }
-    case LCLOpcode::LaunchHomeTransition: {
-        LOAD_ONE(LCLMsgLaunchHomeTransition, msg);
-        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
-        if (msg.launchToken == 0 || msg.launchToken >= kLaunchTokenLimit ||
-            !validUnit(msg.progress)) return false;
-        out.u64(msg.launchToken);
-        out.f32(msg.progress);
-        return true;
-    }
     }
     return false;
 #undef LOAD_ONE
@@ -1267,15 +1257,6 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             m.launchToken == 0 || m.launchToken >= kLaunchTokenLimit ||
             !validString(m.appId, sizeof(m.appId)) || m.appId[0] == '\0')
             return false;
-        appendNative(payload, m);
-        break;
-    }
-    case LCLOpcode::LaunchHomeTransition: {
-        LCLMsgLaunchHomeTransition m{};
-        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
-        if (!in.u64(m.launchToken) || !in.f32(m.progress) ||
-            m.launchToken == 0 || m.launchToken >= kLaunchTokenLimit ||
-            !validUnit(m.progress)) return false;
         appendNative(payload, m);
         break;
     }

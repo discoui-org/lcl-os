@@ -1,6 +1,7 @@
 #include "core/compositor/compositor_renderer.hpp"
 #include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
+#include "core/compositor/mobile_launch_backdrop.hpp"
 #include "core/compositor/mobile_window_decoration.hpp"
 #include "core/compositor/window_chrome_material.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
@@ -20,7 +21,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                                  const SurfaceRegistry::Snapshot& surfaces,
                                  const std::function<void()>& beforePresent,
                                  bool allowIncrementalMove,
-                                 bool drawMobileWindowDecorations) const {
+                                 bool useMobilePresentation) const {
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     // The snapshot contains only const entry pointers, so protocol/input work
     // cannot mutate the surface state while this frame is being composed.
@@ -228,6 +229,35 @@ void CompositorRenderer::render(render::Renderer& renderer,
         }
     }
 
+    float mobileLaunchProgress = 0.0f;
+    if (useMobilePresentation) {
+        // WindowManager order is bottom-to-top. The uppermost visible normal
+        // surface is the sole authority for launcher coverage; minimized apps
+        // must not keep Home blurred behind the launcher.
+        for (auto winIt = windowManager.getWindows().rbegin();
+             winIt != windowManager.getWindows().rend(); ++winIt) {
+            if (winIt->isMinimized) continue;
+            const auto surface = std::find_if(
+                surfaces.begin(), surfaces.end(), [&](const auto& item) {
+                    return item.entry && !item.entry->isPopup() &&
+                        item.entry->windowId == winIt->id &&
+                        item.entry->systemSurfaceKind ==
+                            protocol::LCLSystemSurfaceKind::None;
+                });
+            if (surface == surfaces.end()) continue;
+            if (surface->entry->hasLaunchOrigin &&
+                surface->entry->launchToken != 0) {
+                mobileLaunchProgress =
+                    surface->entry->launchHomeTransitionProgress;
+            } else {
+                mobileLaunchProgress = 1.0f;
+            }
+            break;
+        }
+    }
+    const auto mobileBackdrop =
+        resolveMobileLaunchBackdrop(mobileLaunchProgress);
+
     auto drawLaunchIconProxy = [&](const SurfaceEntry& surface) {
         if (!surface.hasLaunchOrigin ||
             !surface.launchMorphActive || surface.transitionOpacity >= 0.999f) {
@@ -417,6 +447,15 @@ void CompositorRenderer::render(render::Renderer& renderer,
         if (matchingSurface) {
             windowOpacity = std::clamp(matchingSurface->transitionOpacity, 0.0f, 1.0f);
             windowScale = std::clamp(matchingSurface->transitionScale, 0.80f, 1.20f);
+            if (useMobilePresentation) {
+                if (matchingSurface->systemSurfaceKind ==
+                    protocol::LCLSystemSurfaceKind::Wallpaper) {
+                    windowScale = mobileBackdrop.wallpaperScale;
+                } else if (matchingSurface->systemSurfaceKind ==
+                           protocol::LCLSystemSurfaceKind::HomeScreen) {
+                    windowScale = mobileBackdrop.homeScale;
+                }
+            }
         }
 
         const render::WindowGroupTransform group =
@@ -581,7 +620,31 @@ void CompositorRenderer::render(render::Renderer& renderer,
                                           windowOpacity, group);
             }
 
-            if (drawMobileWindowDecorations &&
+            if (useMobilePresentation &&
+                matchingSurface->systemSurfaceKind ==
+                    protocol::LCLSystemSurfaceKind::HomeScreen &&
+                mobileBackdrop.blurRadius > 0.05f) {
+                protocol::FilterOp blur{};
+                blur.type = protocol::FilterType::Blur;
+                blur.value = mobileBackdrop.blurRadius;
+                protocol::FilterOp saturation{};
+                saturation.type = protocol::FilterType::Saturation;
+                saturation.value = mobileBackdrop.saturation;
+                protocol::FilterOp brightness{};
+                brightness.type = protocol::FilterType::Brightness;
+                brightness.value = mobileBackdrop.brightness;
+
+                // This is a real variable-radius blur. The filtered result is
+                // fully opaque; launch progress never becomes effect opacity.
+                raster->applyBackdropFilter(
+                    0.0f, 0.0f,
+                    windowManager.getScreenWidth(),
+                    windowManager.getScreenHeight(),
+                    0.0f, 2.0f, 1.0f,
+                    {blur, saturation, brightness});
+            }
+
+            if (useMobilePresentation &&
                 matchingSurface->systemSurfaceKind ==
                     protocol::LCLSystemSurfaceKind::None &&
                 matchingSurface->hasRenderableBuffer()) {

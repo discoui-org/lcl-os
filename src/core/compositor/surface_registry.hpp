@@ -145,9 +145,8 @@ public:
         float launchGestureVelocityX{0.0f};
         float launchGestureVelocityY{0.0f};
         bool launchGestureFlingPending{false};
-        // Same 0=launcher, 1=fullscreen contract as LaunchHomeTransition.
+        // Compositor-owned 0=launcher, 1=fullscreen background presentation.
         float launchHomeTransitionProgress{0.0f};
-        float publishedLaunchHomeTransitionProgress{-1.0f};
         bool hasCommittedBuffer{false};
         bool ignoreBufferCommits{false};
         bool pendingDestroy{false};

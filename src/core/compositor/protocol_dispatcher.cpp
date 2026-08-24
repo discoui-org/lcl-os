@@ -123,19 +123,6 @@ bool ProtocolDispatcher::publishLaunchIconVisibility(
     return protocol::sendMsgWithFd(entry.launchOwnerFd, header, &message);
 }
 
-bool ProtocolDispatcher::publishLaunchHomeTransition(
-        const SurfaceRegistry::SurfaceEntry& entry, float progress) const {
-    if (entry.launchOwnerFd < 0 || entry.launchToken == 0) return false;
-
-    protocol::LCLMsgLaunchHomeTransition message{};
-    message.launchToken = entry.launchToken;
-    message.progress = std::clamp(progress, 0.0f, 1.0f);
-    protocol::LCLHeader header{};
-    header.opcode = protocol::LCLOpcode::LaunchHomeTransition;
-    header.payloadSize = sizeof(message);
-    return protocol::sendMsgWithFd(entry.launchOwnerFd, header, &message);
-}
-
 ProtocolDispatcher::~ProtocolDispatcher() {
     for (const auto& [clientFd, channelFd] : m_nativeBufferChannels) {
         (void)clientFd;
@@ -269,7 +256,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             it->second.pendingDestroy = true;
             changed = true;
         } else if (!beginClosingTransition(it->second)) {
-            publishLaunchHomeTransition(it->second, 0.0f);
             publishLaunchIconVisibility(it->second, true);
             if (it->second.windowId > 0) {
                 m_windowManager.removeWindow(it->second.windowId);
@@ -322,7 +308,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                         entry.ignoreBufferCommits = true;
                         entry.pendingDestroy = true;
                     } else if (!beginClosingTransition(entry)) {
-                        publishLaunchHomeTransition(entry, 0.0f);
                         publishLaunchIconVisibility(entry, true);
                         if (entry.windowId > 0) m_windowManager.removeWindow(entry.windowId);
                         surfacesToRemove.push_back(surfKey);
@@ -463,7 +448,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 if (old->second.isLaunchPlaceholder &&
                     old->second.launchOwnerFd == msg.clientFd &&
                     old->second.appId == request->appId) {
-                    publishLaunchHomeTransition(old->second, 0.0f);
                     if (old->second.windowId != 0) {
                         m_windowManager.removeWindow(old->second.windowId);
                     }
@@ -506,7 +490,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.launchToken = request->launchToken;
                 entry.launchOwnerFd = msg.clientFd;
                 entry.launchHomeTransitionProgress = 0.0f;
-                entry.publishedLaunchHomeTransitionProgress = -1.0f;
                 // The session service has not told us whether this is a new
                 // instance yet. Keep the icon morph alive, but do not expose
                 // the white first-launch placeholder until resolution. A
@@ -624,7 +607,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     target.launchToken = request->launchToken;
                     target.launchOwnerFd = msg.clientFd;
                     target.launchHomeTransitionProgress = 0.0f;
-                    target.publishedLaunchHomeTransitionProgress = -1.0f;
                     target.hasLaunchOrigin = true;
                     target.launchOriginX = originX;
                     target.launchOriginY = originY;
@@ -712,7 +694,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             if (launch != m_surfaces.end() &&
                 launch->second.isLaunchPlaceholder &&
                 launch->second.launchOwnerFd == msg.clientFd) {
-                publishLaunchHomeTransition(launch->second, 0.0f);
                 m_windowManager.removeWindow(launch->second.windowId);
                 m_surfaces.erase(launch);
                 changed = true;

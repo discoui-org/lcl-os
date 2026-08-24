@@ -398,16 +398,6 @@ void Compositor::renderFrame() {
     constexpr auto kLaunchIconHandoffTimeout = std::chrono::milliseconds(750);
     for (auto& [surfaceKey, entry] : m_surfaces) {
         (void)surfaceKey;
-        if (m_protocolDispatcher && entry.launchOwnerFd >= 0 &&
-            entry.launchToken != 0 &&
-            (entry.publishedLaunchHomeTransitionProgress < 0.0f ||
-             std::fabs(entry.launchHomeTransitionProgress -
-                       entry.publishedLaunchHomeTransitionProgress) > 0.0005f) &&
-            m_protocolDispatcher->publishLaunchHomeTransition(
-                entry, entry.launchHomeTransitionProgress)) {
-            entry.publishedLaunchHomeTransitionProgress =
-                entry.launchHomeTransitionProgress;
-        }
         if (entry.launchIconHandoffActive &&
             entry.launchIconHandoffDeadline.time_since_epoch().count() == 0) {
             entry.launchIconHandoffDeadline =

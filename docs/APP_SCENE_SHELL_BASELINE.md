@@ -6,7 +6,7 @@ change is explicitly approved before implementation.
 
 The numbered implementation records below are historical checkpoints and keep
 the protocol versions and test totals that were true at each checkpoint. The
-current wire contract is protocol v15; current rendering uses backend-neutral
+current wire contract is protocol v22; current rendering uses backend-neutral
 logical display lists, `WindowGroupTransform`, and raster-boundary device
 scaling. Do not read an older step's version label as a compatibility promise.
 

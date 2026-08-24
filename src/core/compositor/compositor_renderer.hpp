@@ -18,7 +18,7 @@ public:
                 const SurfaceRegistry::Snapshot& surfaces,
                 const std::function<void()>& beforePresent = {},
                 bool allowIncrementalMove = false,
-                bool drawMobileWindowDecorations = false) const;
+                bool useMobilePresentation = false) const;
 
 private:
     // Android's compositor scene FBO is authoritative across frames. Partial

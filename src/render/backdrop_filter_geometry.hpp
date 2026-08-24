@@ -34,46 +34,25 @@ struct BackdropPassScale {
 
 struct BackdropBlurPlan {
     float gaussianValuePx{0.0f};
-    float filteredMix{1.0f};
-    int downsampleDivisor{1};
+    float downsampleScale{1.0f};
 };
 
 /**
- * Resolves a Gaussian backdrop blur in device pixels. A positive transition
- * floor keeps the final part of an animated blur on the first downsampled mip
- * and crossfades that result with the sharp retained scene. This avoids the
- * expensive half-resolution to full-resolution Gaussian handoff near zero.
+ * Resolves a genuine variable-radius Gaussian backdrop blur in device pixels.
+ * The working scale changes continuously with the requested radius so an
+ * animation does not cross discrete full/half/quarter-resolution cliffs.
+ * No sharp/filtered opacity blend participates in the visual result.
  */
-inline BackdropBlurPlan computeBackdropBlurPlan(
-    float requestedValuePx,
-    float transitionFloorPx = 0.0f) {
+inline BackdropBlurPlan computeBackdropBlurPlan(float requestedValuePx) {
     if (!std::isfinite(requestedValuePx) || requestedValuePx <= 0.05f) {
-        return {0.0f, 0.0f, 1};
+        return {0.0f, 1.0f};
     }
 
     const float requested = std::max(0.0f, requestedValuePx);
-    const float floor = std::isfinite(transitionFloorPx)
-        ? std::max(0.0f, transitionFloorPx)
-        : 0.0f;
-    const bool transitional = floor > 0.05f;
-    const float gaussianValue = transitional
-        ? std::max(requested, floor)
-        : requested;
-
-    int divisor = 1;
-    if (gaussianValue > 8.0f) {
-        divisor = std::clamp(
-            1 + static_cast<int>(std::floor(std::log2(gaussianValue / 8.0f))),
-            1, 4);
-    }
-    if (transitional) {
-        divisor = std::max(divisor, 2);
-    }
-
-    const float filteredMix = transitional
-        ? std::clamp(requested / floor, 0.0f, 1.0f)
-        : 1.0f;
-    return {gaussianValue, filteredMix, divisor};
+    constexpr float kFullResolutionRadiusPx = 8.0f;
+    const float downsampleScale = std::clamp(
+        requested / kFullResolutionRadiusPx, 1.0f, 4.0f);
+    return {requested, downsampleScale};
 }
 
 /** Logical-to-pass pixel scale after an optional intermediate downsample. */

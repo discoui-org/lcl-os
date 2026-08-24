@@ -3415,7 +3415,6 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
     for (auto& filter : scaledFilters) {
         if (filter.type == protocol::FilterType::Blur) {
             filter.value *= m_deviceScale;
-            filter.params[0] *= m_deviceScale;
         } else if (filter.type == protocol::FilterType::Glass) {
             filter.params[0] *= m_deviceScale;
         }
@@ -3470,19 +3469,20 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
         const int captureW = geometry.capture.width;
         const int captureH = geometry.capture.height;
 
-        int logScale = 1;
-        float filteredOutputMix = 1.0f;
+        float blurPassScale = 1.0f;
         if (gpuBlurAvailable) {
             for (const auto& op : filters) {
                 if (op.type != protocol::FilterType::Blur) continue;
-                const auto plan = computeBackdropBlurPlan(op.value, op.params[0]);
-                logScale = std::max(logScale, plan.downsampleDivisor);
-                filteredOutputMix = std::min(filteredOutputMix, plan.filteredMix);
+                const auto plan = computeBackdropBlurPlan(op.value);
+                blurPassScale = std::max(
+                    blurPassScale, plan.downsampleScale);
             }
         }
 
-        int targetW = std::max(1, captureW / logScale);
-        int targetH = std::max(1, captureH / logScale);
+        int targetW = std::max(1, static_cast<int>(std::lround(
+            static_cast<float>(captureW) / blurPassScale)));
+        int targetH = std::max(1, static_cast<int>(std::lround(
+            static_cast<float>(captureH) / blurPassScale)));
 
         if (targetW > static_cast<int>(m_glFBOCapacityWidth) ||
             targetH > static_cast<int>(m_glFBOCapacityHeight)) {
@@ -3600,12 +3600,12 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
         };
 
         auto runBlurPass = [&](const protocol::FilterOp& blur) {
-            const auto plan = computeBackdropBlurPlan(blur.value, blur.params[0]);
+            const auto plan = computeBackdropBlurPlan(blur.value);
             const float blurValue = plan.gaussianValuePx;
             if (blurValue <= 0.05f) {
                 return;
             }
-            float adjustedValue = blurValue / static_cast<float>(logScale);
+            float adjustedValue = blurValue / blurPassScale;
             float sigma = std::max(0.5f, adjustedValue / 2.0f);
             int radius = std::clamp(static_cast<int>(std::ceil(3.0f * sigma)), 1, 32);
 
@@ -3788,7 +3788,7 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
                       static_cast<float>(effectH),
                       cornerRadius,
                       clampedRoundness,
-                      opacity * filteredOutputMix,
+                      opacity,
                       false,
                       outputUScale,
                       outputVScale,
