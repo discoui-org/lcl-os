@@ -112,7 +112,9 @@ public:
                        PointerSource source = PointerSource::Mouse, uint32_t pointerId = 0);
     bool sendPointerCancel(float x, float y, PointerSource source = PointerSource::Mouse,
                            uint32_t pointerId = 0);
-    bool sendPointerScroll(float x, float y, float deltaX, float deltaY, PointerSource source = PointerSource::Mouse);
+    bool sendPointerScroll(float x, float y, float deltaX, float deltaY,
+                           PointerSource source = PointerSource::Mouse,
+                           uint32_t pointerId = 0);
     bool sendKeyDown(int keyCode, char32_t codepoint = 0, uint8_t modifiers = 0);
     bool sendKeyUp(int keyCode, uint8_t modifiers = 0);
     bool sendTextInput(const std::string& text);

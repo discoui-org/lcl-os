@@ -29,6 +29,7 @@ enum class RawInputEventType {
     Unknown,
     PointerMotion,
     PointerButton,
+    PointerCancel,
     KeyboardKey,
     PointerScroll
 };
@@ -36,6 +37,7 @@ enum class RawInputEventType {
 struct RawInputEvent {
     RawInputEventType type{RawInputEventType::Unknown};
     PointerSource source{PointerSource::Mouse};
+    uint32_t pointerId{0};
     double dx{0.0};
     double dy{0.0};
     double absoluteX{-1.0};

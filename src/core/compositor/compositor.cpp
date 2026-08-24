@@ -85,8 +85,32 @@ bool Compositor::initialize() {
     m_ipcManager.initialize(paths.compositorSocketPath());
 
     // --- Route input through the dedicated focus/hit-test bridge ---
+    const bool mobileSystemGestures =
+        m_platformServices.gestalt().shell == lcl::platform::ShellKind::Mobile;
     m_inputRouter = std::make_unique<InputRouter>(
-        m_windowManager, m_surfaces, m_sceneRegistry, outputScale);
+        m_windowManager, m_surfaces, m_sceneRegistry, outputScale,
+        mobileSystemGestures);
+    m_inputRouter->setSystemGestureHandler([this](SystemGestureDecision decision) {
+        if (decision != SystemGestureDecision::Home) return false;
+        const uint32_t windowId = m_windowManager.getFocusedWindowId();
+        if (windowId == 0) return false;
+        const auto surface = std::find_if(
+            m_surfaces.begin(), m_surfaces.end(), [windowId](const auto& item) {
+                return !item.second.isPopup() && item.second.windowId == windowId;
+            });
+        if (surface == m_surfaces.end() ||
+            surface->second.transitionPhase !=
+                SurfaceRegistry::SurfaceEntry::TransitionPhase::None) {
+            return false;
+        }
+        surface->second.transitionPhase =
+            SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
+        surface->second.transitionElapsedSec = 0.0f;
+        surface->second.transitionDurationSec = 0.18f;
+        surface->second.transitionOpacity = 1.0f;
+        surface->second.transitionScale = 1.0f;
+        return true;
+    });
     input.initialize([this](const lcl::platform::RawInputEvent& event) {
         if (m_inputRouter && m_inputRouter->route(event)) {
             m_needsRedraw = true;

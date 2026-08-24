@@ -202,6 +202,7 @@ add_library(lcl-core-engine STATIC
     src/core/scene/scene_registry.cpp
     src/core/scene/shell_state_broker.cpp
     src/core/input/input_manager.cpp
+    src/core/input/system_gesture_arena.cpp
     src/core/ipc/ipc_manager.cpp
 )
 
@@ -669,6 +670,7 @@ else()
             tests/test_session_service.cpp
             tests/test_ipc_manager.cpp
             tests/test_input_manager.cpp
+            tests/test_system_gesture_arena.cpp
             tests/test_key_mapper.cpp
             tests/test_compositor_components.cpp
             src/core/shell/shell_state_client.cpp
@@ -688,6 +690,7 @@ else()
             src/core/scene/shell_state_broker.cpp
             src/core/app/app_bundle_parser.cpp
             src/core/input/input_manager.cpp
+            src/core/input/system_gesture_arena.cpp
             src/platform/android/android_input_backend.cpp
             src/render/window_manager.cpp
             src/binding/js_runtime.cpp

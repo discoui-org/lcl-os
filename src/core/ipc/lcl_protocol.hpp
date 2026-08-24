@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 15;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 16;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint64_t LCL_CAPABILITY_AHB_V1 = 1ull << 0;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
@@ -342,13 +342,24 @@ enum class LCLPointerSource : uint8_t {
     Touch = 1
 };
 
+enum class LCLInputEventType : uint32_t {
+    KeyDown = 1,
+    KeyUp = 2,
+    PointerMotion = 3,
+    PointerButton = 4,
+    TextInput = 5,
+    PointerScroll = 6,
+    PointerCancel = 7
+};
+
 struct LCLMsgInputEvent {
     uint32_t surfaceId{0};
-    uint32_t type{0};      // 1 = KeyDown, 2 = KeyUp, 3 = PointerMotion, 4 = PointerButton, 5 = KeyPress/TextInput, 6 = PointerScroll
+    uint32_t type{0};      // LCLInputEventType
     uint32_t key{0};       // Linux evdev keycode (e.g. KEY_A, KEY_ENTER)
     uint8_t  pressed{0};   // 1 = Down, 0 = Up
     uint8_t  modifiers{0}; // Bitmask: 0x01=Shift, 0x02=Ctrl, 0x04=Alt, 0x08=CapsLock, 0x10=Super
     uint8_t  source{0};    // 0 = Mouse, 1 = Touch (LCLPointerSource)
+    uint32_t pointerId{0}; // Stable identity for the lifetime of a pointer stream
     uint32_t codepoint{0}; // Translated UTF-8 / ASCII codepoint (e.g. 'A', 'a', '1', '\n')
     float    x{0.0f};
     float    y{0.0f};

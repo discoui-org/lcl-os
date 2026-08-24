@@ -1366,6 +1366,7 @@ TEST(LclUiEventsTest, PointerEventSourcePropagation) {
         touchDown.x = 50.0f;
         touchDown.y = 60.0f;
         touchDown.source = static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch);
+        touchDown.pointerId = 27;
         ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[0], header, &touchDown));
 
         // 3. Send Touch PointerUp
@@ -1377,6 +1378,7 @@ TEST(LclUiEventsTest, PointerEventSourcePropagation) {
         touchUp.x = 50.0f;
         touchUp.y = 60.0f;
         touchUp.source = static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch);
+        touchUp.pointerId = 27;
         ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[0], header, &touchUp));
 
         // 4. Send Mouse PointerScroll
@@ -1390,9 +1392,21 @@ TEST(LclUiEventsTest, PointerEventSourcePropagation) {
         mouseScroll.source = static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Mouse);
         ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[0], header, &mouseScroll));
 
+        // 5. Cancel a second touch stream.
+        lcl::protocol::LCLMsgInputEvent touchCancel{};
+        touchCancel.surfaceId = 1;
+        touchCancel.type = static_cast<uint32_t>(
+            lcl::protocol::LCLInputEventType::PointerCancel);
+        touchCancel.x = 70.0f;
+        touchCancel.y = 80.0f;
+        touchCancel.source = static_cast<uint8_t>(
+            lcl::protocol::LCLPointerSource::Touch);
+        touchCancel.pointerId = 28;
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[0], header, &touchCancel));
+
         app.tick();
 
-        ASSERT_EQ(receivedEvents.size(), 4u);
+        ASSERT_EQ(receivedEvents.size(), 5u);
         EXPECT_EQ(receivedEvents[0].type, PointerEventType::Move);
         EXPECT_EQ(receivedEvents[0].source, PointerSource::Mouse);
         EXPECT_FLOAT_EQ(receivedEvents[0].x, 20.0f);
@@ -1400,11 +1414,13 @@ TEST(LclUiEventsTest, PointerEventSourcePropagation) {
 
         EXPECT_EQ(receivedEvents[1].type, PointerEventType::Down);
         EXPECT_EQ(receivedEvents[1].source, PointerSource::Touch);
+        EXPECT_EQ(receivedEvents[1].pointerId, 27u);
         EXPECT_FLOAT_EQ(receivedEvents[1].x, 50.0f);
         EXPECT_FLOAT_EQ(receivedEvents[1].y, 60.0f);
 
         EXPECT_EQ(receivedEvents[2].type, PointerEventType::Up);
         EXPECT_EQ(receivedEvents[2].source, PointerSource::Touch);
+        EXPECT_EQ(receivedEvents[2].pointerId, 27u);
         EXPECT_FLOAT_EQ(receivedEvents[2].x, 50.0f);
         EXPECT_FLOAT_EQ(receivedEvents[2].y, 60.0f);
 
@@ -1413,6 +1429,12 @@ TEST(LclUiEventsTest, PointerEventSourcePropagation) {
         EXPECT_FLOAT_EQ(receivedEvents[3].x, 25.0f);
         EXPECT_FLOAT_EQ(receivedEvents[3].y, 35.0f);
         EXPECT_FLOAT_EQ(receivedEvents[3].deltaY, 1.0f);
+
+        EXPECT_EQ(receivedEvents[4].type, PointerEventType::Cancel);
+        EXPECT_EQ(receivedEvents[4].source, PointerSource::Touch);
+        EXPECT_EQ(receivedEvents[4].pointerId, 28u);
+        EXPECT_FLOAT_EQ(receivedEvents[4].x, 70.0f);
+        EXPECT_FLOAT_EQ(receivedEvents[4].y, 80.0f);
     }
 
     close(sockets[0]);

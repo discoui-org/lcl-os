@@ -950,14 +950,15 @@ TEST(LCLProtocolTest, SurfaceCreateRequiresCanonicalAppId) {
     EXPECT_TRUE(encodePacket(header, &request, packet));
 }
 
-TEST(LCLProtocolTest, InputEventCodecRoundTripWithPointerSource) {
+TEST(LCLProtocolTest, InputEventCodecRoundTripWithPointerIdentityAndCancel) {
     LCLMsgInputEvent input{};
     input.surfaceId = 12;
-    input.type = 3; // PointerMotion
+    input.type = static_cast<uint32_t>(LCLInputEventType::PointerCancel);
     input.key = 1;
     input.pressed = 1;
     input.modifiers = 0x05;
     input.source = static_cast<uint8_t>(LCLPointerSource::Touch);
+    input.pointerId = 42;
     input.codepoint = 0;
     input.x = 123.45f;
     input.y = 678.90f;
@@ -982,11 +983,13 @@ TEST(LCLProtocolTest, InputEventCodecRoundTripWithPointerSource) {
 
     const auto* decodedInput = reinterpret_cast<const LCLMsgInputEvent*>(decodedPayload.data());
     EXPECT_EQ(decodedInput->surfaceId, 12u);
-    EXPECT_EQ(decodedInput->type, 3u);
+    EXPECT_EQ(decodedInput->type,
+              static_cast<uint32_t>(LCLInputEventType::PointerCancel));
     EXPECT_EQ(decodedInput->key, 1u);
     EXPECT_EQ(decodedInput->pressed, 1u);
     EXPECT_EQ(decodedInput->modifiers, 0x05u);
     EXPECT_EQ(decodedInput->source, static_cast<uint8_t>(LCLPointerSource::Touch));
+    EXPECT_EQ(decodedInput->pointerId, 42u);
     EXPECT_FLOAT_EQ(decodedInput->x, 123.45f);
     EXPECT_FLOAT_EQ(decodedInput->y, 678.90f);
     EXPECT_FLOAT_EQ(decodedInput->deltaX, -1.5f);

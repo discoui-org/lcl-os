@@ -1,9 +1,13 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
+#include <unordered_map>
+#include <utility>
 
 #include "core/compositor/surface_registry.hpp"
 #include "core/input/input_manager.hpp"
+#include "core/input/system_gesture_arena.hpp"
 #include "core/scene/scene_registry.hpp"
 #include "render/window_manager.hpp"
 
@@ -15,9 +19,16 @@ public:
     InputRouter(render::WindowManager& windowManager,
                 SurfaceRegistry& surfaces,
                 SceneRegistry& scenes,
-                float outputScale = 1.0f)
+                float outputScale = 1.0f,
+                bool systemGesturesEnabled = false)
         : m_windowManager(windowManager), m_surfaces(surfaces), m_scenes(scenes),
-          m_outputScale(outputScale) {}
+          m_outputScale(outputScale),
+          m_systemGesturesEnabled(systemGesturesEnabled) {}
+
+    using SystemGestureHandler = std::function<bool(SystemGestureDecision)>;
+    void setSystemGestureHandler(SystemGestureHandler handler) {
+        m_systemGestureHandler = std::move(handler);
+    }
 
     /**
      * Applies compositor interaction (hit test/focus/resize) then sends a
@@ -38,6 +49,7 @@ private:
     void forwardToFocusedSurface(const InputEvent& event) const;
     void forwardToSurface(const InputEvent& event,
                           SurfaceRegistry::Key surfaceKey) const;
+    SurfaceRegistry::Key focusedSurfaceKey() const;
     SurfaceRegistry::Key findPopupAt(float globalX, float globalY) const;
     void destroyPopupChildren(SurfaceRegistry::Key parentSurfaceKey);
 
@@ -45,6 +57,10 @@ private:
     SurfaceRegistry& m_surfaces;
     SceneRegistry& m_scenes;
     float m_outputScale{1.0f};
+    bool m_systemGesturesEnabled{false};
+    SystemGestureArena m_systemGestureArena;
+    SystemGestureHandler m_systemGestureHandler;
+    std::unordered_map<uint32_t, SurfaceRegistry::Key> m_touchTargets;
     SurfaceRegistry::Key m_activePopupSurface{0};
     std::chrono::nanoseconds m_refreshInterval{std::chrono::nanoseconds(16666667)};
 };

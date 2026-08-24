@@ -575,30 +575,39 @@ void WindowApp::pollIPC() {
                 // Do not let hover handling mutate its widget tree until it explicitly
                 // opts into input (dock activation is intentionally future work).
                 if (!m_inputEnabled) continue;
-                if (inputMsg->type == 1) { // KeyDown
+                if (inputMsg->type == static_cast<uint32_t>(lcl::protocol::LCLInputEventType::KeyDown)) {
                     sendKeyDown(inputMsg->key, static_cast<char32_t>(inputMsg->codepoint), inputMsg->modifiers);
-                } else if (inputMsg->type == 2) { // KeyUp
+                } else if (inputMsg->type == static_cast<uint32_t>(lcl::protocol::LCLInputEventType::KeyUp)) {
                     sendKeyUp(inputMsg->key, inputMsg->modifiers);
-                } else if (inputMsg->type == 3) { // PointerMotion
+                } else if (inputMsg->type == static_cast<uint32_t>(lcl::protocol::LCLInputEventType::PointerMotion)) {
                     const auto source = (inputMsg->source == static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch))
                         ? PointerSource::Touch
                         : PointerSource::Mouse;
-                    sendPointerMove(inputMsg->x, inputMsg->y, source);
-                } else if (inputMsg->type == 4) { // PointerButton
+                    sendPointerMove(inputMsg->x, inputMsg->y, source, inputMsg->pointerId);
+                } else if (inputMsg->type == static_cast<uint32_t>(lcl::protocol::LCLInputEventType::PointerButton)) {
                     const auto source = (inputMsg->source == static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch))
                         ? PointerSource::Touch
                         : PointerSource::Mouse;
                     if (inputMsg->pressed) {
-                        sendPointerDown(inputMsg->x, inputMsg->y, inputMsg->key, source);
+                        sendPointerDown(inputMsg->x, inputMsg->y, inputMsg->key, source,
+                                        inputMsg->pointerId);
                     } else {
-                        sendPointerUp(inputMsg->x, inputMsg->y, inputMsg->key, source);
+                        sendPointerUp(inputMsg->x, inputMsg->y, inputMsg->key, source,
+                                      inputMsg->pointerId);
                     }
-                } else if (inputMsg->type == 6) { // PointerScroll
+                } else if (inputMsg->type == static_cast<uint32_t>(lcl::protocol::LCLInputEventType::PointerCancel)) {
                     const auto source = (inputMsg->source == static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch))
                         ? PointerSource::Touch
                         : PointerSource::Mouse;
-                    sendPointerScroll(inputMsg->x, inputMsg->y, inputMsg->deltaX, inputMsg->deltaY, source);
-                } else if (inputMsg->type == 5) { // KeyPress / TextInput
+                    sendPointerCancel(inputMsg->x, inputMsg->y, source,
+                                      inputMsg->pointerId);
+                } else if (inputMsg->type == static_cast<uint32_t>(lcl::protocol::LCLInputEventType::PointerScroll)) {
+                    const auto source = (inputMsg->source == static_cast<uint8_t>(lcl::protocol::LCLPointerSource::Touch))
+                        ? PointerSource::Touch
+                        : PointerSource::Mouse;
+                    sendPointerScroll(inputMsg->x, inputMsg->y, inputMsg->deltaX,
+                                      inputMsg->deltaY, source, inputMsg->pointerId);
+                } else if (inputMsg->type == static_cast<uint32_t>(lcl::protocol::LCLInputEventType::TextInput)) {
                     if (inputMsg->codepoint > 0) {
                         std::string utf8;
                         char32_t cp = inputMsg->codepoint;
@@ -1228,9 +1237,10 @@ bool WindowApp::sendPointerCancel(float x, float y, PointerSource source,
     return m_dispatcher.dispatchPointerEvent(m_windowRoot.get(), &m_transients, ev);
 }
 
-bool WindowApp::sendPointerScroll(float x, float y, float deltaX, float deltaY, PointerSource source) {
+bool WindowApp::sendPointerScroll(float x, float y, float deltaX, float deltaY,
+                                  PointerSource source, uint32_t pointerId) {
     if (m_morphInputFrozen) return false;
-    PointerEvent ev{x, y, 0, deltaX, deltaY, PointerEventType::Scroll, source};
+    PointerEvent ev{x, y, 0, deltaX, deltaY, PointerEventType::Scroll, source, pointerId};
     if (m_onRawPointer && m_onRawPointer(ev)) {
         return true;
     }

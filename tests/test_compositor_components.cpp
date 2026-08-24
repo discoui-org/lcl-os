@@ -991,6 +991,7 @@ TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     InputEvent touchMotion{};
     touchMotion.type = InputEventType::PointerMotion;
     touchMotion.source = lcl::platform::PointerSource::Touch;
+    touchMotion.pointerId = 41;
     touchMotion.absoluteX = 128.0;
     touchMotion.absoluteY = 126.0;
     EXPECT_TRUE(router.route(touchMotion));
@@ -1001,6 +1002,20 @@ TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     const auto* touchInput = reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
     EXPECT_EQ(touchInput->type, 3u);
     EXPECT_EQ(touchInput->source, static_cast<uint8_t>(protocol::LCLPointerSource::Touch));
+    EXPECT_EQ(touchInput->pointerId, 41u);
+
+    InputEvent touchCancel = touchMotion;
+    touchCancel.type = InputEventType::PointerCancel;
+    EXPECT_FALSE(router.route(touchCancel));
+
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    const auto* cancelInput =
+        reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(cancelInput->type, static_cast<uint32_t>(
+        protocol::LCLInputEventType::PointerCancel));
+    EXPECT_EQ(cancelInput->pointerId, 41u);
 
     // Route a PointerScroll event
     InputEvent scrollEvent{};
@@ -1091,6 +1106,76 @@ TEST(InputRouterTest, TouchReleaseKeepsEventCoordinatesAfterCursorReset) {
         EXPECT_FLOAT_EQ(input->x, 20.0f);
         EXPECT_FLOAT_EQ(input->y, 10.0f);
     }
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(InputRouterTest, MobileBottomEdgeClaimCancelsClientThenTriggersHome) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t windowId = manager.createWindow("Mobile App", 0, 0, 1000, 700);
+    manager.setDecorationMode(windowId, lcl::render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    const auto surfaceKey = SurfaceRegistry::makeKey(sockets[0], 103, 1);
+    auto& surface = registry[surfaceKey];
+    surface.windowId = windowId;
+    surface.clientFd = sockets[0];
+    surface.hasCommittedBuffer = true;
+    surface.bufferScale = 1.0f;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes, 1.0f, true);
+    int homeEvents = 0;
+    router.setSystemGestureHandler([&](SystemGestureDecision decision) {
+        if (decision == SystemGestureDecision::Home) ++homeEvents;
+        return true;
+    });
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.source = lcl::platform::PointerSource::Touch;
+    down.pointerId = 77;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.absoluteX = 100.0;
+    down.absoluteY = 695.0;
+    router.route(down);
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    const auto* clientDown =
+        reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(clientDown->type, static_cast<uint32_t>(
+        protocol::LCLInputEventType::PointerButton));
+    EXPECT_EQ(clientDown->pointerId, 77u);
+
+    InputEvent move = down;
+    move.type = InputEventType::PointerMotion;
+    move.pressed = false;
+    move.absoluteY = 660.0;
+    EXPECT_FALSE(router.route(move));
+
+    ASSERT_TRUE(protocol::recvMsgWithFd(sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    const auto* clientCancel =
+        reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(clientCancel->type, static_cast<uint32_t>(
+        protocol::LCLInputEventType::PointerCancel));
+    EXPECT_EQ(clientCancel->pointerId, 77u);
+
+    InputEvent up = move;
+    up.type = InputEventType::PointerButton;
+    up.pressed = false;
+    EXPECT_TRUE(router.route(up));
+    EXPECT_EQ(homeEvents, 1);
 
     close(sockets[0]);
     close(sockets[1]);
