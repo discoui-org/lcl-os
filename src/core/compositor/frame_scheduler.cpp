@@ -279,27 +279,30 @@ bool FrameScheduler::updateLaunchMorph(
     const float presentedHeight = std::max(1.0f, rawHeight * perspectiveScale);
 
     // Preserve the aspect-aware interpolation while converging on the actual
-    // physical display silhouette supplied by Gestalt. Reversing the same
-    // spring grows continuously back into the launcher icon shape.
+    // physical display silhouette supplied by Gestalt. Scale the display
+    // radius with the thumbnail itself so shrinking the window does not make
+    // its corners progressively rounder.
     const float shapeProgress =
         std::clamp(std::pow(expand, 1.5f), 0.0f, 1.0f);
+    const float displaySilhouetteScale = std::clamp(
+        std::min(presentedWidth / screenWidth,
+                 presentedHeight / screenHeight),
+        0.0f, 1.0f);
+    const float scaledDisplayRadius =
+        m_displayCornerRadius * displaySilhouetteScale;
     const float radiusScale = perspectiveScale *
         (screenRatio < iconRatio
             ? rawHeight / iconHeight
             : rawWidth / iconWidth);
     const float scaledIconRadius =
         entry.launchOriginCornerRadius * radiusScale;
-    float cornerRadius = scaledIconRadius +
-        (m_displayCornerRadius - scaledIconRadius) * shapeProgress;
+    const float cornerRadius = scaledIconRadius +
+        (scaledDisplayRadius - scaledIconRadius) * shapeProgress;
 
     entry.launchMorphX = positionX.value - presentedWidth * 0.5f;
     entry.launchMorphY = positionY.value - presentedHeight * 0.5f;
     entry.launchMorphWidth = presentedWidth;
     entry.launchMorphHeight = presentedHeight;
-    if (entry.transitionPhase == TransitionPhase::Interactive) {
-        cornerRadius += (1.0f - std::clamp(perspective, 0.0f, 1.0f)) *
-            entry.launchOriginCornerRadius * perspectiveScale;
-    }
     entry.launchMorphCornerRadius = std::max(0.0f, cornerRadius);
     entry.launchMorphCornerRoundness =
         lcl::theme::mobile::kAppIconCornerRoundness +
