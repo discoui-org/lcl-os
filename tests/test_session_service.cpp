@@ -51,6 +51,8 @@ TEST(SessionProtocolTest, EncodesExplicitLittleEndianLaunchPacket) {
     LaunchRequest sent;
     sent.target = "org.lcl.test";
     sent.waitForExit = true;
+    sent.singleInstance = true;
+    sent.launchToken = 73;
     sent.origin = {true, 12.5f, 24.0f, 60.0f, 60.0f, 14.0f};
     ASSERT_TRUE(encodeLaunchRequest(sent, payload));
     SessionHeader header{};
@@ -70,6 +72,8 @@ TEST(SessionProtocolTest, EncodesExplicitLittleEndianLaunchPacket) {
     ASSERT_TRUE(decodeLaunchRequest(decoded.payload, request));
     EXPECT_EQ(request.target, "org.lcl.test");
     EXPECT_TRUE(request.waitForExit);
+    EXPECT_TRUE(request.singleInstance);
+    EXPECT_EQ(request.launchToken, 73u);
     EXPECT_TRUE(request.origin.valid);
     EXPECT_FLOAT_EQ(request.origin.x, 12.5f);
     EXPECT_FLOAT_EQ(request.origin.y, 24.0f);
@@ -106,6 +110,27 @@ TEST_F(SessionServiceTest, ServiceOwnsLaunchAndExitLifecycle) {
     EXPECT_FALSE(instance.running);
     EXPECT_EQ(instance.exitCode, 23);
     EXPECT_EQ(instance.appId, "org.lcl.lifecycle");
+}
+
+TEST_F(SessionServiceTest, SingleInstanceLaunchReusesRunningProcess) {
+    createBundle("Singleton.app", "org.lcl.singleton",
+                 "#!/bin/sh\nsleep 1\nexit 0\n");
+    SessionService service({tempDir.string()});
+    service.refreshCatalog();
+
+    LaunchRequest request;
+    request.target = "org.lcl.singleton";
+    request.singleInstance = true;
+    const LaunchResponse first = service.launch(request);
+    ASSERT_EQ(first.status, 0u) << first.message;
+    EXPECT_FALSE(first.reused);
+
+    const LaunchResponse second = service.launch(request);
+    ASSERT_EQ(second.status, 0u) << second.message;
+    EXPECT_TRUE(second.reused);
+    EXPECT_EQ(second.instanceId, first.instanceId);
+    EXPECT_EQ(second.pid, first.pid);
+    EXPECT_EQ(service.instances().size(), 1u);
 }
 
 TEST_F(SessionServiceTest, ClientUsesSessiondForLaunchAndWait) {

@@ -107,6 +107,22 @@ private:
 };
 } // namespace
 
+bool ProtocolDispatcher::publishLaunchIconVisibility(
+        const SurfaceRegistry::SurfaceEntry& entry, bool visible) const {
+    if (entry.launchOwnerFd < 0 || entry.launchToken == 0 ||
+        entry.appId.empty()) return false;
+
+    protocol::LCLMsgLaunchIconVisibility message{};
+    message.launchToken = entry.launchToken;
+    std::strncpy(message.appId, entry.appId.c_str(),
+                 sizeof(message.appId) - 1);
+    message.visible = visible ? 1 : 0;
+    protocol::LCLHeader header{};
+    header.opcode = protocol::LCLOpcode::LaunchIconVisibility;
+    header.payloadSize = sizeof(message);
+    return protocol::sendMsgWithFd(entry.launchOwnerFd, header, &message);
+}
+
 ProtocolDispatcher::~ProtocolDispatcher() {
     for (const auto& [clientFd, channelFd] : m_nativeBufferChannels) {
         (void)clientFd;
@@ -125,9 +141,27 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         }
     };
     auto mapSurface = [&](SurfaceRegistry::Key surfaceKey, SurfaceEntry& entry, pid_t clientPid) {
-        if (entry.isPopup() || entry.windowId != 0 || !entry.hasRenderableBuffer() ||
+        if (entry.isPopup() || !entry.hasRenderableBuffer() ||
             entry.width == 0 || entry.height == 0) {
             return false;
+        }
+
+        if (entry.windowId != 0) {
+            if (!entry.hasCommittedBuffer) {
+                entry.hasCommittedBuffer = true;
+                if (entry.launchPlaceholderActive) {
+                    entry.launchContentOpacity = 0.0f;
+                    entry.launchContentFadeElapsedSec = 0.0f;
+                    entry.launchContentFadeActive = true;
+                }
+                if (entry.systemSurfaceKind ==
+                    protocol::LCLSystemSurfaceKind::None) {
+                    m_scenes.mapClientSurface(
+                        surfaceKey, clientPid, entry.windowId,
+                        entry.appId, entry.title, entry.appInstanceId);
+                }
+            }
+            return true;
         }
 
         const auto decorationMode = toRenderDecorationMode(entry.decorationMode);
@@ -163,7 +197,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         }
         entry.hasCommittedBuffer = true;
         if (entry.systemSurfaceKind == protocol::LCLSystemSurfaceKind::None) {
-            m_scenes.mapClientSurface(surfaceKey, clientPid, entry.windowId, entry.appId, entry.title);
+            m_scenes.mapClientSurface(surfaceKey, clientPid, entry.windowId,
+                                      entry.appId, entry.title,
+                                      entry.appInstanceId);
         }
         std::cout << "[LCL Compositor] Mapped Window (ID: " << entry.windowId
                   << ") after first client buffer commit\n";
@@ -220,6 +256,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             it->second.pendingDestroy = true;
             changed = true;
         } else if (!beginClosingTransition(it->second)) {
+            publishLaunchIconVisibility(it->second, true);
             if (it->second.windowId > 0) {
                 m_windowManager.removeWindow(it->second.windowId);
             }
@@ -243,6 +280,14 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             std::vector<uint64_t> surfacesToRemove;
             std::vector<uint64_t> ownedParentSurfaces;
             for (const auto& [surfKey, entry] : m_surfaces) {
+                if (entry.isLaunchPlaceholder &&
+                    entry.launchOwnerFd == msg.clientFd) {
+                    if (entry.windowId != 0) {
+                        m_windowManager.removeWindow(entry.windowId);
+                    }
+                    surfacesToRemove.push_back(surfKey);
+                    continue;
+                }
                 if (SurfaceRegistry::isOwnedByClientConnection(entry, msg.clientFd) &&
                     !entry.isPopup()) {
                     ownedParentSurfaces.push_back(surfKey);
@@ -263,6 +308,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                         entry.ignoreBufferCommits = true;
                         entry.pendingDestroy = true;
                     } else if (!beginClosingTransition(entry)) {
+                        publishLaunchIconVisibility(entry, true);
                         if (entry.windowId > 0) m_windowManager.removeWindow(entry.windowId);
                         surfacesToRemove.push_back(surfKey);
                     } else {
@@ -360,6 +406,273 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             continue;
         }
 
+        const auto trustedHomeSurface = [&](uint32_t homeSurfaceId) {
+            const auto key = SurfaceRegistry::makeKey(
+                msg.clientFd, msg.pid, homeSurfaceId);
+            const auto home = m_surfaces.find(key);
+            return home != m_surfaces.end() &&
+                home->second.clientFd == msg.clientFd &&
+                home->second.systemSurfaceKind ==
+                    protocol::LCLSystemSurfaceKind::HomeScreen;
+        };
+        const auto findLaunch = [&](uint64_t launchToken) {
+            return std::find_if(
+                m_surfaces.begin(), m_surfaces.end(),
+                [launchToken](const auto& item) {
+                    return item.second.launchToken == launchToken;
+                });
+        };
+
+        if (msg.header.opcode ==
+            lcl::protocol::LCLOpcode::BeginLaunchPlaceholder) {
+            const auto* request = reinterpret_cast<const
+                lcl::protocol::LCLMsgBeginLaunchPlaceholder*>(
+                    msg.payload.data());
+            if (!trustedHomeSurface(request->homeSurfaceId)) {
+                requestAck.error(5, "launch placeholder requires HomeScreen");
+                continue;
+            }
+            constexpr uint64_t kLaunchPlaceholderKeyBit = uint64_t{1} << 63;
+            if ((request->launchToken & kLaunchPlaceholderKeyBit) != 0) {
+                requestAck.error(3, "launch token is out of range");
+                continue;
+            }
+            const size_t iconPixelCount =
+                static_cast<size_t>(request->iconWidth) * request->iconHeight;
+            const auto* iconBytes = msg.payload.data() + sizeof(*request);
+
+            // A process may still be starting without a surface when its icon
+            // is tapped again. Keep one visual placeholder per mobile app and
+            // let the app-instance identity join whichever first surface wins.
+            for (auto old = m_surfaces.begin(); old != m_surfaces.end();) {
+                if (old->second.isLaunchPlaceholder &&
+                    old->second.launchOwnerFd == msg.clientFd &&
+                    old->second.appId == request->appId) {
+                    if (old->second.windowId != 0) {
+                        m_windowManager.removeWindow(old->second.windowId);
+                    }
+                    old = m_surfaces.erase(old);
+                } else {
+                    ++old;
+                }
+            }
+            const float width = m_windowManager.getScreenWidth();
+            const float height = m_windowManager.getScreenHeight();
+            const auto configureLaunchWindow = [&](SurfaceEntry& entry) {
+                if (entry.windowId == 0) {
+                    entry.windowId = m_windowManager.createWindow(
+                        request->appId, 0.0f, 0.0f, width, height,
+                        ::lcl::theme::defaultTheme().colors
+                            .windowTitleFocused.toARGB(),
+                        true);
+                }
+                m_windowManager.setDecorationMode(
+                    entry.windowId, render::DecorationMode::None);
+                m_windowManager.setEdgeToEdge(entry.windowId, true);
+                m_windowManager.setInsetBorderEnabled(entry.windowId, false);
+                m_windowManager.setWindowCornerStyle(
+                    entry.windowId, 0.0f, 2.0f);
+                m_windowManager.setResizePresentationMode(
+                    entry.windowId,
+                    protocol::LCLResizePresentationMode::CompositorMorph);
+                entry.initialX = 0.0f;
+                entry.initialY = 0.0f;
+                entry.initialWidth = width;
+                entry.initialHeight = height;
+                entry.configuredX = 0.0f;
+                entry.configuredY = 0.0f;
+                entry.configuredWidth = width;
+                entry.configuredHeight = height;
+                entry.decorationMode = protocol::LCLDecorationMode::None;
+                entry.edgeToEdge = true;
+                entry.insetBorderEnabled = false;
+                entry.cornerRadius = 0.0f;
+                entry.launchToken = request->launchToken;
+                entry.launchOwnerFd = msg.clientFd;
+                entry.launchPlaceholderActive = true;
+                entry.launchContentOpacity = 0.0f;
+                entry.launchContentFadeElapsedSec = 0.0f;
+                entry.launchContentFadeActive = entry.hasRenderableBuffer();
+                entry.hasLaunchOrigin = true;
+                entry.launchOriginX = request->originX;
+                entry.launchOriginY = request->originY;
+                entry.launchOriginWidth = request->originWidth;
+                entry.launchOriginHeight = request->originHeight;
+                entry.launchOriginCornerRadius =
+                    request->originCornerRadius;
+                entry.launchIconWidth = request->iconWidth;
+                entry.launchIconHeight = request->iconHeight;
+                entry.launchIconPixels.resize(iconPixelCount);
+                std::memcpy(entry.launchIconPixels.data(), iconBytes,
+                            iconPixelCount * sizeof(uint32_t));
+                entry.launchIconRevealPending = false;
+                entry.launchIconHandoffActive = false;
+                entry.launchIconHandoffDeadline = {};
+                entry.transitionPhase = SurfaceEntry::TransitionPhase::Entering;
+                entry.transitionElapsedSec = 0.0f;
+                entry.transitionDurationSec =
+                    lcl::motion::tokens::windowOpen().tweenParams.durationSec;
+                entry.transitionOpacity = 0.0f;
+                entry.transitionScale = 1.0f;
+                entry.launchMorphActive = false;
+            };
+
+            // SurfaceCreate travels on the child socket and can win the poll
+            // race against this HomeScreen socket. Adopt that registered or
+            // already-mapped surface instead of creating a second window.
+            const auto earlySurface = findLaunch(request->launchToken);
+            if (earlySurface != m_surfaces.end()) {
+                if (earlySurface->second.isLaunchPlaceholder ||
+                    earlySurface->second.launchOwnerFd >= 0) {
+                    requestAck.error(8, "launch token is already active");
+                    continue;
+                }
+                configureLaunchWindow(earlySurface->second);
+                changed = true;
+                continue;
+            }
+
+            const SurfaceRegistry::Key placeholderKey =
+                kLaunchPlaceholderKeyBit | request->launchToken;
+            if (m_surfaces.contains(placeholderKey)) {
+                requestAck.error(8, "launch placeholder key collision");
+                continue;
+            }
+
+            SurfaceEntry placeholder{};
+            placeholder.title = request->appId;
+            placeholder.appId = request->appId;
+            placeholder.forceOpaque = true;
+            placeholder.isLaunchPlaceholder = true;
+            configureLaunchWindow(placeholder);
+            m_surfaces[placeholderKey] = std::move(placeholder);
+            changed = true;
+            continue;
+        }
+
+        if (msg.header.opcode ==
+            lcl::protocol::LCLOpcode::ResolveLaunchPlaceholder) {
+            const auto* request = reinterpret_cast<const
+                lcl::protocol::LCLMsgResolveLaunchPlaceholder*>(
+                    msg.payload.data());
+            if (!trustedHomeSurface(request->homeSurfaceId)) {
+                requestAck.error(5, "launch resolution requires HomeScreen");
+                continue;
+            }
+            auto launch = findLaunch(request->launchToken);
+            if (launch == m_surfaces.end()) {
+                requestAck.error(6, "launch placeholder is unavailable");
+                continue;
+            }
+            if (launch->second.launchOwnerFd != msg.clientFd) {
+                requestAck.error(5, "launch placeholder is not owned by HomeScreen");
+                continue;
+            }
+            launch->second.appInstanceId = request->appInstanceId;
+            if (request->reused != 0 &&
+                launch->second.isLaunchPlaceholder) {
+                auto existing = std::find_if(
+                    m_surfaces.begin(), m_surfaces.end(),
+                    [&](const auto& item) {
+                        return item.first != launch->first &&
+                            !item.second.isPopup() &&
+                            !item.second.isLaunchPlaceholder &&
+                            item.second.appInstanceId == request->appInstanceId &&
+                            item.second.windowId != 0;
+                    });
+                if (existing != m_surfaces.end()) {
+                    const float originX = launch->second.launchOriginX;
+                    const float originY = launch->second.launchOriginY;
+                    const float originWidth = launch->second.launchOriginWidth;
+                    const float originHeight = launch->second.launchOriginHeight;
+                    const float originRadius =
+                        launch->second.launchOriginCornerRadius;
+                    const uint32_t iconWidth = launch->second.launchIconWidth;
+                    const uint32_t iconHeight = launch->second.launchIconHeight;
+                    auto iconPixels = std::move(
+                        launch->second.launchIconPixels);
+                    const uint32_t placeholderWindowId = launch->second.windowId;
+                    m_windowManager.removeWindow(placeholderWindowId);
+                    m_surfaces.erase(launch);
+
+                    auto& target = existing->second;
+                    if (!m_windowManager.restoreWindow(target.windowId, false)) {
+                        m_windowManager.focusWindow(target.windowId);
+                    }
+                    target.launchToken = request->launchToken;
+                    target.launchOwnerFd = msg.clientFd;
+                    target.hasLaunchOrigin = true;
+                    target.launchOriginX = originX;
+                    target.launchOriginY = originY;
+                    target.launchOriginWidth = originWidth;
+                    target.launchOriginHeight = originHeight;
+                    target.launchOriginCornerRadius = originRadius;
+                    target.launchIconWidth = iconWidth;
+                    target.launchIconHeight = iconHeight;
+                    target.launchIconPixels = std::move(iconPixels);
+                    target.launchIconRevealPending = false;
+                    target.launchIconHandoffActive = false;
+                    target.launchIconHandoffDeadline = {};
+                    target.pendingMinimize = false;
+                    target.transitionPhase =
+                        SurfaceEntry::TransitionPhase::Restoring;
+                    target.transitionElapsedSec = 0.0f;
+                    target.transitionDurationSec =
+                        lcl::motion::tokens::restore().tweenParams.durationSec;
+                    target.transitionOpacity = 0.0f;
+                    target.transitionScale = 1.0f;
+                    target.launchMorphActive = false;
+                    target.launchPlaceholderActive = true;
+                    target.launchContentOpacity = 0.0f;
+                    target.launchContentFadeElapsedSec = 0.0f;
+                    target.launchContentFadeActive = true;
+                }
+            }
+            changed = true;
+            continue;
+        }
+
+        if (msg.header.opcode ==
+            lcl::protocol::LCLOpcode::LaunchIconVisibilityAck) {
+            const auto* ack = reinterpret_cast<const
+                lcl::protocol::LCLMsgLaunchIconVisibilityAck*>(
+                    msg.payload.data());
+            const auto launch = findLaunch(ack->launchToken);
+            if (launch == m_surfaces.end() ||
+                launch->second.launchOwnerFd != msg.clientFd ||
+                launch->second.appId != ack->appId ||
+                !launch->second.launchIconHandoffActive) {
+                requestAck.error(6, "launch icon handoff is unavailable");
+                continue;
+            }
+            launch->second.launchIconRevealPending = false;
+            launch->second.launchIconHandoffActive = false;
+            launch->second.launchIconHandoffDeadline = {};
+            launch->second.launchMorphActive = false;
+            changed = true;
+            continue;
+        }
+
+        if (msg.header.opcode ==
+            lcl::protocol::LCLOpcode::CancelLaunchPlaceholder) {
+            const auto* request = reinterpret_cast<const
+                lcl::protocol::LCLMsgCancelLaunchPlaceholder*>(
+                    msg.payload.data());
+            if (!trustedHomeSurface(request->homeSurfaceId)) {
+                requestAck.error(5, "launch cancellation requires HomeScreen");
+                continue;
+            }
+            const auto launch = findLaunch(request->launchToken);
+            if (launch != m_surfaces.end() &&
+                launch->second.isLaunchPlaceholder &&
+                launch->second.launchOwnerFd == msg.clientFd) {
+                m_windowManager.removeWindow(launch->second.windowId);
+                m_surfaces.erase(launch);
+                changed = true;
+            }
+            continue;
+        }
+
         if (isPopupSurfaceCreate) {
             const auto* popup = reinterpret_cast<const lcl::protocol::LCLMsgPopupSurfaceCreate*>(
                 msg.payload.data());
@@ -434,6 +747,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             const float bufferScale = m_renderer.getRasterRenderer()->getDeviceScale();
             protocol::LCLResizePresentationMode resizePresentation =
                 protocol::LCLResizePresentationMode::CompositorMorph;
+            uint64_t launchToken = 0;
+            uint64_t appInstanceId = 0;
+            std::string appId;
+            bool hasLaunchOrigin = false;
+            float launchOriginX = 0.0f;
+            float launchOriginY = 0.0f;
+            float launchOriginWidth = 0.0f;
+            float launchOriginHeight = 0.0f;
+            float launchOriginCornerRadius = 0.0f;
 
             if (msg.payload.size() == sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
                 auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
@@ -446,6 +768,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                                           : m_windowManager.getScreenWidth();
                 winH = (sm->height > 0.0f) ? sm->height
                                            : m_windowManager.getScreenHeight();
+                launchToken = sm->launchToken;
+                appInstanceId = sm->appInstanceId;
+                appId = sm->appId;
+                hasLaunchOrigin = sm->hasLaunchOrigin != 0;
+                launchOriginX = sm->launchOriginX;
+                launchOriginY = sm->launchOriginY;
+                launchOriginWidth = sm->launchOriginWidth;
+                launchOriginHeight = sm->launchOriginHeight;
+                launchOriginCornerRadius = sm->launchOriginCornerRadius;
             }
 
             auto kindIt = m_pendingSystemSurfaceKinds.find(msg.clientFd);
@@ -472,6 +803,25 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             if (m_surfaces.find(surfaceKey) == m_surfaces.end()) {
                 SurfaceEntry entry{};
+                bool adoptedPlaceholder = false;
+                auto placeholder = launchToken != 0
+                    ? findLaunch(launchToken)
+                    : m_surfaces.end();
+                if (placeholder == m_surfaces.end() && appInstanceId != 0) {
+                    placeholder = std::find_if(
+                        m_surfaces.begin(), m_surfaces.end(),
+                        [appInstanceId](const auto& item) {
+                            return item.second.isLaunchPlaceholder &&
+                                item.second.appInstanceId == appInstanceId;
+                        });
+                }
+                if (placeholder != m_surfaces.end() &&
+                    placeholder->second.isLaunchPlaceholder) {
+                    entry = std::move(placeholder->second);
+                    m_surfaces.erase(placeholder);
+                    entry.isLaunchPlaceholder = false;
+                    adoptedPlaceholder = true;
+                }
                 entry.title = title;
                 entry.initialX = winX;
                 entry.initialY = winY;
@@ -495,16 +845,19 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 }
                 entry.clientFd = msg.clientFd;
                 entry.bufferScale = bufferScale;
-                const auto* create = reinterpret_cast<const
-                    lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
-                entry.appId = create->appId;
-                entry.hasLaunchOrigin = create->hasLaunchOrigin != 0;
-                entry.launchOriginX = create->launchOriginX;
-                entry.launchOriginY = create->launchOriginY;
-                entry.launchOriginWidth = create->launchOriginWidth;
-                entry.launchOriginHeight = create->launchOriginHeight;
-                entry.launchOriginCornerRadius = create->launchOriginCornerRadius;
-                m_surfaces[surfaceKey] = entry;
+                entry.appId = std::move(appId);
+                entry.appInstanceId = appInstanceId;
+                if (!adoptedPlaceholder) entry.launchToken = launchToken;
+                if (hasLaunchOrigin && !adoptedPlaceholder) {
+                    entry.hasLaunchOrigin = true;
+                    entry.launchOriginX = launchOriginX;
+                    entry.launchOriginY = launchOriginY;
+                    entry.launchOriginWidth = launchOriginWidth;
+                    entry.launchOriginHeight = launchOriginHeight;
+                    entry.launchOriginCornerRadius =
+                        launchOriginCornerRadius;
+                }
+                m_surfaces[surfaceKey] = std::move(entry);
                 std::cout << "[LCL Compositor] Registered unmapped Surface " << surfId
                           << " from client PID " << msg.pid << " (" << winW << "x" << winH << ")\n";
             } else {
@@ -652,7 +1005,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
             if (entry.isPopup()) {
                 entry.hasCommittedBuffer = true;
-            } else if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) {
+            } else if (!entry.hasCommittedBuffer &&
+                       !mapSurface(surfaceKey, entry, msg.pid)) {
                 continue;
             }
 
@@ -836,7 +1190,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
             if (entry.isPopup()) {
                 entry.hasCommittedBuffer = true;
-            } else if (entry.windowId == 0 &&
+            } else if (!entry.hasCommittedBuffer &&
                        !mapSurface(surfaceKey, entry, msg.pid)) {
                 continue;
             }
@@ -1079,7 +1433,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             // known to be valid.
             if (entry.isPopup()) {
                 entry.hasCommittedBuffer = true;
-            } else if (entry.windowId == 0 && !mapSurface(surfaceKey, entry, msg.pid)) {
+            } else if (!entry.hasCommittedBuffer &&
+                       !mapSurface(surfaceKey, entry, msg.pid)) {
                 // The first visible commit must include a real shared buffer.
                 continue;
             }

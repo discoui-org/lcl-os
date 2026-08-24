@@ -36,6 +36,10 @@ public:
     /** Publish revisioned scene/focus state to typed shell subscribers. */
     void publishShellStateToSubscribers();
 
+    /** Notify the HomeScreen that its stationary launch icon may be shown. */
+    bool publishLaunchIconVisibility(const SurfaceRegistry::SurfaceEntry& entry,
+                                     bool visible) const;
+
 private:
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     using SurfaceEffectRegion = SurfaceRegistry::SurfaceEffectRegion;

@@ -85,6 +85,7 @@ public:
         bool suppressInitialTransition{false};
         bool forceOpaque{false};
         std::string appId;
+        uint64_t appInstanceId{0};
         std::vector<SurfaceEffectRegion> effectRegions;
 
         float configuredX{0.0f};
@@ -114,12 +115,27 @@ public:
         float launchOriginWidth{0.0f};
         float launchOriginHeight{0.0f};
         float launchOriginCornerRadius{0.0f};
+        uint32_t launchIconWidth{0};
+        uint32_t launchIconHeight{0};
+        std::vector<uint32_t> launchIconPixels;
         bool launchMorphActive{false};
         float launchMorphX{0.0f};
         float launchMorphY{0.0f};
         float launchMorphWidth{0.0f};
         float launchMorphHeight{0.0f};
         float launchMorphCornerRadius{0.0f};
+        uint64_t launchToken{0};
+        int launchOwnerFd{-1};
+        bool launchIconRevealPending{false};
+        // Holds the final compositor proxy until HomeScreen commits the frame
+        // containing the stationary icon and acknowledges that commit.
+        bool launchIconHandoffActive{false};
+        std::chrono::steady_clock::time_point launchIconHandoffDeadline{};
+        bool isLaunchPlaceholder{false};
+        bool launchPlaceholderActive{false};
+        bool launchContentFadeActive{false};
+        float launchContentOpacity{1.0f};
+        float launchContentFadeElapsedSec{0.0f};
         bool launchGestureActive{false};
         float launchGestureStartX{0.0f};
         float launchGestureStartY{0.0f};

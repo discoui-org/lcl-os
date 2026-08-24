@@ -1599,6 +1599,8 @@ TEST(FrameSchedulerTest, LaunchOriginSpringsBetweenIconAndFullscreenSurface) {
 
     SurfaceRegistry registry;
     auto& surface = registry[41];
+    surface.launchToken = 41;
+    surface.launchOwnerFd = 9;
     surface.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::Entering;
     surface.hasLaunchOrigin = true;
     surface.launchOriginX = 24.0f;
@@ -1633,6 +1635,9 @@ TEST(FrameSchedulerTest, LaunchOriginSpringsBetweenIconAndFullscreenSurface) {
             registry, start + std::chrono::milliseconds(frame * 16));
     }
     EXPECT_TRUE(surface.pendingMinimize);
+    EXPECT_TRUE(surface.launchIconRevealPending);
+    EXPECT_TRUE(surface.launchIconHandoffActive);
+    EXPECT_TRUE(surface.launchMorphActive);
     EXPECT_EQ(surface.transitionPhase,
               SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
 }
@@ -1645,6 +1650,8 @@ TEST(FrameSchedulerTest, LaunchMorphCanReverseBeforeOpeningSettles) {
 
     SurfaceRegistry registry;
     auto& surface = registry[42];
+    surface.launchToken = 42;
+    surface.launchOwnerFd = 9;
     surface.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::Entering;
     surface.hasLaunchOrigin = true;
     surface.launchOriginX = 24.0f;
@@ -1681,9 +1688,114 @@ TEST(FrameSchedulerTest, LaunchMorphCanReverseBeforeOpeningSettles) {
             registry, start + std::chrono::milliseconds(frame * 16));
     }
     EXPECT_TRUE(surface.pendingMinimize);
-    EXPECT_FALSE(surface.launchMorphActive);
+    EXPECT_TRUE(surface.launchIconRevealPending);
+    EXPECT_TRUE(surface.launchIconHandoffActive);
+    EXPECT_TRUE(surface.launchMorphActive);
     EXPECT_EQ(surface.transitionPhase,
               SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+}
+
+TEST(FrameSchedulerTest, LaunchMorphHasDeterministicExitDeadline) {
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::time_point{};
+    FrameScheduler scheduler;
+    scheduler.reset(start);
+
+    SurfaceRegistry registry;
+    auto& surface = registry[43];
+    surface.launchToken = 43;
+    surface.launchOwnerFd = 9;
+    surface.transitionPhase =
+        SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing;
+    surface.hasLaunchOrigin = true;
+    surface.launchOriginX = 24.0f;
+    surface.launchOriginY = 40.0f;
+    surface.launchOriginWidth = 60.0f;
+    surface.launchOriginHeight = 60.0f;
+    surface.launchOriginCornerRadius = 14.0f;
+    surface.configuredWidth = 1000000000.0f;
+    surface.configuredHeight = 1000000000.0f;
+
+    for (int frame = 1; frame <= 100; ++frame) {
+        scheduler.advanceTransitions(
+            registry, start + std::chrono::milliseconds(frame * 16));
+    }
+    EXPECT_TRUE(surface.pendingDestroy);
+    EXPECT_TRUE(surface.launchIconRevealPending);
+    EXPECT_TRUE(surface.launchIconHandoffActive);
+    EXPECT_TRUE(surface.launchMorphActive);
+    EXPECT_EQ(surface.transitionPhase,
+              SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+}
+
+TEST(FrameSchedulerTest, LaunchPlaceholderFadesOutAfterFirstContentFrame) {
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::time_point{};
+    FrameScheduler scheduler;
+    scheduler.reset(start);
+
+    SurfaceRegistry registry;
+    auto& surface = registry[51];
+    surface.launchPlaceholderActive = true;
+    surface.launchContentFadeActive = true;
+    surface.launchContentOpacity = 0.0f;
+
+    EXPECT_TRUE(scheduler.advanceTransitions(
+        registry, start + std::chrono::milliseconds(50)));
+    EXPECT_GT(surface.launchContentOpacity, 0.0f);
+    EXPECT_LT(surface.launchContentOpacity, 1.0f);
+    EXPECT_TRUE(surface.launchPlaceholderActive);
+
+    scheduler.advanceTransitions(
+        registry, start + std::chrono::milliseconds(100));
+    scheduler.advanceTransitions(
+        registry, start + std::chrono::milliseconds(150));
+    scheduler.advanceTransitions(
+        registry, start + std::chrono::milliseconds(200));
+    EXPECT_FALSE(surface.launchContentFadeActive);
+    EXPECT_FALSE(surface.launchPlaceholderActive);
+    EXPECT_FLOAT_EQ(surface.launchContentOpacity, 1.0f);
+}
+
+TEST(FrameSchedulerTest, LaunchTokenPreservesSpringAcrossSurfaceHandoff) {
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::time_point{};
+    constexpr uint64_t token = 73;
+    constexpr SurfaceRegistry::Key placeholderKey =
+        (uint64_t{1} << 63) | token;
+    constexpr SurfaceRegistry::Key clientSurfaceKey = 0x123400000001ull;
+    FrameScheduler scheduler;
+    scheduler.reset(start);
+
+    SurfaceRegistry registry;
+    auto& placeholder = registry[placeholderKey];
+    placeholder.launchToken = token;
+    placeholder.transitionPhase =
+        SurfaceRegistry::SurfaceEntry::TransitionPhase::Entering;
+    placeholder.hasLaunchOrigin = true;
+    placeholder.launchOriginX = 24.0f;
+    placeholder.launchOriginY = 40.0f;
+    placeholder.launchOriginWidth = 60.0f;
+    placeholder.launchOriginHeight = 60.0f;
+    placeholder.launchOriginCornerRadius = 14.0f;
+    placeholder.configuredWidth = 390.0f;
+    placeholder.configuredHeight = 844.0f;
+
+    for (int frame = 1; frame <= 8; ++frame) {
+        scheduler.advanceTransitions(
+            registry, start + std::chrono::milliseconds(frame * 16));
+    }
+    const float widthBeforeHandoff = placeholder.launchMorphWidth;
+    ASSERT_GT(widthBeforeHandoff, placeholder.launchOriginWidth);
+
+    SurfaceRegistry::SurfaceEntry client = std::move(placeholder);
+    registry.erase(placeholderKey);
+    registry[clientSurfaceKey] = std::move(client);
+    auto& adopted = registry[clientSurfaceKey];
+    scheduler.advanceTransitions(
+        registry, start + std::chrono::milliseconds(9 * 16));
+
+    EXPECT_GE(adopted.launchMorphWidth, widthBeforeHandoff);
 }
 
 TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {

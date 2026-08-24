@@ -31,7 +31,7 @@ enum class SceneVisibility : uint8_t {
  */
 struct SceneRecord {
     SceneId id{0};
-    uint64_t appInstanceId{0}; // Bound to sessiond instance identity in a later transport step.
+    uint64_t appInstanceId{0}; // Stable sessiond process-instance identity.
     pid_t clientPid{0};
     SurfaceRegistry::Key surfaceKey{0};
     uint32_t windowId{0};
@@ -68,7 +68,8 @@ public:
                              pid_t clientPid,
                              uint32_t windowId,
                              std::string appId,
-                             std::string title);
+                             std::string title,
+                             uint64_t appInstanceId = 0);
 
     void markClosing(SurfaceRegistry::Key surfaceKey);
     void removeSurface(SurfaceRegistry::Key surfaceKey);

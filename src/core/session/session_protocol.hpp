@@ -8,7 +8,7 @@
 namespace lcl::session {
 
 inline constexpr uint32_t kSessionProtocolMagic = 0x4C435353; // "LCSS"
-inline constexpr uint32_t kSessionProtocolVersion = 2;
+inline constexpr uint32_t kSessionProtocolVersion = 3;
 inline constexpr uint32_t kSessionWireHeaderSize = 20;
 inline constexpr uint32_t kSessionMaxPayload = 64u * 1024u;
 inline constexpr const char* kSessionSocket = "/Runtime/lcl-sessiond.sock";
@@ -41,6 +41,10 @@ struct CatalogEntry {
 struct LaunchRequest {
     std::string target;
     bool waitForExit{false};
+    /** The caller requests reuse instead of spawning a second app process. */
+    bool singleInstance{false};
+    /** Caller-owned identity joining placeholder, process and first surface. */
+    uint64_t launchToken{0};
     struct Origin {
         bool valid{false};
         float x{0.0f};
@@ -55,6 +59,7 @@ struct LaunchResponse {
     uint32_t status{0};
     uint64_t instanceId{0};
     int32_t pid{0};
+    bool reused{false};
     std::string appId;
     std::string message;
 };

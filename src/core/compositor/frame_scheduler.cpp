@@ -19,9 +19,25 @@ bool isLaunchMorphPhase(TransitionPhase phase) {
            phase == TransitionPhase::Interactive;
 }
 
-lcl::motion::Motion criticalSpring(float stiffness) {
-    return lcl::motion::Motion::spring(
+lcl::motion::Motion criticalSpring(float stiffness,
+                                   float settlePosition,
+                                   float settleVelocity) {
+    auto motion = lcl::motion::Motion::spring(
         1.0f, stiffness, 2.0f * std::sqrt(stiffness));
+    motion.springParams.settlePosEpsilon = settlePosition;
+    motion.springParams.settleVelEpsilon = settleVelocity;
+    return motion;
+}
+
+constexpr float kLaunchMorphMaxDurationSec = 1.5f;
+
+SurfaceRegistry::Key launchMotionKey(
+        SurfaceRegistry::Key surfaceKey,
+        const SurfaceRegistry::SurfaceEntry& entry) {
+    constexpr uint64_t kLaunchMotionKeyBit = uint64_t{1} << 63;
+    return entry.launchToken != 0
+        ? kLaunchMotionKeyBit | entry.launchToken
+        : surfaceKey;
 }
 
 } // namespace
@@ -53,6 +69,7 @@ void FrameScheduler::prepareLaunchMorph(
     const bool interactive =
         entry.transitionPhase == TransitionPhase::Interactive;
 
+    key = launchMotionKey(key, entry);
     auto [found, inserted] = m_launchMorphs.try_emplace(key);
     auto& state = found->second;
     state.targetX = targetX;
@@ -68,15 +85,20 @@ void FrameScheduler::prepareLaunchMorph(
         state.expand = m_launchMotion.createChannel({key, 3}, initialProgress);
         state.perspective = m_launchMotion.createChannel({key, 4}, initialProgress);
     }
+    if (!inserted && state.phase != entry.transitionPhase) {
+        entry.transitionElapsedSec = 0.0f;
+    }
     if (!inserted && state.phase == entry.transitionPhase && !interactive) return;
 
     const auto draggingMotion = lcl::motion::Motion::spring(
         1.0f, 320.0f, 1.25f * std::sqrt(320.0f));
     const auto positionMotion = interactive
-        ? draggingMotion : criticalSpring(opening ? 150.0f : 120.0f);
-    const auto expandMotion = criticalSpring(opening ? 200.0f : 70.0f);
+        ? draggingMotion
+        : criticalSpring(opening ? 150.0f : 120.0f, 0.05f, 0.05f);
+    const auto expandMotion = criticalSpring(
+        opening ? 200.0f : 70.0f, 0.001f, 0.01f);
     const auto perspectiveMotion = interactive
-        ? draggingMotion : criticalSpring(100.0f);
+        ? draggingMotion : criticalSpring(100.0f, 0.001f, 0.01f);
     float positionTargetX = opening ? targetCenterX : originCenterX;
     float positionTargetY = opening ? targetCenterY : originCenterY;
     float expandTarget = opening ? 1.0f : 0.0f;
@@ -109,12 +131,33 @@ void FrameScheduler::prepareLaunchMorph(
 
 bool FrameScheduler::updateLaunchMorph(
         SurfaceRegistry::Key key, SurfaceRegistry::SurfaceEntry& entry) {
+    key = launchMotionKey(key, entry);
     const auto found = m_launchMorphs.find(key);
     if (found == m_launchMorphs.end() ||
         found->second.phase != entry.transitionPhase) {
         return false;
     }
     const auto& state = found->second;
+    const bool timedOut =
+        entry.transitionPhase != TransitionPhase::Interactive &&
+        entry.transitionElapsedSec >= kLaunchMorphMaxDurationSec;
+    if (timedOut) {
+        const bool opening =
+            entry.transitionPhase == TransitionPhase::Entering ||
+            entry.transitionPhase == TransitionPhase::Restoring;
+        const float targetCenterX = state.targetX + state.targetWidth * 0.5f;
+        const float targetCenterY = state.targetY + state.targetHeight * 0.5f;
+        const float originCenterX =
+            entry.launchOriginX + entry.launchOriginWidth * 0.5f;
+        const float originCenterY =
+            entry.launchOriginY + entry.launchOriginHeight * 0.5f;
+        m_launchMotion.setValue(
+            state.positionX, opening ? targetCenterX : originCenterX);
+        m_launchMotion.setValue(
+            state.positionY, opening ? targetCenterY : originCenterY);
+        m_launchMotion.setValue(state.expand, opening ? 1.0f : 0.0f);
+        m_launchMotion.setValue(state.perspective, opening ? 1.0f : 0.0f);
+    }
     const auto positionX = m_launchMotion.sample(state.positionX);
     const auto positionY = m_launchMotion.sample(state.positionY);
     const auto expandSample = m_launchMotion.sample(state.expand);
@@ -188,14 +231,25 @@ bool FrameScheduler::updateLaunchMorph(
     if (phase == TransitionPhase::Entering || phase == TransitionPhase::Restoring) {
         entry.launchMorphCornerRadius = 0.0f;
         entry.launchMorphActive = false;
+        entry.launchIconHandoffActive = false;
+        entry.launchIconHandoffDeadline = {};
         entry.transitionPhase = TransitionPhase::None;
     } else if (phase == TransitionPhase::Minimizing) {
-        entry.launchMorphActive = false;
+        const bool handoff = entry.launchToken != 0 && entry.launchOwnerFd >= 0;
+        entry.launchMorphActive = handoff;
+        entry.launchIconHandoffActive = handoff;
+        entry.launchIconHandoffDeadline = {};
         entry.pendingMinimize = true;
+        entry.launchIconRevealPending = handoff;
         entry.transitionPhase = TransitionPhase::None;
     } else if (phase == TransitionPhase::Closing) {
-        entry.launchMorphActive = false;
+        const bool handoff = entry.launchToken != 0 && entry.launchOwnerFd >= 0;
+        entry.launchMorphActive = handoff;
+        entry.launchIconHandoffActive = handoff;
+        entry.launchIconHandoffDeadline = {};
+        entry.launchIconRevealPending = handoff;
         entry.pendingDestroy = true;
+        entry.transitionPhase = TransitionPhase::None;
     }
     return false;
 }
@@ -209,6 +263,22 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
     bool active = false;
     for (auto& [key, entry] : surfaces) {
         prepareLaunchMorph(key, entry);
+        if (entry.launchContentFadeActive) {
+            active = true;
+            entry.launchContentFadeElapsedSec += elapsed;
+            constexpr float kLaunchContentFadeDurationSec = 0.16f;
+            const float progress = std::clamp(
+                entry.launchContentFadeElapsedSec /
+                    kLaunchContentFadeDurationSec,
+                0.0f, 1.0f);
+            entry.launchContentOpacity = lcl::motion::Easing(
+                lcl::motion::EasingName::EaseOutCubic).evaluate(progress);
+            if (progress >= 1.0f) {
+                entry.launchContentFadeActive = false;
+                entry.launchPlaceholderActive = false;
+                entry.launchContentOpacity = 1.0f;
+            }
+        }
         if (entry.resizeTransitionPhase == SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer) {
             active = true;
             if (now >= entry.resizeDeadline) {
@@ -237,6 +307,10 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
         }
 
         if (entry.hasLaunchOrigin && isLaunchMorphPhase(entry.transitionPhase)) {
+            if (entry.transitionPhase !=
+                SurfaceRegistry::SurfaceEntry::TransitionPhase::Interactive) {
+                entry.transitionElapsedSec += elapsed;
+            }
             continue;
         }
 
@@ -261,6 +335,7 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
             if (progress >= 1.0f) {
                 entry.transitionOpacity = 0.0f;
                 entry.transitionScale = 0.96f;
+                entry.launchIconRevealPending = entry.launchToken != 0;
                 entry.pendingDestroy = true;
             }
         } else if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing) {
@@ -268,6 +343,7 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
             entry.transitionOpacity = 1.0f - eased;
             entry.transitionScale = 1.0f - 0.08f * eased;
             if (progress >= 1.0f) {
+                entry.launchIconRevealPending = entry.launchToken != 0;
                 entry.pendingMinimize = true;
                 entry.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::None;
             }
@@ -291,7 +367,11 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
     }
 
     for (auto it = m_launchMorphs.begin(); it != m_launchMorphs.end();) {
-        if (surfaces.contains(it->first)) {
+        const bool stillOwned = std::any_of(
+            surfaces.begin(), surfaces.end(), [&](const auto& item) {
+                return launchMotionKey(item.first, item.second) == it->first;
+            });
+        if (stillOwned) {
             ++it;
             continue;
         }

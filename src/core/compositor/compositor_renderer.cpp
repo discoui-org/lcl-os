@@ -225,10 +225,35 @@ void CompositorRenderer::render(render::Renderer& renderer,
     }
 
     auto drawLaunchIconProxy = [&](const SurfaceEntry& surface) {
-        if (!homeScreenSurface || !surface.hasLaunchOrigin ||
+        if (!surface.hasLaunchOrigin ||
             !surface.launchMorphActive || surface.transitionOpacity >= 0.999f) {
             return;
         }
+        const size_t snapshotPixelCount =
+            static_cast<size_t>(surface.launchIconWidth) *
+            surface.launchIconHeight;
+        if (surface.launchIconWidth > 0 && surface.launchIconHeight > 0 &&
+            surface.launchIconPixels.size() == snapshotPixelCount) {
+            const uint64_t iconCacheKey =
+                (uint64_t{1} << 63) | surface.launchToken;
+            raster->drawCachedShmBufferTransformed(
+                iconCacheKey, 1,
+                surface.launchMorphX, surface.launchMorphY,
+                static_cast<int>(surface.launchIconWidth),
+                static_cast<int>(surface.launchIconHeight),
+                static_cast<int>(surface.launchIconWidth),
+                static_cast<int>(surface.launchIconHeight),
+                surface.launchIconPixels.data(),
+                static_cast<int>(surface.launchIconWidth),
+                0, 0,
+                static_cast<int>(surface.launchIconWidth),
+                static_cast<int>(surface.launchIconHeight),
+                1.0f,
+                surface.launchMorphCornerRadius, 2.0f, false,
+                surface.launchMorphWidth, surface.launchMorphHeight);
+            return;
+        }
+        if (!homeScreenSurface) return;
         const auto& home = *homeScreenSurface;
         const float scale = std::max(0.001f, home.bufferScale);
         const int sourceX = static_cast<int>(std::lround(
@@ -361,7 +386,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
         for (const auto& surface : surfaces) {
             const auto* entry = surface.entry;
             if (entry && !entry->isPopup() && entry->windowId == win.id &&
-                entry->hasRenderableBuffer()) {
+                (entry->hasRenderableBuffer() ||
+                 entry->launchPlaceholderActive)) {
                 matchingSurface = entry;
                 matchingSurfaceKey = surface.key;
                 break;
@@ -390,16 +416,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 : render::makeWindowGroupTransform(win, titleOffset, windowScale);
 
         // B. Apply effect-graph backdrop regions (new pipeline only)
-        if (matchingSurface && !matchingSurface->effectRegions.empty()) {
+        if (matchingSurface && matchingSurface->hasRenderableBuffer() &&
+            !matchingSurface->effectRegions.empty()) {
             applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Backdrop,
                                       windowOpacity, group);
         }
 
         if (matchingSurface) {
-            // The prototype keeps the icon as the outer moving layer and fades
-            // the live app surface over it. Sampling the launcher's committed
-            // icon region preserves that exact visual ownership without making
-            // the compositor load application assets itself.
+            // The launcher owns the icon asset and supplies one immutable
+            // snapshot. The compositor only retains and transforms that small
+            // buffer, so hiding the stationary widget cannot erase the proxy.
             drawLaunchIconProxy(*matchingSurface);
 
             int srcW = static_cast<int>(matchingSurface->width);
@@ -425,7 +451,21 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 ? windowCornerRadius
                 : group.mapLength(windowCornerRadius);
 
-            if (matchingSurface->forceOpaque) {
+            if (matchingSurface->launchPlaceholderActive) {
+                raster->drawRoundedRect(
+                    {drawX, drawY, drawW, drawH},
+                    maskToWindowShape ? presentedCornerRadius : 0.0f,
+                    {255, 255, 255,
+                     static_cast<uint8_t>(std::clamp(
+                         std::lround(windowOpacity * 255.0f), 0l, 255l))},
+                    {}, 0.0f, resolveWindowCornerRoundness(win));
+            }
+
+            const float contentOpacity = windowOpacity * std::clamp(
+                matchingSurface->launchContentOpacity, 0.0f, 1.0f);
+
+            if (matchingSurface->forceOpaque &&
+                matchingSurface->hasRenderableBuffer()) {
                 const auto background =
                     lcl::theme::defaultTheme().colors.primarySurface;
                 raster->drawRoundedRect(
@@ -433,7 +473,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     maskToWindowShape ? presentedCornerRadius : 0.0f,
                     {background.r, background.g, background.b,
                      static_cast<uint8_t>(std::clamp(
-                         std::lround(windowOpacity * 255.0f), 0l, 255l))},
+                         std::lround(contentOpacity * 255.0f), 0l, 255l))},
                     {}, 0.0f, resolveWindowCornerRoundness(win));
             }
 
@@ -456,7 +496,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     0, 0,
                     static_cast<int>(matchingSurface->previousWidth),
                     static_cast<int>(matchingSurface->previousHeight),
-                    windowOpacity * (1.0f - matchingSurface->resizeCrossfadeProgress),
+                    contentOpacity *
+                        (1.0f - matchingSurface->resizeCrossfadeProgress),
                     maskToWindowShape ? presentedCornerRadius : 0.0f,
                     resolveWindowCornerRoundness(win),
                     win.decorationMode == render::DecorationMode::SSD,
@@ -470,14 +511,15 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     static_cast<int>(matchingSurface->previousBackingWidth),
                     static_cast<int>(matchingSurface->previousBackingHeight),
                     matchingSurface->previousDmaBufTexture,
-                    windowOpacity * (1.0f - matchingSurface->resizeCrossfadeProgress),
+                    contentOpacity *
+                        (1.0f - matchingSurface->resizeCrossfadeProgress),
                     maskToWindowShape ? presentedCornerRadius : 0.0f,
                     resolveWindowCornerRoundness(win),
                     win.decorationMode == render::DecorationMode::SSD,
                     drawW, drawH);
             }
 
-            const float currentOpacity = windowOpacity *
+            const float currentOpacity = contentOpacity *
                 (hasPrevious ? matchingSurface->resizeCrossfadeProgress : 1.0f);
             if (matchingSurface->pixels) {
                 drawShmSurface(
@@ -496,7 +538,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     resolveWindowCornerRoundness(win),
                     win.decorationMode == render::DecorationMode::SSD,
                     drawW, drawH);
-            } else {
+            } else if (matchingSurface->dmaBufTexture != 0) {
                 renderer.getRasterRenderer()->drawDmaBufTextureTransformed(
                     drawX, drawY, srcW, srcH,
                     static_cast<int>(matchingSurface->backingWidth),
@@ -509,7 +551,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     drawW, drawH);
             }
 
-            if (!matchingSurface->effectRegions.empty()) {
+            if (matchingSurface->hasRenderableBuffer() &&
+                !matchingSurface->effectRegions.empty()) {
                 applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground,
                                           windowOpacity, group);
             }

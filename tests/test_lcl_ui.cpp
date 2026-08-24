@@ -2658,6 +2658,67 @@ TEST(LclUiTest, NormalGpuFramesCoalesceUntilCompositorPresentation) {
     close(sockets[1]);
 }
 
+TEST(LclUiTest, LaunchIconRevealAckFollowsFrameContainingRevealedIcon) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    recorded->dmaBufAvailable = true;
+    WindowApp app(std::move(canvas), 100, 80, "Launch icon handoff");
+    app.setExternalIpcSocket(sockets[0]);
+    ASSERT_TRUE(recorded->configureDmaBufFrame(100, 80, 100, 80));
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(100.0f);
+    root->setHeight(80.0f);
+    root->setOpacity(0.0f);
+    Container* icon = root.get();
+    app.setRootWidget(std::move(root));
+    app.setOnIpcMessage([icon](const lcl::protocol::LCLHeader& header,
+                               const std::vector<uint8_t>&) {
+        if (header.opcode ==
+            lcl::protocol::LCLOpcode::LaunchIconVisibility) {
+            icon->setOpacity(1.0f);
+        }
+    });
+
+    lcl::protocol::LCLMsgLaunchIconVisibility reveal{};
+    reveal.launchToken = 73;
+    std::strncpy(reveal.appId, "org.lcl.test",
+                 sizeof(reveal.appId) - 1);
+    reveal.visible = 1;
+    lcl::protocol::LCLHeader header{};
+    header.opcode = lcl::protocol::LCLOpcode::LaunchIconVisibility;
+    header.payloadSize = sizeof(reveal);
+    ASSERT_TRUE(lcl::protocol::sendMsgWithFd(
+        sockets[1], header, &reveal));
+
+    ASSERT_TRUE(app.tick());
+
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, lcl::protocol::LCLOpcode::AttachDmaBuf);
+    if (receivedFd >= 0) close(receivedFd);
+    receivedFd = -1;
+
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode,
+              lcl::protocol::LCLOpcode::LaunchIconVisibilityAck);
+    ASSERT_EQ(payload.size(),
+              sizeof(lcl::protocol::LCLMsgLaunchIconVisibilityAck));
+    const auto* ack = reinterpret_cast<const
+        lcl::protocol::LCLMsgLaunchIconVisibilityAck*>(payload.data());
+    EXPECT_EQ(ack->launchToken, 73u);
+    EXPECT_STREQ(ack->appId, "org.lcl.test");
+    if (receivedFd >= 0) close(receivedFd);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(LclUiTest, ResizeFirstFrameDamagesPostLayoutRootExtent) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
@@ -2750,6 +2811,29 @@ TEST(LclUiTest, ImplicitTransactionInterpolatesTransformOpacityAndReflowLayout) 
     EXPECT_NEAR(pointer->getPresentationState().opacity, 0.5f, 0.01f);
     EXPECT_NEAR(pointer->getPresentationState().translationX, 10.0f, 0.01f);
     EXPECT_EQ(app.getDispatcher().hitTest(app.getRootWidget(), 140.0f, 20.0f), pointer);
+}
+
+TEST(LclUiTest, ZeroOpacityChildStillBubblesTapToParent) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 120, 80, "Transparent hit target");
+    auto tile = std::make_unique<Container>();
+    tile->setWidth(60.0f);
+    tile->setHeight(60.0f);
+    auto icon = std::make_unique<Container>();
+    icon->setWidth(60.0f);
+    icon->setHeight(60.0f);
+    icon->setOpacity(0.0f);
+    tile->addChild(std::move(icon));
+    int taps = 0;
+    tile->setOnClick([&taps] { ++taps; });
+    app.setRootWidget(std::move(tile));
+    ASSERT_TRUE(app.renderFrame());
+
+    EXPECT_TRUE(app.sendPointerDown(
+        20.0f, 20.0f, 0, PointerSource::Touch, 81));
+    EXPECT_TRUE(app.sendPointerUp(
+        20.0f, 20.0f, 0, PointerSource::Touch, 81));
+    EXPECT_EQ(taps, 1);
 }
 
 TEST(LclUiTest, MorphUsesFinalLayoutAndFreezesWindowInputUntilSettled) {

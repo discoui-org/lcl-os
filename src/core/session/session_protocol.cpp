@@ -164,9 +164,14 @@ bool decodeCatalogSnapshot(const std::vector<uint8_t>& payload, std::vector<Cata
 }
 
 bool encodeLaunchRequest(const LaunchRequest& request, std::vector<uint8_t>& payload) {
-    if (request.target.empty() || !validLaunchOrigin(request.origin)) return false;
+    constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+    if (request.target.empty() || !validLaunchOrigin(request.origin) ||
+        request.launchToken >= kLaunchTokenLimit ||
+        (request.origin.valid && request.launchToken == 0)) return false;
     Writer writer;
     writer.u8(request.waitForExit ? 1 : 0);
+    writer.u8(request.singleInstance ? 1 : 0);
+    writer.u64(request.launchToken);
     if (!writer.string(request.target)) return false;
     writer.u8(request.origin.valid ? 1 : 0);
     writer.f32(request.origin.x);
@@ -179,17 +184,24 @@ bool encodeLaunchRequest(const LaunchRequest& request, std::vector<uint8_t>& pay
 }
 
 bool decodeLaunchRequest(const std::vector<uint8_t>& payload, LaunchRequest& request) {
+    constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
     Reader reader(payload.data(), payload.size());
     uint8_t wait = 0;
+    uint8_t singleInstance = 0;
     uint8_t hasOrigin = 0;
-    if (!reader.u8(wait) || wait > 1 || !reader.string(request.target) ||
+    if (!reader.u8(wait) || wait > 1 ||
+        !reader.u8(singleInstance) || singleInstance > 1 ||
+        !reader.u64(request.launchToken) || !reader.string(request.target) ||
         request.target.empty() || !reader.u8(hasOrigin) || hasOrigin > 1 ||
         !reader.f32(request.origin.x) || !reader.f32(request.origin.y) ||
         !reader.f32(request.origin.width) || !reader.f32(request.origin.height) ||
         !reader.f32(request.origin.cornerRadius) || !reader.done()) return false;
     request.waitForExit = wait != 0;
+    request.singleInstance = singleInstance != 0;
     request.origin.valid = hasOrigin != 0;
-    return validLaunchOrigin(request.origin);
+    return request.launchToken < kLaunchTokenLimit &&
+        validLaunchOrigin(request.origin) &&
+        (!request.origin.valid || request.launchToken != 0);
 }
 
 bool encodeLaunchResponse(const LaunchResponse& response, std::vector<uint8_t>& payload) {
@@ -197,6 +209,7 @@ bool encodeLaunchResponse(const LaunchResponse& response, std::vector<uint8_t>& 
     writer.u32(response.status);
     writer.u64(response.instanceId);
     writer.u32(std::bit_cast<uint32_t>(response.pid));
+    writer.u8(response.reused ? 1 : 0);
     if (!writer.string(response.appId) || !writer.string(response.message)) return false;
     payload = writer.take();
     return true;
@@ -205,9 +218,12 @@ bool encodeLaunchResponse(const LaunchResponse& response, std::vector<uint8_t>& 
 bool decodeLaunchResponse(const std::vector<uint8_t>& payload, LaunchResponse& response) {
     Reader reader(payload.data(), payload.size());
     uint32_t pid = 0;
-    if (!reader.u32(response.status) || !reader.u64(response.instanceId) || !reader.u32(pid) ||
+    uint8_t reused = 0;
+    if (!reader.u32(response.status) || !reader.u64(response.instanceId) ||
+        !reader.u32(pid) || !reader.u8(reused) || reused > 1 ||
         !reader.string(response.appId) || !reader.string(response.message) || !reader.done()) return false;
     response.pid = std::bit_cast<int32_t>(pid);
+    response.reused = reused != 0;
     return true;
 }
 

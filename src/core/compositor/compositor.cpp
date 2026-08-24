@@ -59,9 +59,29 @@ bool Compositor::handleSystemGesture(
     if (surface == m_surfaces.end()) return false;
 
     auto& entry = surface->second;
+    const auto phase = entry.transitionPhase;
+    const bool visibilityExitInProgress =
+        phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing ||
+        phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing ||
+        entry.pendingDestroy || entry.pendingMinimize;
+    if (visibilityExitInProgress) {
+        // A second bottom-edge stream must not retarget an in-flight exit
+        // spring back to Interactive/fullscreen. Only an explicit launcher
+        // activation is allowed to restore a minimizing or closing surface.
+        entry.launchGestureActive = false;
+        return decision == SystemGestureDecision::Claim ||
+               decision == SystemGestureDecision::Update ||
+               decision == SystemGestureDecision::Cancel ||
+               decision == SystemGestureDecision::Home;
+    }
+
     if ((decision == SystemGestureDecision::Claim ||
          decision == SystemGestureDecision::Update) &&
         entry.hasLaunchOrigin) {
+        if (entry.transitionPhase !=
+            SurfaceRegistry::SurfaceEntry::TransitionPhase::Interactive) {
+            entry.transitionElapsedSec = 0.0f;
+        }
         entry.launchGestureActive = true;
         entry.launchGestureStartX = gesture.startX;
         entry.launchGestureStartY = gesture.startY;
@@ -75,18 +95,13 @@ bool Compositor::handleSystemGesture(
     if (decision == SystemGestureDecision::Cancel) {
         if (!entry.launchGestureActive) return false;
         entry.launchGestureActive = false;
+        entry.transitionElapsedSec = 0.0f;
         entry.transitionPhase =
             SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring;
         return true;
     }
 
     if (decision != SystemGestureDecision::Home) return false;
-
-    const auto phase = entry.transitionPhase;
-    if (phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing ||
-        phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing) {
-        return true;
-    }
 
     // Entering/restoring launch morphs are velocity-preserving channels.
     // Retargeting them here makes Home responsive even before the opening
@@ -360,6 +375,29 @@ void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
 
     const bool hasActiveTransitions = m_frameScheduler.advanceTransitions(m_surfaces);
+    const auto handoffNow = std::chrono::steady_clock::now();
+    constexpr auto kLaunchIconHandoffTimeout = std::chrono::milliseconds(750);
+    for (auto& [surfaceKey, entry] : m_surfaces) {
+        (void)surfaceKey;
+        if (entry.launchIconHandoffActive &&
+            entry.launchIconHandoffDeadline.time_since_epoch().count() == 0) {
+            entry.launchIconHandoffDeadline =
+                handoffNow + kLaunchIconHandoffTimeout;
+        }
+        if (entry.launchIconRevealPending && m_protocolDispatcher &&
+            m_protocolDispatcher->publishLaunchIconVisibility(entry, true)) {
+            entry.launchIconRevealPending = false;
+        }
+        if (entry.launchIconHandoffActive &&
+            handoffNow >= entry.launchIconHandoffDeadline) {
+            // A dead or stalled HomeScreen must not leave the final proxy or
+            // closing surface alive indefinitely.
+            entry.launchIconRevealPending = false;
+            entry.launchIconHandoffActive = false;
+            entry.launchIconHandoffDeadline = {};
+            entry.launchMorphActive = false;
+        }
+    }
     const bool hasPendingGpuRelease = std::any_of(
         m_surfaces.begin(), m_surfaces.end(), [](const auto& pair) {
             return !pair.second.pendingDmaBufReleases.empty();
@@ -367,7 +405,7 @@ void Compositor::renderFrame() {
     const int releaseFenceFd = hasPendingGpuRelease
         ? m_renderer.createNativeFence() : -1;
     for (auto& [surfaceKey, entry] : m_surfaces) {
-        if (entry.pendingMinimize) {
+        if (entry.pendingMinimize && !entry.launchIconHandoffActive) {
             m_windowManager.minimizeWindow(entry.windowId);
             entry.pendingMinimize = false;
             entry.transitionOpacity = 1.0f;
@@ -436,7 +474,7 @@ void Compositor::renderFrame() {
 
     std::vector<SurfaceRegistry::Key> surfacesToRemove;
     for (const auto& [surfaceKey, entry] : m_surfaces) {
-        if (entry.pendingDestroy) {
+        if (entry.pendingDestroy && !entry.launchIconHandoffActive) {
             surfacesToRemove.push_back(surfaceKey);
         }
     }
@@ -465,7 +503,12 @@ void Compositor::renderFrame() {
     synchronizeShellState();
 
     m_windowManager.clearAllDirty();
-    m_needsRedraw = hasActiveTransitions || !surfacesToRemove.empty();
+    const bool hasActiveLaunchIconHandoff = std::any_of(
+        m_surfaces.begin(), m_surfaces.end(), [](const auto& pair) {
+            return pair.second.launchIconHandoffActive;
+        });
+    m_needsRedraw = hasActiveTransitions || !surfacesToRemove.empty() ||
+                    hasActiveLaunchIconHandoff;
     ++m_fpsFrameCount;
 }
 

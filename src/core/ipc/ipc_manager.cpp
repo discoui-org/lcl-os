@@ -144,7 +144,7 @@ std::vector<IPCClientMessage> IPCManager::pollMessages() {
                 header.requestId != 0) {
                 protocol::LCLMsgAckResponse error{};
                 error.status = 1;
-                std::strncpy(error.message, "invalid v3 packet",
+                std::strncpy(error.message, "invalid protocol packet",
                              sizeof(error.message) - 1);
                 protocol::LCLHeader response{};
                 response.opcode = protocol::LCLOpcode::AckResponse;

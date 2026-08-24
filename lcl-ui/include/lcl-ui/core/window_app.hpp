@@ -10,6 +10,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-theme/theme.hpp"
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <functional>
@@ -171,6 +172,17 @@ public:
     /** Toggle between maximized and restored geometry. */
     bool requestWindowToggleMaximize();
     bool requestWindowClose();
+    /** Begin an immediate compositor-owned launch placeholder from HomeScreen. */
+    bool beginLaunchPlaceholder(uint64_t launchToken, const std::string& appId,
+                                const graphics::RectF& origin,
+                                float cornerRadius,
+                                uint32_t iconWidth,
+                                uint32_t iconHeight,
+                                const std::vector<uint32_t>& iconPixels);
+    /** Bind session identity; reused instances are restored instead of spawned. */
+    bool resolveLaunchPlaceholder(uint64_t launchToken, uint64_t appInstanceId,
+                                  bool reused);
+    bool cancelLaunchPlaceholder(uint64_t launchToken);
     bool setDecorationMode(lcl::protocol::LCLDecorationMode mode);
     /** Extend the surface material beneath compositor-owned system insets. */
     bool setEdgeToEdge(bool enabled);
@@ -293,6 +305,10 @@ private:
     uint64_t m_refreshIntervalNs{0};
     uint64_t m_submittedConfigureSerial{0};
     uint32_t m_submittedDmaBufId{0};
+    // A launch icon becomes compositor-visible only after the HomeScreen
+    // buffer containing it has been committed on this same ordered socket.
+    std::optional<lcl::protocol::LCLMsgLaunchIconVisibilityAck>
+        m_pendingLaunchIconVisibilityAck;
     std::chrono::steady_clock::time_point m_lastResizeApply{};
     bool m_running{false};
     bool m_surfaceEnded{false};

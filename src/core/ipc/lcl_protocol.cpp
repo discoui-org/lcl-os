@@ -218,6 +218,11 @@ bool validOpcode(LCLOpcode value) {
     case LCLOpcode::SetWindowCornerStyle:
     case LCLOpcode::SetEdgeToEdge:
     case LCLOpcode::PopupSurfaceCreate:
+    case LCLOpcode::BeginLaunchPlaceholder:
+    case LCLOpcode::ResolveLaunchPlaceholder:
+    case LCLOpcode::CancelLaunchPlaceholder:
+    case LCLOpcode::LaunchIconVisibility:
+    case LCLOpcode::LaunchIconVisibilityAck:
         return true;
     }
     return false;
@@ -337,6 +342,7 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
     switch (opcode) {
     case LCLOpcode::SurfaceCreate: {
         LOAD_ONE(LCLMsgSurfaceCreate, msg);
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
         if (msg.surfaceId == 0 || !validFloat(msg.x) || !validFloat(msg.y) ||
             !validFloat(msg.width) || msg.width <= 0.0f ||
             !validFloat(msg.height) || msg.height <= 0.0f ||
@@ -347,6 +353,7 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
             !validFloat(msg.launchOriginX) || !validFloat(msg.launchOriginY) ||
             !validFloat(msg.launchOriginWidth) || !validFloat(msg.launchOriginHeight) ||
             !validFloat(msg.launchOriginCornerRadius) ||
+            msg.launchToken >= kLaunchTokenLimit ||
             (msg.hasLaunchOrigin &&
              (msg.launchOriginWidth <= 0.0f || msg.launchOriginHeight <= 0.0f ||
               msg.launchOriginCornerRadius < 0.0f)))
@@ -365,6 +372,8 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.f32(msg.launchOriginWidth);
         out.f32(msg.launchOriginHeight);
         out.f32(msg.launchOriginCornerRadius);
+        out.u64(msg.launchToken);
+        out.u64(msg.appInstanceId);
         return true;
     }
     case LCLOpcode::PopupSurfaceCreate: {
@@ -718,6 +727,87 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.u32(static_cast<uint32_t>(msg.kind));
         return validSystemSurfaceKind(msg.kind) && msg.kind != LCLSystemSurfaceKind::None;
     }
+    case LCLOpcode::BeginLaunchPlaceholder: {
+        LCLMsgBeginLaunchPlaceholder msg{};
+        if (!loadNative(payload, size, 0, msg)) return false;
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+        const size_t iconPixelCount =
+            static_cast<size_t>(msg.iconWidth) * msg.iconHeight;
+        const size_t expectedSize = sizeof(msg) +
+            iconPixelCount * sizeof(uint32_t);
+        if (msg.homeSurfaceId == 0 || msg.launchToken == 0 ||
+            msg.launchToken >= kLaunchTokenLimit ||
+            !validString(msg.appId, sizeof(msg.appId)) || msg.appId[0] == '\0' ||
+            !validFloat(msg.originX) || !validFloat(msg.originY) ||
+            !validFloat(msg.originWidth) || msg.originWidth <= 0.0f ||
+            !validFloat(msg.originHeight) || msg.originHeight <= 0.0f ||
+            !validFloat(msg.originCornerRadius) || msg.originCornerRadius < 0.0f ||
+            msg.iconWidth == 0 || msg.iconHeight == 0 ||
+            msg.iconWidth > LCL_LAUNCH_ICON_MAX_DIMENSION ||
+            msg.iconHeight > LCL_LAUNCH_ICON_MAX_DIMENSION ||
+            size != expectedSize)
+            return false;
+        out.u32(msg.homeSurfaceId);
+        out.u64(msg.launchToken);
+        out.fixed(msg.appId, sizeof(msg.appId));
+        out.f32(msg.originX);
+        out.f32(msg.originY);
+        out.f32(msg.originWidth);
+        out.f32(msg.originHeight);
+        out.f32(msg.originCornerRadius);
+        out.u32(msg.iconWidth);
+        out.u32(msg.iconHeight);
+        size_t offset = sizeof(msg);
+        for (size_t index = 0; index < iconPixelCount; ++index) {
+            uint32_t pixel = 0;
+            if (!loadNative(payload, size, offset, pixel)) return false;
+            out.u32(pixel);
+            offset += sizeof(pixel);
+        }
+        return true;
+    }
+    case LCLOpcode::ResolveLaunchPlaceholder: {
+        LOAD_ONE(LCLMsgResolveLaunchPlaceholder, msg);
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+        if (msg.homeSurfaceId == 0 || msg.launchToken == 0 ||
+            msg.launchToken >= kLaunchTokenLimit ||
+            msg.appInstanceId == 0 || msg.reused > 1) return false;
+        out.u32(msg.homeSurfaceId);
+        out.u64(msg.launchToken);
+        out.u64(msg.appInstanceId);
+        out.u8(msg.reused);
+        return true;
+    }
+    case LCLOpcode::CancelLaunchPlaceholder: {
+        LOAD_ONE(LCLMsgCancelLaunchPlaceholder, msg);
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+        if (msg.homeSurfaceId == 0 || msg.launchToken == 0 ||
+            msg.launchToken >= kLaunchTokenLimit) return false;
+        out.u32(msg.homeSurfaceId);
+        out.u64(msg.launchToken);
+        return true;
+    }
+    case LCLOpcode::LaunchIconVisibility: {
+        LOAD_ONE(LCLMsgLaunchIconVisibility, msg);
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+        if (msg.launchToken == 0 || msg.launchToken >= kLaunchTokenLimit ||
+            !validString(msg.appId, sizeof(msg.appId)) ||
+            msg.appId[0] == '\0' || msg.visible > 1) return false;
+        out.u64(msg.launchToken);
+        out.fixed(msg.appId, sizeof(msg.appId));
+        out.u8(msg.visible);
+        return true;
+    }
+    case LCLOpcode::LaunchIconVisibilityAck: {
+        LOAD_ONE(LCLMsgLaunchIconVisibilityAck, msg);
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+        if (msg.launchToken == 0 || msg.launchToken >= kLaunchTokenLimit ||
+            !validString(msg.appId, sizeof(msg.appId)) ||
+            msg.appId[0] == '\0') return false;
+        out.u64(msg.launchToken);
+        out.fixed(msg.appId, sizeof(msg.appId));
+        return true;
+    }
     }
     return false;
 #undef LOAD_ONE
@@ -729,6 +819,7 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
     switch (opcode) {
     case LCLOpcode::SurfaceCreate: {
         LCLMsgSurfaceCreate m{};
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
         uint8_t resizePresentation = 0;
         if (!in.u32(m.surfaceId) || !in.f32(m.x) || !in.f32(m.y) ||
             !in.f32(m.width) || !in.f32(m.height) ||
@@ -737,7 +828,8 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !in.u8(resizePresentation) || !in.u8(m.hasLaunchOrigin) ||
             !in.f32(m.launchOriginX) || !in.f32(m.launchOriginY) ||
             !in.f32(m.launchOriginWidth) || !in.f32(m.launchOriginHeight) ||
-            !in.f32(m.launchOriginCornerRadius))
+            !in.f32(m.launchOriginCornerRadius) ||
+            !in.u64(m.launchToken) || !in.u64(m.appInstanceId))
             return false;
         m.resizePresentation = static_cast<LCLResizePresentationMode>(resizePresentation);
         if (m.surfaceId == 0 || !validFloat(m.x) || !validFloat(m.y) ||
@@ -750,6 +842,7 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !validFloat(m.launchOriginX) || !validFloat(m.launchOriginY) ||
             !validFloat(m.launchOriginWidth) || !validFloat(m.launchOriginHeight) ||
             !validFloat(m.launchOriginCornerRadius) ||
+            m.launchToken >= kLaunchTokenLimit ||
             (m.hasLaunchOrigin &&
              (m.launchOriginWidth <= 0.0f || m.launchOriginHeight <= 0.0f ||
               m.launchOriginCornerRadius < 0.0f)))
@@ -1094,6 +1187,77 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
         if (!validSystemSurfaceKind(msg.kind) || msg.kind == LCLSystemSurfaceKind::None)
             return false;
         appendNative(payload, msg);
+        break;
+    }
+    case LCLOpcode::BeginLaunchPlaceholder: {
+        LCLMsgBeginLaunchPlaceholder m{};
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+        if (!in.u32(m.homeSurfaceId) || !in.u64(m.launchToken) ||
+            !in.fixed(m.appId, sizeof(m.appId)) ||
+            !in.f32(m.originX) || !in.f32(m.originY) ||
+            !in.f32(m.originWidth) || !in.f32(m.originHeight) ||
+            !in.f32(m.originCornerRadius) ||
+            !in.u32(m.iconWidth) || !in.u32(m.iconHeight) ||
+            m.homeSurfaceId == 0 || m.launchToken == 0 ||
+            m.launchToken >= kLaunchTokenLimit ||
+            !validString(m.appId, sizeof(m.appId)) || m.appId[0] == '\0' ||
+            !validFloat(m.originX) || !validFloat(m.originY) ||
+            !validFloat(m.originWidth) || m.originWidth <= 0.0f ||
+            !validFloat(m.originHeight) || m.originHeight <= 0.0f ||
+            !validFloat(m.originCornerRadius) || m.originCornerRadius < 0.0f ||
+            m.iconWidth == 0 || m.iconHeight == 0 ||
+            m.iconWidth > LCL_LAUNCH_ICON_MAX_DIMENSION ||
+            m.iconHeight > LCL_LAUNCH_ICON_MAX_DIMENSION)
+            return false;
+        appendNative(payload, m);
+        const size_t iconPixelCount =
+            static_cast<size_t>(m.iconWidth) * m.iconHeight;
+        for (size_t index = 0; index < iconPixelCount; ++index) {
+            uint32_t pixel = 0;
+            if (!in.u32(pixel)) return false;
+            appendNative(payload, pixel);
+        }
+        break;
+    }
+    case LCLOpcode::ResolveLaunchPlaceholder: {
+        LCLMsgResolveLaunchPlaceholder m{};
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+        if (!in.u32(m.homeSurfaceId) || !in.u64(m.launchToken) ||
+            !in.u64(m.appInstanceId) || !in.u8(m.reused) ||
+            m.homeSurfaceId == 0 || m.launchToken == 0 ||
+            m.launchToken >= kLaunchTokenLimit ||
+            m.appInstanceId == 0 || m.reused > 1) return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::CancelLaunchPlaceholder: {
+        LCLMsgCancelLaunchPlaceholder m{};
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+        if (!in.u32(m.homeSurfaceId) || !in.u64(m.launchToken) ||
+            m.homeSurfaceId == 0 || m.launchToken == 0 ||
+            m.launchToken >= kLaunchTokenLimit) return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::LaunchIconVisibility: {
+        LCLMsgLaunchIconVisibility m{};
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+        if (!in.u64(m.launchToken) ||
+            !in.fixed(m.appId, sizeof(m.appId)) || !in.u8(m.visible) ||
+            m.launchToken == 0 || m.launchToken >= kLaunchTokenLimit ||
+            !validString(m.appId, sizeof(m.appId)) ||
+            m.appId[0] == '\0' || m.visible > 1) return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::LaunchIconVisibilityAck: {
+        LCLMsgLaunchIconVisibilityAck m{};
+        constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+        if (!in.u64(m.launchToken) || !in.fixed(m.appId, sizeof(m.appId)) ||
+            m.launchToken == 0 || m.launchToken >= kLaunchTokenLimit ||
+            !validString(m.appId, sizeof(m.appId)) || m.appId[0] == '\0')
+            return false;
+        appendNative(payload, m);
         break;
     }
     }

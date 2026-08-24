@@ -10,11 +10,12 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 17;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 20;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint64_t LCL_CAPABILITY_AHB_V1 = 1ull << 0;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
+constexpr uint32_t LCL_LAUNCH_ICON_MAX_DIMENSION = 256u;
 
 enum class LCLOpcode : uint32_t {
     SurfaceCreate = 2,
@@ -59,7 +60,12 @@ enum class LCLOpcode : uint32_t {
     // Opaque native-buffer commit. AndroidHardwareBufferV1 transfers the
     // AHardwareBuffer handle over the negotiated side channel; an optional
     // acquire-fence fd accompanies this commit through SCM_RIGHTS.
-    AttachNativeBuffer = 32
+    AttachNativeBuffer = 32,
+    BeginLaunchPlaceholder = 33,
+    ResolveLaunchPlaceholder = 34,
+    CancelLaunchPlaceholder = 35,
+    LaunchIconVisibility = 36,
+    LaunchIconVisibilityAck = 37
 };
 
 enum class LCLNativeBufferTransport : uint32_t {
@@ -229,6 +235,55 @@ struct LCLMsgSurfaceCreate {
     float launchOriginWidth{0.0f};
     float launchOriginHeight{0.0f};
     float launchOriginCornerRadius{0.0f};
+    uint64_t launchToken{0};
+    uint64_t appInstanceId{0};
+};
+
+/**
+ * Trusted HomeScreen request for an immediate compositor-owned launch visual.
+ * Followed in the native payload by iconWidth * iconHeight ARGB32 pixels.
+ */
+struct LCLMsgBeginLaunchPlaceholder {
+    uint32_t homeSurfaceId{0};
+    uint64_t launchToken{0};
+    char appId[64]{0};
+    float originX{0.0f};
+    float originY{0.0f};
+    float originWidth{0.0f};
+    float originHeight{0.0f};
+    float originCornerRadius{0.0f};
+    uint32_t iconWidth{0};
+    uint32_t iconHeight{0};
+};
+
+/** Binds session identity and optionally activates an already-running scene. */
+struct LCLMsgResolveLaunchPlaceholder {
+    uint32_t homeSurfaceId{0};
+    uint64_t launchToken{0};
+    uint64_t appInstanceId{0};
+    uint8_t reused{0};
+};
+
+struct LCLMsgCancelLaunchPlaceholder {
+    uint32_t homeSurfaceId{0};
+    uint64_t launchToken{0};
+};
+
+/** Compositor-owned launch lifecycle notification for the trusted HomeScreen. */
+struct LCLMsgLaunchIconVisibility {
+    uint64_t launchToken{0};
+    char appId[64]{0};
+    uint8_t visible{0};
+};
+
+/**
+ * Sent by HomeScreen after committing the frame that applies a launch-icon
+ * visibility notification. Socket ordering makes the preceding buffer attach
+ * the exact handoff point for the compositor-owned icon proxy.
+ */
+struct LCLMsgLaunchIconVisibilityAck {
+    uint64_t launchToken{0};
+    char appId[64]{0};
 };
 
 /**
@@ -520,7 +575,7 @@ ReceiveStatus recvPacketWithFd(int socketFd, LCLHeader& header,
  */
 bool recvMsgWithFd(int socketFd, LCLHeader& header, std::vector<uint8_t>& payload, int& receivedFd);
 
-/** Explicit v3 little-endian codec entry points used by transport and tests. */
+/** Explicit versioned little-endian codec entry points used by transport and tests. */
 bool encodePacket(const LCLHeader& header, const void* nativePayload,
                   std::vector<uint8_t>& packet);
 bool decodePacket(const uint8_t* packet, size_t packetSize, LCLHeader& header,

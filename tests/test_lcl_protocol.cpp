@@ -43,6 +43,8 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     msg.launchOriginWidth = 60.0f;
     msg.launchOriginHeight = 60.0f;
     msg.launchOriginCornerRadius = 14.0f;
+    msg.launchToken = 73;
+    msg.appInstanceId = 91;
     std::strncpy(msg.title, "Test Window Title", sizeof(msg.title) - 1);
     std::strncpy(msg.appId, "org.lcl.test", sizeof(msg.appId) - 1);
 
@@ -79,6 +81,8 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     EXPECT_FLOAT_EQ(msgRecv->launchOriginWidth, 60.0f);
     EXPECT_FLOAT_EQ(msgRecv->launchOriginHeight, 60.0f);
     EXPECT_FLOAT_EQ(msgRecv->launchOriginCornerRadius, 14.0f);
+    EXPECT_EQ(msgRecv->launchToken, 73u);
+    EXPECT_EQ(msgRecv->appInstanceId, 91u);
     EXPECT_STREQ(msgRecv->title, "Test Window Title");
     EXPECT_STREQ(msgRecv->appId, "org.lcl.test");
 
@@ -268,7 +272,7 @@ TEST(LCLProtocolTest, RejectsTruncatedAndNonFiniteLogicalSurfaceGeometry) {
     auto packet = surfaceCreatePacket();
     ASSERT_FALSE(packet.empty());
 
-    // v17 SurfaceCreate must contain the complete launch-origin geometry.
+    // SurfaceCreate must contain the complete launch context.
     packet.resize(packet.size() - sizeof(uint8_t));
     const uint32_t shortened = sizeof(LCLMsgSurfaceCreate) - sizeof(uint8_t);
     packet[20] = static_cast<uint8_t>(shortened);
@@ -942,6 +946,103 @@ TEST(LCLProtocolTest, SystemSurfaceDeclarationRoundTripsAndRejectsNone) {
 
     request.kind = LCLSystemSurfaceKind::None;
     EXPECT_FALSE(encodePacket(header, &request, packet));
+}
+
+TEST(LCLProtocolTest, LaunchPlaceholderCommandsRoundTrip) {
+    LCLMsgBeginLaunchPlaceholder begin{};
+    begin.homeSurfaceId = 1;
+    begin.launchToken = 73;
+    std::strncpy(begin.appId, "org.lcl.test", sizeof(begin.appId) - 1);
+    begin.originX = 24.0f;
+    begin.originY = 32.0f;
+    begin.originWidth = 60.0f;
+    begin.originHeight = 60.0f;
+    begin.originCornerRadius = 14.0f;
+    begin.iconWidth = 2;
+    begin.iconHeight = 2;
+    const std::array<uint32_t, 4> iconPixels{
+        0xFFFF0000u, 0xFF00FF00u, 0xFF0000FFu, 0xFFFFFFFFu};
+    std::vector<uint8_t> beginPayload(
+        sizeof(begin) + sizeof(iconPixels));
+    std::memcpy(beginPayload.data(), &begin, sizeof(begin));
+    std::memcpy(beginPayload.data() + sizeof(begin),
+                iconPixels.data(), sizeof(iconPixels));
+
+    LCLHeader header{};
+    header.opcode = LCLOpcode::BeginLaunchPlaceholder;
+    header.requestId = 71;
+    header.payloadSize = static_cast<uint32_t>(beginPayload.size());
+    std::vector<uint8_t> packet;
+    ASSERT_TRUE(encodePacket(header, beginPayload.data(), packet));
+    LCLHeader decodedHeader{};
+    std::vector<uint8_t> payload;
+    ASSERT_TRUE(decodePacket(
+        packet.data(), packet.size(), decodedHeader, payload));
+    ASSERT_EQ(payload.size(), beginPayload.size());
+    const auto* decodedBegin = reinterpret_cast<const
+        LCLMsgBeginLaunchPlaceholder*>(payload.data());
+    EXPECT_EQ(decodedBegin->launchToken, 73u);
+    EXPECT_STREQ(decodedBegin->appId, "org.lcl.test");
+    EXPECT_EQ(decodedBegin->iconWidth, 2u);
+    EXPECT_EQ(decodedBegin->iconHeight, 2u);
+    EXPECT_EQ(0, std::memcmp(payload.data() + sizeof(*decodedBegin),
+                             iconPixels.data(), sizeof(iconPixels)));
+
+    LCLMsgResolveLaunchPlaceholder resolve{};
+    resolve.homeSurfaceId = 1;
+    resolve.launchToken = 73;
+    resolve.appInstanceId = 91;
+    resolve.reused = 1;
+    header.opcode = LCLOpcode::ResolveLaunchPlaceholder;
+    header.payloadSize = sizeof(resolve);
+    ASSERT_TRUE(encodePacket(header, &resolve, packet));
+    ASSERT_TRUE(decodePacket(
+        packet.data(), packet.size(), decodedHeader, payload));
+    const auto* decodedResolve = reinterpret_cast<const
+        LCLMsgResolveLaunchPlaceholder*>(payload.data());
+    EXPECT_EQ(decodedResolve->appInstanceId, 91u);
+    EXPECT_EQ(decodedResolve->reused, 1u);
+
+    LCLMsgCancelLaunchPlaceholder cancel{};
+    cancel.homeSurfaceId = 1;
+    cancel.launchToken = 73;
+    header.opcode = LCLOpcode::CancelLaunchPlaceholder;
+    header.payloadSize = sizeof(cancel);
+    ASSERT_TRUE(encodePacket(header, &cancel, packet));
+    EXPECT_TRUE(decodePacket(
+        packet.data(), packet.size(), decodedHeader, payload));
+
+    LCLMsgLaunchIconVisibility visibility{};
+    visibility.launchToken = 73;
+    std::strncpy(visibility.appId, "org.lcl.test",
+                 sizeof(visibility.appId) - 1);
+    visibility.visible = 1;
+    header.opcode = LCLOpcode::LaunchIconVisibility;
+    header.payloadSize = sizeof(visibility);
+    ASSERT_TRUE(encodePacket(header, &visibility, packet));
+    ASSERT_TRUE(decodePacket(
+        packet.data(), packet.size(), decodedHeader, payload));
+    ASSERT_EQ(payload.size(), sizeof(visibility));
+    const auto* decodedVisibility = reinterpret_cast<const
+        LCLMsgLaunchIconVisibility*>(payload.data());
+    EXPECT_EQ(decodedVisibility->launchToken, 73u);
+    EXPECT_STREQ(decodedVisibility->appId, "org.lcl.test");
+    EXPECT_EQ(decodedVisibility->visible, 1u);
+
+    LCLMsgLaunchIconVisibilityAck visibilityAck{};
+    visibilityAck.launchToken = 73;
+    std::strncpy(visibilityAck.appId, "org.lcl.test",
+                 sizeof(visibilityAck.appId) - 1);
+    header.opcode = LCLOpcode::LaunchIconVisibilityAck;
+    header.payloadSize = sizeof(visibilityAck);
+    ASSERT_TRUE(encodePacket(header, &visibilityAck, packet));
+    ASSERT_TRUE(decodePacket(
+        packet.data(), packet.size(), decodedHeader, payload));
+    ASSERT_EQ(payload.size(), sizeof(visibilityAck));
+    const auto* decodedVisibilityAck = reinterpret_cast<const
+        LCLMsgLaunchIconVisibilityAck*>(payload.data());
+    EXPECT_EQ(decodedVisibilityAck->launchToken, 73u);
+    EXPECT_STREQ(decodedVisibilityAck->appId, "org.lcl.test");
 }
 
 TEST(LCLProtocolTest, SurfaceCreateRequiresCanonicalAppId) {

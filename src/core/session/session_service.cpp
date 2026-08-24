@@ -43,7 +43,12 @@ std::string resolvedIconPath(const core::AppBundleMetadata& app) {
     return icon.string();
 }
 
-void exportLaunchOrigin(const LaunchRequest::Origin& origin) {
+void exportLaunchContext(const LaunchRequest& request, uint64_t instanceId) {
+    setenv("LCL_APP_INSTANCE_ID", std::to_string(instanceId).c_str(), 1);
+    if (request.launchToken != 0) {
+        setenv("LCL_LAUNCH_TOKEN", std::to_string(request.launchToken).c_str(), 1);
+    }
+    const auto& origin = request.origin;
     if (!origin.valid) return;
     setenv("LCL_LAUNCH_ORIGIN_X", std::to_string(origin.x).c_str(), 1);
     setenv("LCL_LAUNCH_ORIGIN_Y", std::to_string(origin.y).c_str(), 1);
@@ -142,12 +147,29 @@ LaunchResponse SessionService::launch(const LaunchRequest& request) {
         return response;
     }
 
+    if (request.singleInstance) {
+        const auto running = m_runningInstanceByAppId.find(app->appId);
+        if (running != m_runningInstanceByAppId.end()) {
+            const auto instance = m_instances.find(running->second);
+            if (instance != m_instances.end() && instance->second.running) {
+                response.instanceId = instance->second.instanceId;
+                response.pid = instance->second.pid;
+                response.reused = true;
+                response.appId = instance->second.appId;
+                response.message = "reused";
+                return response;
+            }
+            m_runningInstanceByAppId.erase(running);
+        }
+    }
+
     const auto args = executableArgs(*app);
     if (args.empty()) {
         response.status = 3;
         response.message = "application has no executable";
         return response;
     }
+    const uint64_t instanceId = m_nextInstanceId++;
     const pid_t child = fork();
     if (child < 0) {
         response.status = 4;
@@ -156,7 +178,7 @@ LaunchResponse SessionService::launch(const LaunchRequest& request) {
     }
     if (child == 0) {
         setsid();
-        exportLaunchOrigin(request.origin);
+        exportLaunchContext(request, instanceId);
         std::vector<char*> argv;
         argv.reserve(args.size() + 1);
         for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
@@ -166,12 +188,13 @@ LaunchResponse SessionService::launch(const LaunchRequest& request) {
     }
 
     AppInstance instance;
-    instance.instanceId = m_nextInstanceId++;
+    instance.instanceId = instanceId;
     instance.appId = app->appId;
     instance.pid = static_cast<int32_t>(child);
     instance.running = true;
     m_instanceByPid.emplace(instance.pid, instance.instanceId);
     m_instances.emplace(instance.instanceId, instance);
+    m_runningInstanceByAppId[instance.appId] = instance.instanceId;
 
     response.instanceId = instance.instanceId;
     response.pid = instance.pid;
@@ -312,6 +335,11 @@ void SessionService::reapChildren() {
         if (instance == m_instances.end()) continue;
         instance->second.running = false;
         instance->second.exitCode = exitCodeFromStatus(status);
+        const auto running = m_runningInstanceByAppId.find(instance->second.appId);
+        if (running != m_runningInstanceByAppId.end() &&
+            running->second == instanceId) {
+            m_runningInstanceByAppId.erase(running);
+        }
         notifyExit({instanceId, instance->second.exitCode});
         std::cout << "[LCL Session] Instance " << instanceId << " exited with "
                   << instance->second.exitCode << "\n";

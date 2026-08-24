@@ -60,6 +60,7 @@ private:
     std::vector<int> m_clientFds;
     std::unordered_map<uint64_t, AppInstance> m_instances;
     std::unordered_map<int32_t, uint64_t> m_instanceByPid;
+    std::unordered_map<std::string, uint64_t> m_runningInstanceByAppId;
     std::unordered_map<uint64_t, std::vector<int>> m_waiters;
     uint64_t m_nextInstanceId{1};
 };

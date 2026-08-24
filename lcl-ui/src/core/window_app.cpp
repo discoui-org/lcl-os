@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <algorithm>
+#include <cerrno>
 #include <cstddef>
 #include <cstdlib>
 
@@ -84,7 +85,23 @@ bool readEnvironmentFloat(const char* name, float& value) {
     return true;
 }
 
+bool readEnvironmentUint64(const char* name, uint64_t& value) {
+    const char* text = std::getenv(name);
+    if (!text || text[0] == '\0') return false;
+    char* end = nullptr;
+    errno = 0;
+    const unsigned long long parsed = std::strtoull(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || parsed == 0) return false;
+    value = static_cast<uint64_t>(parsed);
+    return true;
+}
+
 void takeLaunchOrigin(lcl::protocol::LCLMsgSurfaceCreate& surface) {
+    readEnvironmentUint64("LCL_LAUNCH_TOKEN", surface.launchToken);
+    readEnvironmentUint64("LCL_APP_INSTANCE_ID", surface.appInstanceId);
+    unsetenv("LCL_LAUNCH_TOKEN");
+    unsetenv("LCL_APP_INSTANCE_ID");
+
     constexpr const char* kNames[] = {
         "LCL_LAUNCH_ORIGIN_X",
         "LCL_LAUNCH_ORIGIN_Y",
@@ -480,7 +497,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     }
     if (!createSent) {
         m_waitingForInitialConfigure = false;
-        std::cerr << "[lcl-ui ERROR] Failed to create v17 surface\n";
+        std::cerr << "[lcl-ui ERROR] Failed to create surface\n";
         return false;
     }
 
@@ -755,6 +772,19 @@ void WindowApp::pollIPC() {
                     m_submittedDmaBufId = 0;
                     m_frameGateOpen = true;
                 }
+            } else if (header.opcode ==
+                           lcl::protocol::LCLOpcode::LaunchIconVisibility &&
+                       payload.size() == sizeof(
+                           lcl::protocol::LCLMsgLaunchIconVisibility)) {
+                const auto* visibility = reinterpret_cast<const
+                    lcl::protocol::LCLMsgLaunchIconVisibility*>(payload.data());
+                if (visibility->visible != 0) {
+                    lcl::protocol::LCLMsgLaunchIconVisibilityAck ack{};
+                    ack.launchToken = visibility->launchToken;
+                    std::strncpy(ack.appId, visibility->appId,
+                                 sizeof(ack.appId) - 1);
+                    m_pendingLaunchIconVisibilityAck = ack;
+                }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
                 if (payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceDestroy)) {
                     auto* destroy = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceDestroy*>(payload.data());
@@ -769,7 +799,7 @@ void WindowApp::pollIPC() {
         } else if (receiveStatus == lcl::protocol::ReceiveStatus::WouldBlock) {
             break;
         } else {
-            std::cerr << "[lcl-ui ERROR] Compositor v17 connection closed or rejected\n";
+            std::cerr << "[lcl-ui ERROR] Compositor connection closed or rejected\n";
             m_ipcConnected = false;
             m_running = false;
             m_surfaceEnded = true;
@@ -1162,6 +1192,72 @@ bool WindowApp::requestWindowClose() {
         return requestSurfaceDestroy(m_surfaceId);
     }
     return requestWindowAction(lcl::protocol::LCLWindowAction::Close);
+}
+
+bool WindowApp::beginLaunchPlaceholder(
+        uint64_t launchToken, const std::string& appId,
+        const graphics::RectF& origin, float cornerRadius,
+        uint32_t iconWidth, uint32_t iconHeight,
+        const std::vector<uint32_t>& iconPixels) {
+    constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+    const size_t iconPixelCount = static_cast<size_t>(iconWidth) * iconHeight;
+    if (!m_ipcConnected || m_socketFd < 0 ||
+        m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::HomeScreen ||
+        launchToken == 0 || launchToken >= kLaunchTokenLimit ||
+        appId.empty() || origin.isEmpty() ||
+        cornerRadius < 0.0f || iconWidth == 0 || iconHeight == 0 ||
+        iconWidth > lcl::protocol::LCL_LAUNCH_ICON_MAX_DIMENSION ||
+        iconHeight > lcl::protocol::LCL_LAUNCH_ICON_MAX_DIMENSION ||
+        iconPixels.size() != iconPixelCount) return false;
+    lcl::protocol::LCLMsgBeginLaunchPlaceholder message{};
+    message.homeSurfaceId = m_surfaceId;
+    message.launchToken = launchToken;
+    std::strncpy(message.appId, appId.c_str(), sizeof(message.appId) - 1);
+    message.originX = origin.x;
+    message.originY = origin.y;
+    message.originWidth = origin.width;
+    message.originHeight = origin.height;
+    message.originCornerRadius = cornerRadius;
+    message.iconWidth = iconWidth;
+    message.iconHeight = iconHeight;
+    std::vector<uint8_t> payload(
+        sizeof(message) + iconPixelCount * sizeof(uint32_t));
+    std::memcpy(payload.data(), &message, sizeof(message));
+    std::memcpy(payload.data() + sizeof(message), iconPixels.data(),
+                iconPixelCount * sizeof(uint32_t));
+    return sendProtocolMessage(
+        lcl::protocol::LCLOpcode::BeginLaunchPlaceholder,
+        payload.data(), static_cast<uint32_t>(payload.size()));
+}
+
+bool WindowApp::resolveLaunchPlaceholder(
+        uint64_t launchToken, uint64_t appInstanceId, bool reused) {
+    constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+    if (!m_ipcConnected || m_socketFd < 0 ||
+        m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::HomeScreen ||
+        launchToken == 0 || launchToken >= kLaunchTokenLimit ||
+        appInstanceId == 0) return false;
+    lcl::protocol::LCLMsgResolveLaunchPlaceholder message{};
+    message.homeSurfaceId = m_surfaceId;
+    message.launchToken = launchToken;
+    message.appInstanceId = appInstanceId;
+    message.reused = reused ? 1 : 0;
+    return sendProtocolMessage(
+        lcl::protocol::LCLOpcode::ResolveLaunchPlaceholder,
+        &message, sizeof(message));
+}
+
+bool WindowApp::cancelLaunchPlaceholder(uint64_t launchToken) {
+    constexpr uint64_t kLaunchTokenLimit = uint64_t{1} << 63;
+    if (!m_ipcConnected || m_socketFd < 0 ||
+        m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::HomeScreen ||
+        launchToken == 0 || launchToken >= kLaunchTokenLimit) return false;
+    lcl::protocol::LCLMsgCancelLaunchPlaceholder message{};
+    message.homeSurfaceId = m_surfaceId;
+    message.launchToken = launchToken;
+    return sendProtocolMessage(
+        lcl::protocol::LCLOpcode::CancelLaunchPlaceholder,
+        &message, sizeof(message));
 }
 
 bool WindowApp::setDecorationMode(lcl::protocol::LCLDecorationMode mode) {
@@ -1599,6 +1695,7 @@ bool WindowApp::renderFrame() {
 
     // If connected over IPC, notify compositor of buffer commit
     const auto attachStarted = std::chrono::steady_clock::now();
+    bool frameAttached = false;
     if (m_ipcConnected && m_socketFd >= 0 && dmaBufFrame) {
         if (auto frame = m_canvas->takeDmaBufFrame()) {
             bool dmaBufAttached = false;
@@ -1655,6 +1752,7 @@ bool WindowApp::renderFrame() {
                 m_submittedConfigureSerial = m_configureSerial;
                 m_submittedDmaBufId = frame->bufferId;
                 m_frameGateOpen = false;
+                frameAttached = true;
             }
             if (dmaBufAttached && m_frameTraceEnabled) ++m_traceDmaBufAttaches;
         } else {
@@ -1686,6 +1784,7 @@ bool WindowApp::renderFrame() {
             m_shmNeedsAttach = false;
             m_submittedConfigureSerial = m_configureSerial;
             m_frameGateOpen = false;
+            frameAttached = true;
         } else if (m_shmNeedsAttach) {
             // A lazy-mapped surface has no fallback window to keep it alive.
             // Keep the first buffer eligible for another SCM_RIGHTS commit if
@@ -1693,6 +1792,14 @@ bool WindowApp::renderFrame() {
             m_firstFrame = true;
             std::cerr << "[lcl-ui ERROR] Initial SHM attach failed for " << m_title
                       << "; retrying\n";
+        }
+    }
+    if (frameAttached && m_pendingLaunchIconVisibilityAck) {
+        const auto& ack = *m_pendingLaunchIconVisibilityAck;
+        if (sendProtocolMessage(
+                lcl::protocol::LCLOpcode::LaunchIconVisibilityAck,
+                &ack, sizeof(ack))) {
+            m_pendingLaunchIconVisibilityAck.reset();
         }
     }
     if (m_frameTraceEnabled) {

@@ -22,7 +22,8 @@ SceneId SceneRegistry::mapClientSurface(SurfaceRegistry::Key surfaceKey,
                                         pid_t clientPid,
                                         uint32_t windowId,
                                         std::string appId,
-                                        std::string title) {
+                                        std::string title,
+                                        uint64_t appInstanceId) {
     const auto existing = m_sceneBySurface.find(surfaceKey);
     if (existing != m_sceneBySurface.end()) {
         return existing->second;
@@ -30,6 +31,7 @@ SceneId SceneRegistry::mapClientSurface(SurfaceRegistry::Key surfaceKey,
 
     SceneRecord scene{};
     scene.id = m_nextSceneId++;
+    scene.appInstanceId = appInstanceId;
     scene.clientPid = clientPid;
     scene.surfaceKey = surfaceKey;
     scene.windowId = windowId;
