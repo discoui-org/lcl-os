@@ -101,6 +101,7 @@ struct AndroidDisplayBackend::Impl {
     int64_t hotplugDisplayId{-1};
     bool hotplugConnected{false};
     std::array<const AHardwareBuffer*, 4> layerBufferSlots{};
+    std::array<bool, 4> layerBufferHandlesSent{};
     std::array<std::vector<int>, 4> pendingSlotFences{};
     uint32_t nextLayerBufferSlot{0};
 };
@@ -342,6 +343,7 @@ void AndroidDisplayBackend::shutdownAidl() {
     }
 
     m_impl->layerBufferSlots.fill(nullptr);
+    m_impl->layerBufferHandlesSent.fill(false);
     m_impl->nextLayerBufferSlot = 0;
 
     m_initialized = false;
@@ -377,6 +379,40 @@ bool AndroidDisplayBackend::moveHardwareCursor(int /*x*/, int /*y*/) {
     return false;
 }
 
+bool AndroidDisplayBackend::prepareBufferForRender(AHardwareBuffer* buffer) {
+    if (m_backendKind == BackendKind::HidlComposer) {
+        return m_hidlBackend->prepareBufferForRender(buffer);
+    }
+    return prepareBufferForRenderAidl(buffer);
+}
+
+bool AndroidDisplayBackend::prepareBufferForRenderAidl(AHardwareBuffer* buffer) {
+    if (!m_initialized || !m_impl->client || m_layerId < 0 || !buffer) {
+        return false;
+    }
+
+    uint32_t bufferSlot = 0;
+    bool knownBuffer = false;
+    for (uint32_t slot = 0; slot < m_impl->layerBufferSlots.size(); ++slot) {
+        if (m_impl->layerBufferSlots[slot] == buffer) {
+            bufferSlot = slot;
+            knownBuffer = true;
+            break;
+        }
+    }
+    if (!knownBuffer) {
+        bufferSlot = m_impl->nextLayerBufferSlot;
+        waitAndClearFenceFds(m_impl->pendingSlotFences[bufferSlot]);
+        m_impl->layerBufferSlots[bufferSlot] = buffer;
+        m_impl->layerBufferHandlesSent[bufferSlot] = false;
+        m_impl->nextLayerBufferSlot =
+            (m_impl->nextLayerBufferSlot + 1) % m_impl->layerBufferSlots.size();
+    } else {
+        waitAndClearFenceFds(m_impl->pendingSlotFences[bufferSlot]);
+    }
+    return true;
+}
+
 bool AndroidDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd) {
     if (m_backendKind == BackendKind::HidlComposer) {
         return m_hidlBackend->presentBuffer(buffer, acquireFenceFd);
@@ -401,13 +437,8 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
         }
     }
     if (!knownBuffer) {
-        bufferSlot = m_impl->nextLayerBufferSlot;
-        waitAndClearFenceFds(m_impl->pendingSlotFences[bufferSlot]);
-        m_impl->layerBufferSlots[bufferSlot] = buffer;
-        m_impl->nextLayerBufferSlot =
-            (m_impl->nextLayerBufferSlot + 1) % m_impl->layerBufferSlots.size();
-    } else {
-        waitAndClearFenceFds(m_impl->pendingSlotFences[bufferSlot]);
+        std::cerr << "[AndroidDisplayBackend] scanout buffer was not prepared before present\n";
+        return false;
     }
 
     // 1. Extract and wrap a native handle only when populating a new Composer
@@ -424,7 +455,7 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
 
     Buffer buf;
     buf.slot = static_cast<int32_t>(bufferSlot);
-    if (!knownBuffer) {
+    if (!m_impl->layerBufferHandlesSent[bufferSlot]) {
         NativeHandle aidlHandle;
         for (int i = 0; i < nh->numFds; ++i) {
             aidlHandle.fds.emplace_back(dup(nh->data[i]));
@@ -528,6 +559,7 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
     if (commandErrors > 0) {
         return false;
     }
+    m_impl->layerBufferHandlesSent[bufferSlot] = true;
     if (alreadyPresented) return true;
 
     // 4. Step 2: Present Display (accepting composition changes if requested by HAL)

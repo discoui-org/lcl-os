@@ -1349,6 +1349,13 @@ TEST(CompositorRendererTest, FullSurfaceEffectMatchingUsesLogicalGeometry) {
     EXPECT_TRUE(effectMatchesLogicalSurfaceBounds(region, 800.0f, 600.0f));
 }
 
+TEST(CompositorRendererTest, NonLocalFiltersRequireDamageDependencyClosure) {
+    EXPECT_TRUE(filterReadsNeighboringPixels(protocol::FilterType::Blur));
+    EXPECT_TRUE(filterReadsNeighboringPixels(protocol::FilterType::Glass));
+    EXPECT_FALSE(filterReadsNeighboringPixels(protocol::FilterType::Tint));
+    EXPECT_FALSE(filterReadsNeighboringPixels(protocol::FilterType::Brightness));
+}
+
 TEST(CompositorRendererTest, EdgeToEdgeRemovesOnlyTheOpaqueSsdBackground) {
     EXPECT_EQ(kOpaqueSsdTitlebarMaterial.r, 17u);
     EXPECT_EQ(kOpaqueSsdTitlebarMaterial.g, 19u);

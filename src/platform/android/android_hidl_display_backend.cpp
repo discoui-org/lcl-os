@@ -15,6 +15,7 @@ struct AndroidHidlDisplayBackend::Impl {
     using Destroy = void (*)(void*);
     using Initialize = int (*)(void*, float, LclAndroidHidlDisplayInfo*);
     using Shutdown = void (*)(void*);
+    using PrepareBuffer = int (*)(void*, AHardwareBuffer*);
     using Present = int (*)(void*, AHardwareBuffer*, int);
 
     void* library{nullptr};
@@ -23,6 +24,7 @@ struct AndroidHidlDisplayBackend::Impl {
     Destroy destroy{nullptr};
     Initialize initialize{nullptr};
     Shutdown shutdown{nullptr};
+    PrepareBuffer prepareBuffer{nullptr};
     Present present{nullptr};
 };
 
@@ -82,6 +84,8 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale) {
             !loadSymbol(m_impl->library, "lcl_android_hidl_destroy", &m_impl->destroy) ||
             !loadSymbol(m_impl->library, "lcl_android_hidl_initialize", &m_impl->initialize) ||
             !loadSymbol(m_impl->library, "lcl_android_hidl_shutdown", &m_impl->shutdown) ||
+            !loadSymbol(m_impl->library, "lcl_android_hidl_prepare_buffer",
+                        &m_impl->prepareBuffer) ||
             !loadSymbol(m_impl->library, "lcl_android_hidl_present", &m_impl->present)) {
             return false;
         }
@@ -113,6 +117,11 @@ void AndroidHidlDisplayBackend::shutdown() {
     m_displayConnected = false;
     m_hasLayer = false;
     m_layerId = 0;
+}
+
+bool AndroidHidlDisplayBackend::prepareBufferForRender(AHardwareBuffer* buffer) {
+    return m_initialized && m_impl->instance && m_impl->prepareBuffer &&
+           m_impl->prepareBuffer(m_impl->instance, buffer) != 0;
 }
 
 bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd) {

@@ -19,6 +19,7 @@ public:
 
     bool initialize(float outputScale);
     void shutdown();
+    bool prepareBufferForRender(AHardwareBuffer* buffer);
     bool presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd = -1);
 
     bool isInitialized() const { return m_initialized; }

@@ -26,7 +26,28 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
     std::optional<graphics::RectF> incrementalDamage;
 #if defined(__ANDROID__)
-    if (allowIncrementalMove && m_hasCompleteRetainedFrame) {
+    // Blur and Glass sample pixels outside their own effect bounds. Replaying
+    // only old+new window damage would therefore sample a partly stale retained
+    // scene and leave trails. Until damage dependencies are closed transitively,
+    // render the complete scene whenever a visible surface uses either filter.
+    const bool hasNonLocalSceneEffect = std::any_of(
+        surfaces.begin(), surfaces.end(), [](const auto& surface) {
+            if (!surface.entry || !surface.entry->hasRenderableBuffer()) {
+                return false;
+            }
+            return std::any_of(
+                surface.entry->effectRegions.begin(), surface.entry->effectRegions.end(),
+                [](const auto& effectRegion) {
+                    return std::any_of(
+                        effectRegion.filters.begin(), effectRegion.filters.end(),
+                        [](const auto& filter) {
+                            return filterReadsNeighboringPixels(filter.type);
+                        });
+                });
+        });
+
+    if (allowIncrementalMove && m_hasCompleteRetainedFrame &&
+        !hasNonLocalSceneEffect) {
         bool hasDirtyWindow = false;
         bool moveOnly = true;
         graphics::RectF mergedDamage{};

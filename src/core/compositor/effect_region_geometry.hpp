@@ -15,6 +15,11 @@ struct LocalEffectGeometry {
     float height{0.0f};
 };
 
+inline bool filterReadsNeighboringPixels(protocol::FilterType type) noexcept {
+    return type == protocol::FilterType::Blur ||
+           type == protocol::FilterType::Glass;
+}
+
 inline bool effectMatchesLogicalSurfaceBounds(
     const protocol::EffectRegion& region,
     float logicalWidth,

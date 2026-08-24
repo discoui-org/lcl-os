@@ -24,6 +24,8 @@ void lcl_android_hidl_destroy(void* instance);
 int lcl_android_hidl_initialize(void* instance, float output_scale,
                                 LclAndroidHidlDisplayInfo* info);
 void lcl_android_hidl_shutdown(void* instance);
+int lcl_android_hidl_prepare_buffer(void* instance,
+                                    struct AHardwareBuffer* buffer);
 int lcl_android_hidl_present(void* instance, struct AHardwareBuffer* buffer,
                              int acquire_fence_fd);
 

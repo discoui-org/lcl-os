@@ -272,13 +272,19 @@ bool AndroidGraphicsContext::presentFromFramebuffer(uint32_t framebuffer,
     if (!m_initialized || width == 0 || height == 0 ||
         width > m_width || height > m_height) return false;
 
+    auto& scanout = m_scanoutSlots[m_currentSlotIndex];
+    if (!m_displayBackend || !scanout.ahb ||
+        !m_displayBackend->prepareBufferForRender(scanout.ahb)) {
+        return false;
+    }
+
     // 1. Copy the compositor scene FBO directly into the active scanout AHB.
     // The legacy present() path supplies framebuffer 0 (the PBuffer); modern
     // compositor rendering supplies its retained scene FBO and skips the old
     // scene-texture -> PBuffer full-screen pass.
     // AHardwareBuffer / Android Composer scanout memory origin is top-left (Row 0 is top scanline of display).
     // Blit with inverted destination Y to map UI top to display top scanline.
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_scanoutSlots[m_currentSlotIndex].fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, scanout.fbo);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
     glBlitFramebuffer(0, 0, width, height,
                       0, height, width, 0,
@@ -307,16 +313,16 @@ bool AndroidGraphicsContext::presentFromFramebuffer(uint32_t framebuffer,
     if (acquireFenceFd < 0) glFinish();
 
     // 2. Present active AHardwareBuffer through the selected Android Composer backend.
-    if (m_displayBackend && m_scanoutSlots[m_currentSlotIndex].ahb) {
-        m_displayBackend->presentBuffer(
-            m_scanoutSlots[m_currentSlotIndex].ahb, acquireFenceFd);
-    }
+    const bool presented = m_displayBackend->presentBuffer(
+        scanout.ahb, acquireFenceFd);
     if (acquireFenceFd >= 0) close(acquireFenceFd);
 
     // 3. Flip to next buffer slot.
-    m_currentSlotIndex = (m_currentSlotIndex + 1) % m_scanoutSlots.size();
+    if (presented) {
+        m_currentSlotIndex = (m_currentSlotIndex + 1) % m_scanoutSlots.size();
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    return true;
+    return presented;
 }
 
 bool AndroidGraphicsContext::readback(uint32_t* destination, uint32_t width, uint32_t height) {

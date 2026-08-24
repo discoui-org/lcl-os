@@ -488,17 +488,8 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
         }
     }
     if (!knownBuffer) {
-        bufferSlot = m_impl->nextLayerBufferSlot;
-        // A cache slot may still refer to an older AHB. Do not replace its
-        // handle until HWC has stopped reading that buffer.
-        waitAndClearFences(m_impl->pendingSlotFences[bufferSlot]);
-        m_impl->layerBufferSlots[bufferSlot] = buffer;
-        m_impl->nextLayerBufferSlot =
-            (m_impl->nextLayerBufferSlot + 1) % m_impl->layerBufferSlots.size();
-    } else {
-        // Defer synchronization until this exact scanout slot is reused. This
-        // permits the other slots to render and present concurrently.
-        waitAndClearFences(m_impl->pendingSlotFences[bufferSlot]);
+        std::cerr << "[AndroidHidlDisplayBackend] scanout buffer was not prepared before present\n";
+        return false;
     }
 
     auto execute = [&]() -> bool {
@@ -610,6 +601,35 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
 #endif
 }
 
+bool AndroidHidlDisplayBackend::prepareBufferForRender(AHardwareBuffer* buffer) {
+#if !defined(LCL_HAS_ANDROID_HIDL)
+    (void)buffer;
+    return false;
+#else
+    if (!m_initialized || !m_impl->client || !m_hasLayer || !buffer) return false;
+
+    uint32_t bufferSlot = 0;
+    bool knownBuffer = false;
+    for (uint32_t slot = 0; slot < m_impl->layerBufferSlots.size(); ++slot) {
+        if (m_impl->layerBufferSlots[slot] == buffer) {
+            bufferSlot = slot;
+            knownBuffer = true;
+            break;
+        }
+    }
+    if (!knownBuffer) {
+        bufferSlot = m_impl->nextLayerBufferSlot;
+        waitAndClearFences(m_impl->pendingSlotFences[bufferSlot]);
+        m_impl->layerBufferSlots[bufferSlot] = buffer;
+        m_impl->nextLayerBufferSlot =
+            (m_impl->nextLayerBufferSlot + 1) % m_impl->layerBufferSlots.size();
+    } else {
+        waitAndClearFences(m_impl->pendingSlotFences[bufferSlot]);
+    }
+    return true;
+#endif
+}
+
 } // namespace lcl::platform::android
 
 #define LCL_HIDL_BRIDGE_EXPORT __attribute__((visibility("default")))
@@ -641,6 +661,12 @@ extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_initialize(
 extern "C" LCL_HIDL_BRIDGE_EXPORT void lcl_android_hidl_shutdown(void* instance) {
     auto* backend = static_cast<lcl::platform::android::AndroidHidlDisplayBackend*>(instance);
     if (backend) backend->shutdown();
+}
+
+extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_prepare_buffer(
+    void* instance, AHardwareBuffer* buffer) {
+    auto* backend = static_cast<lcl::platform::android::AndroidHidlDisplayBackend*>(instance);
+    return backend && backend->prepareBufferForRender(buffer) ? 1 : 0;
 }
 
 extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_present(

@@ -62,6 +62,13 @@ int main() {
     }
     std::cout << "  ✓ AHardwareBuffer allocated (" << width << "x" << height << " RGBA_8888)\n";
 
+    // Composer may still be scanning this slot out from an earlier frame.
+    // Synchronize before any GPU writes begin, not when the completed frame is
+    // submitted for presentation.
+    bool prepareOk = services.getAndroidDisplay().prepareBufferForRender(ahb);
+    std::cout << "  ✓ Buffer ready for rendering: " << (prepareOk ? "YES" : "NO") << "\n";
+    assert(prepareOk && "Composer scanout buffer preparation failed");
+
     auto eglGetNativeClientBufferANDROID = reinterpret_cast<pfn_eglGetNativeClientBufferANDROID>(eglGetProcAddress("eglGetNativeClientBufferANDROID"));
     auto eglCreateImageKHR = reinterpret_cast<pfn_eglCreateImageKHR>(eglGetProcAddress("eglCreateImageKHR"));
     auto eglDestroyImageKHR = reinterpret_cast<pfn_eglDestroyImageKHR>(eglGetProcAddress("eglDestroyImageKHR"));

@@ -41,6 +41,12 @@ public:
     const char* backendName() const;
 
     /**
+     * Wait until Composer has stopped reading this scanout buffer.
+     * Must be called before the renderer starts writing the next frame.
+     */
+    bool prepareBufferForRender(AHardwareBuffer* buffer);
+
+    /**
      * @brief Present an AHardwareBuffer directly to the primary Android display.
      *
      * Submits layer state through the selected AIDL/HIDL backend, validates display
@@ -62,6 +68,7 @@ private:
 
     bool initializeAidl();
     void shutdownAidl();
+    bool prepareBufferForRenderAidl(AHardwareBuffer* buffer);
     bool presentBufferAidl(AHardwareBuffer* buffer, int acquireFenceFd);
 
     std::unique_ptr<Impl> m_impl;
