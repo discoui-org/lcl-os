@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "name": "Xiaomi Redmi Note 13 Pro 5G (2312DRA50G)",
+  "display": {
+    "width": 1220,
+    "height": 2712,
+    "refreshRateHz": 120,
+    "scale": 3.0,
+    "naturalOrientation": "portrait",
+    "defaultRotation": 0,
+    "safeArea": {
+      "top": 104,
+      "right": 0,
+      "bottom": 0,
+      "left": 0
+    },
+    "corners": {
+      "topLeft": { "radiusX": 110, "radiusY": 110, "roundness": 2.0 },
+      "topRight": { "radiusX": 110, "radiusY": 110, "roundness": 2.0 },
+      "bottomLeft": { "radiusX": 110, "radiusY": 110, "roundness": 2.0 },
+      "bottomRight": { "radiusX": 110, "radiusY": 110, "roundness": 2.0 }
+    },
+    "cutouts": [
+      { "x": 578, "y": 0, "width": 64, "height": 104 }
+    ]
+  }
+}

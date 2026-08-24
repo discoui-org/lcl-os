@@ -275,7 +275,7 @@ def require_android_phone_artifacts(use_rootfs: bool, native_clients: bool) -> N
 
 
 def cmd_android(args: argparse.Namespace) -> None:
-    """Build and launch LCL OS on a connected rooted ARM64 Android phone."""
+    """Build and launch LCL OS with the connected device's matching Gestalt."""
     deploy_args = [sys.executable, str(SCRIPTS_DIR / "deploy_android_device.py")]
     if args.restore_only:
         run_android_deploy([*deploy_args, "--restore-only"])
@@ -484,7 +484,7 @@ def main() -> None:
     )
     p_android.add_argument(
         "--gestalt", type=Path, metavar="JSON",
-        help="Push and use an explicit device Gestalt JSON",
+        help="Override automatic devices/<ADB model>.json selection",
     )
 
     # ---- build ----

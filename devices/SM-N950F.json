@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "Samsung Galaxy Note8 (SM-N950F)",
+  "display": {
+    "width": 1440,
+    "height": 2960,
+    "refreshRateHz": 60,
+    "scale": 3.0,
+    "naturalOrientation": "portrait",
+    "defaultRotation": 0,
+    "safeArea": {
+      "top": 0,
+      "right": 0,
+      "bottom": 0,
+      "left": 0
+    },
+    "corners": {
+      "topLeft": { "radiusX": 14, "radiusY": 14, "roundness": 2.0 },
+      "topRight": { "radiusX": 14, "radiusY": 14, "roundness": 2.0 },
+      "bottomLeft": { "radiusX": 14, "radiusY": 14, "roundness": 2.0 },
+      "bottomRight": { "radiusX": 14, "radiusY": 14, "roundness": 2.0 }
+    },
+    "cutouts": []
+  }
+}

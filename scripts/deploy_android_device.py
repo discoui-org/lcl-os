@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+DEVICE_GESTALT_DIR = ROOT_DIR / "devices"
 BUILD_ANDROID_ARM64_DIR = ROOT_DIR / "build-android-arm64"
 BINARY_NAME = "lcl-core-android"
 HIDL_BRIDGE_NAME = "liblcl-android-hidl-bridge.so"
@@ -159,6 +160,16 @@ def get_device_info() -> dict:
     }
 
 
+def device_gestalt_for_model(model: str) -> Path | None:
+    """Return the exact devices/<ro.product.model>.json match when available."""
+    model = model.strip()
+    filename = f"{model}.json"
+    if not model or Path(filename).name != filename:
+        return None
+    candidate = DEVICE_GESTALT_DIR / filename
+    return candidate if candidate.is_file() else None
+
+
 def stop_system_ui() -> None:
     """Stop Android System UI, launchers, and SurfaceFlinger for display takeover."""
     log("Stopping System UI and SurfaceFlinger for display takeover...")
@@ -247,22 +258,74 @@ def stop_rootfs_session() -> None:
         adb_shell("kill -KILL " + " ".join(remaining), as_root=True)
 
 
-def unmount_rootfs() -> None:
-    """Unmount canonical rootfs bind mounts and release its loop device."""
-    stop_rootfs_session()
-    # Recursive binds (notably /apex and /dev/binderfs) create nested mount
-    # points. Unmount only paths strictly below this exact rootfs prefix, from
-    # deepest to shallowest, before releasing the ext4 root.
+def rootfs_mount_points() -> list[str]:
+    """Return every mount layer rooted at the canonical rootfs path."""
     mounted = adb_shell("mount", as_root=True).stdout.splitlines()
-    mount_points: list[str] = []
     prefix = DEVICE_ROOTFS_MOUNT + "/"
+    mount_points: list[str] = []
     for line in mounted:
         fields = line.split()
-        if len(fields) >= 3 and fields[1] == "on" and fields[2].startswith(prefix):
+        if len(fields) < 3 or fields[1] != "on":
+            continue
+        if fields[2] == DEVICE_ROOTFS_MOUNT or fields[2].startswith(prefix):
             mount_points.append(fields[2])
-    for mount_point in sorted(set(mount_points), key=len, reverse=True):
-        adb_shell(f"umount {shlex.quote(mount_point)}", as_root=True)
-    adb_shell(f"umount {DEVICE_ROOTFS_MOUNT}", as_root=True)
+    return mount_points
+
+
+def make_mount_rslave(mount_point: str) -> None:
+    """Prevent a rootfs bind mount from propagating changes back to Android."""
+    result = adb_shell(
+        f"mount -o rslave none {shlex.quote(mount_point)}",
+        as_root=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Could not isolate mount propagation for {mount_point}: " +
+            (result.stderr.strip() or result.stdout.strip())
+        )
+
+
+def unmount_rootfs() -> bool:
+    """Unmount every rootfs mount layer and release its loop device."""
+    stop_rootfs_session()
+    if rootfs_mount_points():
+        # Older deployments created shared recursive binds. Convert the whole
+        # subtree before unmounting so teardown cannot propagate back to the
+        # phone's live /dev, /system, /vendor, or /apex mount trees.
+        result = adb_shell(
+            f"mount -o rslave none {DEVICE_ROOTFS_MOUNT}",
+            as_root=True,
+        )
+        if result.returncode != 0:
+            err("Could not isolate stale rootfs mount propagation: " +
+                (result.stderr.strip() or result.stdout.strip()))
+    # Recursive binds (notably /apex and /dev/binderfs) create nested mount
+    # points. The same destination may also have multiple stacked bind layers
+    # after an interrupted relaunch, so preserve duplicates and keep unwinding
+    # while at least one layer can be removed.
+    for _ in range(64):
+        mount_points = rootfs_mount_points()
+        if not mount_points:
+            break
+        removed_layer = False
+        for mount_point in sorted(
+                mount_points,
+                key=lambda path: (path.count("/"), len(path)),
+                reverse=True):
+            result = adb_shell(
+                f"umount {shlex.quote(mount_point)}",
+                as_root=True,
+            )
+            removed_layer = removed_layer or result.returncode == 0
+        if not removed_layer:
+            break
+
+    remaining = rootfs_mount_points()
+    if remaining:
+        err("Could not fully unmount stale rootfs mount(s): " +
+            ", ".join(sorted(set(remaining))))
+        return False
+
     adb_shell(
         f"if [ -f {DEVICE_ROOTFS_LOOP} ]; then "
         f"loop=$(cat {DEVICE_ROOTFS_LOOP}); "
@@ -270,6 +333,7 @@ def unmount_rootfs() -> None:
         f"rm -f {DEVICE_ROOTFS_LOOP}; fi",
         as_root=True,
     )
+    return True
 
 
 def sha256_file(path: Path) -> str:
@@ -319,7 +383,8 @@ def push_rootfs_image(force: bool = False) -> None:
             check=True,
         )
 
-    unmount_rootfs()
+    if not unmount_rootfs():
+        raise RuntimeError("Cannot replace the rootfs image while it is still mounted.")
     helper_mb = ANDROID_ZSTD_BINARY.stat().st_size / (1024 * 1024)
     log(f"Pushing ARM64 zstd helper ({helper_mb:.1f} MB) to {DEVICE_ZSTD_BINARY}...")
     run_adb("push", str(ANDROID_ZSTD_BINARY), DEVICE_ZSTD_BINARY)
@@ -381,23 +446,21 @@ def remove_native_clients() -> None:
 
 def mount_rootfs(native_clients: bool = False) -> None:
     """Loop-mount rootfs and bind Android kernel/runtime views into it."""
-    adb_shell(f"mkdir -p {DEVICE_ROOTFS_MOUNT}", as_root=True)
-    mounted = adb_shell(
-        f"test -x {DEVICE_ROOTFS_MOUNT}/System/Core/lcl-sessiond; echo $?",
+    # A prior process can die after creating only part of the bind graph. Never
+    # layer a new launch over that stale graph: native-client file binds in
+    # particular cannot be refreshed reliably when their old source was removed.
+    if not unmount_rootfs():
+        raise RuntimeError("Cannot mount rootfs over stale mount layers.")
+    result = adb_shell(
+        f"mkdir -p {DEVICE_ROOTFS_MOUNT}; "
+        f"loop=$(losetup -f); "
+        f"[ -n \"$loop\" ] && losetup \"$loop\" {DEVICE_ROOTFS_IMAGE} && "
+        f"echo \"$loop\" > {DEVICE_ROOTFS_LOOP} && "
+        f"mount -t ext4 -o rw,noatime \"$loop\" {DEVICE_ROOTFS_MOUNT}",
         as_root=True,
-    ).stdout.strip()
-    if not mounted.endswith("0"):
-        unmount_rootfs()
-        result = adb_shell(
-            f"mkdir -p {DEVICE_ROOTFS_MOUNT}; "
-            f"loop=$(losetup -f); "
-            f"[ -n \"$loop\" ] && losetup \"$loop\" {DEVICE_ROOTFS_IMAGE} && "
-            f"echo \"$loop\" > {DEVICE_ROOTFS_LOOP} && "
-            f"mount -t ext4 -o rw,noatime \"$loop\" {DEVICE_ROOTFS_MOUNT}",
-            as_root=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError("Rootfs loop mount failed: " + result.stderr.strip())
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Rootfs loop mount failed: " + result.stderr.strip())
 
     adb_shell(
         f"mkdir -p {DEVICE_ROOTFS_MOUNT}/dev/pts {DEVICE_ROOTFS_MOUNT}/proc "
@@ -424,6 +487,7 @@ def mount_rootfs(native_clients: bool = False) -> None:
                 f"Rootfs bind mount failed ({source} -> {destination}): " +
                 result.stderr.strip()
             )
+        make_mount_rslave(destination)
 
     if native_clients:
         android_views = (
@@ -449,6 +513,7 @@ def mount_rootfs(native_clients: bool = False) -> None:
                     f"Android runtime bind failed ({source} -> {destination}): " +
                     result.stderr.strip()
                 )
+            make_mount_rslave(destination)
 
         # Some Android mount implementations accept --rbind but only expose the
         # /apex tmpfs in the chroot, omitting the independently mounted APEX
@@ -473,24 +538,35 @@ def mount_rootfs(native_clients: bool = False) -> None:
                     f"Android APEX bind failed ({source} -> {destination}): " +
                     result.stderr.strip()
                 )
+            make_mount_rslave(destination)
 
         native_root = f"{DEVICE_ROOTFS_MOUNT}/AndroidClients"
         adb_shell(f"mkdir -p {native_root}", as_root=True)
-        if adb_shell(
+        result = adb_shell(
             f"mount --bind {DEVICE_NATIVE_CLIENT_DIR} {native_root}",
             as_root=True,
-        ).returncode != 0:
-            raise RuntimeError("Android native-client directory bind failed.")
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Android native-client directory bind failed: " +
+                (result.stderr.strip() or result.stdout.strip())
+            )
+        make_mount_rslave(native_root)
         wrapper_targets = (
             f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-desktop-shell",
             f"{DEVICE_ROOTFS_MOUNT}/System/Applications/Terminal.app/Executables/Terminal",
         )
         for target in wrapper_targets:
-            if adb_shell(
+            result = adb_shell(
                 f"mount --bind {DEVICE_NATIVE_CLIENT_WRAPPER} {target}",
                 as_root=True,
-            ).returncode != 0:
-                raise RuntimeError(f"Android native-client wrapper bind failed: {target}")
+            )
+            if result.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip()
+                raise RuntimeError(
+                    f"Android native-client wrapper bind failed ({target}): {detail}"
+                )
+            make_mount_rslave(target)
 
         native_probe = adb_shell(
             f"ANDROID_DATA=/data LD_LIBRARY_PATH={ANDROID_NATIVE_LD_LIBRARY_PATH} "
@@ -665,11 +741,22 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
         err(f"Device ABI '{info['abi']}' is not arm64-v8a. This binary requires ARM64.")
         sys.exit(1)
 
+    selected_gestalt_path = gestalt_path
+    if selected_gestalt_path is None:
+        selected_gestalt_path = device_gestalt_for_model(info["model"])
+        if selected_gestalt_path is not None:
+            log(f"Auto-selected Gestalt for ADB model '{info['model']}': {selected_gestalt_path}")
+        else:
+            log(
+                f"No Gestalt profile for ADB model '{info['model']}' in "
+                f"{DEVICE_GESTALT_DIR}; using the platform default."
+            )
+
     # 4. Reject an overlapping session before changing deployed artifacts.
     runtime_dir = setup_runtime_dir()
     prepare_runtime_for_launch()
-    if gestalt_path is not None:
-        push_gestalt(gestalt_path)
+    if selected_gestalt_path is not None:
+        push_gestalt(selected_gestalt_path)
 
     # 4b. Push binary
     push_binary()
@@ -720,7 +807,7 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
             f"LCL_RUNTIME_DIR={runtime_dir} ANDROID_DATA=/data "
             f"LD_LIBRARY_PATH={DEVICE_TMP_DIR}:/system/lib64:/vendor/lib64:/system_ext/lib64"
         )
-        if gestalt_path is not None:
+        if selected_gestalt_path is not None:
             launch_env += f" LCL_GESTALT_PATH={DEVICE_GESTALT_PATH}"
         lcl_proc = subprocess.Popen([
             "adb", "shell",
@@ -820,7 +907,7 @@ def main() -> None:
         "--gestalt",
         type=Path,
         metavar="JSON",
-        help="Push and use an explicit device Gestalt JSON"
+        help="Override automatic devices/<ADB model>.json selection"
     )
     args = parser.parse_args()
 

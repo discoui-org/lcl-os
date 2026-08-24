@@ -113,7 +113,7 @@ TEST(GestaltTest, MissingExplicitOverrideIsAnError) {
 
 TEST(GestaltTest, CheckedInGalaxyTabS7ProfileMatchesStrictSchema) {
     const auto profilePath = std::filesystem::path(__FILE__).parent_path().parent_path() /
-        "test-devices" / "galaxy-tab-s7-sm-t870.json";
+        "devices" / "SM-T870.json";
     std::ifstream profile(profilePath, std::ios::binary);
     ASSERT_TRUE(profile.is_open()) << profilePath;
     std::ostringstream contents;
@@ -128,6 +128,29 @@ TEST(GestaltTest, CheckedInGalaxyTabS7ProfileMatchesStrictSchema) {
     EXPECT_EQ(gestalt.display.refreshRateHz, 120u);
     EXPECT_EQ(gestalt.display.scale, 2.0f);
     EXPECT_FLOAT_EQ(gestalt.display.corners.topLeft.radiusX, 28.0f);
+}
+
+TEST(GestaltTest, EveryCheckedInDeviceProfileMatchesStrictSchema) {
+    const auto deviceDirectory =
+        std::filesystem::path(__FILE__).parent_path().parent_path() / "devices";
+    size_t profileCount = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(deviceDirectory)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".json") continue;
+
+        std::ifstream profile(entry.path(), std::ios::binary);
+        ASSERT_TRUE(profile.is_open()) << entry.path();
+        std::ostringstream contents;
+        contents << profile.rdbuf();
+
+        DeviceGestalt gestalt;
+        std::string error;
+        ASSERT_TRUE(parseGestaltJson(contents.str(), gestalt, error))
+            << entry.path() << ": " << error;
+        EXPECT_FALSE(gestalt.name.empty()) << entry.path();
+        EXPECT_TRUE(gestalt.display.hasPreferredResolution()) << entry.path();
+        ++profileCount;
+    }
+    EXPECT_GE(profileCount, 3u);
 }
 
 } // namespace lcl::platform
