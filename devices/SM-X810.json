@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "Samsung Galaxy Tab S7 (SM-T870)",
+  "display": {
+    "width": 1600,
+    "height": 2560,
+    "refreshRateHz": 120,
+    "scale": 2.0,
+    "naturalOrientation": "portrait",
+    "defaultRotation": 0,
+    "safeArea": {
+      "top": 0,
+      "right": 0,
+      "bottom": 0,
+      "left": 0
+    },
+    "corners": {
+      "topLeft": { "radiusX": 28, "radiusY": 28, "roundness": 2.0 },
+      "topRight": { "radiusX": 28, "radiusY": 28, "roundness": 2.0 },
+      "bottomLeft": { "radiusX": 28, "radiusY": 28, "roundness": 2.0 },
+      "bottomRight": { "radiusX": 28, "radiusY": 28, "roundness": 2.0 }
+    },
+    "cutouts": []
+  }
+}
