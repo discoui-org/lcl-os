@@ -489,10 +489,14 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.cornerRadius = 0.0f;
                 entry.launchToken = request->launchToken;
                 entry.launchOwnerFd = msg.clientFd;
-                entry.launchPlaceholderActive = true;
+                // The session service has not told us whether this is a new
+                // instance yet. Keep the icon morph alive, but do not expose
+                // the white first-launch placeholder until resolution. A
+                // reused surface already owns the content it must present.
+                entry.launchPlaceholderActive = false;
                 entry.launchContentOpacity = 0.0f;
                 entry.launchContentFadeElapsedSec = 0.0f;
-                entry.launchContentFadeActive = entry.hasRenderableBuffer();
+                entry.launchContentFadeActive = false;
                 entry.hasLaunchOrigin = true;
                 entry.launchOriginX = request->originX;
                 entry.launchOriginY = request->originY;
@@ -622,11 +626,33 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     target.transitionOpacity = 0.0f;
                     target.transitionScale = 1.0f;
                     target.launchMorphActive = false;
-                    target.launchPlaceholderActive = true;
-                    target.launchContentOpacity = 0.0f;
+                    // Restoring a retained single-instance surface must morph
+                    // its existing buffer directly. The white placeholder is
+                    // reserved for an instance that has no first frame yet.
+                    target.launchPlaceholderActive = false;
+                    target.launchContentOpacity = 1.0f;
                     target.launchContentFadeElapsedSec = 0.0f;
-                    target.launchContentFadeActive = true;
+                    target.launchContentFadeActive = false;
+                } else {
+                    // The process can be single-instance while still waiting
+                    // to create its first surface. In that case there is no
+                    // retained content to restore, so keep the first-launch
+                    // placeholder until that surface is adopted by instance id.
+                    launch->second.launchPlaceholderActive = true;
+                    launch->second.launchContentOpacity = 1.0f;
+                    launch->second.launchContentFadeElapsedSec = 0.0f;
+                    launch->second.launchContentFadeActive = false;
                 }
+            } else if (request->reused == 0) {
+                // Only a newly launched instance gets the white placeholder.
+                // If its first frame won the SurfaceCreate race, fade that
+                // frame over the placeholder from this point onward.
+                launch->second.launchPlaceholderActive = true;
+                launch->second.launchContentOpacity =
+                    launch->second.hasRenderableBuffer() ? 0.0f : 1.0f;
+                launch->second.launchContentFadeElapsedSec = 0.0f;
+                launch->second.launchContentFadeActive =
+                    launch->second.hasRenderableBuffer();
             }
             changed = true;
             continue;

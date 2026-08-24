@@ -400,7 +400,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
             const auto* entry = surface.entry;
             if (entry && !entry->isPopup() && entry->windowId == win.id &&
                 (entry->hasRenderableBuffer() ||
-                 entry->launchPlaceholderActive)) {
+                 entry->launchPlaceholderActive ||
+                 entry->isLaunchPlaceholder)) {
                 matchingSurface = entry;
                 matchingSurfaceKey = surface.key;
                 break;

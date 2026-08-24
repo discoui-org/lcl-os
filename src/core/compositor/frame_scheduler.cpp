@@ -11,6 +11,13 @@ namespace {
 
 using TransitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase;
 
+// Time-compress mobile launch morph springs without changing their damping
+// ratio. For x(speed * t), stiffness scales by speed^2 and damping/velocity by
+// speed.
+constexpr float kLaunchSpringSpeed = 1.5f;
+constexpr float kLaunchSpringStiffnessScale =
+    kLaunchSpringSpeed * kLaunchSpringSpeed;
+
 bool isLaunchMorphPhase(TransitionPhase phase) {
     return phase == TransitionPhase::Entering ||
            phase == TransitionPhase::Closing ||
@@ -22,14 +29,16 @@ bool isLaunchMorphPhase(TransitionPhase phase) {
 lcl::motion::Motion criticalSpring(float stiffness,
                                    float settlePosition,
                                    float settleVelocity) {
+    const float scaledStiffness = stiffness * kLaunchSpringStiffnessScale;
     auto motion = lcl::motion::Motion::spring(
-        1.0f, stiffness, 2.0f * std::sqrt(stiffness));
+        1.0f, scaledStiffness, 2.0f * std::sqrt(scaledStiffness));
     motion.springParams.settlePosEpsilon = settlePosition;
-    motion.springParams.settleVelEpsilon = settleVelocity;
+    motion.springParams.settleVelEpsilon =
+        settleVelocity * kLaunchSpringSpeed;
     return motion;
 }
 
-constexpr float kLaunchMorphMaxDurationSec = 1.5f;
+constexpr float kLaunchMorphMaxDurationSec = 1.5f / kLaunchSpringSpeed;
 
 SurfaceRegistry::Key launchMotionKey(
         SurfaceRegistry::Key surfaceKey,
@@ -90,8 +99,11 @@ void FrameScheduler::prepareLaunchMorph(
     }
     if (!inserted && state.phase == entry.transitionPhase && !interactive) return;
 
+    constexpr float kDraggingStiffness =
+        320.0f * kLaunchSpringStiffnessScale;
     const auto draggingMotion = lcl::motion::Motion::spring(
-        1.0f, 320.0f, 1.25f * std::sqrt(320.0f));
+        1.0f, kDraggingStiffness,
+        1.25f * std::sqrt(kDraggingStiffness));
     const auto positionMotion = interactive
         ? draggingMotion
         : criticalSpring(opening ? 150.0f : 120.0f, 0.05f, 0.05f);
