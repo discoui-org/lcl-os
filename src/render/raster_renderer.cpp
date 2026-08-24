@@ -17,6 +17,22 @@
 
 namespace lcl::render {
 
+namespace {
+
+struct BufferSampleScale {
+    float x{1.0f};
+    float y{1.0f};
+};
+
+BufferSampleScale resolveBufferSampleScale(
+    RasterBufferSampling sampling,
+    int sourceWidth,
+    int sourceHeight,
+    float destinationWidth,
+    float destinationHeight);
+
+} // namespace
+
 #ifndef LCL_SOFTWARE_ONLY
 namespace {
 
@@ -305,6 +321,7 @@ bool RasterRenderer::initGLShader() {
         "uniform float uOpacity;\n"
         "uniform float uTopOnlyCorners;\n"
         "uniform vec2 uSampleScale;\n"
+        "uniform vec2 uSampleMax;\n"
         "float sdBox(vec2 p, vec2 b) {\n"
         "    vec2 q = abs(p) - b;\n"
         "    vec2 oq = max(q, 0.0);\n"
@@ -329,7 +346,8 @@ bool RasterRenderer::initGLShader() {
         "    return (k - 1.0) * r;\n"
         "}\n"
         "void main() {\n"
-        "    vec4 c = texture2D(uTexture, vTexCoord * uSampleScale);\n"
+        "    vec2 sampleCoord = min(vTexCoord * uSampleScale, uSampleMax);\n"
+        "    vec4 c = texture2D(uTexture, sampleCoord);\n"
         // A top-only rounded rect can have a top radius taller than half the
         // rect, provided its lower corners are square. The width remains the
         // only universal radius limit.
@@ -375,6 +393,7 @@ bool RasterRenderer::initGLShader() {
     m_uMaskBgraOpacityLoc = glGetUniformLocation(m_glMaskBgraProgram, "uOpacity");
     m_uMaskBgraTopOnlyLoc = glGetUniformLocation(m_glMaskBgraProgram, "uTopOnlyCorners");
     m_uMaskBgraSampleScaleLoc = glGetUniformLocation(m_glMaskBgraProgram, "uSampleScale");
+    m_uMaskBgraSampleMaxLoc = glGetUniformLocation(m_glMaskBgraProgram, "uSampleMax");
 
     // --- GLSL Rounded Rect Fill+Border Shader ---
     const char* vRoundRectSrc =
@@ -1695,7 +1714,9 @@ void RasterRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
                                              bool squareTopCorners,
                                              bool squareBottomCorners,
                                              float uScale,
-                                             float vScale) {
+                                             float vScale,
+                                             float uMax,
+                                             float vMax) {
     if (textureId == 0 || m_glMaskBgraProgram == 0) return;
 
     float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
@@ -1731,6 +1752,7 @@ void RasterRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
     glUniform1f(m_uMaskBgraOpacityLoc, std::clamp(opacity, 0.0f, 1.0f));
     glUniform1f(m_uMaskBgraTopOnlyLoc, squareBottomCorners ? 1.0f : 0.0f);
     glUniform2f(m_uMaskBgraSampleScaleLoc, uScale, vScale);
+    glUniform2f(m_uMaskBgraSampleMaxLoc, uMax, vMax);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glVertexAttribPointer(m_aMaskBgraPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
@@ -2062,7 +2084,8 @@ void RasterRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int sr
                                                 uint32_t texture, float opacity,
                                                 float cornerRadius, float cornerRoundness,
                                                 bool squareTopCorners, float drawWidth,
-                                                float drawHeight) {
+                                                float drawHeight,
+                                                RasterBufferSampling sampling) {
 #ifndef LCL_SOFTWARE_ONLY
     if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend || texture == 0) return;
     m_eglBackend->makeCurrent();
@@ -2075,12 +2098,22 @@ void RasterRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int sr
                                     static_cast<uint32_t>(std::max(0, srcH)),
                                     static_cast<uint32_t>(std::max(0, backingW)),
                                     static_cast<uint32_t>(std::max(0, backingH)));
-    if (destination.cornerRadius > 0.001f) {
+    const BufferSampleScale sampleScale = resolveBufferSampleScale(
+        sampling, srcW, srcH, destination.width, destination.height);
+    const float sampledUMax = crop.uMax * sampleScale.x;
+    const float sampledVMax = crop.vMax * sampleScale.y;
+    const float sampledVOffset =
+        sampling == RasterBufferSampling::TopLeftAnchoredCropTrailingEdge
+        ? crop.vMax - sampledVMax
+        : 0.0f;
+    if (destination.cornerRadius > 0.001f ||
+        sampling != RasterBufferSampling::Stretch) {
         drawMaskedTextureQuad(texture, destination.x, destination.y,
                               destination.width, destination.height,
                               destination.cornerRadius, cornerRoundness, opacity,
-                              squareTopCorners, crop.uMax, crop.vMax,
-                              0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                              squareTopCorners, sampledUMax, sampledVMax,
+                              0.0f, sampledVOffset,
+                              0.0f, 0.0f, 0.0f, 0.0f,
                               normalizedHalfTexel(static_cast<uint32_t>(
                                   std::max(0, backingW))),
                               normalizedHalfTexel(static_cast<uint32_t>(
@@ -2104,6 +2137,7 @@ void RasterRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int sr
     (void)squareTopCorners;
     (void)drawWidth;
     (void)drawHeight;
+    (void)sampling;
 #endif
 }
 
@@ -2598,6 +2632,47 @@ bool RasterRenderer::rasterizeString(const std::string& text,
     return true;
 }
 
+namespace {
+
+BufferSampleScale resolveBufferSampleScale(
+        RasterBufferSampling sampling,
+        int sourceWidth,
+        int sourceHeight,
+        float destinationWidth,
+        float destinationHeight) {
+    if (sampling == RasterBufferSampling::Stretch ||
+        sourceWidth <= 0 || sourceHeight <= 0 ||
+        destinationWidth <= 0.0f || destinationHeight <= 0.0f) {
+        return {};
+    }
+
+    const float sourceAspect =
+        static_cast<float>(sourceWidth) / static_cast<float>(sourceHeight);
+    const float destinationAspect = destinationWidth / destinationHeight;
+    if (sampling == RasterBufferSampling::TopLeftAnchoredCropTrailingEdge) {
+        if (destinationAspect > sourceAspect) {
+            return {1.0f, sourceAspect / destinationAspect};
+        }
+        if (destinationAspect < sourceAspect) {
+            return {destinationAspect / sourceAspect, 1.0f};
+        }
+        return {};
+    }
+    if (destinationAspect < sourceAspect) {
+        // Portrait: source width follows destination width. Sampling beyond
+        // the source bottom is clamped to its final pixel row.
+        return {1.0f, sourceAspect / destinationAspect};
+    }
+    if (destinationAspect > sourceAspect) {
+        // Landscape: source height follows destination height. Sampling beyond
+        // the source right edge is clamped to its final pixel column.
+        return {destinationAspect / sourceAspect, 1.0f};
+    }
+    return {};
+}
+
+} // namespace
+
 void RasterRenderer::drawBuffer(int dstX,
                               int dstY,
                               int srcW,
@@ -2631,7 +2706,8 @@ void RasterRenderer::drawBufferTransformed(float dstX,
                                          float cornerRoundness,
                                          bool squareTopCorners,
                                          float drawWidth,
-                                         float drawHeight) {
+                                         float drawHeight,
+                                         RasterBufferSampling sampling) {
     const auto destination = mapLogicalRasterDestination(
         dstX, dstY, drawWidth, drawHeight, cornerRadius,
         m_deviceScale, m_contentOriginX, m_contentOriginY);
@@ -2639,7 +2715,7 @@ void RasterRenderer::drawBufferTransformed(float dstX,
         destination.x, destination.y,
         srcW, srcH, pixelData, stridePixels, opacity,
         destination.cornerRadius, cornerRoundness, squareTopCorners,
-        false, destination.width, destination.height);
+        false, destination.width, destination.height, sampling);
 }
 
 void RasterRenderer::trimImageTextureCache(uint64_t protectedResourceId) {
@@ -2778,12 +2854,14 @@ void RasterRenderer::drawCachedShmBufferTransformed(uint64_t cacheKey,
                                                      float cornerRoundness,
                                                      bool squareTopCorners,
                                                      float drawWidth,
-                                                     float drawHeight) {
+                                                     float drawHeight,
+                                                     RasterBufferSampling sampling) {
     if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0 ||
         cacheKey == 0 || contentSerial == 0) {
         drawBufferTransformed(dstX, dstY, srcW, srcH, pixelData, stridePixels,
                               opacity, cornerRadius, cornerRoundness,
-                              squareTopCorners, drawWidth, drawHeight);
+                              squareTopCorners, drawWidth, drawHeight,
+                              sampling);
         return;
     }
 
@@ -2894,14 +2972,20 @@ void RasterRenderer::drawCachedShmBufferTransformed(uint64_t cacheKey,
             ? 1.0f : (static_cast<float>(srcW) - 0.5f) / cached.width;
         const float vMax = srcH == cached.height
             ? 1.0f : (static_cast<float>(srcH) - 0.5f) / cached.height;
+        const BufferSampleScale sampleScale = resolveBufferSampleScale(
+            sampling, srcW, srcH, destination.width, destination.height);
+        const bool requiresSamplingShader =
+            sampling != RasterBufferSampling::Stretch;
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
-        if (destination.cornerRadius > 0.001f) {
+        if (destination.cornerRadius > 0.001f || requiresSamplingShader) {
             drawMaskedBgraTextureQuad(cached.texture,
                                       destination.x, destination.y,
                                       destination.width, destination.height,
                                       destination.cornerRadius, cornerRoundness,
                                       opacity, squareTopCorners, false,
+                                      uMax * sampleScale.x,
+                                      vMax * sampleScale.y,
                                       uMax, vMax);
         } else {
             drawBgraTextureQuad(cached.texture,
@@ -2915,7 +2999,7 @@ void RasterRenderer::drawCachedShmBufferTransformed(uint64_t cacheKey,
 
     drawBufferTransformed(dstX, dstY, srcW, srcH, pixelData, stridePixels,
                           opacity, cornerRadius, cornerRoundness,
-                          squareTopCorners, drawWidth, drawHeight);
+                          squareTopCorners, drawWidth, drawHeight, sampling);
 }
 
 void RasterRenderer::drawBufferRaw(float dstX,
@@ -2930,7 +3014,8 @@ void RasterRenderer::drawBufferRaw(float dstX,
                                  bool squareTopCorners,
                                  bool squareBottomCorners,
                                  float drawWidth,
-                                 float drawHeight) {
+                                 float drawHeight,
+                                 RasterBufferSampling sampling) {
     if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0) return;
 
     if (stridePixels <= 0) stridePixels = srcW;
@@ -2938,6 +3023,8 @@ void RasterRenderer::drawBufferRaw(float dstX,
     const float outW = (drawWidth > 0.0f) ? drawWidth : static_cast<float>(srcW);
     const float outH = (drawHeight > 0.0f) ? drawHeight : static_cast<float>(srcH);
     if (outW <= 0.0f || outH <= 0.0f) return;
+    const BufferSampleScale sampleScale = resolveBufferSampleScale(
+        sampling, srcW, srcH, outW, outH);
 
 #ifndef LCL_SOFTWARE_ONLY
     if (m_backendType == RasterBackend::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
@@ -3008,7 +3095,8 @@ void RasterRenderer::drawBufferRaw(float dstX,
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
 
-        if (cornerRadius > 0.001f) {
+        if (cornerRadius > 0.001f ||
+            sampling != RasterBufferSampling::Stretch) {
             drawMaskedBgraTextureQuad(m_glClientTexture,
                                       static_cast<float>(dstX),
                                       static_cast<float>(dstY),
@@ -3018,7 +3106,9 @@ void RasterRenderer::drawBufferRaw(float dstX,
                                       cornerRoundness,
                                       opacity,
                                       squareTopCorners,
-                                      squareBottomCorners);
+                                      squareBottomCorners,
+                                      sampleScale.x,
+                                      sampleScale.y);
         } else {
             drawBgraTextureQuad(m_glClientTexture, dstX, dstY, outW, outH, opacity);
         }
@@ -3109,12 +3199,14 @@ void RasterRenderer::drawBufferRaw(float dstX,
 
     for (int y = clipY1; y < clipY2; ++y) {
         const float outY = (static_cast<float>(y) + 0.5f) - dstY;
-        const float srcY = (outY / outH) * static_cast<float>(srcH) - 0.5f;
+        const float srcY = (outY / outH) * static_cast<float>(srcH) *
+            sampleScale.y - 0.5f;
         uint32_t* dstRow = &m_targetPixels[y * m_width];
 
         for (int x = clipX1; x < clipX2; ++x) {
             const float outX = (static_cast<float>(x) + 0.5f) - dstX;
-            const float srcX = (outX / outW) * static_cast<float>(srcW) - 0.5f;
+            const float srcX = (outX / outW) * static_cast<float>(srcW) *
+                sampleScale.x - 0.5f;
             if (rr > 0.001f) {
                 if (!insideRoundedMask(outX, outY)) {
                     continue;

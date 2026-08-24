@@ -55,6 +55,18 @@ enum class RasterBackend {
     SoftwareRaster
 };
 
+enum class RasterBufferSampling {
+    Stretch,
+    // Preserve the source aspect ratio at the top-left. Portrait destinations
+    // pin top/left/right and extend the final source row downward; landscape
+    // destinations pin top/left/bottom and extend the final source column.
+    TopLeftAnchoredExtendTrailingEdge,
+    // Aspect-preserving thumbnail sampling. Portrait content pins
+    // top/left/right and crops the bottom; landscape content pins
+    // top/left/bottom and crops the right edge.
+    TopLeftAnchoredCropTrailingEdge,
+};
+
 class RasterRenderer {
 public:
     RasterRenderer() = default;
@@ -224,7 +236,9 @@ public:
                                float cornerRoundness,
                                bool squareTopCorners,
                                float drawWidth,
-                               float drawHeight);
+                               float drawHeight,
+                               RasterBufferSampling sampling =
+                                   RasterBufferSampling::Stretch);
     /**
      * Composite a retained SHM surface. The cache key identifies one compositor
      * surface and contentSerial changes only when that client publishes pixels.
@@ -250,7 +264,9 @@ public:
                                         float cornerRoundness,
                                         bool squareTopCorners,
                                         float drawWidth,
-                                        float drawHeight);
+                                        float drawHeight,
+                                        RasterBufferSampling sampling =
+                                            RasterBufferSampling::Stretch);
     void applyBackdropFilter(float dstX, float dstY, float srcW, float srcH,
                              float cornerRadius, float cornerRoundness,
                              float opacity, const std::vector<protocol::FilterOp>& filters);
@@ -269,7 +285,10 @@ public:
                                       int backingW, int backingH,
                                       uint32_t texture, float opacity,
                                       float cornerRadius, float cornerRoundness,
-                                      bool squareTopCorners, float drawWidth, float drawHeight);
+                                      bool squareTopCorners, float drawWidth,
+                                      float drawHeight,
+                                      RasterBufferSampling sampling =
+                                          RasterBufferSampling::Stretch);
     /** Composite a cropped region of an imported surface into a logical rect. */
     void drawDmaBufTextureRegionTransformed(
         float dstX, float dstY, float drawWidth, float drawHeight,
@@ -356,7 +375,9 @@ private:
                        bool squareTopCorners,
                        bool squareBottomCorners,
                        float drawWidth,
-                       float drawHeight);
+                       float drawHeight,
+                       RasterBufferSampling sampling =
+                           RasterBufferSampling::Stretch);
     void drawImageResourceTransformed(
         uint64_t resourceId, uint64_t contentRevision, bool opaque,
         float dstX, float dstY, int srcW, int srcH,
@@ -462,6 +483,7 @@ private:
     int32_t m_uMaskBgraOpacityLoc{-1};
     int32_t m_uMaskBgraTopOnlyLoc{-1};
     int32_t m_uMaskBgraSampleScaleLoc{-1};
+    int32_t m_uMaskBgraSampleMaxLoc{-1};
 
     uint32_t m_glRoundRectProgram{0};
     int32_t m_aRoundRectPosLoc{-1};
@@ -521,7 +543,9 @@ private:
                                    bool squareTopCorners = false,
                                    bool squareBottomCorners = false,
                                    float uScale = 1.0f,
-                                   float vScale = 1.0f);
+                                   float vScale = 1.0f,
+                                   float uMax = 1.0f,
+                                   float vMax = 1.0f);
     void drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h,
                              float opacity = 1.0f, float uMax = 1.0f,
                              float vMax = 1.0f);

@@ -33,6 +33,10 @@ bool DesktopWindowPolicy::usesSystemGestures() const noexcept {
     return false;
 }
 
+bool DesktopWindowPolicy::usesMobileWindowDecorations() const noexcept {
+    return false;
+}
+
 bool DesktopWindowPolicy::forcesOpaqueNormalSurfaces() const noexcept {
     return false;
 }
@@ -72,6 +76,10 @@ bool MobileWindowPolicy::usesDesktopWindowManagement() const noexcept {
 }
 
 bool MobileWindowPolicy::usesSystemGestures() const noexcept {
+    return true;
+}
+
+bool MobileWindowPolicy::usesMobileWindowDecorations() const noexcept {
     return true;
 }
 

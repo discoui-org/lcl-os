@@ -27,6 +27,7 @@ public:
 
     virtual bool usesDesktopWindowManagement() const noexcept = 0;
     virtual bool usesSystemGestures() const noexcept = 0;
+    virtual bool usesMobileWindowDecorations() const noexcept = 0;
     virtual bool forcesOpaqueNormalSurfaces() const noexcept = 0;
 };
 
@@ -44,6 +45,7 @@ public:
     float resolveWindowCornerRadius(float requestedRadius) const noexcept override;
     bool usesDesktopWindowManagement() const noexcept override;
     bool usesSystemGestures() const noexcept override;
+    bool usesMobileWindowDecorations() const noexcept override;
     bool forcesOpaqueNormalSurfaces() const noexcept override;
 };
 
@@ -61,6 +63,7 @@ public:
     float resolveWindowCornerRadius(float requestedRadius) const noexcept override;
     bool usesDesktopWindowManagement() const noexcept override;
     bool usesSystemGestures() const noexcept override;
+    bool usesMobileWindowDecorations() const noexcept override;
     bool forcesOpaqueNormalSurfaces() const noexcept override;
 };
 

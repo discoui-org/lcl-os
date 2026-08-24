@@ -16,6 +16,7 @@
 #include "lcl-ui/widgets/image.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "lcl-theme/theme.hpp"
 #include "render/raster_canvas.hpp"
 
 namespace {
@@ -24,9 +25,12 @@ constexpr float kLauncherPaddingX = 24.0f;
 constexpr float kLauncherPaddingY = 32.0f;
 constexpr float kTileWidth = 84.0f;
 constexpr float kTileHeight = 92.0f;
-constexpr float kIconSize = 60.0f;
-constexpr uint32_t kIconPixelSize = 60;
-constexpr float kIconRadius = 14.0f;
+constexpr float kIconSize = lcl::theme::mobile::kAppIconSize;
+constexpr uint32_t kIconPixelSize =
+    static_cast<uint32_t>(lcl::theme::mobile::kAppIconSize);
+constexpr float kIconRadius = lcl::theme::mobile::kAppIconCornerRadius;
+constexpr float kIconRoundness =
+    lcl::theme::mobile::kAppIconCornerRoundness;
 constexpr float kColumnGap = 18.0f;
 constexpr float kRowGap = 22.0f;
 constexpr uint64_t kLaunchTokenMask = (uint64_t{1} << 63) - 1;
@@ -116,6 +120,7 @@ LauncherIcon makeIcon(
         if (image->hasImage() && source && source->isValid()) {
             image->setFit(lcl::ui::ImageFit::Contain);
             image->setCornerRadius(kIconRadius);
+            image->setCornerRoundness(kIconRoundness);
             image->getYogaNode().setWidth(kIconSize);
             image->getYogaNode().setHeight(kIconSize);
             return {std::move(image), makeContainedIconSnapshot(*source)};
@@ -127,6 +132,7 @@ LauncherIcon makeIcon(
     placeholder->setBorderColor({255, 255, 255, 58});
     placeholder->setBorderWidth(1.0f);
     placeholder->setBorderRadius(kIconRadius);
+    placeholder->setBorderRoundness(kIconRoundness);
     placeholder->getYogaNode().setWidth(kIconSize);
     placeholder->getYogaNode().setHeight(kIconSize);
     std::vector<uint32_t> pixels(

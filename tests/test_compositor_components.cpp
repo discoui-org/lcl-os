@@ -14,6 +14,7 @@
 #include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/input_router.hpp"
+#include "core/compositor/mobile_window_decoration.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
 #include "core/compositor/surface_registry.hpp"
 #include "core/compositor/system_surface_policy.hpp"
@@ -27,6 +28,40 @@
 #include "render/raster_destination.hpp"
 
 namespace lcl::core {
+
+TEST(MobileWindowDecorationTest, GesturePillScalesFromWindowWidthAndStaysBottomAnchored) {
+    const auto reference = layoutMobileGesturePill(
+        {10.0f, 20.0f, 393.0f, 852.0f});
+    EXPECT_FLOAT_EQ(reference.scale, 1.0f);
+    EXPECT_FLOAT_EQ(reference.bounds.x, 139.5f);
+    EXPECT_FLOAT_EQ(reference.bounds.y, 859.0f);
+    EXPECT_FLOAT_EQ(reference.bounds.width, 134.0f);
+    EXPECT_FLOAT_EQ(reference.bounds.height, 5.0f);
+
+    const auto doubled = layoutMobileGesturePill(
+        {10.0f, 20.0f, 786.0f, 852.0f});
+    EXPECT_FLOAT_EQ(doubled.scale, 2.0f);
+    EXPECT_FLOAT_EQ(doubled.bounds.x, 269.0f);
+    EXPECT_FLOAT_EQ(doubled.bounds.y, 846.0f);
+    EXPECT_FLOAT_EQ(doubled.bounds.width, 268.0f);
+    EXPECT_FLOAT_EQ(doubled.bounds.height, 10.0f);
+}
+
+TEST(MobileWindowDecorationTest, GesturePillIsOneRoundedDecorationPath) {
+    const auto list = buildMobileGesturePillDisplayList(
+        {0.0f, 0.0f, 393.0f, 852.0f}, 1.0f);
+    ASSERT_EQ(list.commands().size(), 1u);
+    const auto* command = std::get_if<graphics::DrawPathCommand>(
+        &list.commands().front());
+    ASSERT_NE(command, nullptr);
+    const auto* primitive = command->path.primitive();
+    ASSERT_NE(primitive, nullptr);
+    EXPECT_EQ(primitive->kind, graphics::PathPrimitiveKind::RRect);
+    EXPECT_FLOAT_EQ(primitive->bounds.width, 134.0f);
+    EXPECT_FLOAT_EQ(primitive->bounds.height, 5.0f);
+    EXPECT_FLOAT_EQ(primitive->radiusX, 2.5f);
+    EXPECT_EQ(command->paint.color.a, 235u);
+}
 
 TEST(SurfaceRegistryTest, SnapshotProvidesReadOnlyViewsWithoutCopyingEntries) {
     SurfaceRegistry registry;

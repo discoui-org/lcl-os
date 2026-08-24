@@ -4272,6 +4272,94 @@ TEST(LclUiTest, MaskedAndUnmaskedStraightAlphaBuffersMatchAtTheirCenters) {
     EXPECT_EQ(centerPixel(2.0f), centerPixel(0.0f));
 }
 
+TEST(LclUiTest, TopLeftAnchoredPortraitBufferExtendsItsFinalPixelRow) {
+    const uint32_t source[] = {
+        0xFFFF0000u, 0xFF00FF00u,
+        0xFF0000FFu, 0xFFFFFF00u,
+    };
+    std::vector<uint32_t> pixels(2 * 4, 0u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(2, 4, nullptr, pixels.data()));
+
+    renderer.drawBufferTransformed(
+        0.0f, 0.0f, 2, 2, source, 2, 1.0f, 0.0f, 3.2f, false,
+        2.0f, 4.0f,
+        lcl::render::RasterBufferSampling::
+            TopLeftAnchoredExtendTrailingEdge);
+
+    EXPECT_EQ(pixels[0], 0xFFFF0000u);
+    EXPECT_EQ(pixels[1], 0xFF00FF00u);
+    for (int y = 1; y < 4; ++y) {
+        EXPECT_EQ(pixels[static_cast<size_t>(y) * 2], 0xFF0000FFu);
+        EXPECT_EQ(pixels[static_cast<size_t>(y) * 2 + 1], 0xFFFFFF00u);
+    }
+}
+
+TEST(LclUiTest, TopLeftAnchoredLandscapeBufferExtendsItsFinalPixelColumn) {
+    const uint32_t source[] = {
+        0xFFFF0000u, 0xFF00FF00u,
+        0xFF0000FFu, 0xFFFFFF00u,
+    };
+    std::vector<uint32_t> pixels(4 * 2, 0u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(4, 2, nullptr, pixels.data()));
+
+    renderer.drawBufferTransformed(
+        0.0f, 0.0f, 2, 2, source, 2, 1.0f, 0.0f, 3.2f, false,
+        4.0f, 2.0f,
+        lcl::render::RasterBufferSampling::
+            TopLeftAnchoredExtendTrailingEdge);
+
+    EXPECT_EQ(pixels[0], 0xFFFF0000u);
+    EXPECT_EQ(pixels[4], 0xFF0000FFu);
+    for (int x = 1; x < 4; ++x) {
+        EXPECT_EQ(pixels[x], 0xFF00FF00u);
+        EXPECT_EQ(pixels[4 + x], 0xFFFFFF00u);
+    }
+}
+
+TEST(LclUiTest, TopLeftAnchoredPortraitThumbnailCropsItsBottomEdge) {
+    const uint32_t source[] = {
+        0xFFFF0000u, 0xFF00FF00u,
+        0xFF0000FFu, 0xFFFFFF00u,
+        0xFF00FFFFu, 0xFFFF00FFu,
+        0xFF101010u, 0xFF202020u,
+    };
+    std::vector<uint32_t> pixels(2 * 2, 0u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(2, 2, nullptr, pixels.data()));
+
+    renderer.drawBufferTransformed(
+        0.0f, 0.0f, 2, 4, source, 2, 1.0f, 0.0f, 3.2f, false,
+        2.0f, 2.0f,
+        lcl::render::RasterBufferSampling::TopLeftAnchoredCropTrailingEdge);
+
+    EXPECT_EQ(pixels[0], 0xFFFF0000u);
+    EXPECT_EQ(pixels[1], 0xFF00FF00u);
+    EXPECT_EQ(pixels[2], 0xFF0000FFu);
+    EXPECT_EQ(pixels[3], 0xFFFFFF00u);
+}
+
+TEST(LclUiTest, TopLeftAnchoredLandscapeThumbnailCropsItsRightEdge) {
+    const uint32_t source[] = {
+        0xFFFF0000u, 0xFF00FF00u, 0xFF00FFFFu, 0xFF101010u,
+        0xFF0000FFu, 0xFFFFFF00u, 0xFFFF00FFu, 0xFF202020u,
+    };
+    std::vector<uint32_t> pixels(2 * 2, 0u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(2, 2, nullptr, pixels.data()));
+
+    renderer.drawBufferTransformed(
+        0.0f, 0.0f, 4, 2, source, 4, 1.0f, 0.0f, 3.2f, false,
+        2.0f, 2.0f,
+        lcl::render::RasterBufferSampling::TopLeftAnchoredCropTrailingEdge);
+
+    EXPECT_EQ(pixels[0], 0xFFFF0000u);
+    EXPECT_EQ(pixels[1], 0xFF00FF00u);
+    EXPECT_EQ(pixels[2], 0xFF0000FFu);
+    EXPECT_EQ(pixels[3], 0xFFFFFF00u);
+}
+
 TEST(LclUiTest, StraightAlphaLayersAccumulateAlphaWithoutSquaringIt) {
     std::vector<uint32_t> pixels(1, 0x00000000u);
     const uint32_t red = 0x80FF0000u;

@@ -426,7 +426,9 @@ void Compositor::renderFrame() {
     m_compositorRenderer.render(
         m_renderer, m_platformServices.display(), m_windowManager, surfaces,
         [this] { renderDiagnosticOverlay(); },
-        !hasActiveTransitions && !m_showFpsOverlay);
+        !hasActiveTransitions && !m_showFpsOverlay,
+        m_windowingPolicy &&
+            m_windowingPolicy->usesMobileWindowDecorations());
     m_lastComposeMs = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - composeStart).count();
 

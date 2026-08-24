@@ -1,6 +1,7 @@
 #include "core/compositor/compositor_renderer.hpp"
 #include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
+#include "core/compositor/mobile_window_decoration.hpp"
 #include "core/compositor/window_chrome_material.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
 #include "lcl-theme/theme.hpp"
@@ -18,7 +19,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
                                  const render::WindowManager& windowManager,
                                  const SurfaceRegistry::Snapshot& surfaces,
                                  const std::function<void()>& beforePresent,
-                                 bool allowIncrementalMove) const {
+                                 bool allowIncrementalMove,
+                                 bool drawMobileWindowDecorations) const {
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     // The snapshot contains only const entry pointers, so protocol/input work
     // cannot mutate the surface state while this frame is being composed.
@@ -133,14 +135,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
                               int damageX, int damageY, int damageW, int damageH,
                               float opacity, float cornerRadius,
                               float cornerRoundness, bool squareTopCorners,
-                              float drawWidth, float drawHeight) {
+                              float drawWidth, float drawHeight,
+                              render::RasterBufferSampling sampling =
+                                  render::RasterBufferSampling::Stretch) {
 #if defined(__ANDROID__)
         raster->drawCachedShmBufferTransformed(
             cacheKey, contentSerial, dstX, dstY, srcW, srcH,
             backingW, backingH, pixels, stridePixels,
             damageX, damageY, damageW, damageH,
             opacity, cornerRadius, cornerRoundness,
-            squareTopCorners, drawWidth, drawHeight);
+            squareTopCorners, drawWidth, drawHeight, sampling);
 #else
         (void)cacheKey;
         (void)contentSerial;
@@ -153,7 +157,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
         raster->drawBufferTransformed(
             dstX, dstY, srcW, srcH, pixels, stridePixels, opacity,
             cornerRadius, cornerRoundness, squareTopCorners,
-            drawWidth, drawHeight);
+            drawWidth, drawHeight, sampling);
 #endif
     };
     auto resolveWindowCornerRadiusLogical = [&](const render::Window& win) {
@@ -249,8 +253,11 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 static_cast<int>(surface.launchIconWidth),
                 static_cast<int>(surface.launchIconHeight),
                 1.0f,
-                surface.launchMorphCornerRadius, 2.0f, false,
-                surface.launchMorphWidth, surface.launchMorphHeight);
+                surface.launchMorphCornerRadius,
+                lcl::theme::mobile::kAppIconCornerRoundness, false,
+                surface.launchMorphWidth, surface.launchMorphHeight,
+                render::RasterBufferSampling::
+                    TopLeftAnchoredExtendTrailingEdge);
             return;
         }
         if (!homeScreenSurface) return;
@@ -277,8 +284,11 @@ void CompositorRenderer::render(render::Renderer& renderer,
             raster->drawBufferTransformed(
                 surface.launchMorphX, surface.launchMorphY,
                 sourceWidth, sourceHeight, pixels, stridePixels, 1.0f,
-                surface.launchMorphCornerRadius, 2.0f, false,
-                surface.launchMorphWidth, surface.launchMorphHeight);
+                surface.launchMorphCornerRadius,
+                lcl::theme::mobile::kAppIconCornerRoundness, false,
+                surface.launchMorphWidth, surface.launchMorphHeight,
+                render::RasterBufferSampling::
+                    TopLeftAnchoredExtendTrailingEdge);
         } else if (home.dmaBufTexture != 0) {
             raster->drawDmaBufTextureRegionTransformed(
                 surface.launchMorphX, surface.launchMorphY,
@@ -288,7 +298,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 static_cast<int>(home.backingHeight),
                 sourceX, sourceY, sourceWidth, sourceHeight,
                 home.dmaBufTexture, 1.0f,
-                surface.launchMorphCornerRadius, 2.0f);
+                surface.launchMorphCornerRadius,
+                lcl::theme::mobile::kAppIconCornerRoundness);
         }
     };
 
@@ -342,7 +353,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 cornerRadius = surface.launchMorphActive
                     ? surface.launchMorphCornerRadius
                     : group.mapLength(resolveWindowCornerRadiusLogical(win));
-                cornerRoundness = resolveWindowCornerRoundness(win);
+                cornerRoundness = surface.launchMorphActive
+                    ? lcl::theme::mobile::kAppIconCornerRoundness
+                    : resolveWindowCornerRoundness(win);
             } else {
                 const auto local = resolveLocalEffectGeometry(
                     0.0f, 0.0f, titleOffset,
@@ -450,6 +463,15 @@ void CompositorRenderer::render(render::Renderer& renderer,
             const float presentedCornerRadius = matchingSurface->launchMorphActive
                 ? windowCornerRadius
                 : group.mapLength(windowCornerRadius);
+            const float presentedCornerRoundness =
+                matchingSurface->launchMorphActive
+                ? lcl::theme::mobile::kAppIconCornerRoundness
+                : resolveWindowCornerRoundness(win);
+            const render::RasterBufferSampling contentSampling =
+                matchingSurface->launchMorphActive
+                ? render::RasterBufferSampling::
+                    TopLeftAnchoredCropTrailingEdge
+                : render::RasterBufferSampling::Stretch;
 
             if (matchingSurface->launchPlaceholderActive) {
                 raster->drawRoundedRect(
@@ -458,7 +480,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     {255, 255, 255,
                      static_cast<uint8_t>(std::clamp(
                          std::lround(windowOpacity * 255.0f), 0l, 255l))},
-                    {}, 0.0f, resolveWindowCornerRoundness(win));
+                    {}, 0.0f, presentedCornerRoundness);
             }
 
             const float contentOpacity = windowOpacity * std::clamp(
@@ -474,7 +496,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     {background.r, background.g, background.b,
                      static_cast<uint8_t>(std::clamp(
                          std::lround(contentOpacity * 255.0f), 0l, 255l))},
-                    {}, 0.0f, resolveWindowCornerRoundness(win));
+                    {}, 0.0f, presentedCornerRoundness);
             }
 
             const bool hasPrevious = matchingSurface->previousPixels ||
@@ -499,10 +521,11 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     contentOpacity *
                         (1.0f - matchingSurface->resizeCrossfadeProgress),
                     maskToWindowShape ? presentedCornerRadius : 0.0f,
-                    resolveWindowCornerRoundness(win),
+                    presentedCornerRoundness,
                     win.decorationMode == render::DecorationMode::SSD,
                     drawW,
-                    drawH);
+                    drawH,
+                    contentSampling);
             } else if (matchingSurface->previousDmaBufTexture != 0) {
                 renderer.getRasterRenderer()->drawDmaBufTextureTransformed(
                     drawX, drawY,
@@ -514,9 +537,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     contentOpacity *
                         (1.0f - matchingSurface->resizeCrossfadeProgress),
                     maskToWindowShape ? presentedCornerRadius : 0.0f,
-                    resolveWindowCornerRoundness(win),
+                    presentedCornerRoundness,
                     win.decorationMode == render::DecorationMode::SSD,
-                    drawW, drawH);
+                    drawW, drawH, contentSampling);
             }
 
             const float currentOpacity = contentOpacity *
@@ -535,9 +558,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     static_cast<int>(matchingSurface->shmDamageHeight),
                     currentOpacity,
                     maskToWindowShape ? presentedCornerRadius : 0.0f,
-                    resolveWindowCornerRoundness(win),
+                    presentedCornerRoundness,
                     win.decorationMode == render::DecorationMode::SSD,
-                    drawW, drawH);
+                    drawW, drawH, contentSampling);
             } else if (matchingSurface->dmaBufTexture != 0) {
                 renderer.getRasterRenderer()->drawDmaBufTextureTransformed(
                     drawX, drawY, srcW, srcH,
@@ -546,15 +569,25 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     matchingSurface->dmaBufTexture,
                     currentOpacity,
                     maskToWindowShape ? presentedCornerRadius : 0.0f,
-                    resolveWindowCornerRoundness(win),
+                    presentedCornerRoundness,
                     win.decorationMode == render::DecorationMode::SSD,
-                    drawW, drawH);
+                    drawW, drawH, contentSampling);
             }
 
             if (matchingSurface->hasRenderableBuffer() &&
                 !matchingSurface->effectRegions.empty()) {
                 applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground,
                                           windowOpacity, group);
+            }
+
+            if (drawMobileWindowDecorations &&
+                matchingSurface->systemSurfaceKind ==
+                    protocol::LCLSystemSurfaceKind::None &&
+                matchingSurface->hasRenderableBuffer()) {
+                const float pillOpacity = windowOpacity * std::clamp(
+                    matchingSurface->launchContentOpacity, 0.0f, 1.0f);
+                replayLogicalList(buildMobileGesturePillDisplayList(
+                    group.globalBounds, pillOpacity));
             }
 
         }

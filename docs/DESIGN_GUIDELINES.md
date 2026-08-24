@@ -29,6 +29,42 @@ Use neutral system tones as defaults with one restrained blue accent family.
 - No hard separator line between titlebar and content
 - Use inset dual-border (dark outer + light inner) for depth
 
+## Mobile System UI
+
+### Application icon
+
+- The canonical launcher icon is a `60 x 60` logical-unit square.
+- System UI owns its continuous rounded-rectangle silhouette: corner radius is
+  `14` logical units (`14 / 60`) and corner roundness is `3.2`.
+- Application icon assets must be square and must not bake in a rounded mask.
+  Launcher, placeholders, and transition proxies apply the same border-radius
+  contract.
+- During an icon-to-window morph in portrait, icon content is anchored to
+  `top + left + right`; the final source pixel row extends through the
+  unanchored bottom region.
+- During the same morph in landscape, icon content is anchored to
+  `top + left + bottom`; the final source pixel column extends through the
+  unanchored right region.
+
+### Application thumbnail
+
+- A portrait thumbnail uses `top + left + right` anchoring. A landscape
+  thumbnail uses `top + left + bottom` anchoring.
+- Thumbnail content preserves its aspect ratio and does not extend its final
+  pixel row or column.
+
+### Gesture pill
+
+- The gesture pill is a compositor-owned mobile window decoration, analogous
+  to desktop titlebar decoration. It is not a system surface or client widget.
+- Its reference geometry is a `393`-unit-wide parent with a `134 x 5` pill and
+  an `8`-unit bottom inset.
+- Treat the pill as content inside a conceptual parent anchored to
+  `left: 0`, `right: 0`, and `bottom: 0`.
+- Responsive scaling is driven by the parent width. The resulting geometry
+  preserves left, right, and bottom anchoring; the pill must not scale from its
+  center or drift vertically.
+
 ## Glass Rules
 
 - Glass is depth, not color.

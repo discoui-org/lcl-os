@@ -30,6 +30,7 @@ TEST(WindowingPolicyTest, DesktopPreservesRequestedWindowContract) {
     EXPECT_FLOAT_EQ(policy.resolveWindowCornerRadius(14.0f), 14.0f);
     EXPECT_TRUE(policy.usesDesktopWindowManagement());
     EXPECT_FALSE(policy.usesSystemGestures());
+    EXPECT_FALSE(policy.usesMobileWindowDecorations());
     EXPECT_FALSE(policy.forcesOpaqueNormalSurfaces());
 }
 
@@ -60,6 +61,7 @@ TEST(WindowingPolicyTest, MobileForcesFullscreenFramelessWindowContract) {
     EXPECT_FLOAT_EQ(policy.resolveWindowCornerRadius(20.0f), 0.0f);
     EXPECT_FALSE(policy.usesDesktopWindowManagement());
     EXPECT_TRUE(policy.usesSystemGestures());
+    EXPECT_TRUE(policy.usesMobileWindowDecorations());
     EXPECT_TRUE(policy.forcesOpaqueNormalSurfaces());
 }
 
