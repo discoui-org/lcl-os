@@ -1,5 +1,7 @@
 #include <csignal>
+#include <cstdlib>
 #include <iostream>
+#include <string>
 #include "core/compositor/compositor.hpp"
 #include "platform/desktop/desktop_platform_services.hpp"
 
@@ -14,9 +16,22 @@ namespace {
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     std::signal(SIGINT,  signalHandler);
     std::signal(SIGTERM, signalHandler);
+
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--gestalt") {
+            if (i + 1 >= argc) {
+                std::cerr << "[LCL] --gestalt requires an absolute JSON path.\n";
+                return 2;
+            }
+            setenv("LCL_GESTALT_PATH", argv[++i], 1);
+        } else {
+            std::cerr << "[LCL] Unknown argument: " << argv[i] << "\n";
+            return 2;
+        }
+    }
 
     // 1. Instantiate concrete Desktop Platform Services (Composition Root)
     lcl::platform::desktop::DesktopPlatformServices platformServices;

@@ -16,6 +16,7 @@ public:
     std::string appCatalogDirectory() const override;
     std::vector<std::string> fontSearchDirectories() const override;
     std::string temporaryDirectory() const override;
+    std::string gestaltFilePath() const override;
 };
 
 } // namespace lcl::platform::desktop

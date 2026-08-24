@@ -81,7 +81,7 @@ def generate_utm_bundle(kernel_src: Path, initramfs_src: Path, arch: str = "aarc
     )
     boot_args = (
         f"{serial_console} "
-        f"video=2560x1600-32@60 lcl.scale=2.0 lcl.width=2560 lcl.height=1600 "
+        f"video=2560x1600-32@60 "
         f"rdinit=/init loglevel=6"
     )
 

@@ -9,6 +9,7 @@
 #include <linux/fb.h>
 
 #include "platform/common/display_backend.hpp"
+#include "platform/common/gestalt.hpp"
 
 namespace lcl::platform::desktop {
 
@@ -77,6 +78,7 @@ public:
      */
     bool initialize() override;
     bool initialize(const std::string& devicePath);
+    void setGestalt(const lcl::platform::DeviceGestalt& gestalt) { m_gestalt = gestalt; }
 
     /**
      * @brief Release graphics resources.
@@ -138,6 +140,7 @@ private:
     FBDeviceInfo m_fbDevice;
     DumbScanoutBuffer m_dumbScanout;
     DisplayMode m_activeMode;
+    lcl::platform::DeviceGestalt m_gestalt;
     DesktopDisplayType m_displayType{DesktopDisplayType::None};
     bool m_initialized{false};
 };

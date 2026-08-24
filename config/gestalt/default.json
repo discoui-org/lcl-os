@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "name": "LCL Desktop Default",
+  "display": {
+    "scale": 1.0,
+    "naturalOrientation": "auto",
+    "defaultRotation": 0,
+    "safeArea": {
+      "top": 0,
+      "right": 0,
+      "bottom": 0,
+      "left": 0
+    },
+    "corners": {
+      "topLeft": { "radiusX": 0, "radiusY": 0, "roundness": 2.0 },
+      "topRight": { "radiusX": 0, "radiusY": 0, "roundness": 2.0 },
+      "bottomLeft": { "radiusX": 0, "radiusY": 0, "roundness": 2.0 },
+      "bottomRight": { "radiusX": 0, "radiusY": 0, "roundness": 2.0 }
+    },
+    "cutouts": []
+  }
+}

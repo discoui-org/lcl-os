@@ -154,13 +154,31 @@ make qemu            # default 1280x800, host refresh rate
 make qemu NATIVE=1   # host resolution + scale + fullscreen
 ```
 
-Guest display boot args (when `NATIVE=1`):
-- HiDPI/Retina: `video=` = **physical** pixels, `lcl.scale` = DPR (sharp UI; avoids zoom-upscale blur)
-- 1x displays: `video=` = host resolution, `lcl.scale=1`
+Guest display configuration (when `NATIVE=1`):
+- The standard kernel `video=` argument establishes the early physical DRM mode.
+- LCL resolution, refresh and scale policy comes from the versioned Gestalt JSON;
+  QEMU supplies it through `fw_cfg`, not LCL-specific kernel arguments.
 - QEMU cocoa: `full-screen=on,zoom-to-fit=on` (fill screen if mode list is inexact)
 
-The active `IDisplayBackend` prefers the boot-requested mode and stores the
-resolved `lcl.scale` value in its `DisplayMode.scaleFactor`. Compositor output
+Gestalt lookup is platform-owned. Android ports install their profile at
+`/vendor/etc/lcl/gestalt.json`; desktop/rootfs images use
+`/System/Library/Gestalt/default.json`. Development launches can override either
+path with the `--gestalt /absolute/profile.json` option (or the equivalent
+`LCL_GESTALT_PATH` environment variable). A requested override is strict and
+startup fails if it is missing or invalid. A missing platform-default file is
+not fatal and selects the built-in rectangular 1x profile.
+
+The version 1 `display` object accepts the optional `width`, `height`,
+`refreshRateHz`, and `scale` mode fields, plus `naturalOrientation`,
+`defaultRotation`, `safeArea`, per-corner geometry in `corners`, and rectangular
+`cutouts`. Unknown fields are rejected so a misspelled ROM profile cannot be
+silently accepted. The canonical desktop example is
+`config/gestalt/default.json`.
+
+The active `IDisplayBackend` prefers the Gestalt mode when the platform exposes
+that mode, and stores the Gestalt scale in its `DisplayMode.scaleFactor`. If
+Gestalt omits resolution, Android Composer or desktop DRM supplies the active
+mode; if it omits scale, the backend uses `1.0`. Compositor output
 initialization transfers that value into `RenderTarget.deviceScale`; widgets,
 chrome, paths, strokes, text, images, and effects remain in logical units and
 receive that scale only

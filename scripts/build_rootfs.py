@@ -239,6 +239,7 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
         "System/Core",
         "System/Tools",
         "System/Library/Fonts",
+        "System/Library/Gestalt",
         "System/Library/Wallpapers",
         "System/Library/Libraries",
         "Users/Rei/Applications",
@@ -277,6 +278,7 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
     dest_system_tools = staging_dir / "System" / "Tools"
     dest_system_lib = staging_dir / "System" / "Library" / "Libraries"
     dest_system_fonts = staging_dir / "System" / "Library" / "Fonts"
+    dest_system_gestalt = staging_dir / "System" / "Library" / "Gestalt"
     dest_system_wallpapers = staging_dir / "System" / "Library" / "Wallpapers"
     dest_system_apps = staging_dir / "System" / "Applications"
 
@@ -502,6 +504,11 @@ def stage_canonical_rootfs(staging_dir: Path, arch: str = "x86_64") -> dict[str,
         wp_src = PROJECT_ROOT / wp_name
         if wp_src.is_file():
             shutil.copy2(wp_src, dest_system_wallpapers / wp_name)
+
+    gestalt_src = PROJECT_ROOT / "config" / "gestalt" / "default.json"
+    if not gestalt_src.is_file():
+        raise RuntimeError(f"Missing default Gestalt: {gestalt_src}")
+    shutil.copy2(gestalt_src, dest_system_gestalt / "default.json")
 
     # 11. Built-in App Bundles ABI v1 (/System/Applications/)
     # (A) Terminal.app
@@ -805,6 +812,7 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Applications/UIDemoJS.app/Manifest.json",
         "/System/Applications/UIDemoJS.app/Executables/Main.js",
         "/System/Library/Fonts/inter",
+        "/System/Library/Gestalt/default.json",
         "/System/Library/Wallpapers/wallpaper.jpg",
         "/System/Library/EGL/glvnd/egl_vendor.d/50_mesa.json",
         "/System/Library/Input/libinput",
@@ -826,6 +834,14 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
     manifest_json = json.loads(cat_res.stdout)
     if manifest_json.get("executable") != "Executables/Terminal":
         raise AssertionError(f"Terminal.app Manifest in rootfs has invalid executable: {manifest_json.get('executable')}")
+
+    gestalt_cat = subprocess.run(
+        ["debugfs", "-R", "cat /System/Library/Gestalt/default.json", str(ext4_path)],
+        capture_output=True, text=True, check=True,
+    )
+    gestalt_json = json.loads(gestalt_cat.stdout)
+    if gestalt_json.get("version") != 1 or not isinstance(gestalt_json.get("display"), dict):
+        raise AssertionError("Default Gestalt in rootfs has an invalid schema")
 
     # Check UIDemo.app Manifest content
     cat_cmd = ["debugfs", "-R", "cat /System/Applications/UIDemo.app/Manifest.json", str(ext4_path)]

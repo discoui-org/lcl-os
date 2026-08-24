@@ -35,7 +35,10 @@
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
+#include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <limits>
 #include <vector>
 
 extern "C" {
@@ -188,7 +191,7 @@ AndroidDisplayBackend::~AndroidDisplayBackend() {
 bool AndroidDisplayBackend::initialize() {
     if (m_initialized) return true;
 
-    m_activeMode.scaleFactor = resolveOutputScale();
+    m_activeMode.scaleFactor = sanitizeOutputScale(m_gestalt.display.scale.value_or(1.0f));
 
     if (initializeAidl()) {
         m_backendKind = BackendKind::AidlComposer3;
@@ -198,7 +201,11 @@ bool AndroidDisplayBackend::initialize() {
     shutdownAidl();
 
     std::cerr << "[AndroidDisplayBackend] Composer3 AIDL unavailable; trying Composer 2.4/2.2 HIDL\n";
-    if (m_hidlBackend->initialize(m_activeMode.scaleFactor)) {
+    if (m_hidlBackend->initialize(
+            m_activeMode.scaleFactor,
+            m_gestalt.display.width.value_or(0),
+            m_gestalt.display.height.value_or(0),
+            m_gestalt.display.refreshRateHz.value_or(0))) {
         m_activeMode = m_hidlBackend->activeMode();
         m_displayId = m_hidlBackend->displayId();
         m_layerId = m_hidlBackend->layerId();
@@ -296,7 +303,51 @@ bool AndroidDisplayBackend::initializeAidl() {
     std::vector<::aidl::android::hardware::graphics::composer3::DisplayConfiguration> configs;
     auto cfgStatus = m_impl->client->getDisplayConfigurations(m_displayId, 0, &configs);
     if (cfgStatus.isOk() && !configs.empty()) {
-        const auto& activeCfg = configs.front();
+        int32_t activeConfigId = -1;
+        const auto activeStatus = m_impl->client->getActiveConfig(m_displayId, &activeConfigId);
+        auto selected = activeStatus.isOk()
+            ? std::find_if(configs.begin(), configs.end(), [activeConfigId](const auto& config) {
+                return config.configId == activeConfigId;
+            })
+            : configs.end();
+        if (selected == configs.end()) selected = configs.begin();
+
+        if (m_gestalt.display.hasPreferredResolution()) {
+            auto preferred = configs.end();
+            int64_t bestRefreshDistance = std::numeric_limits<int64_t>::max();
+            for (auto it = configs.begin(); it != configs.end(); ++it) {
+                if (it->width != static_cast<int32_t>(*m_gestalt.display.width) ||
+                    it->height != static_cast<int32_t>(*m_gestalt.display.height)) {
+                    continue;
+                }
+                const int64_t refreshHz = it->vsyncPeriod > 0
+                    ? 1000000000ll / it->vsyncPeriod : 0;
+                const int64_t distance = m_gestalt.display.refreshRateHz
+                    ? std::llabs(refreshHz - *m_gestalt.display.refreshRateHz) : 0;
+                if (preferred == configs.end() || distance < bestRefreshDistance) {
+                    preferred = it;
+                    bestRefreshDistance = distance;
+                }
+            }
+            if (preferred == configs.end()) {
+                std::cerr << "[AndroidDisplayBackend] Gestalt mode "
+                          << *m_gestalt.display.width << "x" << *m_gestalt.display.height
+                          << " is unavailable; using Composer active mode\n";
+            } else if (preferred->configId != selected->configId) {
+                const auto setStatus = m_impl->client->setActiveConfig(
+                    m_displayId, preferred->configId);
+                if (setStatus.isOk()) {
+                    selected = preferred;
+                } else {
+                    std::cerr << "[AndroidDisplayBackend] Composer rejected Gestalt mode: "
+                              << setStatus.getDescription() << "\n";
+                }
+            } else {
+                selected = preferred;
+            }
+        }
+
+        const auto& activeCfg = *selected;
         if (activeCfg.width > 0 && activeCfg.height > 0) {
             m_activeMode.width = activeCfg.width;
             m_activeMode.height = activeCfg.height;

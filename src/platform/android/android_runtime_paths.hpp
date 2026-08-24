@@ -40,6 +40,10 @@ public:
         return runtimeDirectory() + "/Temporary";
     }
 
+    std::string gestaltFilePath() const override {
+        return "/vendor/etc/lcl/gestalt.json";
+    }
+
 private:
     static std::string runtimeDirectory() {
         const char* overridePath = std::getenv("LCL_RUNTIME_DIR");

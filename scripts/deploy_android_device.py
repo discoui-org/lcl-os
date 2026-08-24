@@ -41,6 +41,7 @@ DEVICE_BINARY_PATH = f"{DEVICE_TMP_DIR}/{BINARY_NAME}"
 DEVICE_HIDL_BRIDGE_PATH = f"{DEVICE_TMP_DIR}/{HIDL_BRIDGE_NAME}"
 DEVICE_LOG_PATH = f"{DEVICE_TMP_DIR}/lcl-core.log"
 DEVICE_RUNTIME_DIR = f"{DEVICE_TMP_DIR}/lcl-runtime"
+DEVICE_GESTALT_PATH = f"{DEVICE_RUNTIME_DIR}/gestalt.json"
 DEVICE_COMPOSITOR_SOCKET = f"{DEVICE_RUNTIME_DIR}/lcl-compositor.sock"
 DEVICE_SESSION_SOCKET = f"{DEVICE_RUNTIME_DIR}/lcl-sessiond.sock"
 ROOTFS_IMAGE = ROOT_DIR / "build" / "rootfs" / "lcl-rootfs-aarch64.ext4"
@@ -597,9 +598,21 @@ def setup_runtime_dir() -> str:
     return DEVICE_RUNTIME_DIR
 
 
+def push_gestalt(gestalt_path: Path) -> None:
+    """Push an explicit development Gestalt into the private runtime directory."""
+    resolved = gestalt_path.expanduser().resolve()
+    if not resolved.is_file():
+        err(f"Gestalt file not found: {resolved}")
+        sys.exit(1)
+    log(f"Pushing Gestalt: {resolved}")
+    run_adb("push", str(resolved), DEVICE_GESTALT_PATH)
+    adb_shell(f"chmod 600 {DEVICE_GESTALT_PATH}", as_root=True)
+
+
 def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
                use_rootfs: bool = False, force_rootfs: bool = False,
-               native_clients: bool = True) -> None:
+               native_clients: bool = True,
+               gestalt_path: Path | None = None) -> None:
     """Main deployment logic: push binary, stop SysUI, launch LCL compositor."""
 
     log("=" * 60)
@@ -626,6 +639,8 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
     # 4. Reject an overlapping session before changing deployed artifacts.
     runtime_dir = setup_runtime_dir()
     prepare_runtime_for_launch()
+    if gestalt_path is not None:
+        push_gestalt(gestalt_path)
 
     # 4b. Push binary
     push_binary()
@@ -676,6 +691,8 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
             f"LCL_RUNTIME_DIR={runtime_dir} ANDROID_DATA=/data "
             f"LD_LIBRARY_PATH={DEVICE_TMP_DIR}:/system/lib64:/vendor/lib64:/system_ext/lib64"
         )
+        if gestalt_path is not None:
+            launch_env += f" LCL_GESTALT_PATH={DEVICE_GESTALT_PATH}"
         lcl_proc = subprocess.Popen([
             "adb", "shell",
             f"su -c '{launch_env} {DEVICE_BINARY_PATH} 2>&1 | tee {DEVICE_LOG_PATH}'"
@@ -770,6 +787,12 @@ def main() -> None:
         action="store_true",
         help="Keep canonical glibc SHM clients instead of Android AHardwareBuffer clients"
     )
+    parser.add_argument(
+        "--gestalt",
+        type=Path,
+        metavar="JSON",
+        help="Push and use an explicit device Gestalt JSON"
+    )
     args = parser.parse_args()
 
     if args.restore_only:
@@ -782,6 +805,7 @@ def main() -> None:
         use_rootfs=args.rootfs or args.push_rootfs,
         force_rootfs=args.push_rootfs,
         native_clients=not args.software_clients,
+        gestalt_path=args.gestalt,
     )
 
 

@@ -22,6 +22,9 @@ typedef struct LclAndroidHidlDisplayInfo {
 void* lcl_android_hidl_create(void);
 void lcl_android_hidl_destroy(void* instance);
 int lcl_android_hidl_initialize(void* instance, float output_scale,
+                                uint32_t preferred_width,
+                                uint32_t preferred_height,
+                                uint32_t preferred_refresh_hz,
                                 LclAndroidHidlDisplayInfo* info);
 void lcl_android_hidl_shutdown(void* instance);
 int lcl_android_hidl_prepare_buffer(void* instance,

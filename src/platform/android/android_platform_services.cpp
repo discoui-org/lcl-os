@@ -12,6 +12,21 @@ AndroidPlatformServices::~AndroidPlatformServices() {
 bool AndroidPlatformServices::initialize() {
     if (m_initialized) return true;
 
+    const auto gestaltResult = lcl::platform::loadGestalt(m_paths.gestaltFilePath());
+    if (!gestaltResult.ok()) {
+        std::cerr << "[AndroidPlatformServices] " << gestaltResult.error << "\n";
+        return false;
+    }
+    m_gestalt = gestaltResult.gestalt;
+    m_displayBackend.setGestalt(m_gestalt);
+    if (gestaltResult.loadedFromFile) {
+        std::cout << "[LCL Gestalt] Loaded " << gestaltResult.path
+                  << " (" << m_gestalt.name << ")\n";
+    } else {
+        std::cout << "[LCL Gestalt] Using built-in default; no file at "
+                  << gestaltResult.path << "\n";
+    }
+
     // 1. Initialize Android Display Backend (Composer3 AIDL, then Composer 2.4/2.2 HIDL)
     if (!m_displayBackend.initialize()) {
         std::cerr << "[AndroidPlatformServices] Display backend initialization failed or running in fallback.\n";

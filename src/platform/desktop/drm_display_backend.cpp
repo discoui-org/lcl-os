@@ -2,10 +2,6 @@
 #include "platform/common/output_scale.hpp"
 
 #include <iostream>
-#include <fstream>
-#include <sstream>
-#include <cstdlib>
-#include <cstdio>
 #include <cmath>
 #include <algorithm>
 #include <fcntl.h>
@@ -26,72 +22,15 @@ struct PreferredMode {
     int refreshHz{0};
 };
 
-PreferredMode parsePreferredModeFromBoot() {
+PreferredMode preferredModeFromGestalt(const lcl::platform::DeviceGestalt& gestalt) {
     PreferredMode pref{};
-
-    auto applyVideoToken = [&](const std::string& token) {
-        // video=1280x800-32@60  or  video=1280x800@60  or  video=1280x800
-        if (token.rfind("video=", 0) != 0) {
-            return;
-        }
-        std::string spec = token.substr(6);
-        // strip connector prefix like "Virtual-1:" if present
-        auto colon = spec.find(':');
-        if (colon != std::string::npos) {
-            spec = spec.substr(colon + 1);
-        }
-        int w = 0, h = 0, hz = 0;
-        if (std::sscanf(spec.c_str(), "%dx%d-%*d@%d", &w, &h, &hz) >= 2 ||
-            std::sscanf(spec.c_str(), "%dx%d@%d", &w, &h, &hz) >= 2 ||
-            std::sscanf(spec.c_str(), "%dx%d", &w, &h) >= 2) {
-            if (w > 0 && h > 0) {
-                pref.width = w;
-                pref.height = h;
-                if (hz > 0) {
-                    pref.refreshHz = hz;
-                }
-            }
-        }
-    };
-
-    auto applyKv = [&](const std::string& token) {
-        auto eq = token.find('=');
-        if (eq == std::string::npos) {
-            return;
-        }
-        std::string key = token.substr(0, eq);
-        std::string val = token.substr(eq + 1);
-        try {
-            if (key == "lcl.width") {
-                pref.width = std::stoi(val);
-            } else if (key == "lcl.height") {
-                pref.height = std::stoi(val);
-            } else if (key == "lcl.refresh" || key == "lcl.hz") {
-                pref.refreshHz = std::stoi(val);
-            }
-        } catch (...) {
-        }
-    };
-
-    std::ifstream cmdline("/proc/cmdline");
-    if (cmdline) {
-        std::string line;
-        std::getline(cmdline, line);
-        std::istringstream iss(line);
-        std::string token;
-        while (iss >> token) {
-            applyVideoToken(token);
-            applyKv(token);
-        }
+    if (gestalt.display.hasPreferredResolution()) {
+        pref.width = static_cast<int>(*gestalt.display.width);
+        pref.height = static_cast<int>(*gestalt.display.height);
     }
-
-    if (const char* ew = std::getenv("LCL_WIDTH")) {
-        try { pref.width = std::stoi(ew); } catch (...) {}
+    if (gestalt.display.refreshRateHz) {
+        pref.refreshHz = static_cast<int>(*gestalt.display.refreshRateHz);
     }
-    if (const char* eh = std::getenv("LCL_HEIGHT")) {
-        try { pref.height = std::stoi(eh); } catch (...) {}
-    }
-
     return pref;
 }
 
@@ -155,6 +94,7 @@ DrmDisplayBackend::DrmDisplayBackend(DrmDisplayBackend&& other) noexcept
       m_drmDevice(other.m_drmDevice),
       m_fbDevice(other.m_fbDevice),
       m_activeMode(other.m_activeMode),
+      m_gestalt(std::move(other.m_gestalt)),
       m_displayType(other.m_displayType),
       m_initialized(other.m_initialized) {
     other.m_drmDevice = DRMDeviceInfo{};
@@ -170,6 +110,7 @@ DrmDisplayBackend& DrmDisplayBackend::operator=(DrmDisplayBackend&& other) noexc
         m_drmDevice = other.m_drmDevice;
         m_fbDevice = other.m_fbDevice;
         m_activeMode = other.m_activeMode;
+        m_gestalt = std::move(other.m_gestalt);
         m_displayType = other.m_displayType;
         m_initialized = other.m_initialized;
 
@@ -192,7 +133,7 @@ bool DrmDisplayBackend::initialize(const std::string& devicePath) {
     }
 
     m_devicePath = devicePath;
-    m_activeMode.scaleFactor = resolveOutputScale();
+    m_activeMode.scaleFactor = sanitizeOutputScale(m_gestalt.display.scale.value_or(1.0f));
     std::cout << "[LCL Display] Initializing Desktop Display Subsystem...\n";
 
     // 1. Try DRM/KMS initialization with retry loop
@@ -281,9 +222,9 @@ bool DrmDisplayBackend::probeDRMResources() {
 
     if (!m_drmDevice.connector) return false;
 
-    const PreferredMode pref = parsePreferredModeFromBoot();
+    const PreferredMode pref = preferredModeFromGestalt(m_gestalt);
     if (pref.width > 0 && pref.height > 0) {
-        std::cout << "[LCL Display] Preferred mode from boot: "
+        std::cout << "[LCL Display] Preferred mode from Gestalt: "
                   << pref.width << "x" << pref.height;
         if (pref.refreshHz > 0) {
             std::cout << "@" << pref.refreshHz;

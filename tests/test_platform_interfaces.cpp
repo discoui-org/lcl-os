@@ -100,6 +100,7 @@ public:
     std::string appCatalogDirectory() const override { return "/tmp/mock-apps"; }
     std::vector<std::string> fontSearchDirectories() const override { return {"/tmp/mock-fonts"}; }
     std::string temporaryDirectory() const override { return "/tmp"; }
+    std::string gestaltFilePath() const override { return "/tmp/mock-gestalt.json"; }
 };
 
 // Mock concrete platform services container
@@ -113,12 +114,14 @@ public:
     IGraphicsContext& graphics() override { return m_graphics; }
     IInputBackend& input() override { return m_input; }
     const IRuntimePaths& paths() const override { return m_paths; }
+    const DeviceGestalt& gestalt() const override { return m_gestalt; }
 
     bool m_initialized{false};
     MockDisplayBackend m_display;
     MockGraphicsContext m_graphics;
     MockInputBackend m_input;
     MockRuntimePaths m_paths;
+    DeviceGestalt m_gestalt;
 };
 
 } // namespace
@@ -188,6 +191,7 @@ TEST(PlatformInterfacesTest, RuntimePathsContract) {
     EXPECT_EQ(paths.appCatalogDirectory(), "/tmp/mock-apps");
     ASSERT_EQ(paths.fontSearchDirectories().size(), 1u);
     EXPECT_EQ(paths.fontSearchDirectories()[0], "/tmp/mock-fonts");
+    EXPECT_EQ(paths.gestaltFilePath(), "/tmp/mock-gestalt.json");
 }
 
 TEST(PlatformInterfacesTest, PlatformServicesComposition) {

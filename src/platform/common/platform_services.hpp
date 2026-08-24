@@ -5,6 +5,7 @@
 #include "platform/common/graphics_context.hpp"
 #include "platform/common/input_backend.hpp"
 #include "platform/common/runtime_paths.hpp"
+#include "platform/common/gestalt.hpp"
 
 namespace lcl::platform {
 
@@ -26,6 +27,7 @@ public:
     virtual IGraphicsContext& graphics() = 0;
     virtual IInputBackend& input() = 0;
     virtual const IRuntimePaths& paths() const = 0;
+    virtual const DeviceGestalt& gestalt() const = 0;
 };
 
 } // namespace lcl::platform

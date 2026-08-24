@@ -499,6 +499,7 @@ modprobe virtio_pci 2>/dev/null || true
 modprobe virtio_blk 2>/dev/null || true
 modprobe virtio_gpu 2>/dev/null || true
 modprobe virtio_input 2>/dev/null || true
+modprobe qemu_fw_cfg 2>/dev/null || true
 modprobe ext4 2>/dev/null || true
 
 # Auto-probe hardware drivers via /sys modaliases
@@ -1366,7 +1367,7 @@ def launch_qemu(
     print(f"  - Memory: {memory}")
     print(f"  - SMP Cores: {cpus}")
     print(f"  - Guest video: {width}x{height}@{refresh_hz}")
-    print(f"  - UI scale: {scale} (lcl.scale)")
+    print(f"  - UI scale: {scale} (Gestalt)")
     if mobile:
         print("  - Mode: mobile portrait display (1179x2556 @ 3x scale)")
         print(f"  - Logical viewport: {host.logical_width}x{host.logical_height}")
@@ -1395,16 +1396,36 @@ def launch_qemu(
         print(f"  - Initrd: {INITRAMFS_IMG}")
     print("----------------------------------------------------")
 
-    # Resolution -> DRM/KMS via kernel video= + lcl.width/height (display backend picks mode)
+    # The standard kernel video= argument establishes the early DRM/KMS mode.
+    # LCL display policy travels as a versioned Gestalt document via fw_cfg.
     video_mode = f"video={width}x{height}-32@{refresh_hz}"
-    lcl_params = (
-        f"lcl.scale={scale} lcl.width={width} lcl.height={height} "
-        f"lcl.refresh={refresh_hz} lcl.dpr={host_dpr}"
+    qemu_gestalt = BUILD_DIR / "qemu-gestalt.json"
+    write_text(
+        qemu_gestalt,
+        json.dumps(
+            {
+                "version": 1,
+                "name": "LCL QEMU Output",
+                "display": {
+                    "width": width,
+                    "height": height,
+                    "refreshRateHz": refresh_hz,
+                    "scale": scale,
+                    "naturalOrientation": "portrait" if height > width else "landscape",
+                    "defaultRotation": 0,
+                    "safeArea": {"top": 0, "right": 0, "bottom": 0, "left": 0},
+                    "corners": {
+                        "topLeft": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
+                        "topRight": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
+                        "bottomLeft": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
+                        "bottomRight": {"radiusX": 0, "radiusY": 0, "roundness": 2.0},
+                    },
+                    "cutouts": [],
+                },
+            },
+            indent=2,
+        ) + "\n",
     )
-    if host.logical_width and host.logical_height:
-        lcl_params += f" lcl.logical={host.logical_width}x{host.logical_height}"
-    if host.physical_width and host.physical_height:
-        lcl_params += f" lcl.physical={host.physical_width}x{host.physical_height}"
 
     serial_console = (
         "console=ttyAMA0,115200 console=tty0 earlycon"
@@ -1413,7 +1434,7 @@ def launch_qemu(
     )
     append = (
         f"{serial_console} "
-        f"{video_mode} {lcl_params} "
+        f"{video_mode} "
         f"rdinit=/init loglevel=6"
     )
 
@@ -1489,6 +1510,8 @@ def launch_qemu(
         cpus,
         *gpu,
         *display,
+        "-fw_cfg",
+        f"name=opt/lcl/gestalt,file={qemu_gestalt}",
         *spice,
         *extra_qemu,
         *input_devices,
@@ -1523,7 +1546,7 @@ def main() -> None:
         "--native",
         "-n",
         action="store_true",
-        help="Match host resolution + DPI scale (video= + lcl.scale cmdline)",
+        help="Match host resolution + DPI scale through DRM mode + Gestalt",
     )
     parser.add_argument(
         "--retina",

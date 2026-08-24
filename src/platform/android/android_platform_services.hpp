@@ -31,6 +31,7 @@ public:
     lcl::platform::IGraphicsContext& graphics() override { return m_graphicsContext; }
     lcl::platform::IInputBackend& input() override { return m_inputBackend; }
     const lcl::platform::IRuntimePaths& paths() const override { return m_paths; }
+    const lcl::platform::DeviceGestalt& gestalt() const override { return m_gestalt; }
 
     // Android-specific accessors
     AndroidDisplayBackend& getAndroidDisplay() { return m_displayBackend; }
@@ -46,6 +47,7 @@ private:
     AndroidGraphicsContext m_graphicsContext;
     AndroidInputBackend m_inputBackend;
     AndroidRuntimePaths m_paths;
+    lcl::platform::DeviceGestalt m_gestalt;
     bool m_initialized{false};
 };
 

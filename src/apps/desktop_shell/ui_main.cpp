@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -304,27 +303,13 @@ void updateDockView(
   view.panel->markDirty();
 }
 
-std::pair<uint32_t, uint32_t> displayPixelsFromCmdline() {
-  uint32_t width = 1280, height = 800;
-  std::ifstream cmdline("/proc/cmdline");
-  std::string token;
-  while (cmdline >> token) {
-    if (token.rfind("lcl.width=", 0) == 0)
-      width = std::max(1, std::stoi(token.substr(10)));
-    if (token.rfind("lcl.height=", 0) == 0)
-      height = std::max(1, std::stoi(token.substr(11)));
-  }
-  return {width, height};
-}
-
 } // namespace
 
 int main() {
-  const auto [physicalW, physicalH] = displayPixelsFromCmdline();
   // Bootstrap dimensions are replaced by the compositor's first logical
   // ConfigureBounds before allocation and presentation.
-  uint32_t width = physicalW;
-  uint32_t height = physicalH;
+  uint32_t width = 1280;
+  uint32_t height = 800;
 
   const std::string wallpaperPath =
       std::filesystem::exists("/usr/share/wallpapers/wallpaper.jpg")

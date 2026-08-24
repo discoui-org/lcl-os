@@ -293,6 +293,8 @@ def cmd_android(args: argparse.Namespace) -> None:
         deploy_args.append("--logcat")
     if args.software_clients:
         deploy_args.append("--software-clients")
+    if args.gestalt:
+        deploy_args.extend(("--gestalt", str(args.gestalt)))
 
     run_android_deploy(deploy_args)
 
@@ -474,6 +476,10 @@ def main() -> None:
     p_android.add_argument(
         "--software-clients", action="store_true",
         help="Use canonical glibc SHM clients instead of Android AHardwareBuffer clients",
+    )
+    p_android.add_argument(
+        "--gestalt", type=Path, metavar="JSON",
+        help="Push and use an explicit device Gestalt JSON",
     )
 
     # ---- build ----

@@ -28,6 +28,8 @@
 
 #include <condition_variable>
 #include <array>
+#include <cstdlib>
+#include <limits>
 #include <mutex>
 #include <vector>
 
@@ -253,9 +255,15 @@ AndroidHidlDisplayBackend::~AndroidHidlDisplayBackend() {
     shutdown();
 }
 
-bool AndroidHidlDisplayBackend::initialize(float outputScale) {
+bool AndroidHidlDisplayBackend::initialize(float outputScale,
+                                           uint32_t preferredWidth,
+                                           uint32_t preferredHeight,
+                                           uint32_t preferredRefreshHz) {
 #if !defined(LCL_HAS_ANDROID_HIDL)
     (void)outputScale;
+    (void)preferredWidth;
+    (void)preferredHeight;
+    (void)preferredRefreshHz;
     std::cerr << "[AndroidHidlDisplayBackend] HIDL support was not enabled at build time\n";
     return false;
 #else
@@ -371,27 +379,84 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale) {
         return false;
     }
 
-    const auto readAttribute = [&](composer21::IComposerClient::Attribute attribute,
+    const auto readAttribute = [&](uint32_t config,
+                                   composer21::IComposerClient::Attribute attribute,
                                    int32_t* destination) {
         composer21::Error error = composer21::Error::NO_RESOURCES;
         m_impl->client->getDisplayAttribute(
-            m_displayId, activeConfig, attribute,
+            m_displayId, config, attribute,
             [&](composer21::Error callbackError, int32_t value) {
                 error = callbackError;
                 if (isNone(error)) *destination = value;
             });
         return error;
     };
+
+    if (preferredWidth > 0 && preferredHeight > 0) {
+        composer21::Error configsError = composer21::Error::NO_RESOURCES;
+        hidl_vec<uint32_t> configs;
+        m_impl->client->getDisplayConfigs(
+            m_displayId, [&](composer21::Error error, const hidl_vec<uint32_t>& values) {
+                configsError = error;
+                if (isNone(error)) configs = values;
+            });
+        bool foundPreferred = false;
+        uint32_t preferredConfig = activeConfig;
+        int64_t bestRefreshDistance = std::numeric_limits<int64_t>::max();
+        if (isNone(configsError)) {
+            for (const uint32_t config : configs) {
+                int32_t configWidth = 0;
+                int32_t configHeight = 0;
+                int32_t configVsyncPeriod = 0;
+                if (!isNone(readAttribute(config, composer21::IComposerClient::Attribute::WIDTH,
+                                          &configWidth)) ||
+                    !isNone(readAttribute(config, composer21::IComposerClient::Attribute::HEIGHT,
+                                          &configHeight)) ||
+                    configWidth != static_cast<int32_t>(preferredWidth) ||
+                    configHeight != static_cast<int32_t>(preferredHeight)) {
+                    continue;
+                }
+                (void)readAttribute(config,
+                                    composer21::IComposerClient::Attribute::VSYNC_PERIOD,
+                                    &configVsyncPeriod);
+                const int64_t refreshHz = configVsyncPeriod > 0
+                    ? 1000000000ll / configVsyncPeriod : 0;
+                const int64_t distance = preferredRefreshHz > 0
+                    ? std::llabs(refreshHz - preferredRefreshHz) : 0;
+                if (!foundPreferred || distance < bestRefreshDistance) {
+                    foundPreferred = true;
+                    preferredConfig = config;
+                    bestRefreshDistance = distance;
+                }
+            }
+        }
+        if (!foundPreferred) {
+            std::cerr << "[AndroidHidlDisplayBackend] Gestalt mode "
+                      << preferredWidth << "x" << preferredHeight
+                      << " is unavailable; using Composer active mode\n";
+        } else if (preferredConfig != activeConfig) {
+            const auto setResult = m_impl->client->setActiveConfig(m_displayId, preferredConfig);
+            if (setResult.isOk() && isNone(setResult)) {
+                activeConfig = preferredConfig;
+            } else {
+                std::cerr << "[AndroidHidlDisplayBackend] Composer rejected Gestalt mode\n";
+            }
+        }
+    }
+
     int32_t width = 0;
     int32_t height = 0;
     int32_t vsyncPeriod = 0;
-    if (!isNone(readAttribute(composer21::IComposerClient::Attribute::WIDTH, &width)) ||
-        !isNone(readAttribute(composer21::IComposerClient::Attribute::HEIGHT, &height))) {
+    if (!isNone(readAttribute(activeConfig, composer21::IComposerClient::Attribute::WIDTH,
+                              &width)) ||
+        !isNone(readAttribute(activeConfig, composer21::IComposerClient::Attribute::HEIGHT,
+                              &height))) {
         std::cerr << "[AndroidHidlDisplayBackend] failed to query display dimensions\n";
         shutdown();
         return false;
     }
-    (void)readAttribute(composer21::IComposerClient::Attribute::VSYNC_PERIOD, &vsyncPeriod);
+    (void)readAttribute(activeConfig, composer21::IComposerClient::Attribute::VSYNC_PERIOD,
+                        &vsyncPeriod);
     m_activeMode.width = width;
     m_activeMode.height = height;
     if (vsyncPeriod > 0) {
@@ -643,9 +708,13 @@ extern "C" LCL_HIDL_BRIDGE_EXPORT void lcl_android_hidl_destroy(void* instance) 
 }
 
 extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_initialize(
-    void* instance, float outputScale, LclAndroidHidlDisplayInfo* info) {
+    void* instance, float outputScale, uint32_t preferredWidth,
+    uint32_t preferredHeight, uint32_t preferredRefreshHz,
+    LclAndroidHidlDisplayInfo* info) {
     auto* backend = static_cast<lcl::platform::android::AndroidHidlDisplayBackend*>(instance);
-    if (!backend || !info || !backend->initialize(outputScale)) return 0;
+    if (!backend || !info ||
+        !backend->initialize(outputScale, preferredWidth, preferredHeight,
+                             preferredRefreshHz)) return 0;
     const auto& mode = backend->activeMode();
     info->width = mode.width;
     info->height = mode.height;

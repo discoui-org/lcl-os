@@ -1,6 +1,7 @@
 #pragma once
 
 #include "platform/common/display_backend.hpp"
+#include "platform/common/gestalt.hpp"
 #include <memory>
 #include <string>
 #include <cstdint>
@@ -25,6 +26,7 @@ public:
     ~AndroidDisplayBackend() override;
 
     bool initialize() override;
+    void setGestalt(const lcl::platform::DeviceGestalt& gestalt) { m_gestalt = gestalt; }
     void shutdown() override;
 
     bool isInitialized() const override { return m_initialized; }
@@ -80,6 +82,7 @@ private:
     int64_t m_layerId{-1};
     bool m_displayConnected{false};
     lcl::platform::DisplayMode m_activeMode;
+    lcl::platform::DeviceGestalt m_gestalt;
 };
 
 } // namespace lcl::platform::android

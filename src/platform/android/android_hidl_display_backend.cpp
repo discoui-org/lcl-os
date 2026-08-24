@@ -13,7 +13,8 @@ namespace lcl::platform::android {
 struct AndroidHidlDisplayBackend::Impl {
     using Create = void* (*)();
     using Destroy = void (*)(void*);
-    using Initialize = int (*)(void*, float, LclAndroidHidlDisplayInfo*);
+    using Initialize = int (*)(void*, float, uint32_t, uint32_t, uint32_t,
+                               LclAndroidHidlDisplayInfo*);
     using Shutdown = void (*)(void*);
     using PrepareBuffer = int (*)(void*, AHardwareBuffer*);
     using Present = int (*)(void*, AHardwareBuffer*, int);
@@ -67,7 +68,10 @@ AndroidHidlDisplayBackend::~AndroidHidlDisplayBackend() {
     if (m_impl->library) dlclose(m_impl->library);
 }
 
-bool AndroidHidlDisplayBackend::initialize(float outputScale) {
+bool AndroidHidlDisplayBackend::initialize(float outputScale,
+                                           uint32_t preferredWidth,
+                                           uint32_t preferredHeight,
+                                           uint32_t preferredRefreshHz) {
     if (m_initialized) return true;
     if (!m_impl->library) {
         const std::string path = siblingBridgePath();
@@ -94,7 +98,9 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale) {
     if (!m_impl->instance) return false;
 
     LclAndroidHidlDisplayInfo info{};
-    if (!m_impl->initialize(m_impl->instance, outputScale, &info)) return false;
+    if (!m_impl->initialize(m_impl->instance, outputScale,
+                            preferredWidth, preferredHeight, preferredRefreshHz,
+                            &info)) return false;
     m_activeMode.width = info.width;
     m_activeMode.height = info.height;
     m_activeMode.refreshRate = info.refresh_rate_hz;

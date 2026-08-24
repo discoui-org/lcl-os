@@ -17,7 +17,8 @@ public:
     AndroidHidlDisplayBackend();
     ~AndroidHidlDisplayBackend();
 
-    bool initialize(float outputScale);
+    bool initialize(float outputScale, uint32_t preferredWidth = 0,
+                    uint32_t preferredHeight = 0, uint32_t preferredRefreshHz = 0);
     void shutdown();
     bool prepareBufferForRender(AHardwareBuffer* buffer);
     bool presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd = -1);

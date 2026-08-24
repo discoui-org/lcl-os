@@ -44,6 +44,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 
 # Platform-agnostic interface library (consumed by core and render without concrete platform dependencies)
 add_library(lcl-platform-common STATIC
+    src/platform/common/gestalt.cpp
     src/platform/common/keyboard_mapper.cpp
     src/platform/common/output_scale.cpp
 )
@@ -617,6 +618,7 @@ else()
 
         add_executable(lcl_unit_tests
             tests/test_platform_interfaces.cpp
+            tests/test_gestalt.cpp
             tests/test_motion.cpp
             tests/test_lcl_protocol.cpp
             tests/test_app_bundle_parser.cpp

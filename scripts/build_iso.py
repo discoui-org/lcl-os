@@ -134,7 +134,7 @@ def build_iso(arch: str = "x86_64") -> Path:
             "    protocol: linux\n"
             "    kernel_path: boot():/boot/vmlinuz\n"
             "    initrd_path: boot():/boot/initramfs.cpio.gz\n"
-            "    cmdline: console=tty0 lcl.scale=1\n"
+            "    cmdline: console=tty0\n"
             "    resolution: preferred\n"
         )
         (ISO_ROOT / "boot" / "limine.conf").write_text(default_conf, encoding="utf-8")

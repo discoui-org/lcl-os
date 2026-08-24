@@ -144,6 +144,12 @@ int main(int argc, char* argv[]) {
             maxFrames = std::atoi(argv[++i]);
         } else if (std::string(argv[i]) == "--verify") {
             verify = true;
+        } else if (std::string(argv[i]) == "--gestalt") {
+            if (i + 1 >= argc) {
+                std::cerr << "[LCL Android] --gestalt requires an absolute JSON path.\n";
+                return 2;
+            }
+            setenv("LCL_GESTALT_PATH", argv[++i], 1);
         }
     }
 
