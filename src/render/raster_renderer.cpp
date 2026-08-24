@@ -2081,6 +2081,63 @@ void RasterRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int sr
 #endif
 }
 
+void RasterRenderer::drawDmaBufTextureRegionTransformed(
+        float dstX, float dstY, float drawWidth, float drawHeight,
+        int srcW, int srcH, int backingW, int backingH,
+        int regionX, int regionY, int regionWidth, int regionHeight,
+        uint32_t texture, float opacity, float cornerRadius,
+        float cornerRoundness) {
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend ||
+        texture == 0 || srcW <= 0 || srcH <= 0 || backingW <= 0 ||
+        backingH <= 0) {
+        return;
+    }
+    const int x = std::clamp(regionX, 0, srcW - 1);
+    const int y = std::clamp(regionY, 0, srcH - 1);
+    const int width = std::clamp(regionWidth, 1, srcW - x);
+    const int height = std::clamp(regionHeight, 1, srcH - y);
+    const float uOffset = static_cast<float>(x) / backingW;
+    const float uScale = static_cast<float>(width) / backingW;
+    // Imported DMA-BUF textures use the same vertically flipped sampling
+    // convention as the complete-surface path.
+    const float vOffset = static_cast<float>(srcH - y - height) / backingH;
+    const float vScale = static_cast<float>(height) / backingH;
+    const auto destination = mapLogicalRasterDestination(
+        dstX, dstY, drawWidth, drawHeight, cornerRadius,
+        m_deviceScale, m_contentOriginX, m_contentOriginY);
+
+    m_eglBackend->makeCurrent();
+    glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+    glViewport(0, 0, m_width, m_height);
+    drawMaskedTextureQuad(
+        texture, destination.x, destination.y,
+        destination.width, destination.height,
+        destination.cornerRadius, cornerRoundness, opacity, false,
+        uScale, vScale, uOffset, vOffset,
+        0.0f, 0.0f, 0.0f, 0.0f,
+        normalizedHalfTexel(static_cast<uint32_t>(backingW)),
+        normalizedHalfTexel(static_cast<uint32_t>(backingH)));
+#else
+    (void)dstX;
+    (void)dstY;
+    (void)drawWidth;
+    (void)drawHeight;
+    (void)srcW;
+    (void)srcH;
+    (void)backingW;
+    (void)backingH;
+    (void)regionX;
+    (void)regionY;
+    (void)regionWidth;
+    (void)regionHeight;
+    (void)texture;
+    (void)opacity;
+    (void)cornerRadius;
+    (void)cornerRoundness;
+#endif
+}
+
 void RasterRenderer::drawBackgroundGradient(const RasterColor& topColor, const RasterColor& bottomColor) {
     if (!m_initialized || !m_targetPixels || m_height == 0 || m_width == 0) return;
 

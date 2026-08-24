@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 16;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 17;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint64_t LCL_CAPABILITY_AHB_V1 = 1ull << 0;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
@@ -76,6 +76,7 @@ enum class LCLSystemSurfaceKind : uint32_t {
     Wallpaper = 1,
     MenuBar = 2,
     Dock = 3,
+    HomeScreen = 4,
 };
 
 enum class LCLSceneVisibility : uint8_t {
@@ -222,6 +223,12 @@ struct LCLMsgSurfaceCreate {
     char title[128]{0};
     char appId[64]{0};
     LCLResizePresentationMode resizePresentation{LCLResizePresentationMode::CompositorMorph};
+    uint8_t hasLaunchOrigin{0};
+    float launchOriginX{0.0f};
+    float launchOriginY{0.0f};
+    float launchOriginWidth{0.0f};
+    float launchOriginHeight{0.0f};
+    float launchOriginCornerRadius{0.0f};
 };
 
 /**

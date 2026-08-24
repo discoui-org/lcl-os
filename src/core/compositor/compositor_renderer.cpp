@@ -212,6 +212,60 @@ void CompositorRenderer::render(render::Renderer& renderer,
             rootTransform);
     };
 
+    const SurfaceEntry* homeScreenSurface = nullptr;
+    for (const auto& surface : surfaces) {
+        if (surface.entry &&
+            surface.entry->systemSurfaceKind ==
+                protocol::LCLSystemSurfaceKind::HomeScreen &&
+            surface.entry->hasRenderableBuffer()) {
+            homeScreenSurface = surface.entry;
+            break;
+        }
+    }
+
+    auto drawLaunchIconProxy = [&](const SurfaceEntry& surface) {
+        if (!homeScreenSurface || !surface.hasLaunchOrigin ||
+            !surface.launchMorphActive || surface.transitionOpacity >= 0.999f) {
+            return;
+        }
+        const auto& home = *homeScreenSurface;
+        const float scale = std::max(0.001f, home.bufferScale);
+        const int sourceX = static_cast<int>(std::lround(
+            (surface.launchOriginX - home.configuredX) * scale));
+        const int sourceY = static_cast<int>(std::lround(
+            (surface.launchOriginY - home.configuredY) * scale));
+        const int sourceWidth = std::max(1, static_cast<int>(std::lround(
+            surface.launchOriginWidth * scale)));
+        const int sourceHeight = std::max(1, static_cast<int>(std::lround(
+            surface.launchOriginHeight * scale)));
+        if (sourceX < 0 || sourceY < 0 ||
+            sourceX + sourceWidth > static_cast<int>(home.width) ||
+            sourceY + sourceHeight > static_cast<int>(home.height)) {
+            return;
+        }
+
+        if (home.pixels) {
+            const int stridePixels = static_cast<int>(home.stride / 4);
+            const auto* pixels = reinterpret_cast<const uint32_t*>(home.pixels) +
+                static_cast<size_t>(sourceY) * stridePixels + sourceX;
+            raster->drawBufferTransformed(
+                surface.launchMorphX, surface.launchMorphY,
+                sourceWidth, sourceHeight, pixels, stridePixels, 1.0f,
+                surface.launchMorphCornerRadius, 2.0f, false,
+                surface.launchMorphWidth, surface.launchMorphHeight);
+        } else if (home.dmaBufTexture != 0) {
+            raster->drawDmaBufTextureRegionTransformed(
+                surface.launchMorphX, surface.launchMorphY,
+                surface.launchMorphWidth, surface.launchMorphHeight,
+                static_cast<int>(home.width), static_cast<int>(home.height),
+                static_cast<int>(home.backingWidth),
+                static_cast<int>(home.backingHeight),
+                sourceX, sourceY, sourceWidth, sourceHeight,
+                home.dmaBufTexture, 1.0f,
+                surface.launchMorphCornerRadius, 2.0f);
+        }
+    };
+
     // 1. Clear either the complete desktop or only the old+new move damage.
 #if defined(__ANDROID__)
     if (incrementalDamage) {
@@ -259,7 +313,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 fxY = group.globalBounds.y;
                 fxW = std::max(1.0f, group.globalBounds.width);
                 fxH = std::max(1.0f, group.globalBounds.height);
-                cornerRadius = group.mapLength(resolveWindowCornerRadiusLogical(win));
+                cornerRadius = surface.launchMorphActive
+                    ? surface.launchMorphCornerRadius
+                    : group.mapLength(resolveWindowCornerRadiusLogical(win));
                 cornerRoundness = resolveWindowCornerRoundness(win);
             } else {
                 const auto local = resolveLocalEffectGeometry(
@@ -323,7 +379,14 @@ void CompositorRenderer::render(render::Renderer& renderer,
         }
 
         const render::WindowGroupTransform group =
-            render::makeWindowGroupTransform(win, titleOffset, windowScale);
+            matchingSurface && matchingSurface->launchMorphActive
+                ? render::makeWindowGroupTransformToBounds(
+                    win, titleOffset,
+                    {matchingSurface->launchMorphX,
+                     matchingSurface->launchMorphY,
+                     matchingSurface->launchMorphWidth,
+                     matchingSurface->launchMorphHeight})
+                : render::makeWindowGroupTransform(win, titleOffset, windowScale);
 
         // B. Apply effect-graph backdrop regions (new pipeline only)
         if (matchingSurface && !matchingSurface->effectRegions.empty()) {
@@ -332,6 +395,12 @@ void CompositorRenderer::render(render::Renderer& renderer,
         }
 
         if (matchingSurface) {
+            // The prototype keeps the icon as the outer moving layer and fades
+            // the live app surface over it. Sampling the launcher's committed
+            // icon region preserves that exact visual ownership without making
+            // the compositor load application assets itself.
+            drawLaunchIconProxy(*matchingSurface);
+
             int srcW = static_cast<int>(matchingSurface->width);
             int srcH = static_cast<int>(matchingSurface->height);
             int stridePixels = static_cast<int>(matchingSurface->stride / 4);
@@ -347,9 +416,13 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 drawH = std::max(1.0f, group.globalBounds.height - group.titleHeight);
             }
 
-            const float windowCornerRadius = resolveWindowCornerRadiusLogical(win);
+            const float windowCornerRadius = matchingSurface->launchMorphActive
+                ? matchingSurface->launchMorphCornerRadius
+                : resolveWindowCornerRadiusLogical(win);
             const bool maskToWindowShape = windowCornerRadius > 0.001f;
-            const float presentedCornerRadius = group.mapLength(windowCornerRadius);
+            const float presentedCornerRadius = matchingSurface->launchMorphActive
+                ? windowCornerRadius
+                : group.mapLength(windowCornerRadius);
 
             const bool hasPrevious = matchingSurface->previousPixels ||
                                      matchingSurface->previousDmaBufTexture != 0;

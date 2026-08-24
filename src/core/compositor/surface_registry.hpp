@@ -106,6 +106,18 @@ public:
         float transitionDurationSec{0.0f};
         float transitionOpacity{1.0f};
         float transitionScale{1.0f};
+        bool hasLaunchOrigin{false};
+        float launchOriginX{0.0f};
+        float launchOriginY{0.0f};
+        float launchOriginWidth{0.0f};
+        float launchOriginHeight{0.0f};
+        float launchOriginCornerRadius{0.0f};
+        bool launchMorphActive{false};
+        float launchMorphX{0.0f};
+        float launchMorphY{0.0f};
+        float launchMorphWidth{0.0f};
+        float launchMorphHeight{0.0f};
+        float launchMorphCornerRadius{0.0f};
         bool hasCommittedBuffer{false};
         bool ignoreBufferCommits{false};
         bool pendingDestroy{false};

@@ -269,6 +269,13 @@ public:
                                       uint32_t texture, float opacity,
                                       float cornerRadius, float cornerRoundness,
                                       bool squareTopCorners, float drawWidth, float drawHeight);
+    /** Composite a cropped region of an imported surface into a logical rect. */
+    void drawDmaBufTextureRegionTransformed(
+        float dstX, float dstY, float drawWidth, float drawHeight,
+        int srcW, int srcH, int backingW, int backingH,
+        int regionX, int regionY, int regionWidth, int regionHeight,
+        uint32_t texture, float opacity, float cornerRadius,
+        float cornerRoundness = 2.0f);
 
     // Accessors
     uint32_t getWidth() const { return m_width; }

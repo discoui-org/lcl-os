@@ -86,4 +86,35 @@ inline WindowGroupTransform makeWindowGroupTransform(const Window& window,
     return group;
 }
 
+/** Map a complete WindowGroup into an explicit compositor presentation rect. */
+inline WindowGroupTransform makeWindowGroupTransformToBounds(
+        const Window& window, float unscaledTitleHeight,
+        const graphics::RectF& globalBounds) noexcept {
+    WindowGroupTransform group{};
+    const auto presentation = presentedBounds(window);
+    group.localBounds = {
+        0.0f, 0.0f,
+        std::max(1.0f, presentation.width),
+        std::max(1.0f, presentation.height),
+    };
+    group.globalBounds = {
+        globalBounds.x,
+        globalBounds.y,
+        std::max(1.0f, globalBounds.width),
+        std::max(1.0f, globalBounds.height),
+    };
+    const float scaleX = group.globalBounds.width / group.localBounds.width;
+    const float scaleY = group.globalBounds.height / group.localBounds.height;
+    group.scale = std::min(scaleX, scaleY);
+    group.localToGlobal = graphics::Matrix3::scale(scaleX, scaleY)
+        .followedBy(graphics::Matrix3::translation(
+            group.globalBounds.x, group.globalBounds.y));
+    group.globalToLocal = group.localToGlobal.inverted().value_or(
+        graphics::Matrix3::identity());
+    group.titleHeight = std::clamp(
+        std::max(0.0f, unscaledTitleHeight) * scaleY,
+        0.0f, group.globalBounds.height);
+    return group;
+}
+
 } // namespace lcl::render

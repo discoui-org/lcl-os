@@ -96,13 +96,22 @@ bool Compositor::initialize() {
         if (windowId == 0) return false;
         const auto surface = std::find_if(
             m_surfaces.begin(), m_surfaces.end(), [windowId](const auto& item) {
-                return !item.second.isPopup() && item.second.windowId == windowId;
+                return !item.second.isPopup() &&
+                    item.second.systemSurfaceKind ==
+                        protocol::LCLSystemSurfaceKind::None &&
+                    item.second.windowId == windowId;
             });
-        if (surface == m_surfaces.end() ||
-            surface->second.transitionPhase !=
-                SurfaceRegistry::SurfaceEntry::TransitionPhase::None) {
+        if (surface == m_surfaces.end()) {
             return false;
         }
+        const auto phase = surface->second.transitionPhase;
+        if (phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing ||
+            phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing) {
+            return true;
+        }
+        // Entering/restoring launch morphs are velocity-preserving channels.
+        // Retargeting them here makes Home responsive even before the opening
+        // animation has settled.
         surface->second.transitionPhase =
             SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
         surface->second.transitionElapsedSec = 0.0f;

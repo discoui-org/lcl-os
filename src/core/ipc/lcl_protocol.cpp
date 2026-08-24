@@ -160,7 +160,8 @@ bool validShellDeltaKind(LCLShellStateDeltaKind value) {
            value <= LCLShellStateDeltaKind::FocusChanged;
 }
 bool validSystemSurfaceKind(LCLSystemSurfaceKind value) {
-    return value >= LCLSystemSurfaceKind::None && value <= LCLSystemSurfaceKind::Dock;
+    return value >= LCLSystemSurfaceKind::None &&
+           value <= LCLSystemSurfaceKind::HomeScreen;
 }
 bool validPopupRole(LCLPopupRole value) {
     return value == LCLPopupRole::Transient;
@@ -341,7 +342,14 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
             !validFloat(msg.height) || msg.height <= 0.0f ||
             !validString(msg.title, sizeof(msg.title)) ||
             !validString(msg.appId, sizeof(msg.appId)) || msg.appId[0] == '\0' ||
-            !validResizePresentation(msg.resizePresentation))
+            !validResizePresentation(msg.resizePresentation) ||
+            msg.hasLaunchOrigin > 1 ||
+            !validFloat(msg.launchOriginX) || !validFloat(msg.launchOriginY) ||
+            !validFloat(msg.launchOriginWidth) || !validFloat(msg.launchOriginHeight) ||
+            !validFloat(msg.launchOriginCornerRadius) ||
+            (msg.hasLaunchOrigin &&
+             (msg.launchOriginWidth <= 0.0f || msg.launchOriginHeight <= 0.0f ||
+              msg.launchOriginCornerRadius < 0.0f)))
             return false;
         out.u32(msg.surfaceId);
         out.f32(msg.x);
@@ -351,6 +359,12 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.fixed(msg.title, sizeof(msg.title));
         out.fixed(msg.appId, sizeof(msg.appId));
         out.u8(static_cast<uint8_t>(msg.resizePresentation));
+        out.u8(msg.hasLaunchOrigin);
+        out.f32(msg.launchOriginX);
+        out.f32(msg.launchOriginY);
+        out.f32(msg.launchOriginWidth);
+        out.f32(msg.launchOriginHeight);
+        out.f32(msg.launchOriginCornerRadius);
         return true;
     }
     case LCLOpcode::PopupSurfaceCreate: {
@@ -720,7 +734,10 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !in.f32(m.width) || !in.f32(m.height) ||
             !in.fixed(m.title, sizeof(m.title)) ||
             !in.fixed(m.appId, sizeof(m.appId)) ||
-            !in.u8(resizePresentation))
+            !in.u8(resizePresentation) || !in.u8(m.hasLaunchOrigin) ||
+            !in.f32(m.launchOriginX) || !in.f32(m.launchOriginY) ||
+            !in.f32(m.launchOriginWidth) || !in.f32(m.launchOriginHeight) ||
+            !in.f32(m.launchOriginCornerRadius))
             return false;
         m.resizePresentation = static_cast<LCLResizePresentationMode>(resizePresentation);
         if (m.surfaceId == 0 || !validFloat(m.x) || !validFloat(m.y) ||
@@ -728,7 +745,14 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !validFloat(m.height) || m.height <= 0.0f ||
             !validString(m.title, sizeof(m.title)) ||
             !validString(m.appId, sizeof(m.appId)) || m.appId[0] == '\0' ||
-            !validResizePresentation(m.resizePresentation))
+            !validResizePresentation(m.resizePresentation) ||
+            m.hasLaunchOrigin > 1 ||
+            !validFloat(m.launchOriginX) || !validFloat(m.launchOriginY) ||
+            !validFloat(m.launchOriginWidth) || !validFloat(m.launchOriginHeight) ||
+            !validFloat(m.launchOriginCornerRadius) ||
+            (m.hasLaunchOrigin &&
+             (m.launchOriginWidth <= 0.0f || m.launchOriginHeight <= 0.0f ||
+              m.launchOriginCornerRadius < 0.0f)))
             return false;
         appendNative(payload, m);
         break;

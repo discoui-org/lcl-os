@@ -386,6 +386,7 @@ if(ANDROID)
         lcl-ui
         lcl-raster
         lcl-protocol
+        lcl-session
         Threads::Threads
     )
 
@@ -538,6 +539,7 @@ else()
 
     target_link_libraries(lcl-sessiond PRIVATE
         lcl-session
+        lcl-platform-common
         Threads::Threads
     )
 
@@ -602,6 +604,7 @@ else()
         lcl-ui
         lcl-raster
         lcl-protocol
+        lcl-session
         Threads::Threads
     )
 

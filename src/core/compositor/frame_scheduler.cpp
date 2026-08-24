@@ -7,18 +7,178 @@
 
 namespace lcl::core {
 
+namespace {
+
+using TransitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase;
+
+bool isLaunchMorphPhase(TransitionPhase phase) {
+    return phase == TransitionPhase::Entering ||
+           phase == TransitionPhase::Closing ||
+           phase == TransitionPhase::Minimizing ||
+           phase == TransitionPhase::Restoring;
+}
+
+lcl::motion::Motion criticalSpring(float stiffness) {
+    return lcl::motion::Motion::spring(
+        1.0f, stiffness, 2.0f * std::sqrt(stiffness));
+}
+
+} // namespace
+
 void FrameScheduler::reset(std::chrono::steady_clock::time_point now) noexcept {
     m_lastTransitionTick = now;
 }
 
+void FrameScheduler::prepareLaunchMorph(
+        SurfaceRegistry::Key key, SurfaceRegistry::SurfaceEntry& entry) {
+    if (!entry.hasLaunchOrigin || !isLaunchMorphPhase(entry.transitionPhase)) {
+        return;
+    }
+
+    const float targetX = entry.configuredWidth > 0.0f
+        ? entry.configuredX : entry.initialX;
+    const float targetY = entry.configuredHeight > 0.0f
+        ? entry.configuredY : entry.initialY;
+    const float targetWidth = std::max(1.0f, entry.configuredWidth > 0.0f
+        ? entry.configuredWidth : entry.initialWidth);
+    const float targetHeight = std::max(1.0f, entry.configuredHeight > 0.0f
+        ? entry.configuredHeight : entry.initialHeight);
+    const float originCenterX = entry.launchOriginX + entry.launchOriginWidth * 0.5f;
+    const float originCenterY = entry.launchOriginY + entry.launchOriginHeight * 0.5f;
+    const float targetCenterX = targetX + targetWidth * 0.5f;
+    const float targetCenterY = targetY + targetHeight * 0.5f;
+    const bool opening = entry.transitionPhase == TransitionPhase::Entering ||
+                         entry.transitionPhase == TransitionPhase::Restoring;
+
+    auto [found, inserted] = m_launchMorphs.try_emplace(key);
+    auto& state = found->second;
+    state.targetX = targetX;
+    state.targetY = targetY;
+    state.targetWidth = targetWidth;
+    state.targetHeight = targetHeight;
+    if (inserted) {
+        const float initialX = opening ? originCenterX : targetCenterX;
+        const float initialY = opening ? originCenterY : targetCenterY;
+        const float initialProgress = opening ? 0.0f : 1.0f;
+        state.positionX = m_launchMotion.createChannel({key, 1}, initialX);
+        state.positionY = m_launchMotion.createChannel({key, 2}, initialY);
+        state.expand = m_launchMotion.createChannel({key, 3}, initialProgress);
+        state.perspective = m_launchMotion.createChannel({key, 4}, initialProgress);
+    }
+    if (!inserted && state.phase == entry.transitionPhase) return;
+
+    const auto positionMotion = criticalSpring(opening ? 150.0f : 120.0f);
+    const auto expandMotion = criticalSpring(opening ? 200.0f : 70.0f);
+    const auto perspectiveMotion = criticalSpring(100.0f);
+    m_launchMotion.setSpec(state.positionX, positionMotion);
+    m_launchMotion.setSpec(state.positionY, positionMotion);
+    m_launchMotion.setSpec(state.expand, expandMotion);
+    m_launchMotion.setSpec(state.perspective, perspectiveMotion);
+    m_launchMotion.animateTo(
+        state.positionX, opening ? targetCenterX : originCenterX, positionMotion);
+    m_launchMotion.animateTo(
+        state.positionY, opening ? targetCenterY : originCenterY, positionMotion);
+    m_launchMotion.animateTo(state.expand, opening ? 1.0f : 0.0f, expandMotion);
+    m_launchMotion.animateTo(
+        state.perspective, opening ? 1.0f : 0.0f, perspectiveMotion);
+    state.phase = entry.transitionPhase;
+    entry.launchMorphActive = true;
+}
+
+bool FrameScheduler::updateLaunchMorph(
+        SurfaceRegistry::Key key, SurfaceRegistry::SurfaceEntry& entry) {
+    const auto found = m_launchMorphs.find(key);
+    if (found == m_launchMorphs.end() ||
+        found->second.phase != entry.transitionPhase) {
+        return false;
+    }
+    const auto& state = found->second;
+    const auto positionX = m_launchMotion.sample(state.positionX);
+    const auto positionY = m_launchMotion.sample(state.positionY);
+    const auto expandSample = m_launchMotion.sample(state.expand);
+    const auto perspectiveSample = m_launchMotion.sample(state.perspective);
+    const float expand = std::max(0.0f, expandSample.value);
+    const float perspective = perspectiveSample.value;
+    const float iconWidth = std::max(1.0f, entry.launchOriginWidth);
+    const float iconHeight = std::max(1.0f, entry.launchOriginHeight);
+    const float screenWidth = state.targetWidth;
+    const float screenHeight = state.targetHeight;
+    const float iconRatio = iconWidth / iconHeight;
+    const float screenRatio = screenWidth / screenHeight;
+    const float targetRatio = iconRatio + (screenRatio - iconRatio) * expand;
+
+    float rawWidth = iconWidth;
+    float rawHeight = iconHeight;
+    if (screenRatio > iconRatio) {
+        rawWidth = iconWidth * (targetRatio / iconRatio);
+    } else {
+        rawHeight = iconHeight * (iconRatio / std::max(0.0001f, targetRatio));
+    }
+    const float rawPerspective = screenRatio < iconRatio
+        ? 1.0f + ((screenWidth - iconWidth) / iconWidth) * perspective
+        : 1.0f + ((screenHeight - iconHeight) / iconHeight) * perspective;
+    const float perspectiveScale = std::max(rawPerspective, 0.05f);
+    const float presentedWidth = std::max(1.0f, rawWidth * perspectiveScale);
+    const float presentedHeight = std::max(1.0f, rawHeight * perspectiveScale);
+
+    // Preserve the prototype's aspect-aware interpolation while ending at a
+    // square fullscreen surface. Reversing the same spring therefore grows
+    // the radius continuously from zero back into the launcher icon radius.
+    constexpr float kDisplayRadius = 0.0f;
+    float cornerRadius = 0.0f;
+    if (screenRatio < iconRatio) {
+        const float scale = rawHeight / iconHeight;
+        cornerRadius = scale * (entry.launchOriginCornerRadius +
+            (kDisplayRadius / screenHeight * rawHeight -
+             entry.launchOriginCornerRadius) * std::pow(expand, 1.5f));
+    } else {
+        const float scale = rawWidth / iconWidth;
+        cornerRadius = scale * (entry.launchOriginCornerRadius +
+            (kDisplayRadius / screenWidth * rawWidth -
+             entry.launchOriginCornerRadius) * std::pow(expand, 1.5f));
+    }
+
+    entry.launchMorphX = positionX.value - presentedWidth * 0.5f;
+    entry.launchMorphY = positionY.value - presentedHeight * 0.5f;
+    entry.launchMorphWidth = presentedWidth;
+    entry.launchMorphHeight = presentedHeight;
+    entry.launchMorphCornerRadius = std::max(0.0f, cornerRadius * perspectiveScale);
+    entry.transitionOpacity = std::clamp(expand * 2.0f - 0.25f, 0.0f, 1.0f);
+    entry.transitionScale = 1.0f;
+    entry.launchMorphActive = true;
+
+    const bool moving = positionX.active || positionY.active ||
+                        expandSample.active || perspectiveSample.active;
+    if (moving) return true;
+
+    const auto phase = entry.transitionPhase;
+    entry.transitionOpacity = phase == TransitionPhase::Entering ||
+                              phase == TransitionPhase::Restoring
+        ? 1.0f : 0.0f;
+    if (phase == TransitionPhase::Entering || phase == TransitionPhase::Restoring) {
+        entry.launchMorphCornerRadius = 0.0f;
+        entry.launchMorphActive = false;
+        entry.transitionPhase = TransitionPhase::None;
+    } else if (phase == TransitionPhase::Minimizing) {
+        entry.launchMorphActive = false;
+        entry.pendingMinimize = true;
+        entry.transitionPhase = TransitionPhase::None;
+    } else if (phase == TransitionPhase::Closing) {
+        entry.launchMorphActive = false;
+        entry.pendingDestroy = true;
+    }
+    return false;
+}
+
 bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
-                                        std::chrono::steady_clock::time_point now) noexcept {
+                                        std::chrono::steady_clock::time_point now) {
     float elapsed = std::chrono::duration<float>(now - m_lastTransitionTick).count();
     m_lastTransitionTick = now;
     elapsed = std::clamp(elapsed, 1.0f / 240.0f, 1.0f / 20.0f);
 
     bool active = false;
-    for (auto& [_, entry] : surfaces) {
+    for (auto& [key, entry] : surfaces) {
+        prepareLaunchMorph(key, entry);
         if (entry.resizeTransitionPhase == SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer) {
             active = true;
             if (now >= entry.resizeDeadline) {
@@ -43,6 +203,10 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
             }
         }
         if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::None) {
+            continue;
+        }
+
+        if (entry.hasLaunchOrigin && isLaunchMorphPhase(entry.transitionPhase)) {
             continue;
         }
 
@@ -87,6 +251,22 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
                 entry.transitionScale = 1.0f;
             }
         }
+    }
+
+    m_launchMotion.tick(elapsed);
+    for (auto& [key, entry] : surfaces) {
+        if (entry.hasLaunchOrigin && isLaunchMorphPhase(entry.transitionPhase)) {
+            active = updateLaunchMorph(key, entry) || active;
+        }
+    }
+
+    for (auto it = m_launchMorphs.begin(); it != m_launchMorphs.end();) {
+        if (surfaces.contains(it->first)) {
+            ++it;
+            continue;
+        }
+        m_launchMotion.clearObjectChannels(it->first);
+        it = m_launchMorphs.erase(it);
     }
     return active;
 }

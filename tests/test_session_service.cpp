@@ -48,7 +48,11 @@ protected:
 
 TEST(SessionProtocolTest, EncodesExplicitLittleEndianLaunchPacket) {
     std::vector<uint8_t> payload;
-    ASSERT_TRUE(encodeLaunchRequest({"org.lcl.test", true}, payload));
+    LaunchRequest sent;
+    sent.target = "org.lcl.test";
+    sent.waitForExit = true;
+    sent.origin = {true, 12.5f, 24.0f, 60.0f, 60.0f, 14.0f};
+    ASSERT_TRUE(encodeLaunchRequest(sent, payload));
     SessionHeader header{};
     header.opcode = SessionOpcode::LaunchRequest;
     header.requestId = 0x44332211u;
@@ -66,6 +70,12 @@ TEST(SessionProtocolTest, EncodesExplicitLittleEndianLaunchPacket) {
     ASSERT_TRUE(decodeLaunchRequest(decoded.payload, request));
     EXPECT_EQ(request.target, "org.lcl.test");
     EXPECT_TRUE(request.waitForExit);
+    EXPECT_TRUE(request.origin.valid);
+    EXPECT_FLOAT_EQ(request.origin.x, 12.5f);
+    EXPECT_FLOAT_EQ(request.origin.y, 24.0f);
+    EXPECT_FLOAT_EQ(request.origin.width, 60.0f);
+    EXPECT_FLOAT_EQ(request.origin.height, 60.0f);
+    EXPECT_FLOAT_EQ(request.origin.cornerRadius, 14.0f);
 }
 
 TEST_F(SessionServiceTest, RegistryUsesManifestIdAndFindsBundleAlias) {

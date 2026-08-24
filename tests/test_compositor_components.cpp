@@ -1230,30 +1230,51 @@ TEST(InputRouterTest, ManualGestureCancelsOutstandingGeometryRollback) {
     close(sockets[1]);
 }
 
-TEST(InputRouterTest, RestoreVisibilityTransitionBlocksPointerDispatch) {
+TEST(InputRouterTest, LaunchMorphForwardsPointerInPresentedCoordinates) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK, 0, sockets), 0);
 
     lcl::render::WindowManager manager;
     ASSERT_TRUE(manager.initialize(800, 600));
     const uint32_t windowId = manager.createWindow("Restoring", 80, 60, 400, 300);
+    manager.setDecorationMode(windowId, lcl::render::DecorationMode::None);
     SurfaceRegistry registry;
     auto& surface = registry[SurfaceRegistry::makeKey(sockets[0], 104, 1)];
     surface.windowId = windowId;
     surface.clientFd = sockets[0];
     surface.hasCommittedBuffer = true;
     surface.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring;
+    surface.launchMorphActive = true;
+    surface.launchMorphX = 200.0f;
+    surface.launchMorphY = 150.0f;
+    surface.launchMorphWidth = 200.0f;
+    surface.launchMorphHeight = 150.0f;
     SceneRegistry scenes;
-    InputRouter router(manager, registry, scenes);
+    InputRouter router(manager, registry, scenes, 1.0f, false, false);
 
     InputEvent down{};
     down.type = InputEventType::PointerButton;
     down.button = lcl::platform::PointerButton::Left;
     down.pressed = true;
-    EXPECT_FALSE(router.route(down));
-    char byte = 0;
-    EXPECT_EQ(recv(sockets[1], &byte, sizeof(byte), MSG_DONTWAIT), -1);
-    EXPECT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
+    // The presented morph is half the fullscreen surface size. Global
+    // (250, 187.5) therefore maps to client-local (100, 75).
+    down.absoluteX = 250.0;
+    down.absoluteY = 187.5;
+    router.route(down);
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    const auto* input = reinterpret_cast<const protocol::LCLMsgInputEvent*>(
+        payload.data());
+    EXPECT_EQ(input->type, static_cast<uint32_t>(
+        protocol::LCLInputEventType::PointerButton));
+    EXPECT_FLOAT_EQ(input->x, 100.0f);
+    EXPECT_FLOAT_EQ(input->y, 75.0f);
 
     close(sockets[0]);
     close(sockets[1]);
@@ -1406,6 +1427,25 @@ TEST(WindowGroupTransformTest, ChromeAndClientShareOneSubpixelAnimatedFrame) {
     EXPECT_FLOAT_EQ(resting.globalBounds.height, std::round(resting.globalBounds.height));
 }
 
+TEST(WindowGroupTransformTest, ExplicitLaunchBoundsSupportNonUniformIconMorph) {
+    render::Window window{};
+    window.width = 390;
+    window.height = 844;
+
+    const graphics::RectF iconBounds{24.5f, 40.25f, 60.0f, 60.0f};
+    const auto group = render::makeWindowGroupTransformToBounds(
+        window, 0.0f, iconBounds);
+    EXPECT_NEAR(group.globalBounds.x, iconBounds.x, 0.0001f);
+    EXPECT_NEAR(group.globalBounds.y, iconBounds.y, 0.0001f);
+    EXPECT_NEAR(group.globalBounds.width, iconBounds.width, 0.0001f);
+    EXPECT_NEAR(group.globalBounds.height, iconBounds.height, 0.0001f);
+    const auto mapped = group.mapRect(group.localBounds);
+    EXPECT_NEAR(mapped.x, iconBounds.x, 0.0001f);
+    EXPECT_NEAR(mapped.y, iconBounds.y, 0.0001f);
+    EXPECT_NEAR(mapped.width, iconBounds.width, 0.0001f);
+    EXPECT_NEAR(mapped.height, iconBounds.height, 0.0001f);
+}
+
 TEST(CompositorRendererTest, LocalBackdropStartsBelowSsdTitlebar) {
     protocol::EffectRegion region{};
     region.x = 0;
@@ -1550,6 +1590,86 @@ TEST(FrameSchedulerTest, MinimizeAndRestoreTransitionsOwnVisibilityEndpoints) {
     EXPECT_FLOAT_EQ(surface.transitionScale, 1.0f);
 }
 
+TEST(FrameSchedulerTest, LaunchOriginSpringsBetweenIconAndFullscreenSurface) {
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::time_point{};
+    FrameScheduler scheduler;
+    scheduler.reset(start);
+
+    SurfaceRegistry registry;
+    auto& surface = registry[41];
+    surface.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::Entering;
+    surface.hasLaunchOrigin = true;
+    surface.launchOriginX = 24.0f;
+    surface.launchOriginY = 40.0f;
+    surface.launchOriginWidth = 60.0f;
+    surface.launchOriginHeight = 60.0f;
+    surface.launchOriginCornerRadius = 14.0f;
+    surface.configuredWidth = 390.0f;
+    surface.configuredHeight = 844.0f;
+
+    EXPECT_TRUE(scheduler.advanceTransitions(
+        registry, start + std::chrono::milliseconds(16)));
+    EXPECT_TRUE(surface.launchMorphActive);
+    EXPECT_LT(surface.launchMorphWidth, surface.configuredWidth);
+    EXPECT_LT(surface.launchMorphHeight, surface.configuredHeight);
+    EXPECT_GE(surface.transitionOpacity, 0.0f);
+
+    for (int frame = 2; frame <= 180; ++frame) {
+        scheduler.advanceTransitions(
+            registry, start + std::chrono::milliseconds(frame * 16));
+    }
+    EXPECT_EQ(surface.transitionPhase,
+              SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+    EXPECT_FALSE(surface.launchMorphActive);
+    EXPECT_FLOAT_EQ(surface.launchMorphCornerRadius, 0.0f);
+    EXPECT_FLOAT_EQ(surface.transitionOpacity, 1.0f);
+
+    surface.transitionPhase =
+        SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
+    for (int frame = 181; frame <= 360; ++frame) {
+        scheduler.advanceTransitions(
+            registry, start + std::chrono::milliseconds(frame * 16));
+    }
+    EXPECT_TRUE(surface.pendingMinimize);
+    EXPECT_EQ(surface.transitionPhase,
+              SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+}
+
+TEST(FrameSchedulerTest, LaunchMorphCanReverseBeforeOpeningSettles) {
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::time_point{};
+    FrameScheduler scheduler;
+    scheduler.reset(start);
+
+    SurfaceRegistry registry;
+    auto& surface = registry[42];
+    surface.transitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase::Entering;
+    surface.hasLaunchOrigin = true;
+    surface.launchOriginX = 24.0f;
+    surface.launchOriginY = 40.0f;
+    surface.launchOriginWidth = 60.0f;
+    surface.launchOriginHeight = 60.0f;
+    surface.launchOriginCornerRadius = 14.0f;
+    surface.configuredWidth = 390.0f;
+    surface.configuredHeight = 844.0f;
+
+    ASSERT_TRUE(scheduler.advanceTransitions(
+        registry, start + std::chrono::milliseconds(16)));
+    ASSERT_TRUE(surface.launchMorphActive);
+    surface.transitionPhase =
+        SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
+
+    for (int frame = 2; frame <= 180; ++frame) {
+        scheduler.advanceTransitions(
+            registry, start + std::chrono::milliseconds(frame * 16));
+    }
+    EXPECT_TRUE(surface.pendingMinimize);
+    EXPECT_FALSE(surface.launchMorphActive);
+    EXPECT_EQ(surface.transitionPhase,
+              SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
+}
+
 TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {
     SurfaceRegistry registry;
     auto& crossfade = registry[1];
@@ -1682,6 +1802,8 @@ TEST(SystemSurfacePolicyTest, MenuAndDockAreCompositorOwnedUnfocusablePanels) {
     const auto menu = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::MenuBar);
     const auto dock = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::Dock);
     const auto wallpaper = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::Wallpaper);
+    const auto home = SystemSurfacePolicyRegistry::policyFor(
+        protocol::LCLSystemSurfaceKind::HomeScreen);
 
     EXPECT_TRUE(menu.isSystemSurface);
     EXPECT_EQ(menu.layer, protocol::LCLWindowLayer::TopMost);
@@ -1694,6 +1816,11 @@ TEST(SystemSurfacePolicyTest, MenuAndDockAreCompositorOwnedUnfocusablePanels) {
     EXPECT_TRUE(wallpaper.isSystemSurface);
     EXPECT_EQ(wallpaper.layer, protocol::LCLWindowLayer::Bottom);
     EXPECT_FALSE(wallpaper.reservesWorkArea);
+    EXPECT_TRUE(home.isSystemSurface);
+    EXPECT_EQ(home.layer, protocol::LCLWindowLayer::Normal);
+    EXPECT_FALSE(home.unfocusable);
+    EXPECT_EQ(home.placement, SystemSurfacePlacement::OutputBounds);
+    EXPECT_FALSE(home.insetBorderEnabled);
     EXPECT_FALSE(SystemSurfacePolicyRegistry::isValidKind(protocol::LCLSystemSurfaceKind::None));
 }
 

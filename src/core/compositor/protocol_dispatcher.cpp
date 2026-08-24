@@ -491,7 +491,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 }
                 entry.clientFd = msg.clientFd;
                 entry.bufferScale = bufferScale;
-                entry.appId = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data())->appId;
+                const auto* create = reinterpret_cast<const
+                    lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
+                entry.appId = create->appId;
+                entry.hasLaunchOrigin = create->hasLaunchOrigin != 0;
+                entry.launchOriginX = create->launchOriginX;
+                entry.launchOriginY = create->launchOriginY;
+                entry.launchOriginWidth = create->launchOriginWidth;
+                entry.launchOriginHeight = create->launchOriginHeight;
+                entry.launchOriginCornerRadius = create->launchOriginCornerRadius;
                 m_surfaces[surfaceKey] = entry;
                 std::cout << "[LCL Compositor] Registered unmapped Surface " << surfId
                           << " from client PID " << msg.pid << " (" << winW << "x" << winH << ")\n";

@@ -8,7 +8,7 @@
 namespace lcl::session {
 
 inline constexpr uint32_t kSessionProtocolMagic = 0x4C435353; // "LCSS"
-inline constexpr uint32_t kSessionProtocolVersion = 1;
+inline constexpr uint32_t kSessionProtocolVersion = 2;
 inline constexpr uint32_t kSessionWireHeaderSize = 20;
 inline constexpr uint32_t kSessionMaxPayload = 64u * 1024u;
 inline constexpr const char* kSessionSocket = "/Runtime/lcl-sessiond.sock";
@@ -41,6 +41,14 @@ struct CatalogEntry {
 struct LaunchRequest {
     std::string target;
     bool waitForExit{false};
+    struct Origin {
+        bool valid{false};
+        float x{0.0f};
+        float y{0.0f};
+        float width{0.0f};
+        float height{0.0f};
+        float cornerRadius{0.0f};
+    } origin;
 };
 
 struct LaunchResponse {

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fcntl.h>
@@ -40,6 +41,15 @@ std::string resolvedIconPath(const core::AppBundleMetadata& app) {
     std::error_code error;
     if (!std::filesystem::is_regular_file(icon, error) || error) return {};
     return icon.string();
+}
+
+void exportLaunchOrigin(const LaunchRequest::Origin& origin) {
+    if (!origin.valid) return;
+    setenv("LCL_LAUNCH_ORIGIN_X", std::to_string(origin.x).c_str(), 1);
+    setenv("LCL_LAUNCH_ORIGIN_Y", std::to_string(origin.y).c_str(), 1);
+    setenv("LCL_LAUNCH_ORIGIN_WIDTH", std::to_string(origin.width).c_str(), 1);
+    setenv("LCL_LAUNCH_ORIGIN_HEIGHT", std::to_string(origin.height).c_str(), 1);
+    setenv("LCL_LAUNCH_ORIGIN_RADIUS", std::to_string(origin.cornerRadius).c_str(), 1);
 }
 
 } // namespace
@@ -146,6 +156,7 @@ LaunchResponse SessionService::launch(const LaunchRequest& request) {
     }
     if (child == 0) {
         setsid();
+        exportLaunchOrigin(request.origin);
         std::vector<char*> argv;
         argv.reserve(args.size() + 1);
         for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));

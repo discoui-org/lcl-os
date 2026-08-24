@@ -95,7 +95,6 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
                 if (item.second.windowId != focusedWindowId) return false;
                 const auto phase = item.second.transitionPhase;
                 return phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing ||
-                       phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring ||
                        phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing;
             });
         visibilityInputBlocked = surface != m_surfaces.end();
@@ -355,7 +354,6 @@ void InputRouter::forwardToSurface(const InputEvent& event,
         return;
     }
     if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing ||
-        entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring ||
         entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing) {
         return;
     }
@@ -437,8 +435,13 @@ void InputRouter::forwardToSurface(const InputEvent& event,
         const auto popupBounds = resolvePopupSurfaceBounds(*windowIt, parent->second, entry);
         surfacePoint = popupBounds.unmapPoint(globalPointerX, globalPointerY);
     } else {
-        const auto group = render::makeWindowGroupTransform(
-            *windowIt, titleOffset, entry.transitionScale);
+        const auto group = entry.launchMorphActive
+            ? render::makeWindowGroupTransformToBounds(
+                *windowIt, titleOffset,
+                {entry.launchMorphX, entry.launchMorphY,
+                 entry.launchMorphWidth, entry.launchMorphHeight})
+            : render::makeWindowGroupTransform(
+                *windowIt, titleOffset, entry.transitionScale);
         surfacePoint = group.unmapPoint({globalPointerX, globalPointerY});
         surfacePoint.y -= titleOffset;
     }

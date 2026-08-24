@@ -2,8 +2,10 @@
 
 #include <chrono>
 #include <cstdint>
+#include <unordered_map>
 
 #include "core/compositor/surface_registry.hpp"
+#include "lcl-motion/motion.hpp"
 
 namespace lcl::core {
 
@@ -13,7 +15,7 @@ public:
     void reset(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 
     bool advanceTransitions(SurfaceRegistry& surfaces,
-                            std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+                            std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
     std::chrono::microseconds frameBudgetForHz(uint32_t refreshHz) const noexcept;
     void waitForFrame(std::chrono::high_resolution_clock::time_point frameStart,
@@ -21,7 +23,27 @@ public:
     void waitIdle() const;
 
 private:
+    struct LaunchMorphState {
+        lcl::motion::ChannelId positionX{0};
+        lcl::motion::ChannelId positionY{0};
+        lcl::motion::ChannelId expand{0};
+        lcl::motion::ChannelId perspective{0};
+        SurfaceRegistry::SurfaceEntry::TransitionPhase phase{
+            SurfaceRegistry::SurfaceEntry::TransitionPhase::None};
+        float targetX{0.0f};
+        float targetY{0.0f};
+        float targetWidth{1.0f};
+        float targetHeight{1.0f};
+    };
+
+    void prepareLaunchMorph(SurfaceRegistry::Key key,
+                            SurfaceRegistry::SurfaceEntry& entry);
+    bool updateLaunchMorph(SurfaceRegistry::Key key,
+                           SurfaceRegistry::SurfaceEntry& entry);
+
     std::chrono::steady_clock::time_point m_lastTransitionTick{};
+    lcl::motion::AnimationEngine m_launchMotion;
+    std::unordered_map<SurfaceRegistry::Key, LaunchMorphState> m_launchMorphs;
 };
 
 } // namespace lcl::core

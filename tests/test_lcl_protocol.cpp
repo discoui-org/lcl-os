@@ -37,6 +37,12 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     msg.width = 800;
     msg.height = 600;
     msg.resizePresentation = LCLResizePresentationMode::Live;
+    msg.hasLaunchOrigin = 1;
+    msg.launchOriginX = 24.0f;
+    msg.launchOriginY = 32.0f;
+    msg.launchOriginWidth = 60.0f;
+    msg.launchOriginHeight = 60.0f;
+    msg.launchOriginCornerRadius = 14.0f;
     std::strncpy(msg.title, "Test Window Title", sizeof(msg.title) - 1);
     std::strncpy(msg.appId, "org.lcl.test", sizeof(msg.appId) - 1);
 
@@ -67,6 +73,12 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     EXPECT_FLOAT_EQ(msgRecv->width, 800.0f);
     EXPECT_FLOAT_EQ(msgRecv->height, 600.0f);
     EXPECT_EQ(msgRecv->resizePresentation, LCLResizePresentationMode::Live);
+    EXPECT_EQ(msgRecv->hasLaunchOrigin, 1);
+    EXPECT_FLOAT_EQ(msgRecv->launchOriginX, 24.0f);
+    EXPECT_FLOAT_EQ(msgRecv->launchOriginY, 32.0f);
+    EXPECT_FLOAT_EQ(msgRecv->launchOriginWidth, 60.0f);
+    EXPECT_FLOAT_EQ(msgRecv->launchOriginHeight, 60.0f);
+    EXPECT_FLOAT_EQ(msgRecv->launchOriginCornerRadius, 14.0f);
     EXPECT_STREQ(msgRecv->title, "Test Window Title");
     EXPECT_STREQ(msgRecv->appId, "org.lcl.test");
 
@@ -256,7 +268,7 @@ TEST(LCLProtocolTest, RejectsTruncatedAndNonFiniteLogicalSurfaceGeometry) {
     auto packet = surfaceCreatePacket();
     ASSERT_FALSE(packet.empty());
 
-    // v15 SurfaceCreate must contain the final resize presentation field.
+    // v17 SurfaceCreate must contain the complete launch-origin geometry.
     packet.resize(packet.size() - sizeof(uint8_t));
     const uint32_t shortened = sizeof(LCLMsgSurfaceCreate) - sizeof(uint8_t);
     packet[20] = static_cast<uint8_t>(shortened);
@@ -912,7 +924,7 @@ TEST(LCLProtocolTest, ShellStateSnapshotAndDeltaRoundTripWithExplicitRevision) {
 
 TEST(LCLProtocolTest, SystemSurfaceDeclarationRoundTripsAndRejectsNone) {
     LCLMsgSetSystemSurfaceKind request{};
-    request.kind = LCLSystemSurfaceKind::Dock;
+    request.kind = LCLSystemSurfaceKind::HomeScreen;
     LCLHeader header{};
     header.opcode = LCLOpcode::SetSystemSurfaceKind;
     header.requestId = 63;
@@ -926,7 +938,7 @@ TEST(LCLProtocolTest, SystemSurfaceDeclarationRoundTripsAndRejectsNone) {
     ASSERT_EQ(decodedHeader.opcode, LCLOpcode::SetSystemSurfaceKind);
     ASSERT_EQ(payload.size(), sizeof(request));
     EXPECT_EQ(reinterpret_cast<const LCLMsgSetSystemSurfaceKind*>(payload.data())->kind,
-              LCLSystemSurfaceKind::Dock);
+              LCLSystemSurfaceKind::HomeScreen);
 
     request.kind = LCLSystemSurfaceKind::None;
     EXPECT_FALSE(encodePacket(header, &request, packet));

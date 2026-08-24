@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -285,6 +286,156 @@ def make_mount_rslave(mount_point: str) -> None:
         )
 
 
+def rootfs_loop_devices() -> list[str] | None:
+    """Return loop devices currently backed by LCL's canonical rootfs image."""
+    result = adb_shell(
+        f"losetup -j {shlex.quote(DEVICE_ROOTFS_IMAGE)}",
+        as_root=True,
+    )
+    if result.returncode != 0:
+        err("Could not inspect rootfs loop devices: " +
+            (result.stderr.strip() or result.stdout.strip()))
+        return None
+
+    devices: list[str] = []
+    for line in result.stdout.splitlines():
+        device = line.partition(":")[0].strip()
+        if re.fullmatch(r"/dev/block/loop\d+", device):
+            devices.append(device)
+    return devices
+
+
+def detach_rootfs_loops() -> bool:
+    """Detach only loop devices backed by LCL's canonical rootfs image."""
+    devices = rootfs_loop_devices()
+    if devices is None:
+        return False
+
+    for device in devices:
+        result = adb_shell(f"losetup -d {shlex.quote(device)}", as_root=True)
+        if result.returncode != 0:
+            err(f"Could not detach stale rootfs loop {device}: " +
+                (result.stderr.strip() or result.stdout.strip()))
+            return False
+
+    result = adb_shell(f"rm -f {DEVICE_ROOTFS_LOOP}", as_root=True)
+    if result.returncode != 0:
+        err("Could not remove stale rootfs loop marker: " +
+            (result.stderr.strip() or result.stdout.strip()))
+        return False
+    return True
+
+
+def usable_loop_devices() -> list[str] | None:
+    """Find unconfigured loops that are not held by Android device-mapper."""
+    result = adb_shell("ls -1 /sys/class/block", as_root=True)
+    if result.returncode != 0:
+        err("Could not enumerate Android loop devices: " +
+            (result.stderr.strip() or result.stdout.strip()))
+        return None
+
+    loop_names = sorted(
+        (name for name in result.stdout.splitlines()
+         if re.fullmatch(r"loop\d+", name)),
+        key=lambda name: int(name[4:]),
+    )
+    if not loop_names:
+        err("Android exposes no loop devices under /sys/class/block.")
+        return None
+
+    checks = []
+    for name in loop_names:
+        sysfs = f"/sys/class/block/{name}"
+        device = f"/dev/block/{name}"
+        checks.append(
+            f"if [ -b {device} ] && "
+            f"[ \"$(cat {sysfs}/size 2>/dev/null)\" = 0 ] && "
+            f"[ -z \"$(ls -A {sysfs}/holders 2>/dev/null)\" ]; then "
+            f"echo {device}; fi"
+        )
+    result = adb_shell("; ".join(checks), as_root=True)
+    if result.returncode != 0:
+        err("Could not inspect Android loop-device availability: " +
+            (result.stderr.strip() or result.stdout.strip()))
+        return None
+
+    allowed = {f"/dev/block/{name}" for name in loop_names}
+    return [line.strip() for line in result.stdout.splitlines()
+            if line.strip() in allowed]
+
+
+def loop_device_is_unheld(device: str) -> bool:
+    """Return whether a validated loop device has no device-mapper holders."""
+    if not re.fullmatch(r"/dev/block/loop\d+", device):
+        return False
+    name = device.rsplit("/", 1)[-1]
+    sysfs = f"/sys/class/block/{name}"
+    result = adb_shell(
+        f"[ -b {device} ] && [ -z \"$(ls -A {sysfs}/holders 2>/dev/null)\" ]",
+        as_root=True,
+    )
+    return result.returncode == 0
+
+
+def record_rootfs_loop(device: str) -> None:
+    """Persist the selected rootfs loop for diagnostics and compatibility."""
+    marker = adb_shell(
+        f"echo {shlex.quote(device)} > {DEVICE_ROOTFS_LOOP}",
+        as_root=True,
+    )
+    if marker.returncode != 0:
+        raise RuntimeError(
+            "Could not record rootfs loop device: " +
+            (marker.stderr.strip() or marker.stdout.strip())
+        )
+
+
+def attach_rootfs_loop() -> str:
+    """Attach the rootfs to a genuinely usable loop device."""
+    # A detached autoclear loop can remain alive while Android still has an
+    # open reference. Reuse it only when it is backed by our exact image and
+    # has no device-mapper holders; trying losetup -f would select loop4 on
+    # some devices even though Android's com.android.resolv still holds it.
+    existing = rootfs_loop_devices()
+    if existing is None:
+        raise RuntimeError("Could not inspect existing rootfs loop devices.")
+    for device in existing:
+        if loop_device_is_unheld(device):
+            record_rootfs_loop(device)
+            return device
+
+    devices = usable_loop_devices()
+    if devices is None:
+        raise RuntimeError("Could not inspect Android loop devices.")
+    if not devices:
+        raise RuntimeError(
+            "No unconfigured Android loop device without active holders is available."
+        )
+
+    failures: list[str] = []
+    for device in devices:
+        result = adb_shell(
+            f"losetup {shlex.quote(device)} {shlex.quote(DEVICE_ROOTFS_IMAGE)}",
+            as_root=True,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip()
+            failures.append(f"{device}: {detail or 'association failed'}")
+            continue
+
+        try:
+            record_rootfs_loop(device)
+            return device
+        except RuntimeError:
+            adb_shell(f"losetup -d {shlex.quote(device)}", as_root=True)
+            raise
+
+    raise RuntimeError(
+        "No usable Android loop device accepted the rootfs image: " +
+        "; ".join(failures)
+    )
+
+
 def unmount_rootfs() -> bool:
     """Unmount every rootfs mount layer and release its loop device."""
     stop_rootfs_session()
@@ -326,14 +477,9 @@ def unmount_rootfs() -> bool:
             ", ".join(sorted(set(remaining))))
         return False
 
-    adb_shell(
-        f"if [ -f {DEVICE_ROOTFS_LOOP} ]; then "
-        f"loop=$(cat {DEVICE_ROOTFS_LOOP}); "
-        f"[ -n \"$loop\" ] && losetup -d \"$loop\" 2>/dev/null; "
-        f"rm -f {DEVICE_ROOTFS_LOOP}; fi",
-        as_root=True,
-    )
-    return True
+    # Do not trust the marker alone: after a reboot its loop number may belong
+    # to Android. Match the backing image so orphaned LCL loops are also found.
+    return detach_rootfs_loops()
 
 
 def sha256_file(path: Path) -> str:
@@ -452,12 +598,11 @@ def mount_rootfs(native_clients: bool = False) -> None:
     # particular cannot be refreshed reliably when their old source was removed.
     if not unmount_rootfs():
         raise RuntimeError("Cannot mount rootfs over stale mount layers.")
+    loop_device = attach_rootfs_loop()
     result = adb_shell(
-        f"mkdir -p {DEVICE_ROOTFS_MOUNT}; "
-        f"loop=$(losetup -f); "
-        f"[ -n \"$loop\" ] && losetup \"$loop\" {DEVICE_ROOTFS_IMAGE} && "
-        f"echo \"$loop\" > {DEVICE_ROOTFS_LOOP} && "
-        f"mount -t ext4 -o rw,noatime \"$loop\" {DEVICE_ROOTFS_MOUNT}",
+        f"mkdir -p {DEVICE_ROOTFS_MOUNT} && "
+        f"mount -t ext4 -o rw,noatime {shlex.quote(loop_device)} "
+        f"{DEVICE_ROOTFS_MOUNT}",
         as_root=True,
     )
     if result.returncode != 0:

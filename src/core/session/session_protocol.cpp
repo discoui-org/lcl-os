@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 
 namespace lcl::session {
 namespace {
@@ -15,6 +16,7 @@ public:
     void u64(uint64_t value) {
         for (unsigned shift = 0; shift < 64; shift += 8) u8(static_cast<uint8_t>(value >> shift));
     }
+    void f32(float value) { u32(std::bit_cast<uint32_t>(value)); }
     bool string(const std::string& value) {
         if (value.size() > UINT16_MAX) return false;
         const auto size = static_cast<uint16_t>(value.size());
@@ -52,6 +54,12 @@ public:
         }
         return true;
     }
+    bool f32(float& value) {
+        uint32_t bits = 0;
+        if (!u32(bits)) return false;
+        value = std::bit_cast<float>(bits);
+        return true;
+    }
     bool string(std::string& value) {
         uint8_t lo = 0, hi = 0;
         if (!u8(lo) || !u8(hi)) return false;
@@ -82,6 +90,14 @@ bool encodeString(const std::string& value, std::vector<uint8_t>& payload) {
 bool decodeString(const std::vector<uint8_t>& payload, std::string& value) {
     Reader reader(payload.data(), payload.size());
     return reader.string(value) && reader.done();
+}
+
+bool validLaunchOrigin(const LaunchRequest::Origin& origin) {
+    if (!origin.valid) return true;
+    return std::isfinite(origin.x) && std::isfinite(origin.y) &&
+           std::isfinite(origin.width) && origin.width > 0.0f &&
+           std::isfinite(origin.height) && origin.height > 0.0f &&
+           std::isfinite(origin.cornerRadius) && origin.cornerRadius >= 0.0f;
 }
 
 } // namespace
@@ -148,10 +164,16 @@ bool decodeCatalogSnapshot(const std::vector<uint8_t>& payload, std::vector<Cata
 }
 
 bool encodeLaunchRequest(const LaunchRequest& request, std::vector<uint8_t>& payload) {
-    if (request.target.empty()) return false;
+    if (request.target.empty() || !validLaunchOrigin(request.origin)) return false;
     Writer writer;
     writer.u8(request.waitForExit ? 1 : 0);
     if (!writer.string(request.target)) return false;
+    writer.u8(request.origin.valid ? 1 : 0);
+    writer.f32(request.origin.x);
+    writer.f32(request.origin.y);
+    writer.f32(request.origin.width);
+    writer.f32(request.origin.height);
+    writer.f32(request.origin.cornerRadius);
     payload = writer.take();
     return true;
 }
@@ -159,10 +181,15 @@ bool encodeLaunchRequest(const LaunchRequest& request, std::vector<uint8_t>& pay
 bool decodeLaunchRequest(const std::vector<uint8_t>& payload, LaunchRequest& request) {
     Reader reader(payload.data(), payload.size());
     uint8_t wait = 0;
+    uint8_t hasOrigin = 0;
     if (!reader.u8(wait) || wait > 1 || !reader.string(request.target) ||
-        request.target.empty() || !reader.done()) return false;
+        request.target.empty() || !reader.u8(hasOrigin) || hasOrigin > 1 ||
+        !reader.f32(request.origin.x) || !reader.f32(request.origin.y) ||
+        !reader.f32(request.origin.width) || !reader.f32(request.origin.height) ||
+        !reader.f32(request.origin.cornerRadius) || !reader.done()) return false;
     request.waitForExit = wait != 0;
-    return true;
+    request.origin.valid = hasOrigin != 0;
+    return validLaunchOrigin(request.origin);
 }
 
 bool encodeLaunchResponse(const LaunchResponse& response, std::vector<uint8_t>& payload) {

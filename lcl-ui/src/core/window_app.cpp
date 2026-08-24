@@ -74,6 +74,41 @@ bool layoutOverlayEnabled() {
     return value && value[0] != '\0' && value[0] != '0';
 }
 
+bool readEnvironmentFloat(const char* name, float& value) {
+    const char* text = std::getenv(name);
+    if (!text || text[0] == '\0') return false;
+    char* end = nullptr;
+    const float parsed = std::strtof(text, &end);
+    if (end == text || *end != '\0' || !std::isfinite(parsed)) return false;
+    value = parsed;
+    return true;
+}
+
+void takeLaunchOrigin(lcl::protocol::LCLMsgSurfaceCreate& surface) {
+    constexpr const char* kNames[] = {
+        "LCL_LAUNCH_ORIGIN_X",
+        "LCL_LAUNCH_ORIGIN_Y",
+        "LCL_LAUNCH_ORIGIN_WIDTH",
+        "LCL_LAUNCH_ORIGIN_HEIGHT",
+        "LCL_LAUNCH_ORIGIN_RADIUS",
+    };
+    float values[5]{};
+    bool valid = true;
+    for (size_t index = 0; index < 5; ++index) {
+        valid = readEnvironmentFloat(kNames[index], values[index]) && valid;
+    }
+    for (const char* name : kNames) unsetenv(name);
+    if (!valid || values[2] <= 0.0f || values[3] <= 0.0f || values[4] < 0.0f) {
+        return;
+    }
+    surface.hasLaunchOrigin = 1;
+    surface.launchOriginX = values[0];
+    surface.launchOriginY = values[1];
+    surface.launchOriginWidth = values[2];
+    surface.launchOriginHeight = values[3];
+    surface.launchOriginCornerRadius = values[4];
+}
+
 void drawLayoutOverlay(const Widget& widget, graphics::Canvas& canvas, uint32_t depth = 0) {
     static constexpr graphics::Color kPalette[] = {
         {56, 189, 248, 220}, {74, 222, 128, 220}, {250, 204, 21, 220},
@@ -439,12 +474,13 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         surface.resizePresentation = m_resizePresentationMode;
         std::strncpy(surface.title, m_title.c_str(), sizeof(surface.title) - 1);
         std::strncpy(surface.appId, m_appId.c_str(), sizeof(surface.appId) - 1);
+        takeLaunchOrigin(surface);
         createSent = sendProtocolMessage(lcl::protocol::LCLOpcode::SurfaceCreate,
                                          &surface, sizeof(surface));
     }
     if (!createSent) {
         m_waitingForInitialConfigure = false;
-        std::cerr << "[lcl-ui ERROR] Failed to create v15 surface\n";
+        std::cerr << "[lcl-ui ERROR] Failed to create v17 surface\n";
         return false;
     }
 
@@ -733,7 +769,7 @@ void WindowApp::pollIPC() {
         } else if (receiveStatus == lcl::protocol::ReceiveStatus::WouldBlock) {
             break;
         } else {
-            std::cerr << "[lcl-ui ERROR] Compositor v15 connection closed or rejected\n";
+            std::cerr << "[lcl-ui ERROR] Compositor v17 connection closed or rejected\n";
             m_ipcConnected = false;
             m_running = false;
             m_surfaceEnded = true;
