@@ -1,12 +1,34 @@
 #include "lcl-ui/core/image_loader.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <filesystem>
+#include <mutex>
+#include <unordered_map>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "render/stb_image.h"
 
 namespace lcl::ui {
+
+namespace {
+
+std::atomic<uint64_t> nextImageResourceId{1};
+std::mutex sharedImageCacheMutex;
+std::unordered_map<std::string, std::weak_ptr<const ImageData>> sharedImageCache;
+
+uint64_t allocateImageResourceId() {
+    return nextImageResourceId.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::string normalizedImagePath(const std::string& path) {
+    std::error_code error;
+    const auto canonical = std::filesystem::weakly_canonical(path, error);
+    return error ? path : canonical.string();
+}
+
+} // namespace
 
 std::optional<ImageData> ImageLoader::loadArgb32(const std::string& path) {
     int imgW = 0;
@@ -19,9 +41,11 @@ std::optional<ImageData> ImageLoader::loadArgb32(const std::string& path) {
     }
 
     ImageData out{};
+    out.resourceId = allocateImageResourceId();
     out.width = static_cast<uint32_t>(imgW);
     out.height = static_cast<uint32_t>(imgH);
     out.pixels.resize(static_cast<size_t>(out.width) * static_cast<size_t>(out.height));
+    out.opaque = true;
 
     for (size_t i = 0; i < out.pixels.size(); ++i) {
         const unsigned char* p = raw + i * 4;
@@ -30,14 +54,43 @@ std::optional<ImageData> ImageLoader::loadArgb32(const std::string& path) {
         const uint32_t g = static_cast<uint32_t>(p[1]);
         const uint32_t b = static_cast<uint32_t>(p[2]);
         out.pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        out.opaque = out.opaque && a == 0xFFu;
     }
 
     stbi_image_free(raw);
     return out;
 }
 
+std::shared_ptr<const ImageData> ImageLoader::loadSharedArgb32(
+        const std::string& path) {
+    if (path.empty()) return {};
+    const std::string key = normalizedImagePath(path);
+    {
+        std::lock_guard lock(sharedImageCacheMutex);
+        if (const auto found = sharedImageCache.find(key);
+            found != sharedImageCache.end()) {
+            if (auto cached = found->second.lock()) return cached;
+            sharedImageCache.erase(found);
+        }
+    }
+
+    auto decoded = loadArgb32(key);
+    if (!decoded) return {};
+    auto resource = std::make_shared<const ImageData>(std::move(*decoded));
+    {
+        std::lock_guard lock(sharedImageCacheMutex);
+        const auto [found, inserted] = sharedImageCache.try_emplace(key, resource);
+        if (!inserted) {
+            if (auto cached = found->second.lock()) return cached;
+            found->second = resource;
+        }
+    }
+    return resource;
+}
+
 ImageData ImageLoader::resizeBilinear(const ImageData& src, uint32_t targetWidth, uint32_t targetHeight) {
     ImageData out{};
+    out.resourceId = allocateImageResourceId();
     out.width = targetWidth;
     out.height = targetHeight;
 
@@ -46,6 +99,7 @@ ImageData ImageLoader::resizeBilinear(const ImageData& src, uint32_t targetWidth
     }
 
     out.pixels.resize(static_cast<size_t>(targetWidth) * static_cast<size_t>(targetHeight));
+    out.opaque = true;
 
     auto unpack = [](uint32_t argb, float& a, float& r, float& g, float& b) {
         a = static_cast<float>((argb >> 24) & 0xFF);
@@ -92,6 +146,7 @@ ImageData ImageLoader::resizeBilinear(const ImageData& src, uint32_t targetWidth
 
             out.pixels[static_cast<size_t>(y) * targetWidth + static_cast<size_t>(x)] =
                 (au << 24) | (ru << 16) | (gu << 8) | bu;
+            out.opaque = out.opaque && au == 0xFFu;
         }
     }
 

@@ -75,6 +75,11 @@ public:
                     const uint32_t* pixels, int stridePixels, float opacity,
                     float cornerRadius, float cornerRoundness,
                     bool squareTopCorners) override;
+    void drawImageResource(
+        const lcl::graphics::RectF& destination,
+        const lcl::graphics::ImageResourceView& resource,
+        float opacity, float cornerRadius, float cornerRoundness,
+        bool squareTopCorners) override;
 
     const lcl::graphics::DisplayList& lastDisplayList() const noexcept {
         return m_lastDisplayList;

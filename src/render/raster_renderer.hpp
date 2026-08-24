@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -328,6 +329,15 @@ private:
         uint64_t lastUsedFrame{0};
     };
 
+    struct CachedImageTexture {
+        uint32_t texture{0};
+        int32_t width{0};
+        int32_t height{0};
+        uint64_t contentRevision{0};
+        uint64_t lastUse{0};
+        size_t byteSize{0};
+    };
+
     bool initGLShader();
     RasterRect scaleRect(const RasterRect& rect) const;
     int scaleCoord(int value) const;
@@ -347,6 +357,13 @@ private:
                        bool squareBottomCorners,
                        float drawWidth,
                        float drawHeight);
+    void drawImageResourceTransformed(
+        uint64_t resourceId, uint64_t contentRevision, bool opaque,
+        float dstX, float dstY, int srcW, int srcH,
+        const uint32_t* pixelData, int stridePixels, float opacity,
+        float cornerRadius, float cornerRoundness, bool squareTopCorners,
+        float drawWidth, float drawHeight);
+    void trimImageTextureCache(uint64_t protectedResourceId);
 
     uint32_t m_width{0};
     uint32_t m_height{0};
@@ -392,6 +409,9 @@ private:
     std::optional<CachedLayerTargetState> m_cachedLayerTargetState;
     std::unordered_map<uint64_t, CachedDisplayLayer> m_cachedDisplayLayers;
     std::unordered_map<uint64_t, CachedShmTexture> m_cachedShmTextures;
+    std::unordered_map<uint64_t, CachedImageTexture> m_cachedImageTextures;
+    size_t m_cachedImageTextureBytes{0};
+    uint64_t m_imageTextureUseCounter{0};
     std::vector<RasterizedTextLayer> m_rasterizedTextLayers;
     uint64_t m_textLayerUseCounter{0};
     uint64_t m_shmTextureFrameSerial{0};

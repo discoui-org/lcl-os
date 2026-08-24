@@ -1,6 +1,6 @@
 #pragma once
 
-#include <optional>
+#include <memory>
 #include <string>
 
 #include "lcl-ui/core/image_loader.hpp"
@@ -23,7 +23,7 @@ public:
     const std::string& getSourcePath() const { return m_sourcePath; }
 
     void clearSource();
-    bool hasImage() const { return m_sourceImage.has_value(); }
+    bool hasImage() const { return static_cast<bool>(m_sourceImage); }
 
     void setFit(ImageFit fit) { m_fit = fit; markDirty(); }
     ImageFit getFit() const { return m_fit; }
@@ -41,7 +41,7 @@ public:
 
 private:
     std::string m_sourcePath;
-    std::optional<ImageData> m_sourceImage;
+    std::shared_ptr<const ImageData> m_sourceImage;
     ImageFit m_fit{ImageFit::Contain};
     float m_cornerRadius{0.0f};
     float m_cornerRoundness{2.0f};

@@ -47,11 +47,14 @@ void Canvas::drawDisplayList(const DisplayList& displayList) {
                 }
             } else if constexpr (std::is_same_v<T, DrawImageCommand>) {
                 const auto* pixels = reinterpret_cast<const uint32_t*>(op.resourceKey);
-                drawBuffer(op.destination, op.sourceWidth, op.sourceHeight, pixels,
-                           op.stridePixels > 0 ? op.stridePixels : op.sourceWidth,
-                           op.opacity,
-                           op.cornerRadius, op.cornerRoundness,
-                           op.squareTopCorners);
+                drawImageResource(
+                    op.destination,
+                    {op.resourceId, op.contentRevision,
+                     op.sourceWidth, op.sourceHeight, pixels,
+                     op.stridePixels > 0 ? op.stridePixels : op.sourceWidth,
+                     op.opaque},
+                    op.opacity, op.cornerRadius, op.cornerRoundness,
+                    op.squareTopCorners);
             }
         }, command);
     }

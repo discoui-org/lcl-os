@@ -29,6 +29,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <string>
@@ -175,6 +176,19 @@ public:
         bufferStrides.push_back(stridePixels);
     }
 
+    void drawImageResource(
+            const graphics::RectF& destination,
+            const graphics::ImageResourceView& resource,
+            float opacity, float cornerRadius, float cornerRoundness,
+            bool squareTopCorners) override {
+        imageResourceIds.push_back(resource.id);
+        imageContentRevisions.push_back(resource.contentRevision);
+        imageOpaqueValues.push_back(resource.opaque);
+        drawBuffer(destination, resource.width, resource.height, resource.pixels,
+                   resource.stridePixels, opacity, cornerRadius,
+                   cornerRoundness, squareTopCorners);
+    }
+
     bool initialized{false};
     bool useSharedTextMetrics{false};
     float measurementScale{1.0f};
@@ -218,6 +232,9 @@ public:
     std::vector<float> roundnesses;
     std::vector<float> fontSizes;
     std::vector<int> bufferStrides;
+    std::vector<uint64_t> imageResourceIds;
+    std::vector<uint64_t> imageContentRevisions;
+    std::vector<bool> imageOpaqueValues;
     std::vector<graphics::FontFamily> fontFamilies;
     std::vector<graphics::Color> colors;
     std::vector<graphics::Color> clearColors;
@@ -367,6 +384,32 @@ TEST(LclGraphicsTest, RasterCanvasRecordsClearLayerImageAndRasterTextCommands) {
     EXPECT_NE(std::get_if<graphics::EndLayerCommand>(&commands[4]), nullptr);
 }
 
+TEST(LclGraphicsTest, RasterCanvasRecordsStableImageResourceMetadata) {
+    std::vector<uint32_t> targetPixels(8 * 8, 0x00000000u);
+    const std::array<uint32_t, 4> imagePixels{
+        0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu,
+    };
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(8, 8, nullptr, targetPixels.data()));
+    renderer.setRetainsFrameBacking(true);
+    lcl::render::RasterCanvas canvas(renderer);
+
+    canvas.beginFrame();
+    canvas.drawImageResource(
+        {1.0f, 1.0f, 2.0f, 2.0f},
+        {73, 4, 2, 2, imagePixels.data(), 2, true},
+        1.0f, 0.0f, 2.0f, false);
+    canvas.endFrame();
+
+    const auto& commands = canvas.lastDisplayList().commands();
+    ASSERT_EQ(commands.size(), 1u);
+    const auto* image = std::get_if<graphics::DrawImageCommand>(&commands.front());
+    ASSERT_NE(image, nullptr);
+    EXPECT_EQ(image->resourceId, 73u);
+    EXPECT_EQ(image->contentRevision, 4u);
+    EXPECT_TRUE(image->opaque);
+}
+
 TEST(LclGraphicsTest, CanvasHelperPathsRetainGpuPrimitiveMetadata) {
     graphics::Path rect;
     rect.addRect({2.0f, 3.0f, 80.0f, 40.0f});
@@ -406,6 +449,24 @@ TEST(LclGraphicsTest, CanvasDisplayListReplayPreservesImageStride) {
     EXPECT_EQ(canvas.bufferDrawCount, 1);
     ASSERT_EQ(canvas.bufferStrides.size(), 1u);
     EXPECT_EQ(canvas.bufferStrides.front(), 4);
+}
+
+TEST(LclGraphicsTest, CanvasDisplayListReplayPreservesImageResourceIdentity) {
+    RecordingCanvas canvas;
+    const uint32_t pixels[4]{0xFFFFFFFFu, 0xFFFFFFFFu,
+                             0xFFFFFFFFu, 0xFFFFFFFFu};
+    graphics::DisplayListBuilder builder;
+    builder.drawImage({1.0f, 2.0f, 2.0f, 2.0f},
+                      reinterpret_cast<uintptr_t>(pixels),
+                      2, 2, 2, 1.0f, 0.0f, 2.0f, false,
+                      42, 7, true);
+
+    canvas.drawDisplayList(builder.build());
+
+    ASSERT_EQ(canvas.imageResourceIds.size(), 1u);
+    EXPECT_EQ(canvas.imageResourceIds.front(), 42u);
+    EXPECT_EQ(canvas.imageContentRevisions.front(), 7u);
+    EXPECT_TRUE(canvas.imageOpaqueValues.front());
 }
 
 TEST(LclGraphicsTest, NormalStrokeScalesButHairlineRemainsOneDevicePixel) {

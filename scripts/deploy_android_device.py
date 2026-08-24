@@ -404,6 +404,32 @@ def loop_device_is_unheld(device: str) -> bool:
     return result.returncode == 0
 
 
+def loop_device_is_usable(device: str) -> bool:
+    """Return whether a loop is unconfigured and has no active holders."""
+    if not re.fullmatch(r"/dev/block/loop\d+", device):
+        return False
+    name = device.rsplit("/", 1)[-1]
+    sysfs = f"/sys/class/block/{name}"
+    result = adb_shell(
+        f"[ -b {device} ] && "
+        f"[ \"$(cat {sysfs}/size 2>/dev/null)\" = 0 ] && "
+        f"[ -z \"$(ls -A {sysfs}/holders 2>/dev/null)\" ]",
+        as_root=True,
+    )
+    return result.returncode == 0
+
+
+def request_free_loop_device() -> str | None:
+    """Ask Android's loop-control driver to expose another free loop."""
+    result = adb_shell("losetup -f", as_root=True)
+    if result.returncode != 0:
+        return None
+    device = result.stdout.strip()
+    if loop_device_is_usable(device):
+        return device
+    return None
+
+
 def record_rootfs_loop(device: str) -> None:
     """Persist the selected rootfs loop for diagnostics and compatibility."""
     marker = adb_shell(
@@ -435,9 +461,14 @@ def attach_rootfs_loop() -> str:
     if devices is None:
         raise RuntimeError("Could not inspect Android loop devices.")
     if not devices:
-        raise RuntimeError(
-            "No unconfigured Android loop device without active holders is available."
-        )
+        requested = request_free_loop_device()
+        if requested is not None:
+            devices.append(requested)
+        else:
+            raise RuntimeError(
+                "Android loop-control could not provide an unconfigured loop "
+                "device without active holders."
+            )
 
     failures: list[str] = []
     for device in devices:

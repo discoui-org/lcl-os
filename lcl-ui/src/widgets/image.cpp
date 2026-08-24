@@ -14,11 +14,11 @@ Image::Image(const std::string& sourcePath) {
 }
 
 bool Image::setSourcePath(const std::string& sourcePath) {
-    if (sourcePath == m_sourcePath && m_sourceImage.has_value()) {
+    if (sourcePath == m_sourcePath && m_sourceImage) {
         return true;
     }
 
-    auto loaded = ImageLoader::loadArgb32(sourcePath);
+    auto loaded = ImageLoader::loadSharedArgb32(sourcePath);
     if (!loaded || !loaded->isValid()) {
         m_sourcePath.clear();
         m_sourceImage.reset();
@@ -33,7 +33,7 @@ bool Image::setSourcePath(const std::string& sourcePath) {
 }
 
 void Image::clearSource() {
-    if (m_sourcePath.empty() && !m_sourceImage.has_value()) {
+    if (m_sourcePath.empty() && !m_sourceImage) {
         return;
     }
 
@@ -127,9 +127,12 @@ void Image::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
         drawY = boxY + (boxH - drawH) / 2;
     }
 
-    canvas.drawBuffer({drawX, drawY, drawW, drawH}, srcW, srcH,
-                      m_sourceImage->pixels.data(), srcW, m_opacity,
-                      m_cornerRadius, m_cornerRoundness, false);
+    canvas.drawImageResource(
+        {drawX, drawY, drawW, drawH},
+        {m_sourceImage->resourceId, m_sourceImage->contentRevision,
+         srcW, srcH, m_sourceImage->pixels.data(), srcW,
+         m_sourceImage->opaque},
+        m_opacity, m_cornerRadius, m_cornerRoundness, false);
 
     drawChildren(canvas, damageRect);
     endPresentation(canvas);

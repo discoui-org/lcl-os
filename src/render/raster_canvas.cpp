@@ -345,6 +345,18 @@ void RasterCanvas::drawBuffer(const lcl::graphics::RectF& destination,
                                    cornerRoundness, squareTopCorners);
 }
 
+void RasterCanvas::drawImageResource(
+        const lcl::graphics::RectF& destination,
+        const lcl::graphics::ImageResourceView& resource,
+        float opacity, float cornerRadius, float cornerRoundness,
+        bool squareTopCorners) {
+    m_displayListBuilder.drawImage(
+        destination, reinterpret_cast<uintptr_t>(resource.pixels),
+        resource.width, resource.height, resource.stridePixels,
+        opacity, cornerRadius, cornerRoundness, squareTopCorners,
+        resource.id, resource.contentRevision, resource.opaque);
+}
+
 std::unique_ptr<lcl::graphics::Canvas> makeRasterCanvas() {
     return std::make_unique<RasterCanvas>();
 }

@@ -20,6 +20,9 @@ namespace lcl::render {
 #ifndef LCL_SOFTWARE_ONLY
 namespace {
 
+constexpr size_t kImageTextureCacheBudgetBytes = 128u * 1024u * 1024u;
+constexpr size_t kImageTextureCacheMaxEntries = 128u;
+
 bool hasGlExtension(const char* extensions, const char* requested) {
     if (!extensions || !requested || *requested == '\0' || std::strchr(requested, ' ')) {
         return false;
@@ -1024,6 +1027,14 @@ void RasterRenderer::shutdown() {
     }
     m_cachedShmTextures.clear();
     m_shmTextureFrameSerial = 0;
+    for (const auto& [_, cached] : m_cachedImageTextures) {
+        if (canDeleteGlResources && cached.texture > 0) {
+            glDeleteTextures(1, &cached.texture);
+        }
+    }
+    m_cachedImageTextures.clear();
+    m_cachedImageTextureBytes = 0;
+    m_imageTextureUseCounter = 0;
     if (m_glClientTexture > 0) {
         if (canDeleteGlResources) glDeleteTextures(1, &m_glClientTexture);
         m_glClientTexture = 0;
@@ -1464,14 +1475,29 @@ void RasterRenderer::replayDisplayList(
                 }
             } else if constexpr (std::is_same_v<T, lcl::graphics::DrawImageCommand>) {
                 const auto mapped = state.transform.mapRect(op.destination);
+                if (mapped.isEmpty() ||
+                    (state.clip && !mapped.intersects(*state.clip))) {
+                    return;
+                }
                 const auto* pixels = reinterpret_cast<const uint32_t*>(op.resourceKey);
                 const int stridePixels = op.stridePixels > 0
                     ? op.stridePixels : op.sourceWidth;
-                drawBufferTransformed(mapped.x, mapped.y, op.sourceWidth, op.sourceHeight,
-                                      pixels, stridePixels, op.opacity * state.opacity,
-                                      op.cornerRadius * state.transform.maxScale(),
-                                      op.cornerRoundness, op.squareTopCorners,
-                                      mapped.width, mapped.height);
+                if (op.resourceId != 0 && op.contentRevision != 0) {
+                    drawImageResourceTransformed(
+                        op.resourceId, op.contentRevision, op.opaque,
+                        mapped.x, mapped.y, op.sourceWidth, op.sourceHeight,
+                        pixels, stridePixels, op.opacity * state.opacity,
+                        op.cornerRadius * state.transform.maxScale(),
+                        op.cornerRoundness, op.squareTopCorners,
+                        mapped.width, mapped.height);
+                } else {
+                    drawBufferTransformed(
+                        mapped.x, mapped.y, op.sourceWidth, op.sourceHeight,
+                        pixels, stridePixels, op.opacity * state.opacity,
+                        op.cornerRadius * state.transform.maxScale(),
+                        op.cornerRoundness, op.squareTopCorners,
+                        mapped.width, mapped.height);
+                }
             }
         }, command);
     }
@@ -2614,6 +2640,123 @@ void RasterRenderer::drawBufferTransformed(float dstX,
         srcW, srcH, pixelData, stridePixels, opacity,
         destination.cornerRadius, cornerRoundness, squareTopCorners,
         false, destination.width, destination.height);
+}
+
+void RasterRenderer::trimImageTextureCache(uint64_t protectedResourceId) {
+#ifndef LCL_SOFTWARE_ONLY
+    while ((m_cachedImageTextureBytes > kImageTextureCacheBudgetBytes ||
+            m_cachedImageTextures.size() > kImageTextureCacheMaxEntries) &&
+           m_cachedImageTextures.size() > 1) {
+        auto oldest = m_cachedImageTextures.end();
+        for (auto it = m_cachedImageTextures.begin();
+             it != m_cachedImageTextures.end(); ++it) {
+            if (it->first == protectedResourceId) continue;
+            if (oldest == m_cachedImageTextures.end() ||
+                it->second.lastUse < oldest->second.lastUse) {
+                oldest = it;
+            }
+        }
+        if (oldest == m_cachedImageTextures.end()) break;
+        if (oldest->second.texture > 0) {
+            glDeleteTextures(1, &oldest->second.texture);
+        }
+        m_cachedImageTextureBytes -= std::min(
+            m_cachedImageTextureBytes, oldest->second.byteSize);
+        m_cachedImageTextures.erase(oldest);
+    }
+#else
+    (void)protectedResourceId;
+#endif
+}
+
+void RasterRenderer::drawImageResourceTransformed(
+        uint64_t resourceId, uint64_t contentRevision, bool opaque,
+        float dstX, float dstY, int srcW, int srcH,
+        const uint32_t* pixelData, int stridePixels, float opacity,
+        float cornerRadius, float cornerRoundness, bool squareTopCorners,
+        float drawWidth, float drawHeight) {
+    if (!m_initialized || resourceId == 0 || contentRevision == 0 ||
+        !pixelData || srcW <= 0 || srcH <= 0) {
+        return;
+    }
+
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_glFBOReady &&
+        m_eglBackend) {
+        m_eglBackend->makeCurrent();
+        auto& cached = m_cachedImageTextures[resourceId];
+        cached.lastUse = ++m_imageTextureUseCounter;
+        const bool needsUpload = cached.texture == 0 ||
+            cached.width != srcW || cached.height != srcH ||
+            cached.contentRevision != contentRevision;
+        if (needsUpload) {
+            if (cached.texture == 0) glGenTextures(1, &cached.texture);
+            glBindTexture(GL_TEXTURE_2D, cached.texture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                            GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, srcW, srcH, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+            const uint32_t* uploadPixels = pixelData;
+            std::vector<uint32_t> preparedPixels;
+            if (!opaque || stridePixels != srcW) {
+                preparedPixels.resize(static_cast<size_t>(srcW) * srcH);
+                for (int y = 0; y < srcH; ++y) {
+                    const uint32_t* source = pixelData +
+                        static_cast<size_t>(y) * stridePixels;
+                    uint32_t* destination = preparedPixels.data() +
+                        static_cast<size_t>(y) * srcW;
+                    for (int x = 0; x < srcW; ++x) {
+                        destination[x] = opaque
+                            ? source[x] : alpha::premultiplyArgb(source[x]);
+                    }
+                }
+                uploadPixels = preparedPixels.data();
+            }
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, srcW, srcH,
+                            GL_RGBA, GL_UNSIGNED_BYTE, uploadPixels);
+            glGenerateMipmap(GL_TEXTURE_2D);
+
+            m_cachedImageTextureBytes -= std::min(
+                m_cachedImageTextureBytes, cached.byteSize);
+            cached.width = srcW;
+            cached.height = srcH;
+            cached.contentRevision = contentRevision;
+            cached.byteSize = static_cast<size_t>(srcW) * srcH *
+                sizeof(uint32_t) * 4u / 3u;
+            m_cachedImageTextureBytes += cached.byteSize;
+            trimImageTextureCache(resourceId);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, cached.texture);
+        }
+
+        const auto destination = mapLogicalRasterDestination(
+            dstX, dstY, drawWidth, drawHeight, cornerRadius,
+            m_deviceScale, m_contentOriginX, m_contentOriginY);
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+        glViewport(0, 0, m_width, m_height);
+        if (destination.cornerRadius > 0.001f) {
+            drawMaskedBgraTextureQuad(
+                cached.texture, destination.x, destination.y,
+                destination.width, destination.height,
+                destination.cornerRadius, cornerRoundness, opacity,
+                squareTopCorners, false);
+        } else {
+            drawBgraTextureQuad(
+                cached.texture, destination.x, destination.y,
+                destination.width, destination.height, opacity);
+        }
+        return;
+    }
+#endif
+
+    drawBufferTransformed(
+        dstX, dstY, srcW, srcH, pixelData, stridePixels, opacity,
+        cornerRadius, cornerRoundness, squareTopCorners,
+        drawWidth, drawHeight);
 }
 
 void RasterRenderer::drawCachedShmBufferTransformed(uint64_t cacheKey,

@@ -53,10 +53,12 @@ void DisplayListBuilder::drawImage(const RectF& destination, uintptr_t resourceK
                                    int sourceWidth, int sourceHeight, int stridePixels,
                                    float opacity,
                                    float cornerRadius, float cornerRoundness,
-                                   bool squareTopCorners) {
-    m_commands.emplace_back(DrawImageCommand{destination, resourceKey, sourceWidth,
-                                              sourceHeight, stridePixels, opacity, cornerRadius,
-                                              cornerRoundness, squareTopCorners});
+                                   bool squareTopCorners, uint64_t resourceId,
+                                   uint64_t contentRevision, bool opaque) {
+    m_commands.emplace_back(DrawImageCommand{
+        destination, resourceKey, resourceId, contentRevision,
+        sourceWidth, sourceHeight, stridePixels, opaque, opacity,
+        cornerRadius, cornerRoundness, squareTopCorners});
 }
 DisplayList DisplayListBuilder::build() const {
     return DisplayList(std::make_shared<const std::vector<DisplayCommand>>(m_commands));

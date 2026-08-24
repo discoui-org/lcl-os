@@ -9,6 +9,17 @@
 
 namespace lcl::graphics {
 
+/** Immutable image pixels identified independently from their memory address. */
+struct ImageResourceView {
+    uint64_t id{0};
+    uint64_t contentRevision{0};
+    int width{0};
+    int height{0};
+    const uint32_t* pixels{nullptr};
+    int stridePixels{0};
+    bool opaque{false};
+};
+
 enum class NativeBufferTransport : uint8_t {
     DmaBuf = 0,
     AndroidHardwareBufferV1 = 1,
@@ -101,6 +112,15 @@ public:
                             const uint32_t* pixels, int stridePixels, float opacity,
                             float cornerRadius, float cornerRoundness,
                             bool squareTopCorners) = 0;
+    virtual void drawImageResource(const RectF& destination,
+                                   const ImageResourceView& resource,
+                                   float opacity, float cornerRadius,
+                                   float cornerRoundness,
+                                   bool squareTopCorners) {
+        drawBuffer(destination, resource.width, resource.height, resource.pixels,
+                   resource.stridePixels, opacity, cornerRadius,
+                   cornerRoundness, squareTopCorners);
+    }
 };
 
 } // namespace lcl::graphics
