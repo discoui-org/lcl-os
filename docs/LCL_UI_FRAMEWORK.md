@@ -21,7 +21,7 @@
 
 ## 1. Architecture Overview
 
-`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v13 Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by default), DMA-BUF, and lazy shared-memory (`memfd`) fallback.
+`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v15 Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by default), DMA-BUF, and retained shared-memory (`memfd`) fallback.
 
 ```text
 +-----------------------------------------------------------+
@@ -54,7 +54,7 @@ and active-frame pacing.
 - `void setTheme(theme::Theme theme)`: Replaces the window-owned semantic theme and propagates it through the widget tree and hosted popup surfaces.
 - `const theme::Theme& getTheme() const`: Returns the active window theme.
 - `void setAppId(std::string appId)`: Sets the required canonical application identity before connecting.
-- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v13 normal or configured popup surface.
+- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v15 normal or configured popup surface.
 - `registerLocalTransient(...)`: Registers an ordinary absolute-positioned Widget in the single WindowRoot tree with generic lifecycle/dismissal policy.
 - `configurePopupSurface(parentSurfaceId, role, x, y)`: Configures this `WindowApp` as a compositor-level popup that reuses the normal configure and buffer path.
 - `hostSurface(...)`: Owns and ticks an additional generic `WindowApp` surface from the same event loop; it contains no Popover-specific policy.

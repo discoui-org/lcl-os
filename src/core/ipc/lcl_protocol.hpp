@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 13;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 15;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
@@ -47,7 +47,10 @@ enum class LCLOpcode : uint32_t {
     // a pool slot writable; this callback paces the next interactive frame.
     FramePresented = 26,
     SetEdgeToEdge = 27,
-    PopupSurfaceCreate = 28
+    PopupSurfaceCreate = 28,
+    // Returns the single-frame presentation credit when a commit cannot be
+    // presented, commonly because a newer configure serial superseded it.
+    FrameDiscarded = 29
 };
 
 /** Minimal v1 popup role. Feature semantics remain in client-side UI policy. */
@@ -240,7 +243,7 @@ struct LCLMsgConfigureBounds {
     uint32_t headerColor{0};
     uint8_t isFocused{0};
     char title[128]{0};
-    float bufferScale{1.0f}; // v13 buffer mapping; bounds and input are logical.
+    float bufferScale{1.0f}; // v14 buffer mapping; bounds and input are logical.
     LCLConfigureResizeReason resizeReason{LCLConfigureResizeReason::Initial};
 };
 
@@ -251,6 +254,12 @@ struct LCLMsgAttachBuffer {
     uint32_t height{0};
     uint32_t stride{0};
     uint32_t format{0}; // Straight-alpha LCL_BUFFER_FORMAT_ARGB8888
+    // Physical-pixel damage within width x height. Zero extent means the
+    // complete active surface, preserving compatibility with old producers.
+    uint32_t damageX{0};
+    uint32_t damageY{0};
+    uint32_t damageWidth{0};
+    uint32_t damageHeight{0};
 };
 
 struct LCLMsgAttachDmaBuf {
@@ -276,12 +285,17 @@ struct LCLMsgReleaseDmaBuf {
 };
 
 struct LCLMsgFramePresented {
-    // Sent after the compositor presents the latest accepted DMA-BUF commit.
+    // Sent after the compositor presents the latest accepted buffer commit.
     // Clients keep at most one frame in flight and coalesce newer damage until
     // this acknowledgement returns the presentation credit.
     uint32_t surfaceId{0};
     uint64_t timestampNs{0};
     uint64_t refreshIntervalNs{0};
+};
+
+struct LCLMsgFrameDiscarded {
+    uint32_t surfaceId{0};
+    uint64_t configureSerial{0};
 };
 
 struct LCLMsgAckResponse {

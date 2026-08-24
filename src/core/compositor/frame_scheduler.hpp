@@ -12,7 +12,6 @@ class FrameScheduler {
 public:
     void reset(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 
-    bool cursorBlinkDue(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
     bool advanceTransitions(SurfaceRegistry& surfaces,
                             std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 
@@ -22,7 +21,6 @@ public:
     void waitIdle() const;
 
 private:
-    std::chrono::steady_clock::time_point m_lastBlinkCheck{};
     std::chrono::steady_clock::time_point m_lastTransitionTick{};
 };
 

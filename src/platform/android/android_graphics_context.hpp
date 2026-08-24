@@ -6,6 +6,7 @@
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
 #include <memory>
+#include <array>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -19,7 +20,7 @@ class AndroidDisplayBackend;
  *
  * Implements IGraphicsContext on top of Android EGL and OpenGL ES 3.0.
  * Manages EGLDisplay, EGLContext, PBuffer rendering surfaces, and
- * double-buffered AHardwareBuffer scanout targets for Android Composer presentation.
+ * triple-buffered AHardwareBuffer scanout targets for Android Composer presentation.
  */
 class AndroidGraphicsContext final : public lcl::platform::IGraphicsContext {
 public:
@@ -41,6 +42,8 @@ public:
 
     bool presentsToDisplay() const override { return true; }
     bool present() override;
+    bool presentFramebuffer(uint32_t framebuffer,
+                            uint32_t width, uint32_t height) override;
 
     bool readback(uint32_t* destination, uint32_t width, uint32_t height) override;
 
@@ -64,6 +67,8 @@ private:
 
     bool setupScanoutBuffers();
     void destroyScanoutBuffers();
+    bool presentFromFramebuffer(uint32_t framebuffer,
+                                uint32_t width, uint32_t height);
 
     EGLDisplay m_eglDisplay{EGL_NO_DISPLAY};
     EGLConfig m_eglConfig{nullptr};
@@ -79,8 +84,11 @@ private:
     bool m_hasAhbExtension{false};
     bool m_hasImageExtension{false};
 
-    // Double-buffered scanout swapchain
-    ScanoutSlot m_scanoutSlots[2];
+    // Three slots let GLES, Composer validation, and display scanout overlap.
+    // The display backend waits on a slot's old release fences only when that
+    // exact AHardwareBuffer is selected again.
+    static constexpr size_t kScanoutSlotCount = 3;
+    std::array<ScanoutSlot, kScanoutSlotCount> m_scanoutSlots{};
     size_t m_currentSlotIndex{0};
 
     // Imported textures cache

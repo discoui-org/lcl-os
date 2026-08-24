@@ -11,6 +11,7 @@
 #include <cstring>
 #include <iostream>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace lcl::core {
@@ -521,11 +522,13 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.previousBackingWidth = entry.backingWidth;
                 entry.previousBackingHeight = entry.backingHeight;
                 entry.previousStride = entry.stride;
+                entry.previousShmContentSerial = entry.shmContentSerial;
                 entry.previousDmaBufId = entry.dmaBufId;
                 entry.previousDmaBufTexture = entry.dmaBufTexture;
                 entry.pixels = nullptr;
                 entry.shmSize = 0;
                 entry.shmFd = -1;
+                entry.shmContentSerial = 0;
                 entry.dmaBufId = 0;
                 entry.dmaBufTexture = 0;
             } else {
@@ -537,6 +540,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.pixels = nullptr;
                 entry.shmSize = 0;
                 entry.shmFd = -1;
+                entry.shmContentSerial = 0;
                 entry.dmaBufId = 0;
                 entry.dmaBufTexture = 0;
             }
@@ -639,6 +643,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
 
             const auto* bufferMessage = reinterpret_cast<const lcl::protocol::LCLMsgAttachBuffer*>(msg.payload.data());
+            const auto discardRejected = [&] {
+                lcl::protocol::LCLHeader discardHeader{};
+                discardHeader.opcode = lcl::protocol::LCLOpcode::FrameDiscarded;
+                discardHeader.payloadSize = sizeof(lcl::protocol::LCLMsgFrameDiscarded);
+                lcl::protocol::LCLMsgFrameDiscarded discard{};
+                discard.surfaceId = bufferMessage->surfaceId;
+                discard.configureSerial = bufferMessage->configureSerial;
+                lcl::protocol::sendMsgWithFd(msg.clientFd, discardHeader, &discard);
+            };
             if (!SurfaceRegistry::acceptsBufferCommit(
                     entry, bufferMessage->configureSerial)) {
                 if (msg.passedFd >= 0) close(msg.passedFd);
@@ -648,6 +661,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                           << "; buffer=" << w << 'x' << h
                           << ", configured=" << entry.configuredWidth << 'x'
                           << entry.configuredHeight << "\n";
+                discardRejected();
                 continue;
             }
 
@@ -656,11 +670,27 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             int fd = msg.passedFd;
             bool bufferCommitAccepted = false;
             if (fd >= 0) {
-                size_t shmSize = static_cast<size_t>(stride) * h;
-                if (entry.pixels && entry.shmSize == shmSize && entry.width == w && entry.height == h) {
-                    // Buffer is ALREADY mapped in compositor address space with identical size & dimensions!
-                    // Do NOT unmap/remap memory on every frame to avoid rendering race conditions.
+                struct stat shmStat{};
+                const size_t minimumSize = static_cast<size_t>(stride) * h;
+                const bool validShmSize = fstat(fd, &shmStat) == 0 &&
+                    shmStat.st_size > 0 &&
+                    static_cast<uint64_t>(shmStat.st_size) >= minimumSize;
+                const size_t shmSize = validShmSize
+                    ? static_cast<size_t>(shmStat.st_size) : 0;
+                if (!validShmSize || stride < w * sizeof(uint32_t)) {
+                    std::cerr << "[LCL Compositor] Rejected undersized SHM backing for Surface "
+                              << surfId << "\n";
                     close(fd);
+                    discardRejected();
+                    continue;
+                }
+                if (entry.pixels && entry.shmSize == shmSize &&
+                    entry.stride == stride) {
+                    // This retained-capacity mapping is already visible in the
+                    // compositor. Only its active content extent changed.
+                    close(fd);
+                    entry.width = w;
+                    entry.height = h;
                     bufferCommitAccepted = true;
                 } else {
                     void* pixels = mmap(nullptr, shmSize, PROT_READ, MAP_SHARED, fd, 0);
@@ -674,6 +704,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                             entry.previousWidth = entry.width;
                             entry.previousHeight = entry.height;
                             entry.previousStride = entry.stride;
+                            entry.previousShmContentSerial = entry.shmContentSerial;
                             entry.previousDmaBufId = entry.dmaBufId;
                             entry.previousDmaBufTexture = entry.dmaBufTexture;
                             entry.pixels = nullptr;
@@ -695,6 +726,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                         entry.shmFd   = fd;
                         entry.width   = w;
                         entry.height  = h;
+                        entry.backingWidth = stride / sizeof(uint32_t);
+                        entry.backingHeight = static_cast<uint32_t>(shmSize / stride);
                         entry.stride  = stride;
                         bufferCommitAccepted = true;
                         if (entry.resizeTransitionPhase == SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer) {
@@ -713,10 +746,13 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 // example Terminal cell-grid snapping) needs no replacement
                 // memfd. It still acknowledges the serial and releases
                 // configure backpressure.
-                if (!entry.pixels || entry.width != w || entry.height != h || entry.stride != stride) {
+                if (!entry.pixels || entry.stride != stride ||
+                    stride < w * sizeof(uint32_t) ||
+                    static_cast<size_t>(stride) * h > entry.shmSize) {
                     std::cerr << "[LCL Compositor] Rejected buffer commit without matching memfd for Surface "
                               << surfId << "; buffer=" << w << 'x' << h
                               << ", mapped=" << entry.width << 'x' << entry.height << "\n";
+                    discardRejected();
                     continue;
                 }
                 entry.width  = w;
@@ -725,8 +761,31 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 bufferCommitAccepted = true;
             }
 
-            if (!bufferCommitAccepted) continue;
+            if (!bufferCommitAccepted) {
+                discardRejected();
+                continue;
+            }
             entry.acceptedConfigureSerial = bufferMessage->configureSerial;
+            entry.shmContentSerial = m_nextShmContentSerial++;
+            if (m_nextShmContentSerial == 0) m_nextShmContentSerial = 1;
+            const bool validDamage = bufferMessage->damageWidth > 0 &&
+                bufferMessage->damageHeight > 0 &&
+                bufferMessage->damageX < w && bufferMessage->damageY < h;
+            if (!validDamage) {
+                entry.shmDamageX = 0;
+                entry.shmDamageY = 0;
+                entry.shmDamageWidth = w;
+                entry.shmDamageHeight = h;
+            } else {
+                const uint32_t damageRight = bufferMessage->damageX + std::min(
+                    bufferMessage->damageWidth, w - bufferMessage->damageX);
+                const uint32_t damageBottom = bufferMessage->damageY + std::min(
+                    bufferMessage->damageHeight, h - bufferMessage->damageY);
+                entry.shmDamageX = bufferMessage->damageX;
+                entry.shmDamageY = bufferMessage->damageY;
+                entry.shmDamageWidth = damageRight - bufferMessage->damageX;
+                entry.shmDamageHeight = damageBottom - bufferMessage->damageY;
+            }
 
             // Mapping is intentionally evaluated after every commit rather
             // than only in the SCM_RIGHTS branch.  A client can retain a
@@ -741,6 +800,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
 
             if (entry.isPopup()) {
+                SurfaceRegistry::queuePresentation(
+                    entry, bufferMessage->configureSerial);
                 changed = true;
                 continue;
             }
@@ -782,6 +843,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.windowId, frameW, frameH, preserveNewerTarget,
                 entry.configuredX, entry.configuredY,
                 entry.configuredGeometryGeneration);
+            SurfaceRegistry::queuePresentation(
+                entry, bufferMessage->configureSerial);
             changed = true;
 
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetDecorationMode) {

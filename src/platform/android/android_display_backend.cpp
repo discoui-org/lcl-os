@@ -9,6 +9,7 @@
 #include <aidl/android/hardware/graphics/composer3/LayerCommand.h>
 #include <aidl/android/hardware/graphics/composer3/Buffer.h>
 #include <aidl/android/hardware/graphics/composer3/CommandResultPayload.h>
+#include <aidl/android/hardware/graphics/composer3/PresentOrValidate.h>
 #include <aidl/android/hardware/graphics/composer3/ParcelableComposition.h>
 #include <aidl/android/hardware/graphics/composer3/ParcelableBlendMode.h>
 #include <aidl/android/hardware/graphics/composer3/ParcelableDataspace.h>
@@ -34,6 +35,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
+#include <array>
 #include <vector>
 
 extern "C" {
@@ -60,6 +62,7 @@ using aidl::android::hardware::graphics::composer3::DisplayCommand;
 using aidl::android::hardware::graphics::composer3::LayerCommand;
 using aidl::android::hardware::graphics::composer3::Buffer;
 using aidl::android::hardware::graphics::composer3::CommandResultPayload;
+using aidl::android::hardware::graphics::composer3::PresentOrValidate;
 using aidl::android::hardware::graphics::composer3::ParcelableComposition;
 using aidl::android::hardware::graphics::composer3::Composition;
 using aidl::android::hardware::graphics::composer3::ParcelableBlendMode;
@@ -97,7 +100,22 @@ struct AndroidDisplayBackend::Impl {
     bool hotplugReceived{false};
     int64_t hotplugDisplayId{-1};
     bool hotplugConnected{false};
+    std::array<const AHardwareBuffer*, 4> layerBufferSlots{};
+    std::array<std::vector<int>, 4> pendingSlotFences{};
+    uint32_t nextLayerBufferSlot{0};
 };
+
+static void waitAndClearFenceFds(std::vector<int>& fences) {
+    for (const int fence : fences) {
+        if (fence < 0) continue;
+        pollfd descriptor{};
+        descriptor.fd = fence;
+        descriptor.events = POLLIN | POLLPRI;
+        (void)poll(&descriptor, 1, 1000);
+        close(fence);
+    }
+    fences.clear();
+}
 
 class AndroidComposerCallback final : public BnComposerCallback {
 public:
@@ -305,6 +323,10 @@ bool AndroidDisplayBackend::initializeAidl() {
 
 void AndroidDisplayBackend::shutdownAidl() {
 
+    for (auto& fences : m_impl->pendingSlotFences) {
+        waitAndClearFenceFds(fences);
+    }
+
     if (m_layerId >= 0 && m_impl->client) {
         m_impl->client->destroyLayer(m_displayId, m_layerId);
         m_layerId = -1;
@@ -318,6 +340,9 @@ void AndroidDisplayBackend::shutdownAidl() {
         dlclose(m_impl->binderNdkLib);
         m_impl->binderNdkLib = nullptr;
     }
+
+    m_impl->layerBufferSlots.fill(nullptr);
+    m_impl->nextLayerBufferSlot = 0;
 
     m_initialized = false;
 }
@@ -366,19 +391,31 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
         return false;
     }
 
-    // 1. Extract and wrap native handle
+    uint32_t bufferSlot = 0;
+    bool knownBuffer = false;
+    for (uint32_t slot = 0; slot < m_impl->layerBufferSlots.size(); ++slot) {
+        if (m_impl->layerBufferSlots[slot] == buffer) {
+            bufferSlot = slot;
+            knownBuffer = true;
+            break;
+        }
+    }
+    if (!knownBuffer) {
+        bufferSlot = m_impl->nextLayerBufferSlot;
+        waitAndClearFenceFds(m_impl->pendingSlotFences[bufferSlot]);
+        m_impl->layerBufferSlots[bufferSlot] = buffer;
+        m_impl->nextLayerBufferSlot =
+            (m_impl->nextLayerBufferSlot + 1) % m_impl->layerBufferSlots.size();
+    } else {
+        waitAndClearFenceFds(m_impl->pendingSlotFences[bufferSlot]);
+    }
+
+    // 1. Extract and wrap a native handle only when populating a new Composer
+    // cache slot. Subsequent frames reference that stable slot directly.
     const native_handle_t* nh = AHardwareBuffer_getNativeHandle(buffer);
     if (!nh) {
         std::cerr << "[AndroidDisplayBackend] AHardwareBuffer_getNativeHandle returned null\n";
         return false;
-    }
-
-    NativeHandle aidlHandle;
-    for (int i = 0; i < nh->numFds; ++i) {
-        aidlHandle.fds.emplace_back(dup(nh->data[i]));
-    }
-    for (int i = 0; i < nh->numInts; ++i) {
-        aidlHandle.ints.push_back(nh->data[nh->numFds + i]);
     }
 
     // 2. Build Layer Command with full layer state
@@ -386,10 +423,20 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
     layerCmd.layer = m_layerId;
 
     Buffer buf;
-    buf.slot = 0;
-    buf.handle = std::move(aidlHandle);
+    buf.slot = static_cast<int32_t>(bufferSlot);
+    if (!knownBuffer) {
+        NativeHandle aidlHandle;
+        for (int i = 0; i < nh->numFds; ++i) {
+            aidlHandle.fds.emplace_back(dup(nh->data[i]));
+        }
+        for (int i = 0; i < nh->numInts; ++i) {
+            aidlHandle.ints.push_back(nh->data[nh->numFds + i]);
+        }
+        buf.handle = std::move(aidlHandle);
+    }
     if (acquireFenceFd >= 0) {
-        buf.fence = ::ndk::ScopedFileDescriptor(acquireFenceFd);
+        // The caller retains ownership; the Composer command owns this dup.
+        buf.fence = ::ndk::ScopedFileDescriptor(dup(acquireFenceFd));
     } else {
         buf.fence = ::ndk::ScopedFileDescriptor(-1);
     }
@@ -419,11 +466,13 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
     layerCmd.dataspace = ParcelableDataspace{Dataspace::UNKNOWN};
     layerCmd.transform = ParcelableTransform{Transform::NONE};
 
-    // 3. Step 1: Validate Display
+    // 3. Present immediately when the established DEVICE composition remains
+    // valid; otherwise this same command performs validation and reports the
+    // composition changes required before a second present command.
     DisplayCommand valCmd;
     valCmd.display = m_displayId;
     valCmd.layers.push_back(std::move(layerCmd));
-    valCmd.validateDisplay = true;
+    valCmd.presentOrValidateDisplay = true;
 
     std::vector<DisplayCommand> valCmds;
     valCmds.push_back(std::move(valCmd));
@@ -431,26 +480,55 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
     std::vector<CommandResultPayload> valResults;
     auto valStatus = m_impl->client->executeCommands(valCmds, &valResults);
     if (!valStatus.isOk()) {
-        std::cerr << "[AndroidDisplayBackend] executeCommands(validate) failed: " << valStatus.getDescription() << "\n";
+        std::cerr << "[AndroidDisplayBackend] executeCommands(presentOrValidate) failed: "
+                  << valStatus.getDescription() << "\n";
         return false;
     }
 
     bool hasChangedTypes = false;
+    bool alreadyPresented = false;
     int commandErrors = 0;
-    for (const auto& payload : valResults) {
-        if (payload.getTag() == CommandResultPayload::Tag::error) {
-            const auto& err = payload.get<CommandResultPayload::Tag::error>();
-            std::cerr << "[AndroidDisplayBackend] Validate CommandError at index "
-                      << err.commandIndex << ": code " << err.errorCode << "\n";
-            commandErrors++;
-        } else if (payload.getTag() == CommandResultPayload::Tag::changedCompositionTypes) {
-            hasChangedTypes = true;
+    const auto collectResults = [&](const std::vector<CommandResultPayload>& results,
+                                    const char* phase) {
+        for (const auto& payload : results) {
+            if (payload.getTag() == CommandResultPayload::Tag::error) {
+                const auto& err = payload.get<CommandResultPayload::Tag::error>();
+                std::cerr << "[AndroidDisplayBackend] " << phase
+                          << " CommandError at index " << err.commandIndex
+                          << ": code " << err.errorCode << "\n";
+                commandErrors++;
+            } else if (payload.getTag() ==
+                       CommandResultPayload::Tag::changedCompositionTypes) {
+                hasChangedTypes = true;
+            } else if (payload.getTag() ==
+                       CommandResultPayload::Tag::presentOrValidateResult) {
+                const auto& result = payload.get<
+                    CommandResultPayload::Tag::presentOrValidateResult>();
+                alreadyPresented =
+                    result.result == PresentOrValidate::Result::Presented;
+            } else if (payload.getTag() == CommandResultPayload::Tag::presentFence) {
+                const auto& present = payload.get<CommandResultPayload::Tag::presentFence>();
+                const int fenceFd = present.fence.get();
+                if (fenceFd >= 0) {
+                    m_impl->pendingSlotFences[bufferSlot].push_back(dup(fenceFd));
+                }
+            } else if (payload.getTag() == CommandResultPayload::Tag::releaseFences) {
+                const auto& releases = payload.get<CommandResultPayload::Tag::releaseFences>();
+                for (const auto& layer : releases.layers) {
+                    const int fenceFd = layer.fence.get();
+                    if (fenceFd >= 0) {
+                        m_impl->pendingSlotFences[bufferSlot].push_back(dup(fenceFd));
+                    }
+                }
+            }
         }
-    }
+    };
+    collectResults(valResults, "PresentOrValidate");
 
     if (commandErrors > 0) {
         return false;
     }
+    if (alreadyPresented) return true;
 
     // 4. Step 2: Present Display (accepting composition changes if requested by HAL)
     DisplayCommand presCmd;
@@ -470,23 +548,7 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
         return false;
     }
 
-    for (auto& payload : presResults) {
-        if (payload.getTag() == CommandResultPayload::Tag::error) {
-            const auto& err = payload.get<CommandResultPayload::Tag::error>();
-            std::cerr << "[AndroidDisplayBackend] Present CommandError at index "
-                      << err.commandIndex << ": code " << err.errorCode << "\n";
-            commandErrors++;
-        } else if (payload.getTag() == CommandResultPayload::Tag::presentFence) {
-            auto& pf = payload.get<CommandResultPayload::Tag::presentFence>();
-            int fenceFd = pf.fence.get();
-            if (fenceFd >= 0) {
-                struct pollfd pfd;
-                pfd.fd = fenceFd;
-                pfd.events = POLLIN | POLLPRI;
-                poll(&pfd, 1, 1000);
-            }
-        }
-    }
+    collectResults(presResults, "Present");
 
     return (commandErrors == 0);
 }

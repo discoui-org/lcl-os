@@ -8,17 +8,7 @@
 namespace lcl::core {
 
 void FrameScheduler::reset(std::chrono::steady_clock::time_point now) noexcept {
-    m_lastBlinkCheck = now;
     m_lastTransitionTick = now;
-}
-
-bool FrameScheduler::cursorBlinkDue(std::chrono::steady_clock::time_point now) noexcept {
-    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastBlinkCheck);
-    if (elapsed.count() < 500) {
-        return false;
-    }
-    m_lastBlinkCheck = now;
-    return true;
 }
 
 bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,

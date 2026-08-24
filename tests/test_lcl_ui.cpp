@@ -25,6 +25,7 @@
 #include "render/text_metrics.hpp"
 
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -2297,6 +2298,108 @@ TEST(LclUiTest, WindowAppWaitsForInitialConfigureBeforeAttachingBuffer) {
     unlink(socketPath.c_str());
 }
 
+TEST(LclUiTest, LiveShmResizeReusesWorkspaceBackingAndWaitsForPresentation) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 64, 48, "Live SHM resize");
+    app.setResizePresentationMode(lcl::protocol::LCLResizePresentationMode::Live);
+    app.setExternalIpcSocket(sockets[0]);
+
+    const auto sendConfigure = [&](uint64_t serial, uint32_t width, uint32_t height) {
+        lcl::protocol::LCLMsgConfigureBounds configure{};
+        configure.surfaceId = app.getSurfaceId();
+        configure.configureSerial = serial;
+        configure.width = width;
+        configure.height = height;
+        configure.backingWidth = 300;
+        configure.backingHeight = 200;
+        configure.bufferScale = 1.0f;
+        configure.resizeReason =
+            lcl::protocol::LCLConfigureResizeReason::WindowStateTransition;
+        lcl::protocol::LCLHeader header{};
+        header.opcode = lcl::protocol::LCLOpcode::ConfigureBounds;
+        header.payloadSize = sizeof(configure);
+        ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[1], header, &configure));
+    };
+
+    sendConfigure(1, 80, 60);
+    ASSERT_TRUE(app.tick());
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, lcl::protocol::LCLOpcode::AttachBuffer);
+    ASSERT_EQ(payload.size(), sizeof(lcl::protocol::LCLMsgAttachBuffer));
+    const auto* first =
+        reinterpret_cast<const lcl::protocol::LCLMsgAttachBuffer*>(payload.data());
+    EXPECT_EQ(first->configureSerial, 1u);
+    EXPECT_EQ(first->stride, 300u * sizeof(uint32_t));
+    EXPECT_EQ(first->damageWidth, 80u);
+    EXPECT_EQ(first->damageHeight, 60u);
+    const uint32_t retainedStride = first->stride;
+    ASSERT_GE(receivedFd, 0);
+    struct stat shmStat{};
+    ASSERT_EQ(fstat(receivedFd, &shmStat), 0);
+    EXPECT_EQ(static_cast<size_t>(shmStat.st_size),
+              300u * 200u * sizeof(uint32_t));
+    close(receivedFd);
+
+    // The next target is coalesced while the first SHM frame is in flight.
+    sendConfigure(2, 120, 90);
+    EXPECT_FALSE(app.tick());
+    EXPECT_EQ(app.getWidth(), 80u);
+
+    lcl::protocol::LCLMsgFramePresented presented{};
+    presented.surfaceId = app.getSurfaceId();
+    presented.timestampNs = 1000000000ull;
+    presented.refreshIntervalNs = 16666667ull;
+    header = {};
+    header.opcode = lcl::protocol::LCLOpcode::FramePresented;
+    header.payloadSize = sizeof(presented);
+    ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[1], header, &presented));
+
+    ASSERT_TRUE(app.tick());
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, lcl::protocol::LCLOpcode::AttachBuffer);
+    const auto* second =
+        reinterpret_cast<const lcl::protocol::LCLMsgAttachBuffer*>(payload.data());
+    EXPECT_EQ(second->configureSerial, 2u);
+    EXPECT_EQ(second->width, 120u);
+    EXPECT_EQ(second->height, 90u);
+    EXPECT_EQ(second->stride, retainedStride);
+    EXPECT_EQ(receivedFd, -1); // Same memfd mapping, only active extent changed.
+
+    // If a newer configure overtakes the submitted SHM frame, the compositor
+    // explicitly discards that serial. The returned credit must immediately
+    // allow a repaint at the newest size.
+    sendConfigure(3, 140, 100);
+    EXPECT_FALSE(app.tick());
+    lcl::protocol::LCLMsgFrameDiscarded discarded{};
+    discarded.surfaceId = app.getSurfaceId();
+    discarded.configureSerial = 2;
+    header = {};
+    header.opcode = lcl::protocol::LCLOpcode::FrameDiscarded;
+    header.payloadSize = sizeof(discarded);
+    ASSERT_TRUE(lcl::protocol::sendMsgWithFd(sockets[1], header, &discarded));
+
+    ASSERT_TRUE(app.tick());
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, lcl::protocol::LCLOpcode::AttachBuffer);
+    const auto* recovered =
+        reinterpret_cast<const lcl::protocol::LCLMsgAttachBuffer*>(payload.data());
+    EXPECT_EQ(recovered->configureSerial, 3u);
+    EXPECT_EQ(recovered->width, 140u);
+    EXPECT_EQ(recovered->height, 100u);
+    EXPECT_EQ(receivedFd, -1);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(LclUiTest, WindowAppCreatesPopupWithParentLocalGeometry) {
     const std::string socketPath = "/tmp/lcl-ui-popup-create-" +
         std::to_string(getpid()) + ".sock";
@@ -3563,6 +3666,27 @@ TEST(LclUiTest, ChildPaintInvalidationDoesNotExpandDamageToRootBounds) {
     EXPECT_FLOAT_EQ(pass.getDirtyRects().front().width, 30.0f);
     EXPECT_FLOAT_EQ(pass.getDirtyRects().front().height, 20.0f);
     EXPECT_GT(root->getPaintRevision(), rootRevision);
+}
+
+TEST(LclUiTest, ExplicitWidgetPaintDamageKeepsTheRequestedSubregion) {
+    RenderPass pass;
+    auto widget = std::make_unique<CountingPaintWidget>();
+    widget->setWidth(100.0f);
+    widget->setHeight(80.0f);
+    widget->getYogaNode().calculateLayout(100.0f, 80.0f);
+    widget->syncLayout();
+    widget->setRenderPass(&pass);
+    pass.clear();
+
+    const uint64_t revision = widget->getPaintRevision();
+    widget->markDirty({12.0f, 18.0f, 9.0f, 15.0f});
+
+    ASSERT_EQ(pass.getDirtyRects().size(), 1u);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().x, 12.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().y, 18.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().width, 9.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().height, 15.0f);
+    EXPECT_GT(widget->getPaintRevision(), revision);
 }
 
 TEST(LclUiTest, WindowAppRetainedFrameClearsOnlyChangedWidgetRegion) {

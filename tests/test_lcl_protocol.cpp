@@ -74,6 +74,32 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     close(sv[1]);
 }
 
+TEST(LCLProtocolTest, FrameDiscardedRoundTripsConfigureSerial) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    LCLMsgFrameDiscarded discarded{};
+    discarded.surfaceId = 4;
+    discarded.configureSerial = 91;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::FrameDiscarded;
+    header.payloadSize = sizeof(discarded);
+    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &discarded));
+
+    LCLHeader received{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sockets[1], received, payload, receivedFd));
+    ASSERT_EQ(received.opcode, LCLOpcode::FrameDiscarded);
+    ASSERT_EQ(payload.size(), sizeof(LCLMsgFrameDiscarded));
+    const auto* decoded = reinterpret_cast<const LCLMsgFrameDiscarded*>(payload.data());
+    EXPECT_EQ(decoded->surfaceId, 4u);
+    EXPECT_EQ(decoded->configureSerial, 91u);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(LCLProtocolTest, PopupSurfaceCreateRoundTripsParentRoleAndGeometry) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
@@ -230,7 +256,7 @@ TEST(LCLProtocolTest, RejectsTruncatedAndNonFiniteLogicalSurfaceGeometry) {
     auto packet = surfaceCreatePacket();
     ASSERT_FALSE(packet.empty());
 
-    // v13 SurfaceCreate must contain the final resize presentation field.
+    // v15 SurfaceCreate must contain the final resize presentation field.
     packet.resize(packet.size() - sizeof(uint8_t));
     const uint32_t shortened = sizeof(LCLMsgSurfaceCreate) - sizeof(uint8_t);
     packet[20] = static_cast<uint8_t>(shortened);
@@ -335,6 +361,10 @@ TEST(LCLProtocolTest, FileDescriptorIsAcceptedOnlyForBufferAttachOpcodes) {
     attach.height = 16;
     attach.stride = 64;
     attach.format = 1;
+    attach.damageX = 2;
+    attach.damageY = 3;
+    attach.damageWidth = 8;
+    attach.damageHeight = 9;
     LCLHeader attachHeader{};
     attachHeader.opcode = LCLOpcode::AttachBuffer;
     attachHeader.requestId = 5;
@@ -348,6 +378,13 @@ TEST(LCLProtocolTest, FileDescriptorIsAcceptedOnlyForBufferAttachOpcodes) {
               ReceiveStatus::Received);
     EXPECT_GE(receivedFd, 0);
     EXPECT_EQ(receivedHeader.requestId, 5u);
+    ASSERT_EQ(payload.size(), sizeof(LCLMsgAttachBuffer));
+    const auto* decodedAttach =
+        reinterpret_cast<const LCLMsgAttachBuffer*>(payload.data());
+    EXPECT_EQ(decodedAttach->damageX, 2u);
+    EXPECT_EQ(decodedAttach->damageY, 3u);
+    EXPECT_EQ(decodedAttach->damageWidth, 8u);
+    EXPECT_EQ(decodedAttach->damageHeight, 9u);
     if (receivedFd >= 0)
         close(receivedFd);
 

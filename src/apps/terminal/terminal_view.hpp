@@ -27,6 +27,7 @@ private:
     TerminalApp& m_terminal;
     bool m_cursorStateInitialized{false};
     bool m_cursorVisible{true};
+    lcl::graphics::RectF m_cursorPaintBounds{};
 };
 
 } // namespace lcl::apps

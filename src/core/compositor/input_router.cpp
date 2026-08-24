@@ -158,7 +158,7 @@ void InputRouter::sendPendingConfigures() {
             }
 
             // Every resize policy permits only one configure at a time. Live
-            // additionally waits until the accepted DMA-BUF has actually been
+            // additionally waits until the accepted client buffer has actually been
             // presented before publishing the newest coalesced geometry.
             const bool live = entry.resizePresentation ==
                 protocol::LCLResizePresentationMode::Live;

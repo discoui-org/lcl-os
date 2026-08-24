@@ -39,6 +39,10 @@ bool TerminalView::updateCursorBlink() {
     if (!m_cursorStateInitialized || visible != m_cursorVisible) {
         m_cursorStateInitialized = true;
         m_cursorVisible = visible;
+        // Cursor visibility changes paint only the last caret cell. Terminal
+        // output and resize still invalidate the full widget through their
+        // existing paths and refresh this cached geometry during draw().
+        markDirty(m_cursorPaintBounds);
         return true;
     }
     return false;
@@ -89,8 +93,6 @@ void TerminalView::draw(lcl::graphics::Canvas& canvas, const lcl::graphics::Rect
         }
     }
 
-    if (!m_cursorVisible) return;
-
     const float cursorY = (y > contentTop) ? (y - kLineHeight) : contentTop;
     const std::string& finalLine = lines.empty() ? std::string{} : lines.back();
     const size_t cursorByte = static_cast<size_t>(std::clamp(
@@ -99,8 +101,10 @@ void TerminalView::draw(lcl::graphics::Canvas& canvas, const lcl::graphics::Rect
                                                   availableWidth, cellWidth);
     const float cursorX = std::min(contentRight - cellWidth,
         contentLeft + canvas.measureText(cursorPrefix, kFontSize, lcl::graphics::FontFamily::Monospace));
-    if (cursorX >= contentLeft && cursorY + kFontSize <= contentBottom) {
-        canvas.drawRect({cursorX, cursorY, cellWidth, kFontSize}, kCursorColor);
+    m_cursorPaintBounds = {cursorX, cursorY, cellWidth, kFontSize};
+    if (m_cursorVisible && cursorX >= contentLeft &&
+        cursorY + kFontSize <= contentBottom) {
+        canvas.drawRect(m_cursorPaintBounds, kCursorColor);
     }
 }
 

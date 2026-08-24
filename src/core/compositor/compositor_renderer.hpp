@@ -16,7 +16,13 @@ public:
                 lcl::platform::IDisplayBackend& displayBackend,
                 const render::WindowManager& windowManager,
                 const SurfaceRegistry::Snapshot& surfaces,
-                const std::function<void()>& beforePresent = {}) const;
+                const std::function<void()>& beforePresent = {},
+                bool allowIncrementalMove = false) const;
+
+private:
+    // Android's compositor scene FBO is authoritative across frames. Partial
+    // move damage is enabled only after one complete frame initialized it.
+    mutable bool m_hasCompleteRetainedFrame{false};
 };
 
 } // namespace lcl::core

@@ -5,11 +5,15 @@
 #include <vector>
 #include <cstring>
 #include <cassert>
+#include <unistd.h>
 
 typedef EGLClientBuffer (*pfn_eglGetNativeClientBufferANDROID)(const struct AHardwareBuffer* buffer);
 typedef EGLImageKHR (*pfn_eglCreateImageKHR)(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer, const EGLint* attrib_list);
 typedef EGLBoolean (*pfn_eglDestroyImageKHR)(EGLDisplay dpy, EGLImageKHR image);
 typedef void (*pfn_glEGLImageTargetTexture2DOES)(GLenum target, void* image);
+typedef EGLSyncKHR (*pfn_eglCreateSyncKHR)(EGLDisplay, EGLenum, const EGLint*);
+typedef EGLBoolean (*pfn_eglDestroySyncKHR)(EGLDisplay, EGLSyncKHR);
+typedef EGLint (*pfn_eglDupNativeFenceFDANDROID)(EGLDisplay, EGLSyncKHR);
 
 namespace lcl::platform::android {
 
@@ -29,7 +33,7 @@ bool AndroidGraphicsContext::setupScanoutBuffers() {
         return false;
     }
 
-    for (size_t i = 0; i < 2; ++i) {
+    for (size_t i = 0; i < m_scanoutSlots.size(); ++i) {
         AHardwareBuffer_Desc desc = {};
         desc.width = m_width;
         desc.height = m_height;
@@ -80,7 +84,7 @@ bool AndroidGraphicsContext::setupScanoutBuffers() {
 void AndroidGraphicsContext::destroyScanoutBuffers() {
     auto eglDestroyImageKHR = reinterpret_cast<pfn_eglDestroyImageKHR>(eglGetProcAddress("eglDestroyImageKHR"));
 
-    for (size_t i = 0; i < 2; ++i) {
+    for (size_t i = 0; i < m_scanoutSlots.size(); ++i) {
         if (m_scanoutSlots[i].fbo != 0) {
             glDeleteFramebuffers(1, &m_scanoutSlots[i].fbo);
             m_scanoutSlots[i].fbo = 0;
@@ -251,24 +255,65 @@ bool AndroidGraphicsContext::resize(uint32_t width, uint32_t height) {
 }
 
 bool AndroidGraphicsContext::present() {
-    if (!m_initialized) return false;
+    return presentFromFramebuffer(0, m_width, m_height);
+}
 
-    // 1. Copy the rendered PBuffer contents into the active scanout AHardwareBuffer FBO.
-    // OpenGL PBuffer coordinate origin is bottom-left (Y=0 is bottom row in PBuffer).
+bool AndroidGraphicsContext::presentFramebuffer(uint32_t framebuffer,
+                                                uint32_t width,
+                                                uint32_t height) {
+    if (framebuffer == 0) return false;
+    return presentFromFramebuffer(framebuffer, width, height);
+}
+
+bool AndroidGraphicsContext::presentFromFramebuffer(uint32_t framebuffer,
+                                                    uint32_t width,
+                                                    uint32_t height) {
+    if (!m_initialized || width == 0 || height == 0 ||
+        width > m_width || height > m_height) return false;
+
+    // 1. Copy the compositor scene FBO directly into the active scanout AHB.
+    // The legacy present() path supplies framebuffer 0 (the PBuffer); modern
+    // compositor rendering supplies its retained scene FBO and skips the old
+    // scene-texture -> PBuffer full-screen pass.
     // AHardwareBuffer / Android Composer scanout memory origin is top-left (Row 0 is top scanline of display).
-    // Blit with inverted destination Y [0..m_height] -> [m_height..0] to map UI top to display top scanline.
+    // Blit with inverted destination Y to map UI top to display top scanline.
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_scanoutSlots[m_currentSlotIndex].fbo);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0); // PBuffer default FBO
-    glBlitFramebuffer(0, 0, m_width, m_height, 0, m_height, m_width, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    glFinish();
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    glBlitFramebuffer(0, 0, width, height,
+                      0, height, width, 0,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    // Export the GPU completion point to Hardware Composer instead of
+    // stalling the CPU on glFinish(). HWC waits asynchronously before reading
+    // this AHardwareBuffer. Older vendor EGL stacks retain the safe fallback.
+    int acquireFenceFd = -1;
+    auto eglCreateSyncKHR = reinterpret_cast<pfn_eglCreateSyncKHR>(
+        eglGetProcAddress("eglCreateSyncKHR"));
+    auto eglDestroySyncKHR = reinterpret_cast<pfn_eglDestroySyncKHR>(
+        eglGetProcAddress("eglDestroySyncKHR"));
+    auto eglDupNativeFenceFDANDROID =
+        reinterpret_cast<pfn_eglDupNativeFenceFDANDROID>(
+            eglGetProcAddress("eglDupNativeFenceFDANDROID"));
+    if (eglCreateSyncKHR && eglDestroySyncKHR && eglDupNativeFenceFDANDROID) {
+        const EGLint fenceAttribs[] = {EGL_NONE};
+        EGLSyncKHR fence = eglCreateSyncKHR(
+            m_eglDisplay, EGL_SYNC_NATIVE_FENCE_ANDROID, fenceAttribs);
+        if (fence != EGL_NO_SYNC_KHR) {
+            glFlush();
+            acquireFenceFd = eglDupNativeFenceFDANDROID(m_eglDisplay, fence);
+            eglDestroySyncKHR(m_eglDisplay, fence);
+        }
+    }
+    if (acquireFenceFd < 0) glFinish();
 
     // 2. Present active AHardwareBuffer through the selected Android Composer backend.
     if (m_displayBackend && m_scanoutSlots[m_currentSlotIndex].ahb) {
-        m_displayBackend->presentBuffer(m_scanoutSlots[m_currentSlotIndex].ahb);
+        m_displayBackend->presentBuffer(
+            m_scanoutSlots[m_currentSlotIndex].ahb, acquireFenceFd);
     }
+    if (acquireFenceFd >= 0) close(acquireFenceFd);
 
-    // 3. Flip to next buffer slot
-    m_currentSlotIndex = 1 - m_currentSlotIndex;
+    // 3. Flip to next buffer slot.
+    m_currentSlotIndex = (m_currentSlotIndex + 1) % m_scanoutSlots.size();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return true;
 }

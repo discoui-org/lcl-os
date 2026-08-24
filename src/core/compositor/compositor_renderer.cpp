@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,18 +16,124 @@ void CompositorRenderer::render(render::Renderer& renderer,
                                  lcl::platform::IDisplayBackend& displayBackend,
                                  const render::WindowManager& windowManager,
                                  const SurfaceRegistry::Snapshot& surfaces,
-                                 const std::function<void()>& beforePresent) const {
+                                 const std::function<void()>& beforePresent,
+                                 bool allowIncrementalMove) const {
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     // The snapshot contains only const entry pointers, so protocol/input work
     // cannot mutate the surface state while this frame is being composed.
 
-    // --- Begin LCL raster frame ---
     auto* raster = renderer.getRasterRenderer();
+
+    std::optional<graphics::RectF> incrementalDamage;
+#if defined(__ANDROID__)
+    if (allowIncrementalMove && m_hasCompleteRetainedFrame) {
+        bool hasDirtyWindow = false;
+        bool moveOnly = true;
+        graphics::RectF mergedDamage{};
+        for (const auto& window : windowManager.getWindows()) {
+            if (!window.isDirty) continue;
+            hasDirtyWindow = true;
+            if (!window.isDragging()) {
+                moveOnly = false;
+                break;
+            }
+            mergedDamage = mergedDamage.unionWith(window.damageRect);
+        }
+
+        // Popup surfaces may extend beyond their parent WindowGroup. Until
+        // popup visual bounds participate in Window damage, keep that less
+        // common move path on the correctness-first full redraw.
+        if (moveOnly) {
+            for (const auto& window : windowManager.getWindows()) {
+                if (!window.isDirty) continue;
+                SurfaceRegistry::Key parentSurfaceKey = 0;
+                for (const auto& surface : surfaces) {
+                    if (surface.entry && !surface.entry->isPopup() &&
+                        surface.entry->windowId == window.id) {
+                        parentSurfaceKey = surface.key;
+                        break;
+                    }
+                }
+                if (parentSurfaceKey == 0) continue;
+                const bool hasPopup = std::any_of(
+                    surfaces.begin(), surfaces.end(),
+                    [parentSurfaceKey](const auto& surface) {
+                        return surface.entry &&
+                            surface.entry->parentSurfaceKey == parentSurfaceKey &&
+                            surface.entry->hasRenderableBuffer() &&
+                            !surface.entry->pendingDestroy;
+                    });
+                if (hasPopup) {
+                    moveOnly = false;
+                    break;
+                }
+            }
+        }
+
+        if (hasDirtyWindow && moveOnly && !mergedDamage.isEmpty()) {
+            // Cover antialiased window edges and fractional motion before
+            // clipping to the logical output. There are currently no exterior
+            // compositor shadows; if one is introduced its radius must be
+            // included here as part of the WindowGroup visual bounds.
+            constexpr float kEdgeSafety = 2.0f;
+            const graphics::RectF expanded{
+                mergedDamage.x - kEdgeSafety,
+                mergedDamage.y - kEdgeSafety,
+                mergedDamage.width + kEdgeSafety * 2.0f,
+                mergedDamage.height + kEdgeSafety * 2.0f,
+            };
+            const graphics::RectF outputBounds{
+                0.0f, 0.0f,
+                windowManager.getScreenWidth(),
+                windowManager.getScreenHeight(),
+            };
+            const auto clipped = expanded.intersection(outputBounds);
+            if (!clipped.isEmpty()) incrementalDamage = clipped;
+        }
+    }
+
+    // The Android scene FBO is the retained source of truth. Other platform
+    // binaries keep their existing full-frame beginFrame behavior.
+    raster->setRetainsFrameBacking(true);
+#endif
+
+    // --- Begin LCL raster frame ---
     raster->beginFrame();
 
     constexpr float kWindowCornerRadiusLogical = 20.0f;
 
     const float outputScale = raster->getDeviceScale();
+    auto drawShmSurface = [&](SurfaceRegistry::Key cacheKey,
+                              uint64_t contentSerial,
+                              float dstX, float dstY,
+                              int srcW, int srcH, int backingW, int backingH,
+                              const uint32_t* pixels, int stridePixels,
+                              int damageX, int damageY, int damageW, int damageH,
+                              float opacity, float cornerRadius,
+                              float cornerRoundness, bool squareTopCorners,
+                              float drawWidth, float drawHeight) {
+#if defined(__ANDROID__)
+        raster->drawCachedShmBufferTransformed(
+            cacheKey, contentSerial, dstX, dstY, srcW, srcH,
+            backingW, backingH, pixels, stridePixels,
+            damageX, damageY, damageW, damageH,
+            opacity, cornerRadius, cornerRoundness,
+            squareTopCorners, drawWidth, drawHeight);
+#else
+        (void)cacheKey;
+        (void)contentSerial;
+        (void)backingW;
+        (void)backingH;
+        (void)damageX;
+        (void)damageY;
+        (void)damageW;
+        (void)damageH;
+        raster->drawBufferTransformed(
+            dstX, dstY, srcW, srcH, pixels, stridePixels, opacity,
+            cornerRadius, cornerRoundness, squareTopCorners,
+            drawWidth, drawHeight);
+#endif
+    };
     auto resolveWindowCornerRadiusLogical = [&](const render::Window& win) {
         if (win.cornerRadius >= 0.0f) {
             return win.cornerRadius;
@@ -84,8 +191,23 @@ void CompositorRenderer::render(render::Renderer& renderer,
             rootTransform);
     };
 
-    // 1. Clear Desktop Canvas (Black background)
+    // 1. Clear either the complete desktop or only the old+new move damage.
+#if defined(__ANDROID__)
+    if (incrementalDamage) {
+        const render::RasterRect damage{
+            incrementalDamage->x, incrementalDamage->y,
+            incrementalDamage->width, incrementalDamage->height};
+        raster->setFrameDamageRect(damage);
+        raster->clearRect(damage, {0, 0, 0, 255});
+    } else {
+        raster->setFrameDamageRect(std::nullopt);
+        raster->setClipRect(std::nullopt);
+        raster->clear({0, 0, 0, 255});
+        m_hasCompleteRetainedFrame = true;
+    }
+#else
     renderer.clear(0xFF000000);
+#endif
 
     // 2. Atomic Z-Stacking Window Group Rendering (Frame + Client Surface per Window in Z-order)
     auto applySurfaceRegionEffects = [&](const render::Window& win,
@@ -135,6 +257,10 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 cornerRoundness = std::clamp(fx.region.cornerRoundness, 2.0f, 8.0f);
             }
             if (fxW <= 0.0f || fxH <= 0.0f) continue;
+            if (incrementalDamage && !incrementalDamage->intersects(
+                    {fxX, fxY, fxW, fxH})) {
+                continue;
+            }
 
             // Initial executor supports chain filters with source-type routing.
             // Advanced blend modes are currently treated as normal blend.
@@ -207,12 +333,22 @@ void CompositorRenderer::render(render::Renderer& renderer,
             const bool hasPrevious = matchingSurface->previousPixels ||
                                      matchingSurface->previousDmaBufTexture != 0;
             if (matchingSurface->previousPixels) {
-                renderer.getRasterRenderer()->drawBufferTransformed(
+                // Android retains current and crossfade source independently.
+                // Surface keys are PID-backed and therefore never use bit 63.
+                constexpr uint64_t kPreviousShmCacheBit = uint64_t{1} << 63;
+                drawShmSurface(
+                    matchingSurfaceKey ^ kPreviousShmCacheBit,
+                    matchingSurface->previousShmContentSerial,
                     drawX, drawY,
                     static_cast<int>(matchingSurface->previousWidth),
                     static_cast<int>(matchingSurface->previousHeight),
+                    static_cast<int>(matchingSurface->previousBackingWidth),
+                    static_cast<int>(matchingSurface->previousBackingHeight),
                     reinterpret_cast<const uint32_t*>(matchingSurface->previousPixels),
                     static_cast<int>(matchingSurface->previousStride / 4),
+                    0, 0,
+                    static_cast<int>(matchingSurface->previousWidth),
+                    static_cast<int>(matchingSurface->previousHeight),
                     windowOpacity * (1.0f - matchingSurface->resizeCrossfadeProgress),
                     maskToWindowShape ? presentedCornerRadius : 0.0f,
                     resolveWindowCornerRoundness(win),
@@ -237,10 +373,18 @@ void CompositorRenderer::render(render::Renderer& renderer,
             const float currentOpacity = windowOpacity *
                 (hasPrevious ? matchingSurface->resizeCrossfadeProgress : 1.0f);
             if (matchingSurface->pixels) {
-                renderer.getRasterRenderer()->drawBufferTransformed(
+                drawShmSurface(
+                    matchingSurfaceKey, matchingSurface->shmContentSerial,
                     drawX, drawY, srcW, srcH,
+                    static_cast<int>(matchingSurface->backingWidth),
+                    static_cast<int>(matchingSurface->backingHeight),
                     reinterpret_cast<const uint32_t*>(matchingSurface->pixels),
-                    stridePixels, currentOpacity,
+                    stridePixels,
+                    static_cast<int>(matchingSurface->shmDamageX),
+                    static_cast<int>(matchingSurface->shmDamageY),
+                    static_cast<int>(matchingSurface->shmDamageWidth),
+                    static_cast<int>(matchingSurface->shmDamageHeight),
+                    currentOpacity,
                     maskToWindowShape ? presentedCornerRadius : 0.0f,
                     resolveWindowCornerRoundness(win),
                     win.decorationMode == render::DecorationMode::SSD,
@@ -287,30 +431,38 @@ void CompositorRenderer::render(render::Renderer& renderer,
         // PopupSurface entries are not windows. Compose them immediately above
         // their parent WindowGroup and before the next unrelated window.
         if (matchingSurfaceKey != 0) {
-            std::vector<const SurfaceEntry*> popups;
+            std::vector<SurfaceRegistry::SnapshotEntry> popups;
             for (const auto& surface : surfaces) {
                 const auto* popup = surface.entry;
                 if (popup && popup->parentSurfaceKey == matchingSurfaceKey &&
                     popup->hasCommittedBuffer && popup->hasRenderableBuffer() &&
                     !popup->pendingDestroy) {
-                    popups.push_back(popup);
+                    popups.push_back(surface);
                 }
             }
-            std::sort(popups.begin(), popups.end(), [](const auto* lhs, const auto* rhs) {
-                return lhs->popupOrder < rhs->popupOrder;
+            std::sort(popups.begin(), popups.end(), [](const auto& lhs, const auto& rhs) {
+                return lhs.entry->popupOrder < rhs.entry->popupOrder;
             });
 
-            for (const auto* popup : popups) {
+            for (const auto& popupSurface : popups) {
+                const auto* popup = popupSurface.entry;
                 const auto popupBounds = resolvePopupSurfaceBounds(
                     win, *matchingSurface, *popup);
                 const float opacity = windowOpacity *
                     std::clamp(popup->transitionOpacity, 0.0f, 1.0f);
                 if (popup->pixels) {
-                    renderer.getRasterRenderer()->drawBufferTransformed(
+                    drawShmSurface(
+                        popupSurface.key, popup->shmContentSerial,
                         popupBounds.x, popupBounds.y,
                         static_cast<int>(popup->width), static_cast<int>(popup->height),
+                        static_cast<int>(popup->backingWidth),
+                        static_cast<int>(popup->backingHeight),
                         reinterpret_cast<const uint32_t*>(popup->pixels),
-                        static_cast<int>(popup->stride / 4), opacity,
+                        static_cast<int>(popup->stride / 4),
+                        static_cast<int>(popup->shmDamageX),
+                        static_cast<int>(popup->shmDamageY),
+                        static_cast<int>(popup->shmDamageWidth),
+                        static_cast<int>(popup->shmDamageHeight), opacity,
                         0.0f, 2.0f, false,
                         popupBounds.width, popupBounds.height);
                 } else {
@@ -351,6 +503,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
             static_cast<int>(std::lround(windowManager.getMouseY() * outputScale)));
     }
 
+    // Presentation and diagnostic overlays must not inherit scene damage.
+    raster->setFrameDamageRect(std::nullopt);
+    raster->setClipRect(std::nullopt);
     if (beforePresent) beforePresent();
     renderer.swapBuffers();
 }

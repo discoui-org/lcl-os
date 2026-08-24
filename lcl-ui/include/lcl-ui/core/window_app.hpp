@@ -240,6 +240,11 @@ private:
     int m_shmFd{-1};
     size_t m_shmSize{0};
     uint32_t* m_shmPixels{nullptr};
+    // SHM keeps a workspace-sized backing during live resize. The Canvas still
+    // rasterizes into a tightly packed active-size vector; only the published
+    // memfd uses this stable row stride and capacity.
+    uint32_t m_shmCapacityWidth{0};
+    uint32_t m_shmCapacityHeight{0};
     bool m_ipcConnected{false};
     bool m_ownsSocketFd{true};
     uint32_t m_surfaceId{1};
@@ -275,9 +280,13 @@ private:
     // Both pointer resize and maximize/restore are frame-paced in Live mode.
     // Initial configure remains an immediate, content-sized transaction.
     bool m_liveResizeFramePacing{false};
-    bool m_dmaBufFrameGateOpen{true};
+    // One compositor presentation credit applies to both SHM and DMA-BUF.
+    // This prevents software clients from producing obsolete resize frames
+    // faster than Android can upload and present them.
+    bool m_frameGateOpen{true};
     uint64_t m_lastPresentedTimestampNs{0};
     uint64_t m_refreshIntervalNs{0};
+    uint64_t m_submittedConfigureSerial{0};
     uint32_t m_submittedDmaBufId{0};
     std::chrono::steady_clock::time_point m_lastResizeApply{};
     bool m_running{false};

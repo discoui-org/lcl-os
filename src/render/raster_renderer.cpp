@@ -266,6 +266,7 @@ bool RasterRenderer::initGLShader() {
         "uniform float uRoundnessExp;\n"
         "uniform float uOpacity;\n"
         "uniform float uTopOnlyCorners;\n"
+        "uniform vec2 uSampleScale;\n"
         "float sdBox(vec2 p, vec2 b) {\n"
         "    vec2 q = abs(p) - b;\n"
         "    vec2 oq = max(q, 0.0);\n"
@@ -290,7 +291,7 @@ bool RasterRenderer::initGLShader() {
         "    return (k - 1.0) * r;\n"
         "}\n"
         "void main() {\n"
-        "    vec4 c = texture2D(uTexture, vTexCoord);\n"
+        "    vec4 c = texture2D(uTexture, vTexCoord * uSampleScale);\n"
         // A top-only rounded rect can have a top radius taller than half the
         // rect, provided its lower corners are square. The width remains the
         // only universal radius limit.
@@ -335,6 +336,7 @@ bool RasterRenderer::initGLShader() {
     m_uMaskBgraRoundnessLoc = glGetUniformLocation(m_glMaskBgraProgram, "uRoundnessExp");
     m_uMaskBgraOpacityLoc = glGetUniformLocation(m_glMaskBgraProgram, "uOpacity");
     m_uMaskBgraTopOnlyLoc = glGetUniformLocation(m_glMaskBgraProgram, "uTopOnlyCorners");
+    m_uMaskBgraSampleScaleLoc = glGetUniformLocation(m_glMaskBgraProgram, "uSampleScale");
 
     // --- GLSL Rounded Rect Fill+Border Shader ---
     const char* vRoundRectSrc =
@@ -979,6 +981,13 @@ void RasterRenderer::shutdown() {
     const bool canDeleteGlResources =
         m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend &&
         m_eglBackend->makeCurrent();
+    for (const auto& [_, cached] : m_cachedShmTextures) {
+        if (canDeleteGlResources && cached.texture > 0) {
+            glDeleteTextures(1, &cached.texture);
+        }
+    }
+    m_cachedShmTextures.clear();
+    m_shmTextureFrameSerial = 0;
     if (m_glClientTexture > 0) {
         if (canDeleteGlResources) glDeleteTextures(1, &m_glClientTexture);
         m_glClientTexture = 0;
@@ -1576,7 +1585,9 @@ void RasterRenderer::drawMaskedTextureQuad(uint32_t textureId,
     glDisableVertexAttribArray(m_aMaskTexLoc);
 }
 
-void RasterRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity) {
+void RasterRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y,
+                                         float w, float h, float opacity,
+                                         float uMax, float vMax) {
     if (textureId == 0 || m_glBgraProgram == 0) return;
 
     float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
@@ -1587,9 +1598,9 @@ void RasterRenderer::drawBgraTextureQuad(uint32_t textureId, float x, float y, f
     // UV orientation for raw CPU buffer memory: Top-Left maps to (0,0), Bottom-Left maps to (0,1)
     float quad[16] = {
         x1, y1,  0.0f, 0.0f,
-        x1, y2,  0.0f, 1.0f,
-        x2, y1,  1.0f, 0.0f,
-        x2, y2,  1.0f, 1.0f,
+        x1, y2,  0.0f, vMax,
+        x2, y1,  uMax, 0.0f,
+        x2, y2,  uMax, vMax,
     };
 
     glUseProgram(m_glBgraProgram);
@@ -1620,7 +1631,9 @@ void RasterRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
                                              float cornerRoundness,
                                              float opacity,
                                              bool squareTopCorners,
-                                             bool squareBottomCorners) {
+                                             bool squareBottomCorners,
+                                             float uScale,
+                                             float vScale) {
     if (textureId == 0 || m_glMaskBgraProgram == 0) return;
 
     float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
@@ -1655,6 +1668,7 @@ void RasterRenderer::drawMaskedBgraTextureQuad(uint32_t textureId,
     glUniform1f(m_uMaskBgraRoundnessLoc, std::clamp(cornerRoundness, 2.0f, 8.0f));
     glUniform1f(m_uMaskBgraOpacityLoc, std::clamp(opacity, 0.0f, 1.0f));
     glUniform1f(m_uMaskBgraTopOnlyLoc, squareBottomCorners ? 1.0f : 0.0f);
+    glUniform2f(m_uMaskBgraSampleScaleLoc, uScale, vScale);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glVertexAttribPointer(m_aMaskBgraPosLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), quad);
@@ -1727,8 +1741,24 @@ void RasterRenderer::drawGpuRoundedRect(float x,
 void RasterRenderer::applyScissorState() {
 #ifndef LCL_SOFTWARE_ONLY
     if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend) return;
-    if (m_clipRect.has_value()) {
-        const RasterRect deviceClip = scaleRect(*m_clipRect);
+    std::optional<RasterRect> effectiveClip = m_clipRect;
+    if (m_frameDamageRect) {
+        if (effectiveClip) {
+            const float left = std::max(effectiveClip->x, m_frameDamageRect->x);
+            const float top = std::max(effectiveClip->y, m_frameDamageRect->y);
+            const float right = std::min(effectiveClip->x + effectiveClip->width,
+                                         m_frameDamageRect->x + m_frameDamageRect->width);
+            const float bottom = std::min(effectiveClip->y + effectiveClip->height,
+                                          m_frameDamageRect->y + m_frameDamageRect->height);
+            effectiveClip = RasterRect{
+                left, top, std::max(0.0f, right - left),
+                std::max(0.0f, bottom - top)};
+        } else {
+            effectiveClip = m_frameDamageRect;
+        }
+    }
+    if (effectiveClip.has_value()) {
+        const RasterRect deviceClip = scaleRect(*effectiveClip);
         int sx = std::max(0, static_cast<int>(std::floor(deviceClip.x)));
         int syTop = std::max(0, static_cast<int>(std::floor(deviceClip.y)));
         int sRight = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width)));
@@ -1822,9 +1852,18 @@ void RasterRenderer::setClipRect(const std::optional<RasterRect>& clip) {
     applyScissorState();
 }
 
+void RasterRenderer::setFrameDamageRect(
+    const std::optional<RasterRect>& damage) {
+    m_frameDamageRect = damage;
+    applyScissorState();
+}
+
 void RasterRenderer::beginFrame() {
     if (!m_initialized) return;
+    ++m_shmTextureFrameSerial;
+    if (m_shmTextureFrameSerial == 0) m_shmTextureFrameSerial = 1;
     m_clipRect = std::nullopt;
+    m_frameDamageRect = std::nullopt;
     applyScissorState();
 
 #ifndef LCL_SOFTWARE_ONLY
@@ -1860,19 +1899,39 @@ void RasterRenderer::endFrame() {
     if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend) {
         m_eglBackend->makeCurrent();
 
-        if (m_eglBackend->presentsToDisplay()) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            glViewport(0, 0, m_width, m_height);
-            if (m_glSceneTexture > 0) {
-                const float uMax = static_cast<float>(m_width) /
-                    static_cast<float>(std::max(1u, m_glSceneCapacityWidth));
-                const float vMax = static_cast<float>(m_height) /
-                    static_cast<float>(std::max(1u, m_glSceneCapacityHeight));
-                drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height,
-                                1.0f, uMax, vMax);
+        // A compositor surface absent from this frame is no longer visible.
+        // Release its retained upload instead of leaking GPU memory after
+        // close, minimize, or client disconnect.
+        for (auto it = m_cachedShmTextures.begin(); it != m_cachedShmTextures.end();) {
+            if (it->second.lastUsedFrame != m_shmTextureFrameSerial) {
+                if (it->second.texture > 0) glDeleteTextures(1, &it->second.texture);
+                it = m_cachedShmTextures.erase(it);
+            } else {
+                ++it;
             }
-            glFlush();
-            m_eglBackend->present();
+        }
+
+        if (m_eglBackend->presentsToDisplay()) {
+            // Android can blit this retained scene FBO straight into its
+            // rotating AHardwareBuffer scanout. Desktop backends return false
+            // and retain the default-surface presentation path below.
+            const bool directPresented = activeSceneFBO() > 0 &&
+                m_eglBackend->presentFramebuffer(
+                    activeSceneFBO(), m_width, m_height);
+            if (!directPresented) {
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glViewport(0, 0, m_width, m_height);
+                if (m_glSceneTexture > 0) {
+                    const float uMax = static_cast<float>(m_width) /
+                        static_cast<float>(std::max(1u, m_glSceneCapacityWidth));
+                    const float vMax = static_cast<float>(m_height) /
+                        static_cast<float>(std::max(1u, m_glSceneCapacityHeight));
+                    drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height,
+                                    1.0f, uMax, vMax);
+                }
+                glFlush();
+                m_eglBackend->present();
+            }
         } else if (m_glOutputFrameFBO != 0 && m_glSceneTexture != 0) {
             // DMA-BUF slots rotate and cannot retain authoritative content.
             // Copy the retained scene into the acquired slot before export.
@@ -2464,6 +2523,155 @@ void RasterRenderer::drawBufferTransformed(float dstX,
         false, destination.width, destination.height);
 }
 
+void RasterRenderer::drawCachedShmBufferTransformed(uint64_t cacheKey,
+                                                     uint64_t contentSerial,
+                                                     float dstX,
+                                                     float dstY,
+                                                     int srcW,
+                                                     int srcH,
+                                                     int backingW,
+                                                     int backingH,
+                                                     const uint32_t* pixelData,
+                                                     int stridePixels,
+                                                     int damageX,
+                                                     int damageY,
+                                                     int damageW,
+                                                     int damageH,
+                                                     float opacity,
+                                                     float cornerRadius,
+                                                     float cornerRoundness,
+                                                     bool squareTopCorners,
+                                                     float drawWidth,
+                                                     float drawHeight) {
+    if (!m_initialized || !pixelData || srcW <= 0 || srcH <= 0 ||
+        cacheKey == 0 || contentSerial == 0) {
+        drawBufferTransformed(dstX, dstY, srcW, srcH, pixelData, stridePixels,
+                              opacity, cornerRadius, cornerRoundness,
+                              squareTopCorners, drawWidth, drawHeight);
+        return;
+    }
+
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_glFBOReady && m_eglBackend) {
+        if (stridePixels <= 0) stridePixels = srcW;
+        backingW = std::max({srcW, backingW, stridePixels});
+        backingH = std::max(srcH, backingH);
+        const auto destination = mapLogicalRasterDestination(
+            dstX, dstY, drawWidth, drawHeight, cornerRadius,
+            m_deviceScale, m_contentOriginX, m_contentOriginY);
+        if (destination.width <= 0.0f || destination.height <= 0.0f) return;
+
+        m_eglBackend->makeCurrent();
+        auto& cached = m_cachedShmTextures[cacheKey];
+        cached.lastUsedFrame = m_shmTextureFrameSerial;
+
+        const bool sizeChanged = cached.width != backingW || cached.height != backingH;
+        if (cached.texture == 0) glGenTextures(1, &cached.texture);
+        glBindTexture(GL_TEXTURE_2D, cached.texture);
+        if (sizeChanged || cached.width == 0 || cached.height == 0) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, backingW, backingH, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            cached.width = backingW;
+            cached.height = backingH;
+            cached.uploadedContentSerial = 0;
+        }
+
+        if (cached.uploadedContentSerial != contentSerial) {
+            const bool completeUpload = sizeChanged || cached.uploadedContentSerial == 0;
+            int uploadX = completeUpload ? 0 : std::clamp(damageX, 0, srcW);
+            int uploadY = completeUpload ? 0 : std::clamp(damageY, 0, srcH);
+            int uploadW = completeUpload ? srcW : std::clamp(damageW, 0, srcW - uploadX);
+            int uploadH = completeUpload ? srcH : std::clamp(damageH, 0, srcH - uploadY);
+            if (uploadW == 0 || uploadH == 0) {
+                uploadX = 0;
+                uploadY = 0;
+                uploadW = srcW;
+                uploadH = srcH;
+            }
+
+            // SHM uses straight alpha. Convert once per client commit instead
+            // of repeating this scan for unrelated compositor redraws. Damage
+            // keeps both conversion and the Android texture upload bounded.
+            const uint32_t* uploadPixels = pixelData +
+                static_cast<size_t>(uploadY) * stridePixels + uploadX;
+            int uploadStride = stridePixels;
+            bool needsPremultiply = false;
+            for (int y = 0; y < uploadH && !needsPremultiply; ++y) {
+                const uint32_t* row = uploadPixels + static_cast<size_t>(y) * uploadStride;
+                for (int x = 0; x < uploadW; ++x) {
+                    const uint32_t pixel = row[x];
+                    if ((pixel >> 24u) != 0xFFu && (pixel & 0x00FFFFFFu) != 0u) {
+                        needsPremultiply = true;
+                        break;
+                    }
+                }
+            }
+
+            std::vector<uint32_t> premultipliedPixels;
+            if (needsPremultiply) {
+                premultipliedPixels.resize(static_cast<size_t>(uploadW) * uploadH);
+                for (int y = 0; y < uploadH; ++y) {
+                    const uint32_t* source = uploadPixels + static_cast<size_t>(y) * uploadStride;
+                    uint32_t* destinationPixels = premultipliedPixels.data() +
+                        static_cast<size_t>(y) * uploadW;
+                    for (int x = 0; x < uploadW; ++x) {
+                        destinationPixels[x] = alpha::premultiplyArgb(source[x]);
+                    }
+                }
+                uploadPixels = premultipliedPixels.data();
+                uploadStride = uploadW;
+            }
+
+            if (uploadStride == uploadW) {
+                glTexSubImage2D(GL_TEXTURE_2D, 0,
+                                uploadX, uploadY, uploadW, uploadH,
+                                GL_RGBA, GL_UNSIGNED_BYTE, uploadPixels);
+            } else {
+                // GLES2-compatible fallback for tightly bounded damage. The
+                // Android client path typically produces short dirty spans,
+                // so this remains much cheaper than uploading the full frame.
+                for (int y = 0; y < uploadH; ++y) {
+                    glTexSubImage2D(
+                        GL_TEXTURE_2D, 0, uploadX, uploadY + y, uploadW, 1,
+                        GL_RGBA, GL_UNSIGNED_BYTE,
+                        uploadPixels + static_cast<size_t>(y) * uploadStride);
+                }
+            }
+            cached.uploadedContentSerial = contentSerial;
+        }
+
+        const float uMax = srcW == cached.width
+            ? 1.0f : (static_cast<float>(srcW) - 0.5f) / cached.width;
+        const float vMax = srcH == cached.height
+            ? 1.0f : (static_cast<float>(srcH) - 0.5f) / cached.height;
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+        glViewport(0, 0, m_width, m_height);
+        if (destination.cornerRadius > 0.001f) {
+            drawMaskedBgraTextureQuad(cached.texture,
+                                      destination.x, destination.y,
+                                      destination.width, destination.height,
+                                      destination.cornerRadius, cornerRoundness,
+                                      opacity, squareTopCorners, false,
+                                      uMax, vMax);
+        } else {
+            drawBgraTextureQuad(cached.texture,
+                                destination.x, destination.y,
+                                destination.width, destination.height, opacity,
+                                uMax, vMax);
+        }
+        return;
+    }
+#endif
+
+    drawBufferTransformed(dstX, dstY, srcW, srcH, pixelData, stridePixels,
+                          opacity, cornerRadius, cornerRoundness,
+                          squareTopCorners, drawWidth, drawHeight);
+}
+
 void RasterRenderer::drawBufferRaw(float dstX,
                                  float dstY,
                                  int srcW,
@@ -2908,6 +3116,12 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
         m_eglBackend->makeCurrent();
         const bool gpuBlurAvailable = m_eglBackend->isHardwareAccelerated();
 
+        // The frame-damage scissor is expressed in scene coordinates. Blur,
+        // color and refraction intermediates use compact local FBOs, so that
+        // scissor would be invalid there. Restore it only for the final write
+        // back into the retained scene.
+        glDisable(GL_SCISSOR_TEST);
+
         const int effectX = geometry.effect.x;
         const int effectY = geometry.effect.y;
         const int effectW = geometry.effect.width;
@@ -3212,6 +3426,7 @@ void RasterRenderer::applyBackdropFilter(float logicalX, float logicalY,
         // ZERO GLREADPIXELS! ZERO CPU MEMCPY!
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
+        applyScissorState();
 
         const float outputUScale = (static_cast<float>(effectW) /
             static_cast<float>(captureW)) * captureUScale;

@@ -406,6 +406,9 @@ TEST(WindowManagerRegressionTest, SuperLeftDragMovesWindow) {
     ASSERT_NE(draggingWin, nullptr);
     EXPECT_TRUE(draggingWin->isDragging());
 
+    manager.clearAllDirty();
+    const auto oldBounds = draggingWin->getBounds();
+
     // 3. Move pointer with drag (+50px X, +30px Y)
     motion.absoluteX = 250.0;
     motion.absoluteY = 230.0;
@@ -415,6 +418,11 @@ TEST(WindowManagerRegressionTest, SuperLeftDragMovesWindow) {
     ASSERT_NE(movedWin, nullptr);
     EXPECT_EQ(movedWin->x, 150);
     EXPECT_EQ(movedWin->y, 130);
+    const auto expectedDamage = oldBounds.unionWith(movedWin->getBounds());
+    EXPECT_FLOAT_EQ(movedWin->damageRect.x, expectedDamage.x);
+    EXPECT_FLOAT_EQ(movedWin->damageRect.y, expectedDamage.y);
+    EXPECT_FLOAT_EQ(movedWin->damageRect.width, expectedDamage.width);
+    EXPECT_FLOAT_EQ(movedWin->damageRect.height, expectedDamage.height);
 
     // 4. Release Left Button
     lcl::core::InputEvent up = down;

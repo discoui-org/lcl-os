@@ -21,7 +21,7 @@ Every message MUST begin with the sender identifier: `[Name]: [Message Body]` (e
 Before implementing any changes, read and adhere strictly to `docs/ARCHITECTURE.md`:
 - **No X11 / No Wayland:** Bare-metal Linux DRM/KMS + `evdev` C++20 engine.
 - **Decoupled Architecture:** Window Manager, Compositor, and Client Apps are strictly separated.
-- **IPC & Disconnects:** Protocol-v13 Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`, `0600`). Socket EOF automatically triggers surface/window reclamation.
+- **IPC & Disconnects:** Protocol-v15 Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`, `0600`). Socket EOF automatically triggers surface/window reclamation.
 - **Initramfs Isolation:** No host shell tool dependencies in initramfs (`grep`, `cut`, `sed`, `awk`). Use native C++ binaries (`lcl-open`).
 
 ---

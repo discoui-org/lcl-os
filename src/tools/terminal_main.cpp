@@ -150,8 +150,10 @@ int main() {
   });
   window.setOnFrame([&] {
     const bool outputChanged = terminal.update();
-    const bool cursorChanged = terminalViewPtr->updateCursorBlink();
-    if (outputChanged || cursorChanged) {
+    // TerminalView owns cursor-cell damage; PTY output changes the model and
+    // therefore still invalidates the complete terminal content.
+    terminalViewPtr->updateCursorBlink();
+    if (outputChanged) {
       terminalViewPtr->markDirty();
     }
     if (!terminal.isAlive()) {

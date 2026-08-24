@@ -121,6 +121,9 @@ void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
     }
     entry.pixels = nullptr;
     entry.shmSize = 0;
+    entry.shmContentSerial = 0;
+    entry.shmDamageX = entry.shmDamageY = 0;
+    entry.shmDamageWidth = entry.shmDamageHeight = 0;
 
     if (entry.shmFd >= 0) {
         close(entry.shmFd);
@@ -139,6 +142,7 @@ void SurfaceRegistry::releasePreviousBuffer(SurfaceEntry& entry) noexcept {
     }
     entry.previousPixels = nullptr;
     entry.previousShmSize = 0;
+    entry.previousShmContentSerial = 0;
     if (entry.previousShmFd >= 0) close(entry.previousShmFd);
     entry.previousShmFd = -1;
     entry.previousWidth = entry.previousHeight = entry.previousStride = 0;

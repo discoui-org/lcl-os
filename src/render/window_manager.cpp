@@ -330,6 +330,7 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                     stateChanged = true;
                 }
             } else if (win.isDragging()) {
+                const graphics::RectF previousBounds = win.getBounds();
                 const float newX = m_mouseX - win.dragOffsetX;
                 const float newY = std::max(topInset, m_mouseY - win.dragOffsetY);
 
@@ -342,7 +343,11 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                     win.presentationY = static_cast<float>(newY);
                     win.pendingX = newX;
                     win.pendingY = newY;
-                    win.markDirty();
+                    // Retained composition must repaint both the newly occupied
+                    // pixels and the desktop/window stack exposed at the old
+                    // position. Keeping this union at the logical geometry
+                    // boundary avoids leaking device-scale rounding into WM.
+                    win.markDirty(previousBounds.unionWith(win.getBounds()));
                     stateChanged = true;
                 }
             }

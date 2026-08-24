@@ -192,20 +192,21 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
         "lcl_ui_demo",
     ]
 
-    missing = [name for name in targets if not find_built_binary(name, norm_arch)]
-    if missing:
-        log(f"Building missing/stale canonical targets for {norm_arch}: {missing}...")
-        target_build_dir = canonical_build_dir(norm_arch)
-        if not (target_build_dir / "CMakeCache.txt").is_file():
-            subprocess.run(
-                ["cmake", "-B", str(target_build_dir), "-S", str(PROJECT_ROOT)],
-                check=True,
-            )
+    # Existence alone is not freshness. Always let CMake's dependency graph
+    # update these targets so a protocol/header change cannot be packaged with
+    # stale canonical userspace binaries.
+    target_build_dir = canonical_build_dir(norm_arch)
+    if not (target_build_dir / "CMakeCache.txt").is_file():
         subprocess.run(
-            ["cmake", "--build", str(target_build_dir), "--target"] +
-            missing + ["-j", str(os.cpu_count() or 4)],
+            ["cmake", "-B", str(target_build_dir), "-S", str(PROJECT_ROOT)],
             check=True,
         )
+    log(f"Updating canonical targets for {norm_arch}...")
+    subprocess.run(
+        ["cmake", "--build", str(target_build_dir), "--target"] +
+        targets + ["-j", str(os.cpu_count() or 4)],
+        check=True,
+    )
 
     binaries: dict[str, Path] = {}
     for name in targets:

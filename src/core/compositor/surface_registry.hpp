@@ -56,6 +56,14 @@ public:
         uint32_t stride{0};
         float bufferScale{1.0f};
         size_t shmSize{0};
+        // Monotonic compositor-local identity for the pixels published by the
+        // latest SHM commit. Android uses it to retain one GL texture per
+        // surface without re-uploading unchanged buffers during scene redraws.
+        uint64_t shmContentSerial{0};
+        uint32_t shmDamageX{0};
+        uint32_t shmDamageY{0};
+        uint32_t shmDamageWidth{0};
+        uint32_t shmDamageHeight{0};
         // A surface is registered before it is mapped.  Keep its window policy
         // here until the first complete client buffer is ready to present.
         std::string title;
@@ -86,7 +94,7 @@ public:
         uint64_t pendingConfigureSerial{0};
         uint64_t acceptedConfigureSerial{0};
         uint64_t configuredGeometryGeneration{0};
-        // Non-zero after any DMA-BUF commit has been accepted and before the
+        // Non-zero after any buffer commit has been accepted and before the
         // compositor frame containing it has been presented. Live resize also
         // uses this credit to serialize configure -> commit -> presentation.
         uint64_t presentationSerial{0};
@@ -115,6 +123,7 @@ public:
         uint32_t previousBackingHeight{0};
         uint32_t previousStride{0};
         size_t previousShmSize{0};
+        uint64_t previousShmContentSerial{0};
         ResizeTransitionPhase resizeTransitionPhase{ResizeTransitionPhase::None};
         std::chrono::steady_clock::time_point resizeDeadline{};
         float resizeCrossfadeElapsedSec{0.0f};

@@ -48,6 +48,8 @@ ROOTFS_SESSION_LAUNCHER = ROOT_DIR / "scripts" / "lcl_android_rootfs_session.sh"
 DEVICE_ROOTFS_IMAGE = f"{DEVICE_TMP_DIR}/lcl-rootfs-aarch64.ext4"
 DEVICE_ROOTFS_ARCHIVE = f"{DEVICE_ROOTFS_IMAGE}.zst"
 DEVICE_ROOTFS_HASH = f"{DEVICE_ROOTFS_IMAGE}.sha256"
+ANDROID_ZSTD_BINARY = ROOT_DIR / "build" / "android-tools-arm64" / "zstd"
+DEVICE_ZSTD_BINARY = f"{DEVICE_TMP_DIR}/lcl-zstd"
 DEVICE_ROOTFS_MOUNT = f"{DEVICE_TMP_DIR}/lcl-rootfs"
 DEVICE_ROOTFS_LOOP = f"{DEVICE_TMP_DIR}/lcl-rootfs.loop"
 DEVICE_SESSION_LAUNCHER = f"{DEVICE_TMP_DIR}/lcl-android-rootfs-session.sh"
@@ -283,6 +285,11 @@ def push_rootfs_image(force: bool = False) -> None:
     zstd = shutil.which("zstd")
     if not zstd:
         raise RuntimeError("Host zstd executable is required to deploy the rootfs image.")
+    if not ANDROID_ZSTD_BINARY.is_file():
+        raise RuntimeError(
+            "ARM64 Android zstd helper is missing: "
+            f"{ANDROID_ZSTD_BINARY}. Run './main.py android' once without --no-build."
+        )
     if (not ROOTFS_ARCHIVE.is_file() or
             ROOTFS_ARCHIVE.stat().st_mtime < ROOTFS_IMAGE.stat().st_mtime):
         log("Compressing canonical ARM64 rootfs with zstd...")
@@ -292,12 +299,23 @@ def push_rootfs_image(force: bool = False) -> None:
         )
 
     unmount_rootfs()
+    helper_mb = ANDROID_ZSTD_BINARY.stat().st_size / (1024 * 1024)
+    log(f"Pushing ARM64 zstd helper ({helper_mb:.1f} MB) to {DEVICE_ZSTD_BINARY}...")
+    run_adb("push", str(ANDROID_ZSTD_BINARY), DEVICE_ZSTD_BINARY)
+    adb_shell(f"chmod 0755 {DEVICE_ZSTD_BINARY}", as_root=True)
+    helper_probe = adb_shell(f"{DEVICE_ZSTD_BINARY} --version", as_root=True)
+    if helper_probe.returncode != 0:
+        raise RuntimeError(
+            "ARM64 zstd helper failed on the connected device: "
+            + (helper_probe.stderr.strip() or helper_probe.stdout.strip())
+        )
+
     archive_mb = ROOTFS_ARCHIVE.stat().st_size / (1024 * 1024)
     log(f"Pushing compressed rootfs ({archive_mb:.1f} MB)...")
     run_adb("push", str(ROOTFS_ARCHIVE), DEVICE_ROOTFS_ARCHIVE)
     log("Decompressing rootfs on the phone...")
     result = adb_shell(
-        f"/system_ext/bin/zstd -d -f {DEVICE_ROOTFS_ARCHIVE} -o {DEVICE_ROOTFS_IMAGE} && "
+        f"{DEVICE_ZSTD_BINARY} -d -f {DEVICE_ROOTFS_ARCHIVE} -o {DEVICE_ROOTFS_IMAGE} && "
         f"chmod 0600 {DEVICE_ROOTFS_IMAGE} && rm -f {DEVICE_ROOTFS_ARCHIVE}",
         as_root=True,
     )

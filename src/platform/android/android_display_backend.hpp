@@ -44,7 +44,8 @@ public:
      * @brief Present an AHardwareBuffer directly to the primary Android display.
      *
      * Submits layer state through the selected AIDL/HIDL backend, validates display
-     * composition, presents the display, and waits for the present fence.
+     * composition and presents the display. GPU completion is supplied as an
+     * acquire fence so the renderer does not need a CPU-side glFinish().
      *
      * @param buffer Hardware buffer containing the rendered frame.
      * @param acquireFenceFd Optional acquire fence file descriptor (-1 if none).

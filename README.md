@@ -75,7 +75,9 @@ Use `--rebuild` for a clean compositor rebuild, `--push-rootfs` to force a
 rootfs upload, `--compositor-only` for substrate diagnostics, or
 `--restore-only` to recover Android UI after an interrupted session. The first
 build downloads pinned official AOSP VNDK headers and pulls compatible HIDL
-libraries from the connected phone without modifying it. Deployment temporarily
+libraries from the connected phone without modifying it. It also builds a
+pinned ARM64 zstd helper, so rootfs deployment does not depend on optional
+Android system utilities. Deployment temporarily
 stops SurfaceFlinger for exclusive Composer access and restores Android UI when
 the LCL process exits. Root access is required.
 

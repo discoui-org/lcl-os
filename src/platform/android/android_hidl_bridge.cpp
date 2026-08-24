@@ -111,7 +111,7 @@ public:
                 break;
             case composer21::IComposerClient::Command::SET_PRESENT_OR_VALIDATE_DISPLAY_RESULT:
                 parsed = length == composer21::CommandWriterBase::kPresentOrValidateDisplayResultLength;
-                if (parsed) (void)read();
+                if (parsed) m_presentOrValidateState = static_cast<int32_t>(read());
                 break;
             case static_cast<composer21::IComposerClient::Command>(
                 composer24::IComposerClient::Command::SET_CLIENT_TARGET_PROPERTY):
@@ -135,6 +135,7 @@ public:
         m_errors.clear();
         m_changedTypes.clear();
         m_displayRequestMask = 0;
+        m_presentOrValidateState = -1;
         m_currentDisplay = 0;
         if (m_presentFence >= 0) {
             close(m_presentFence);
@@ -157,6 +158,7 @@ public:
         return false;
     }
     uint32_t displayRequestMask() const { return m_displayRequestMask; }
+    bool presentOrValidatePresented() const { return m_presentOrValidateState == 1; }
     bool hasErrors() const { return !m_errors.empty(); }
     int takePresentFence() {
         const int fence = m_presentFence;
@@ -171,6 +173,7 @@ public:
 private:
     uint64_t m_currentDisplay{0};
     uint32_t m_displayRequestMask{0};
+    int32_t m_presentOrValidateState{-1};
     int m_presentFence{-1};
     std::vector<std::pair<uint64_t, composer21::IComposerClient::Composition>> m_changedTypes;
     std::vector<std::pair<uint64_t, int>> m_releaseFences;
@@ -191,8 +194,19 @@ struct AndroidHidlDisplayBackend::Impl {
     bool hotplugConnected{false};
     uint32_t composerMinorVersion{0};
     std::array<const AHardwareBuffer*, 4> layerBufferSlots{};
+    std::array<std::vector<int>, 4> pendingSlotFences{};
     uint32_t nextLayerBufferSlot{0};
 };
+
+static void waitAndClearFences(std::vector<int>& fences) {
+    for (const int fence : fences) {
+        if (fence >= 0) {
+            (void)sync_wait(fence, 1000);
+            close(fence);
+        }
+    }
+    fences.clear();
+}
 
 class HidlComposerCallback final : public composer21::IComposerCallback {
 public:
@@ -417,6 +431,11 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale) {
 
 void AndroidHidlDisplayBackend::shutdown() {
 #if defined(LCL_HAS_ANDROID_HIDL)
+    // Keep scanout buffers alive until Composer has released every slot. The
+    // platform service shuts this backend down before destroying its AHBs.
+    for (auto& fences : m_impl->pendingSlotFences) {
+        waitAndClearFences(fences);
+    }
     if (m_hasLayer && m_impl->client) {
         (void)m_impl->client->destroyLayer(m_displayId, m_layerId);
     }
@@ -431,6 +450,7 @@ void AndroidHidlDisplayBackend::shutdown() {
     m_impl->hotplugConnected = false;
     m_impl->composerMinorVersion = 0;
     m_impl->layerBufferSlots.fill(nullptr);
+    for (auto& fences : m_impl->pendingSlotFences) fences.clear();
     m_impl->nextLayerBufferSlot = 0;
 #endif
     m_initialized = false;
@@ -469,9 +489,16 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
     }
     if (!knownBuffer) {
         bufferSlot = m_impl->nextLayerBufferSlot;
+        // A cache slot may still refer to an older AHB. Do not replace its
+        // handle until HWC has stopped reading that buffer.
+        waitAndClearFences(m_impl->pendingSlotFences[bufferSlot]);
         m_impl->layerBufferSlots[bufferSlot] = buffer;
         m_impl->nextLayerBufferSlot =
             (m_impl->nextLayerBufferSlot + 1) % m_impl->layerBufferSlots.size();
+    } else {
+        // Defer synchronization until this exact scanout slot is reused. This
+        // permits the other slots to render and present concurrently.
+        waitAndClearFences(m_impl->pendingSlotFences[bufferSlot]);
     }
 
     auto execute = [&]() -> bool {
@@ -533,8 +560,30 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
     m_impl->writer.setLayerTransform(static_cast<common10::Transform>(0));
     m_impl->writer.setLayerVisibleRegion(region);
     m_impl->writer.setLayerZOrder(0);
-    m_impl->writer.validateDisplay();
+    // Composer 2.2+ can present immediately when the established composition
+    // remains valid. This collapses the common move-frame path from separate
+    // validate and present HIDL transactions into one executeCommands call.
+    m_impl->writer.presentOrvalidateDisplay();
     if (!execute()) return false;
+
+    const auto retainCompletionFences = [&] {
+        const int presentFence = m_impl->reader.takePresentFence();
+        auto releaseFences = m_impl->reader.takeReleaseFences();
+        if (presentFence >= 0) {
+            m_impl->pendingSlotFences[bufferSlot].push_back(presentFence);
+        }
+        for (const auto& [layer, fence] : releaseFences) {
+            (void)layer;
+            if (fence >= 0) {
+                m_impl->pendingSlotFences[bufferSlot].push_back(fence);
+            }
+        }
+    };
+
+    if (m_impl->reader.presentOrValidatePresented()) {
+        retainCompletionFences();
+        return true;
+    }
 
     const bool changedTypes = m_impl->reader.hasChangedTypes();
     const bool needsClientTarget =
@@ -554,22 +603,9 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
     m_impl->writer.presentDisplay();
     if (!execute()) return false;
 
-    const int presentFence = m_impl->reader.takePresentFence();
-    auto releaseFences = m_impl->reader.takeReleaseFences();
-    if (presentFence >= 0) {
-        (void)sync_wait(presentFence, 1000);
-        close(presentFence);
-    }
-    // A present fence does not replace the per-layer release fence. Wait until
-    // HWC has stopped reading the previous scanout buffer before returning to
-    // the renderer, which may reuse that buffer on the following frame.
-    for (const auto& [layer, fence] : releaseFences) {
-        (void)layer;
-        if (fence >= 0) {
-            (void)sync_wait(fence, 1000);
-            close(fence);
-        }
-    }
+    // A present fence does not replace the per-layer release fence. Retain
+    // both, but wait only when this AHB slot rotates back to the renderer.
+    retainCompletionFences();
     return true;
 #endif
 }

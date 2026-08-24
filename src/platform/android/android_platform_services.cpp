@@ -37,10 +37,12 @@ bool AndroidPlatformServices::initialize() {
 void AndroidPlatformServices::shutdown() {
     if (!m_initialized) return;
 
-    // Shutdown in reverse dependency order
+    // Composer owns pending release fences for the scanout AHBs. Drain and
+    // destroy its layer while those buffers are still alive, then tear down
+    // their EGL/AHB storage.
     m_inputBackend.shutdown();
-    m_graphicsContext.shutdown();
     m_displayBackend.shutdown();
+    m_graphicsContext.shutdown();
 
     m_initialized = false;
 }

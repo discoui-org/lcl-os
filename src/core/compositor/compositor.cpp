@@ -183,10 +183,6 @@ void Compositor::run() {
         // compositor loop even when the pointer becomes stationary.
         if (m_inputRouter) m_inputRouter->syncWindowState();
         synchronizeShellState();
-        if (m_frameScheduler.cursorBlinkDue()) {
-            m_needsRedraw = true;
-        }
-
         bool willDraw = m_needsRedraw || m_windowManager.isAnyWindowDirty();
 
         if (willDraw) {
@@ -311,7 +307,8 @@ void Compositor::renderFrame() {
     const auto composeStart = std::chrono::steady_clock::now();
     m_compositorRenderer.render(
         m_renderer, m_platformServices.display(), m_windowManager, surfaces,
-        [this] { renderDiagnosticOverlay(); });
+        [this] { renderDiagnosticOverlay(); },
+        !hasActiveTransitions && !m_showFpsOverlay);
     m_lastComposeMs = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - composeStart).count();
 
@@ -341,8 +338,7 @@ void Compositor::renderFrame() {
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
     for (auto& [surfaceKey, entry] : m_surfaces) {
-        if (entry.clientFd < 0 || !entry.dmaBufTransportActive ||
-            !entry.hasCommittedBuffer ||
+        if (entry.clientFd < 0 || !entry.hasCommittedBuffer ||
             !SurfaceRegistry::hasUnpresentedFrame(entry)) continue;
         protocol::LCLHeader header{};
         header.opcode = protocol::LCLOpcode::FramePresented;

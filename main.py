@@ -32,6 +32,7 @@ BUILD_DIR = ROOT_DIR / "build"
 ANDROID_BUILD_DIR = ROOT_DIR / "build-android-arm64"
 ANDROID_HIDL_ROOT = BUILD_DIR / "android-hidl-v31"
 ANDROID_ROOTFS_IMAGE = BUILD_DIR / "rootfs" / "lcl-rootfs-aarch64.ext4"
+ANDROID_ZSTD_BINARY = BUILD_DIR / "android-tools-arm64" / "zstd"
 
 
 def log(msg: str) -> None:
@@ -207,6 +208,15 @@ def build_android_phone_artifacts(args: argparse.Namespace, use_rootfs: bool) ->
         )
 
     ndk = find_android_ndk()
+    if use_rootfs and (args.rebuild or not ANDROID_ZSTD_BINARY.is_file()):
+        log("Building pinned ARM64 zstd deployment helper...")
+        subprocess.check_call(
+            [
+                sys.executable, str(SCRIPTS_DIR / "prepare_android_zstd.py"),
+                "--ndk", str(ndk), "--output", str(ANDROID_ZSTD_BINARY),
+            ],
+            cwd=ROOT_DIR,
+        )
     log(f"Configuring ARM64 Android compositor with NDK: {ndk}")
     configure_args = [
         "cmake", "-S", str(ROOT_DIR), "-B", str(ANDROID_BUILD_DIR),
@@ -242,7 +252,7 @@ def require_android_phone_artifacts(use_rootfs: bool) -> None:
     """Make --no-build strict instead of silently building missing files."""
     required = [ANDROID_BUILD_DIR / "lcl-core-android"]
     if use_rootfs:
-        required.append(ANDROID_ROOTFS_IMAGE)
+        required.extend((ANDROID_ROOTFS_IMAGE, ANDROID_ZSTD_BINARY))
     missing = [path for path in required if not path.is_file()]
     if missing:
         formatted = "\n".join(f"  - {path}" for path in missing)

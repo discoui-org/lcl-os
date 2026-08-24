@@ -62,7 +62,7 @@ adapters over the shared channel engine.
 
 ## Compositor resize ownership
 
-Protocol v13 pairs `ConfigureBounds` and buffer attachment with a monotonic
+Protocol v15 pairs `ConfigureBounds` and buffer attachment with a monotonic
 `configureSerial`. Maximize/restore retains the old mapped client buffer while
 the shared spring animates one `WindowGroupTransform` for client, chrome,
 popups, effects, and inverse hit testing. A

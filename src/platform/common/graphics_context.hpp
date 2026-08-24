@@ -26,6 +26,18 @@ public:
     // Direct display presentation (Compositor context)
     virtual bool presentsToDisplay() const = 0;
     virtual bool present() = 0;
+    /**
+     * Present an already rendered GPU framebuffer without first copying it to
+     * the context's default surface. Backends that cannot import/blit an FBO
+     * keep the default false result and use present() instead.
+     */
+    virtual bool presentFramebuffer(uint32_t framebuffer,
+                                    uint32_t width, uint32_t height) {
+        (void)framebuffer;
+        (void)width;
+        (void)height;
+        return false;
+    }
 
     // Offscreen / client readback
     virtual bool readback(uint32_t* destination, uint32_t width, uint32_t height) = 0;

@@ -88,6 +88,8 @@ public:
     /** Marks a traversal boundary without making the widget a focus target. */
     virtual bool isFocusScope() const noexcept { return false; }
     void markDirty();
+    /** Mark one global logical paint region without invalidating the full widget. */
+    void markDirty(const graphics::RectF& damageRect);
     uint64_t getPaintRevision() const noexcept { return m_paintRevision; }
     uint64_t getPresentationRevision() const noexcept {
         return m_presentationRevision;

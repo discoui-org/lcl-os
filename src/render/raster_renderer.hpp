@@ -118,6 +118,14 @@ public:
 
     void setClipRect(const std::optional<RasterRect>& clip);
     const std::optional<RasterRect>& getClipRect() const { return m_clipRect; }
+    /**
+     * Frame-level compositor damage. Unlike display-list/widget clips this
+     * remains active across replay save/restore operations.
+     */
+    void setFrameDamageRect(const std::optional<RasterRect>& damage);
+    const std::optional<RasterRect>& getFrameDamageRect() const {
+        return m_frameDamageRect;
+    }
 
     /**
      * @brief Clear whole canvas or subregion with specific background color.
@@ -216,6 +224,32 @@ public:
                                bool squareTopCorners,
                                float drawWidth,
                                float drawHeight);
+    /**
+     * Composite a retained SHM surface. The cache key identifies one compositor
+     * surface and contentSerial changes only when that client publishes pixels.
+     * Android uses this path to avoid uploading unchanged surfaces on every
+     * full-scene redraw.
+     */
+    void drawCachedShmBufferTransformed(uint64_t cacheKey,
+                                        uint64_t contentSerial,
+                                        float dstX,
+                                        float dstY,
+                                        int srcW,
+                                        int srcH,
+                                        int backingW,
+                                        int backingH,
+                                        const uint32_t* pixelData,
+                                        int stridePixels,
+                                        int damageX,
+                                        int damageY,
+                                        int damageW,
+                                        int damageH,
+                                        float opacity,
+                                        float cornerRadius,
+                                        float cornerRoundness,
+                                        bool squareTopCorners,
+                                        float drawWidth,
+                                        float drawHeight);
     void applyBackdropFilter(float dstX, float dstY, float srcW, float srcH,
                              float cornerRadius, float cornerRoundness,
                              float opacity, const std::vector<protocol::FilterOp>& filters);
@@ -277,6 +311,14 @@ private:
         int height{0};
         uint64_t lastUse{0};
         std::vector<uint32_t> pixels;
+    };
+
+    struct CachedShmTexture {
+        uint32_t texture{0};
+        int32_t width{0};
+        int32_t height{0};
+        uint64_t uploadedContentSerial{0};
+        uint64_t lastUsedFrame{0};
     };
 
     bool initGLShader();
@@ -341,8 +383,10 @@ private:
     uint32_t m_glOutputFrameFBO{0};
     std::optional<CachedLayerTargetState> m_cachedLayerTargetState;
     std::unordered_map<uint64_t, CachedDisplayLayer> m_cachedDisplayLayers;
+    std::unordered_map<uint64_t, CachedShmTexture> m_cachedShmTextures;
     std::vector<RasterizedTextLayer> m_rasterizedTextLayers;
     uint64_t m_textLayerUseCounter{0};
+    uint64_t m_shmTextureFrameSerial{0};
 
     uint32_t m_glBlurProgram{0};
     int32_t m_aBlurPosLoc{-1};
@@ -389,6 +433,7 @@ private:
     int32_t m_uMaskBgraRoundnessLoc{-1};
     int32_t m_uMaskBgraOpacityLoc{-1};
     int32_t m_uMaskBgraTopOnlyLoc{-1};
+    int32_t m_uMaskBgraSampleScaleLoc{-1};
 
     uint32_t m_glRoundRectProgram{0};
     int32_t m_aRoundRectPosLoc{-1};
@@ -446,8 +491,12 @@ private:
                                    float cornerRoundness,
                                    float opacity,
                                    bool squareTopCorners = false,
-                                   bool squareBottomCorners = false);
-    void drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h, float opacity = 1.0f);
+                                   bool squareBottomCorners = false,
+                                   float uScale = 1.0f,
+                                   float vScale = 1.0f);
+    void drawBgraTextureQuad(uint32_t textureId, float x, float y, float w, float h,
+                             float opacity = 1.0f, float uMax = 1.0f,
+                             float vMax = 1.0f);
     void drawGpuRoundedRect(float x,
                             float y,
                             float w,
@@ -465,6 +514,7 @@ private:
     }
 
     std::optional<RasterRect> m_clipRect;
+    std::optional<RasterRect> m_frameDamageRect;
     void applyScissorState();
 };
 

@@ -191,6 +191,7 @@ bool validOpcode(LCLOpcode value) {
     case LCLOpcode::AttachDmaBuf:
     case LCLOpcode::ReleaseDmaBuf:
     case LCLOpcode::FramePresented:
+    case LCLOpcode::FrameDiscarded:
     case LCLOpcode::InputEvent:
     case LCLOpcode::AckResponse:
     case LCLOpcode::SetDecorationMode:
@@ -398,7 +399,11 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         if (msg.surfaceId == 0 || msg.configureSerial == 0 || msg.width == 0 || msg.height == 0 ||
             msg.format != 1 ||
             msg.width > std::numeric_limits<uint32_t>::max() / 4 ||
-            msg.stride < msg.width * 4)
+            msg.stride < msg.width * 4 ||
+            (msg.damageWidth > 0 &&
+             (msg.damageX >= msg.width || msg.damageWidth > msg.width - msg.damageX)) ||
+            (msg.damageHeight > 0 &&
+             (msg.damageY >= msg.height || msg.damageHeight > msg.height - msg.damageY)))
             return false;
         out.u32(msg.surfaceId);
         out.u64(msg.configureSerial);
@@ -406,6 +411,10 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.u32(msg.height);
         out.u32(msg.stride);
         out.u32(msg.format);
+        out.u32(msg.damageX);
+        out.u32(msg.damageY);
+        out.u32(msg.damageWidth);
+        out.u32(msg.damageHeight);
         return true;
     }
     case LCLOpcode::AttachDmaBuf: {
@@ -443,6 +452,13 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.u32(msg.surfaceId);
         out.u64(msg.timestampNs);
         out.u64(msg.refreshIntervalNs);
+        return true;
+    }
+    case LCLOpcode::FrameDiscarded: {
+        LOAD_ONE(LCLMsgFrameDiscarded, msg);
+        if (msg.surfaceId == 0 || msg.configureSerial == 0) return false;
+        out.u32(msg.surfaceId);
+        out.u64(msg.configureSerial);
         return true;
     }
     case LCLOpcode::AckResponse: {
@@ -726,11 +742,17 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
     case LCLOpcode::AttachBuffer: {
         LCLMsgAttachBuffer m{};
         if (!in.u32(m.surfaceId) || !in.u64(m.configureSerial) || !in.u32(m.width) || !in.u32(m.height) ||
-            !in.u32(m.stride) || !in.u32(m.format))
+            !in.u32(m.stride) || !in.u32(m.format) ||
+            !in.u32(m.damageX) || !in.u32(m.damageY) ||
+            !in.u32(m.damageWidth) || !in.u32(m.damageHeight))
             return false;
         if (m.surfaceId == 0 || m.configureSerial == 0 || m.width == 0 || m.height == 0 || m.format != 1 ||
             m.width > std::numeric_limits<uint32_t>::max() / 4 ||
-            m.stride < m.width * 4)
+            m.stride < m.width * 4 ||
+            (m.damageWidth > 0 &&
+             (m.damageX >= m.width || m.damageWidth > m.width - m.damageX)) ||
+            (m.damageHeight > 0 &&
+             (m.damageY >= m.height || m.damageHeight > m.height - m.damageY)))
             return false;
         appendNative(payload, m);
         break;
@@ -764,6 +786,14 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
         if (!in.u32(m.surfaceId) || !in.u64(m.timestampNs) ||
             !in.u64(m.refreshIntervalNs) || m.surfaceId == 0 ||
             m.timestampNs == 0 || m.refreshIntervalNs == 0)
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::FrameDiscarded: {
+        LCLMsgFrameDiscarded m{};
+        if (!in.u32(m.surfaceId) || !in.u64(m.configureSerial) ||
+            m.surfaceId == 0 || m.configureSerial == 0)
             return false;
         appendNative(payload, m);
         break;

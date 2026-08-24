@@ -1494,15 +1494,8 @@ TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {
     EXPECT_TRUE(timeout.resizeBufferReady);
 }
 
-TEST(FrameSchedulerTest, CursorBlinkAndFrameBudgetUseTheExistingCadence) {
-    using Clock = std::chrono::steady_clock;
-    const auto start = Clock::time_point{};
+TEST(FrameSchedulerTest, FrameBudgetUsesTheExistingCadence) {
     FrameScheduler scheduler;
-    scheduler.reset(start);
-
-    EXPECT_FALSE(scheduler.cursorBlinkDue(start + std::chrono::milliseconds(499)));
-    EXPECT_TRUE(scheduler.cursorBlinkDue(start + std::chrono::milliseconds(500)));
-    EXPECT_FALSE(scheduler.cursorBlinkDue(start + std::chrono::milliseconds(501)));
     EXPECT_EQ(scheduler.frameBudgetForHz(60), std::chrono::microseconds(16166));
 }
 

@@ -43,6 +43,7 @@ private:
     SceneRegistry& m_scenes;
     FocusController& m_focus;
     ShellStateBroker& m_shellState;
+    uint64_t m_nextShmContentSerial{1};
     std::unordered_map<int, protocol::LCLSystemSurfaceKind> m_pendingSystemSurfaceKinds;
     struct ShellSubscription {
         uint64_t revision{0};

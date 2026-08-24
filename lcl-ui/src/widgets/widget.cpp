@@ -258,6 +258,15 @@ void Widget::markDirty() {
     if (m_parent) m_parent->propagateDescendantPaintRevision();
 }
 
+void Widget::markDirty(const graphics::RectF& damageRect) {
+    ++m_paintRevision;
+    if (m_renderPass) {
+        m_renderPass->addDirtyRect(
+            damageRect.intersection(getVisiblePresentationPaintBounds()));
+    }
+    if (m_parent) m_parent->propagateDescendantPaintRevision();
+}
+
 void Widget::markPresentationDirty() {
     markPresentationDirty(getPresentationSubtreePaintBounds());
 }
