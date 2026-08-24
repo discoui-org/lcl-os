@@ -98,6 +98,7 @@ bool Compositor::handleSystemGesture(
     entry.transitionDurationSec = 0.18f;
     entry.transitionOpacity = 1.0f;
     entry.transitionScale = 1.0f;
+    m_windowManager.transferFocusFromWindow(entry.windowId);
     return true;
 }
 

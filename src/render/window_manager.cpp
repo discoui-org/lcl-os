@@ -1192,6 +1192,28 @@ void WindowManager::focusWindow(uint32_t windowId) {
     }
 }
 
+bool WindowManager::transferFocusFromWindow(uint32_t windowId) {
+    const auto source = std::find_if(
+        m_windows.begin(), m_windows.end(), [windowId](const Window& window) {
+            return window.id == windowId;
+        });
+    if (source == m_windows.end() || !source->isFocused) return false;
+
+    unfocusAll();
+    for (auto it = m_windows.rbegin(); it != m_windows.rend(); ++it) {
+        if (it->id == windowId || it->isMinimized || it->isUnfocusable) {
+            continue;
+        }
+        it->isFocused = true;
+        it->headerColor =
+            lcl::theme::defaultTheme().colors.windowTitleFocused.toARGB();
+        it->markDirty();
+        break;
+    }
+    m_mouseDirty = true;
+    return true;
+}
+
 void WindowManager::focusTopmostVisibleWindow() {
     for (auto it = m_windows.rbegin(); it != m_windows.rend(); ++it) {
         if (!it->isMinimized && !it->isUnfocusable) {

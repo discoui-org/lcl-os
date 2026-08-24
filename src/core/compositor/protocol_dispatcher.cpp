@@ -171,6 +171,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
     };
     auto beginClosingTransition = [&](SurfaceEntry& entry) {
         if (!SurfaceRegistry::beginClosingTransition(entry)) return false;
+        m_windowManager.transferFocusFromWindow(entry.windowId);
         std::cout << "[LCL Compositor] Closing transition started for Window ID: "
                   << entry.windowId << "\n";
         changed = true;
@@ -1239,6 +1240,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                         surfaceIt->second.transitionDurationSec = 0.18f;
                         surfaceIt->second.transitionOpacity = 1.0f;
                         surfaceIt->second.transitionScale = 1.0f;
+                        m_windowManager.transferFocusFromWindow(windowId);
                         changed = true;
                     }
                     break;

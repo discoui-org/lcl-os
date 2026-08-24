@@ -320,6 +320,13 @@ public:
     void focusWindow(uint32_t windowId);
 
     /**
+     * Move focus away from a window that is becoming non-interactive without
+     * changing z-order. This keeps its exit animation above the newly focused
+     * window while allowing that underlying window to receive input.
+     */
+    bool transferFocusFromWindow(uint32_t windowId);
+
+    /**
      * @brief Sort windows by layer (Bottom -> Normal -> TopMost) preserving relative Z-order.
      */
     void sortWindowsByLayer();

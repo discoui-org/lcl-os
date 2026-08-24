@@ -201,6 +201,24 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
         m_activePopupSurface = 0;
     }
     if (touchFinished) m_touchTargets.erase(event.pointerId);
+    if (stateChanged) {
+        const uint32_t focusedWindowId = m_windowManager.getFocusedWindowId();
+        const auto focusedSurface = std::find_if(
+            m_surfaces.begin(), m_surfaces.end(),
+            [focusedWindowId](const auto& item) {
+                return !item.second.isPopup() &&
+                    item.second.windowId == focusedWindowId;
+            });
+        if (focusedSurface != m_surfaces.end()) {
+            const auto phase = focusedSurface->second.transitionPhase;
+            if (phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing ||
+                phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing) {
+                // Route the event that initiated the transition to its original
+                // target, then expose the underlying window to subsequent input.
+                m_windowManager.transferFocusFromWindow(focusedWindowId);
+            }
+        }
+    }
     return stateChanged;
 }
 

@@ -87,6 +87,24 @@ TEST(WindowManagerTest, UnfocusableSystemWindowDoesNotStealApplicationFocus) {
     EXPECT_FALSE(panelWindow->isFocused);
 }
 
+TEST(WindowManagerTest, ExitTransitionTransfersFocusWithoutChangingZOrder) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+
+    const uint32_t home = manager.createWindow("Home", 0, 0, 1000, 700);
+    const uint32_t app = manager.createWindow("App", 0, 0, 1000, 700);
+    ASSERT_EQ(manager.getFocusedWindowId(), app);
+    ASSERT_EQ(manager.getWindows().back().id, app);
+
+    EXPECT_TRUE(manager.transferFocusFromWindow(app));
+
+    EXPECT_EQ(manager.getFocusedWindowId(), home);
+    EXPECT_EQ(manager.getWindows().back().id, app);
+    EXPECT_FALSE(findWindow(manager, app)->isFocused);
+    EXPECT_TRUE(findWindow(manager, home)->isFocused);
+    EXPECT_FALSE(manager.transferFocusFromWindow(app));
+}
+
 TEST(WindowManagerTest, WindowCornerStyleOwnsRadiusAndRoundnessTogether) {
     lcl::render::WindowManager manager;
     ASSERT_TRUE(manager.initialize(1000, 700));
