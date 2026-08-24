@@ -127,6 +127,8 @@ public:
     bool animateTo(ChannelId channelId, float target, const Motion& motion);
     bool retarget(ChannelId channelId, float target);
     bool setSpec(ChannelId channelId, const Motion& motion, bool keepVelocity = true);
+    /** Replace instantaneous velocity without changing target or play state. */
+    bool setVelocity(ChannelId channelId, float velocity);
     bool setValue(ChannelId channelId, float value);
     bool stop(ChannelId channelId, bool snapToTarget = true);
     AnimatedSample sample(ChannelId channelId) const;

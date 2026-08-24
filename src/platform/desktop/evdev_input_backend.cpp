@@ -541,6 +541,9 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                     }
                 }
             } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
+                const uint64_t timestampNs =
+                    static_cast<uint64_t>(ev.time.tv_sec) * 1000000000ull +
+                    static_cast<uint64_t>(ev.time.tv_usec) * 1000ull;
                 if (dev.isDirectTouchscreen) {
                     const double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
                     const double rangeY = static_cast<double>(dev.absYMax - dev.absYMin);
@@ -568,6 +571,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                             moveEv.source = PointerSource::Touch;
                             moveEv.absoluteX = normX;
                             moveEv.absoluteY = normY;
+                            moveEv.timestampNs = timestampNs;
                             moveEv.deviceName = dev.name;
                             moveEv.superPressed = m_superPressed;
                             moveEv.modifiers = getActiveModifiers();
@@ -581,6 +585,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                         downEv.pressed = true;
                         downEv.absoluteX = normX;
                         downEv.absoluteY = normY;
+                        downEv.timestampNs = timestampNs;
                         downEv.deviceName = dev.name;
                         downEv.superPressed = m_superPressed;
                         downEv.modifiers = getActiveModifiers();
@@ -598,6 +603,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                         upEv.pressed = false;
                         upEv.absoluteX = normX >= 0.0 ? normX : dev.lastNormTouchX;
                         upEv.absoluteY = normY >= 0.0 ? normY : dev.lastNormTouchY;
+                        upEv.timestampNs = timestampNs;
                         upEv.deviceName = dev.name;
                         upEv.superPressed = m_superPressed;
                         upEv.modifiers = getActiveModifiers();
@@ -614,6 +620,7 @@ size_t EvdevInputBackend::dispatchEvdevEvents(int screenWidth, int screenHeight)
                             moveEv.source = PointerSource::Touch;
                             moveEv.absoluteX = normX;
                             moveEv.absoluteY = normY;
+                            moveEv.timestampNs = timestampNs;
                             moveEv.deviceName = dev.name;
                             moveEv.superPressed = m_superPressed;
                             moveEv.modifiers = getActiveModifiers();

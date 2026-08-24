@@ -221,6 +221,9 @@ size_t AndroidInputBackend::pollEvents(int screenWidth, int screenHeight) {
                     }
                 }
             } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
+                const uint64_t timestampNs =
+                    static_cast<uint64_t>(ev.time.tv_sec) * 1000000000ull +
+                    static_cast<uint64_t>(ev.time.tv_usec) * 1000ull;
                 if (dev.isDirectTouchscreen) {
                     const double rangeX = static_cast<double>(dev.absXMax - dev.absXMin);
                     const double rangeY = static_cast<double>(dev.absYMax - dev.absYMin);
@@ -248,6 +251,7 @@ size_t AndroidInputBackend::pollEvents(int screenWidth, int screenHeight) {
                             moveEv.source = PointerSource::Touch;
                             moveEv.absoluteX = normX;
                             moveEv.absoluteY = normY;
+                            moveEv.timestampNs = timestampNs;
                             moveEv.deviceName = dev.name;
                             if (m_callback) m_callback(moveEv);
                         }
@@ -259,6 +263,7 @@ size_t AndroidInputBackend::pollEvents(int screenWidth, int screenHeight) {
                         downEv.pressed = true;
                         downEv.absoluteX = normX;
                         downEv.absoluteY = normY;
+                        downEv.timestampNs = timestampNs;
                         downEv.deviceName = dev.name;
                         if (m_callback) m_callback(downEv);
 
@@ -274,6 +279,7 @@ size_t AndroidInputBackend::pollEvents(int screenWidth, int screenHeight) {
                         upEv.pressed = false;
                         upEv.absoluteX = normX >= 0.0 ? normX : dev.lastTouchX;
                         upEv.absoluteY = normY >= 0.0 ? normY : dev.lastTouchY;
+                        upEv.timestampNs = timestampNs;
                         upEv.deviceName = dev.name;
                         if (m_callback) m_callback(upEv);
 
@@ -288,6 +294,7 @@ size_t AndroidInputBackend::pollEvents(int screenWidth, int screenHeight) {
                             moveEv.source = PointerSource::Touch;
                             moveEv.absoluteX = normX;
                             moveEv.absoluteY = normY;
+                            moveEv.timestampNs = timestampNs;
                             moveEv.deviceName = dev.name;
                             if (m_callback) m_callback(moveEv);
 
@@ -308,4 +315,3 @@ size_t AndroidInputBackend::pollEvents(int screenWidth, int screenHeight) {
 }
 
 } // namespace lcl::platform::android
-

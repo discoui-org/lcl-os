@@ -42,6 +42,9 @@ struct RawInputEvent {
     double dy{0.0};
     double absoluteX{-1.0};
     double absoluteY{-1.0};
+    // Source-event timestamp in nanoseconds. Zero asks consumers to use their
+    // local monotonic clock (for synthetic and legacy producers).
+    uint64_t timestampNs{0};
     PointerButton button{PointerButton::None};
     bool pressed{false};
     bool isRepeat{false};

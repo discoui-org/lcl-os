@@ -142,6 +142,9 @@ public:
         float launchGestureStartY{0.0f};
         float launchGestureX{0.0f};
         float launchGestureY{0.0f};
+        float launchGestureVelocityX{0.0f};
+        float launchGestureVelocityY{0.0f};
+        bool launchGestureFlingPending{false};
         bool hasCommittedBuffer{false};
         bool ignoreBufferCommits{false};
         bool pendingDestroy{false};

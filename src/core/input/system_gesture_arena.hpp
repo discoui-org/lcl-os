@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
+#include <deque>
 
 #include "core/input/input_manager.hpp"
 
@@ -22,11 +24,16 @@ struct SystemGestureProgress {
     float startY{0.0f};
     float x{0.0f};
     float y{0.0f};
+    // Least-squares fling estimate in output-logical units per second.
+    float velocityX{0.0f};
+    float velocityY{0.0f};
 };
 
 struct SystemGestureConfig {
     float bottomEdgeInset{24.0f};
     float claimDistance{18.0f};
+    float flingWindowSec{0.08f};
+    float maxFlingVelocity{8000.0f};
 };
 
 /**
@@ -35,11 +42,15 @@ struct SystemGestureConfig {
  */
 class SystemGestureArena {
 public:
+    using Clock = std::chrono::steady_clock;
+    using TimePoint = Clock::time_point;
+
     explicit SystemGestureArena(SystemGestureConfig config = {})
         : m_config(config) {}
 
     SystemGestureDecision process(const InputEvent& event, float outputHeight,
-                                  SystemGestureProgress* progress = nullptr);
+                                  SystemGestureProgress* progress = nullptr,
+                                  TimePoint now = Clock::now());
     void reset() noexcept;
     bool isTracking(uint32_t pointerId) const noexcept;
     bool hasClaimed(uint32_t pointerId) const noexcept;
@@ -51,11 +62,21 @@ private:
         Claimed
     };
 
+    struct VelocitySample {
+        float x{0.0f};
+        float y{0.0f};
+        TimePoint time{};
+    };
+
+    void recordVelocitySample(float x, float y, TimePoint now);
+    void resolveFlingVelocity(float& velocityX, float& velocityY) const;
+
     SystemGestureConfig m_config;
     State m_state{State::Idle};
     uint32_t m_pointerId{0};
     float m_startX{0.0f};
     float m_startY{0.0f};
+    std::deque<VelocitySample> m_velocitySamples;
 };
 
 } // namespace lcl::core

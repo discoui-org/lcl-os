@@ -65,6 +65,16 @@ TEST(MotionTest, TweenRetargetStartsAtPresentationValue) {
     EXPECT_NEAR(engine.sample(channel).value, 6.0f, 0.001f);
 }
 
+TEST(MotionTest, ExplicitVelocityReplacesRetargetMomentum) {
+    AnimationEngine engine;
+    const auto channel = engine.createChannel({8, 3}, 0.0f);
+    engine.animateTo(channel, 1.0f, Motion::spring(0.4f, 0.08f));
+    engine.tick(0.05f);
+    ASSERT_TRUE(engine.setVelocity(channel, -6.0f));
+    EXPECT_FLOAT_EQ(engine.sample(channel).velocity, -6.0f);
+    EXPECT_FALSE(engine.setVelocity(channel, std::nanf("")));
+}
+
 TEST(MotionTest, SetValueSynchronizesAnExistingChannelWithoutLeavingVelocity) {
     AnimationEngine engine;
     const auto channel = engine.createChannel({4, 8}, 0.0f);

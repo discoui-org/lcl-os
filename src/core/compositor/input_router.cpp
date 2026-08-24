@@ -4,6 +4,7 @@
 #include "render/window_group_transform.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <vector>
 
@@ -38,8 +39,12 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
 
     if (m_systemGesturesEnabled) {
         SystemGestureProgress progress{};
+        const auto gestureTime = event.timestampNs != 0
+            ? SystemGestureArena::TimePoint(
+                std::chrono::nanoseconds(event.timestampNs))
+            : SystemGestureArena::Clock::now();
         const auto decision = m_systemGestureArena.process(
-            event, m_windowManager.getScreenHeight(), &progress);
+            event, m_windowManager.getScreenHeight(), &progress, gestureTime);
         if (decision == SystemGestureDecision::Claim) {
             const auto target = m_touchTargets.find(event.pointerId);
             if (target != m_touchTargets.end()) {

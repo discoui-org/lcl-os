@@ -1720,6 +1720,8 @@ TEST(FrameSchedulerTest, LaunchMorphCanReverseBeforeOpeningSettles) {
     EXPECT_LT(surface.launchMorphWidth, surface.configuredWidth);
 
     surface.launchGestureActive = false;
+    surface.launchGestureVelocityY = -2400.0f;
+    surface.launchGestureFlingPending = true;
     surface.transitionPhase =
         SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
 
@@ -1731,6 +1733,7 @@ TEST(FrameSchedulerTest, LaunchMorphCanReverseBeforeOpeningSettles) {
     EXPECT_TRUE(surface.launchIconRevealPending);
     EXPECT_TRUE(surface.launchIconHandoffActive);
     EXPECT_TRUE(surface.launchMorphActive);
+    EXPECT_FALSE(surface.launchGestureFlingPending);
     EXPECT_EQ(surface.transitionPhase,
               SurfaceRegistry::SurfaceEntry::TransitionPhase::None);
 }

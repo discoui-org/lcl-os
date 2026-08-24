@@ -87,6 +87,9 @@ bool Compositor::handleSystemGesture(
         entry.launchGestureStartY = gesture.startY;
         entry.launchGestureX = gesture.x;
         entry.launchGestureY = gesture.y;
+        entry.launchGestureVelocityX = gesture.velocityX;
+        entry.launchGestureVelocityY = gesture.velocityY;
+        entry.launchGestureFlingPending = false;
         entry.transitionPhase =
             SurfaceRegistry::SurfaceEntry::TransitionPhase::Interactive;
         return true;
@@ -95,6 +98,9 @@ bool Compositor::handleSystemGesture(
     if (decision == SystemGestureDecision::Cancel) {
         if (!entry.launchGestureActive) return false;
         entry.launchGestureActive = false;
+        entry.launchGestureVelocityX = 0.0f;
+        entry.launchGestureVelocityY = 0.0f;
+        entry.launchGestureFlingPending = false;
         entry.transitionElapsedSec = 0.0f;
         entry.transitionPhase =
             SurfaceRegistry::SurfaceEntry::TransitionPhase::Restoring;
@@ -103,10 +109,14 @@ bool Compositor::handleSystemGesture(
 
     if (decision != SystemGestureDecision::Home) return false;
 
-    // Entering/restoring launch morphs are velocity-preserving channels.
-    // Retargeting them here makes Home responsive even before the opening
-    // animation has settled.
+    // The scheduler replaces its gesture-following channel velocity with this
+    // measured fling, so a quick release remains energetic after retargeting.
     entry.launchGestureActive = false;
+    entry.launchGestureX = gesture.x;
+    entry.launchGestureY = gesture.y;
+    entry.launchGestureVelocityX = gesture.velocityX;
+    entry.launchGestureVelocityY = gesture.velocityY;
+    entry.launchGestureFlingPending = entry.hasLaunchOrigin;
     entry.transitionPhase =
         SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing;
     entry.transitionElapsedSec = 0.0f;

@@ -301,6 +301,13 @@ bool AnimationEngine::setSpec(ChannelId id, const Motion& motion, bool keepVeloc
     return true;
 }
 
+bool AnimationEngine::setVelocity(ChannelId id, float velocity) {
+    auto found = m_channels.find(id);
+    if (found == m_channels.end() || !std::isfinite(velocity)) return false;
+    found->second.velocity = velocity;
+    return true;
+}
+
 bool AnimationEngine::setValue(ChannelId id, float value) {
     auto found = m_channels.find(id);
     if (found == m_channels.end() || !std::isfinite(value)) return false;

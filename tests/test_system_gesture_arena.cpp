@@ -59,6 +59,57 @@ TEST(SystemGestureArenaTest, ReportsClaimedGestureProgressBeforeRelease) {
     EXPECT_FLOAT_EQ(progress.y, 750.0f);
 }
 
+TEST(SystemGestureArenaTest, ReportsRecentFlingVelocityOnRelease) {
+    using namespace std::chrono_literals;
+    SystemGestureArena arena;
+    SystemGestureProgress progress{};
+    const auto start = SystemGestureArena::TimePoint{};
+
+    EXPECT_EQ(arena.process(
+                  touchEvent(InputEventType::PointerButton,
+                             100.0f, 795.0f, 11, true),
+                  800.0f, &progress, start),
+              SystemGestureDecision::Tracking);
+    EXPECT_EQ(arena.process(
+                  touchEvent(InputEventType::PointerMotion,
+                             102.0f, 755.0f, 11),
+                  800.0f, &progress, start + 20ms),
+              SystemGestureDecision::Claim);
+    EXPECT_EQ(arena.process(
+                  touchEvent(InputEventType::PointerMotion,
+                             104.0f, 705.0f, 11),
+                  800.0f, &progress, start + 40ms),
+              SystemGestureDecision::Update);
+    EXPECT_EQ(arena.process(
+                  touchEvent(InputEventType::PointerButton,
+                             104.0f, 705.0f, 11, false),
+                  800.0f, &progress, start + 45ms),
+              SystemGestureDecision::Home);
+    EXPECT_GT(progress.velocityX, 0.0f);
+    EXPECT_LT(progress.velocityY, -1500.0f);
+}
+
+TEST(SystemGestureArenaTest, ReleaseAfterPauseDoesNotReuseStaleVelocity) {
+    using namespace std::chrono_literals;
+    SystemGestureArena arena;
+    SystemGestureProgress progress{};
+    const auto start = SystemGestureArena::TimePoint{};
+
+    arena.process(touchEvent(InputEventType::PointerButton,
+                             100.0f, 795.0f, 12, true),
+                  800.0f, &progress, start);
+    ASSERT_EQ(arena.process(touchEvent(InputEventType::PointerMotion,
+                                      100.0f, 740.0f, 12),
+                            800.0f, &progress, start + 20ms),
+              SystemGestureDecision::Claim);
+    ASSERT_EQ(arena.process(touchEvent(InputEventType::PointerButton,
+                                      100.0f, 740.0f, 12, false),
+                            800.0f, &progress, start + 200ms),
+              SystemGestureDecision::Home);
+    EXPECT_FLOAT_EQ(progress.velocityX, 0.0f);
+    EXPECT_FLOAT_EQ(progress.velocityY, 0.0f);
+}
+
 TEST(SystemGestureArenaTest, LeavesHorizontalAndNonEdgeStreamsToApplications) {
     SystemGestureArena arena;
 

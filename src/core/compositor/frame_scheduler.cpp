@@ -18,6 +18,9 @@ using TransitionPhase = SurfaceRegistry::SurfaceEntry::TransitionPhase;
 constexpr float kLaunchSpringSpeed = 1.5f;
 constexpr float kLaunchSpringStiffnessScale =
     kLaunchSpringSpeed * kLaunchSpringSpeed;
+constexpr float kSpringyMinimizeDampingRatio = 0.72f;
+constexpr float kSlowFlingScreenLengthsPerSecond = 0.5f;
+constexpr float kFastFlingScreenLengthsPerSecond = 4.0f;
 
 bool isLaunchMorphPhase(TransitionPhase phase) {
     return phase == TransitionPhase::Entering ||
@@ -27,16 +30,68 @@ bool isLaunchMorphPhase(TransitionPhase phase) {
            phase == TransitionPhase::Interactive;
 }
 
-lcl::motion::Motion criticalSpring(float stiffness,
-                                   float settlePosition,
-                                   float settleVelocity) {
+lcl::motion::Motion launchSpring(float stiffness,
+                                 float dampingRatio,
+                                 float settlePosition,
+                                 float settleVelocity) {
     const float scaledStiffness = stiffness * kLaunchSpringStiffnessScale;
     auto motion = lcl::motion::Motion::spring(
-        1.0f, scaledStiffness, 2.0f * std::sqrt(scaledStiffness));
+        1.0f, scaledStiffness,
+        2.0f * dampingRatio * std::sqrt(scaledStiffness));
     motion.springParams.settlePosEpsilon = settlePosition;
     motion.springParams.settleVelEpsilon =
         settleVelocity * kLaunchSpringSpeed;
     return motion;
+}
+
+float minimizeDampingRatio(float velocityY, float targetHeight) {
+    const float screenLengthsPerSecond =
+        std::abs(velocityY) / std::max(1.0f, targetHeight);
+    float progress = std::clamp(
+        (screenLengthsPerSecond - kSlowFlingScreenLengthsPerSecond) /
+            (kFastFlingScreenLengthsPerSecond -
+             kSlowFlingScreenLengthsPerSecond),
+        0.0f, 1.0f);
+    progress = progress * progress * (3.0f - 2.0f * progress);
+    return 1.0f +
+        (kSpringyMinimizeDampingRatio - 1.0f) * progress;
+}
+
+struct LaunchFlingVelocity {
+    float positionX{0.0f};
+    float positionY{0.0f};
+    float expand{0.0f};
+    float perspective{0.0f};
+};
+
+LaunchFlingVelocity resolveLaunchFlingVelocity(
+        const SurfaceRegistry::SurfaceEntry& entry,
+        float targetX, float targetWidth, float targetHeight) {
+    const float velocityX =
+        entry.launchGestureVelocityX * kLaunchSpringSpeed;
+    const float velocityY =
+        entry.launchGestureVelocityY * kLaunchSpringSpeed;
+    const float deltaY = std::max(
+        0.0f, entry.launchGestureStartY - entry.launchGestureY);
+    const float normalizedStartX = std::clamp(
+        (entry.launchGestureStartX - targetX) / targetWidth, 0.0f, 1.0f);
+    const float horizontalCoupling =
+        (normalizedStartX - 0.5f) * targetWidth * 0.00125f;
+    // Continue along the same non-linear path used while the finger is down.
+    // This turns finger px/s into window-center px/s without letting a fast
+    // fling shoot the morph past the screen's upper-third region.
+    const float verticalDenominator = 2.0f +
+        std::pow(deltaY, 1.5f) / (10.0f * targetHeight);
+    const float verticalDerivative = deltaY > 0.0f
+        ? 0.15f * std::sqrt(deltaY) /
+            (verticalDenominator * verticalDenominator)
+        : 0.0f;
+    return {
+        velocityX - velocityY * horizontalCoupling,
+        velocityY * verticalDerivative,
+        velocityY / targetHeight,
+        velocityY / (targetHeight * (2.0f / 3.0f)),
+    };
 }
 
 constexpr float kLaunchMorphMaxDurationSec = 1.5f / kLaunchSpringSpeed;
@@ -104,6 +159,8 @@ void FrameScheduler::prepareLaunchMorph(
     if (!inserted && state.phase != entry.transitionPhase) {
         entry.transitionElapsedSec = 0.0f;
     }
+    const bool flingToHome = entry.launchGestureFlingPending &&
+        entry.transitionPhase == TransitionPhase::Minimizing;
     if (!inserted && state.phase == entry.transitionPhase && !interactive) return;
 
     constexpr float kDraggingStiffness =
@@ -111,13 +168,20 @@ void FrameScheduler::prepareLaunchMorph(
     const auto draggingMotion = lcl::motion::Motion::spring(
         1.0f, kDraggingStiffness,
         1.25f * std::sqrt(kDraggingStiffness));
+    const float dampingRatio = flingToHome
+        ? minimizeDampingRatio(
+              entry.launchGestureVelocityY, targetHeight)
+        : 1.0f;
     const auto positionMotion = interactive
         ? draggingMotion
-        : criticalSpring(opening ? 150.0f : 120.0f, 0.05f, 0.05f);
-    const auto expandMotion = criticalSpring(
-        opening ? 200.0f : 70.0f, 0.001f, 0.01f);
+        : launchSpring(opening ? 150.0f : 120.0f,
+                       dampingRatio, 0.05f, 0.05f);
+    const auto expandMotion = launchSpring(
+        opening ? 200.0f : 70.0f,
+        dampingRatio, 0.001f, 0.01f);
     const auto perspectiveMotion = interactive
-        ? draggingMotion : criticalSpring(100.0f, 0.001f, 0.01f);
+        ? draggingMotion
+        : launchSpring(100.0f, dampingRatio, 0.001f, 0.01f);
     float positionTargetX = opening ? targetCenterX : originCenterX;
     float positionTargetY = opening ? targetCenterY : originCenterY;
     float expandTarget = opening ? 1.0f : 0.0f;
@@ -144,6 +208,15 @@ void FrameScheduler::prepareLaunchMorph(
     m_launchMotion.animateTo(state.expand, expandTarget, expandMotion);
     m_launchMotion.animateTo(
         state.perspective, perspectiveTarget, perspectiveMotion);
+    if (flingToHome) {
+        const auto fling = resolveLaunchFlingVelocity(
+            entry, targetX, targetWidth, targetHeight);
+        m_launchMotion.setVelocity(state.positionX, fling.positionX);
+        m_launchMotion.setVelocity(state.positionY, fling.positionY);
+        m_launchMotion.setVelocity(state.expand, fling.expand);
+        m_launchMotion.setVelocity(state.perspective, fling.perspective);
+        entry.launchGestureFlingPending = false;
+    }
     state.phase = entry.transitionPhase;
     entry.launchMorphActive = true;
 }
