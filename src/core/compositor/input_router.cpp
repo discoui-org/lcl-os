@@ -102,7 +102,8 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
     }
     const bool popupButtonEvent = event.type == InputEventType::PointerButton &&
         popupTarget != 0;
-    auto result = (visibilityInputBlocked || popupButtonEvent)
+    auto result = (visibilityInputBlocked || popupButtonEvent ||
+                   !m_desktopWindowManagementEnabled)
         ? render::WindowInputResult{}
         : m_windowManager.processInputEvent(event);
 

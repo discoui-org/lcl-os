@@ -9,6 +9,7 @@
 #include "core/scene/scene_registry.hpp"
 #include "core/scene/shell_state_broker.hpp"
 #include "core/compositor/system_surface_policy.hpp"
+#include "core/compositor/windowing_policy.hpp"
 #include "render/renderer.hpp"
 #include "render/window_manager.hpp"
 
@@ -22,9 +23,11 @@ public:
                        SurfaceRegistry& surfaces,
                        SceneRegistry& scenes,
                        FocusController& focus,
-                       ShellStateBroker& shellState)
+                       ShellStateBroker& shellState,
+                       const WindowingPolicy& windowingPolicy)
         : m_renderer(renderer), m_windowManager(windowManager), m_surfaces(surfaces),
-          m_scenes(scenes), m_focus(focus), m_shellState(shellState) {}
+          m_scenes(scenes), m_focus(focus), m_shellState(shellState),
+          m_windowingPolicy(windowingPolicy) {}
     ~ProtocolDispatcher();
 
     /** Process every queued IPC message and report whether a frame is required. */
@@ -44,6 +47,7 @@ private:
     SceneRegistry& m_scenes;
     FocusController& m_focus;
     ShellStateBroker& m_shellState;
+    const WindowingPolicy& m_windowingPolicy;
     uint64_t m_nextShmContentSerial{1};
     std::unordered_map<int, protocol::LCLSystemSurfaceKind> m_pendingSystemSurfaceKinds;
     std::unordered_map<int, int> m_nativeBufferChannels;

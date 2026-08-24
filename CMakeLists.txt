@@ -198,6 +198,7 @@ add_library(lcl-core-engine STATIC
     src/core/compositor/protocol_dispatcher.cpp
     src/core/compositor/surface_registry.cpp
     src/core/compositor/system_surface_policy.cpp
+    src/core/compositor/windowing_policy.cpp
     src/core/scene/focus_controller.cpp
     src/core/scene/scene_registry.cpp
     src/core/scene/shell_state_broker.cpp
@@ -671,6 +672,7 @@ else()
             tests/test_ipc_manager.cpp
             tests/test_input_manager.cpp
             tests/test_system_gesture_arena.cpp
+            tests/test_windowing_policy.cpp
             tests/test_key_mapper.cpp
             tests/test_compositor_components.cpp
             src/core/shell/shell_state_client.cpp
@@ -685,6 +687,7 @@ else()
             src/core/compositor/input_router.cpp
             src/core/compositor/surface_registry.cpp
             src/core/compositor/system_surface_policy.cpp
+            src/core/compositor/windowing_policy.cpp
             src/core/scene/focus_controller.cpp
             src/core/scene/scene_registry.cpp
             src/core/scene/shell_state_broker.cpp

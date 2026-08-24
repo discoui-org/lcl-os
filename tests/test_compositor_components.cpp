@@ -1129,7 +1129,7 @@ TEST(InputRouterTest, MobileBottomEdgeClaimCancelsClientThenTriggersHome) {
     surface.bufferScale = 1.0f;
 
     SceneRegistry scenes;
-    InputRouter router(manager, registry, scenes, 1.0f, true);
+    InputRouter router(manager, registry, scenes, 1.0f, true, false);
     int homeEvents = 0;
     router.setSystemGestureHandler([&](SystemGestureDecision decision) {
         if (decision == SystemGestureDecision::Home) ++homeEvents;

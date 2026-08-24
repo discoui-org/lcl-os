@@ -20,10 +20,12 @@ public:
                 SurfaceRegistry& surfaces,
                 SceneRegistry& scenes,
                 float outputScale = 1.0f,
-                bool systemGesturesEnabled = false)
+                bool systemGesturesEnabled = false,
+                bool desktopWindowManagementEnabled = true)
         : m_windowManager(windowManager), m_surfaces(surfaces), m_scenes(scenes),
           m_outputScale(outputScale),
-          m_systemGesturesEnabled(systemGesturesEnabled) {}
+          m_systemGesturesEnabled(systemGesturesEnabled),
+          m_desktopWindowManagementEnabled(desktopWindowManagementEnabled) {}
 
     using SystemGestureHandler = std::function<bool(SystemGestureDecision)>;
     void setSystemGestureHandler(SystemGestureHandler handler) {
@@ -58,6 +60,7 @@ private:
     SceneRegistry& m_scenes;
     float m_outputScale{1.0f};
     bool m_systemGesturesEnabled{false};
+    bool m_desktopWindowManagementEnabled{true};
     SystemGestureArena m_systemGestureArena;
     SystemGestureHandler m_systemGestureHandler;
     std::unordered_map<uint32_t, SurfaceRegistry::Key> m_touchTargets;

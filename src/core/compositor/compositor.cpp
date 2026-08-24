@@ -77,19 +77,19 @@ bool Compositor::initialize() {
     m_windowManager.initialize(
         static_cast<float>(m_renderer.getWidth()) / outputScale,
         static_cast<float>(m_renderer.getHeight()) / outputScale);
+    m_windowingPolicy = makeWindowingPolicy(m_platformServices.gestalt().shell);
     m_protocolDispatcher = std::make_unique<ProtocolDispatcher>(
         m_renderer, m_windowManager, m_surfaces, m_sceneRegistry,
-        m_focusController, m_shellStateBroker);
+        m_focusController, m_shellStateBroker, *m_windowingPolicy);
 
     // --- IPC (Unix Domain Socket, SO_PEERCRED auth, 0600 perms) ---
     m_ipcManager.initialize(paths.compositorSocketPath());
 
     // --- Route input through the dedicated focus/hit-test bridge ---
-    const bool mobileSystemGestures =
-        m_platformServices.gestalt().shell == lcl::platform::ShellKind::Mobile;
     m_inputRouter = std::make_unique<InputRouter>(
         m_windowManager, m_surfaces, m_sceneRegistry, outputScale,
-        mobileSystemGestures);
+        m_windowingPolicy->usesSystemGestures(),
+        m_windowingPolicy->usesDesktopWindowManagement());
     m_inputRouter->setSystemGestureHandler([this](SystemGestureDecision decision) {
         if (decision != SystemGestureDecision::Home) return false;
         const uint32_t windowId = m_windowManager.getFocusedWindowId();

@@ -457,6 +457,16 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 systemPolicy, m_windowManager.getScreenWidth(),
                 m_windowManager.getScreenHeight(),
                 winX, winY, winW, winH);
+            protocol::LCLDecorationMode initialDecorationMode =
+                protocol::LCLDecorationMode::SSD;
+            bool initialInsetBorderEnabled = true;
+            if (!systemPolicy.isSystemSurface) {
+                m_windowingPolicy.configureNormalSurface(
+                    m_windowManager.getScreenWidth(),
+                    m_windowManager.getScreenHeight(),
+                    winX, winY, winW, winH,
+                    initialDecorationMode, initialInsetBorderEnabled);
+            }
 
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             if (m_surfaces.find(surfaceKey) == m_surfaces.end()) {
@@ -469,11 +479,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.resizePresentation = resizePresentation;
                 entry.systemSurfaceKind = requestedSystemKind;
                 entry.suppressInitialTransition = systemPolicy.suppressInitialTransition;
+                entry.decorationMode = systemPolicy.isSystemSurface
+                    ? protocol::LCLDecorationMode::None
+                    : initialDecorationMode;
+                entry.insetBorderEnabled = systemPolicy.isSystemSurface
+                    ? systemPolicy.insetBorderEnabled
+                    : initialInsetBorderEnabled;
                 if (systemPolicy.isSystemSurface) {
-                    entry.decorationMode = protocol::LCLDecorationMode::None;
                     entry.layer = systemPolicy.layer;
                     entry.unfocusable = systemPolicy.unfocusable;
-                    entry.insetBorderEnabled = systemPolicy.insetBorderEnabled;
                 }
                 entry.clientFd = msg.clientFd;
                 entry.bufferScale = bufferScale;
@@ -1117,6 +1131,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | surfId;
             auto it = m_surfaces.find(surfaceKey);
             if (it != m_surfaces.end()) {
+                mode = it->second.systemSurfaceKind ==
+                           protocol::LCLSystemSurfaceKind::None
+                    ? m_windowingPolicy.resolveDecorationMode(mode)
+                    : protocol::LCLDecorationMode::None;
                 it->second.decorationMode = mode;
                 const auto wmMode = toRenderDecorationMode(mode);
                 if (it->second.windowId != 0) {
@@ -1152,6 +1170,16 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
 
             const auto* request = reinterpret_cast<const lcl::protocol::LCLMsgRequestWindowAction*>(msg.payload.data());
+            const bool desktopOnlyAction =
+                request->action == lcl::protocol::LCLWindowAction::BeginDrag ||
+                request->action == lcl::protocol::LCLWindowAction::Maximize ||
+                request->action == lcl::protocol::LCLWindowAction::Restore ||
+                request->action == lcl::protocol::LCLWindowAction::ToggleMaximize;
+            if (desktopOnlyAction &&
+                !m_windowingPolicy.usesDesktopWindowManagement()) {
+                requestAck.error(5, "window action unavailable in mobile mode");
+                continue;
+            }
             const uint64_t surfaceKey =
                 (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | request->surfaceId;
             const auto surfaceIt = m_surfaces.find(surfaceKey);
@@ -1229,6 +1257,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
 
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::BeginWindowMove) {
+            if (!m_windowingPolicy.usesDesktopWindowManagement()) {
+                requestAck.error(5, "window move unavailable in mobile mode");
+                continue;
+            }
             if (msg.payload.size() >= sizeof(lcl::protocol::LCLMsgBeginWindowMove)) {
                 auto* moveMsg = reinterpret_cast<const lcl::protocol::LCLMsgBeginWindowMove*>(msg.payload.data());
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | moveMsg->surfaceId;
@@ -1272,7 +1304,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     const bool disableInsetBorder =
                         (layerMsg->layer == lcl::protocol::LCLWindowLayer::Bottom) ||
                         (layerMsg->layer == lcl::protocol::LCLWindowLayer::TopMost && layerMsg->unfocusable != 0);
-                    it->second.insetBorderEnabled = !disableInsetBorder;
+                    it->second.insetBorderEnabled =
+                        m_windowingPolicy.resolveInsetBorderEnabled(
+                            !disableInsetBorder);
                     if (it->second.windowId != 0) {
                         m_windowManager.setWindowLayer(it->second.windowId, it->second.layer, it->second.unfocusable);
                         m_windowManager.setInsetBorderEnabled(it->second.windowId, it->second.insetBorderEnabled);
@@ -1291,7 +1325,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 uint64_t surfaceKey = (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) | borderMsg->surfaceId;
                 auto it = m_surfaces.find(surfaceKey);
                 if (it != m_surfaces.end()) {
-                    it->second.insetBorderEnabled = borderMsg->enabled != 0;
+                    it->second.insetBorderEnabled =
+                        m_windowingPolicy.resolveInsetBorderEnabled(
+                            borderMsg->enabled != 0);
                     if (it->second.windowId != 0) {
                         m_windowManager.setInsetBorderEnabled(it->second.windowId, it->second.insetBorderEnabled);
                     }

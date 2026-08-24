@@ -48,7 +48,10 @@ The LCL architecture consists of 5 main decoupled layers:
 * **Font & Text Engine (`FontRenderer`):** TrueType vector font rasterization via `stb_truetype` featuring subpixel antialiasing, macOS-style gamma correction, font-agnostic metric queries (`getCellWidth()`, `getCellHeight()`), and UTF-8 multi-byte sequence handling.
 * **Window Manager:** Decoupled spatial engine tracking z-index, logical
   coordinates (`x, y, width, height`), focus, drag/resize state, and window
-  presentation transforms. It does not paint window contents.
+  presentation transforms. It does not paint window contents. Shell-specific
+  behavior is selected through `WindowingPolicy`: desktop policy permits
+  floating/SSD/CSD move-resize behavior, while mobile policy makes normal app
+  surfaces fullscreen and frameless and disables desktop pointer manipulation.
 * **Terminal Engine (`TerminalApp` & `PTYManager`):** Pseudo-terminal (`/dev/pts/`) controller spawning interactive GNU Bash shells. Features font-agnostic canvas layout, `TIOCSWINSZ` PTY window size synchronization, VT100 write-head overwrite state tracking, and typing-aware 500ms blinking inverted block cursor rendering.
 
 ### III. Session, IPC & Application Bundle Subsystem
@@ -172,7 +175,9 @@ The version 1 root accepts an optional `shell` value (`desktop` or `mobile`),
 defaulting to `desktop` for older profiles. Both executables are installed in
 the canonical rootfs; `lcl-shell-launcher` reads the same Gestalt document as
 the platform and replaces itself with exactly one selected shell. Emulator
-viewer flags do not form a second shell-selection authority.
+viewer flags do not form a second shell-selection authority. The compositor
+uses that same value to select `DesktopWindowPolicy` or `MobileWindowPolicy`;
+the shell executable and its window-management model therefore cannot drift.
 
 The version 1 `display` object accepts the optional `width`, `height`,
 `refreshRateHz`, and `scale` mode fields, plus `naturalOrientation`,

@@ -14,6 +14,7 @@
 #include "core/compositor/input_router.hpp"
 #include "core/compositor/frame_scheduler.hpp"
 #include "core/compositor/protocol_dispatcher.hpp"
+#include "core/compositor/windowing_policy.hpp"
 #include "core/compositor/compositor_renderer.hpp"
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
@@ -85,6 +86,7 @@ private:
     SceneRegistry m_sceneRegistry;
     FocusController m_focusController;
     ShellStateBroker m_shellStateBroker;
+    std::unique_ptr<WindowingPolicy> m_windowingPolicy;
     std::unique_ptr<InputRouter> m_inputRouter;
     FrameScheduler m_frameScheduler;
     CompositorRenderer m_compositorRenderer;
