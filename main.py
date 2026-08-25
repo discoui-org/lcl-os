@@ -6,8 +6,8 @@ Provides a clean, cross-platform CLI for building, running QEMU, ISO generation,
 Usage:
   ./main.py qemu [--native] [--gpu] [--arch aarch64|x86_64]
   ./main.py qemu --mobile [--skin pixel_8_pro] [--gestalt profile.json]
-  ./main.py avd [--avd-name lcl-phone] [--no-window] [--rebuild]
   ./main.py android [--no-build] [--rebuild] [--push-rootfs]
+  ./main.py android --avd [--avd-name lcl-phone] [--no-window]
   ./main.py build [--arch ...]
   ./main.py iso [--arch ...]
   ./main.py flash [--dev /dev/sdX]
@@ -144,14 +144,10 @@ def cmd_utm(args: argparse.Namespace) -> None:
     subprocess.check_call(utm_args)
 
 
-def cmd_avd(args: argparse.Namespace) -> None:
-    arch = normalize_arch(getattr(args, "arch", None))
-    if arch != "x86_64":
-        err(f"AVD platform substrate only supports 'x86_64' (requested: '{arch}').")
-        sys.exit(1)
-
+def cmd_android_avd(args: argparse.Namespace) -> None:
+    """Build and launch the fixed x86_64 Android AVD substrate."""
     run_avd_py = SCRIPTS_DIR / "run_avd.py"
-    avd_args = [sys.executable, str(run_avd_py), "--arch", arch]
+    avd_args = [sys.executable, str(run_avd_py), "--arch", "x86_64"]
     if getattr(args, "avd_name", None):
         avd_args.extend(["--avd-name", str(args.avd_name)])
     if getattr(args, "show_kernel", False):
@@ -283,7 +279,11 @@ def require_android_phone_artifacts(use_rootfs: bool, native_clients: bool) -> N
 
 
 def cmd_android(args: argparse.Namespace) -> None:
-    """Build and launch LCL OS with the connected device's matching Gestalt."""
+    """Launch either the x86_64 AVD or a connected ARM64 Android device."""
+    if args.avd:
+        cmd_android_avd(args)
+        return
+
     deploy_args = [sys.executable, str(SCRIPTS_DIR / "deploy_android_device.py")]
     if args.restore_only:
         run_android_deploy([*deploy_args, "--restore-only"])
@@ -436,19 +436,26 @@ def main() -> None:
     p_utm.add_argument("--no-build", action="store_true", help="Skip build; launch existing UTM VM directly")
     p_utm.add_argument("--rebuild", action="store_true", help="Force clean rebuild of ISO and VM image")
 
-    # ---- avd ----
-    p_avd = subparsers.add_parser("avd", help="Build & launch LCL OS on Android AVD emulator")
-    p_avd.add_argument("--arch", "-a", metavar="ARCH", default="x86_64", help="Target architecture (only x86_64 supported on AVD)")
-    p_avd.add_argument("--avd-name", metavar="NAME", default="lcl-phone", help="Target AVD name (default: lcl-phone)")
-    p_avd.add_argument("--show-kernel", action="store_true", help="Display live guest kernel and init boot logs in terminal")
-    p_avd.add_argument("--no-window", action="store_true", help="Run emulator headless without GUI window")
-    p_avd.add_argument("--no-build", action="store_true", help="Skip artifact build & packaging")
-    p_avd.add_argument("--rebuild", action="store_true", help="Force clean rebuild of all targets")
-
     # ---- android ----
     p_android = subparsers.add_parser(
         "android",
-        help="Build & launch LCL OS on a connected rooted ARM64 Android phone",
+        help="Build & launch LCL OS on Android hardware or an x86_64 AVD",
+    )
+    p_android.add_argument(
+        "--avd", action="store_true",
+        help="Launch the x86_64 Android AVD instead of a connected ARM64 device",
+    )
+    p_android.add_argument(
+        "--avd-name", metavar="NAME",
+        help="AVD name for --avd (default: lcl-phone)",
+    )
+    p_android.add_argument(
+        "--show-kernel", action="store_true",
+        help="Display live guest kernel and init logs with --avd",
+    )
+    p_android.add_argument(
+        "--no-window", action="store_true",
+        help="Run the AVD headless with --avd",
     )
     p_android.add_argument(
         "--no-build", action="store_true",
@@ -540,13 +547,30 @@ def main() -> None:
             parser.error("android --jobs must be at least 1.")
         if args.size < 128:
             parser.error("android --size must be at least 128 MB.")
-        if args.push_rootfs and args.compositor_only:
+        if args.avd:
+            physical_only = {
+                "--push-rootfs": args.push_rootfs,
+                "--compositor-only": args.compositor_only,
+                "--no-stop-sysui": args.no_stop_sysui,
+                "--logcat": args.logcat,
+                "--restore-only": args.restore_only,
+                "--software-clients": args.software_clients,
+                "--gestalt": args.gestalt is not None,
+            }
+            incompatible = [name for name, enabled in physical_only.items() if enabled]
+            if incompatible:
+                parser.error(
+                    "android --avd cannot be combined with physical-device option(s): "
+                    + ", ".join(incompatible)
+                )
+        elif args.avd_name or args.show_kernel or args.no_window:
+            parser.error("android --avd-name, --show-kernel, and --no-window require --avd.")
+        elif args.push_rootfs and args.compositor_only:
             parser.error("android --push-rootfs cannot be combined with --compositor-only.")
 
     dispatch = {
         "qemu": cmd_qemu,
         "utm": cmd_utm,
-        "avd": cmd_avd,
         "android": cmd_android,
         "build": cmd_build,
         "package": cmd_package,

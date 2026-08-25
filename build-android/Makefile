@@ -158,6 +158,7 @@ preinstall/fast:
 
 # clear depends
 depend:
+	$(CMAKE_COMMAND) -P /home/superb/Projects/lcl-os/build-android/CMakeFiles/VerifyGlobs.cmake
 	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 1
 .PHONY : depend
 
@@ -188,17 +189,30 @@ lcl-protocol/fast:
 .PHONY : lcl-protocol/fast
 
 #=============================================================================
-# Target rules for targets named lcl-display-scale
+# Target rules for targets named lcl-path-raster
 
 # Build rule for target.
-lcl-display-scale: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-display-scale
-.PHONY : lcl-display-scale
+lcl-path-raster: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-path-raster
+.PHONY : lcl-path-raster
 
 # fast build rule for target.
-lcl-display-scale/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-display-scale.dir/build.make CMakeFiles/lcl-display-scale.dir/build
-.PHONY : lcl-display-scale/fast
+lcl-path-raster/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-path-raster.dir/build.make CMakeFiles/lcl-path-raster.dir/build
+.PHONY : lcl-path-raster/fast
+
+#=============================================================================
+# Target rules for targets named lcl-font-metrics
+
+# Build rule for target.
+lcl-font-metrics: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-font-metrics
+.PHONY : lcl-font-metrics
+
+# fast build rule for target.
+lcl-font-metrics/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/build
+.PHONY : lcl-font-metrics/fast
 
 #=============================================================================
 # Target rules for targets named lcl-session-protocol
@@ -266,6 +280,19 @@ lcl-core-engine/fast:
 .PHONY : lcl-core-engine/fast
 
 #=============================================================================
+# Target rules for targets named lcl-raster
+
+# Build rule for target.
+lcl-raster: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-raster
+.PHONY : lcl-raster
+
+# fast build rule for target.
+lcl-raster/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/build
+.PHONY : lcl-raster/fast
+
+#=============================================================================
 # Target rules for targets named lcl-platform-android
 
 # Build rule for target.
@@ -290,6 +317,84 @@ test_android_platform_services: cmake_check_build_system
 test_android_platform_services/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_platform_services.dir/build.make CMakeFiles/test_android_platform_services.dir/build
 .PHONY : test_android_platform_services/fast
+
+#=============================================================================
+# Target rules for targets named test_android_client_raster
+
+# Build rule for target.
+test_android_client_raster: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 test_android_client_raster
+.PHONY : test_android_client_raster
+
+# fast build rule for target.
+test_android_client_raster/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_client_raster.dir/build.make CMakeFiles/test_android_client_raster.dir/build
+.PHONY : test_android_client_raster/fast
+
+#=============================================================================
+# Target rules for targets named test_android_window_client
+
+# Build rule for target.
+test_android_window_client: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 test_android_window_client
+.PHONY : test_android_window_client
+
+# fast build rule for target.
+test_android_window_client/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_window_client.dir/build.make CMakeFiles/test_android_window_client.dir/build
+.PHONY : test_android_window_client/fast
+
+#=============================================================================
+# Target rules for targets named lcl-desktop-shell
+
+# Build rule for target.
+lcl-desktop-shell: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-desktop-shell
+.PHONY : lcl-desktop-shell
+
+# fast build rule for target.
+lcl-desktop-shell/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell.dir/build.make CMakeFiles/lcl-desktop-shell.dir/build
+.PHONY : lcl-desktop-shell/fast
+
+#=============================================================================
+# Target rules for targets named lcl-mobile-shell
+
+# Build rule for target.
+lcl-mobile-shell: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-mobile-shell
+.PHONY : lcl-mobile-shell
+
+# fast build rule for target.
+lcl-mobile-shell/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-mobile-shell.dir/build.make CMakeFiles/lcl-mobile-shell.dir/build
+.PHONY : lcl-mobile-shell/fast
+
+#=============================================================================
+# Target rules for targets named lcl-terminal
+
+# Build rule for target.
+lcl-terminal: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-terminal
+.PHONY : lcl-terminal
+
+# fast build rule for target.
+lcl-terminal/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/build
+.PHONY : lcl-terminal/fast
+
+#=============================================================================
+# Target rules for targets named lcl-js
+
+# Build rule for target.
+lcl-js: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-js
+.PHONY : lcl-js
+
+# fast build rule for target.
+lcl-js/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/build
+.PHONY : lcl-js/fast
 
 #=============================================================================
 # Target rules for targets named lcl-core-android
@@ -396,6 +501,32 @@ test_conv/fast:
 .PHONY : test_conv/fast
 
 #=============================================================================
+# Target rules for targets named lcl-graphics
+
+# Build rule for target.
+lcl-graphics: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-graphics
+.PHONY : lcl-graphics
+
+# fast build rule for target.
+lcl-graphics/fast:
+	$(MAKE) $(MAKESILENT) -f lcl-graphics/CMakeFiles/lcl-graphics.dir/build.make lcl-graphics/CMakeFiles/lcl-graphics.dir/build
+.PHONY : lcl-graphics/fast
+
+#=============================================================================
+# Target rules for targets named lcl-theme
+
+# Build rule for target.
+lcl-theme: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-theme
+.PHONY : lcl-theme
+
+# fast build rule for target.
+lcl-theme/fast:
+	$(MAKE) $(MAKESILENT) -f lcl-theme/CMakeFiles/lcl-theme.dir/build.make lcl-theme/CMakeFiles/lcl-theme.dir/build
+.PHONY : lcl-theme/fast
+
+#=============================================================================
 # Target rules for targets named lcl-motion
 
 # Build rule for target.
@@ -407,6 +538,178 @@ lcl-motion: cmake_check_build_system
 lcl-motion/fast:
 	$(MAKE) $(MAKESILENT) -f lcl-motion/CMakeFiles/lcl-motion.dir/build.make lcl-motion/CMakeFiles/lcl-motion.dir/build
 .PHONY : lcl-motion/fast
+
+#=============================================================================
+# Target rules for targets named lcl-window-chrome
+
+# Build rule for target.
+lcl-window-chrome: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-window-chrome
+.PHONY : lcl-window-chrome
+
+# fast build rule for target.
+lcl-window-chrome/fast:
+	$(MAKE) $(MAKESILENT) -f lcl-window-chrome/CMakeFiles/lcl-window-chrome.dir/build.make lcl-window-chrome/CMakeFiles/lcl-window-chrome.dir/build
+.PHONY : lcl-window-chrome/fast
+
+#=============================================================================
+# Target rules for targets named lcl-ui
+
+# Build rule for target.
+lcl-ui: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-ui
+.PHONY : lcl-ui
+
+# fast build rule for target.
+lcl-ui/fast:
+	$(MAKE) $(MAKESILENT) -f lcl-ui/CMakeFiles/lcl-ui.dir/build.make lcl-ui/CMakeFiles/lcl-ui.dir/build
+.PHONY : lcl-ui/fast
+
+#=============================================================================
+# Target rules for targets named yogacore
+
+# Build rule for target.
+yogacore: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 yogacore
+.PHONY : yogacore
+
+# fast build rule for target.
+yogacore/fast:
+	$(MAKE) $(MAKESILENT) -f _deps/yoga-build/yoga/CMakeFiles/yogacore.dir/build.make _deps/yoga-build/yoga/CMakeFiles/yogacore.dir/build
+.PHONY : yogacore/fast
+
+#=============================================================================
+# Target rules for targets named lcl_ui_demo
+
+# Build rule for target.
+lcl_ui_demo: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl_ui_demo
+.PHONY : lcl_ui_demo
+
+# fast build rule for target.
+lcl_ui_demo/fast:
+	$(MAKE) $(MAKESILENT) -f apps/ui_demo/CMakeFiles/lcl_ui_demo.dir/build.make apps/ui_demo/CMakeFiles/lcl_ui_demo.dir/build
+.PHONY : lcl_ui_demo/fast
+
+src/apps/desktop_shell/ui_main.o: src/apps/desktop_shell/ui_main.cpp.o
+.PHONY : src/apps/desktop_shell/ui_main.o
+
+# target to build an object file
+src/apps/desktop_shell/ui_main.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell.dir/build.make CMakeFiles/lcl-desktop-shell.dir/src/apps/desktop_shell/ui_main.cpp.o
+.PHONY : src/apps/desktop_shell/ui_main.cpp.o
+
+src/apps/desktop_shell/ui_main.i: src/apps/desktop_shell/ui_main.cpp.i
+.PHONY : src/apps/desktop_shell/ui_main.i
+
+# target to preprocess a source file
+src/apps/desktop_shell/ui_main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell.dir/build.make CMakeFiles/lcl-desktop-shell.dir/src/apps/desktop_shell/ui_main.cpp.i
+.PHONY : src/apps/desktop_shell/ui_main.cpp.i
+
+src/apps/desktop_shell/ui_main.s: src/apps/desktop_shell/ui_main.cpp.s
+.PHONY : src/apps/desktop_shell/ui_main.s
+
+# target to generate assembly for a file
+src/apps/desktop_shell/ui_main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell.dir/build.make CMakeFiles/lcl-desktop-shell.dir/src/apps/desktop_shell/ui_main.cpp.s
+.PHONY : src/apps/desktop_shell/ui_main.cpp.s
+
+src/apps/mobile_shell/ui_main.o: src/apps/mobile_shell/ui_main.cpp.o
+.PHONY : src/apps/mobile_shell/ui_main.o
+
+# target to build an object file
+src/apps/mobile_shell/ui_main.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-mobile-shell.dir/build.make CMakeFiles/lcl-mobile-shell.dir/src/apps/mobile_shell/ui_main.cpp.o
+.PHONY : src/apps/mobile_shell/ui_main.cpp.o
+
+src/apps/mobile_shell/ui_main.i: src/apps/mobile_shell/ui_main.cpp.i
+.PHONY : src/apps/mobile_shell/ui_main.i
+
+# target to preprocess a source file
+src/apps/mobile_shell/ui_main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-mobile-shell.dir/build.make CMakeFiles/lcl-mobile-shell.dir/src/apps/mobile_shell/ui_main.cpp.i
+.PHONY : src/apps/mobile_shell/ui_main.cpp.i
+
+src/apps/mobile_shell/ui_main.s: src/apps/mobile_shell/ui_main.cpp.s
+.PHONY : src/apps/mobile_shell/ui_main.s
+
+# target to generate assembly for a file
+src/apps/mobile_shell/ui_main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-mobile-shell.dir/build.make CMakeFiles/lcl-mobile-shell.dir/src/apps/mobile_shell/ui_main.cpp.s
+.PHONY : src/apps/mobile_shell/ui_main.cpp.s
+
+src/apps/terminal/terminal_app.o: src/apps/terminal/terminal_app.cpp.o
+.PHONY : src/apps/terminal/terminal_app.o
+
+# target to build an object file
+src/apps/terminal/terminal_app.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/apps/terminal/terminal_app.cpp.o
+.PHONY : src/apps/terminal/terminal_app.cpp.o
+
+src/apps/terminal/terminal_app.i: src/apps/terminal/terminal_app.cpp.i
+.PHONY : src/apps/terminal/terminal_app.i
+
+# target to preprocess a source file
+src/apps/terminal/terminal_app.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/apps/terminal/terminal_app.cpp.i
+.PHONY : src/apps/terminal/terminal_app.cpp.i
+
+src/apps/terminal/terminal_app.s: src/apps/terminal/terminal_app.cpp.s
+.PHONY : src/apps/terminal/terminal_app.s
+
+# target to generate assembly for a file
+src/apps/terminal/terminal_app.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/apps/terminal/terminal_app.cpp.s
+.PHONY : src/apps/terminal/terminal_app.cpp.s
+
+src/apps/terminal/terminal_view.o: src/apps/terminal/terminal_view.cpp.o
+.PHONY : src/apps/terminal/terminal_view.o
+
+# target to build an object file
+src/apps/terminal/terminal_view.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/apps/terminal/terminal_view.cpp.o
+.PHONY : src/apps/terminal/terminal_view.cpp.o
+
+src/apps/terminal/terminal_view.i: src/apps/terminal/terminal_view.cpp.i
+.PHONY : src/apps/terminal/terminal_view.i
+
+# target to preprocess a source file
+src/apps/terminal/terminal_view.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/apps/terminal/terminal_view.cpp.i
+.PHONY : src/apps/terminal/terminal_view.cpp.i
+
+src/apps/terminal/terminal_view.s: src/apps/terminal/terminal_view.cpp.s
+.PHONY : src/apps/terminal/terminal_view.s
+
+# target to generate assembly for a file
+src/apps/terminal/terminal_view.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/apps/terminal/terminal_view.cpp.s
+.PHONY : src/apps/terminal/terminal_view.cpp.s
+
+src/binding/js_runtime.o: src/binding/js_runtime.cpp.o
+.PHONY : src/binding/js_runtime.o
+
+# target to build an object file
+src/binding/js_runtime.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_runtime.cpp.o
+.PHONY : src/binding/js_runtime.cpp.o
+
+src/binding/js_runtime.i: src/binding/js_runtime.cpp.i
+.PHONY : src/binding/js_runtime.i
+
+# target to preprocess a source file
+src/binding/js_runtime.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_runtime.cpp.i
+.PHONY : src/binding/js_runtime.cpp.i
+
+src/binding/js_runtime.s: src/binding/js_runtime.cpp.s
+.PHONY : src/binding/js_runtime.s
+
+# target to generate assembly for a file
+src/binding/js_runtime.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_runtime.cpp.s
+.PHONY : src/binding/js_runtime.cpp.s
 
 src/core/app/app_bundle_parser.o: src/core/app/app_bundle_parser.cpp.o
 .PHONY : src/core/app/app_bundle_parser.o
@@ -600,29 +903,29 @@ src/core/compositor/system_surface_policy.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/system_surface_policy.cpp.s
 .PHONY : src/core/compositor/system_surface_policy.cpp.s
 
-src/core/display/display_scale.o: src/core/display/display_scale.cpp.o
-.PHONY : src/core/display/display_scale.o
+src/core/compositor/windowing_policy.o: src/core/compositor/windowing_policy.cpp.o
+.PHONY : src/core/compositor/windowing_policy.o
 
 # target to build an object file
-src/core/display/display_scale.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-display-scale.dir/build.make CMakeFiles/lcl-display-scale.dir/src/core/display/display_scale.cpp.o
-.PHONY : src/core/display/display_scale.cpp.o
+src/core/compositor/windowing_policy.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/windowing_policy.cpp.o
+.PHONY : src/core/compositor/windowing_policy.cpp.o
 
-src/core/display/display_scale.i: src/core/display/display_scale.cpp.i
-.PHONY : src/core/display/display_scale.i
+src/core/compositor/windowing_policy.i: src/core/compositor/windowing_policy.cpp.i
+.PHONY : src/core/compositor/windowing_policy.i
 
 # target to preprocess a source file
-src/core/display/display_scale.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-display-scale.dir/build.make CMakeFiles/lcl-display-scale.dir/src/core/display/display_scale.cpp.i
-.PHONY : src/core/display/display_scale.cpp.i
+src/core/compositor/windowing_policy.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/windowing_policy.cpp.i
+.PHONY : src/core/compositor/windowing_policy.cpp.i
 
-src/core/display/display_scale.s: src/core/display/display_scale.cpp.s
-.PHONY : src/core/display/display_scale.s
+src/core/compositor/windowing_policy.s: src/core/compositor/windowing_policy.cpp.s
+.PHONY : src/core/compositor/windowing_policy.s
 
 # target to generate assembly for a file
-src/core/display/display_scale.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-display-scale.dir/build.make CMakeFiles/lcl-display-scale.dir/src/core/display/display_scale.cpp.s
-.PHONY : src/core/display/display_scale.cpp.s
+src/core/compositor/windowing_policy.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/windowing_policy.cpp.s
+.PHONY : src/core/compositor/windowing_policy.cpp.s
 
 src/core/input/input_manager.o: src/core/input/input_manager.cpp.o
 .PHONY : src/core/input/input_manager.o
@@ -648,12 +951,37 @@ src/core/input/input_manager.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/input/input_manager.cpp.s
 .PHONY : src/core/input/input_manager.cpp.s
 
+src/core/input/system_gesture_arena.o: src/core/input/system_gesture_arena.cpp.o
+.PHONY : src/core/input/system_gesture_arena.o
+
+# target to build an object file
+src/core/input/system_gesture_arena.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/input/system_gesture_arena.cpp.o
+.PHONY : src/core/input/system_gesture_arena.cpp.o
+
+src/core/input/system_gesture_arena.i: src/core/input/system_gesture_arena.cpp.i
+.PHONY : src/core/input/system_gesture_arena.i
+
+# target to preprocess a source file
+src/core/input/system_gesture_arena.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/input/system_gesture_arena.cpp.i
+.PHONY : src/core/input/system_gesture_arena.cpp.i
+
+src/core/input/system_gesture_arena.s: src/core/input/system_gesture_arena.cpp.s
+.PHONY : src/core/input/system_gesture_arena.s
+
+# target to generate assembly for a file
+src/core/input/system_gesture_arena.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/input/system_gesture_arena.cpp.s
+.PHONY : src/core/input/system_gesture_arena.cpp.s
+
 src/core/ipc/ipc_manager.o: src/core/ipc/ipc_manager.cpp.o
 .PHONY : src/core/ipc/ipc_manager.o
 
 # target to build an object file
 src/core/ipc/ipc_manager.cpp.o:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/ipc/ipc_manager.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell.dir/build.make CMakeFiles/lcl-desktop-shell.dir/src/core/ipc/ipc_manager.cpp.o
 .PHONY : src/core/ipc/ipc_manager.cpp.o
 
 src/core/ipc/ipc_manager.i: src/core/ipc/ipc_manager.cpp.i
@@ -662,6 +990,7 @@ src/core/ipc/ipc_manager.i: src/core/ipc/ipc_manager.cpp.i
 # target to preprocess a source file
 src/core/ipc/ipc_manager.cpp.i:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/ipc/ipc_manager.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell.dir/build.make CMakeFiles/lcl-desktop-shell.dir/src/core/ipc/ipc_manager.cpp.i
 .PHONY : src/core/ipc/ipc_manager.cpp.i
 
 src/core/ipc/ipc_manager.s: src/core/ipc/ipc_manager.cpp.s
@@ -670,6 +999,7 @@ src/core/ipc/ipc_manager.s: src/core/ipc/ipc_manager.cpp.s
 # target to generate assembly for a file
 src/core/ipc/ipc_manager.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/ipc/ipc_manager.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-desktop-shell.dir/build.make CMakeFiles/lcl-desktop-shell.dir/src/core/ipc/ipc_manager.cpp.s
 .PHONY : src/core/ipc/ipc_manager.cpp.s
 
 src/core/ipc/lcl_protocol.o: src/core/ipc/lcl_protocol.cpp.o
@@ -912,6 +1242,30 @@ src/core/shell/shell_state_model.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-shell-state.dir/build.make CMakeFiles/lcl-shell-state.dir/src/core/shell/shell_state_model.cpp.s
 .PHONY : src/core/shell/shell_state_model.cpp.s
 
+src/core/terminal/pty_manager.o: src/core/terminal/pty_manager.cpp.o
+.PHONY : src/core/terminal/pty_manager.o
+
+# target to build an object file
+src/core/terminal/pty_manager.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/core/terminal/pty_manager.cpp.o
+.PHONY : src/core/terminal/pty_manager.cpp.o
+
+src/core/terminal/pty_manager.i: src/core/terminal/pty_manager.cpp.i
+.PHONY : src/core/terminal/pty_manager.i
+
+# target to preprocess a source file
+src/core/terminal/pty_manager.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/core/terminal/pty_manager.cpp.i
+.PHONY : src/core/terminal/pty_manager.cpp.i
+
+src/core/terminal/pty_manager.s: src/core/terminal/pty_manager.cpp.s
+.PHONY : src/core/terminal/pty_manager.s
+
+# target to generate assembly for a file
+src/core/terminal/pty_manager.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/core/terminal/pty_manager.cpp.s
+.PHONY : src/core/terminal/pty_manager.cpp.s
+
 src/platform/android/android_display_backend.o: src/platform/android/android_display_backend.cpp.o
 .PHONY : src/platform/android/android_display_backend.o
 
@@ -959,6 +1313,30 @@ src/platform/android/android_graphics_context.s: src/platform/android/android_gr
 src/platform/android/android_graphics_context.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/android_graphics_context.cpp.s
 .PHONY : src/platform/android/android_graphics_context.cpp.s
+
+src/platform/android/android_hidl_display_backend.o: src/platform/android/android_hidl_display_backend.cpp.o
+.PHONY : src/platform/android/android_hidl_display_backend.o
+
+# target to build an object file
+src/platform/android/android_hidl_display_backend.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/android_hidl_display_backend.cpp.o
+.PHONY : src/platform/android/android_hidl_display_backend.cpp.o
+
+src/platform/android/android_hidl_display_backend.i: src/platform/android/android_hidl_display_backend.cpp.i
+.PHONY : src/platform/android/android_hidl_display_backend.i
+
+# target to preprocess a source file
+src/platform/android/android_hidl_display_backend.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/android_hidl_display_backend.cpp.i
+.PHONY : src/platform/android/android_hidl_display_backend.cpp.i
+
+src/platform/android/android_hidl_display_backend.s: src/platform/android/android_hidl_display_backend.cpp.s
+.PHONY : src/platform/android/android_hidl_display_backend.s
+
+# target to generate assembly for a file
+src/platform/android/android_hidl_display_backend.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/android_hidl_display_backend.cpp.s
+.PHONY : src/platform/android/android_hidl_display_backend.cpp.s
 
 src/platform/android/android_input_backend.o: src/platform/android/android_input_backend.cpp.o
 .PHONY : src/platform/android/android_input_backend.o
@@ -3240,6 +3618,30 @@ src/platform/android/main_android.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-android.dir/build.make CMakeFiles/lcl-core-android.dir/src/platform/android/main_android.cpp.s
 .PHONY : src/platform/android/main_android.cpp.s
 
+src/platform/common/gestalt.o: src/platform/common/gestalt.cpp.o
+.PHONY : src/platform/common/gestalt.o
+
+# target to build an object file
+src/platform/common/gestalt.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-common.dir/build.make CMakeFiles/lcl-platform-common.dir/src/platform/common/gestalt.cpp.o
+.PHONY : src/platform/common/gestalt.cpp.o
+
+src/platform/common/gestalt.i: src/platform/common/gestalt.cpp.i
+.PHONY : src/platform/common/gestalt.i
+
+# target to preprocess a source file
+src/platform/common/gestalt.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-common.dir/build.make CMakeFiles/lcl-platform-common.dir/src/platform/common/gestalt.cpp.i
+.PHONY : src/platform/common/gestalt.cpp.i
+
+src/platform/common/gestalt.s: src/platform/common/gestalt.cpp.s
+.PHONY : src/platform/common/gestalt.s
+
+# target to generate assembly for a file
+src/platform/common/gestalt.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-common.dir/build.make CMakeFiles/lcl-platform-common.dir/src/platform/common/gestalt.cpp.s
+.PHONY : src/platform/common/gestalt.cpp.s
+
 src/platform/common/keyboard_mapper.o: src/platform/common/keyboard_mapper.cpp.o
 .PHONY : src/platform/common/keyboard_mapper.o
 
@@ -3264,12 +3666,60 @@ src/platform/common/keyboard_mapper.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-common.dir/build.make CMakeFiles/lcl-platform-common.dir/src/platform/common/keyboard_mapper.cpp.s
 .PHONY : src/platform/common/keyboard_mapper.cpp.s
 
+src/platform/common/output_scale.o: src/platform/common/output_scale.cpp.o
+.PHONY : src/platform/common/output_scale.o
+
+# target to build an object file
+src/platform/common/output_scale.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-common.dir/build.make CMakeFiles/lcl-platform-common.dir/src/platform/common/output_scale.cpp.o
+.PHONY : src/platform/common/output_scale.cpp.o
+
+src/platform/common/output_scale.i: src/platform/common/output_scale.cpp.i
+.PHONY : src/platform/common/output_scale.i
+
+# target to preprocess a source file
+src/platform/common/output_scale.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-common.dir/build.make CMakeFiles/lcl-platform-common.dir/src/platform/common/output_scale.cpp.i
+.PHONY : src/platform/common/output_scale.cpp.i
+
+src/platform/common/output_scale.s: src/platform/common/output_scale.cpp.s
+.PHONY : src/platform/common/output_scale.s
+
+# target to generate assembly for a file
+src/platform/common/output_scale.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-common.dir/build.make CMakeFiles/lcl-platform-common.dir/src/platform/common/output_scale.cpp.s
+.PHONY : src/platform/common/output_scale.cpp.s
+
+src/render/client_egl_context.o: src/render/client_egl_context.cpp.o
+.PHONY : src/render/client_egl_context.o
+
+# target to build an object file
+src/render/client_egl_context.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/client_egl_context.cpp.o
+.PHONY : src/render/client_egl_context.cpp.o
+
+src/render/client_egl_context.i: src/render/client_egl_context.cpp.i
+.PHONY : src/render/client_egl_context.i
+
+# target to preprocess a source file
+src/render/client_egl_context.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/client_egl_context.cpp.i
+.PHONY : src/render/client_egl_context.cpp.i
+
+src/render/client_egl_context.s: src/render/client_egl_context.cpp.s
+.PHONY : src/render/client_egl_context.s
+
+# target to generate assembly for a file
+src/render/client_egl_context.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/client_egl_context.cpp.s
+.PHONY : src/render/client_egl_context.cpp.s
+
 src/render/font_renderer.o: src/render/font_renderer.cpp.o
 .PHONY : src/render/font_renderer.o
 
 # target to build an object file
 src/render/font_renderer.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/font_renderer.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/font_renderer.cpp.o
 .PHONY : src/render/font_renderer.cpp.o
 
 src/render/font_renderer.i: src/render/font_renderer.cpp.i
@@ -3277,7 +3727,7 @@ src/render/font_renderer.i: src/render/font_renderer.cpp.i
 
 # target to preprocess a source file
 src/render/font_renderer.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/font_renderer.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/font_renderer.cpp.i
 .PHONY : src/render/font_renderer.cpp.i
 
 src/render/font_renderer.s: src/render/font_renderer.cpp.s
@@ -3285,8 +3735,83 @@ src/render/font_renderer.s: src/render/font_renderer.cpp.s
 
 # target to generate assembly for a file
 src/render/font_renderer.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/font_renderer.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/font_renderer.cpp.s
 .PHONY : src/render/font_renderer.cpp.s
+
+src/render/path_rasterizer.o: src/render/path_rasterizer.cpp.o
+.PHONY : src/render/path_rasterizer.o
+
+# target to build an object file
+src/render/path_rasterizer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-path-raster.dir/build.make CMakeFiles/lcl-path-raster.dir/src/render/path_rasterizer.cpp.o
+.PHONY : src/render/path_rasterizer.cpp.o
+
+src/render/path_rasterizer.i: src/render/path_rasterizer.cpp.i
+.PHONY : src/render/path_rasterizer.i
+
+# target to preprocess a source file
+src/render/path_rasterizer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-path-raster.dir/build.make CMakeFiles/lcl-path-raster.dir/src/render/path_rasterizer.cpp.i
+.PHONY : src/render/path_rasterizer.cpp.i
+
+src/render/path_rasterizer.s: src/render/path_rasterizer.cpp.s
+.PHONY : src/render/path_rasterizer.s
+
+# target to generate assembly for a file
+src/render/path_rasterizer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-path-raster.dir/build.make CMakeFiles/lcl-path-raster.dir/src/render/path_rasterizer.cpp.s
+.PHONY : src/render/path_rasterizer.cpp.s
+
+src/render/raster_canvas.o: src/render/raster_canvas.cpp.o
+.PHONY : src/render/raster_canvas.o
+
+# target to build an object file
+src/render/raster_canvas.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/raster_canvas.cpp.o
+.PHONY : src/render/raster_canvas.cpp.o
+
+src/render/raster_canvas.i: src/render/raster_canvas.cpp.i
+.PHONY : src/render/raster_canvas.i
+
+# target to preprocess a source file
+src/render/raster_canvas.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/raster_canvas.cpp.i
+.PHONY : src/render/raster_canvas.cpp.i
+
+src/render/raster_canvas.s: src/render/raster_canvas.cpp.s
+.PHONY : src/render/raster_canvas.s
+
+# target to generate assembly for a file
+src/render/raster_canvas.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/raster_canvas.cpp.s
+.PHONY : src/render/raster_canvas.cpp.s
+
+src/render/raster_renderer.o: src/render/raster_renderer.cpp.o
+.PHONY : src/render/raster_renderer.o
+
+# target to build an object file
+src/render/raster_renderer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/raster_renderer.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/raster_renderer.cpp.o
+.PHONY : src/render/raster_renderer.cpp.o
+
+src/render/raster_renderer.i: src/render/raster_renderer.cpp.i
+.PHONY : src/render/raster_renderer.i
+
+# target to preprocess a source file
+src/render/raster_renderer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/raster_renderer.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/raster_renderer.cpp.i
+.PHONY : src/render/raster_renderer.cpp.i
+
+src/render/raster_renderer.s: src/render/raster_renderer.cpp.s
+.PHONY : src/render/raster_renderer.s
+
+# target to generate assembly for a file
+src/render/raster_renderer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/raster_renderer.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/raster_renderer.cpp.s
+.PHONY : src/render/raster_renderer.cpp.s
 
 src/render/renderer.o: src/render/renderer.cpp.o
 .PHONY : src/render/renderer.o
@@ -3312,53 +3837,29 @@ src/render/renderer.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/renderer.cpp.s
 .PHONY : src/render/renderer.cpp.s
 
-src/render/skia_renderer.o: src/render/skia_renderer.cpp.o
-.PHONY : src/render/skia_renderer.o
+src/render/text_metrics.o: src/render/text_metrics.cpp.o
+.PHONY : src/render/text_metrics.o
 
 # target to build an object file
-src/render/skia_renderer.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/skia_renderer.cpp.o
-.PHONY : src/render/skia_renderer.cpp.o
+src/render/text_metrics.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/text_metrics.cpp.o
+.PHONY : src/render/text_metrics.cpp.o
 
-src/render/skia_renderer.i: src/render/skia_renderer.cpp.i
-.PHONY : src/render/skia_renderer.i
-
-# target to preprocess a source file
-src/render/skia_renderer.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/skia_renderer.cpp.i
-.PHONY : src/render/skia_renderer.cpp.i
-
-src/render/skia_renderer.s: src/render/skia_renderer.cpp.s
-.PHONY : src/render/skia_renderer.s
-
-# target to generate assembly for a file
-src/render/skia_renderer.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/skia_renderer.cpp.s
-.PHONY : src/render/skia_renderer.cpp.s
-
-src/render/window_chrome_widget.o: src/render/window_chrome_widget.cpp.o
-.PHONY : src/render/window_chrome_widget.o
-
-# target to build an object file
-src/render/window_chrome_widget.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/window_chrome_widget.cpp.o
-.PHONY : src/render/window_chrome_widget.cpp.o
-
-src/render/window_chrome_widget.i: src/render/window_chrome_widget.cpp.i
-.PHONY : src/render/window_chrome_widget.i
+src/render/text_metrics.i: src/render/text_metrics.cpp.i
+.PHONY : src/render/text_metrics.i
 
 # target to preprocess a source file
-src/render/window_chrome_widget.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/window_chrome_widget.cpp.i
-.PHONY : src/render/window_chrome_widget.cpp.i
+src/render/text_metrics.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/text_metrics.cpp.i
+.PHONY : src/render/text_metrics.cpp.i
 
-src/render/window_chrome_widget.s: src/render/window_chrome_widget.cpp.s
-.PHONY : src/render/window_chrome_widget.s
+src/render/text_metrics.s: src/render/text_metrics.cpp.s
+.PHONY : src/render/text_metrics.s
 
 # target to generate assembly for a file
-src/render/window_chrome_widget.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/window_chrome_widget.cpp.s
-.PHONY : src/render/window_chrome_widget.cpp.s
+src/render/text_metrics.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/text_metrics.cpp.s
+.PHONY : src/render/text_metrics.cpp.s
 
 src/render/window_manager.o: src/render/window_manager.cpp.o
 .PHONY : src/render/window_manager.o
@@ -3384,6 +3885,78 @@ src/render/window_manager.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/window_manager.cpp.s
 .PHONY : src/render/window_manager.cpp.s
 
+src/tools/js_main.o: src/tools/js_main.cpp.o
+.PHONY : src/tools/js_main.o
+
+# target to build an object file
+src/tools/js_main.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/tools/js_main.cpp.o
+.PHONY : src/tools/js_main.cpp.o
+
+src/tools/js_main.i: src/tools/js_main.cpp.i
+.PHONY : src/tools/js_main.i
+
+# target to preprocess a source file
+src/tools/js_main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/tools/js_main.cpp.i
+.PHONY : src/tools/js_main.cpp.i
+
+src/tools/js_main.s: src/tools/js_main.cpp.s
+.PHONY : src/tools/js_main.s
+
+# target to generate assembly for a file
+src/tools/js_main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/tools/js_main.cpp.s
+.PHONY : src/tools/js_main.cpp.s
+
+src/tools/terminal_main.o: src/tools/terminal_main.cpp.o
+.PHONY : src/tools/terminal_main.o
+
+# target to build an object file
+src/tools/terminal_main.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/tools/terminal_main.cpp.o
+.PHONY : src/tools/terminal_main.cpp.o
+
+src/tools/terminal_main.i: src/tools/terminal_main.cpp.i
+.PHONY : src/tools/terminal_main.i
+
+# target to preprocess a source file
+src/tools/terminal_main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/tools/terminal_main.cpp.i
+.PHONY : src/tools/terminal_main.cpp.i
+
+src/tools/terminal_main.s: src/tools/terminal_main.cpp.s
+.PHONY : src/tools/terminal_main.s
+
+# target to generate assembly for a file
+src/tools/terminal_main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/tools/terminal_main.cpp.s
+.PHONY : src/tools/terminal_main.cpp.s
+
+tests/android/test_android_client_raster.o: tests/android/test_android_client_raster.cpp.o
+.PHONY : tests/android/test_android_client_raster.o
+
+# target to build an object file
+tests/android/test_android_client_raster.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_client_raster.dir/build.make CMakeFiles/test_android_client_raster.dir/tests/android/test_android_client_raster.cpp.o
+.PHONY : tests/android/test_android_client_raster.cpp.o
+
+tests/android/test_android_client_raster.i: tests/android/test_android_client_raster.cpp.i
+.PHONY : tests/android/test_android_client_raster.i
+
+# target to preprocess a source file
+tests/android/test_android_client_raster.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_client_raster.dir/build.make CMakeFiles/test_android_client_raster.dir/tests/android/test_android_client_raster.cpp.i
+.PHONY : tests/android/test_android_client_raster.cpp.i
+
+tests/android/test_android_client_raster.s: tests/android/test_android_client_raster.cpp.s
+.PHONY : tests/android/test_android_client_raster.s
+
+# target to generate assembly for a file
+tests/android/test_android_client_raster.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_client_raster.dir/build.make CMakeFiles/test_android_client_raster.dir/tests/android/test_android_client_raster.cpp.s
+.PHONY : tests/android/test_android_client_raster.cpp.s
+
 tests/android/test_android_platform_services.o: tests/android/test_android_platform_services.cpp.o
 .PHONY : tests/android/test_android_platform_services.o
 
@@ -3408,6 +3981,30 @@ tests/android/test_android_platform_services.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_platform_services.dir/build.make CMakeFiles/test_android_platform_services.dir/tests/android/test_android_platform_services.cpp.s
 .PHONY : tests/android/test_android_platform_services.cpp.s
 
+tests/android/test_android_window_client.o: tests/android/test_android_window_client.cpp.o
+.PHONY : tests/android/test_android_window_client.o
+
+# target to build an object file
+tests/android/test_android_window_client.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_window_client.dir/build.make CMakeFiles/test_android_window_client.dir/tests/android/test_android_window_client.cpp.o
+.PHONY : tests/android/test_android_window_client.cpp.o
+
+tests/android/test_android_window_client.i: tests/android/test_android_window_client.cpp.i
+.PHONY : tests/android/test_android_window_client.i
+
+# target to preprocess a source file
+tests/android/test_android_window_client.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_window_client.dir/build.make CMakeFiles/test_android_window_client.dir/tests/android/test_android_window_client.cpp.i
+.PHONY : tests/android/test_android_window_client.cpp.i
+
+tests/android/test_android_window_client.s: tests/android/test_android_window_client.cpp.s
+.PHONY : tests/android/test_android_window_client.s
+
+# target to generate assembly for a file
+tests/android/test_android_window_client.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_android_window_client.dir/build.make CMakeFiles/test_android_window_client.dir/tests/android/test_android_window_client.cpp.s
+.PHONY : tests/android/test_android_window_client.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -3423,22 +4020,51 @@ help:
 	@echo "... function_source"
 	@echo "... lcl-core-android"
 	@echo "... lcl-core-engine"
-	@echo "... lcl-display-scale"
+	@echo "... lcl-desktop-shell"
+	@echo "... lcl-font-metrics"
+	@echo "... lcl-graphics"
+	@echo "... lcl-js"
+	@echo "... lcl-mobile-shell"
 	@echo "... lcl-motion"
+	@echo "... lcl-path-raster"
 	@echo "... lcl-platform-android"
 	@echo "... lcl-platform-common"
 	@echo "... lcl-protocol"
+	@echo "... lcl-raster"
 	@echo "... lcl-render"
 	@echo "... lcl-session"
 	@echo "... lcl-session-protocol"
 	@echo "... lcl-shell-state"
+	@echo "... lcl-terminal"
+	@echo "... lcl-theme"
+	@echo "... lcl-ui"
+	@echo "... lcl-window-chrome"
+	@echo "... lcl_ui_demo"
 	@echo "... qjs"
 	@echo "... qjs_exe"
 	@echo "... qjsc"
 	@echo "... run-test262"
+	@echo "... test_android_client_raster"
 	@echo "... test_android_platform_services"
+	@echo "... test_android_window_client"
 	@echo "... test_conv"
 	@echo "... unicode_gen"
+	@echo "... yogacore"
+	@echo "... src/apps/desktop_shell/ui_main.o"
+	@echo "... src/apps/desktop_shell/ui_main.i"
+	@echo "... src/apps/desktop_shell/ui_main.s"
+	@echo "... src/apps/mobile_shell/ui_main.o"
+	@echo "... src/apps/mobile_shell/ui_main.i"
+	@echo "... src/apps/mobile_shell/ui_main.s"
+	@echo "... src/apps/terminal/terminal_app.o"
+	@echo "... src/apps/terminal/terminal_app.i"
+	@echo "... src/apps/terminal/terminal_app.s"
+	@echo "... src/apps/terminal/terminal_view.o"
+	@echo "... src/apps/terminal/terminal_view.i"
+	@echo "... src/apps/terminal/terminal_view.s"
+	@echo "... src/binding/js_runtime.o"
+	@echo "... src/binding/js_runtime.i"
+	@echo "... src/binding/js_runtime.s"
 	@echo "... src/core/app/app_bundle_parser.o"
 	@echo "... src/core/app/app_bundle_parser.i"
 	@echo "... src/core/app/app_bundle_parser.s"
@@ -3463,12 +4089,15 @@ help:
 	@echo "... src/core/compositor/system_surface_policy.o"
 	@echo "... src/core/compositor/system_surface_policy.i"
 	@echo "... src/core/compositor/system_surface_policy.s"
-	@echo "... src/core/display/display_scale.o"
-	@echo "... src/core/display/display_scale.i"
-	@echo "... src/core/display/display_scale.s"
+	@echo "... src/core/compositor/windowing_policy.o"
+	@echo "... src/core/compositor/windowing_policy.i"
+	@echo "... src/core/compositor/windowing_policy.s"
 	@echo "... src/core/input/input_manager.o"
 	@echo "... src/core/input/input_manager.i"
 	@echo "... src/core/input/input_manager.s"
+	@echo "... src/core/input/system_gesture_arena.o"
+	@echo "... src/core/input/system_gesture_arena.i"
+	@echo "... src/core/input/system_gesture_arena.s"
 	@echo "... src/core/ipc/ipc_manager.o"
 	@echo "... src/core/ipc/ipc_manager.i"
 	@echo "... src/core/ipc/ipc_manager.s"
@@ -3502,12 +4131,18 @@ help:
 	@echo "... src/core/shell/shell_state_model.o"
 	@echo "... src/core/shell/shell_state_model.i"
 	@echo "... src/core/shell/shell_state_model.s"
+	@echo "... src/core/terminal/pty_manager.o"
+	@echo "... src/core/terminal/pty_manager.i"
+	@echo "... src/core/terminal/pty_manager.s"
 	@echo "... src/platform/android/android_display_backend.o"
 	@echo "... src/platform/android/android_display_backend.i"
 	@echo "... src/platform/android/android_display_backend.s"
 	@echo "... src/platform/android/android_graphics_context.o"
 	@echo "... src/platform/android/android_graphics_context.i"
 	@echo "... src/platform/android/android_graphics_context.s"
+	@echo "... src/platform/android/android_hidl_display_backend.o"
+	@echo "... src/platform/android/android_hidl_display_backend.i"
+	@echo "... src/platform/android/android_hidl_display_backend.s"
 	@echo "... src/platform/android/android_input_backend.o"
 	@echo "... src/platform/android/android_input_backend.i"
 	@echo "... src/platform/android/android_input_backend.s"
@@ -3793,27 +4428,54 @@ help:
 	@echo "... src/platform/android/main_android.o"
 	@echo "... src/platform/android/main_android.i"
 	@echo "... src/platform/android/main_android.s"
+	@echo "... src/platform/common/gestalt.o"
+	@echo "... src/platform/common/gestalt.i"
+	@echo "... src/platform/common/gestalt.s"
 	@echo "... src/platform/common/keyboard_mapper.o"
 	@echo "... src/platform/common/keyboard_mapper.i"
 	@echo "... src/platform/common/keyboard_mapper.s"
+	@echo "... src/platform/common/output_scale.o"
+	@echo "... src/platform/common/output_scale.i"
+	@echo "... src/platform/common/output_scale.s"
+	@echo "... src/render/client_egl_context.o"
+	@echo "... src/render/client_egl_context.i"
+	@echo "... src/render/client_egl_context.s"
 	@echo "... src/render/font_renderer.o"
 	@echo "... src/render/font_renderer.i"
 	@echo "... src/render/font_renderer.s"
+	@echo "... src/render/path_rasterizer.o"
+	@echo "... src/render/path_rasterizer.i"
+	@echo "... src/render/path_rasterizer.s"
+	@echo "... src/render/raster_canvas.o"
+	@echo "... src/render/raster_canvas.i"
+	@echo "... src/render/raster_canvas.s"
+	@echo "... src/render/raster_renderer.o"
+	@echo "... src/render/raster_renderer.i"
+	@echo "... src/render/raster_renderer.s"
 	@echo "... src/render/renderer.o"
 	@echo "... src/render/renderer.i"
 	@echo "... src/render/renderer.s"
-	@echo "... src/render/skia_renderer.o"
-	@echo "... src/render/skia_renderer.i"
-	@echo "... src/render/skia_renderer.s"
-	@echo "... src/render/window_chrome_widget.o"
-	@echo "... src/render/window_chrome_widget.i"
-	@echo "... src/render/window_chrome_widget.s"
+	@echo "... src/render/text_metrics.o"
+	@echo "... src/render/text_metrics.i"
+	@echo "... src/render/text_metrics.s"
 	@echo "... src/render/window_manager.o"
 	@echo "... src/render/window_manager.i"
 	@echo "... src/render/window_manager.s"
+	@echo "... src/tools/js_main.o"
+	@echo "... src/tools/js_main.i"
+	@echo "... src/tools/js_main.s"
+	@echo "... src/tools/terminal_main.o"
+	@echo "... src/tools/terminal_main.i"
+	@echo "... src/tools/terminal_main.s"
+	@echo "... tests/android/test_android_client_raster.o"
+	@echo "... tests/android/test_android_client_raster.i"
+	@echo "... tests/android/test_android_client_raster.s"
 	@echo "... tests/android/test_android_platform_services.o"
 	@echo "... tests/android/test_android_platform_services.i"
 	@echo "... tests/android/test_android_platform_services.s"
+	@echo "... tests/android/test_android_window_client.o"
+	@echo "... tests/android/test_android_window_client.i"
+	@echo "... tests/android/test_android_window_client.s"
 .PHONY : help
 
 
@@ -3825,6 +4487,7 @@ help:
 # No rule that depends on this can have commands that come from listfiles
 # because they might be regenerated.
 cmake_check_build_system:
+	$(CMAKE_COMMAND) -P /home/superb/Projects/lcl-os/build-android/CMakeFiles/VerifyGlobs.cmake
 	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 0
 .PHONY : cmake_check_build_system
 

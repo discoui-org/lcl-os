@@ -54,9 +54,9 @@ LCL OS provides a unified CLI driver via `./main.py`:
 
 ### 4. Run in Android AVD Target (Stage 4C.3 Substrate)
 ```bash
-./main.py avd
+./main.py android --avd
 ```
-*Boots the Android Emulator directly attaching the exact, byte-for-byte canonical rootfs (`lcl-rootfs-x86_64.ext4`).*
+*Builds the x86_64 userspace in Docker, then boots the Android Emulator directly attaching the exact, byte-for-byte canonical rootfs (`lcl-rootfs-x86_64.ext4`).*
 
 ### 5. Run on a Rooted ARM64 Android Phone (Composer3 AIDL / Composer 2.2–2.4 HIDL)
 

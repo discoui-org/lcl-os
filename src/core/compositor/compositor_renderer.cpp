@@ -233,7 +233,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
     if (useMobilePresentation) {
         // WindowManager order is bottom-to-top. The uppermost visible normal
         // surface is the sole authority for launcher coverage; minimized apps
-        // must not keep Home blurred behind the launcher.
+        // must not keep Home dimmed behind the launcher.
         for (auto winIt = windowManager.getWindows().rbegin();
              winIt != windowManager.getWindows().rend(); ++winIt) {
             if (winIt->isMinimized) continue;
@@ -623,25 +623,19 @@ void CompositorRenderer::render(render::Renderer& renderer,
             if (useMobilePresentation &&
                 matchingSurface->systemSurfaceKind ==
                     protocol::LCLSystemSurfaceKind::HomeScreen &&
-                mobileBackdrop.blurRadius > 0.05f) {
-                protocol::FilterOp blur{};
-                blur.type = protocol::FilterType::Blur;
-                blur.value = mobileBackdrop.blurRadius;
-                protocol::FilterOp saturation{};
-                saturation.type = protocol::FilterType::Saturation;
-                saturation.value = mobileBackdrop.saturation;
+                mobileBackdrop.progress > 0.0001f) {
                 protocol::FilterOp brightness{};
                 brightness.type = protocol::FilterType::Brightness;
                 brightness.value = mobileBackdrop.brightness;
 
-                // This is a real variable-radius blur. The filtered result is
-                // fully opaque; launch progress never becomes effect opacity.
+                // Launch progress changes brightness directly; it never becomes
+                // effect opacity.
                 raster->applyBackdropFilter(
                     0.0f, 0.0f,
                     windowManager.getScreenWidth(),
                     windowManager.getScreenHeight(),
                     0.0f, 2.0f, 1.0f,
-                    {blur, saturation, brightness});
+                    {brightness});
             }
 
             if (useMobilePresentation &&

@@ -187,7 +187,7 @@ void FrameScheduler::prepareLaunchMorph(
     const auto perspectiveMotion = interactive
         ? draggingMotion
         : launchSpring(100.0f, dampingRatio, 0.001f, 0.01f);
-    // Launcher scale and blur have their own critically damped spring. Fling
+    // Launcher scale and brightness have their own critically damped spring. Fling
     // velocity remains owned by the app thumbnail trajectory.
     const auto homeEffectMotion = interactive
         ? draggingMotion

@@ -1023,10 +1023,11 @@ def build_rootfs_ext4(
 ) -> tuple[Path, Path, dict[str, str]]:
     """Builds the canonical ext4 rootfs image from the staging tree."""
     norm_arch = normalize_arch(arch)
-    host_arch = normalize_arch(platform.machine())
-
-    # If cross-building on host machine (e.g. host is x86_64, target is aarch64) and not already inside docker, delegate to Docker
-    if not inside_docker and host_arch != norm_arch:
+    # Canonical userspace is always built in the pinned Docker environment.
+    # Besides keeping toolchains reproducible, this prevents a CMake cache
+    # configured at /src/build inside Docker from being reopened through the
+    # host checkout's absolute path.
+    if not inside_docker:
         return run_inside_docker(norm_arch, image_size_mb, force=force)
 
     ROOTFS_BASE_DIR.mkdir(parents=True, exist_ok=True)

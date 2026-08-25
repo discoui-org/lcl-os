@@ -31,27 +31,21 @@
 
 namespace lcl::core {
 
-TEST(MobileLaunchBackdropTest, UsesRealRadiusWithoutEffectOpacity) {
+TEST(MobileLaunchBackdropTest, UsesScaleAndBrightnessWithoutEffectOpacity) {
     const auto start = resolveMobileLaunchBackdrop(0.0f);
     EXPECT_FLOAT_EQ(start.wallpaperScale, 1.0f);
     EXPECT_FLOAT_EQ(start.homeScale, 1.0f);
-    EXPECT_FLOAT_EQ(start.blurRadius, 0.0f);
-    EXPECT_FLOAT_EQ(start.saturation, 1.0f);
     EXPECT_FLOAT_EQ(start.brightness, 1.0f);
 
     const auto halfway = resolveMobileLaunchBackdrop(0.5f);
     EXPECT_FLOAT_EQ(halfway.progress, 0.5f);
     EXPECT_FLOAT_EQ(halfway.wallpaperScale, 1.03f);
     EXPECT_FLOAT_EQ(halfway.homeScale, 0.97f);
-    EXPECT_FLOAT_EQ(halfway.blurRadius, 25.0f);
-    EXPECT_FLOAT_EQ(halfway.saturation, 1.3f);
     EXPECT_FLOAT_EQ(halfway.brightness, 0.91f);
 
     const auto covered = resolveMobileLaunchBackdrop(1.0f);
     EXPECT_FLOAT_EQ(covered.wallpaperScale, 1.06f);
     EXPECT_FLOAT_EQ(covered.homeScale, 0.94f);
-    EXPECT_FLOAT_EQ(covered.blurRadius, 50.0f);
-    EXPECT_FLOAT_EQ(covered.saturation, 1.6f);
     EXPECT_FLOAT_EQ(covered.brightness, 0.82f);
 }
 

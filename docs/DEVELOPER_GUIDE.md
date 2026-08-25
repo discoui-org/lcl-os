@@ -39,9 +39,9 @@ make iso
 
 ### 2. Android AVD Target Mode (Stage 4C.3 Substrate)
 ```bash
-./main.py avd
+./main.py android --avd
 ```
-- Boots the Android Emulator directly attaching the exact, byte-for-byte canonical rootfs (`lcl-rootfs-x86_64.ext4`).
+- Builds the x86_64 userspace in Docker, then boots the Android Emulator directly attaching the exact, byte-for-byte canonical rootfs (`lcl-rootfs-x86_64.ext4`).
 
 ### 3. Bootable ISO via Limine Bootloader (Legacy BIOS Mode)
 ```bash

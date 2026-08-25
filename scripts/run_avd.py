@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -95,34 +94,6 @@ class AndroidEnvironment:
         return subprocess.run([str(self.adb), "shell", cmd_str], capture_output=capture_output, text=True, check=check)
 
 
-def is_rootfs_stale(rootfs_img: Path) -> bool:
-    if not rootfs_img.is_file():
-        return True
-    rootfs_mtime = rootfs_img.stat().st_mtime
-    candidates = [
-        BUILD_DIR / "lcl-core",
-        BUILD_DIR / "lcl-desktop-shell",
-        BUILD_DIR / "lcl-mobile-shell",
-        BUILD_DIR / "lcl-shell-launcher",
-        BUILD_DIR / "lcl-sessiond",
-        BUILD_DIR / "lcl-open",
-        BUILD_DIR / "lcl-js",
-        BUILD_DIR / "UIDemo",
-        BUILD_DIR / "Terminal",
-        BUILD_DIR / "apps" / "ui_demo" / "UIDemo",
-        BUILD_DIR / "apps" / "terminal" / "Terminal",
-    ]
-    for b in candidates:
-        if b.is_file() and b.stat().st_mtime > rootfs_mtime:
-            return True
-    for directory in (ROOT_DIR / "apps", ROOT_DIR / "assets"):
-        if directory.is_dir():
-            for p in directory.rglob("*"):
-                if p.is_file() and p.stat().st_mtime > rootfs_mtime:
-                    return True
-    return False
-
-
 def is_android_core_stale(android_core: Path) -> bool:
     if not android_core.is_file():
         return True
@@ -156,22 +127,18 @@ def is_android_images_stale(out_system_img: Path, out_ramdisk_img: Path, android
 
 
 def build_targets(env: AndroidEnvironment, force_rebuild: bool = False, arch: str = "x86_64") -> None:
-    # 1. Incremental build of canonical Linux userspace binaries via Docker
-    log("Ensuring canonical Linux userspace binaries are up to date (Docker)...")
-    run_qemu_py = SCRIPT_DIR / "run_qemu.py"
-    subprocess.check_call([sys.executable, str(run_qemu_py), "--build-only", "--arch", arch])
-
-    # 2. Build canonical rootfs artifact if missing, stale, or forced
-    if force_rebuild or is_rootfs_stale(CANONICAL_ROOTFS_EXT4):
-        log("Canonical ext4 rootfs artifact is missing or stale. Building...")
-        sys.path.insert(0, str(SCRIPT_DIR))
-        from build_rootfs import build_rootfs_ext4
-        build_rootfs_ext4(arch=arch)
+    # 1. Update userspace and package the canonical rootfs in one Docker run.
+    # CMake caches created under the container's /src mount are intentionally
+    # never reopened from the host checkout path.
+    log("Ensuring canonical Linux userspace and rootfs are up to date (Docker)...")
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from build_rootfs import build_rootfs_ext4
+    build_rootfs_ext4(arch=arch, force=force_rebuild)
 
     rootfs_sha = get_sha256(CANONICAL_ROOTFS_EXT4)
     log(f"Canonical ext4 rootfs ready ({CANONICAL_ROOTFS_EXT4.stat().st_size} bytes, SHA-256: {rootfs_sha})")
 
-    # 3. Build Android Platform Composition Root (lcl-core-android)
+    # 2. Build Android Platform Composition Root (lcl-core-android)
     android_core = BUILD_ANDROID_DIR / "lcl-core-android"
     if force_rebuild or is_android_core_stale(android_core):
         log("Building Android platform compositor (lcl-core-android)...")
