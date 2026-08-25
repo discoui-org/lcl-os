@@ -21,11 +21,12 @@ public:
     SkiaDisplayListRenderer(const SkiaDisplayListRenderer&) = delete;
     SkiaDisplayListRenderer& operator=(const SkiaDisplayListRenderer&) = delete;
 
-    bool initialize(lcl::platform::IGraphicsContext& graphicsContext);
+    /** Pass nullptr for Skia's CPU raster backend. */
+    bool initialize(lcl::platform::IGraphicsContext* graphicsContext);
     void shutdown();
 
     bool beginFrame(uint32_t framebuffer, uint32_t pixelWidth,
-                    uint32_t pixelHeight,
+                    uint32_t pixelHeight, uint32_t* rasterPixels,
                     std::optional<lcl::graphics::RectF> deviceDamage = std::nullopt);
     bool replay(const lcl::graphics::DisplayList& displayList,
                 const lcl::graphics::RenderTarget& target,

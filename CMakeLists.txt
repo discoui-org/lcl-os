@@ -9,13 +9,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Dependencies
 find_package(Threads REQUIRED)
 
-# Skia is the authoritative hardware DisplayList execution engine. The option
-# remains only for software-only bring-up builds; normal builds use Skia.
-option(LCL_ENABLE_SKIA "Use Skia for LCL DisplayList raster execution" ON)
+# Skia is the sole DisplayList execution engine for GPU and CPU rendering.
 include(cmake/LclSkia.cmake)
-if(LCL_ENABLE_SKIA)
-    lcl_import_skia()
-endif()
+lcl_import_skia()
 
 if(NOT ANDROID)
     find_package(PkgConfig REQUIRED)
@@ -89,7 +85,7 @@ target_link_libraries(lcl-path-raster PUBLIC
 # client/compositor rendering. Keeping this below the UI ABI avoids a renderer
 # dependency from widgets while preserving one authoritative measurement path.
 add_library(lcl-font-metrics STATIC
-    src/render/font_renderer.cpp
+    src/render/skia_text_engine.cpp
     src/render/text_metrics.cpp
 )
 
@@ -100,6 +96,7 @@ target_include_directories(lcl-font-metrics PUBLIC
 
 target_link_libraries(lcl-font-metrics PUBLIC
     lcl-graphics
+    LCL::Skia
 )
 
 # Session lifecycle transport and authority stay independent from compositor

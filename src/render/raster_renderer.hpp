@@ -10,15 +10,12 @@
 
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-graphics/display_list.hpp"
-#include "render/font_renderer.hpp"
 
 #include "platform/common/graphics_context.hpp"
 
 namespace lcl::render {
 
-#ifdef LCL_ENABLE_SKIA
 class SkiaDisplayListRenderer;
-#endif
 
 struct RasterColor {
     uint8_t r{0};
@@ -215,20 +212,9 @@ public:
     void drawDropShadow(const RasterRect& rect, float radius, float blur, const RasterColor& shadowColor);
     void drawCircle(float cx, float cy, float radius, const RasterColor& color);
     void drawLine(float x1, float y1, float x2, float y2, const RasterColor& color, float strokeWidth = 1.0f);
-    void drawString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize = 15.0f);
-    /** Draw text with the packaged JetBrains Mono face. */
-    void drawMonospaceString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize = 15.0f);
-    /** Returns the rendered text width in the caller's logical coordinate space. */
+    /** Returns the canonical Skia text width in logical coordinates. */
     float measureString(const std::string& text, float fontSize = 15.0f);
     float measureMonospaceString(const std::string& text, float fontSize = 15.0f);
-    /** Rasterizes one stable text layer at the current content scale. */
-    bool rasterizeString(const std::string& text,
-                         uint32_t fgColor,
-                         float fontSize,
-                         bool monospace,
-                         std::vector<uint32_t>& pixels,
-                         int& width,
-                         int& height);
     /** Composite a straight-alpha CPU/SHM ARGB buffer. */
     void drawBuffer(int dstX,
                     int dstY,
@@ -346,18 +332,6 @@ private:
         std::vector<uint32_t> pixels;
     };
 
-    struct RasterizedTextLayer {
-        std::string text;
-        uint32_t argb{0};
-        float fontSize{0.0f};
-        float effectiveScale{1.0f};
-        lcl::graphics::FontFamily family{lcl::graphics::FontFamily::Interface};
-        int width{0};
-        int height{0};
-        uint64_t lastUse{0};
-        std::vector<uint32_t> pixels;
-    };
-
     struct CachedShmTexture {
         uint32_t texture{0};
         int32_t width{0};
@@ -379,8 +353,6 @@ private:
     RasterRect scaleRect(const RasterRect& rect) const;
     int scaleCoord(int value) const;
     int scaleLength(int value) const;
-    bool ensureFont(float logicalFontSize);
-    bool ensureMonospaceFont(float logicalFontSize);
     void drawBufferRaw(float dstX,
                        float dstY,
                        int srcW,
@@ -411,8 +383,6 @@ private:
 
     std::vector<uint32_t> m_rasterPixels;
     uint32_t* m_targetPixels{nullptr};
-    FontRenderer m_fontRenderer;
-    FontRenderer m_monospaceFontRenderer;
     float m_deviceScale{1.0f};
     float m_contentOriginX{0.0f};
     float m_contentOriginY{0.0f};
@@ -451,17 +421,11 @@ private:
     std::unordered_map<uint64_t, CachedImageTexture> m_cachedImageTextures;
     size_t m_cachedImageTextureBytes{0};
     uint64_t m_imageTextureUseCounter{0};
-    std::vector<RasterizedTextLayer> m_rasterizedTextLayers;
-#if !defined(LCL_ENABLE_SKIA) || defined(LCL_SOFTWARE_ONLY)
-    uint64_t m_textLayerUseCounter{0};
-#endif
     uint64_t m_shmTextureFrameSerial{0};
 
-#ifdef LCL_ENABLE_SKIA
-    // One backend-neutral DisplayList is replayed by the shared Skia engine on
-    // every hardware target; platform code only owns presentation.
+    // One backend-neutral DisplayList is replayed by Skia through either a
+    // Ganesh/OpenGL surface or a CPU raster surface.
     std::unique_ptr<SkiaDisplayListRenderer> m_skiaDisplayListRenderer;
-#endif
 
     uint32_t m_glBlurProgram{0};
     int32_t m_aBlurPosLoc{-1};

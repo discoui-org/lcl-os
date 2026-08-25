@@ -37,7 +37,6 @@ struct DrawTextCommand {
     Color color{};
     float fontSize{14.0f};
     FontFamily fontFamily{FontFamily::Interface};
-    bool rasterized{false};
 };
 struct DrawImageCommand {
     RectF destination{};
@@ -93,8 +92,8 @@ public:
     void drawCachedLayer(uint64_t id, const RectF& destination, float opacity);
     void drawPath(const Path& path, const Paint& paint);
     void drawText(PointF origin, std::string text, Color color,
-                  float fontSize, FontFamily fontFamily = FontFamily::Interface,
-                  bool rasterized = false);
+                  float fontSize,
+                  FontFamily fontFamily = FontFamily::Interface);
     void drawImage(const RectF& destination, uintptr_t resourceKey,
                    int sourceWidth, int sourceHeight, int stridePixels,
                    float opacity,

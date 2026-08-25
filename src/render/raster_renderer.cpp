@@ -5,9 +5,7 @@
 #include "render/backdrop_filter_geometry.hpp"
 #include "render/dma_buf_crop.hpp"
 #include "render/raster_destination.hpp"
-#ifdef LCL_ENABLE_SKIA
 #include "render/skia_display_list_renderer.hpp"
-#endif
 #ifndef LCL_SOFTWARE_ONLY
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
@@ -695,17 +693,6 @@ bool RasterRenderer::initialize(uint32_t width, uint32_t height,
 
         initGLShader();
 
-#ifdef LCL_ENABLE_SKIA
-        auto skia = std::make_unique<SkiaDisplayListRenderer>();
-        if (skia->initialize(*m_eglBackend)) {
-            m_skiaDisplayListRenderer = std::move(skia);
-            std::cout << "[LCL Raster] Skia/Ganesh DisplayList replay active.\n";
-        } else {
-            std::cerr << "[LCL Raster] Skia/Ganesh initialization failed; "
-                         "unsupported lists remain on legacy replay.\n";
-        }
-#endif
-
         glViewport(0, 0, m_width, m_height);
         glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -723,6 +710,18 @@ bool RasterRenderer::initialize(uint32_t width, uint32_t height,
         std::cout << "[LCL Raster] LCL raster Raster Software Backend Active ("
                   << m_width << "x" << m_height << ").\n";
     }
+
+    auto skia = std::make_unique<SkiaDisplayListRenderer>();
+    lcl::platform::IGraphicsContext* skiaGraphics =
+        m_backendType == RasterBackend::OpenGL_EGL ? m_eglBackend : nullptr;
+    if (!skia->initialize(skiaGraphics)) {
+        std::cerr << "[LCL Raster] Required Skia DisplayList engine failed to initialize.\n";
+        return false;
+    }
+    m_skiaDisplayListRenderer = std::move(skia);
+    std::cout << (skiaGraphics
+        ? "[LCL Raster] Skia/Ganesh DisplayList replay active.\n"
+        : "[LCL Raster] Skia CPU DisplayList replay active.\n");
 
     m_initialized = true;
     return true;
@@ -742,10 +741,15 @@ void RasterRenderer::setTargetPixels(uint32_t* targetPixels, uint32_t width, uin
             initialize(nextWidth, nextHeight, eglBackend, targetPixels);
             return;
         }
-        // A failed client-context resize falls back to the established SHM CPU
-        // renderer rather than risking a stale GPU surface.
-        m_eglBackend = nullptr;
-        m_backendType = RasterBackend::SoftwareRaster;
+        // Recreate the required Skia replay engine against the CPU pixel
+        // target. Merely changing the backend enum would leave its Ganesh
+        // surface attached to the failed EGL context.
+        shutdown();
+        if (!initialize(nextWidth, nextHeight, nullptr, targetPixels)) {
+            std::cerr << "[LCL Raster] Failed to initialize Skia CPU rendering "
+                         "after EGL resize failure.\n";
+        }
+        return;
     }
 #endif
 
@@ -1086,11 +1090,9 @@ bool RasterRenderer::drawCachedDisplayLayer(uint64_t id,
 }
 
 void RasterRenderer::releaseCachedDisplayLayer(uint64_t id) {
-#ifdef LCL_ENABLE_SKIA
     if (m_skiaDisplayListRenderer) {
         m_skiaDisplayListRenderer->releaseCachedLayer(id);
     }
-#endif
     const auto found = m_cachedDisplayLayers.find(id);
     if (found == m_cachedDisplayLayers.end()) return;
     destroyCachedLayerTarget(found->second.framebuffer, found->second.texture);
@@ -1098,16 +1100,13 @@ void RasterRenderer::releaseCachedDisplayLayer(uint64_t id) {
 }
 
 void RasterRenderer::clearDisplayListCaches() {
-#ifdef LCL_ENABLE_SKIA
     if (m_skiaDisplayListRenderer) {
         m_skiaDisplayListRenderer->clearCaches();
     }
-#endif
     for (const auto& [_, layer] : m_cachedDisplayLayers) {
         destroyCachedLayerTarget(layer.framebuffer, layer.texture);
     }
     m_cachedDisplayLayers.clear();
-    m_rasterizedTextLayers.clear();
 }
 
 void RasterRenderer::shutdown() {
@@ -1116,6 +1115,7 @@ void RasterRenderer::shutdown() {
     // never restore dimensions or pointers owned by its previous lifetime.
     m_cachedLayerTargetStates.clear();
     clearDisplayListCaches();
+    m_skiaDisplayListRenderer.reset();
 #ifndef LCL_SOFTWARE_ONLY
     // Several WindowApps may interleave independent EGL contexts on one
     // thread. Resource names are context-local, so deleting this renderer's
@@ -1124,9 +1124,6 @@ void RasterRenderer::shutdown() {
     const bool canDeleteGlResources =
         m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend &&
         m_eglBackend->makeCurrent();
-#ifdef LCL_ENABLE_SKIA
-    m_skiaDisplayListRenderer.reset();
-#endif
     for (const auto& [_, cached] : m_cachedShmTextures) {
         if (canDeleteGlResources && cached.texture > 0) {
             glDeleteTextures(1, &cached.texture);
@@ -1224,10 +1221,6 @@ void RasterRenderer::setDeviceScale(float scale) {
     }
 
     m_deviceScale = sanitized;
-    // Glyph bitmaps are raster assets, so rebuilding the cache prevents a scaled
-    // client surface from reusing 1x text.
-    m_fontRenderer = FontRenderer{};
-    m_monospaceFontRenderer = FontRenderer{};
 }
 
 void RasterRenderer::drawPath(const lcl::graphics::Path& path,
@@ -1323,325 +1316,41 @@ void RasterRenderer::replayDisplayList(
         const lcl::graphics::DisplayList& displayList,
         const lcl::graphics::RenderTarget& target,
         const lcl::graphics::Matrix3& rootTransform) {
-#if defined(LCL_ENABLE_SKIA) && !defined(LCL_SOFTWARE_ONLY)
-    if (m_skiaDisplayListRenderer && activeSceneFBO() > 0) {
-        std::optional<lcl::graphics::RectF> deviceDamage;
-        if (m_frameDamageRect) {
-            const auto damage = scaleRect(*m_frameDamageRect);
-            deviceDamage = lcl::graphics::RectF{
-                damage.x, damage.y, damage.width, damage.height};
-        }
-        const bool attached = m_skiaDisplayListRenderer->beginFrame(
-            activeSceneFBO(), m_width, m_height, deviceDamage);
-        const bool replayed = attached && m_skiaDisplayListRenderer->replay(
+    if (!m_skiaDisplayListRenderer) return;
+
+    std::optional<lcl::graphics::RectF> deviceDamage;
+    if (m_frameDamageRect) {
+        const auto damage = scaleRect(*m_frameDamageRect);
+        deviceDamage = lcl::graphics::RectF{
+            damage.x, damage.y, damage.width, damage.height};
+    }
+
+    uint32_t framebuffer = 0;
+    uint32_t* rasterPixels = m_targetPixels;
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == RasterBackend::OpenGL_EGL) {
+        framebuffer = activeSceneFBO();
+        rasterPixels = nullptr;
+        if (framebuffer == 0) return;
+    }
+#endif
+
+    const bool attached = m_skiaDisplayListRenderer->beginFrame(
+        framebuffer, m_width, m_height, rasterPixels, deviceDamage);
+    if (attached) {
+        (void)m_skiaDisplayListRenderer->replay(
             displayList, target, rootTransform,
             m_contentOriginX, m_contentOriginY);
-        if (attached) m_skiaDisplayListRenderer->endFrame();
+        m_skiaDisplayListRenderer->endFrame();
+    }
+
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend) {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
         applyScissorState();
-        (void)replayed;
     }
-    // Hardware targets have exactly one DisplayList execution engine. A Skia
-    // attachment/replay failure must not silently switch raster semantics in
-    // the middle of a session.
-    return;
-#else
-
-    struct ReplayState {
-        lcl::graphics::Matrix3 transform{};
-        float opacity{1.0f};
-        std::optional<lcl::graphics::RectF> clip{};
-        std::vector<RasterizedPath> pathClips;
-    };
-
-    const float previousScale = m_deviceScale;
-    const auto previousClip = m_clipRect;
-    setDeviceScale(target.deviceScale);
-    ReplayState state{};
-    state.transform = rootTransform;
-    std::vector<ReplayState> stack;
-    std::vector<float> layerOpacityStack;
-    std::optional<ReplayState> cachedLayerReplayState;
-
-    const auto concat = [](const lcl::graphics::Matrix3& old,
-                           const lcl::graphics::Matrix3& value) {
-        return lcl::graphics::Matrix3{
-            old.a * value.a + old.c * value.b,
-            old.b * value.a + old.d * value.b,
-            old.a * value.c + old.c * value.d,
-            old.b * value.c + old.d * value.d,
-            old.a * value.tx + old.c * value.ty + old.tx,
-            old.b * value.tx + old.d * value.ty + old.ty,
-        };
-    };
-    const auto syncClip = [&] {
-        if (state.clip) {
-            setClipRect(RasterRect{state.clip->x, state.clip->y,
-                                   state.clip->width, state.clip->height});
-        } else {
-            setClipRect(std::nullopt);
-        }
-    };
-
-    for (const auto& command : displayList.commands()) {
-        std::visit([&](const auto& op) {
-            using T = std::decay_t<decltype(op)>;
-            if constexpr (std::is_same_v<T, lcl::graphics::SaveCommand>) {
-                stack.push_back(state);
-            } else if constexpr (std::is_same_v<T, lcl::graphics::RestoreCommand>) {
-                if (!stack.empty()) {
-                    state = stack.back();
-                    stack.pop_back();
-                    syncClip();
-                }
-            } else if constexpr (std::is_same_v<T, lcl::graphics::ConcatCommand>) {
-                state.transform = concat(state.transform, op.transform);
-            } else if constexpr (std::is_same_v<T, lcl::graphics::BeginLayerCommand>) {
-                layerOpacityStack.push_back(state.opacity);
-                state.opacity *= std::clamp(op.opacity, 0.0f, 1.0f);
-            } else if constexpr (std::is_same_v<T, lcl::graphics::EndLayerCommand>) {
-                if (!layerOpacityStack.empty()) {
-                    state.opacity = layerOpacityStack.back();
-                    layerOpacityStack.pop_back();
-                }
-            } else if constexpr (std::is_same_v<T, lcl::graphics::ClipRectCommand>) {
-                const auto mapped = state.transform.mapRect(op.rect);
-                state.clip = state.clip ? state.clip->intersection(mapped) : mapped;
-                syncClip();
-            } else if constexpr (std::is_same_v<T, lcl::graphics::ClipPathCommand>) {
-                lcl::graphics::Paint clipPaint;
-                clipPaint.color = {255, 255, 255, 255};
-                clipPaint.fillRule = op.fillRule;
-                const auto deviceTransform = state.transform.followedBy(
-                    lcl::graphics::Matrix3::scale(m_deviceScale, m_deviceScale));
-                auto mask = rasterizePath(op.path, clipPaint, deviceTransform);
-                if (!mask.empty()) {
-                    const lcl::graphics::RectF bounds{
-                        static_cast<float>(mask.x) / m_deviceScale,
-                        static_cast<float>(mask.y) / m_deviceScale,
-                        static_cast<float>(mask.width) / m_deviceScale,
-                        static_cast<float>(mask.height) / m_deviceScale};
-                    state.clip = state.clip ? state.clip->intersection(bounds) : bounds;
-                    state.pathClips.push_back(std::move(mask));
-                    syncClip();
-                }
-            } else if constexpr (std::is_same_v<T, lcl::graphics::ClearRectCommand>) {
-                const auto mapped = state.transform.mapRect(op.rect);
-                clearRect({mapped.x, mapped.y, mapped.width, mapped.height},
-                          {op.color.r, op.color.g, op.color.b, op.color.a});
-            } else if constexpr (std::is_same_v<T, lcl::graphics::BeginCachedLayerCommand>) {
-                if (cachedLayerReplayState) return;
-                if (!prepareCachedDisplayLayer(
-                        op.id, op.sourceBounds, state.transform, target,
-                        op.updateBounds.has_value())) {
-                    return;
-                }
-                const auto found = m_cachedDisplayLayers.find(op.id);
-                if (found == m_cachedDisplayLayers.end()) return;
-                auto& layer = found->second;
-                uint32_t* softwarePixels = layer.texture != 0
-                    ? nullptr : layer.pixels.data();
-                if (!beginCachedLayerTarget(
-                        layer.framebuffer, layer.texture,
-                        layer.pixelWidth, layer.pixelHeight, softwarePixels,
-                        op.sourceBounds.x, op.sourceBounds.y,
-                        layer.effectiveScale, op.updateBounds)) {
-                    return;
-                }
-                cachedLayerReplayState = state;
-                state = ReplayState{};
-                if (op.updateBounds) {
-                    state.clip = *op.updateBounds;
-                    syncClip();
-                }
-            } else if constexpr (std::is_same_v<T, lcl::graphics::EndCachedLayerCommand>) {
-                if (!cachedLayerReplayState) return;
-                endCachedLayerTarget();
-                state = *cachedLayerReplayState;
-                cachedLayerReplayState.reset();
-                syncClip();
-            } else if constexpr (std::is_same_v<T, lcl::graphics::DrawCachedLayerCommand>) {
-                const auto found = m_cachedDisplayLayers.find(op.id);
-                if (found == m_cachedDisplayLayers.end()) return;
-                const auto& layer = found->second;
-                const auto mapped = state.transform.mapRect(op.destination);
-                const float opacity = std::clamp(op.opacity * state.opacity, 0.0f, 1.0f);
-                if (layer.texture != 0) {
-                    drawCachedLayerTexture(
-                        layer.texture,
-                        {mapped.x, mapped.y, mapped.width, mapped.height}, opacity);
-                } else if (!layer.pixels.empty()) {
-                    drawBufferTransformed(
-                        mapped.x, mapped.y,
-                        static_cast<int>(layer.pixelWidth),
-                        static_cast<int>(layer.pixelHeight),
-                        layer.pixels.data(), static_cast<int>(layer.pixelWidth),
-                        opacity, 0.0f, 2.0f, false,
-                        mapped.width, mapped.height);
-                }
-            } else if constexpr (std::is_same_v<T, lcl::graphics::DrawPathCommand>) {
-                if (state.pathClips.empty()) {
-                    drawPath(op.path, op.paint, state.transform, state.opacity);
-                } else {
-                    const auto deviceTransform = state.transform.followedBy(
-                        lcl::graphics::Matrix3::scale(m_deviceScale,
-                                                     m_deviceScale));
-                    auto image = rasterizePath(op.path, op.paint, deviceTransform,
-                                               state.opacity);
-                    for (const auto& mask : state.pathClips) {
-                        for (int y = 0; y < image.height; ++y) {
-                            for (int x = 0; x < image.width; ++x) {
-                                auto& pixel = image.pixels[
-                                    static_cast<size_t>(y) * image.width + x];
-                                if ((pixel >> 24) == 0) continue;
-                                const int maskX = image.x + x - mask.x;
-                                const int maskY = image.y + y - mask.y;
-                                uint32_t maskAlpha = 0;
-                                if (maskX >= 0 && maskX < mask.width &&
-                                    maskY >= 0 && maskY < mask.height) {
-                                    maskAlpha = mask.pixels[
-                                        static_cast<size_t>(maskY) * mask.width + maskX] >> 24;
-                                }
-                                const uint32_t alpha =
-                                    (pixel >> 24) * maskAlpha / 255u;
-                                pixel = (pixel & 0x00FFFFFFu) | (alpha << 24);
-                            }
-                        }
-                    }
-                    if (!image.empty()) {
-                        drawBufferTransformed(
-                            static_cast<float>(image.x) / m_deviceScale,
-                            static_cast<float>(image.y) / m_deviceScale,
-                            image.width, image.height, image.pixels.data(), image.width,
-                            1.0f, 0.0f, 2.0f, false,
-                            static_cast<float>(image.width) / m_deviceScale,
-                            static_cast<float>(image.height) / m_deviceScale);
-                    }
-                }
-            } else if constexpr (std::is_same_v<T, lcl::graphics::DrawTextCommand>) {
-                if (op.rasterized) {
-                    const uint32_t argb = (static_cast<uint32_t>(op.color.a) << 24) |
-                        (static_cast<uint32_t>(op.color.r) << 16) |
-                        (static_cast<uint32_t>(op.color.g) << 8) | op.color.b;
-                    const float effectiveScale = std::max(
-                        0.001f, m_deviceScale * state.transform.maxScale());
-                    ++m_textLayerUseCounter;
-                    auto found = std::find_if(
-                        m_rasterizedTextLayers.begin(), m_rasterizedTextLayers.end(),
-                        [&](const RasterizedTextLayer& layer) {
-                            return layer.text == op.text && layer.argb == argb &&
-                                   layer.family == op.fontFamily &&
-                                   std::fabs(layer.fontSize - op.fontSize) < 0.0001f &&
-                                   std::fabs(layer.effectiveScale - effectiveScale) < 0.0001f;
-                        });
-                    if (found == m_rasterizedTextLayers.end()) {
-                        RasterizedTextLayer layer;
-                        layer.text = op.text;
-                        layer.argb = argb;
-                        layer.fontSize = op.fontSize;
-                        layer.effectiveScale = effectiveScale;
-                        layer.family = op.fontFamily;
-                        const float currentScale = m_deviceScale;
-                        setDeviceScale(effectiveScale);
-                        const bool rasterized = rasterizeString(
-                            op.text, argb, op.fontSize,
-                            op.fontFamily == lcl::graphics::FontFamily::Monospace,
-                            layer.pixels, layer.width, layer.height);
-                        setDeviceScale(currentScale);
-                        if (!rasterized) {
-                            const auto origin = state.transform.mapPoint(op.origin);
-                            const float fontSize = op.fontSize * state.transform.maxScale();
-                            const uint8_t alpha = static_cast<uint8_t>(std::clamp(
-                                std::lround(static_cast<float>(op.color.a) * state.opacity),
-                                0l, 255l));
-                            const uint32_t packed = (static_cast<uint32_t>(alpha) << 24) |
-                                (static_cast<uint32_t>(op.color.r) << 16) |
-                                (static_cast<uint32_t>(op.color.g) << 8) | op.color.b;
-                            if (op.fontFamily == lcl::graphics::FontFamily::Monospace) {
-                                drawMonospaceString(static_cast<int>(std::lround(origin.x)),
-                                                    static_cast<int>(std::lround(origin.y)),
-                                                    op.text, packed, fontSize);
-                            } else {
-                                drawString(static_cast<int>(std::lround(origin.x)),
-                                           static_cast<int>(std::lround(origin.y)),
-                                           op.text, packed, fontSize);
-                            }
-                            return;
-                        }
-                        layer.lastUse = m_textLayerUseCounter;
-                        if (m_rasterizedTextLayers.size() >= 96u) {
-                            const auto oldest = std::min_element(
-                                m_rasterizedTextLayers.begin(), m_rasterizedTextLayers.end(),
-                                [](const auto& lhs, const auto& rhs) {
-                                    return lhs.lastUse < rhs.lastUse;
-                                });
-                            m_rasterizedTextLayers.erase(oldest);
-                        }
-                        m_rasterizedTextLayers.push_back(std::move(layer));
-                        found = std::prev(m_rasterizedTextLayers.end());
-                    }
-                    found->lastUse = m_textLayerUseCounter;
-                    const float logicalWidth =
-                        static_cast<float>(found->width) / effectiveScale;
-                    const float logicalHeight =
-                        static_cast<float>(found->height) / effectiveScale;
-                    const auto mapped = state.transform.mapRect(
-                        {op.origin.x, op.origin.y, logicalWidth, logicalHeight});
-                    drawBufferTransformed(
-                        mapped.x, mapped.y, found->width, found->height,
-                        found->pixels.data(), found->width, state.opacity,
-                        0.0f, 2.0f, false, mapped.width, mapped.height);
-                    return;
-                }
-                const auto origin = state.transform.mapPoint(op.origin);
-                const float fontSize = op.fontSize * state.transform.maxScale();
-                const uint8_t alpha = static_cast<uint8_t>(std::clamp(
-                    std::lround(static_cast<float>(op.color.a) * state.opacity), 0l, 255l));
-                const uint32_t packed = (static_cast<uint32_t>(alpha) << 24) |
-                    (static_cast<uint32_t>(op.color.r) << 16) |
-                    (static_cast<uint32_t>(op.color.g) << 8) | op.color.b;
-                if (op.fontFamily == lcl::graphics::FontFamily::Monospace) {
-                    drawMonospaceString(static_cast<int>(std::lround(origin.x)),
-                                        static_cast<int>(std::lround(origin.y)),
-                                        op.text, packed, fontSize);
-                } else {
-                    drawString(static_cast<int>(std::lround(origin.x)),
-                               static_cast<int>(std::lround(origin.y)),
-                               op.text, packed, fontSize);
-                }
-            } else if constexpr (std::is_same_v<T, lcl::graphics::DrawImageCommand>) {
-                const auto mapped = state.transform.mapRect(op.destination);
-                if (mapped.isEmpty() ||
-                    (state.clip && !mapped.intersects(*state.clip))) {
-                    return;
-                }
-                const auto* pixels = reinterpret_cast<const uint32_t*>(op.resourceKey);
-                const int stridePixels = op.stridePixels > 0
-                    ? op.stridePixels : op.sourceWidth;
-                if (op.resourceId != 0 && op.contentRevision != 0) {
-                    drawImageResourceTransformed(
-                        op.resourceId, op.contentRevision, op.opaque,
-                        mapped.x, mapped.y, op.sourceWidth, op.sourceHeight,
-                        pixels, stridePixels, op.opacity * state.opacity,
-                        op.cornerRadius * state.transform.maxScale(),
-                        op.cornerRoundness, op.squareTopCorners,
-                        mapped.width, mapped.height);
-                } else {
-                    drawBufferTransformed(
-                        mapped.x, mapped.y, op.sourceWidth, op.sourceHeight,
-                        pixels, stridePixels, op.opacity * state.opacity,
-                        op.cornerRadius * state.transform.maxScale(),
-                        op.cornerRoundness, op.squareTopCorners,
-                        mapped.width, mapped.height);
-                }
-            }
-        }, command);
-    }
-
-    setClipRect(previousClip);
-    setDeviceScale(previousScale);
 #endif
 }
 
@@ -1660,27 +1369,6 @@ int RasterRenderer::scaleCoord(int value) const {
 
 int RasterRenderer::scaleLength(int value) const {
     return static_cast<int>(std::lround(static_cast<float>(value) * m_deviceScale));
-}
-
-bool RasterRenderer::ensureFont(float logicalFontSize) {
-    const float deviceFontSize = std::max(1.0f, logicalFontSize * m_deviceScale);
-    if (!m_fontRenderer.isInitialized() ||
-        std::fabs(m_fontRenderer.getFontSize() - deviceFontSize) > 0.01f) {
-        m_fontRenderer = FontRenderer{};
-        text_metrics::loadFont(m_fontRenderer, lcl::graphics::FontFamily::Interface, deviceFontSize);
-    }
-    return m_fontRenderer.isInitialized();
-}
-
-bool RasterRenderer::ensureMonospaceFont(float logicalFontSize) {
-    const float deviceFontSize = std::max(1.0f, logicalFontSize * m_deviceScale);
-    if (!m_monospaceFontRenderer.isInitialized() ||
-        std::fabs(m_monospaceFontRenderer.getFontSize() - deviceFontSize) > 0.01f) {
-        m_monospaceFontRenderer = FontRenderer{};
-        text_metrics::loadFont(m_monospaceFontRenderer, lcl::graphics::FontFamily::Monospace,
-                               deviceFontSize);
-    }
-    return m_monospaceFontRenderer.isInitialized();
 }
 
 #ifndef LCL_SOFTWARE_ONLY
@@ -2649,107 +2337,16 @@ void RasterRenderer::drawLine(float x1, float y1, float x2, float y2, const Rast
     drawRect(rect, color);
 }
 
-void RasterRenderer::drawString(int x, int y, const std::string& text, uint32_t fgColor, float fontSize) {
-    if (!m_initialized || text.empty()) return;
-    ensureFont(fontSize);
-
-    const int deviceX = scaleCoord(x);
-    const int deviceY = static_cast<int>(std::lround(static_cast<float>(y) * m_deviceScale + m_contentOriginY));
-
-#ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend && m_fontRenderer.isInitialized()) {
-        int textW = std::max(1, m_fontRenderer.getTextWidth(text));
-        int textH = std::max(1, m_fontRenderer.getCellHeight() + 2);
-        std::vector<uint32_t> glyphPixels(static_cast<size_t>(textW) * static_cast<size_t>(textH), 0x00000000);
-        m_fontRenderer.renderString(glyphPixels.data(), textW, textH, 0, 1, text, fgColor);
-        drawBufferRaw(deviceX, deviceY, textW, textH, glyphPixels.data(), textW, 1.0f, 0.0f, 2.0f, false, false, 0, 0);
-        return;
-    }
-#endif
-
-    if (m_fontRenderer.isInitialized() && m_targetPixels) {
-        if (m_clipRect) {
-            const RasterRect deviceClip = scaleRect(*m_clipRect);
-            int minX = std::max(0, static_cast<int>(std::floor(deviceClip.x)));
-            int minY = std::max(0, static_cast<int>(std::floor(deviceClip.y)));
-            int maxX = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width)));
-            int maxY = std::min(static_cast<int>(m_height), static_cast<int>(std::ceil(deviceClip.y + deviceClip.height)));
-            m_fontRenderer.renderStringClipped(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor, minX, minY, maxX, maxY);
-        } else {
-            m_fontRenderer.renderString(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor);
-        }
-    }
+float RasterRenderer::measureString(
+        const std::string& text, float fontSize) {
+    return text_metrics::measureText(
+        text, fontSize, lcl::graphics::FontFamily::Interface);
 }
 
-void RasterRenderer::drawMonospaceString(int x, int y, const std::string& text,
-                                       uint32_t fgColor, float fontSize) {
-    if (!m_initialized || text.empty() || !ensureMonospaceFont(fontSize)) return;
-
-    const int deviceX = scaleCoord(x);
-    const int deviceY = static_cast<int>(std::lround(static_cast<float>(y) * m_deviceScale + m_contentOriginY));
-
-#ifndef LCL_SOFTWARE_ONLY
-    if (m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend) {
-        const int textW = std::max(1, m_monospaceFontRenderer.getTextWidth(text));
-        const int textH = std::max(1, m_monospaceFontRenderer.getCellHeight() + 2);
-        std::vector<uint32_t> glyphPixels(static_cast<size_t>(textW) * static_cast<size_t>(textH), 0x00000000);
-        m_monospaceFontRenderer.renderString(glyphPixels.data(), textW, textH, 0, 1, text, fgColor);
-        drawBufferRaw(deviceX, deviceY, textW, textH, glyphPixels.data(), textW, 1.0f, 0.0f, 2.0f, false, false, 0, 0);
-        return;
-    }
-#endif
-
-    if (m_targetPixels) {
-        if (m_clipRect) {
-            const RasterRect deviceClip = scaleRect(*m_clipRect);
-            int minX = std::max(0, static_cast<int>(std::floor(deviceClip.x)));
-            int minY = std::max(0, static_cast<int>(std::floor(deviceClip.y)));
-            int maxX = std::min(static_cast<int>(m_width), static_cast<int>(std::ceil(deviceClip.x + deviceClip.width)));
-            int maxY = std::min(static_cast<int>(m_height), static_cast<int>(std::ceil(deviceClip.y + deviceClip.height)));
-            m_monospaceFontRenderer.renderStringClipped(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor, minX, minY, maxX, maxY);
-        } else {
-            m_monospaceFontRenderer.renderString(m_targetPixels, m_width, m_height, deviceX, deviceY, text, fgColor);
-        }
-    }
-}
-
-float RasterRenderer::measureString(const std::string& text, float fontSize) {
-    if (text.empty() || !ensureFont(fontSize)) return 0.0f;
-    return static_cast<float>(m_fontRenderer.getTextWidth(text)) / m_deviceScale;
-}
-
-float RasterRenderer::measureMonospaceString(const std::string& text, float fontSize) {
-    if (text.empty() || !ensureMonospaceFont(fontSize)) return 0.0f;
-    return static_cast<float>(m_monospaceFontRenderer.getTextWidth(text)) / m_deviceScale;
-}
-
-bool RasterRenderer::rasterizeString(const std::string& text,
-                                   uint32_t fgColor,
-                                   float fontSize,
-                                   bool monospace,
-                                   std::vector<uint32_t>& pixels,
-                                   int& width,
-                                   int& height) {
-    width = 0;
-    height = 0;
-    pixels.clear();
-    if (!m_initialized || text.empty()) return false;
-
-    FontRenderer* font = nullptr;
-    if (monospace) {
-        if (!ensureMonospaceFont(fontSize)) return false;
-        font = &m_monospaceFontRenderer;
-    } else {
-        if (!ensureFont(fontSize)) return false;
-        font = &m_fontRenderer;
-    }
-    if (!font->isInitialized()) return false;
-
-    width = std::max(1, font->getTextWidth(text));
-    height = std::max(1, font->getCellHeight() + 2);
-    pixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0x00000000u);
-    font->renderString(pixels.data(), width, height, 0, 1, text, fgColor);
-    return true;
+float RasterRenderer::measureMonospaceString(
+        const std::string& text, float fontSize) {
+    return text_metrics::measureText(
+        text, fontSize, lcl::graphics::FontFamily::Monospace);
 }
 
 namespace {

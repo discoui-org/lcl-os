@@ -13,7 +13,7 @@ lcl-os/
 ├── iso_root/                 # Limine bootloader configuration & boot tree
 ├── src/                      # Core OS Engine & Compositor
 │   ├── core/                 # DRM/KMS, EGL, Evdev Input, Hotplug, IPC, Session
-│   ├── render/               # LCL raster Renderer, FontRenderer, WindowManager
+│   ├── render/               # Skia GPU/CPU replay, text metrics, WindowManager
 │   └── tools/                # Core System Daemons & Binaries (lcl-core, lcl-terminal, lcl-open)
 ├── lcl-ui/                   # Decoupled UI Application Framework (Yoga Flexbox, Widget Tree)
 ├── apps/                     # User-Space Desktop Applications (Terminal.app, UIDemo.app, ShaderDemo.app)

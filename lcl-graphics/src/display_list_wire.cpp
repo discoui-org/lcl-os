@@ -421,7 +421,6 @@ DisplayListEncodeResult encodeDisplayList(const DisplayList& displayList,
                 writeColor(payload, item.color);
                 payload.f32(item.fontSize);
                 payload.u8(static_cast<uint8_t>(item.fontFamily));
-                payload.u8(item.rasterized ? 1 : 0);
                 payload.string(item.text);
             } else if constexpr (std::is_same_v<T, DrawImageCommand>) {
                 if (item.resourceId == 0 || item.contentRevision == 0 ||
@@ -604,13 +603,12 @@ DisplayListDecodeResult decodeDisplayList(std::span<const uint8_t> bytes,
             valid = readPoint(payload, origin) && readColor(payload, color);
             const float fontSize = payload.f32();
             const uint8_t family = payload.u8();
-            const uint8_t rasterized = payload.u8();
             std::string text = payload.string();
             valid = valid && payload.ok() && finite(fontSize) &&
-                    enumAtMost(family, FontFamily::Monospace) && rasterized <= 1;
+                    enumAtMost(family, FontFamily::Monospace);
             if (valid) {
                 builder.drawText(origin, std::move(text), color, fontSize,
-                                 static_cast<FontFamily>(family), rasterized != 0);
+                                 static_cast<FontFamily>(family));
             }
             break;
         }

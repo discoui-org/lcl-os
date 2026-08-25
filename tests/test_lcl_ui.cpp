@@ -154,15 +154,6 @@ public:
         fontFamilies.push_back(family);
     }
 
-    void drawRasterizedText(float x, float y, const std::string& text, graphics::Color color,
-                            float fontSize, graphics::FontFamily family) override {
-        rasterTextPositions.push_back({x, y, 0.0f, 0.0f});
-        rasterTexts.push_back(text);
-        colors.push_back(color);
-        fontSizes.push_back(fontSize);
-        fontFamilies.push_back(family);
-    }
-
     float measureText(const std::string& text, float fontSize, graphics::FontFamily family) override {
         if (useSharedTextMetrics) {
             return lcl::render::text_metrics::measureText(text, fontSize, family) *
@@ -224,7 +215,6 @@ public:
     std::vector<graphics::RectF> roundedRects;
     std::vector<graphics::RectF> topRoundedRects;
     std::vector<graphics::RectF> textPositions;
-    std::vector<graphics::RectF> rasterTextPositions;
     std::vector<graphics::RectF> clips;
     std::vector<graphics::RectF> cachedLayerBounds;
     std::vector<graphics::RectF> cachedLayerDestinations;
@@ -241,7 +231,6 @@ public:
     std::vector<graphics::Color> clearColors;
     std::vector<graphics::Color> borders;
     std::vector<std::string> texts;
-    std::vector<std::string> rasterTexts;
     std::unordered_set<CachedLayerId> cachedLayers;
 };
 
@@ -374,7 +363,7 @@ TEST(LclGraphicsTest, CompositorOwnedDisplayListLayerRasterizesThenComposes) {
     EXPECT_FALSE(renderer.hasCachedDisplayLayer(91));
 }
 
-TEST(LclGraphicsTest, RasterCanvasRecordsClearLayerImageAndRasterTextCommands) {
+TEST(LclGraphicsTest, RasterCanvasRecordsClearLayerImageAndTextCommands) {
     std::vector<uint32_t> pixels(32 * 32, 0x00000000u);
     std::array<uint32_t, 6> imagePixels{
         0xFFFFFFFFu, 0xFFFFFFFFu, 0u,
@@ -391,8 +380,8 @@ TEST(LclGraphicsTest, RasterCanvasRecordsClearLayerImageAndRasterTextCommands) {
     canvas.drawBuffer({10.0f, 10.0f, 2.0f, 2.0f},
                       2, 2, imagePixels.data(), 3,
                       1.0f, 0.0f, 2.0f, false);
-    canvas.drawRasterizedText(1.0f, 1.0f, "A", {255, 255, 255, 255},
-                              10.0f, graphics::FontFamily::Interface);
+    canvas.drawText(1.0f, 1.0f, "A", {255, 255, 255, 255},
+                    10.0f, graphics::FontFamily::Interface);
     canvas.endLayer();
     canvas.endFrame();
 
@@ -405,7 +394,7 @@ TEST(LclGraphicsTest, RasterCanvasRecordsClearLayerImageAndRasterTextCommands) {
     EXPECT_EQ(image->stridePixels, 3);
     const auto* text = std::get_if<graphics::DrawTextCommand>(&commands[3]);
     ASSERT_NE(text, nullptr);
-    EXPECT_TRUE(text->rasterized);
+    EXPECT_EQ(text->text, "A");
     EXPECT_NE(std::get_if<graphics::EndLayerCommand>(&commands[4]), nullptr);
 }
 
@@ -3318,7 +3307,7 @@ TEST(LclUiTest, CustomContainerUsesDeclarativeHoverPressedAndClickStates) {
     EXPECT_EQ(clicks, 1);
 }
 
-TEST(LclUiTest, TextUsesStableRasterLayerOnlyWhileAncestorAnimationIsActive) {
+TEST(LclUiTest, TextUsesCanonicalSkiaCommandDuringAncestorAnimation) {
     auto canvas = std::make_unique<RecordingCanvas>();
     RecordingCanvas* recorded = canvas.get();
     WindowApp app(std::move(canvas), 240, 120, "Animated text raster layer");
@@ -3333,19 +3322,18 @@ TEST(LclUiTest, TextUsesStableRasterLayerOnlyWhileAncestorAnimationIsActive) {
 
     ASSERT_TRUE(app.renderFrame());
     ASSERT_EQ(recorded->texts.size(), 1u);
-    EXPECT_TRUE(recorded->rasterTexts.empty());
 
     app.sendPointerMove(20.0f, 20.0f);
     ASSERT_TRUE(app.renderFrame());
-    ASSERT_EQ(recorded->rasterTexts.size(), 1u);
-    EXPECT_EQ(recorded->rasterTexts.back(), "Stable");
+    ASSERT_EQ(recorded->texts.size(), 2u);
+    EXPECT_EQ(recorded->texts.back(), "Stable");
 
     for (int index = 0; index < 300 && app.hasActiveAnimations(); ++index) {
         app.advanceAnimations(1.0f / 240.0f);
     }
     ASSERT_FALSE(app.hasActiveAnimations());
     ASSERT_TRUE(app.renderFrame());
-    EXPECT_EQ(recorded->texts.size(), 2u);
+    EXPECT_EQ(recorded->texts.size(), 3u);
 }
 
 TEST(LclUiTest, WindowAppRendersReplacementRootAfterInitialFrame) {

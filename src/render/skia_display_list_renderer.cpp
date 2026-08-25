@@ -12,9 +12,6 @@
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColor.h"
 #include "include/core/SkColorSpace.h"
-#include "include/core/SkFont.h"
-#include "include/core/SkFontMetrics.h"
-#include "include/core/SkFontMgr.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkMatrix.h"
@@ -29,10 +26,9 @@
 #include "include/gpu/ganesh/gl/GrGLBackendSurface.h"
 #include "include/gpu/ganesh/gl/GrGLDirectContext.h"
 #include "include/gpu/ganesh/gl/GrGLInterface.h"
-#include "include/ports/SkFontMgr_empty.h"
 
 #include "lcl-graphics/path.hpp"
-#include "render/text_metrics.hpp"
+#include "render/skia_text_engine.hpp"
 
 namespace lcl::render {
 namespace {
@@ -167,26 +163,13 @@ struct SkiaDisplayListRenderer::Impl {
     lcl::platform::IGraphicsContext* graphicsContext{nullptr};
     sk_sp<GrDirectContext> directContext;
     sk_sp<SkSurface> surface;
-    sk_sp<SkFontMgr> fontManager;
-    sk_sp<SkTypeface> interfaceTypeface;
-    sk_sp<SkTypeface> monospaceTypeface;
     std::unordered_map<uint64_t, ImageResource> imageResources;
     std::unordered_map<uint64_t, CachedLayer> cachedLayers;
     uint32_t surfaceFramebuffer{0};
     uint32_t surfaceWidth{0};
     uint32_t surfaceHeight{0};
+    uint32_t* surfacePixels{nullptr};
     int frameSaveCount{0};
-
-    sk_sp<SkTypeface> typeface(lcl::graphics::FontFamily family) {
-        auto& cached = family == lcl::graphics::FontFamily::Monospace
-            ? monospaceTypeface
-            : interfaceTypeface;
-        if (cached) return cached;
-        const auto path = text_metrics::resolveFontPath(family);
-        if (!path || !fontManager) return nullptr;
-        cached = fontManager->makeFromFile(path->c_str());
-        return cached;
-    }
 
     sk_sp<SkImage> image(const lcl::graphics::DrawImageCommand& command) {
         const auto* pixels = reinterpret_cast<const uint32_t*>(command.resourceKey);
@@ -232,26 +215,25 @@ SkiaDisplayListRenderer::~SkiaDisplayListRenderer() {
 }
 
 bool SkiaDisplayListRenderer::initialize(
-        lcl::platform::IGraphicsContext& graphicsContext) {
+        lcl::platform::IGraphicsContext* graphicsContext) {
     shutdown();
-    if (!graphicsContext.isHardwareAccelerated() || !graphicsContext.makeCurrent()) {
-        return false;
+    if (graphicsContext) {
+        if (!graphicsContext->isHardwareAccelerated() ||
+            !graphicsContext->makeCurrent()) {
+            return false;
+        }
+        auto interface = GrGLMakeNativeInterface();
+        if (!interface || !interface->validate()) return false;
+        m_impl->directContext = GrDirectContexts::MakeGL(std::move(interface));
+        if (!m_impl->directContext) return false;
     }
-    auto interface = GrGLMakeNativeInterface();
-    if (!interface || !interface->validate()) return false;
-    m_impl->directContext = GrDirectContexts::MakeGL(std::move(interface));
-    if (!m_impl->directContext) return false;
-    m_impl->fontManager = SkFontMgr_New_Custom_Empty();
-    m_impl->graphicsContext = &graphicsContext;
+    m_impl->graphicsContext = graphicsContext;
     return true;
 }
 
 void SkiaDisplayListRenderer::shutdown() {
     if (!m_impl) return;
     m_impl->surface.reset();
-    m_impl->interfaceTypeface.reset();
-    m_impl->monospaceTypeface.reset();
-    m_impl->fontManager.reset();
     m_impl->imageResources.clear();
     m_impl->cachedLayers.clear();
     if (m_impl->directContext) {
@@ -262,41 +244,60 @@ void SkiaDisplayListRenderer::shutdown() {
     m_impl->surfaceFramebuffer = 0;
     m_impl->surfaceWidth = 0;
     m_impl->surfaceHeight = 0;
+    m_impl->surfacePixels = nullptr;
     m_impl->frameSaveCount = 0;
 }
 
 bool SkiaDisplayListRenderer::beginFrame(
         uint32_t framebuffer, uint32_t pixelWidth, uint32_t pixelHeight,
+        uint32_t* rasterPixels,
         std::optional<lcl::graphics::RectF> deviceDamage) {
-    if (!m_impl->directContext || !m_impl->graphicsContext ||
-        pixelWidth == 0 || pixelHeight == 0 ||
-        !m_impl->graphicsContext->makeCurrent()) {
+    if (pixelWidth == 0 || pixelHeight == 0) {
         return false;
     }
 
-    m_impl->directContext->resetContext();
-    if (!m_impl->surface || m_impl->surfaceFramebuffer != framebuffer ||
-        m_impl->surfaceWidth != pixelWidth ||
-        m_impl->surfaceHeight != pixelHeight) {
-        GLint samples = 0;
-        GLint stencilBits = 0;
-        glGetIntegerv(GL_SAMPLES, &samples);
-        glGetIntegerv(GL_STENCIL_BITS, &stencilBits);
-        const GrGLFramebufferInfo info{
-            static_cast<GrGLuint>(framebuffer),
-            static_cast<GrGLenum>(GL_RGBA8),
-        };
-        const auto target = GrBackendRenderTargets::MakeGL(
-            static_cast<int>(pixelWidth), static_cast<int>(pixelHeight),
-            std::max(0, samples), std::max(0, stencilBits), info);
-        m_impl->surface = SkSurfaces::WrapBackendRenderTarget(
-            m_impl->directContext.get(), target, kBottomLeft_GrSurfaceOrigin,
-            kRGBA_8888_SkColorType, SkColorSpace::MakeSRGB(), nullptr);
-        if (!m_impl->surface) return false;
-        m_impl->surfaceFramebuffer = framebuffer;
-        m_impl->surfaceWidth = pixelWidth;
-        m_impl->surfaceHeight = pixelHeight;
+    if (m_impl->graphicsContext) {
+        if (!m_impl->directContext ||
+            !m_impl->graphicsContext->makeCurrent()) return false;
+        m_impl->directContext->resetContext();
+        if (!m_impl->surface || m_impl->surfaceFramebuffer != framebuffer ||
+            m_impl->surfaceWidth != pixelWidth ||
+            m_impl->surfaceHeight != pixelHeight) {
+            GLint samples = 0;
+            GLint stencilBits = 0;
+            glGetIntegerv(GL_SAMPLES, &samples);
+            glGetIntegerv(GL_STENCIL_BITS, &stencilBits);
+            const GrGLFramebufferInfo info{
+                static_cast<GrGLuint>(framebuffer),
+                static_cast<GrGLenum>(GL_RGBA8),
+            };
+            const auto target = GrBackendRenderTargets::MakeGL(
+                static_cast<int>(pixelWidth), static_cast<int>(pixelHeight),
+                std::max(0, samples), std::max(0, stencilBits), info);
+            m_impl->surface = SkSurfaces::WrapBackendRenderTarget(
+                m_impl->directContext.get(), target,
+                kBottomLeft_GrSurfaceOrigin, kRGBA_8888_SkColorType,
+                SkColorSpace::MakeSRGB(), nullptr);
+        }
+    } else {
+        if (!rasterPixels) return false;
+        if (!m_impl->surface || m_impl->surfacePixels != rasterPixels ||
+            m_impl->surfaceWidth != pixelWidth ||
+            m_impl->surfaceHeight != pixelHeight) {
+            const SkImageInfo info = SkImageInfo::Make(
+                static_cast<int>(pixelWidth), static_cast<int>(pixelHeight),
+                kBGRA_8888_SkColorType, kUnpremul_SkAlphaType,
+                SkColorSpace::MakeSRGB());
+            m_impl->surface = SkSurfaces::WrapPixels(
+                info, rasterPixels,
+                static_cast<size_t>(pixelWidth) * sizeof(uint32_t));
+        }
     }
+    if (!m_impl->surface) return false;
+    m_impl->surfaceFramebuffer = framebuffer;
+    m_impl->surfaceWidth = pixelWidth;
+    m_impl->surfaceHeight = pixelHeight;
+    m_impl->surfacePixels = rasterPixels;
 
     SkCanvas* canvas = m_impl->surface->getCanvas();
     canvas->resetMatrix();
@@ -399,9 +400,11 @@ bool SkiaDisplayListRenderer::replay(
                     const SkImageInfo info = SkImageInfo::Make(
                         pixelWidth, pixelHeight, kRGBA_8888_SkColorType,
                         kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
-                    auto cachedSurface = SkSurfaces::RenderTarget(
-                        m_impl->directContext.get(), skgpu::Budgeted::kYes,
-                        info);
+                    auto cachedSurface = m_impl->directContext
+                        ? SkSurfaces::RenderTarget(
+                              m_impl->directContext.get(),
+                              skgpu::Budgeted::kYes, info)
+                        : SkSurfaces::Raster(info);
                     if (!cachedSurface) {
                         replaySucceeded = false;
                         return;
@@ -473,18 +476,16 @@ bool SkiaDisplayListRenderer::replay(
                 canvas->drawPath(toSkPath(op.path, op.paint.fillRule),
                                  toSkPaint(op.paint));
             } else if constexpr (std::is_same_v<T, lcl::graphics::DrawTextCommand>) {
-                auto typeface = m_impl->typeface(op.fontFamily);
-                if (!typeface || op.text.empty()) return;
-                SkFont font(std::move(typeface), std::max(1.0f, op.fontSize));
-                font.setEdging(SkFont::Edging::kAntiAlias);
-                SkFontMetrics metrics;
-                font.getMetrics(&metrics);
+                const auto prepared = skia_text::prepareFont(
+                    op.fontFamily, op.fontSize);
+                if (!prepared || op.text.empty()) return;
                 SkPaint paint;
                 paint.setAntiAlias(true);
                 paint.setColor4f(toSkColor(op.color));
                 canvas->drawSimpleText(
                     op.text.data(), op.text.size(), SkTextEncoding::kUTF8,
-                    op.origin.x, op.origin.y - metrics.fAscent, font, paint);
+                    op.origin.x, op.origin.y + prepared->metrics.ascent,
+                    prepared->font, paint);
             } else if constexpr (std::is_same_v<T, lcl::graphics::DrawImageCommand>) {
                 auto image = m_impl->image(op);
                 if (!image || op.destination.isEmpty()) return;
@@ -537,12 +538,12 @@ void SkiaDisplayListRenderer::clearCaches() {
 }
 
 void SkiaDisplayListRenderer::endFrame() {
-    if (!m_impl->surface || !m_impl->directContext) return;
+    if (!m_impl->surface) return;
     SkCanvas* canvas = m_impl->surface->getCanvas();
     if (m_impl->frameSaveCount > 0) {
         canvas->restoreToCount(m_impl->frameSaveCount);
     }
-    m_impl->directContext->flushAndSubmit();
+    if (m_impl->directContext) m_impl->directContext->flushAndSubmit();
     m_impl->frameSaveCount = 0;
 }
 

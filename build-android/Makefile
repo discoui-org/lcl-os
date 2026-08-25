@@ -3714,30 +3714,6 @@ src/render/client_egl_context.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/client_egl_context.cpp.s
 .PHONY : src/render/client_egl_context.cpp.s
 
-src/render/font_renderer.o: src/render/font_renderer.cpp.o
-.PHONY : src/render/font_renderer.o
-
-# target to build an object file
-src/render/font_renderer.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/font_renderer.cpp.o
-.PHONY : src/render/font_renderer.cpp.o
-
-src/render/font_renderer.i: src/render/font_renderer.cpp.i
-.PHONY : src/render/font_renderer.i
-
-# target to preprocess a source file
-src/render/font_renderer.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/font_renderer.cpp.i
-.PHONY : src/render/font_renderer.cpp.i
-
-src/render/font_renderer.s: src/render/font_renderer.cpp.s
-.PHONY : src/render/font_renderer.s
-
-# target to generate assembly for a file
-src/render/font_renderer.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/font_renderer.cpp.s
-.PHONY : src/render/font_renderer.cpp.s
-
 src/render/path_rasterizer.o: src/render/path_rasterizer.cpp.o
 .PHONY : src/render/path_rasterizer.o
 
@@ -3863,6 +3839,30 @@ src/render/skia_display_list_renderer.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-render.dir/build.make CMakeFiles/lcl-render.dir/src/render/skia_display_list_renderer.cpp.s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/skia_display_list_renderer.cpp.s
 .PHONY : src/render/skia_display_list_renderer.cpp.s
+
+src/render/skia_text_engine.o: src/render/skia_text_engine.cpp.o
+.PHONY : src/render/skia_text_engine.o
+
+# target to build an object file
+src/render/skia_text_engine.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/skia_text_engine.cpp.o
+.PHONY : src/render/skia_text_engine.cpp.o
+
+src/render/skia_text_engine.i: src/render/skia_text_engine.cpp.i
+.PHONY : src/render/skia_text_engine.i
+
+# target to preprocess a source file
+src/render/skia_text_engine.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/skia_text_engine.cpp.i
+.PHONY : src/render/skia_text_engine.cpp.i
+
+src/render/skia_text_engine.s: src/render/skia_text_engine.cpp.s
+.PHONY : src/render/skia_text_engine.s
+
+# target to generate assembly for a file
+src/render/skia_text_engine.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-font-metrics.dir/build.make CMakeFiles/lcl-font-metrics.dir/src/render/skia_text_engine.cpp.s
+.PHONY : src/render/skia_text_engine.cpp.s
 
 src/render/text_metrics.o: src/render/text_metrics.cpp.o
 .PHONY : src/render/text_metrics.o
@@ -4467,9 +4467,6 @@ help:
 	@echo "... src/render/client_egl_context.o"
 	@echo "... src/render/client_egl_context.i"
 	@echo "... src/render/client_egl_context.s"
-	@echo "... src/render/font_renderer.o"
-	@echo "... src/render/font_renderer.i"
-	@echo "... src/render/font_renderer.s"
 	@echo "... src/render/path_rasterizer.o"
 	@echo "... src/render/path_rasterizer.i"
 	@echo "... src/render/path_rasterizer.s"
@@ -4485,6 +4482,9 @@ help:
 	@echo "... src/render/skia_display_list_renderer.o"
 	@echo "... src/render/skia_display_list_renderer.i"
 	@echo "... src/render/skia_display_list_renderer.s"
+	@echo "... src/render/skia_text_engine.o"
+	@echo "... src/render/skia_text_engine.i"
+	@echo "... src/render/skia_text_engine.s"
 	@echo "... src/render/text_metrics.o"
 	@echo "... src/render/text_metrics.i"
 	@echo "... src/render/text_metrics.s"

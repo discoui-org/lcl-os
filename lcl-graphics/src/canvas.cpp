@@ -38,13 +38,8 @@ void Canvas::drawDisplayList(const DisplayList& displayList) {
             } else if constexpr (std::is_same_v<T, DrawPathCommand>) {
                 drawPath(op.path, op.paint);
             } else if constexpr (std::is_same_v<T, DrawTextCommand>) {
-                if (op.rasterized) {
-                    drawRasterizedText(op.origin.x, op.origin.y, op.text, op.color,
-                                       op.fontSize, op.fontFamily);
-                } else {
-                    drawText(op.origin.x, op.origin.y, op.text, op.color,
-                             op.fontSize, op.fontFamily);
-                }
+                drawText(op.origin.x, op.origin.y, op.text, op.color,
+                         op.fontSize, op.fontFamily);
             } else if constexpr (std::is_same_v<T, DrawImageCommand>) {
                 const auto* pixels = reinterpret_cast<const uint32_t*>(op.resourceKey);
                 drawImageResource(

@@ -67,9 +67,6 @@ public:
                             float roundness) override;
     void drawText(float x, float y, const std::string& text, lcl::graphics::Color color,
                   float fontSize, lcl::graphics::FontFamily family) override;
-    void drawRasterizedText(float x, float y, const std::string& text,
-                            lcl::graphics::Color color, float fontSize,
-                            lcl::graphics::FontFamily family) override;
     float measureText(const std::string& text, float fontSize,
                       lcl::graphics::FontFamily family) override;
     void drawBuffer(const lcl::graphics::RectF& destination,

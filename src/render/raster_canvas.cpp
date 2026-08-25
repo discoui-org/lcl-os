@@ -353,21 +353,9 @@ void RasterCanvas::drawText(float x, float y, const std::string& text,
     m_displayListBuilder.drawText({x, y}, text, color, fontSize, family);
 }
 
-void RasterCanvas::drawRasterizedText(float x, float y, const std::string& text,
-                                    lcl::graphics::Color color, float fontSize,
-                                    lcl::graphics::FontFamily family) {
-    if (text.empty()) return;
-    m_displayListBuilder.drawText({x, y}, text, color, fontSize, family, true);
-}
-
 float RasterCanvas::measureText(const std::string& text, float fontSize,
                               lcl::graphics::FontFamily family) {
-    if (m_displayListOnly) {
-        return lcl::render::text_metrics::measureText(text, fontSize, family);
-    }
-    return family == lcl::graphics::FontFamily::Monospace
-        ? renderer().measureMonospaceString(text, fontSize)
-        : renderer().measureString(text, fontSize);
+    return lcl::render::text_metrics::measureText(text, fontSize, family);
 }
 
 void RasterCanvas::drawBuffer(const lcl::graphics::RectF& destination,

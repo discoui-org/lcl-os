@@ -42,7 +42,7 @@ TEST(DisplayListWireTest, RoundTripsBackendNeutralCommandsCanonically) {
     paint.opacity = 0.65f;
     builder.drawPath(rounded, paint);
     builder.drawText({13.0f, 17.0f}, "LCL UTF-8: çığ", {40, 50, 60, 255},
-                     15.0f, graphics::FontFamily::Monospace, true);
+                     15.0f, graphics::FontFamily::Monospace);
     builder.endLayer();
     builder.restore();
 
@@ -112,7 +112,7 @@ TEST(DisplayListWireTest, RejectsTruncationTrailingBytesAndUnknownVersion) {
               graphics::DisplayListWireError::InvalidData);
 
     std::vector<uint8_t> future = encoded.bytes;
-    future[4] = 2;
+    future[4] = 3;
     future[5] = 0;
     EXPECT_EQ(graphics::decodeDisplayList(future).error,
               graphics::DisplayListWireError::UnsupportedVersion);

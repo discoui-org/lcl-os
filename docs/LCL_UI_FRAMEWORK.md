@@ -178,8 +178,8 @@ The backend-neutral 2D drawing contract available inside `Widget::draw(...)`:
 Geometry, text sizes, radii, strokes, clips, and effects use float logical
 units. `RasterCanvas` records them into one immutable `DisplayList`; only
 `endFrame()` asks `RasterRenderer` to replay that list with
-`RenderTarget.deviceScale`. Cached layers and animation-stable rasterized text
-are display-list commands rather than immediate renderer calls.
+`RenderTarget.deviceScale`. Cached layers remain display-list commands, while
+text measurement and GPU/CPU drawing share the same Skia font engine.
 
 Applications select the standard adapter explicitly with
 `lcl::render::makeDisplayListCanvas()` and link `lcl-raster`. Widgets themselves

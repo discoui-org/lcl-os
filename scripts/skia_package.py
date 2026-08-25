@@ -25,7 +25,7 @@ def _require_package(project_root: Path, package_name: str) -> Path:
 def host_skia_cmake_args(project_root: Path, arch: str) -> list[str]:
     normalized = "x86_64" if arch in {"x64", "amd64"} else arch
     package = _require_package(project_root, f"host-{normalized}")
-    return ["-DLCL_ENABLE_SKIA=ON", f"-DLCL_SKIA_ROOT={package}"]
+    return [f"-DLCL_SKIA_ROOT={package}"]
 
 
 def android_skia_cmake_args(project_root: Path, abi: str) -> list[str]:
@@ -36,4 +36,4 @@ def android_skia_cmake_args(project_root: Path, abi: str) -> list[str]:
     if package_arch is None:
         raise RuntimeError(f"Unsupported Android Skia ABI: {abi}")
     package = _require_package(project_root, f"android-{package_arch}")
-    return ["-DLCL_ENABLE_SKIA=ON", f"-DLCL_SKIA_ROOT={package}"]
+    return [f"-DLCL_SKIA_ROOT={package}"]

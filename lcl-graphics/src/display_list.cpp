@@ -44,10 +44,9 @@ void DisplayListBuilder::drawPath(const Path& path, const Paint& paint) {
     m_commands.emplace_back(DrawPathCommand{path, paint});
 }
 void DisplayListBuilder::drawText(PointF origin, std::string text, Color color,
-                                  float fontSize, FontFamily fontFamily,
-                                  bool rasterized) {
+                                  float fontSize, FontFamily fontFamily) {
     m_commands.emplace_back(DrawTextCommand{origin, std::move(text), color,
-                                            fontSize, fontFamily, rasterized});
+                                            fontSize, fontFamily});
 }
 void DisplayListBuilder::drawImage(const RectF& destination, uintptr_t resourceKey,
                                    int sourceWidth, int sourceHeight, int stridePixels,

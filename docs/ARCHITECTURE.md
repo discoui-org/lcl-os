@@ -18,7 +18,7 @@ The LCL architecture consists of 5 main decoupled layers:
 +-----------------------------------------------------------------------+
 |  Application & IPC Layer (lcl-ui clients, compositor AF_UNIX IPC)    |
 +-----------------------------------------------------------------------+
-|  Graphics & Window Manager (`lcl-graphics`, `lcl-raster`, FontRenderer)     |
+|  Graphics & Window Manager (`lcl-graphics`, Skia GPU/CPU replay)           |
 +-----------------------------------------------------------------------+
 |  Linux Kernel & Hardware Layer (DRM/KMS, virtio_gpu, evdev, io_uring) |
 +-----------------------------------------------------------------------+
@@ -42,10 +42,13 @@ The LCL architecture consists of 5 main decoupled layers:
   coordinates, paths, paints, clips, layers, text, images, and cached-layer
   references. No device-pixel conversion occurs while the list is recorded.
 * **Raster execution (`lcl-raster`):** `RasterCanvas` records one frame and
-  submits it once at `endFrame()`. `RasterRenderer` replays that list through
-  the GLES or software backend. `RenderTarget.deviceScale` is applied only at
-  this raster boundary.
-* **Font & Text Engine (`FontRenderer`):** TrueType vector font rasterization via `stb_truetype` featuring subpixel antialiasing, macOS-style gamma correction, font-agnostic metric queries (`getCellWidth()`, `getCellHeight()`), and UTF-8 multi-byte sequence handling.
+  submits it once at `endFrame()`. One Skia replay engine targets either a
+  Ganesh/OpenGL surface or a CPU raster surface. `RenderTarget.deviceScale` is
+  applied only at this raster boundary.
+* **Font & Text Engine:** Skia owns packaged typeface loading, glyph advances,
+  ascent/descent/line-height metrics, UTF-8 drawing, and GPU/CPU rasterization.
+  Layout and drawing use the same prepared `SkFont`; no second font rasterizer
+  or heuristic measurement path exists.
 * **Window Manager:** Decoupled spatial engine tracking z-index, logical
   coordinates (`x, y, width, height`), focus, drag/resize state, and window
   presentation transforms. It does not paint window contents. Shell-specific
@@ -98,7 +101,7 @@ The LCL architecture consists of 5 main decoupled layers:
             |
             v
 +-----------+-----------+
-|  5. Renderer Engine   | (FontRenderer & DRM/KMS buffer swap)
+|  5. Renderer Engine   | (Skia replay & DRM/KMS buffer swap)
 +-----------------------+
 ```
 
@@ -137,7 +140,7 @@ lcl-os/
     │   ├── ipc/                    # Secure Unix Domain Socket IPC server
     │   ├── session/                # App registry, session RPC, lifecycle authority
     │   └── terminal/               # PTY master/slave manager
-    ├── render/                     # Renderer engine & stb_truetype FontRenderer
+    ├── render/                     # Skia GPU/CPU replay and presentation helpers
     ├── fs/                         # io_uring & POSIX async file system
     └── tools/                      # Native CLI utilities (lcl-open, lcl-sessiond)
 ```

@@ -1,8 +1,7 @@
 #include "render/text_metrics.hpp"
+#include "render/skia_text_engine.hpp"
 
 #include <algorithm>
-#include <cstddef>
-#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <string_view>
@@ -14,12 +13,6 @@ namespace {
 bool isReadableFile(const std::string& path) {
     std::ifstream file(path, std::ios::binary);
     return file.good();
-}
-
-FontRenderer& cachedRenderer(lcl::graphics::FontFamily family) {
-    thread_local FontRenderer interfaceFont;
-    thread_local FontRenderer monospaceFont;
-    return family == lcl::graphics::FontFamily::Monospace ? monospaceFont : interfaceFont;
 }
 
 } // namespace
@@ -54,23 +47,13 @@ std::optional<std::string> resolveFontPath(lcl::graphics::FontFamily family) {
     return *found;
 }
 
-bool loadFont(FontRenderer& renderer, lcl::graphics::FontFamily family, float pixelFontSize) {
-    const float sanitizedSize = std::max(1.0f, pixelFontSize);
-    const auto path = resolveFontPath(family);
-    return path && renderer.loadFont(*path, sanitizedSize);
+TextMetrics measure(const std::string& text, float fontSize,
+                    lcl::graphics::FontFamily family) {
+    return skia_text::measureText(text, fontSize, family);
 }
 
 float measureText(const std::string& text, float fontSize, lcl::graphics::FontFamily family) {
-    if (text.empty() || !std::isfinite(fontSize)) return 0.0f;
-
-    FontRenderer& renderer = cachedRenderer(family);
-    const float sanitizedSize = std::max(1.0f, fontSize);
-    if (!renderer.isInitialized() ||
-        std::fabs(renderer.getFontSize() - sanitizedSize) > 0.01f) {
-        renderer = FontRenderer{};
-        if (!loadFont(renderer, family, sanitizedSize)) return 0.0f;
-    }
-    return static_cast<float>(renderer.getTextWidth(text));
+    return measure(text, fontSize, family).advanceWidth;
 }
 
 } // namespace lcl::render::text_metrics

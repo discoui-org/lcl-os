@@ -80,10 +80,9 @@ void Text::styleDidChange() {
 void Text::updateMeasureFunc() {
     m_yogaNode.setMeasureFunc([this](float width, YGMeasureMode widthMode, float height, YGMeasureMode heightMode) {
         (void)width; (void)widthMode; (void)height; (void)heightMode;
-        const float measuredW = lcl::render::text_metrics::measureText(
+        const auto metrics = lcl::render::text_metrics::measure(
             m_text, m_fontSize, m_fontFamily);
-        float measuredH = m_fontSize * 1.2f;
-        return YGSize{measuredW, measuredH};
+        return YGSize{metrics.advanceWidth, metrics.lineHeight};
     });
     m_yogaNode.markDirty();
 }
@@ -102,16 +101,8 @@ void Text::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     } else if (m_textAlign == TextAlign::End) {
         textX += std::max(0.0f, m_absoluteBounds.width - textWidth);
     }
-    if (hasActiveAnimationInHierarchy()) {
-        // Keep one glyph raster stable for the entire transform. Once the
-        // animation settles the normal path below is used again, producing a
-        // fresh, pixel-aligned final render instead of scaling forever.
-        canvas.drawRasterizedText(textX, m_absoluteBounds.y, m_text, m_textColor,
-                                  m_fontSize, m_fontFamily);
-    } else {
-        canvas.drawText(textX, m_absoluteBounds.y, m_text, m_textColor,
-                        m_fontSize, m_fontFamily);
-    }
+    canvas.drawText(textX, m_absoluteBounds.y, m_text, m_textColor,
+                    m_fontSize, m_fontFamily);
     drawChildren(canvas, damageRect);
     endPresentation(canvas);
 }
