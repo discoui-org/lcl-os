@@ -53,6 +53,9 @@ private:
     ShellStateBroker& m_shellState;
     const WindowingPolicy& m_windowingPolicy;
     uint64_t m_nextShmContentSerial{1};
+    uint64_t m_nextDisplayListSerial{1};
+    uint64_t m_nextDisplayResourceId{1};
+    uint64_t m_nextDisplayCacheId{1};
     std::unordered_map<int, protocol::LCLSystemSurfaceKind> m_pendingSystemSurfaceKinds;
     std::unordered_map<int, int> m_nativeBufferChannels;
     struct ShellSubscription {

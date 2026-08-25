@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "lcl-graphics/display_list.hpp"
 #include "lcl-graphics/font.hpp"
@@ -18,6 +19,11 @@ struct ImageResourceView {
     const uint32_t* pixels{nullptr};
     int stridePixels{0};
     bool opaque{false};
+};
+
+struct DisplayListFrame {
+    DisplayList displayList;
+    std::vector<ImageResourceView> imageResources;
 };
 
 enum class NativeBufferTransport : uint8_t {
@@ -52,6 +58,11 @@ public:
     virtual void beginFrame() = 0;
     virtual void endFrame() = 0;
     virtual uint32_t* rasterBuffer() = 0;
+
+    virtual bool usesDisplayListTransport() const { return false; }
+    virtual std::optional<DisplayListFrame> takeDisplayListFrame() {
+        return std::nullopt;
+    }
 
     virtual bool isDmaBufFrameActive() const { return false; }
     virtual void setDmaBufTransportEnabled(bool) {}

@@ -14,7 +14,7 @@ namespace lcl::render {
 /** Canvas adapter for the existing RasterRenderer implementation. */
 class RasterCanvas final : public lcl::graphics::Canvas {
 public:
-    RasterCanvas();
+    explicit RasterCanvas(bool displayListOnly = false);
     explicit RasterCanvas(RasterRenderer& renderer);
     ~RasterCanvas() override;
 
@@ -25,6 +25,8 @@ public:
     void beginFrame() override;
     void endFrame() override;
     uint32_t* rasterBuffer() override;
+    bool usesDisplayListTransport() const override { return m_displayListOnly; }
+    std::optional<lcl::graphics::DisplayListFrame> takeDisplayListFrame() override;
     bool isDmaBufFrameActive() const override;
     void setDmaBufTransportEnabled(bool enabled) override;
     bool hasDmaBufTransport() const override;
@@ -113,10 +115,13 @@ private:
     bool m_dmaBufFrameActive{false};
     bool m_dmaBufFrameBlocked{false};
     bool m_dmaBufTransportEnabled{false};
+    bool m_displayListOnly{false};
+    std::vector<lcl::graphics::ImageResourceView> m_frameImageResources;
     uint32_t m_dmaBufContentWidth{0};
     uint32_t m_dmaBufContentHeight{0};
 };
 
 std::unique_ptr<lcl::graphics::Canvas> makeRasterCanvas();
+std::unique_ptr<lcl::graphics::Canvas> makeDisplayListCanvas();
 
 } // namespace lcl::render

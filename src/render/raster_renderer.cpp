@@ -853,16 +853,16 @@ bool RasterRenderer::beginCachedLayerTarget(uint32_t framebuffer, uint32_t textu
                                           float logicalOriginX, float logicalOriginY,
                                           float effectiveScale,
                                           std::optional<lcl::graphics::RectF> updateBounds) {
-    if (!m_initialized || m_cachedLayerTargetState || width == 0 || height == 0) return false;
+    if (!m_initialized || width == 0 || height == 0) return false;
     const bool gpu = m_backendType == RasterBackend::OpenGL_EGL;
     if ((gpu && (framebuffer == 0 || texture == 0 || !m_eglBackend)) ||
         (!gpu && !softwarePixels)) return false;
 
-    m_cachedLayerTargetState = CachedLayerTargetState{
+    m_cachedLayerTargetStates.push_back(CachedLayerTargetState{
         m_width, m_height, m_targetPixels, m_contentOriginX, m_contentOriginY,
         m_deviceScale,
         m_clipRect, m_glExternalFrameFBO, m_glExternalFrameTexture,
-        m_glExternalBackingWidth, m_glExternalBackingHeight};
+        m_glExternalBackingWidth, m_glExternalBackingHeight});
     setDeviceScale(effectiveScale);
     m_width = width;
     m_height = height;
@@ -909,9 +909,9 @@ bool RasterRenderer::beginCachedLayerTarget(uint32_t framebuffer, uint32_t textu
 }
 
 void RasterRenderer::endCachedLayerTarget() {
-    if (!m_cachedLayerTargetState) return;
-    const CachedLayerTargetState state = *m_cachedLayerTargetState;
-    m_cachedLayerTargetState.reset();
+    if (m_cachedLayerTargetStates.empty()) return;
+    const CachedLayerTargetState state = m_cachedLayerTargetStates.back();
+    m_cachedLayerTargetStates.pop_back();
     m_width = state.width;
     m_height = state.height;
     m_targetPixels = state.targetPixels;
@@ -1017,6 +1017,65 @@ bool RasterRenderer::hasCachedDisplayLayer(uint64_t id) const {
     return m_cachedDisplayLayers.find(id) != m_cachedDisplayLayers.end();
 }
 
+bool RasterRenderer::updateCachedDisplayLayer(
+        uint64_t id, const lcl::graphics::RectF& logicalBounds,
+        const lcl::graphics::DisplayList& displayList,
+        const lcl::graphics::RenderTarget& target) {
+    const lcl::graphics::Matrix3 identity{};
+    if (!prepareCachedDisplayLayer(id, logicalBounds, identity, target, false)) {
+        return false;
+    }
+    auto found = m_cachedDisplayLayers.find(id);
+    if (found == m_cachedDisplayLayers.end()) return false;
+    auto& layer = found->second;
+    uint32_t* softwarePixels = layer.texture != 0 ? nullptr : layer.pixels.data();
+    if (!beginCachedLayerTarget(
+            layer.framebuffer, layer.texture, layer.pixelWidth, layer.pixelHeight,
+            softwarePixels, logicalBounds.x, logicalBounds.y,
+            layer.effectiveScale, std::nullopt)) {
+        return false;
+    }
+    replayDisplayList(displayList, target);
+    endCachedLayerTarget();
+    return true;
+}
+
+bool RasterRenderer::drawCachedDisplayLayer(uint64_t id,
+                                            const RasterRect& destination,
+                                            float opacity,
+                                            float cornerRadius,
+                                            float cornerRoundness,
+                                            bool squareTopCorners,
+                                            RasterBufferSampling sampling) {
+    const auto found = m_cachedDisplayLayers.find(id);
+    if (found == m_cachedDisplayLayers.end()) return false;
+    const auto& layer = found->second;
+    if (layer.texture != 0) {
+        drawDmaBufTextureTransformed(
+            destination.x, destination.y,
+            static_cast<int>(layer.pixelWidth), static_cast<int>(layer.pixelHeight),
+            static_cast<int>(layer.pixelWidth), static_cast<int>(layer.pixelHeight),
+            layer.texture, opacity, cornerRadius, cornerRoundness,
+            squareTopCorners, destination.width, destination.height, sampling);
+        return true;
+    }
+    if (layer.pixels.empty()) return false;
+    drawBufferTransformed(
+        destination.x, destination.y,
+        static_cast<int>(layer.pixelWidth), static_cast<int>(layer.pixelHeight),
+        layer.pixels.data(), static_cast<int>(layer.pixelWidth), opacity,
+        cornerRadius, cornerRoundness, squareTopCorners,
+        destination.width, destination.height, sampling);
+    return true;
+}
+
+void RasterRenderer::releaseCachedDisplayLayer(uint64_t id) {
+    const auto found = m_cachedDisplayLayers.find(id);
+    if (found == m_cachedDisplayLayers.end()) return;
+    destroyCachedLayerTarget(found->second.framebuffer, found->second.texture);
+    m_cachedDisplayLayers.erase(found);
+}
+
 void RasterRenderer::clearDisplayListCaches() {
     for (const auto& [_, layer] : m_cachedDisplayLayers) {
         destroyCachedLayerTarget(layer.framebuffer, layer.texture);
@@ -1029,7 +1088,7 @@ void RasterRenderer::shutdown() {
     // A Canvas normally balances cached-target redirection before shutdown.
     // Drop any saved target state defensively so a reinitialized renderer can
     // never restore dimensions or pointers owned by its previous lifetime.
-    m_cachedLayerTargetState.reset();
+    m_cachedLayerTargetStates.clear();
     clearDisplayListCaches();
 #ifndef LCL_SOFTWARE_ONLY
     // Several WindowApps may interleave independent EGL contexts on one
@@ -1319,6 +1378,11 @@ void RasterRenderer::replayDisplayList(
                           {op.color.r, op.color.g, op.color.b, op.color.a});
             } else if constexpr (std::is_same_v<T, lcl::graphics::BeginCachedLayerCommand>) {
                 if (cachedLayerReplayState) return;
+                if (!prepareCachedDisplayLayer(
+                        op.id, op.sourceBounds, state.transform, target,
+                        op.updateBounds.has_value())) {
+                    return;
+                }
                 const auto found = m_cachedDisplayLayers.find(op.id);
                 if (found == m_cachedDisplayLayers.end()) return;
                 auto& layer = found->second;

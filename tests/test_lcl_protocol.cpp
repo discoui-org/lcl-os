@@ -1109,3 +1109,73 @@ TEST(LCLProtocolTest, InputEventCodecRoundTripWithPointerIdentityAndCancel) {
     EXPECT_FLOAT_EQ(decodedInput->deltaX, -1.5f);
     EXPECT_FLOAT_EQ(decodedInput->deltaY, 2.5f);
 }
+
+TEST(LCLProtocolTest, ImageResourceUploadCarriesStableIdentityAndDescriptor) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+    const int descriptor = dup(STDIN_FILENO);
+    ASSERT_GE(descriptor, 0);
+
+    LCLMsgUploadImageResource sent{};
+    sent.surfaceId = 3;
+    sent.resourceId = 41;
+    sent.contentRevision = 7;
+    sent.width = 8;
+    sent.height = 4;
+    sent.stridePixels = 8;
+    sent.opaque = 1;
+    sent.byteSize = 8u * 4u * sizeof(uint32_t);
+    LCLHeader header{};
+    header.opcode = LCLOpcode::UploadImageResource;
+    header.payloadSize = sizeof(sent);
+    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &sent, descriptor));
+
+    LCLHeader receivedHeader{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(
+        sockets[1], receivedHeader, payload, receivedFd));
+    ASSERT_EQ(receivedHeader.opcode, LCLOpcode::UploadImageResource);
+    ASSERT_EQ(payload.size(), sizeof(sent));
+    const auto* received = reinterpret_cast<const
+        LCLMsgUploadImageResource*>(payload.data());
+    EXPECT_EQ(received->resourceId, 41u);
+    EXPECT_EQ(received->contentRevision, 7u);
+    EXPECT_EQ(received->byteSize, sent.byteSize);
+    EXPECT_GE(receivedFd, 0);
+
+    close(receivedFd);
+    close(descriptor);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(LCLProtocolTest, DisplayListCommitRoundTripsBoundedVariablePayload) {
+    constexpr std::array<uint8_t, 12> wire{
+        0x4c, 0x44, 0x4c, 0x31, 1, 0, 0, 0, 0, 0, 0, 0};
+    LCLMsgCommitDisplayList commit{};
+    commit.surfaceId = 5;
+    commit.configureSerial = 19;
+    commit.logicalWidth = 448.0f;
+    commit.logicalHeight = 997.333f;
+    commit.displayListSize = wire.size();
+    std::vector<uint8_t> native(sizeof(commit) + wire.size());
+    std::memcpy(native.data(), &commit, sizeof(commit));
+    std::memcpy(native.data() + sizeof(commit), wire.data(), wire.size());
+
+    LCLHeader header{};
+    header.opcode = LCLOpcode::CommitDisplayList;
+    header.payloadSize = native.size();
+    std::vector<uint8_t> packet;
+    ASSERT_TRUE(encodePacket(header, native.data(), packet));
+
+    LCLHeader decodedHeader{};
+    std::vector<uint8_t> decoded;
+    ASSERT_TRUE(decodePacket(
+        packet.data(), packet.size(), decodedHeader, decoded));
+    ASSERT_EQ(decoded, native);
+    const auto* decodedCommit = reinterpret_cast<const
+        LCLMsgCommitDisplayList*>(decoded.data());
+    EXPECT_EQ(decodedCommit->configureSerial, 19u);
+    EXPECT_FLOAT_EQ(decodedCommit->logicalWidth, 448.0f);
+}

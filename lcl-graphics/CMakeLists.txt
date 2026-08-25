@@ -5,6 +5,7 @@ add_library(lcl-graphics STATIC
     src/canvas.cpp
     src/path.cpp
     src/display_list.cpp
+    src/display_list_wire.cpp
 )
 
 target_include_directories(lcl-graphics PUBLIC

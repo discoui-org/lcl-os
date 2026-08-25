@@ -2,6 +2,7 @@
 #include "lcl-graphics/canvas.hpp"
 #include "lcl-ui/core/caret_presentation_controller.hpp"
 #include "lcl-graphics/geometry.hpp"
+#include "lcl-graphics/display_list_wire.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/layout/yoga_node.hpp"
@@ -347,6 +348,30 @@ TEST(LclGraphicsTest, RasterCanvasDefersRasterWorkUntilDisplayListReplay) {
     ASSERT_EQ(canvas.lastDisplayList().commands().size(), 1u);
     EXPECT_NE(std::get_if<graphics::DrawPathCommand>(
                   &canvas.lastDisplayList().commands().front()), nullptr);
+}
+
+TEST(LclGraphicsTest, CompositorOwnedDisplayListLayerRasterizesThenComposes) {
+    std::vector<uint32_t> scenePixels(16 * 16, 0x00000000u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(16, 16, nullptr, scenePixels.data()));
+
+    graphics::DisplayListBuilder builder;
+    builder.clearRect({0.0f, 0.0f, 4.0f, 4.0f}, {0, 0, 0, 0});
+    builder.drawPath([] {
+        graphics::Path path;
+        path.addRect({0.0f, 0.0f, 4.0f, 4.0f});
+        return path;
+    }(), graphics::Paint{{255, 0, 0, 255}});
+    const graphics::RenderTarget target{{4.0f, 4.0f}, {4, 4}, 1.0f};
+    ASSERT_TRUE(renderer.updateCachedDisplayLayer(
+        91, {0.0f, 0.0f, 4.0f, 4.0f}, builder.build(), target));
+    EXPECT_EQ(scenePixels[3 + 4 * 16], 0x00000000u);
+
+    ASSERT_TRUE(renderer.drawCachedDisplayLayer(
+        91, {2.0f, 3.0f, 4.0f, 4.0f}));
+    EXPECT_EQ(scenePixels[3 + 4 * 16], 0xFFFF0000u);
+    renderer.releaseCachedDisplayLayer(91);
+    EXPECT_FALSE(renderer.hasCachedDisplayLayer(91));
 }
 
 TEST(LclGraphicsTest, RasterCanvasRecordsClearLayerImageAndRasterTextCommands) {
@@ -2653,6 +2678,44 @@ TEST(LclUiTest, NormalGpuFramesCoalesceUntilCompositorPresentation) {
         sockets[1], header, payload, receivedFd));
     EXPECT_EQ(header.opcode, lcl::protocol::LCLOpcode::AttachDmaBuf);
     if (receivedFd >= 0) close(receivedFd);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(LclUiTest, DisplayListCanvasCommitsLogicalCommandsWithoutShmOrDmaBuf) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    WindowApp app(lcl::render::makeDisplayListCanvas(), 100, 80,
+                  "Logical frame transport");
+    app.setExternalIpcSocket(sockets[0]);
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(100.0f);
+    root->setHeight(80.0f);
+    root->setBackgroundColor({10, 20, 30, 255});
+    app.setRootWidget(std::move(root));
+    ASSERT_TRUE(app.renderFrame());
+
+    lcl::protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(lcl::protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(receivedFd, -1);
+    ASSERT_EQ(header.opcode,
+              lcl::protocol::LCLOpcode::CommitDisplayList);
+    ASSERT_GE(payload.size(),
+              sizeof(lcl::protocol::LCLMsgCommitDisplayList));
+    const auto* commit = reinterpret_cast<const
+        lcl::protocol::LCLMsgCommitDisplayList*>(payload.data());
+    EXPECT_FLOAT_EQ(commit->logicalWidth, 100.0f);
+    EXPECT_FLOAT_EQ(commit->logicalHeight, 80.0f);
+    ASSERT_EQ(payload.size(), sizeof(*commit) + commit->displayListSize);
+    const auto decoded = graphics::decodeDisplayList(std::span<const uint8_t>(
+        payload.data() + sizeof(*commit), commit->displayListSize));
+    ASSERT_TRUE(decoded);
+    EXPECT_FALSE(decoded.displayList.empty());
 
     close(sockets[0]);
     close(sockets[1]);

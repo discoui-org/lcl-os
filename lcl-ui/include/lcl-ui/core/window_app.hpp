@@ -16,6 +16,7 @@
 #include <functional>
 #include <chrono>
 #include <utility>
+#include <unordered_map>
 
 namespace lcl::ui {
 
@@ -215,6 +216,7 @@ private:
     bool requestSurfaceDestroy(uint32_t surfaceId);
     bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
                              uint32_t payloadSize, int passedFd = -1);
+    bool uploadImageResource(const graphics::ImageResourceView& resource);
     void logFrameTraceIfDue();
     void collectClosedHostedSurfaces();
 
@@ -305,6 +307,7 @@ private:
     uint64_t m_refreshIntervalNs{0};
     uint64_t m_submittedConfigureSerial{0};
     uint32_t m_submittedDmaBufId{0};
+    std::unordered_map<uint64_t, uint64_t> m_uploadedImageRevisions;
     // A launch icon becomes compositor-visible only after the HomeScreen
     // buffer containing it has been committed on this same ordered socket.
     std::optional<lcl::protocol::LCLMsgLaunchIconVisibilityAck>

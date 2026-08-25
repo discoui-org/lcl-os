@@ -56,7 +56,7 @@ int main() {
     return 1;
   }
 
-  lcl::ui::WindowApp window(lcl::render::makeRasterCanvas(), kSurfaceWidth,
+  lcl::ui::WindowApp window(lcl::render::makeDisplayListCanvas(), kSurfaceWidth,
                             kSurfaceHeight, "LCL Terminal");
   window.setAppId("org.lcl.terminal");
   window.setInitialBounds(80, 60, kSurfaceWidth, kSurfaceHeight);

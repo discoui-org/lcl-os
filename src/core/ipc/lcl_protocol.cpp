@@ -223,6 +223,8 @@ bool validOpcode(LCLOpcode value) {
     case LCLOpcode::CancelLaunchPlaceholder:
     case LCLOpcode::LaunchIconVisibility:
     case LCLOpcode::LaunchIconVisibilityAck:
+    case LCLOpcode::UploadImageResource:
+    case LCLOpcode::CommitDisplayList:
         return true;
     }
     return false;
@@ -808,6 +810,53 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.fixed(msg.appId, sizeof(msg.appId));
         return true;
     }
+    case LCLOpcode::UploadImageResource: {
+        LOAD_ONE(LCLMsgUploadImageResource, msg);
+        if (msg.surfaceId == 0 || msg.reserved0 != 0 ||
+            std::any_of(std::begin(msg.reserved1), std::end(msg.reserved1),
+                        [](uint8_t value) { return value != 0; }) ||
+            msg.resourceId == 0 ||
+            msg.contentRevision == 0 || msg.width == 0 || msg.height == 0 ||
+            msg.stridePixels < msg.width || msg.opaque > 1 ||
+            msg.stridePixels > std::numeric_limits<uint64_t>::max() /
+                (static_cast<uint64_t>(msg.height) * sizeof(uint32_t)) ||
+            msg.byteSize != static_cast<uint64_t>(msg.stridePixels) *
+                msg.height * sizeof(uint32_t)) {
+            return false;
+        }
+        out.u32(msg.surfaceId);
+        out.u32(msg.reserved0);
+        out.u64(msg.resourceId);
+        out.u64(msg.contentRevision);
+        out.u32(msg.width);
+        out.u32(msg.height);
+        out.u32(msg.stridePixels);
+        out.u8(msg.opaque);
+        for (const uint8_t value : msg.reserved1) out.u8(value);
+        out.u64(msg.byteSize);
+        return true;
+    }
+    case LCLOpcode::CommitDisplayList: {
+        LCLMsgCommitDisplayList msg{};
+        if (!loadNative(payload, size, 0, msg) || msg.surfaceId == 0 ||
+            msg.reserved0 != 0 || msg.reserved1 != 0 ||
+            msg.configureSerial == 0 || !validFloat(msg.logicalWidth) ||
+            msg.logicalWidth <= 0.0f || !validFloat(msg.logicalHeight) ||
+            msg.logicalHeight <= 0.0f || msg.displayListSize == 0 ||
+            size != sizeof(msg) + msg.displayListSize) {
+            return false;
+        }
+        out.u32(msg.surfaceId);
+        out.u32(msg.reserved0);
+        out.u64(msg.configureSerial);
+        out.f32(msg.logicalWidth);
+        out.f32(msg.logicalHeight);
+        out.u32(msg.displayListSize);
+        out.u32(msg.reserved1);
+        const auto* bytes = static_cast<const uint8_t*>(payload) + sizeof(msg);
+        for (uint32_t i = 0; i < msg.displayListSize; ++i) out.u8(bytes[i]);
+        return true;
+    }
     }
     return false;
 #undef LOAD_ONE
@@ -1260,6 +1309,58 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
         appendNative(payload, m);
         break;
     }
+    case LCLOpcode::UploadImageResource: {
+        LCLMsgUploadImageResource m{};
+        if (!in.u32(m.surfaceId) || !in.u32(m.reserved0) ||
+            !in.u64(m.resourceId) ||
+            !in.u64(m.contentRevision) || !in.u32(m.width) ||
+            !in.u32(m.height) || !in.u32(m.stridePixels) ||
+            !in.u8(m.opaque)) {
+            return false;
+        }
+        for (uint8_t& value : m.reserved1) {
+            if (!in.u8(value)) return false;
+        }
+        if (!in.u64(m.byteSize)) return false;
+        if (m.surfaceId == 0 || m.reserved0 != 0 ||
+            std::any_of(std::begin(m.reserved1), std::end(m.reserved1),
+                        [](uint8_t value) { return value != 0; }) ||
+            m.resourceId == 0 ||
+            m.contentRevision == 0 || m.width == 0 || m.height == 0 ||
+            m.stridePixels < m.width || m.opaque > 1 ||
+            m.stridePixels > std::numeric_limits<uint64_t>::max() /
+                (static_cast<uint64_t>(m.height) * sizeof(uint32_t)) ||
+            m.byteSize != static_cast<uint64_t>(m.stridePixels) *
+                m.height * sizeof(uint32_t)) {
+            return false;
+        }
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::CommitDisplayList: {
+        LCLMsgCommitDisplayList m{};
+        if (!in.u32(m.surfaceId) || !in.u32(m.reserved0) ||
+            !in.u64(m.configureSerial) ||
+            !in.f32(m.logicalWidth) || !in.f32(m.logicalHeight) ||
+            !in.u32(m.displayListSize) || !in.u32(m.reserved1)) {
+            return false;
+        }
+        if (m.surfaceId == 0 || m.reserved0 != 0 || m.reserved1 != 0 ||
+            m.configureSerial == 0 ||
+            !validFloat(m.logicalWidth) || m.logicalWidth <= 0.0f ||
+            !validFloat(m.logicalHeight) || m.logicalHeight <= 0.0f ||
+            m.displayListSize == 0 ||
+            m.displayListSize > LCL_PROTOCOL_MAX_PAYLOAD - sizeof(m)) {
+            return false;
+        }
+        appendNative(payload, m);
+        for (uint32_t i = 0; i < m.displayListSize; ++i) {
+            uint8_t byte = 0;
+            if (!in.u8(byte)) return false;
+            payload.push_back(byte);
+        }
+        break;
+    }
     }
     return in.done();
 }
@@ -1421,6 +1522,7 @@ bool sendMsgWithFd(int socketFd, const LCLHeader& header, const void* payload,
     const bool acceptsFd = header.opcode == LCLOpcode::AttachBuffer ||
                            header.opcode == LCLOpcode::AttachDmaBuf ||
                            header.opcode == LCLOpcode::AttachNativeBuffer ||
+                           header.opcode == LCLOpcode::UploadImageResource ||
                            header.opcode == LCLOpcode::ReleaseDmaBuf ||
                            header.opcode == LCLOpcode::Capabilities;
     if ((passedFd >= 0 && !acceptsFd) ||
@@ -1503,6 +1605,7 @@ ReceiveStatus recvPacketWithFd(int socketFd, LCLHeader& header,
     if ((!descriptors.empty() && header.opcode != LCLOpcode::AttachBuffer &&
          header.opcode != LCLOpcode::AttachDmaBuf &&
          header.opcode != LCLOpcode::AttachNativeBuffer &&
+         header.opcode != LCLOpcode::UploadImageResource &&
          header.opcode != LCLOpcode::ReleaseDmaBuf &&
          header.opcode != LCLOpcode::Capabilities))
         return reject();

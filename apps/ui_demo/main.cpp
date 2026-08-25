@@ -29,15 +29,15 @@ int main() {
   std::cout << "========================================\n";
 
   // 1. Initialize WindowApp Application Pipeline (800x600)
-  WindowApp app(lcl::render::makeRasterCanvas(), 800, 600,
+  WindowApp app(lcl::render::makeDisplayListCanvas(), 800, 600,
                 "LCL-UI ScrollView Interactive Demo App");
   app.setAppId("org.lcl.uidemo");
   app.setWindowCornerStyle(20.0f, 2.0f);
   app.setEdgeToEdge(true);
   const auto &theme = app.getTheme();
   const auto &metrics = theme.metrics;
-  Popover popover(app, [] { return lcl::render::makeRasterCanvas(); });
-  Menu menu(app, [] { return lcl::render::makeRasterCanvas(); });
+  Popover popover(app, [] { return lcl::render::makeDisplayListCanvas(); });
+  Menu menu(app, [] { return lcl::render::makeDisplayListCanvas(); });
 
   // 2. Build Centered Flexbox Layout Tree in User-Space App
   auto rootContainer = std::make_unique<Container>();
@@ -307,14 +307,14 @@ int main() {
       {"Automatic", true}, {"Light", true}, {"Dark", true},
       {"Unavailable", false}};
   auto menuPicker = std::make_unique<Picker>(
-      app, [] { return lcl::render::makeRasterCanvas(); },
+      app, [] { return lcl::render::makeDisplayListCanvas(); },
       "Appearance", pickerOptions, 0);
   menuPicker->setWidth(300.0f);
   menuPicker->setOnChange([pickerStatusPtr, pickerOptions](size_t index) {
     pickerStatusPtr->setText("Picker: " + pickerOptions[index].label);
   });
   auto radioPicker = std::make_unique<Picker>(
-      app, [] { return lcl::render::makeRasterCanvas(); },
+      app, [] { return lcl::render::makeDisplayListCanvas(); },
       "Quality", std::vector<PickerOption>{{"Standard", true},
                                             {"High", true},
                                             {"Lossless", true}}, 1);

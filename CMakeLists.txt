@@ -701,6 +701,7 @@ else()
             src/core/shell/shell_state_model.cpp
             tests/test_shell_state_model.cpp
             tests/test_window_manager.cpp
+            tests/test_display_list_wire.cpp
             tests/test_lcl_ui.cpp
             tests/test_lcl_ui_events.cpp
             tests/test_js_runtime.cpp

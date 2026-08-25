@@ -10,7 +10,7 @@ int main() {
     constexpr float kWidth = 360.0f;
     constexpr float kHeight = 240.0f;
     lcl::ui::WindowApp window(
-        lcl::render::makeRasterCanvas(), kWidth, kHeight,
+        lcl::render::makeDisplayListCanvas(), kWidth, kHeight,
         "Android AHB Client Test");
     window.setAppId("org.lcl.test.ahb-client");
     window.setInitialBounds(120.0f, 180.0f, kWidth, kHeight);

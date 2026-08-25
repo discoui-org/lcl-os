@@ -136,7 +136,7 @@ Create `apps/my_custom_app/` containing `CMakeLists.txt` and `main.cpp`.
 using namespace lcl::ui;
 
 int main() {
-    WindowApp app(lcl::render::makeRasterCanvas(), 600, 400, "My Custom App");
+    WindowApp app(lcl::render::makeDisplayListCanvas(), 600, 400, "My Custom App");
     app.setAppId("org.example.my-custom-app");
 
     auto root = std::make_unique<Container>();

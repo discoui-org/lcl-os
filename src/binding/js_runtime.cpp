@@ -327,7 +327,7 @@ JSValue js_window_app_constructor(JSContext* ctx, JSValueConst new_target, int a
 
     auto* wrapper = new JsWindowAppWrapper();
     wrapper->app = new lcl::ui::WindowApp(
-        lcl::render::makeRasterCanvas(), width, height, title);
+        lcl::render::makeDisplayListCanvas(), width, height, title);
     JS_SetOpaque(obj, wrapper);
     return obj;
 }

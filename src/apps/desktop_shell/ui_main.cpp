@@ -316,7 +316,7 @@ int main() {
           ? "/usr/share/wallpapers/wallpaper.jpg"
           : "/usr/share/wallpaper.jpg";
   auto wallpaper = std::make_unique<lcl::ui::WindowApp>(
-      lcl::render::makeRasterCanvas(), width, height, "LCL Wallpaper");
+      lcl::render::makeDisplayListCanvas(), width, height, "LCL Wallpaper");
   wallpaper->setSurfaceId(1);
   wallpaper->setSystemSurfaceKind(
       lcl::protocol::LCLSystemSurfaceKind::Wallpaper);
@@ -379,7 +379,7 @@ int main() {
     // their first real buffer commit, so menu setup cannot leave the shell
     // in a half-created state with no dock.
     menu = std::make_unique<lcl::ui::WindowApp>(
-        lcl::render::makeRasterCanvas(), width, kMenuBarHeight, "LCL MenuBar");
+        lcl::render::makeDisplayListCanvas(), width, kMenuBarHeight, "LCL MenuBar");
     menu->setSurfaceId(2);
     menu->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::MenuBar);
     menu->setAppId("org.lcl.desktop-shell");
@@ -392,7 +392,7 @@ int main() {
     });
     menu->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 
-    dock = std::make_unique<lcl::ui::WindowApp>(lcl::render::makeRasterCanvas(),
+    dock = std::make_unique<lcl::ui::WindowApp>(lcl::render::makeDisplayListCanvas(),
                                                 width, kDockHeight, "LCL Dock");
     dock->setSurfaceId(3);
     dock->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::Dock);

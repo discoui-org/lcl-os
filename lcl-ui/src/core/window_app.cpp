@@ -1,5 +1,6 @@
 #include "lcl-ui/core/window_app.hpp"
 #include "core/ipc/lcl_protocol.hpp"
+#include "lcl-graphics/display_list_wire.hpp"
 #include <iostream>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -16,6 +17,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdlib>
+#include <limits>
 
 namespace lcl::ui {
 
@@ -154,8 +156,13 @@ WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, floa
     m_traceLastLog = std::chrono::steady_clock::now();
     const uint32_t pixelWidth = toBufferPixels(width, m_bufferScale);
     const uint32_t pixelHeight = toBufferPixels(height, m_bufferScale);
-    m_pixelBuffer.resize(static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF000000);
-    m_initialized = m_canvas->initialize(pixelWidth, pixelHeight, m_pixelBuffer.data());
+    if (!m_canvas->usesDisplayListTransport()) {
+        m_pixelBuffer.resize(
+            static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF000000);
+    }
+    m_initialized = m_canvas->initialize(
+        pixelWidth, pixelHeight,
+        m_pixelBuffer.empty() ? nullptr : m_pixelBuffer.data());
     updateCanvasRenderTarget();
     m_motionCoordinator.setCallbacks(
         [this] { updateLayout(); },
@@ -444,7 +451,8 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // 1. System-surface policy is declared separately. The compositor verifies
     // the declaration against the trusted shell peer; normal clients have no
     // role-selection protocol.
-    if (m_canvas->supportsNativeBufferTransport(
+    if (!m_canvas->usesDisplayListTransport() &&
+        m_canvas->supportsNativeBufferTransport(
             lcl::graphics::NativeBufferTransport::AndroidHardwareBufferV1)) {
         lcl::protocol::LCLMsgQueryCapabilities capabilityQuery{};
         capabilityQuery.requested = lcl::protocol::LCL_CAPABILITY_AHB_V1;
@@ -503,15 +511,18 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
 
     m_ipcConnected = true;
     m_ownsSocketFd = true;
-    m_canvas->setDmaBufTransportEnabled(true);
+    m_uploadedImageRevisions.clear();
     m_backingWidth = m_width;
     m_backingHeight = m_height;
-    if (!m_canvas->hasDmaBufTransport() ||
-        !m_canvas->configureDmaBufFrame(getPixelWidth(), getPixelHeight(),
-                                        getPixelWidth(), getPixelHeight())) {
-        // CPU storage is prepared only when GPU transport is genuinely absent.
-        m_canvas->setDmaBufTransportEnabled(false);
-        allocateSHM(m_width, m_height);
+    if (!m_canvas->usesDisplayListTransport()) {
+        m_canvas->setDmaBufTransportEnabled(true);
+        if (!m_canvas->hasDmaBufTransport() ||
+            !m_canvas->configureDmaBufFrame(
+                getPixelWidth(), getPixelHeight(),
+                getPixelWidth(), getPixelHeight())) {
+            m_canvas->setDmaBufTransportEnabled(false);
+            allocateSHM(m_width, m_height);
+        }
     }
     // Decoration state belongs to the surface contract, not to a later frame.
     // Send preconfigured values before the first effect graph/buffer attach so a
@@ -551,7 +562,9 @@ void WindowApp::resize(float width, float height) {
             std::max(width, m_backingWidth), m_bufferScale);
         const uint32_t backingPixelHeight = toBufferPixels(
             std::max(height, m_backingHeight), m_bufferScale);
-        if (m_canvas->hasDmaBufTransport()) {
+        if (m_canvas->usesDisplayListTransport()) {
+            updateCanvasRenderTarget();
+        } else if (m_canvas->hasDmaBufTransport()) {
             if (!m_canvas->configureDmaBufFrame(getPixelWidth(), getPixelHeight(),
                                                 backingPixelWidth, backingPixelHeight)) {
                 m_canvas->setDmaBufTransportEnabled(false);
@@ -579,8 +592,11 @@ void WindowApp::setInitialBounds(float x, float y, float width, float height) {
     m_height = height;
     const uint32_t pixelWidth = toBufferPixels(width, m_bufferScale);
     const uint32_t pixelHeight = toBufferPixels(height, m_bufferScale);
-    m_pixelBuffer.resize(static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF000000);
-    m_canvas->setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
+    if (!m_canvas->usesDisplayListTransport()) {
+        m_pixelBuffer.resize(
+            static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF000000);
+        m_canvas->setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
+    }
     updateCanvasRenderTarget();
     if (m_windowRoot) {
         m_windowRoot->getYogaNode().setWidth(static_cast<float>(width));
@@ -831,7 +847,9 @@ void WindowApp::pollIPC() {
             updateCanvasRenderTarget();
             // A scale-only configure has identical logical bounds but needs a new buffer.
             if (latestWidth == m_width && latestHeight == m_height && m_ipcConnected) {
-                if (m_canvas->hasDmaBufTransport()) {
+                if (m_canvas->usesDisplayListTransport()) {
+                    updateCanvasRenderTarget();
+                } else if (m_canvas->hasDmaBufTransport()) {
                     m_canvas->configureDmaBufFrame(
                         getPixelWidth(), getPixelHeight(),
                         toBufferPixels(std::max(m_width, m_backingWidth), m_bufferScale),
@@ -878,7 +896,8 @@ void WindowApp::pollIPC() {
         m_hasPendingResize = false;
         m_configureSerial = m_pendingConfigureSerial;
         m_waitingForInitialConfigure = false;
-        if (m_canvas->hasDmaBufTransport()) {
+        if (!m_canvas->usesDisplayListTransport() &&
+            m_canvas->hasDmaBufTransport()) {
             m_canvas->configureDmaBufFrame(
                 getPixelWidth(), getPixelHeight(),
                 toBufferPixels(std::max(m_width, m_backingWidth), m_bufferScale),
@@ -1131,7 +1150,10 @@ void WindowApp::setExternalIpcSocket(int socketFd) {
     m_ipcConnected = true;
     m_surfaceEnded = false;
     m_ownsSocketFd = false;
-    m_canvas->setDmaBufTransportEnabled(true);
+    m_uploadedImageRevisions.clear();
+    if (!m_canvas->usesDisplayListTransport()) {
+        m_canvas->setDmaBufTransportEnabled(true);
+    }
 }
 
 bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
@@ -1165,6 +1187,61 @@ bool WindowApp::sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void*
     if (m_nextRequestId == 0) m_nextRequestId = 1;
     header.payloadSize = payloadSize;
     return lcl::protocol::sendMsgWithFd(m_socketFd, header, payload, passedFd);
+}
+
+bool WindowApp::uploadImageResource(const graphics::ImageResourceView& resource) {
+    if (resource.id == 0 || resource.contentRevision == 0 ||
+        resource.width == 0 || resource.height == 0 ||
+        resource.stridePixels < resource.width || !resource.pixels) {
+        return false;
+    }
+    if (const auto found = m_uploadedImageRevisions.find(resource.id);
+        found != m_uploadedImageRevisions.end() &&
+        found->second == resource.contentRevision) {
+        return true;
+    }
+
+    constexpr uint64_t kMaxImageBytes = 512ull * 1024ull * 1024ull;
+    const uint64_t rowBytes = static_cast<uint64_t>(resource.stridePixels) *
+        sizeof(uint32_t);
+    if (rowBytes > kMaxImageBytes ||
+        static_cast<uint64_t>(resource.height) > kMaxImageBytes / rowBytes) {
+        return false;
+    }
+    const uint64_t byteSize = rowBytes * resource.height;
+    if (byteSize > static_cast<uint64_t>(std::numeric_limits<off_t>::max())) {
+        return false;
+    }
+
+    const int fd = memfd_create("lcl-image-resource", MFD_CLOEXEC);
+    if (fd < 0 || ftruncate(fd, static_cast<off_t>(byteSize)) != 0) {
+        if (fd >= 0) close(fd);
+        return false;
+    }
+    void* mapping = mmap(nullptr, static_cast<size_t>(byteSize),
+                         PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mapping == MAP_FAILED) {
+        close(fd);
+        return false;
+    }
+    std::memcpy(mapping, resource.pixels, static_cast<size_t>(byteSize));
+    munmap(mapping, static_cast<size_t>(byteSize));
+
+    lcl::protocol::LCLMsgUploadImageResource message{};
+    message.surfaceId = m_surfaceId;
+    message.resourceId = resource.id;
+    message.contentRevision = resource.contentRevision;
+    message.width = resource.width;
+    message.height = resource.height;
+    message.stridePixels = resource.stridePixels;
+    message.opaque = resource.opaque ? 1 : 0;
+    message.byteSize = byteSize;
+    const bool sent = sendProtocolMessage(
+        lcl::protocol::LCLOpcode::UploadImageResource,
+        &message, sizeof(message), fd);
+    close(fd);
+    if (sent) m_uploadedImageRevisions[resource.id] = resource.contentRevision;
+    return sent;
 }
 
 bool WindowApp::requestWindowDrag(float localX, float localY) {
@@ -1466,6 +1543,12 @@ bool WindowApp::renderFrame() {
     std::vector<graphics::RectF> damageRects = rasterDamage.getDirtyRects();
     m_renderPass.clear();
     if (damageRects.empty()) return false;
+    if (m_canvas->usesDisplayListTransport()) {
+        // A committed display list is a complete retained surface description.
+        // Re-record the whole logical surface; physical damage remains a
+        // compositor/raster concern and never leaks into the client contract.
+        damageRects.assign(1, surfaceBounds);
+    }
 
     struct PhysicalDamageRect {
         uint32_t left{0};
@@ -1561,7 +1644,7 @@ bool WindowApp::renderFrame() {
 
     m_renderPass.end(*m_canvas);
     m_canvas->endFrame();
-    if (!dmaBufFrame) blendMorphSnapshot();
+    if (!dmaBufFrame && !m_canvas->usesDisplayListTransport()) blendMorphSnapshot();
 
     if (m_ipcConnected && m_socketFd >= 0) {
         auto toProtoSource = [](EffectSource source) {
@@ -1696,7 +1779,54 @@ bool WindowApp::renderFrame() {
     // If connected over IPC, notify compositor of buffer commit
     const auto attachStarted = std::chrono::steady_clock::now();
     bool frameAttached = false;
-    if (m_ipcConnected && m_socketFd >= 0 && dmaBufFrame) {
+    if (m_ipcConnected && m_socketFd >= 0 &&
+        m_canvas->usesDisplayListTransport()) {
+        if (auto frame = m_canvas->takeDisplayListFrame()) {
+            bool resourcesReady = true;
+            for (const auto& resource : frame->imageResources) {
+                if (!uploadImageResource(resource)) {
+                    resourcesReady = false;
+                    break;
+                }
+            }
+
+            constexpr size_t kMaxWireBytes =
+                lcl::protocol::LCL_PROTOCOL_MAX_PAYLOAD -
+                sizeof(lcl::protocol::LCLMsgCommitDisplayList);
+            auto encoded = resourcesReady
+                ? graphics::encodeDisplayList(frame->displayList, kMaxWireBytes)
+                : graphics::DisplayListEncodeResult{};
+            if (resourcesReady && encoded) {
+                lcl::protocol::LCLMsgCommitDisplayList commit{};
+                commit.surfaceId = m_surfaceId;
+                commit.configureSerial = m_configureSerial;
+                commit.logicalWidth = m_width;
+                commit.logicalHeight = m_height;
+                commit.displayListSize = static_cast<uint32_t>(encoded.bytes.size());
+
+                std::vector<uint8_t> payload(sizeof(commit) + encoded.bytes.size());
+                std::memcpy(payload.data(), &commit, sizeof(commit));
+                if (!encoded.bytes.empty()) {
+                    std::memcpy(payload.data() + sizeof(commit), encoded.bytes.data(),
+                                encoded.bytes.size());
+                }
+                if (sendProtocolMessage(lcl::protocol::LCLOpcode::CommitDisplayList,
+                                        payload.data(),
+                                        static_cast<uint32_t>(payload.size()))) {
+                    m_submittedConfigureSerial = m_configureSerial;
+                    m_frameGateOpen = false;
+                    frameAttached = true;
+                }
+            }
+            if (!frameAttached) {
+                m_firstFrame = true;
+                std::cerr << "[lcl-ui ERROR] DisplayList commit failed for "
+                          << m_title << "; retrying\n";
+            }
+        } else {
+            m_firstFrame = true;
+        }
+    } else if (m_ipcConnected && m_socketFd >= 0 && dmaBufFrame) {
         if (auto frame = m_canvas->takeDmaBufFrame()) {
             bool dmaBufAttached = false;
             if (frame->transport ==
@@ -1762,7 +1892,8 @@ bool WindowApp::renderFrame() {
             if (m_frameTraceEnabled) ++m_traceDmaBufPoolBlocks;
         }
     }
-    if (!dmaBufFrame && m_ipcConnected && m_socketFd >= 0 && m_shmFd >= 0) {
+    if (!m_canvas->usesDisplayListTransport() && !dmaBufFrame &&
+        m_ipcConnected && m_socketFd >= 0 && m_shmFd >= 0) {
         lcl::protocol::LCLMsgAttachBuffer attachMsg{};
         attachMsg.surfaceId = m_surfaceId;
         attachMsg.configureSerial = m_configureSerial;

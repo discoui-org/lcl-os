@@ -6,6 +6,8 @@
 #include "render/window_manager.hpp"
 
 #include <functional>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace lcl::core {
 
@@ -24,6 +26,8 @@ private:
     // Android's compositor scene FBO is authoritative across frames. Partial
     // move damage is enabled only after one complete frame initialized it.
     mutable bool m_hasCompleteRetainedFrame{false};
+    mutable std::unordered_map<uint64_t, uint64_t> m_displayListRasterSerials;
+    mutable std::unordered_set<uint64_t> m_liveDisplayCacheIds;
 };
 
 } // namespace lcl::core

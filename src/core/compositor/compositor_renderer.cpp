@@ -27,6 +27,24 @@ void CompositorRenderer::render(render::Renderer& renderer,
     // cannot mutate the surface state while this frame is being composed.
 
     auto* raster = renderer.getRasterRenderer();
+    std::unordered_set<uint64_t> liveDisplayCacheIds;
+    for (const auto& surface : surfaces) {
+        if (!surface.entry) continue;
+        const auto& entry = *surface.entry;
+        if (entry.displayListCacheId != 0)
+            liveDisplayCacheIds.insert(entry.displayListCacheId);
+        if (entry.previousDisplayListCacheId != 0)
+            liveDisplayCacheIds.insert(entry.previousDisplayListCacheId);
+        for (const auto& [_, cacheId] : entry.cachedLayerNamespaces) {
+            if (cacheId != 0) liveDisplayCacheIds.insert(cacheId);
+        }
+    }
+    for (const uint64_t oldCacheId : m_liveDisplayCacheIds) {
+        if (liveDisplayCacheIds.contains(oldCacheId)) continue;
+        raster->releaseCachedDisplayLayer(oldCacheId);
+        m_displayListRasterSerials.erase(oldCacheId);
+    }
+    m_liveDisplayCacheIds = std::move(liveDisplayCacheIds);
 
     std::optional<graphics::RectF> incrementalDamage;
 #if defined(__ANDROID__)
@@ -216,6 +234,42 @@ void CompositorRenderer::render(render::Renderer& renderer,
               static_cast<float>(renderer.getHeight()) / outputScale},
              {renderer.getWidth(), renderer.getHeight()}, outputScale},
             rootTransform);
+    };
+    auto ensureDisplayListLayer = [&](const SurfaceEntry& surface,
+                                      bool previous) {
+        const auto& displayList = previous
+            ? surface.previousDisplayList : surface.displayList;
+        const uint64_t serial = previous
+            ? surface.previousDisplayListSerial : surface.displayListSerial;
+        const uint64_t cacheId = previous
+            ? surface.previousDisplayListCacheId : surface.displayListCacheId;
+        const float logicalWidth = previous
+            ? surface.previousDisplayListWidth : surface.displayListWidth;
+        const float logicalHeight = previous
+            ? surface.previousDisplayListHeight : surface.displayListHeight;
+        if (displayList.empty() || serial == 0 || cacheId == 0 ||
+            logicalWidth <= 0.0f || logicalHeight <= 0.0f) {
+            return false;
+        }
+        if (const auto found = m_displayListRasterSerials.find(cacheId);
+            found != m_displayListRasterSerials.end() && found->second == serial &&
+            raster->hasCachedDisplayLayer(cacheId)) {
+            return true;
+        }
+        const float scale = std::clamp(surface.bufferScale, 0.5f, 4.0f);
+        const graphics::RenderTarget target{
+            {logicalWidth, logicalHeight},
+            {std::max(1u, static_cast<uint32_t>(std::ceil(logicalWidth * scale))),
+             std::max(1u, static_cast<uint32_t>(std::ceil(logicalHeight * scale)))},
+            scale,
+        };
+        if (!raster->updateCachedDisplayLayer(
+                cacheId, {0.0f, 0.0f, logicalWidth, logicalHeight},
+                displayList, target)) {
+            return false;
+        }
+        m_displayListRasterSerials[cacheId] = serial;
+        return true;
     };
 
     const SurfaceEntry* homeScreenSurface = nullptr;
@@ -540,7 +594,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
             }
 
             const bool hasPrevious = matchingSurface->previousPixels ||
-                                     matchingSurface->previousDmaBufTexture != 0;
+                                     matchingSurface->previousDmaBufTexture != 0 ||
+                                     !matchingSurface->previousDisplayList.empty();
             if (matchingSurface->previousPixels) {
                 // Android retains current and crossfade source independently.
                 // Surface keys are PID-backed and therefore never use bit 63.
@@ -580,6 +635,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     presentedCornerRoundness,
                     win.decorationMode == render::DecorationMode::SSD,
                     drawW, drawH, contentSampling);
+            } else if (ensureDisplayListLayer(*matchingSurface, true)) {
+                raster->drawCachedDisplayLayer(
+                    matchingSurface->previousDisplayListCacheId,
+                    {drawX, drawY, drawW, drawH},
+                    contentOpacity *
+                        (1.0f - matchingSurface->resizeCrossfadeProgress),
+                    maskToWindowShape ? presentedCornerRadius : 0.0f,
+                    presentedCornerRoundness,
+                    win.decorationMode == render::DecorationMode::SSD,
+                    contentSampling);
             }
 
             const float currentOpacity = contentOpacity *
@@ -612,6 +677,14 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     presentedCornerRoundness,
                     win.decorationMode == render::DecorationMode::SSD,
                     drawW, drawH, contentSampling);
+            } else if (ensureDisplayListLayer(*matchingSurface, false)) {
+                raster->drawCachedDisplayLayer(
+                    matchingSurface->displayListCacheId,
+                    {drawX, drawY, drawW, drawH}, currentOpacity,
+                    maskToWindowShape ? presentedCornerRadius : 0.0f,
+                    presentedCornerRoundness,
+                    win.decorationMode == render::DecorationMode::SSD,
+                    contentSampling);
             }
 
             if (matchingSurface->hasRenderableBuffer() &&
@@ -706,7 +779,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                         static_cast<int>(popup->shmDamageHeight), opacity,
                         0.0f, 2.0f, false,
                         popupBounds.width, popupBounds.height);
-                } else {
+                } else if (popup->dmaBufTexture != 0) {
                     renderer.getRasterRenderer()->drawDmaBufTextureTransformed(
                         popupBounds.x, popupBounds.y,
                         static_cast<int>(popup->width), static_cast<int>(popup->height),
@@ -715,6 +788,12 @@ void CompositorRenderer::render(render::Renderer& renderer,
                         popup->dmaBufTexture, opacity,
                         0.0f, 2.0f, false,
                         popupBounds.width, popupBounds.height);
+                } else if (ensureDisplayListLayer(*popup, false)) {
+                    raster->drawCachedDisplayLayer(
+                        popup->displayListCacheId,
+                        {popupBounds.x, popupBounds.y,
+                         popupBounds.width, popupBounds.height},
+                        opacity);
                 }
 
                 if (popup->insetBorderEnabled) {

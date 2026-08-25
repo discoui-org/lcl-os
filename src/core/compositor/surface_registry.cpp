@@ -124,6 +124,13 @@ void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
     entry.shmContentSerial = 0;
     entry.shmDamageX = entry.shmDamageY = 0;
     entry.shmDamageWidth = entry.shmDamageHeight = 0;
+    entry.displayList = {};
+    entry.displayListSerial = 0;
+    entry.displayListCacheId = 0;
+    entry.displayListWidth = entry.displayListHeight = 0.0f;
+    entry.imageResources.clear();
+    entry.imageResourceBytes = 0;
+    entry.cachedLayerNamespaces.clear();
 
     if (entry.shmFd >= 0) {
         close(entry.shmFd);
@@ -143,6 +150,10 @@ void SurfaceRegistry::releasePreviousBuffer(SurfaceEntry& entry) noexcept {
     entry.previousPixels = nullptr;
     entry.previousShmSize = 0;
     entry.previousShmContentSerial = 0;
+    entry.previousDisplayList = {};
+    entry.previousDisplayListSerial = 0;
+    entry.previousDisplayListCacheId = 0;
+    entry.previousDisplayListWidth = entry.previousDisplayListHeight = 0.0f;
     if (entry.previousShmFd >= 0) close(entry.previousShmFd);
     entry.previousShmFd = -1;
     entry.previousWidth = entry.previousHeight = entry.previousStride = 0;

@@ -2,6 +2,7 @@
 #include "core/compositor/effect_region_geometry.hpp"
 #include "lcl-motion/motion.hpp"
 #include "lcl-theme/theme.hpp"
+#include "lcl-graphics/display_list_wire.hpp"
 #include "platform/common/native_buffer.hpp"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <cstddef>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <poll.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -335,6 +337,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         const bool isAttachDmaBuf = msg.header.opcode == lcl::protocol::LCLOpcode::AttachDmaBuf;
         const bool isAttachNativeBuffer =
             msg.header.opcode == lcl::protocol::LCLOpcode::AttachNativeBuffer;
+        const bool isUploadImageResource =
+            msg.header.opcode == lcl::protocol::LCLOpcode::UploadImageResource;
+        const bool isCommitDisplayList =
+            msg.header.opcode == lcl::protocol::LCLOpcode::CommitDisplayList;
 
         if (msg.header.opcode == lcl::protocol::LCLOpcode::QueryCapabilities) {
             if (msg.payload.size() !=
@@ -920,6 +926,295 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             configuredEntry.configuredFocused = cfgMsg.isFocused;
 
             protocol::sendMsgWithFd(msg.clientFd, header, &cfgMsg);
+
+        // --- UPLOAD_IMAGE_RESOURCE: copy immutable pixels into compositor ownership ---
+        } else if (isUploadImageResource) {
+            if (msg.payload.size() !=
+                    sizeof(lcl::protocol::LCLMsgUploadImageResource) ||
+                msg.passedFd < 0) {
+                if (msg.passedFd >= 0) close(msg.passedFd);
+                requestAck.error(3, "invalid image resource upload");
+                continue;
+            }
+            const auto* upload = reinterpret_cast<const
+                lcl::protocol::LCLMsgUploadImageResource*>(msg.payload.data());
+            const auto surfaceKey = SurfaceRegistry::makeKey(
+                msg.clientFd, msg.pid, upload->surfaceId);
+            auto surfaceIt = m_surfaces.find(surfaceKey);
+            if (surfaceIt == m_surfaces.end() ||
+                !SurfaceRegistry::isOwnedByClientConnection(
+                    surfaceIt->second, msg.clientFd)) {
+                close(msg.passedFd);
+                requestAck.error(3, "image resource surface not owned by client");
+                continue;
+            }
+
+            constexpr uint64_t kMaxImageBytes = 512ull * 1024ull * 1024ull;
+            struct stat resourceStat{};
+            const bool validSize = upload->byteSize > 0 &&
+                upload->byteSize <= kMaxImageBytes &&
+                upload->byteSize <= static_cast<uint64_t>(
+                    std::numeric_limits<size_t>::max()) &&
+                fstat(msg.passedFd, &resourceStat) == 0 &&
+                resourceStat.st_size >= 0 &&
+                static_cast<uint64_t>(resourceStat.st_size) >= upload->byteSize;
+            if (!validSize) {
+                close(msg.passedFd);
+                requestAck.error(3, "invalid image resource backing");
+                continue;
+            }
+
+            const SurfaceEntry::ImageResourceKey resourceKey{
+                upload->resourceId, upload->contentRevision};
+            auto& entry = surfaceIt->second;
+            if (!entry.imageResources.contains(resourceKey)) {
+                constexpr size_t kMaxImageResourcesPerSurface = 256;
+                if (entry.imageResources.size() >= kMaxImageResourcesPerSurface ||
+                    upload->byteSize > kMaxImageBytes -
+                        std::min<uint64_t>(entry.imageResourceBytes,
+                                           kMaxImageBytes)) {
+                    close(msg.passedFd);
+                    requestAck.error(4, "surface image resource budget exceeded");
+                    continue;
+                }
+                void* mapping = mmap(nullptr, static_cast<size_t>(upload->byteSize),
+                                     PROT_READ, MAP_SHARED, msg.passedFd, 0);
+                if (mapping == MAP_FAILED) {
+                    close(msg.passedFd);
+                    requestAck.error(4, "image resource mmap failed");
+                    continue;
+                }
+                SurfaceEntry::ImageResource resource{};
+                resource.compositorId = m_nextDisplayResourceId++;
+                if (m_nextDisplayResourceId == 0) m_nextDisplayResourceId = 1;
+                resource.width = upload->width;
+                resource.height = upload->height;
+                resource.stridePixels = upload->stridePixels;
+                resource.opaque = upload->opaque != 0;
+                resource.pixels.resize(static_cast<size_t>(upload->byteSize) /
+                                       sizeof(uint32_t));
+                std::memcpy(resource.pixels.data(), mapping,
+                            static_cast<size_t>(upload->byteSize));
+                munmap(mapping, static_cast<size_t>(upload->byteSize));
+                entry.imageResources.emplace(resourceKey, std::move(resource));
+                entry.imageResourceBytes += static_cast<size_t>(upload->byteSize);
+            }
+            close(msg.passedFd);
+
+        // --- COMMIT_DISPLAY_LIST: accept one complete logical surface frame ---
+        } else if (isCommitDisplayList) {
+            if (msg.passedFd >= 0 ||
+                msg.payload.size() < sizeof(lcl::protocol::LCLMsgCommitDisplayList)) {
+                if (msg.passedFd >= 0) close(msg.passedFd);
+                requestAck.error(3, "invalid DisplayList commit");
+                continue;
+            }
+            const auto* commit = reinterpret_cast<const
+                lcl::protocol::LCLMsgCommitDisplayList*>(msg.payload.data());
+            if (commit->displayListSize == 0 ||
+                msg.payload.size() != sizeof(*commit) + commit->displayListSize) {
+                requestAck.error(3, "invalid DisplayList payload size");
+                continue;
+            }
+            const auto surfaceKey = SurfaceRegistry::makeKey(
+                msg.clientFd, msg.pid, commit->surfaceId);
+            auto surfaceIt = m_surfaces.find(surfaceKey);
+            if (surfaceIt == m_surfaces.end() ||
+                !SurfaceRegistry::isOwnedByClientConnection(
+                    surfaceIt->second, msg.clientFd)) {
+                requestAck.error(3, "DisplayList surface not owned by client");
+                continue;
+            }
+            auto& entry = surfaceIt->second;
+            const auto discardRejected = [&] {
+                lcl::protocol::LCLHeader discardHeader{};
+                discardHeader.opcode = lcl::protocol::LCLOpcode::FrameDiscarded;
+                discardHeader.payloadSize =
+                    sizeof(lcl::protocol::LCLMsgFrameDiscarded);
+                lcl::protocol::LCLMsgFrameDiscarded discard{};
+                discard.surfaceId = commit->surfaceId;
+                discard.configureSerial = commit->configureSerial;
+                lcl::protocol::sendMsgWithFd(
+                    msg.clientFd, discardHeader, &discard);
+            };
+            if (entry.ignoreBufferCommits ||
+                entry.transitionPhase == SurfaceEntry::TransitionPhase::Closing ||
+                !SurfaceRegistry::acceptsBufferCommit(
+                    entry, commit->configureSerial)) {
+                discardRejected();
+                continue;
+            }
+
+            const auto wire = std::span<const uint8_t>(
+                msg.payload.data() + sizeof(*commit), commit->displayListSize);
+            auto decoded = lcl::graphics::decodeDisplayList(
+                wire, lcl::protocol::LCL_PROTOCOL_MAX_PAYLOAD - sizeof(*commit));
+            if (!decoded) {
+                requestAck.error(3, "malformed DisplayList");
+                discardRejected();
+                continue;
+            }
+
+            auto commands = std::make_shared<std::vector<lcl::graphics::DisplayCommand>>(
+                decoded.displayList.commands());
+            bool resourcesResolved = true;
+            for (auto& command : *commands) {
+                if (auto* image = std::get_if<lcl::graphics::DrawImageCommand>(
+                        &command)) {
+                    const SurfaceEntry::ImageResourceKey key{
+                        image->resourceId, image->contentRevision};
+                    const auto found = entry.imageResources.find(key);
+                    if (found == entry.imageResources.end()) {
+                        resourcesResolved = false;
+                        break;
+                    }
+                    const auto& resource = found->second;
+                    image->resourceKey = reinterpret_cast<uintptr_t>(
+                        resource.pixels.data());
+                    image->resourceId = resource.compositorId;
+                    image->sourceWidth = static_cast<int>(resource.width);
+                    image->sourceHeight = static_cast<int>(resource.height);
+                    image->stridePixels = static_cast<int>(resource.stridePixels);
+                    image->opaque = resource.opaque;
+                } else if (auto* begin = std::get_if<
+                               lcl::graphics::BeginCachedLayerCommand>(&command)) {
+                    auto [found, inserted] =
+                        entry.cachedLayerNamespaces.try_emplace(begin->id, 0);
+                    if (inserted) {
+                        found->second = m_nextDisplayCacheId++;
+                        if (m_nextDisplayCacheId == 0) m_nextDisplayCacheId = 1;
+                    }
+                    begin->id = found->second;
+                } else if (auto* draw = std::get_if<
+                               lcl::graphics::DrawCachedLayerCommand>(&command)) {
+                    auto [found, inserted] =
+                        entry.cachedLayerNamespaces.try_emplace(draw->id, 0);
+                    if (inserted) {
+                        found->second = m_nextDisplayCacheId++;
+                        if (m_nextDisplayCacheId == 0) m_nextDisplayCacheId = 1;
+                    }
+                    draw->id = found->second;
+                }
+            }
+            if (!resourcesResolved) {
+                requestAck.error(3, "DisplayList references an unknown image");
+                discardRejected();
+                continue;
+            }
+
+            if (entry.resizeTransitionPhase ==
+                    SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer &&
+                entry.hasRenderableBuffer()) {
+                SurfaceRegistry::releasePreviousBuffer(entry);
+                entry.previousPixels = entry.pixels;
+                entry.previousShmSize = entry.shmSize;
+                entry.previousShmFd = entry.shmFd;
+                entry.previousWidth = entry.width;
+                entry.previousHeight = entry.height;
+                entry.previousBackingWidth = entry.backingWidth;
+                entry.previousBackingHeight = entry.backingHeight;
+                entry.previousStride = entry.stride;
+                entry.previousShmContentSerial = entry.shmContentSerial;
+                entry.previousDmaBufId = entry.dmaBufId;
+                entry.previousDmaBufTexture = entry.dmaBufTexture;
+                entry.previousDisplayList = entry.displayList;
+                entry.previousDisplayListSerial = entry.displayListSerial;
+                entry.previousDisplayListCacheId = entry.displayListCacheId;
+                entry.previousDisplayListWidth = entry.displayListWidth;
+                entry.previousDisplayListHeight = entry.displayListHeight;
+                entry.pixels = nullptr;
+                entry.shmSize = 0;
+                entry.shmFd = -1;
+                entry.shmContentSerial = 0;
+                entry.dmaBufId = 0;
+                entry.dmaBufTexture = 0;
+                entry.displayList = {};
+                entry.displayListSerial = 0;
+                entry.displayListCacheId = 0;
+            } else {
+                if (entry.dmaBufTexture != 0 || entry.dmaBufId != 0) {
+                    entry.pendingDmaBufReleases.push_back(
+                        {entry.dmaBufId, entry.dmaBufTexture});
+                }
+                if (entry.pixels && entry.shmSize > 0)
+                    munmap(entry.pixels, entry.shmSize);
+                if (entry.shmFd >= 0) close(entry.shmFd);
+                entry.pixels = nullptr;
+                entry.shmSize = 0;
+                entry.shmFd = -1;
+                entry.shmContentSerial = 0;
+                entry.dmaBufId = 0;
+                entry.dmaBufTexture = 0;
+            }
+
+            entry.clientFd = msg.clientFd;
+            entry.displayList = lcl::graphics::DisplayList(std::move(commands));
+            entry.displayListSerial = m_nextDisplayListSerial++;
+            if (m_nextDisplayListSerial == 0) m_nextDisplayListSerial = 1;
+            if (entry.displayListCacheId == 0) {
+                entry.displayListCacheId = m_nextDisplayCacheId++;
+                if (m_nextDisplayCacheId == 0) m_nextDisplayCacheId = 1;
+            }
+            entry.displayListWidth = commit->logicalWidth;
+            entry.displayListHeight = commit->logicalHeight;
+            entry.width = std::max(1u, static_cast<uint32_t>(std::ceil(
+                commit->logicalWidth * entry.bufferScale)));
+            entry.height = std::max(1u, static_cast<uint32_t>(std::ceil(
+                commit->logicalHeight * entry.bufferScale)));
+            entry.backingWidth = entry.width;
+            entry.backingHeight = entry.height;
+            entry.stride = 0;
+            entry.acceptedConfigureSerial = commit->configureSerial;
+
+            if (entry.resizeTransitionPhase ==
+                SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer) {
+                entry.resizeTransitionPhase =
+                    SurfaceEntry::ResizeTransitionPhase::Crossfading;
+                entry.resizeCrossfadeElapsedSec = 0.0f;
+                entry.resizeCrossfadeProgress = 0.0f;
+            }
+            if (entry.isPopup()) {
+                entry.hasCommittedBuffer = true;
+            } else if (!entry.hasCommittedBuffer &&
+                       !mapSurface(surfaceKey, entry, msg.pid)) {
+                discardRejected();
+                continue;
+            }
+            if (!entry.isPopup()) {
+                int titleOffset = 0;
+                for (const auto& win : m_windowManager.getWindows()) {
+                    if (win.id == entry.windowId &&
+                        win.decorationMode == render::DecorationMode::SSD) {
+                        titleOffset = 32;
+                        break;
+                    }
+                }
+                const float frameWidth = commit->logicalWidth;
+                const float frameHeight = commit->logicalHeight +
+                    static_cast<float>(titleOffset);
+                bool preserveNewerTarget = false;
+                const auto configuredWindow = std::find_if(
+                    m_windowManager.getWindows().begin(),
+                    m_windowManager.getWindows().end(),
+                    [&entry](const auto& window) {
+                        return window.id == entry.windowId;
+                    });
+                if (configuredWindow != m_windowManager.getWindows().end()) {
+                    const float configuredFrameHeight = entry.configuredHeight +
+                        static_cast<float>(titleOffset);
+                    preserveNewerTarget =
+                        configuredWindow->pendingWidth != entry.configuredWidth ||
+                        configuredWindow->pendingHeight != configuredFrameHeight;
+                }
+                entry.configuredWidth = commit->logicalWidth;
+                entry.configuredHeight = commit->logicalHeight;
+                m_windowManager.commitSurfaceGeometry(
+                    entry.windowId, frameWidth, frameHeight,
+                    preserveNewerTarget, entry.configuredX, entry.configuredY,
+                    entry.configuredGeometryGeneration);
+            }
+            SurfaceRegistry::queuePresentation(entry, commit->configureSerial);
+            changed = true;
 
         // --- ATTACH_DMA_BUF: import one client GBM allocation as a GPU texture ---
         } else if (isAttachDmaBuf) {

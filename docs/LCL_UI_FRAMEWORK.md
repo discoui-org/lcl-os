@@ -182,7 +182,7 @@ units. `RasterCanvas` records them into one immutable `DisplayList`; only
 are display-list commands rather than immediate renderer calls.
 
 Applications select the standard adapter explicitly with
-`lcl::render::makeRasterCanvas()` and link `lcl-raster`. Widgets themselves
+`lcl::render::makeDisplayListCanvas()` and link `lcl-raster`. Widgets themselves
 depend only on `Canvas`; `lcl-ui` does not link EGL, DRM, GBM, or GLES.
 
 ---
@@ -204,7 +204,7 @@ using namespace lcl::ui;
 
 int main() {
     // 1. Initialize WindowApp (600x400)
-    WindowApp app(lcl::render::makeRasterCanvas(), 600, 400, "My Application");
+    WindowApp app(lcl::render::makeDisplayListCanvas(), 600, 400, "My Application");
 
     // 2. Build Centered Flexbox Layout Tree
     auto rootContainer = std::make_unique<Container>();

@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 22;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 23;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint64_t LCL_CAPABILITY_AHB_V1 = 1ull << 0;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
@@ -65,7 +65,11 @@ enum class LCLOpcode : uint32_t {
     ResolveLaunchPlaceholder = 34,
     CancelLaunchPlaceholder = 35,
     LaunchIconVisibility = 36,
-    LaunchIconVisibilityAck = 37
+    LaunchIconVisibilityAck = 37,
+    // Immutable image pixels uploaded once and referenced by logical frames.
+    UploadImageResource = 38,
+    // Mandatory lcl-ui frame path: a versioned backend-neutral DisplayList.
+    CommitDisplayList = 39
 };
 
 enum class LCLNativeBufferTransport : uint32_t {
@@ -377,6 +381,33 @@ struct LCLMsgAttachNativeBuffer {
     LCLNativeBufferTransport transport{
         LCLNativeBufferTransport::AndroidHardwareBufferV1};
 };
+
+struct LCLMsgUploadImageResource {
+    uint32_t surfaceId{0};
+    uint32_t reserved0{0};
+    uint64_t resourceId{0};
+    uint64_t contentRevision{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t stridePixels{0};
+    uint8_t opaque{0};
+    uint8_t reserved1[3]{};
+    uint64_t byteSize{0};
+};
+
+/** Followed by displayListSize bytes encoded as LDL1. */
+struct LCLMsgCommitDisplayList {
+    uint32_t surfaceId{0};
+    uint32_t reserved0{0};
+    uint64_t configureSerial{0};
+    float logicalWidth{0.0f};
+    float logicalHeight{0.0f};
+    uint32_t displayListSize{0};
+    uint32_t reserved1{0};
+};
+
+static_assert(sizeof(LCLMsgUploadImageResource) == 48);
+static_assert(sizeof(LCLMsgCommitDisplayList) == 32);
 
 struct LCLMsgReleaseDmaBuf {
     uint32_t surfaceId{0};

@@ -1,14 +1,19 @@
 #include "render/raster_canvas.hpp"
+#include "render/text_metrics.hpp"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 
 namespace lcl::render {
 
-RasterCanvas::RasterCanvas()
-    : m_clientEglContext(std::make_unique<ClientEGLContext>()),
-      m_ownedRenderer(std::make_unique<RasterRenderer>()),
-      m_renderer(m_ownedRenderer.get()) {}
+RasterCanvas::RasterCanvas(bool displayListOnly)
+    : m_displayListOnly(displayListOnly) {
+    if (!m_displayListOnly) {
+        m_clientEglContext = std::make_unique<ClientEGLContext>();
+        m_ownedRenderer = std::make_unique<RasterRenderer>();
+        m_renderer = m_ownedRenderer.get();
+    }
+}
 
 RasterCanvas::RasterCanvas(RasterRenderer& renderer) : m_renderer(&renderer) {}
 
@@ -22,6 +27,9 @@ bool RasterCanvas::initialize(uint32_t width, uint32_t height, uint32_t* targetP
     if (m_renderTarget.pixelSize.width == 0 || m_renderTarget.pixelSize.height == 0) {
         m_renderTarget = {{static_cast<float>(width), static_cast<float>(height)},
                           {width, height}, 1.0f};
+    }
+    if (m_displayListOnly) {
+        return true;
     }
     if (m_clientEglContext && m_clientEglContext->initialize(width, height)) {
         if (!m_clientEglContext->hasDmaBufPool()) {
@@ -39,6 +47,7 @@ bool RasterCanvas::initialize(uint32_t width, uint32_t height, uint32_t* targetP
 
 void RasterCanvas::setTargetPixels(uint32_t* targetPixels, uint32_t width, uint32_t height) {
     if (width > 0 && height > 0) m_renderTarget.pixelSize = {width, height};
+    if (m_displayListOnly) return;
     renderer().setTargetPixels(targetPixels, width, height);
 }
 
@@ -52,7 +61,7 @@ void RasterCanvas::setRenderTarget(const lcl::graphics::RenderTarget& target) {
         clearCachedLayers();
     }
     m_renderTarget = sanitized;
-    renderer().setDeviceScale(m_renderTarget.deviceScale);
+    if (!m_displayListOnly) renderer().setDeviceScale(m_renderTarget.deviceScale);
 }
 void RasterCanvas::beginFrame() {
     m_dmaBufFrameActive = false;
@@ -61,6 +70,8 @@ void RasterCanvas::beginFrame() {
     m_stack.clear();
     m_layerOpacityStack.clear();
     m_displayListBuilder.reset();
+    m_frameImageResources.clear();
+    if (m_displayListOnly) return;
     renderer().clearExternalFrameTarget();
     if (hasDmaBufTransport()) {
         if (const auto target = m_clientEglContext->acquireDmaBufTarget()) {
@@ -78,12 +89,20 @@ void RasterCanvas::beginFrame() {
 }
 void RasterCanvas::endFrame() {
     m_lastDisplayList = m_displayListBuilder.build();
+    if (m_displayListOnly) return;
     if (!m_dmaBufFrameBlocked) {
         renderer().replayDisplayList(m_lastDisplayList, m_renderTarget);
         renderer().endFrame();
     }
 }
-uint32_t* RasterCanvas::rasterBuffer() { return renderer().getRasterBuffer(); }
+uint32_t* RasterCanvas::rasterBuffer() {
+    return m_displayListOnly ? nullptr : renderer().getRasterBuffer();
+}
+std::optional<lcl::graphics::DisplayListFrame> RasterCanvas::takeDisplayListFrame() {
+    if (!m_displayListOnly) return std::nullopt;
+    return lcl::graphics::DisplayListFrame{m_lastDisplayList,
+                                           m_frameImageResources};
+}
 bool RasterCanvas::isDmaBufFrameActive() const { return m_dmaBufFrameActive; }
 void RasterCanvas::setDmaBufTransportEnabled(bool enabled) {
     m_dmaBufTransportEnabled = enabled;
@@ -235,6 +254,18 @@ bool RasterCanvas::beginCachedLayerInternal(
         std::optional<lcl::graphics::RectF> updateBounds) {
     if (m_cachedLayerCanvasState || sourceBounds.width <= 0.0f ||
         sourceBounds.height <= 0.0f) return false;
+    if (m_displayListOnly) {
+        if (updateBounds) {
+            m_displayListBuilder.beginCachedLayerUpdate(
+                id, sourceBounds, *updateBounds);
+        } else {
+            m_displayListBuilder.beginCachedLayer(id, sourceBounds);
+        }
+        m_cachedLayerCanvasState = m_state;
+        m_state = CanvasState{};
+        if (updateBounds) m_state.clip = *updateBounds;
+        return true;
+    }
     if (!renderer().prepareCachedDisplayLayer(
             id, sourceBounds, m_state.transform, m_renderTarget,
             updateBounds.has_value())) {
@@ -263,12 +294,13 @@ void RasterCanvas::endCachedLayer() {
 bool RasterCanvas::drawCachedLayer(CachedLayerId id,
                                  const lcl::graphics::RectF& destination,
                                  float opacity) {
-    if (!renderer().hasCachedDisplayLayer(id)) return false;
+    if (!m_displayListOnly && !renderer().hasCachedDisplayLayer(id)) return false;
     m_displayListBuilder.drawCachedLayer(id, destination, opacity);
     return true;
 }
 
 void RasterCanvas::clearCachedLayers() {
+    if (m_displayListOnly) return;
     renderer().clearDisplayListCaches();
 }
 
@@ -330,6 +362,9 @@ void RasterCanvas::drawRasterizedText(float x, float y, const std::string& text,
 
 float RasterCanvas::measureText(const std::string& text, float fontSize,
                               lcl::graphics::FontFamily family) {
+    if (m_displayListOnly) {
+        return lcl::render::text_metrics::measureText(text, fontSize, family);
+    }
     return family == lcl::graphics::FontFamily::Monospace
         ? renderer().measureMonospaceString(text, fontSize)
         : renderer().measureString(text, fontSize);
@@ -355,10 +390,28 @@ void RasterCanvas::drawImageResource(
         resource.width, resource.height, resource.stridePixels,
         opacity, cornerRadius, cornerRoundness, squareTopCorners,
         resource.id, resource.contentRevision, resource.opaque);
+    if (m_displayListOnly && resource.id != 0 &&
+        resource.contentRevision != 0 && resource.pixels &&
+        resource.width > 0 && resource.height > 0 &&
+        resource.stridePixels >= resource.width) {
+        const auto duplicate = std::find_if(
+            m_frameImageResources.begin(), m_frameImageResources.end(),
+            [&](const auto& existing) {
+                return existing.id == resource.id &&
+                    existing.contentRevision == resource.contentRevision;
+            });
+        if (duplicate == m_frameImageResources.end()) {
+            m_frameImageResources.push_back(resource);
+        }
+    }
 }
 
 std::unique_ptr<lcl::graphics::Canvas> makeRasterCanvas() {
     return std::make_unique<RasterCanvas>();
+}
+
+std::unique_ptr<lcl::graphics::Canvas> makeDisplayListCanvas() {
+    return std::make_unique<RasterCanvas>(true);
 }
 
 } // namespace lcl::render

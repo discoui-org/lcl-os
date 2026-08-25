@@ -169,6 +169,20 @@ public:
                                    const lcl::graphics::RenderTarget& target,
                                    bool preserveContents = false);
     bool hasCachedDisplayLayer(uint64_t id) const;
+    /** Rasterize one complete logical client surface into a compositor-owned cache. */
+    bool updateCachedDisplayLayer(uint64_t id,
+                                  const lcl::graphics::RectF& logicalBounds,
+                                  const lcl::graphics::DisplayList& displayList,
+                                  const lcl::graphics::RenderTarget& target);
+    /** Composite a previously rasterized logical surface cache. */
+    bool drawCachedDisplayLayer(uint64_t id, const RasterRect& destination,
+                                float opacity = 1.0f,
+                                float cornerRadius = 0.0f,
+                                float cornerRoundness = 2.0f,
+                                bool squareTopCorners = false,
+                                RasterBufferSampling sampling =
+                                    RasterBufferSampling::Stretch);
+    void releaseCachedDisplayLayer(uint64_t id);
     void clearDisplayListCaches();
 
     /** Draw one logical path. GPU backends keep recognized primitives on-GPU;
@@ -427,7 +441,7 @@ private:
     // Rotating DMA-BUF output is separate from the authoritative retained
     // scene FBO. A completed scene is copied here once per submitted frame.
     uint32_t m_glOutputFrameFBO{0};
-    std::optional<CachedLayerTargetState> m_cachedLayerTargetState;
+    std::vector<CachedLayerTargetState> m_cachedLayerTargetStates;
     std::unordered_map<uint64_t, CachedDisplayLayer> m_cachedDisplayLayers;
     std::unordered_map<uint64_t, CachedShmTexture> m_cachedShmTextures;
     std::unordered_map<uint64_t, CachedImageTexture> m_cachedImageTextures;

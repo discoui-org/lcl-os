@@ -318,7 +318,7 @@ int main() {
 
     LauncherState launcherState;
     auto wallpaper = std::make_unique<lcl::ui::WindowApp>(
-        lcl::render::makeRasterCanvas(), width, height,
+        lcl::render::makeDisplayListCanvas(), width, height,
         "LCL Mobile Wallpaper");
     auto* wallpaperApp = wallpaper.get();
     // Surface IDs are process-scoped even when each WindowApp owns a separate
@@ -338,7 +338,7 @@ int main() {
     });
     wallpaper->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 
-    lcl::ui::WindowApp home(lcl::render::makeRasterCanvas(), width, height,
+    lcl::ui::WindowApp home(lcl::render::makeDisplayListCanvas(), width, height,
                             "LCL Mobile Home");
     home.setSurfaceId(kHomeSurfaceId);
     home.setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::HomeScreen);
