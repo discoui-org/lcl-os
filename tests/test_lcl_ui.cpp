@@ -3233,12 +3233,12 @@ TEST(LclUiTest, ToggleInteractionPresentationAndActiveAnimationCleanUpSafely) {
     EXPECT_NO_THROW(coordinator.tick(1.0f));
 }
 
-TEST(LclUiTest, ButtonInteractionMotionComposesHoverPressFocusDisabledAndThemeOverride) {
+TEST(LclUiTest, ButtonInteractionMotionComposesHoverPressFocusDisabledAndStyleOverride) {
     auto canvas = std::make_unique<RecordingCanvas>();
     WindowApp app(std::move(canvas), 240, 120, "Interaction motion");
-    InteractionMotionTheme theme;
-    theme.hoverScale = 1.10f;
-    app.setInteractionMotionTheme(theme);
+    auto styleTheme = lcl::theme::createDefaultTheme();
+    styleTheme.primaryButton.hover.scale = 1.10f;
+    app.setTheme(std::move(styleTheme));
     auto root = std::make_unique<Container>();
     root->setWidth(240.0f); root->setHeight(120.0f);
     auto button = std::make_unique<Button>("Motion");
@@ -3264,8 +3264,9 @@ TEST(LclUiTest, ButtonInteractionMotionComposesHoverPressFocusDisabledAndThemeOv
     pointer->setEnabled(true);
     EXPECT_EQ(pointer->getState(), ButtonState::Focused);
 
-    theme.enabled = false;
-    pointer->setInteractionMotionTheme(theme);
+    InteractionMotionTheme motionTheme;
+    motionTheme.enabled = false;
+    pointer->setInteractionMotionTheme(motionTheme);
     pointer->setEnabled(false);
     pointer->setEnabled(true);
     EXPECT_FLOAT_EQ(pointer->getPresentationState().scaleX, 1.0f);
@@ -3911,7 +3912,7 @@ TEST(LclUiTest, ExplicitWidgetPaintDamageKeepsTheRequestedSubregion) {
     EXPECT_GT(widget->getPaintRevision(), revision);
 }
 
-TEST(LclUiTest, WindowAppRetainedFrameClearsOnlyChangedWidgetRegion) {
+TEST(LclUiTest, WindowAppRetainedFrameAddsRasterCoverageToChangedWidgetRegion) {
     auto canvas = std::make_unique<RecordingCanvas>();
     RecordingCanvas* recorded = canvas.get();
     WindowApp app(std::move(canvas), 200, 120, "Retained damage");
@@ -3931,8 +3932,10 @@ TEST(LclUiTest, WindowAppRetainedFrameClearsOnlyChangedWidgetRegion) {
     ASSERT_TRUE(app.renderFrame());
 
     ASSERT_EQ(recorded->clearedRects.size(), 1u);
-    EXPECT_FLOAT_EQ(recorded->clearedRects.front().width, 30.0f);
-    EXPECT_FLOAT_EQ(recorded->clearedRects.front().height, 20.0f);
+    EXPECT_FLOAT_EQ(recorded->clearedRects.front().x, 0.0f);
+    EXPECT_FLOAT_EQ(recorded->clearedRects.front().y, 0.0f);
+    EXPECT_FLOAT_EQ(recorded->clearedRects.front().width, 31.0f);
+    EXPECT_FLOAT_EQ(recorded->clearedRects.front().height, 21.0f);
 }
 
 TEST(LclUiTest, RasterRendererClearRectReplacesOnlyRequestedRetainedPixels) {

@@ -163,7 +163,7 @@ TEST(GestaltTest, CheckedInMobileDefaultProfileMatchesStrictSchema) {
     EXPECT_EQ(gestalt.display.width, 1344u);
     EXPECT_EQ(gestalt.display.height, 2992u);
     EXPECT_EQ(gestalt.display.refreshRateHz, 60u);
-    EXPECT_EQ(gestalt.display.scale, 3.0f);
+    EXPECT_EQ(gestalt.display.scale, 4.0f);
     EXPECT_EQ(gestalt.display.naturalOrientation, NaturalOrientation::Portrait);
     EXPECT_FLOAT_EQ(gestalt.display.safeArea.top, 117.0f);
     EXPECT_FLOAT_EQ(gestalt.display.corners.topLeft.radiusX, 93.0f);
