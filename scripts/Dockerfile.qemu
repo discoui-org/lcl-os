@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     ninja-build \
     ccache \
+    git \
     pkg-config \
     python3 \
     libdrm-dev \

@@ -3,16 +3,17 @@
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <string_view>
+#include <vector>
 
 namespace lcl::render::text_metrics {
 namespace {
 
-template <size_t N>
-bool loadFirstAvailable(FontRenderer& renderer, const char* const (&paths)[N], float pixelFontSize) {
-    for (const char* path : paths) {
-        if (renderer.loadFont(path, pixelFontSize)) return true;
-    }
-    return false;
+bool isReadableFile(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    return file.good();
 }
 
 FontRenderer& cachedRenderer(lcl::graphics::FontFamily family) {
@@ -23,21 +24,40 @@ FontRenderer& cachedRenderer(lcl::graphics::FontFamily family) {
 
 } // namespace
 
-bool loadFont(FontRenderer& renderer, lcl::graphics::FontFamily family, float pixelFontSize) {
-    const float sanitizedSize = std::max(1.0f, pixelFontSize);
-    if (family == lcl::graphics::FontFamily::Monospace) {
-        constexpr const char* kMonospacePaths[] = {
-            "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
-            "assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
-        };
-        return loadFirstAvailable(renderer, kMonospacePaths, sanitizedSize);
+std::optional<std::string> resolveFontPath(lcl::graphics::FontFamily family) {
+    const bool monospace = family == lcl::graphics::FontFamily::Monospace;
+    const std::string_view fileName = monospace
+        ? "JetBrainsMono-Regular.ttf"
+        : "Inter-Regular.otf";
+
+    std::vector<std::string> candidates;
+    if (const char* fontRoot = std::getenv("LCL_FONT_ROOT");
+        fontRoot != nullptr && *fontRoot != '\0') {
+        std::string path(fontRoot);
+        if (path.back() != '/') path.push_back('/');
+        path.append(fileName);
+        candidates.push_back(std::move(path));
     }
 
-    constexpr const char* kInterfacePaths[] = {
-        "/usr/share/fonts/inter/Inter-Regular.otf",
-        "assets/fonts/inter/Inter-Regular.otf",
-    };
-    return loadFirstAvailable(renderer, kInterfacePaths, sanitizedSize);
+    if (monospace) {
+        candidates.emplace_back(
+            "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf");
+        candidates.emplace_back(
+            "assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf");
+    } else {
+        candidates.emplace_back("/usr/share/fonts/inter/Inter-Regular.otf");
+        candidates.emplace_back("assets/fonts/inter/Inter-Regular.otf");
+    }
+
+    const auto found = std::find_if(candidates.begin(), candidates.end(), isReadableFile);
+    if (found == candidates.end()) return std::nullopt;
+    return *found;
+}
+
+bool loadFont(FontRenderer& renderer, lcl::graphics::FontFamily family, float pixelFontSize) {
+    const float sanitizedSize = std::max(1.0f, pixelFontSize);
+    const auto path = resolveFontPath(family);
+    return path && renderer.loadFont(*path, sanitizedSize);
 }
 
 float measureText(const std::string& text, float fontSize, lcl::graphics::FontFamily family) {

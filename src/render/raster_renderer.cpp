@@ -5,6 +5,9 @@
 #include "render/backdrop_filter_geometry.hpp"
 #include "render/dma_buf_crop.hpp"
 #include "render/raster_destination.hpp"
+#ifdef LCL_ENABLE_SKIA
+#include "render/skia_display_list_renderer.hpp"
+#endif
 #ifndef LCL_SOFTWARE_ONLY
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
@@ -663,6 +666,8 @@ bool RasterRenderer::initGLShader() {
 }
 #endif
 
+RasterRenderer::RasterRenderer() = default;
+
 RasterRenderer::~RasterRenderer() {
     shutdown();
 }
@@ -689,6 +694,17 @@ bool RasterRenderer::initialize(uint32_t width, uint32_t height,
         m_glSupportsUnpackRowLength = supportsUnpackRowLength();
 
         initGLShader();
+
+#ifdef LCL_ENABLE_SKIA
+        auto skia = std::make_unique<SkiaDisplayListRenderer>();
+        if (skia->initialize(*m_eglBackend)) {
+            m_skiaDisplayListRenderer = std::move(skia);
+            std::cout << "[LCL Raster] Skia/Ganesh DisplayList replay active.\n";
+        } else {
+            std::cerr << "[LCL Raster] Skia/Ganesh initialization failed; "
+                         "unsupported lists remain on legacy replay.\n";
+        }
+#endif
 
         glViewport(0, 0, m_width, m_height);
         glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
@@ -1070,6 +1086,11 @@ bool RasterRenderer::drawCachedDisplayLayer(uint64_t id,
 }
 
 void RasterRenderer::releaseCachedDisplayLayer(uint64_t id) {
+#ifdef LCL_ENABLE_SKIA
+    if (m_skiaDisplayListRenderer) {
+        m_skiaDisplayListRenderer->releaseCachedLayer(id);
+    }
+#endif
     const auto found = m_cachedDisplayLayers.find(id);
     if (found == m_cachedDisplayLayers.end()) return;
     destroyCachedLayerTarget(found->second.framebuffer, found->second.texture);
@@ -1077,6 +1098,11 @@ void RasterRenderer::releaseCachedDisplayLayer(uint64_t id) {
 }
 
 void RasterRenderer::clearDisplayListCaches() {
+#ifdef LCL_ENABLE_SKIA
+    if (m_skiaDisplayListRenderer) {
+        m_skiaDisplayListRenderer->clearCaches();
+    }
+#endif
     for (const auto& [_, layer] : m_cachedDisplayLayers) {
         destroyCachedLayerTarget(layer.framebuffer, layer.texture);
     }
@@ -1098,6 +1124,9 @@ void RasterRenderer::shutdown() {
     const bool canDeleteGlResources =
         m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend &&
         m_eglBackend->makeCurrent();
+#ifdef LCL_ENABLE_SKIA
+    m_skiaDisplayListRenderer.reset();
+#endif
     for (const auto& [_, cached] : m_cachedShmTextures) {
         if (canDeleteGlResources && cached.texture > 0) {
             glDeleteTextures(1, &cached.texture);
@@ -1294,6 +1323,32 @@ void RasterRenderer::replayDisplayList(
         const lcl::graphics::DisplayList& displayList,
         const lcl::graphics::RenderTarget& target,
         const lcl::graphics::Matrix3& rootTransform) {
+#if defined(LCL_ENABLE_SKIA) && !defined(LCL_SOFTWARE_ONLY)
+    if (m_skiaDisplayListRenderer && activeSceneFBO() > 0) {
+        std::optional<lcl::graphics::RectF> deviceDamage;
+        if (m_frameDamageRect) {
+            const auto damage = scaleRect(*m_frameDamageRect);
+            deviceDamage = lcl::graphics::RectF{
+                damage.x, damage.y, damage.width, damage.height};
+        }
+        const bool attached = m_skiaDisplayListRenderer->beginFrame(
+            activeSceneFBO(), m_width, m_height, deviceDamage);
+        const bool replayed = attached && m_skiaDisplayListRenderer->replay(
+            displayList, target, rootTransform,
+            m_contentOriginX, m_contentOriginY);
+        if (attached) m_skiaDisplayListRenderer->endFrame();
+        m_eglBackend->makeCurrent();
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+        glViewport(0, 0, m_width, m_height);
+        applyScissorState();
+        (void)replayed;
+    }
+    // Hardware targets have exactly one DisplayList execution engine. A Skia
+    // attachment/replay failure must not silently switch raster semantics in
+    // the middle of a session.
+    return;
+#else
+
     struct ReplayState {
         lcl::graphics::Matrix3 transform{};
         float opacity{1.0f};
@@ -1587,6 +1642,7 @@ void RasterRenderer::replayDisplayList(
 
     setClipRect(previousClip);
     setDeviceScale(previousScale);
+#endif
 }
 
 RasterRect RasterRenderer::scaleRect(const RasterRect& rect) const {

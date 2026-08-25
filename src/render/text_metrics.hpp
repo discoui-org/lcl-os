@@ -3,9 +3,13 @@
 #include "lcl-graphics/font.hpp"
 #include "render/font_renderer.hpp"
 
+#include <optional>
 #include <string>
 
 namespace lcl::render::text_metrics {
+
+/** Resolves the packaged face shared by measurement and raster replay. */
+std::optional<std::string> resolveFontPath(lcl::graphics::FontFamily family);
 
 /** Loads the same packaged face selected by the client renderer. */
 bool loadFont(FontRenderer& renderer, lcl::graphics::FontFamily family, float pixelFontSize);

@@ -17,6 +17,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from skia_package import host_skia_cmake_args
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent
 BUILD_DIR = ROOT_DIR / "build"
@@ -196,6 +198,7 @@ def cmake_build() -> None:
             str(ROOT_DIR),
             "-DCMAKE_BUILD_TYPE=Debug",
             "-DBUILD_TESTS=OFF",
+            *host_skia_cmake_args(ROOT_DIR, platform.machine().lower()),
         ]
     )
     if which("ccache"):

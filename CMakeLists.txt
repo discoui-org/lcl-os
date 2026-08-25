@@ -9,6 +9,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Dependencies
 find_package(Threads REQUIRED)
 
+# Skia is the authoritative hardware DisplayList execution engine. The option
+# remains only for software-only bring-up builds; normal builds use Skia.
+option(LCL_ENABLE_SKIA "Use Skia for LCL DisplayList raster execution" ON)
+include(cmake/LclSkia.cmake)
+if(LCL_ENABLE_SKIA)
+    lcl_import_skia()
+endif()
+
 if(NOT ANDROID)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(DRM libdrm)
@@ -148,6 +156,7 @@ add_library(lcl-render STATIC
     src/render/raster_renderer.cpp
     src/render/window_manager.cpp
 )
+lcl_enable_skia_replay(lcl-render)
 
 target_include_directories(lcl-render PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -232,6 +241,7 @@ if(ANDROID)
         src/render/raster_canvas.cpp
         src/render/raster_renderer.cpp
     )
+    lcl_enable_skia_replay(lcl-raster)
     target_include_directories(lcl-raster PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
@@ -460,6 +470,7 @@ else()
         src/render/raster_canvas.cpp
         src/render/raster_renderer.cpp
     )
+    lcl_enable_skia_replay(lcl-raster)
 
     target_include_directories(lcl-raster PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src

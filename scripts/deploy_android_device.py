@@ -44,6 +44,7 @@ DEVICE_BINARY_PATH = f"{DEVICE_TMP_DIR}/{BINARY_NAME}"
 DEVICE_HIDL_BRIDGE_PATH = f"{DEVICE_TMP_DIR}/{HIDL_BRIDGE_NAME}"
 DEVICE_LOG_PATH = f"{DEVICE_TMP_DIR}/lcl-core.log"
 DEVICE_RUNTIME_DIR = f"{DEVICE_TMP_DIR}/lcl-runtime"
+DEVICE_FONT_DIR = f"{DEVICE_RUNTIME_DIR}/fonts"
 DEVICE_GESTALT_UPLOAD_PATH = f"{DEVICE_TMP_DIR}/lcl-gestalt.json.upload"
 DEVICE_GESTALT_PATH = f"{DEVICE_RUNTIME_DIR}/gestalt.json"
 DEVICE_COMPOSITOR_SOCKET = f"{DEVICE_RUNTIME_DIR}/lcl-compositor.sock"
@@ -75,6 +76,12 @@ ANDROID_NATIVE_LD_LIBRARY_PATH = (
     "/system/lib64:/vendor/lib64:/system_ext/lib64"
 )
 ROOT_SHELL_MODE: str | None = None
+RUNTIME_FONTS = {
+    "Inter-Regular.otf": ROOT_DIR / "assets" / "fonts" / "inter" / "Inter-Regular.otf",
+    "JetBrainsMono-Regular.ttf": (
+        ROOT_DIR / "assets" / "fonts" / "jetbrains-mono" / "JetBrainsMono-Regular.ttf"
+    ),
+}
 
 # Android system services to suspend for display takeover
 SYSUI_PACKAGE = "com.android.systemui"
@@ -1027,6 +1034,31 @@ def push_gestalt(gestalt_path: Path) -> None:
         sys.exit(1)
 
 
+def push_runtime_fonts() -> None:
+    """Install the compositor's packaged fonts outside the rootfs chroot."""
+    missing = [str(path) for path in RUNTIME_FONTS.values() if not path.is_file()]
+    if missing:
+        raise RuntimeError("Packaged runtime fonts are missing: " + ", ".join(missing))
+
+    adb_shell(f"mkdir -p {DEVICE_FONT_DIR} && chmod 0755 {DEVICE_FONT_DIR}", as_root=True)
+    for name, source in RUNTIME_FONTS.items():
+        upload_path = f"{DEVICE_TMP_DIR}/lcl-{name}.upload"
+        adb_shell(f"rm -f {shlex.quote(upload_path)}", as_root=True)
+        run_adb("push", str(source), upload_path)
+        result = adb_shell(
+            f"mv {shlex.quote(upload_path)} {shlex.quote(f'{DEVICE_FONT_DIR}/{name}')} && "
+            f"chown root:root {shlex.quote(f'{DEVICE_FONT_DIR}/{name}')} && "
+            f"chmod 0644 {shlex.quote(f'{DEVICE_FONT_DIR}/{name}')}",
+            as_root=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to install runtime font {name}: "
+                + (result.stderr.strip() or result.stdout.strip())
+            )
+    log("Packaged compositor fonts installed in the Android runtime.")
+
+
 def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
                use_rootfs: bool = False, force_rootfs: bool = False,
                native_clients: bool = True,
@@ -1081,6 +1113,7 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
 
     # 4b. Push binary
     push_binary()
+    push_runtime_fonts()
 
     # 4c. Deploy and mount the canonical ABI-matched glibc userspace when requested.
     if use_rootfs:
@@ -1125,7 +1158,7 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
         # Set LCL_RUNTIME_DIR so lcl-core-android uses the writable path
         # ANDROID_DATA=/data is required for linker and binder initialization
         launch_env = (
-            f"LCL_RUNTIME_DIR={runtime_dir} ANDROID_DATA=/data "
+            f"LCL_RUNTIME_DIR={runtime_dir} LCL_FONT_ROOT={DEVICE_FONT_DIR} ANDROID_DATA=/data "
             f"LD_LIBRARY_PATH={DEVICE_TMP_DIR}:/system/lib64:/vendor/lib64:/system_ext/lib64"
         )
         if selected_gestalt_path is not None:

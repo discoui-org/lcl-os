@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+from skia_package import android_skia_cmake_args
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent
 BUILD_DIR = ROOT_DIR / "build"
@@ -98,14 +100,22 @@ def is_android_core_stale(android_core: Path) -> bool:
     if not android_core.is_file():
         return True
     core_mtime = android_core.stat().st_mtime
-    for d in (ROOT_DIR / "src" / "platform" / "android", ROOT_DIR / "src" / "platform" / "common"):
+    for d in (
+        ROOT_DIR / "src" / "platform" / "android",
+        ROOT_DIR / "src" / "platform" / "common",
+        ROOT_DIR / "src" / "render",
+        ROOT_DIR / "lcl-graphics",
+    ):
         if d.is_dir():
             for p in d.rglob("*"):
                 if p.is_file() and p.stat().st_mtime > core_mtime:
                     return True
-    cm = ROOT_DIR / "CMakeLists.txt"
-    if cm.is_file() and cm.stat().st_mtime > core_mtime:
-        return True
+    for build_input in (
+        ROOT_DIR / "CMakeLists.txt",
+        ROOT_DIR / "cmake" / "LclSkia.cmake",
+    ):
+        if build_input.is_file() and build_input.stat().st_mtime > core_mtime:
+            return True
     return False
 
 
@@ -145,13 +155,14 @@ def build_targets(env: AndroidEnvironment, force_rebuild: bool = False, arch: st
         if not env.ndk_root:
             raise RuntimeError("Android NDK not found. Set ANDROID_NDK_ROOT.")
         toolchain = env.ndk_root / "build/cmake/android.toolchain.cmake"
-        if not (BUILD_ANDROID_DIR / "CMakeCache.txt").is_file():
-            subprocess.run([
-                "cmake", "-B", str(BUILD_ANDROID_DIR), "-S", str(ROOT_DIR),
-                f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
-                "-DANDROID_ABI=x86_64",
-                "-DANDROID_PLATFORM=android-35"
-            ], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run([
+            "cmake", "-B", str(BUILD_ANDROID_DIR), "-S", str(ROOT_DIR),
+            f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
+            "-DANDROID_ABI=x86_64",
+            "-DANDROID_PLATFORM=android-35",
+            "-DBUILD_TESTS=OFF",
+            *android_skia_cmake_args(ROOT_DIR, "x86_64"),
+        ], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([
             "cmake", "--build", str(BUILD_ANDROID_DIR),
             "--target", "lcl-core-android",

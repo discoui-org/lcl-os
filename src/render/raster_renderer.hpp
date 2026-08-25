@@ -16,6 +16,10 @@
 
 namespace lcl::render {
 
+#ifdef LCL_ENABLE_SKIA
+class SkiaDisplayListRenderer;
+#endif
+
 struct RasterColor {
     uint8_t r{0};
     uint8_t g{0};
@@ -69,7 +73,7 @@ enum class RasterBufferSampling {
 
 class RasterRenderer {
 public:
-    RasterRenderer() = default;
+    RasterRenderer();
     ~RasterRenderer();
 
     // Non-copyable
@@ -448,8 +452,16 @@ private:
     size_t m_cachedImageTextureBytes{0};
     uint64_t m_imageTextureUseCounter{0};
     std::vector<RasterizedTextLayer> m_rasterizedTextLayers;
+#if !defined(LCL_ENABLE_SKIA) || defined(LCL_SOFTWARE_ONLY)
     uint64_t m_textLayerUseCounter{0};
+#endif
     uint64_t m_shmTextureFrameSerial{0};
+
+#ifdef LCL_ENABLE_SKIA
+    // One backend-neutral DisplayList is replayed by the shared Skia engine on
+    // every hardware target; platform code only owns presentation.
+    std::unique_ptr<SkiaDisplayListRenderer> m_skiaDisplayListRenderer;
+#endif
 
     uint32_t m_glBlurProgram{0};
     int32_t m_aBlurPosLoc{-1};

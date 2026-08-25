@@ -41,6 +41,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from skia_package import host_skia_cmake_args
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 BUILD_DIR = PROJECT_ROOT / "build"
@@ -203,11 +205,24 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
     # update these targets so a protocol/header change cannot be packaged with
     # stale canonical userspace binaries.
     target_build_dir = canonical_build_dir(norm_arch)
-    if not (target_build_dir / "CMakeCache.txt").is_file():
-        configure = [
-            "cmake", "-B", str(target_build_dir), "-S", str(PROJECT_ROOT),
-            "-DBUILD_TESTS=OFF",
-        ]
+    try:
+        skia_args = host_skia_cmake_args(PROJECT_ROOT, norm_arch)
+    except RuntimeError:
+        package_target = f"host-{norm_arch}"
+        log(f"Preparing missing Skia package {package_target} inside target Docker...")
+        subprocess.run(
+            [sys.executable, str(SCRIPT_DIR / "prepare_skia.py"),
+             "--target", package_target],
+            check=True,
+        )
+        skia_args = host_skia_cmake_args(PROJECT_ROOT, norm_arch)
+    cache_exists = (target_build_dir / "CMakeCache.txt").is_file()
+    configure = [
+        "cmake", "-B", str(target_build_dir), "-S", str(PROJECT_ROOT),
+        "-DBUILD_TESTS=OFF",
+        *skia_args,
+    ]
+    if not cache_exists:
         if shutil.which("ninja"):
             configure.extend(["-G", "Ninja"])
         if shutil.which("ccache"):
@@ -215,7 +230,7 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
                 "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
                 "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
             ])
-        subprocess.run(configure, check=True)
+    subprocess.run(configure, check=True)
     log(f"Updating canonical targets for {norm_arch}...")
     subprocess.run(
         ["cmake", "--build", str(target_build_dir),

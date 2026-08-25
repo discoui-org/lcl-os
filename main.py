@@ -26,6 +26,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.skia_package import android_skia_cmake_args
+
 ROOT_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 BUILD_DIR = ROOT_DIR / "build"
@@ -204,18 +206,64 @@ def find_android_ndk() -> Path:
     )
 
 
-def build_android_phone_artifacts(args: argparse.Namespace, use_rootfs: bool) -> None:
-    """Build the Android substrate and optional canonical ARM64 userspace."""
-    hidl_config = ANDROID_HIDL_ROOT / "hidl-config.cmake"
-    if not hidl_config.is_file():
-        log("Preparing official Android HIDL headers and device libraries...")
-        subprocess.check_call(
-            [sys.executable, str(SCRIPTS_DIR / "prepare_android_hidl.py")],
-            cwd=ROOT_DIR,
+def connected_android_abi() -> str:
+    """Resolve the same single connected ADB target used by the deployer."""
+    adb = shutil.which("adb")
+    if not adb:
+        sdk_root = Path(os.environ.get("ANDROID_HOME") or
+                        os.environ.get("ANDROID_SDK_ROOT") or
+                        Path.home() / "Android/Sdk")
+        candidate = sdk_root / "platform-tools" / "adb"
+        if candidate.is_file():
+            adb = str(candidate)
+    if not adb:
+        raise RuntimeError("adb not found; set ANDROID_HOME or add adb to PATH.")
+
+    devices = subprocess.check_output([adb, "devices"], text=True)
+    serials = [
+        parts[0] for line in devices.splitlines()[1:]
+        if len(parts := line.split()) >= 2 and parts[1] == "device"
+    ]
+    if not serials:
+        raise RuntimeError("No authorized ADB target is connected.")
+    if len(serials) > 1:
+        raise RuntimeError(
+            "Multiple ADB targets are connected; leave only the intended target online."
         )
+    abi = subprocess.check_output(
+        [adb, "-s", serials[0], "shell", "getprop", "ro.product.cpu.abi"],
+        text=True,
+    ).strip()
+    if abi in {"x86_64", "amd64"}:
+        return "x86_64"
+    if abi in {"arm64-v8a", "aarch64"}:
+        return "arm64-v8a"
+    raise RuntimeError(f"Unsupported connected Android ABI: {abi or '<empty>'}")
+
+
+def build_android_phone_artifacts(
+        args: argparse.Namespace, use_rootfs: bool, abi: str) -> None:
+    """Build Android and canonical userspace for the connected target ABI."""
+    is_arm64 = abi == "arm64-v8a"
+    target_arch = "aarch64" if is_arm64 else "x86_64"
+    android_build_dir = (
+        ROOT_DIR / "build-android-arm64" if is_arm64
+        else ROOT_DIR / "build-android"
+    )
+    android_platform = "android-33" if is_arm64 else "android-35"
+
+    if is_arm64:
+        hidl_config = ANDROID_HIDL_ROOT / "hidl-config.cmake"
+        if not hidl_config.is_file():
+            log("Preparing official Android HIDL headers and device libraries...")
+            subprocess.check_call(
+                [sys.executable, str(SCRIPTS_DIR / "prepare_android_hidl.py")],
+                cwd=ROOT_DIR,
+            )
 
     ndk = find_android_ndk()
-    if use_rootfs and (args.rebuild or not ANDROID_ZSTD_BINARY.is_file()):
+    if is_arm64 and use_rootfs and (
+            args.rebuild or not ANDROID_ZSTD_BINARY.is_file()):
         log("Building pinned ARM64 zstd deployment helper...")
         subprocess.check_call(
             [
@@ -224,35 +272,38 @@ def build_android_phone_artifacts(args: argparse.Namespace, use_rootfs: bool) ->
             ],
             cwd=ROOT_DIR,
         )
-    log(f"Configuring ARM64 Android compositor with NDK: {ndk}")
+    log(f"Configuring {abi} Android compositor with NDK: {ndk}")
     configure_args = [
-        "cmake", "-S", str(ROOT_DIR), "-B", str(ANDROID_BUILD_DIR),
+        "cmake", "-S", str(ROOT_DIR), "-B", str(android_build_dir),
         f"-DCMAKE_TOOLCHAIN_FILE={ndk / 'build/cmake/android.toolchain.cmake'}",
-        "-DANDROID_ABI=arm64-v8a",
-        "-DANDROID_PLATFORM=android-33",
-        f"-DLCL_ANDROID_HIDL_ROOT={ANDROID_HIDL_ROOT}",
+        f"-DANDROID_ABI={abi}",
+        f"-DANDROID_PLATFORM={android_platform}",
+        "-DBUILD_TESTS=OFF",
+        *android_skia_cmake_args(ROOT_DIR, abi),
     ]
+    if is_arm64:
+        configure_args.append(f"-DLCL_ANDROID_HIDL_ROOT={ANDROID_HIDL_ROOT}")
     subprocess.check_call(configure_args, cwd=ROOT_DIR)
 
     jobs = max(1, int(args.jobs))
     android_targets = ["lcl-core-android"]
-    if use_rootfs and not args.software_clients:
+    if is_arm64 and use_rootfs and not args.software_clients:
         android_targets.extend(ANDROID_NATIVE_CLIENT_TARGETS)
     build_args = [
-        "cmake", "--build", str(ANDROID_BUILD_DIR),
+        "cmake", "--build", str(android_build_dir),
         "--target", *android_targets, "-j", str(jobs),
     ]
     if args.rebuild:
         build_args.append("--clean-first")
-    log("Building ARM64 Android compositor (AIDL + HIDL)...")
+    log(f"Building {abi} Android compositor...")
     subprocess.check_call(build_args, cwd=ROOT_DIR)
 
     if use_rootfs:
-        log("Building canonical ARM64 rootfs...")
+        log(f"Building canonical {target_arch} rootfs...")
         subprocess.check_call(
             [
                 sys.executable, str(SCRIPTS_DIR / "build_rootfs.py"),
-                "--arch", "aarch64", "--size", str(args.size),
+                "--arch", target_arch, "--size", str(args.size),
             ],
             cwd=ROOT_DIR,
         )
@@ -277,7 +328,9 @@ def cmd_android(args: argparse.Namespace) -> None:
         deploy_args.append("--no-build")
         log("Skipping builds; deployment will require artifacts matching the connected Android target (--no-build).")
     else:
-        build_android_phone_artifacts(args, use_rootfs)
+        abi = connected_android_abi()
+        log(f"Connected Android target ABI: {abi}")
+        build_android_phone_artifacts(args, use_rootfs, abi)
 
     if use_rootfs:
         deploy_args.append("--push-rootfs" if args.push_rootfs else "--rootfs")
