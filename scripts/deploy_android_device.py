@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-LCL OS - Real Android Device Deployment Script
-Deploys lcl-core-android to a rooted Android device via ADB.
+LCL OS - Android ADB Deployment Script
+Deploys lcl-core-android to a rooted physical device or running emulator via ADB.
 
 Workflow:
   1. Push lcl-core-android and the optional HIDL bridge to /data/local/tmp/
@@ -16,8 +16,8 @@ Usage:
 
 Requirements:
   - ADB connected device (USB or network)
-  - Root access via `adb shell su -c` (Magisk/KernelSU/SuperSU)
-  - lcl-core-android ARM64 binary built in build-android-arm64/
+  - Root adbd (`adb root`) or working `su -c` access
+  - lcl-core-android matching the connected target ABI
 """
 
 from __future__ import annotations
@@ -35,7 +35,8 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEVICE_GESTALT_DIR = ROOT_DIR / "devices"
-BUILD_ANDROID_ARM64_DIR = ROOT_DIR / "build-android-arm64"
+TARGET_ARCH = "aarch64"
+BUILD_ANDROID_DIR = ROOT_DIR / "build-android-arm64"
 BINARY_NAME = "lcl-core-android"
 HIDL_BRIDGE_NAME = "liblcl-android-hidl-bridge.so"
 DEVICE_TMP_DIR = "/data/local/tmp"
@@ -53,7 +54,7 @@ ROOTFS_SESSION_LAUNCHER = ROOT_DIR / "scripts" / "lcl_android_rootfs_session.sh"
 DEVICE_ROOTFS_IMAGE = f"{DEVICE_TMP_DIR}/lcl-rootfs-aarch64.ext4"
 DEVICE_ROOTFS_ARCHIVE = f"{DEVICE_ROOTFS_IMAGE}.zst"
 DEVICE_ROOTFS_HASH = f"{DEVICE_ROOTFS_IMAGE}.sha256"
-ANDROID_ZSTD_BINARY = ROOT_DIR / "build" / "android-tools-arm64" / "zstd"
+ANDROID_ZSTD_BINARY: Path | None = ROOT_DIR / "build" / "android-tools-arm64" / "zstd"
 DEVICE_ZSTD_BINARY = f"{DEVICE_TMP_DIR}/lcl-zstd"
 DEVICE_ROOTFS_MOUNT = f"{DEVICE_TMP_DIR}/lcl-rootfs"
 DEVICE_ROOTFS_LOOP = f"{DEVICE_TMP_DIR}/lcl-rootfs.loop"
@@ -73,6 +74,7 @@ ANDROID_NATIVE_LD_LIBRARY_PATH = (
     "/apex/com.android.i18n/lib64:/apex/com.android.runtime/lib64/bionic:"
     "/system/lib64:/vendor/lib64:/system_ext/lib64"
 )
+ROOT_SHELL_MODE: str | None = None
 
 # Android system services to suspend for display takeover
 SYSUI_PACKAGE = "com.android.systemui"
@@ -101,12 +103,22 @@ def run_adb(*args: str, capture: bool = False, check: bool = True) -> subprocess
     return subprocess.run(cmd, check=check)
 
 
-def adb_shell(cmd: str, as_root: bool = True, capture: bool = True, check: bool = False) -> subprocess.CompletedProcess:
-    if as_root:
-        shell_cmd = f"su -c '{cmd}'"
-    else:
+def adb_shell_command(cmd: str, as_root: bool = True) -> list[str]:
+    """Build an adb shell command using the root transport detected at startup."""
+    if not as_root or ROOT_SHELL_MODE == "adbd":
         shell_cmd = cmd
-    return subprocess.run(["adb", "shell", shell_cmd], capture_output=capture, text=True, check=check)
+    else:
+        shell_cmd = f"su -c {shlex.quote(cmd)}"
+    return ["adb", "shell", shell_cmd]
+
+
+def adb_shell(cmd: str, as_root: bool = True, capture: bool = True, check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        adb_shell_command(cmd, as_root=as_root),
+        capture_output=capture,
+        text=True,
+        check=check,
+    )
 
 
 def check_device() -> str:
@@ -141,16 +153,78 @@ def check_device() -> str:
 
 
 def check_root() -> bool:
-    """Verify root access via su."""
+    """Select direct root adbd when available, otherwise fall back to su."""
+    global ROOT_SHELL_MODE
     log("Checking root access...")
-    res = adb_shell("id", as_root=True, capture=True)
-    if "uid=0" in res.stdout:
-        log("Root access confirmed (uid=0).")
+
+    direct = subprocess.run(
+        ["adb", "shell", "id"], capture_output=True, text=True, check=False,
+    )
+    if "uid=0" in direct.stdout:
+        ROOT_SHELL_MODE = "adbd"
+        log("Root access confirmed through adbd (uid=0).")
         return True
+
+    root_attempt = run_adb("root", capture=True, check=False)
+    run_adb("wait-for-device", capture=True, check=False)
+    direct = subprocess.run(
+        ["adb", "shell", "id"], capture_output=True, text=True, check=False,
+    )
+    if "uid=0" in direct.stdout:
+        ROOT_SHELL_MODE = "adbd"
+        log("Root access confirmed after adb root (uid=0).")
+        return True
+
+    via_su = subprocess.run(
+        ["adb", "shell", f"su -c {shlex.quote('id')}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if "uid=0" in via_su.stdout:
+        ROOT_SHELL_MODE = "su"
+        log("Root access confirmed through su (uid=0).")
+        return True
+
+    details = " | ".join(
+        value for value in (
+            direct.stdout.strip(), direct.stderr.strip(),
+            root_attempt.stdout.strip(), root_attempt.stderr.strip(),
+            via_su.stdout.strip(), via_su.stderr.strip(),
+        ) if value
+    )
+    err("Root access NOT available. Output: " + details)
+    err("  -> This target needs either root adbd or a working su implementation.")
+    return False
+
+
+def configure_target_for_abi(abi: str) -> None:
+    """Select existing Android and canonical rootfs artifacts for one ADB ABI."""
+    global TARGET_ARCH, BUILD_ANDROID_DIR, ROOTFS_IMAGE, ROOTFS_ARCHIVE
+    global DEVICE_ROOTFS_IMAGE, DEVICE_ROOTFS_ARCHIVE, DEVICE_ROOTFS_HASH
+    global ANDROID_ZSTD_BINARY
+
+    if abi in ("arm64-v8a", "aarch64"):
+        TARGET_ARCH = "aarch64"
+        BUILD_ANDROID_DIR = ROOT_DIR / "build-android-arm64"
+        ANDROID_ZSTD_BINARY = ROOT_DIR / "build" / "android-tools-arm64" / "zstd"
+    elif abi in ("x86_64", "amd64"):
+        TARGET_ARCH = "x86_64"
+        BUILD_ANDROID_DIR = ROOT_DIR / "build-android"
+        # No prebuilt Android x86_64 decompressor is required: deployment
+        # pushes the existing ext4 artifact directly when it changes.
+        ANDROID_ZSTD_BINARY = None
     else:
-        err("Root access NOT available. Output: " + res.stdout.strip())
-        err("  -> Make sure Magisk/KernelSU is installed and 'adb' is granted root in Magisk app.")
-        return False
+        raise RuntimeError(
+            f"Device ABI '{abi}' is unsupported; expected arm64-v8a or x86_64."
+        )
+
+    filename = f"lcl-rootfs-{TARGET_ARCH}.ext4"
+    ROOTFS_IMAGE = ROOT_DIR / "build" / "rootfs" / filename
+    ROOTFS_ARCHIVE = ROOTFS_IMAGE.with_suffix(ROOTFS_IMAGE.suffix + ".zst")
+    DEVICE_ROOTFS_IMAGE = f"{DEVICE_TMP_DIR}/{filename}"
+    DEVICE_ROOTFS_ARCHIVE = f"{DEVICE_ROOTFS_IMAGE}.zst"
+    DEVICE_ROOTFS_HASH = f"{DEVICE_ROOTFS_IMAGE}.sha256"
 
 
 def get_device_info() -> dict:
@@ -314,9 +388,11 @@ def make_mount_rslave(mount_point: str) -> None:
 
 
 def rootfs_loop_devices() -> list[str] | None:
-    """Return loop devices currently backed by LCL's canonical rootfs image."""
+    """Return loops backed by the rootfs; an absent first-deploy image has none."""
+    rootfs_image = shlex.quote(DEVICE_ROOTFS_IMAGE)
     result = adb_shell(
-        f"losetup -j {shlex.quote(DEVICE_ROOTFS_IMAGE)}",
+        f"if [ ! -e {rootfs_image} ]; then exit 0; fi; "
+        f"losetup -j {rootfs_image}",
         as_root=True,
     )
     if result.returncode != 0:
@@ -548,27 +624,54 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def ensure_rootfs_image() -> None:
-    """Build the canonical ARM64 glibc rootfs when it is absent."""
+def ensure_rootfs_image(allow_build: bool = True) -> None:
+    """Require or build the canonical glibc rootfs selected for the ADB ABI."""
     if ROOTFS_IMAGE.is_file():
         return
-    log("Canonical ARM64 rootfs is missing; building it in the ARM64 Docker builder...")
+    if not allow_build:
+        raise RuntimeError(
+            f"--no-build requires the canonical {TARGET_ARCH} rootfs: {ROOTFS_IMAGE}"
+        )
+    log(f"Canonical {TARGET_ARCH} rootfs is missing; building it in Docker...")
     subprocess.run(
         [sys.executable, str(ROOT_DIR / "scripts" / "build_rootfs.py"),
-         "--arch", "aarch64", "--size", "1024"],
+         "--arch", TARGET_ARCH, "--size", "1024"],
         cwd=ROOT_DIR,
         check=True,
     )
 
 
-def push_rootfs_image(force: bool = False) -> None:
-    """Compress and deploy the canonical ARM64 ext4 artifact."""
-    ensure_rootfs_image()
+def push_rootfs_image(force: bool = False, allow_build: bool = True) -> None:
+    """Deploy the canonical ext4 artifact selected for the connected ABI."""
+    ensure_rootfs_image(allow_build=allow_build)
     rootfs_hash = sha256_file(ROOTFS_IMAGE)
     remote_hash = adb_shell(f"cat {DEVICE_ROOTFS_HASH}", as_root=True).stdout.strip()
     remote_image = adb_shell(f"test -f {DEVICE_ROOTFS_IMAGE}; echo $?", as_root=True).stdout.strip()
     if not force and remote_hash == rootfs_hash and remote_image.endswith("0"):
-        log("Canonical ARM64 rootfs already matches the connected phone.")
+        log(f"Canonical {TARGET_ARCH} rootfs already matches the connected target.")
+        return
+
+    if not unmount_rootfs():
+        raise RuntimeError("Cannot replace the rootfs image while it is still mounted.")
+
+    if ANDROID_ZSTD_BINARY is None:
+        upload_path = f"{DEVICE_ROOTFS_IMAGE}.upload"
+        image_mb = ROOTFS_IMAGE.stat().st_size / (1024 * 1024)
+        log(f"Pushing canonical {TARGET_ARCH} rootfs directly ({image_mb:.1f} MB)...")
+        adb_shell(f"rm -f {upload_path}", as_root=True)
+        run_adb("push", str(ROOTFS_IMAGE), upload_path)
+        install = adb_shell(
+            f"mv {upload_path} {DEVICE_ROOTFS_IMAGE} && "
+            f"chmod 0600 {DEVICE_ROOTFS_IMAGE} && "
+            f"echo {rootfs_hash} > {DEVICE_ROOTFS_HASH}",
+            as_root=True,
+        )
+        if install.returncode != 0:
+            raise RuntimeError(
+                "Rootfs installation failed: " +
+                (install.stderr.strip() or install.stdout.strip())
+            )
+        log(f"Canonical rootfs deployed: {DEVICE_ROOTFS_IMAGE}")
         return
 
     zstd = shutil.which("zstd")
@@ -576,34 +679,32 @@ def push_rootfs_image(force: bool = False) -> None:
         raise RuntimeError("Host zstd executable is required to deploy the rootfs image.")
     if not ANDROID_ZSTD_BINARY.is_file():
         raise RuntimeError(
-            "ARM64 Android zstd helper is missing: "
+            f"{TARGET_ARCH} Android zstd helper is missing: "
             f"{ANDROID_ZSTD_BINARY}. Run './main.py android' once without --no-build."
         )
     if (not ROOTFS_ARCHIVE.is_file() or
             ROOTFS_ARCHIVE.stat().st_mtime < ROOTFS_IMAGE.stat().st_mtime):
-        log("Compressing canonical ARM64 rootfs with zstd...")
+        log(f"Compressing canonical {TARGET_ARCH} rootfs with zstd...")
         subprocess.run(
             [zstd, "-T0", "-3", "-f", str(ROOTFS_IMAGE), "-o", str(ROOTFS_ARCHIVE)],
             check=True,
         )
 
-    if not unmount_rootfs():
-        raise RuntimeError("Cannot replace the rootfs image while it is still mounted.")
     helper_mb = ANDROID_ZSTD_BINARY.stat().st_size / (1024 * 1024)
-    log(f"Pushing ARM64 zstd helper ({helper_mb:.1f} MB) to {DEVICE_ZSTD_BINARY}...")
+    log(f"Pushing {TARGET_ARCH} zstd helper ({helper_mb:.1f} MB) to {DEVICE_ZSTD_BINARY}...")
     run_adb("push", str(ANDROID_ZSTD_BINARY), DEVICE_ZSTD_BINARY)
     adb_shell(f"chmod 0755 {DEVICE_ZSTD_BINARY}", as_root=True)
     helper_probe = adb_shell(f"{DEVICE_ZSTD_BINARY} --version", as_root=True)
     if helper_probe.returncode != 0:
         raise RuntimeError(
-            "ARM64 zstd helper failed on the connected device: "
+            f"{TARGET_ARCH} zstd helper failed on the connected device: "
             + (helper_probe.stderr.strip() or helper_probe.stdout.strip())
         )
 
     archive_mb = ROOTFS_ARCHIVE.stat().st_size / (1024 * 1024)
     log(f"Pushing compressed rootfs ({archive_mb:.1f} MB)...")
     run_adb("push", str(ROOTFS_ARCHIVE), DEVICE_ROOTFS_ARCHIVE)
-    log("Decompressing rootfs on the phone...")
+    log("Decompressing rootfs on the connected target...")
     result = adb_shell(
         f"{DEVICE_ZSTD_BINARY} -d -f {DEVICE_ROOTFS_ARCHIVE} -o {DEVICE_ROOTFS_IMAGE} && "
         f"chmod 0600 {DEVICE_ROOTFS_IMAGE} && rm -f {DEVICE_ROOTFS_ARCHIVE}",
@@ -621,16 +722,16 @@ def push_native_clients() -> None:
         raise RuntimeError(f"Native-client wrapper missing: {NATIVE_CLIENT_WRAPPER}")
     missing = [
         name for name, relative_path in NATIVE_CLIENT_ARTIFACTS.items()
-        if not (BUILD_ANDROID_ARM64_DIR / relative_path).is_file()
+        if not (BUILD_ANDROID_DIR / relative_path).is_file()
     ]
     if missing:
         raise RuntimeError(
             "Android-native client target(s) missing: " + ", ".join(missing) +
-            ". Build them in build-android-arm64 first."
+            f". Build them in {BUILD_ANDROID_DIR.name} first."
         )
     adb_shell(f"mkdir -p {DEVICE_NATIVE_CLIENT_DIR}", as_root=False)
     for name, relative_path in NATIVE_CLIENT_ARTIFACTS.items():
-        run_adb("push", str(BUILD_ANDROID_ARM64_DIR / relative_path),
+        run_adb("push", str(BUILD_ANDROID_DIR / relative_path),
                 f"{DEVICE_NATIVE_CLIENT_DIR}/{name}")
     run_adb("push", str(NATIVE_CLIENT_WRAPPER), DEVICE_NATIVE_CLIENT_WRAPPER)
     native_paths = " ".join(
@@ -796,10 +897,10 @@ def mount_rootfs(native_clients: bool = False) -> None:
         f"echo ROOTFS_ARCH=\\$(/System/Tools/uname -m)\"",
         as_root=True,
     )
-    if probe.returncode != 0 or "ROOTFS_ARCH=aarch64" not in probe.stdout:
-        raise RuntimeError("ARM64 rootfs chroot probe failed: " +
+    if probe.returncode != 0 or f"ROOTFS_ARCH={TARGET_ARCH}" not in probe.stdout:
+        raise RuntimeError(f"{TARGET_ARCH} rootfs chroot probe failed: " +
                            (probe.stderr.strip() or probe.stdout.strip()))
-    log("Canonical ARM64 rootfs mounted and chroot probe passed.")
+    log(f"Canonical {TARGET_ARCH} rootfs mounted and chroot probe passed.")
 
 
 def push_rootfs_session_launcher() -> None:
@@ -875,10 +976,10 @@ def wait_for_compositor_socket(
 
 def push_binary() -> None:
     """Push lcl-core-android and its optional HIDL ABI bridge to device."""
-    binary = BUILD_ANDROID_ARM64_DIR / BINARY_NAME
+    binary = BUILD_ANDROID_DIR / BINARY_NAME
     if not binary.is_file():
         err(f"Binary not found: {binary}")
-        err("  -> Build first: cd build-android-arm64 && cmake --build . --target lcl-core-android")
+        err(f"  -> Build first: cmake --build {BUILD_ANDROID_DIR} --target lcl-core-android")
         sys.exit(1)
 
     size_mb = binary.stat().st_size / (1024 * 1024)
@@ -886,7 +987,7 @@ def push_binary() -> None:
 
     run_adb("push", str(binary), DEVICE_TMP_DIR)
     adb_shell(f"chmod 755 {DEVICE_BINARY_PATH}", as_root=True)
-    bridge = BUILD_ANDROID_ARM64_DIR / HIDL_BRIDGE_NAME
+    bridge = BUILD_ANDROID_DIR / HIDL_BRIDGE_NAME
     if bridge.is_file():
         bridge_size_mb = bridge.stat().st_size / (1024 * 1024)
         log(f"Pushing HIDL bridge ({bridge_size_mb:.1f} MB) to {DEVICE_HIDL_BRIDGE_PATH}...")
@@ -929,11 +1030,12 @@ def push_gestalt(gestalt_path: Path) -> None:
 def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
                use_rootfs: bool = False, force_rootfs: bool = False,
                native_clients: bool = True,
+               no_build: bool = False,
                gestalt_path: Path | None = None) -> None:
     """Main deployment logic: push binary, stop SysUI, launch LCL compositor."""
 
     log("=" * 60)
-    log("  LCL Core Linux -- Real Android Device Deployment")
+    log("  LCL Core Linux -- Android ADB Deployment")
     log("  Stage 4C.3 | Android Composer Direct Display Takeover")
     log("=" * 60)
 
@@ -948,10 +1050,13 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
     # 3. Device info
     info = get_device_info()
     log(f"Device: {info['model']} | Android {info['android_version']} (SDK {info['sdk_version']}) | ABI: {info['abi']}")
-
-    if info["abi"] not in ("arm64-v8a", "aarch64"):
-        err(f"Device ABI '{info['abi']}' is not arm64-v8a. This binary requires ARM64.")
-        sys.exit(1)
+    configure_target_for_abi(info["abi"])
+    log(f"Selected {TARGET_ARCH} ADB deployment artifacts from {BUILD_ANDROID_DIR}.")
+    if TARGET_ARCH == "x86_64" and native_clients:
+        # The existing x86_64 Android build contains the compositor; canonical
+        # glibc clients come from the x86_64 rootfs and use the SHM path.
+        native_clients = False
+        log("Using canonical x86_64 rootfs clients (Android-native client bundle is not required).")
 
     selected_gestalt_path = gestalt_path
     if selected_gestalt_path is None:
@@ -977,10 +1082,10 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
     # 4b. Push binary
     push_binary()
 
-    # 4c. Deploy and mount the canonical ARM64 glibc userspace when requested.
+    # 4c. Deploy and mount the canonical ABI-matched glibc userspace when requested.
     if use_rootfs:
         try:
-            push_rootfs_image(force=force_rootfs)
+            push_rootfs_image(force=force_rootfs, allow_build=not no_build)
             if native_clients:
                 push_native_clients()
             mount_rootfs(native_clients=native_clients)
@@ -1002,7 +1107,7 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
 
     # 6. Launch lcl-core-android as root
     log("Launching lcl-core-android compositor on device...")
-    log("  The LCL desktop should appear on your phone screen.")
+    log("  The LCL desktop should appear on the connected target.")
     log("  Press Ctrl+C here to terminate and restore System UI.")
     log("-" * 60)
 
@@ -1025,10 +1130,10 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
         )
         if selected_gestalt_path is not None:
             launch_env += f" LCL_GESTALT_PATH={DEVICE_GESTALT_PATH}"
-        lcl_proc = subprocess.Popen([
-            "adb", "shell",
-            f"su -c '{launch_env} {DEVICE_BINARY_PATH} 2>&1 | tee {DEVICE_LOG_PATH}'"
-        ])
+        lcl_proc = subprocess.Popen(adb_shell_command(
+            f"{launch_env} {DEVICE_BINARY_PATH} 2>&1 | tee {DEVICE_LOG_PATH}",
+            as_root=True,
+        ))
 
         if use_rootfs:
             log("Waiting for Android compositor IPC before starting canonical userspace...")
@@ -1037,11 +1142,11 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
                     "LCL compositor did not expose a live listening IPC socket "
                     "before the rootfs session timeout."
                 )
-            session_proc = subprocess.Popen([
-                "adb", "shell",
-                f"su -c '{DEVICE_SESSION_LAUNCHER} 2>&1'",
-            ])
-            log("Canonical ARM64 rootfs session launched.")
+            session_proc = subprocess.Popen(adb_shell_command(
+                f"{DEVICE_SESSION_LAUNCHER} 2>&1",
+                as_root=True,
+            ))
+            log(f"Canonical {TARGET_ARCH} rootfs session launched.")
 
         lcl_proc.wait()
 
@@ -1077,6 +1182,9 @@ def restore_only() -> None:
     """Just restore System UI without launching LCL."""
     log("Restore-only mode: Restarting Android System UI...")
     check_device()
+    if not check_root():
+        raise RuntimeError("Cannot restore Android UI without root access.")
+    configure_target_for_abi(get_device_info()["abi"])
     stop_rootfs_session()
     stop_lcl_process()
     unmount_rootfs()
@@ -1087,7 +1195,7 @@ def restore_only() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="LCL OS - Real Android Device Deployment (ADB + Root)"
+        description="LCL OS - Android Device/Emulator Deployment (ADB + Root)"
     )
     parser.add_argument(
         "--restore-only",
@@ -1107,12 +1215,17 @@ def main() -> None:
     parser.add_argument(
         "--rootfs",
         action="store_true",
-        help="Mount and launch the canonical ARM64 glibc rootfs desktop session"
+        help="Mount and launch the canonical glibc rootfs matching the target ABI"
     )
     parser.add_argument(
         "--push-rootfs",
         action="store_true",
-        help="Force re-upload of the canonical ARM64 rootfs (implies --rootfs)"
+        help="Force re-upload of the canonical ABI-matched rootfs (implies --rootfs)"
+    )
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="Require existing artifacts matching the connected target ABI"
     )
     parser.add_argument(
         "--software-clients",
@@ -1137,6 +1250,7 @@ def main() -> None:
         use_rootfs=args.rootfs or args.push_rootfs,
         force_rootfs=args.push_rootfs,
         native_clients=not args.software_clients,
+        no_build=args.no_build,
         gestalt_path=args.gestalt,
     )
 

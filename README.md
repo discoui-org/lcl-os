@@ -81,6 +81,18 @@ Android system utilities. Deployment temporarily
 stops SurfaceFlinger for exclusive Composer access and restores Android UI when
 the LCL process exits. Root access is required.
 
+To deploy the existing x86_64 artifacts to an already-running, root-capable
+Android Emulator without generating or booting custom AVD images, use the same
+ADB deployment command:
+
+```bash
+./main.py android --no-build
+```
+
+The deployer reads `ro.product.cpu.abi`: `x86_64` selects `build-android/` and
+`lcl-rootfs-x86_64.ext4`, while `arm64-v8a` selects the physical-device ARM64
+artifacts. Root may come from an already-root adbd, `adb root`, or `su -c`.
+
 ---
 
 ## Running Applications Inside LCL OS

@@ -158,12 +158,20 @@ TEST(GestaltTest, CheckedInMobileDefaultProfileMatchesStrictSchema) {
     DeviceGestalt gestalt;
     std::string error;
     ASSERT_TRUE(parseGestaltJson(contents.str(), gestalt, error)) << error;
-    EXPECT_EQ(gestalt.name, "LCL Mobile Default");
+    EXPECT_EQ(gestalt.name, "Google Pixel 8 Pro AVD (Pixel_8_Pro)");
     EXPECT_EQ(gestalt.shell, ShellKind::Mobile);
-    EXPECT_EQ(gestalt.display.width, 1179u);
-    EXPECT_EQ(gestalt.display.height, 2556u);
-    EXPECT_EQ(gestalt.display.scale, 2.0f);
+    EXPECT_EQ(gestalt.display.width, 1344u);
+    EXPECT_EQ(gestalt.display.height, 2992u);
+    EXPECT_EQ(gestalt.display.refreshRateHz, 60u);
+    EXPECT_EQ(gestalt.display.scale, 3.0f);
     EXPECT_EQ(gestalt.display.naturalOrientation, NaturalOrientation::Portrait);
+    EXPECT_FLOAT_EQ(gestalt.display.safeArea.top, 117.0f);
+    EXPECT_FLOAT_EQ(gestalt.display.corners.topLeft.radiusX, 93.0f);
+    ASSERT_EQ(gestalt.display.cutouts.size(), 1u);
+    EXPECT_FLOAT_EQ(gestalt.display.cutouts.front().x, 631.0f);
+    EXPECT_FLOAT_EQ(gestalt.display.cutouts.front().y, 35.0f);
+    EXPECT_FLOAT_EQ(gestalt.display.cutouts.front().width, 82.0f);
+    EXPECT_FLOAT_EQ(gestalt.display.cutouts.front().height, 82.0f);
 }
 
 TEST(GestaltTest, EveryCheckedInDeviceProfileMatchesStrictSchema) {

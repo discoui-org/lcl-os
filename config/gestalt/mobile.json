@@ -1,25 +1,28 @@
 {
   "version": 1,
-  "name": "LCL Mobile Default",
+  "name": "Google Pixel 8 Pro AVD (Pixel_8_Pro)",
   "shell": "mobile",
   "display": {
-    "width": 1179,
-    "height": 2556,
+    "width": 1344,
+    "height": 2992,
+    "refreshRateHz": 60,
     "scale": 3.0,
     "naturalOrientation": "portrait",
     "defaultRotation": 0,
     "safeArea": {
-      "top": 0,
+      "top": 117,
       "right": 0,
       "bottom": 0,
       "left": 0
     },
     "corners": {
-      "topLeft": { "radiusX": 90, "radiusY": 90, "roundness": 2.0 },
-      "topRight": { "radiusX": 90, "radiusY": 90, "roundness": 2.0 },
-      "bottomLeft": { "radiusX": 90, "radiusY": 90, "roundness": 2.0 },
-      "bottomRight": { "radiusX": 90, "radiusY": 90, "roundness": 2.0 }
+      "topLeft": { "radiusX": 93, "radiusY": 93, "roundness": 2.0 },
+      "topRight": { "radiusX": 93, "radiusY": 93, "roundness": 2.0 },
+      "bottomLeft": { "radiusX": 93, "radiusY": 93, "roundness": 2.0 },
+      "bottomRight": { "radiusX": 93, "radiusY": 93, "roundness": 2.0 }
     },
-    "cutouts": []
+    "cutouts": [
+      { "x": 631, "y": 35, "width": 82, "height": 82 }
+    ]
   }
 }

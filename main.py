@@ -31,7 +31,6 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 BUILD_DIR = ROOT_DIR / "build"
 ANDROID_BUILD_DIR = ROOT_DIR / "build-android-arm64"
 ANDROID_HIDL_ROOT = BUILD_DIR / "android-hidl-v31"
-ANDROID_ROOTFS_IMAGE = BUILD_DIR / "rootfs" / "lcl-rootfs-aarch64.ext4"
 ANDROID_ZSTD_BINARY = BUILD_DIR / "android-tools-arm64" / "zstd"
 ANDROID_NATIVE_CLIENT_ARTIFACTS = {
     "lcl-desktop-shell": Path("lcl-desktop-shell"),
@@ -259,27 +258,8 @@ def build_android_phone_artifacts(args: argparse.Namespace, use_rootfs: bool) ->
         )
 
 
-def require_android_phone_artifacts(use_rootfs: bool, native_clients: bool) -> None:
-    """Make --no-build strict instead of silently building missing files."""
-    required = [ANDROID_BUILD_DIR / "lcl-core-android"]
-    if use_rootfs:
-        required.extend((ANDROID_ROOTFS_IMAGE, ANDROID_ZSTD_BINARY))
-    if use_rootfs and native_clients:
-        required.extend(
-            ANDROID_BUILD_DIR / relative_path
-            for relative_path in ANDROID_NATIVE_CLIENT_ARTIFACTS.values()
-        )
-    missing = [path for path in required if not path.is_file()]
-    if missing:
-        formatted = "\n".join(f"  - {path}" for path in missing)
-        raise RuntimeError(
-            "--no-build was requested, but required Android artifacts are missing:\n"
-            f"{formatted}\nRun './main.py android' once to build them."
-        )
-
-
 def cmd_android(args: argparse.Namespace) -> None:
-    """Launch either the x86_64 AVD or a connected ARM64 Android device."""
+    """Boot custom AVD images or deploy ABI-matched artifacts over ADB."""
     if args.avd:
         cmd_android_avd(args)
         return
@@ -290,10 +270,12 @@ def cmd_android(args: argparse.Namespace) -> None:
         return
 
     use_rootfs = not args.compositor_only
-    native_clients = use_rootfs and not args.software_clients
     if args.no_build:
-        require_android_phone_artifacts(use_rootfs, native_clients)
-        log("Skipping Android compositor and rootfs build (--no-build).")
+        # Artifact selection depends on the connected target's ABI. Let the
+        # deployer select x86_64 emulator or ARM64 device paths before it
+        # performs the strict no-build validation.
+        deploy_args.append("--no-build")
+        log("Skipping builds; deployment will require artifacts matching the connected Android target (--no-build).")
     else:
         build_android_phone_artifacts(args, use_rootfs)
 
@@ -439,11 +421,11 @@ def main() -> None:
     # ---- android ----
     p_android = subparsers.add_parser(
         "android",
-        help="Build & launch LCL OS on Android hardware or an x86_64 AVD",
+        help="Build & launch LCL OS on an ADB target or a custom-image x86_64 AVD",
     )
     p_android.add_argument(
         "--avd", action="store_true",
-        help="Launch the x86_64 Android AVD instead of a connected ARM64 device",
+        help="Boot the custom-image x86_64 AVD instead of deploying over ADB",
     )
     p_android.add_argument(
         "--avd-name", metavar="NAME",
@@ -459,7 +441,7 @@ def main() -> None:
     )
     p_android.add_argument(
         "--no-build", action="store_true",
-        help="Skip all builds and require existing Android/rootfs artifacts",
+        help="Skip builds and deploy existing artifacts matching the ADB target ABI",
     )
     p_android.add_argument(
         "--rebuild", action="store_true",
