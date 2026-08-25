@@ -8,7 +8,7 @@ restrained foreground mark over a strong colour field.
 
 The result should feel confident at launcher size: one recognisable idea, a
 strong colour field, and a simple foreground mark. It must not depend on
-third-party product imagery, symbol libraries, or reproduced system artwork.
+third-party product imagery or reproduced system artwork.
 
 ## Presentation: continuous rounded-rectangle mask
 
@@ -37,13 +37,14 @@ Every icon lives in this directory and uses this baseline:
 
 | Property | Rule |
 | --- | --- |
-| File format | Plain SVG 1.1, no embedded bitmap and no external references |
+| Source format | Plain SVG 1.1, no embedded bitmap and no external references |
+| Generated format | `1024 x 1024` PNG under `assets/icons/png` |
 | Artboard | `1024 x 1024`, `viewBox="0 0 1024 1024"` |
 | Background | Full square colour or gradient; never transparent by accident |
 | Visible safe zone | Keep the primary mark inside the centred `760 x 760` area |
 | Preferred mark size | About `480–640` units wide or tall, adjusted optically |
 | Shape count | Prefer 1–5 purposeful shapes; merge incidental detail |
-| Text | None, except an inseparable brand monogram |
+| Text | No visible label; a local icon-font glyph is permitted |
 | Strokes | Avoid hairlines; use filled shapes or strokes at least `56` units |
 
 Design against the final system mask, not only the square artboard. No meaningful
@@ -53,17 +54,32 @@ an explanation, simplify it.
 
 ## Layer model
 
-Use a maximum of three visual planes, named from back to front in the SVG:
+Use two primary visual planes, named from back to front in the SVG:
 
 1. **Background** — a solid colour or restrained two-to-three-stop gradient.
-2. **Atmosphere** — optional broad translucent form that creates depth without
-   competing with the mark.
-3. **Symbol** — one filled, high-contrast motif representing the application.
+2. **Symbol** — one filled, high-contrast motif representing the application.
 
-The depth is graphic, not photorealistic. Avoid drop shadows, bevels, texture,
+The depth is graphic, not photorealistic. Do not add the same decorative circle
+or generic atmosphere shape to every icon. Avoid drop shadows, bevels, texture,
 specular highlights, blur filters, noise, and fake glass reflections. These
-details collapse at small sizes and are renderer-dependent. A translucent
-overlap is sufficient when a layered effect is needed.
+details collapse at small sizes and are renderer-dependent.
+
+## Symbol font
+
+Application symbols use the locally packaged `CupertinoIcons` font at
+`assets/fonts/cupertino-icons/CupertinoIcons.ttf`. SVG files place one glyph
+in a `text` element with `font-family="CupertinoIcons"`; this is a vector glyph,
+not a visible text label. The consuming icon renderer must register that local
+font family before rendering the SVGs.
+
+Generate the PNG derivatives with:
+
+```sh
+python3 tools/convert_icons_to_png.py
+```
+
+The converter creates an isolated Fontconfig environment, resolves the local
+font explicitly, and verifies the signature and dimensions of every PNG.
 
 ## Colour palette
 
