@@ -271,6 +271,7 @@ if(ANDROID)
 
     # Android Platform implementation library
     add_library(lcl-platform-android STATIC
+        src/platform/android/binder_ndk_compat.cpp
         src/platform/android/android_input_backend.cpp
         src/platform/android/android_display_backend.cpp
         src/platform/android/android_hidl_display_backend.cpp
@@ -279,9 +280,21 @@ if(ANDROID)
         ${ANDROID_AIDL_SOURCES}
     )
 
+    target_include_directories(lcl-platform-android BEFORE PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/binder_ndk_compat
+    )
+
     target_include_directories(lcl-platform-android PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android/generated/include
+    )
+
+    # Composer3 is a VINTF-stable vendor interface. The generated NDK binder
+    # stubs guard their stability marking behind this definition; without it
+    # the vendor HAL rejects every callback (including VSync) as a system-
+    # stability binder transaction.
+    target_compile_definitions(lcl-platform-android PRIVATE
+        BINDER_STABILITY_SUPPORT=1
     )
 
     target_link_libraries(lcl-platform-android PUBLIC

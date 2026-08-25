@@ -39,6 +39,7 @@
 #include <array>
 #include <cstdlib>
 #include <limits>
+#include <optional>
 #include <vector>
 
 extern "C" {
@@ -86,7 +87,6 @@ using aidl::android::hardware::drm::HdcpLevels;
 
 typedef AIBinder* (*pfn_AServiceManager_getService)(const char* instance);
 typedef void (*pfn_ABinderProcess_startThreadPool)();
-typedef void (*pfn_AIBinder_markVintfStability)(AIBinder* binder);
 
 struct AndroidDisplayBackend::Impl {
     std::shared_ptr<IComposer> composer;
@@ -96,7 +96,6 @@ struct AndroidDisplayBackend::Impl {
     void* binderNdkLib{nullptr};
     pfn_AServiceManager_getService getService{nullptr};
     pfn_ABinderProcess_startThreadPool startThreadPool{nullptr};
-    pfn_AIBinder_markVintfStability markVintfStability{nullptr};
 
     std::mutex mutex;
     std::condition_variable cv;
@@ -109,6 +108,7 @@ struct AndroidDisplayBackend::Impl {
     std::array<bool, 4> layerBufferHandlesSent{};
     std::array<std::vector<int>, 4> pendingSlotFences{};
     uint32_t nextLayerBufferSlot{0};
+    std::optional<uint32_t> activeLayerBufferSlot;
 };
 
 static void waitAndClearFenceFds(std::vector<int>& fences) {
@@ -238,9 +238,6 @@ bool AndroidDisplayBackend::initializeAidl() {
         dlsym(m_impl->binderNdkLib, "AServiceManager_getService"));
     m_impl->startThreadPool = reinterpret_cast<pfn_ABinderProcess_startThreadPool>(
         dlsym(m_impl->binderNdkLib, "ABinderProcess_startThreadPool"));
-    m_impl->markVintfStability = reinterpret_cast<pfn_AIBinder_markVintfStability>(
-        dlsym(m_impl->binderNdkLib, "AIBinder_markVintfStability"));
-
     if (m_impl->startThreadPool) {
         m_impl->startThreadPool();
     }
@@ -278,11 +275,9 @@ bool AndroidDisplayBackend::initializeAidl() {
         return false;
     }
 
-    // 3. Instantiate callback with VINTF stability and register with HAL
+    // 3. Instantiate the generated VINTF-stable callback and register with HAL.
+    // BnComposerCallback::createBinder() performs the stability marking.
     m_impl->callback = ::ndk::SharedRefBase::make<AndroidComposerCallback>(m_impl.get());
-    if (m_impl->markVintfStability) {
-        m_impl->markVintfStability(m_impl->callback->asBinder().get());
-    }
 
     auto regStatus = m_impl->client->registerCallback(m_impl->callback);
     if (!regStatus.isOk()) {
@@ -413,6 +408,7 @@ void AndroidDisplayBackend::shutdownAidl() {
     m_impl->layerBufferSlots.fill(nullptr);
     m_impl->layerBufferHandlesSent.fill(false);
     m_impl->nextLayerBufferSlot = 0;
+    m_impl->activeLayerBufferSlot.reset();
     m_impl->vsyncSerial = 0;
     m_impl->vsyncEnabled = false;
 
@@ -633,9 +629,17 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
             } else if (payload.getTag() == CommandResultPayload::Tag::releaseFences) {
                 const auto& releases = payload.get<CommandResultPayload::Tag::releaseFences>();
                 for (const auto& layer : releases.layers) {
+                    if (layer.layer != m_layerId ||
+                        !m_impl->activeLayerBufferSlot) {
+                        continue;
+                    }
                     const int fenceFd = layer.fence.get();
                     if (fenceFd >= 0) {
-                        m_impl->pendingSlotFences[bufferSlot].push_back(dup(fenceFd));
+                        // A layer release fence belongs to the previous buffer
+                        // replaced by this present, not to the buffer submitted
+                        // in the current command.
+                        m_impl->pendingSlotFences[
+                            *m_impl->activeLayerBufferSlot].push_back(dup(fenceFd));
                     }
                 }
             }
@@ -647,7 +651,10 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
         return false;
     }
     m_impl->layerBufferHandlesSent[bufferSlot] = true;
-    if (alreadyPresented) return true;
+    if (alreadyPresented) {
+        m_impl->activeLayerBufferSlot = bufferSlot;
+        return true;
+    }
 
     // 4. Step 2: Present Display (accepting composition changes if requested by HAL)
     DisplayCommand presCmd;
@@ -668,8 +675,11 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
     }
 
     collectResults(presResults, "Present");
-
-    return (commandErrors == 0);
+    if (commandErrors == 0) {
+        m_impl->activeLayerBufferSlot = bufferSlot;
+        return true;
+    }
+    return false;
 }
 
 } // namespace lcl::platform::android

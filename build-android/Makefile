@@ -1386,6 +1386,30 @@ src/platform/android/android_platform_services.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/android_platform_services.cpp.s
 .PHONY : src/platform/android/android_platform_services.cpp.s
 
+src/platform/android/binder_ndk_compat.o: src/platform/android/binder_ndk_compat.cpp.o
+.PHONY : src/platform/android/binder_ndk_compat.o
+
+# target to build an object file
+src/platform/android/binder_ndk_compat.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/binder_ndk_compat.cpp.o
+.PHONY : src/platform/android/binder_ndk_compat.cpp.o
+
+src/platform/android/binder_ndk_compat.i: src/platform/android/binder_ndk_compat.cpp.i
+.PHONY : src/platform/android/binder_ndk_compat.i
+
+# target to preprocess a source file
+src/platform/android/binder_ndk_compat.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/binder_ndk_compat.cpp.i
+.PHONY : src/platform/android/binder_ndk_compat.cpp.i
+
+src/platform/android/binder_ndk_compat.s: src/platform/android/binder_ndk_compat.cpp.s
+.PHONY : src/platform/android/binder_ndk_compat.s
+
+# target to generate assembly for a file
+src/platform/android/binder_ndk_compat.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-platform-android.dir/build.make CMakeFiles/lcl-platform-android.dir/src/platform/android/binder_ndk_compat.cpp.s
+.PHONY : src/platform/android/binder_ndk_compat.cpp.s
+
 src/platform/android/generated/src/android/hardware/common/Ashmem.o: src/platform/android/generated/src/android/hardware/common/Ashmem.cpp.o
 .PHONY : src/platform/android/generated/src/android/hardware/common/Ashmem.o
 
@@ -4176,6 +4200,9 @@ help:
 	@echo "... src/platform/android/android_platform_services.o"
 	@echo "... src/platform/android/android_platform_services.i"
 	@echo "... src/platform/android/android_platform_services.s"
+	@echo "... src/platform/android/binder_ndk_compat.o"
+	@echo "... src/platform/android/binder_ndk_compat.i"
+	@echo "... src/platform/android/binder_ndk_compat.s"
 	@echo "... src/platform/android/generated/src/android/hardware/common/Ashmem.o"
 	@echo "... src/platform/android/generated/src/android/hardware/common/Ashmem.i"
 	@echo "... src/platform/android/generated/src/android/hardware/common/Ashmem.s"
