@@ -717,8 +717,29 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 matchingSurface->hasRenderableBuffer()) {
                 const float pillOpacity = windowOpacity * std::clamp(
                     matchingSurface->launchContentOpacity, 0.0f, 1.0f);
-                replayLogicalList(buildMobileGesturePillDisplayList(
-                    group.globalBounds, pillOpacity));
+                const MobileGesturePillMetrics metrics{};
+                const auto pill = layoutMobileGesturePill(
+                    group.globalBounds, metrics);
+                if (pill.bounds.width > 0.0f &&
+                    pill.bounds.height > 0.0f && pillOpacity > 0.0f) {
+                    auto color = metrics.color;
+                    color.a = static_cast<uint8_t>(std::clamp(std::lround(
+                        static_cast<float>(color.a) * pillOpacity),
+                        0l, 255l));
+
+                    // Keep the final mobile decoration in the same GLES/raster
+                    // ownership epoch as the cached client texture. Re-entering
+                    // Ganesh here wrapped the live scene FBO after legacy GLES
+                    // had composited the application and could invalidate that
+                    // content on some Android drivers, producing a one-frame
+                    // wallpaper+pill flash.
+                    raster->drawRoundedRect(
+                        {pill.bounds.x, pill.bounds.y,
+                         pill.bounds.width, pill.bounds.height},
+                        pill.bounds.height * 0.5f,
+                        {color.r, color.g, color.b, color.a},
+                        {}, 0.0f, 2.0f);
+                }
             }
 
         }

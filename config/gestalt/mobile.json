@@ -5,7 +5,7 @@
   "display": {
     "width": 1344,
     "height": 2992,
-    "refreshRateHz": 120,
+    "refreshRateHz": 60,
     "scale": 4.0,
     "naturalOrientation": "portrait",
     "defaultRotation": 0,
