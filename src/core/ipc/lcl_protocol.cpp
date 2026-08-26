@@ -166,6 +166,10 @@ bool validSystemSurfaceKind(LCLSystemSurfaceKind value) {
 bool validPopupRole(LCLPopupRole value) {
     return value == LCLPopupRole::Transient;
 }
+bool validAttachedRole(LCLAttachedSurfaceRole value) {
+    return value >= LCLAttachedSurfaceRole::Frame &&
+           value <= LCLAttachedSurfaceRole::Adornment;
+}
 bool validNativeBufferTransport(LCLNativeBufferTransport value) {
     return value == LCLNativeBufferTransport::AndroidHardwareBufferV1;
 }
@@ -225,6 +229,8 @@ bool validOpcode(LCLOpcode value) {
     case LCLOpcode::LaunchIconVisibilityAck:
     case LCLOpcode::UploadImageResource:
     case LCLOpcode::CommitDisplayList:
+    case LCLOpcode::AttachedSurfaceCreate:
+    case LCLOpcode::RequestManagedWindowAction:
         return true;
     }
     return false;
@@ -235,6 +241,8 @@ bool validShellScene(const LCLMsgShellScene& scene) {
            validFloat(scene.width) && scene.width >= 0.0f &&
            validFloat(scene.height) && scene.height >= 0.0f &&
            validSceneVisibility(scene.visibility) &&
+           validDecoration(scene.decorationMode) &&
+           scene.edgeToEdge <= 1 &&
            validString(scene.appId, sizeof(scene.appId)) &&
            validString(scene.title, sizeof(scene.title));
 }
@@ -251,25 +259,32 @@ void encodeShellScene(Writer& out, const LCLMsgShellScene& scene) {
     out.f32(scene.width);
     out.f32(scene.height);
     out.u8(static_cast<uint8_t>(scene.visibility));
+    out.u32(static_cast<uint32_t>(scene.decorationMode));
+    out.u8(scene.edgeToEdge);
     out.fixed(scene.appId, sizeof(scene.appId));
     out.fixed(scene.title, sizeof(scene.title));
 }
 
 bool decodeShellScene(Reader& in, LCLMsgShellScene& scene, bool requireIdentity = true) {
     uint8_t visibility = 0;
+    uint32_t decorationMode = 0;
     if (!in.u64(scene.sceneId) || !in.u64(scene.appInstanceId) ||
         !in.u32(scene.windowId) || !in.i32(scene.clientPid) ||
         !in.u32(scene.displayId) || !in.u32(scene.workspaceId) ||
         !in.f32(scene.x) || !in.f32(scene.y) || !in.f32(scene.width) ||
         !in.f32(scene.height) || !in.u8(visibility) ||
+        !in.u32(decorationMode) || !in.u8(scene.edgeToEdge) ||
         !in.fixed(scene.appId, sizeof(scene.appId)) ||
         !in.fixed(scene.title, sizeof(scene.title)))
         return false;
     scene.visibility = static_cast<LCLSceneVisibility>(visibility);
+    scene.decorationMode = static_cast<LCLDecorationMode>(decorationMode);
     if (!validFloat(scene.x) || !validFloat(scene.y) ||
         !validFloat(scene.width) || scene.width < 0.0f ||
         !validFloat(scene.height) || scene.height < 0.0f ||
         !validSceneVisibility(scene.visibility) ||
+        !validDecoration(scene.decorationMode) ||
+        scene.edgeToEdge > 1 ||
         !validString(scene.appId, sizeof(scene.appId)) ||
         !validString(scene.title, sizeof(scene.title)))
         return false;
@@ -394,6 +409,27 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.f32(msg.height);
         return true;
     }
+    case LCLOpcode::AttachedSurfaceCreate: {
+        LOAD_ONE(LCLMsgAttachedSurfaceCreate, msg);
+        if (msg.surfaceId == 0 || msg.targetWindowId == 0 ||
+            !validAttachedRole(msg.role) || !validFloat(msg.x) ||
+            !validFloat(msg.y) || !validFloat(msg.width) || msg.width <= 0.0f ||
+            !validFloat(msg.height) || msg.height <= 0.0f ||
+            msg.followParentWidth > 1 || msg.followParentHeight > 1 ||
+            msg.acceptsInput > 1)
+            return false;
+        out.u32(msg.surfaceId);
+        out.u32(msg.targetWindowId);
+        out.u32(static_cast<uint32_t>(msg.role));
+        out.f32(msg.x);
+        out.f32(msg.y);
+        out.f32(msg.width);
+        out.f32(msg.height);
+        out.u8(msg.followParentWidth);
+        out.u8(msg.followParentHeight);
+        out.u8(msg.acceptsInput);
+        return true;
+    }
     case LCLOpcode::SurfaceDestroy: {
         LOAD_ONE(LCLMsgSurfaceDestroy, msg);
         out.u32(msg.surfaceId);
@@ -418,7 +454,6 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.f32(msg.height);
         out.f32(msg.backingWidth);
         out.f32(msg.backingHeight);
-        out.u32(msg.headerColor);
         out.u8(msg.isFocused);
         out.fixed(msg.title, sizeof(msg.title));
         out.f32(msg.bufferScale);
@@ -679,6 +714,15 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         return msg.surfaceId > 0 && validAction(msg.action) &&
                validFloat(msg.localX) && validFloat(msg.localY);
     }
+    case LCLOpcode::RequestManagedWindowAction: {
+        LOAD_ONE(LCLMsgRequestManagedWindowAction, msg);
+        out.u32(msg.targetWindowId);
+        out.u32(static_cast<uint32_t>(msg.action));
+        out.f32(msg.localX);
+        out.f32(msg.localY);
+        return msg.targetWindowId > 0 && validAction(msg.action) &&
+               validFloat(msg.localX) && validFloat(msg.localY);
+    }
     case LCLOpcode::SubscribeShellState: {
         LOAD_ONE(LCLMsgSubscribeShellState, msg);
         out.u64(msg.lastKnownRevision);
@@ -915,6 +959,26 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
         appendNative(payload, m);
         break;
     }
+    case LCLOpcode::AttachedSurfaceCreate: {
+        LCLMsgAttachedSurfaceCreate m{};
+        uint32_t role = 0;
+        if (!in.u32(m.surfaceId) || !in.u32(m.targetWindowId) ||
+            !in.u32(role) || !in.f32(m.x) || !in.f32(m.y) ||
+            !in.f32(m.width) || !in.f32(m.height) ||
+            !in.u8(m.followParentWidth) || !in.u8(m.followParentHeight) ||
+            !in.u8(m.acceptsInput))
+            return false;
+        m.role = static_cast<LCLAttachedSurfaceRole>(role);
+        if (m.surfaceId == 0 || m.targetWindowId == 0 ||
+            !validAttachedRole(m.role) || !validFloat(m.x) ||
+            !validFloat(m.y) || !validFloat(m.width) || m.width <= 0.0f ||
+            !validFloat(m.height) || m.height <= 0.0f ||
+            m.followParentWidth > 1 || m.followParentHeight > 1 ||
+            m.acceptsInput > 1)
+            return false;
+        appendNative(payload, m);
+        break;
+    }
     case LCLOpcode::SurfaceDestroy: {
         LCLMsgSurfaceDestroy m{};
         if (!in.u32(m.surfaceId) || m.surfaceId == 0)
@@ -929,7 +993,6 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !in.f32(m.x) || !in.f32(m.y) ||
             !in.f32(m.width) || !in.f32(m.height) ||
             !in.f32(m.backingWidth) || !in.f32(m.backingHeight) ||
-            !in.u32(m.headerColor) ||
             !in.u8(m.isFocused) || !in.fixed(m.title, sizeof(m.title)) ||
             !in.f32(m.bufferScale) || !in.u8(resizeReason))
             return false;
@@ -1186,6 +1249,19 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
         m.action = static_cast<LCLWindowAction>(action);
         if (m.surfaceId == 0 || !validAction(m.action) || !validFloat(m.localX) ||
             !validFloat(m.localY))
+            return false;
+        appendNative(payload, m);
+        break;
+    }
+    case LCLOpcode::RequestManagedWindowAction: {
+        LCLMsgRequestManagedWindowAction m{};
+        uint32_t action = 0;
+        if (!in.u32(m.targetWindowId) || !in.u32(action) ||
+            !in.f32(m.localX) || !in.f32(m.localY))
+            return false;
+        m.action = static_cast<LCLWindowAction>(action);
+        if (m.targetWindowId == 0 || !validAction(m.action) ||
+            !validFloat(m.localX) || !validFloat(m.localY))
             return false;
         appendNative(payload, m);
         break;

@@ -55,8 +55,9 @@ Use neutral system tones as defaults with one restrained blue accent family.
 
 ### Gesture pill
 
-- The gesture pill is a compositor-owned mobile window decoration, analogous
-  to desktop titlebar decoration. It is not a system surface or client widget.
+- The gesture pill is a MobileWM-owned attached surface. The compositor knows
+  only that it is an adornment child of a WindowGroup; it does not know or draw
+  the pill visual.
 - Its reference geometry is a `393`-unit-wide parent with a `134 x 5` pill and
   an `8`-unit bottom inset.
 - Treat the pill as content inside a conceptual parent anchored to
@@ -89,11 +90,13 @@ Use neutral system tones as defaults with one restrained blue accent family.
 
 ## Implementation Notes
 
-- CSD and SSD use the same renderer-independent `WindowChromeWidget` state and
-  produce the same logical chrome `DisplayList`; CSD records it through the
-  client `Canvas`, while SSD replays it in the compositor.
+- CSD and DesktopWM frames use the same renderer-independent
+  `WindowChromeWidget` state and produce the same logical chrome `DisplayList`.
+  Both are ordinary client-side recordings; the compositor does not link or
+  execute window-chrome policy.
 - Keep all radius/border tokens centralized where possible.
 - Layout, hit testing, actions, interaction state, motion, and visual color
-  resolution come from `lcl-window-chrome`; neither host may reimplement them.
+  resolution come from `lcl-window-chrome`; neither client host may reimplement
+  them.
 - Window motion and hit testing must share the same forward/inverse
   `WindowGroupTransform`. Device scale is applied only during raster replay.

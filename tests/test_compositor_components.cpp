@@ -10,17 +10,16 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "apps/mobile_shell/gesture_indicator.hpp"
 #include "core/compositor/frame_scheduler.hpp"
 #include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/input_router.hpp"
 #include "core/compositor/mobile_launch_backdrop.hpp"
-#include "core/compositor/mobile_window_decoration.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
 #include "core/compositor/surface_registry.hpp"
 #include "core/compositor/system_surface_policy.hpp"
 #include "render/window_group_transform.hpp"
-#include "core/compositor/window_chrome_material.hpp"
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
 #include "core/scene/shell_state_broker.hpp"
@@ -50,7 +49,7 @@ TEST(MobileLaunchBackdropTest, UsesScaleAndBrightnessWithoutEffectOpacity) {
 }
 
 TEST(MobileWindowDecorationTest, GesturePillScalesFromWindowWidthAndStaysBottomAnchored) {
-    const auto reference = layoutMobileGesturePill(
+    const auto reference = lcl::mobile::layoutGestureIndicator(
         {10.0f, 20.0f, 393.0f, 852.0f});
     EXPECT_FLOAT_EQ(reference.scale, 1.0f);
     EXPECT_FLOAT_EQ(reference.bounds.x, 139.5f);
@@ -58,7 +57,7 @@ TEST(MobileWindowDecorationTest, GesturePillScalesFromWindowWidthAndStaysBottomA
     EXPECT_FLOAT_EQ(reference.bounds.width, 134.0f);
     EXPECT_FLOAT_EQ(reference.bounds.height, 5.0f);
 
-    const auto doubled = layoutMobileGesturePill(
+    const auto doubled = lcl::mobile::layoutGestureIndicator(
         {10.0f, 20.0f, 786.0f, 852.0f});
     EXPECT_FLOAT_EQ(doubled.scale, 2.0f);
     EXPECT_FLOAT_EQ(doubled.bounds.x, 269.0f);
@@ -68,7 +67,7 @@ TEST(MobileWindowDecorationTest, GesturePillScalesFromWindowWidthAndStaysBottomA
 }
 
 TEST(MobileWindowDecorationTest, GesturePillIsOneRoundedDecorationPath) {
-    const auto list = buildMobileGesturePillDisplayList(
+    const auto list = lcl::mobile::buildGestureIndicatorDisplayList(
         {0.0f, 0.0f, 393.0f, 852.0f}, 1.0f);
     ASSERT_EQ(list.commands().size(), 1u);
     const auto* command = std::get_if<graphics::DrawPathCommand>(
@@ -101,6 +100,89 @@ TEST(SurfaceRegistryTest, SnapshotProvidesReadOnlyViewsWithoutCopyingEntries) {
     ASSERT_NE(found->entry, nullptr);
     EXPECT_EQ(found->entry, &registry.find(firstKey)->second);
     EXPECT_EQ(found->entry->windowId, 11u);
+}
+
+TEST(SurfaceRegistryTest, AtomicConfigureWaitsWithoutDuplicatingBuffers) {
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(10, 70, 1);
+    const auto frameKey = SurfaceRegistry::makeKey(11, 71, 2);
+    auto& parent = registry[parentKey];
+    parent.windowId = 9;
+    parent.pendingConfigureSerial = 5;
+    parent.acceptedConfigureSerial = 4;
+    parent.configuredGeometryGeneration = 22;
+    auto& frame = registry[frameKey];
+    frame.windowId = 9;
+    frame.pendingConfigureSerial = 8;
+    frame.acceptedConfigureSerial = 7;
+    frame.configuredGeometryGeneration = 22;
+
+    const auto now = std::chrono::steady_clock::now();
+    ASSERT_TRUE(registry.beginAtomicConfigure(
+        9, 22, {parentKey, frameKey}, now + std::chrono::seconds(1)));
+    EXPECT_TRUE(registry.hasIncompleteAtomicConfigure(now));
+
+    parent.acceptedConfigureSerial = 5;
+    SurfaceRegistry::queuePresentation(parent, 5);
+    EXPECT_TRUE(registry.hasIncompleteAtomicConfigure(now));
+    frame.atomicConfigureIssued = true;
+    frame.acceptedConfigureSerial = 8;
+    SurfaceRegistry::queuePresentation(frame, 8);
+    EXPECT_FALSE(registry.hasIncompleteAtomicConfigure(now));
+    EXPECT_EQ(parent.atomicConfigureGeneration, 0u);
+    EXPECT_EQ(frame.atomicConfigureGeneration, 0u);
+    EXPECT_EQ(parent.presentationSerial, 5u);
+    EXPECT_EQ(frame.presentationSerial, 8u);
+    EXPECT_EQ(parent.previousPixels, nullptr);
+    EXPECT_EQ(frame.previousPixels, nullptr);
+}
+
+TEST(SurfaceRegistryTest, ImageBudgetPruningProtectsRetainedDisplayListPixels) {
+    SurfaceRegistry::SurfaceEntry entry;
+    using ResourceKey = SurfaceRegistry::SurfaceEntry::ImageResourceKey;
+    using Resource = SurfaceRegistry::SurfaceEntry::ImageResource;
+    const ResourceKey currentKey{1, 1};
+    const ResourceKey previousKey{2, 1};
+    const ResourceKey staleKey{3, 1};
+
+    const auto insertResource = [&entry](ResourceKey key, uint32_t color) {
+        Resource resource{};
+        resource.compositorId = key.id + 100;
+        resource.width = 2;
+        resource.height = 2;
+        resource.stridePixels = 2;
+        resource.pixels.assign(4, color);
+        entry.imageResourceBytes += resource.pixels.size() * sizeof(uint32_t);
+        return entry.imageResources.emplace(key, std::move(resource)).first;
+    };
+    insertResource(currentKey, 0xFFFF0000u);
+    insertResource(previousKey, 0xFF00FF00u);
+    insertResource(staleKey, 0xFF0000FFu);
+    const auto& current = entry.imageResources.at(currentKey);
+    const auto& previous = entry.imageResources.at(previousKey);
+
+    graphics::DisplayListBuilder currentBuilder;
+    currentBuilder.drawImage(
+        {0, 0, 2, 2},
+        reinterpret_cast<uintptr_t>(current.pixels.data()),
+        2, 2, 2, 1.0f, 0.0f, 2.0f, false,
+        current.compositorId, currentKey.revision, true);
+    entry.displayList = currentBuilder.build();
+    graphics::DisplayListBuilder previousBuilder;
+    previousBuilder.drawImage(
+        {0, 0, 2, 2},
+        reinterpret_cast<uintptr_t>(previous.pixels.data()),
+        2, 2, 2, 1.0f, 0.0f, 2.0f, false,
+        previous.compositorId, previousKey.revision, true);
+    entry.previousDisplayList = previousBuilder.build();
+
+    SurfaceRegistry::pruneUnreferencedImageResources(
+        entry, 2, 2 * 4 * sizeof(uint32_t));
+    EXPECT_TRUE(entry.imageResources.contains(currentKey));
+    EXPECT_TRUE(entry.imageResources.contains(previousKey));
+    EXPECT_FALSE(entry.imageResources.contains(staleKey));
+    EXPECT_EQ(entry.imageResources.size(), 2u);
+    EXPECT_EQ(entry.imageResourceBytes, 2u * 4u * sizeof(uint32_t));
 }
 
 TEST(SurfaceRegistryTest, PopupChildrenKeepStableParentLocalStackOrder) {
@@ -737,6 +819,72 @@ TEST(InputRouterTest, FractionalOutputScaleKeepsHorizontalResizeLogical) {
     EXPECT_FLOAT_EQ(resized.pendingX, 100.0f);
 }
 
+TEST(InputRouterTest, SsdResizeBorderWinsOverInteractiveFrameAttachment) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t windowId = manager.createWindow(
+        "Attached edge", 100, 80, 300, 200);
+
+    SurfaceRegistry registry;
+    auto& parent = registry[SurfaceRegistry::makeKey(20, 60, 1)];
+    parent.windowId = windowId;
+    parent.hasCommittedBuffer = true;
+    auto& frame = registry[SurfaceRegistry::makeKey(sockets[0], 60, 1000)];
+    frame.attachedWindowId = windowId;
+    frame.attachedRole = protocol::LCLAttachedSurfaceRole::Frame;
+    frame.attachedWidth = 300;
+    frame.attachedHeight = 32;
+    frame.attachedFollowParentWidth = true;
+    frame.attachedAcceptsInput = true;
+    frame.hasCommittedBuffer = true;
+    frame.pixels = reinterpret_cast<void*>(1);
+    frame.clientFd = sockets[0];
+    frame.configuredWidth = 300;
+    frame.configuredHeight = 32;
+    frame.pendingConfigureSerial = 1;
+    frame.acceptedConfigureSerial = 1;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    InputEvent motion{};
+    motion.type = InputEventType::PointerMotion;
+    motion.absoluteX = 399.5;
+    motion.absoluteY = 96.0;
+    router.route(motion);
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    down.absoluteX = motion.absoluteX;
+    down.absoluteY = motion.absoluteY;
+    ASSERT_TRUE(router.route(down));
+    EXPECT_TRUE(manager.getWindows().back().isResizing());
+    EXPECT_EQ(manager.getWindows().back().resizeEdge,
+              render::ResizeEdge::Right);
+
+    const int flags = fcntl(sockets[1], F_GETFL, 0);
+    ASSERT_GE(flags, 0);
+    ASSERT_EQ(fcntl(sockets[1], F_SETFL, flags | O_NONBLOCK), 0);
+    EXPECT_EQ(protocol::recvPacketWithFd(
+                  sockets[1], header, payload, receivedFd),
+              protocol::ReceiveStatus::WouldBlock);
+
+    frame.pixels = nullptr;
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(InputRouterTest, TwoXOutputQuantizesInteractiveResizeToLogicalPixels) {
     render::WindowManager manager;
     ASSERT_TRUE(manager.initialize(800, 600));
@@ -836,6 +984,164 @@ TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
 
     close(sockets[0]);
     close(sockets[1]);
+}
+
+TEST(InputRouterTest, AttachedFrameFollowsPendingParentResizeGeometry) {
+    int parentSockets[2];
+    int frameSockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, parentSockets), 0);
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, frameSockets), 0);
+
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t windowId = manager.createWindow(
+        "Attached resize", 80, 90, 320, 232);
+
+    SurfaceRegistry registry;
+    auto& parent = registry[
+        SurfaceRegistry::makeKey(parentSockets[0], 102, 1)];
+    parent.windowId = windowId;
+    parent.clientFd = parentSockets[0];
+    parent.configuredX = 80.0f;
+    parent.configuredY = 90.0f;
+    parent.configuredWidth = 320.0f;
+    parent.configuredHeight = 200.0f;
+    parent.pendingConfigureSerial = 1;
+    parent.acceptedConfigureSerial = 1;
+    parent.nextConfigureSerial = 2;
+    parent.hasCommittedBuffer = true;
+    graphics::DisplayListBuilder parentBuilder;
+    parentBuilder.drawText({0, 0}, "parent", {255, 255, 255, 255}, 12);
+    parent.displayList = parentBuilder.build();
+    auto& frame = registry[
+        SurfaceRegistry::makeKey(frameSockets[0], 103, 1000)];
+    frame.windowId = windowId;
+    frame.attachedWindowId = windowId;
+    frame.attachedRole = protocol::LCLAttachedSurfaceRole::Adornment;
+    frame.attachedWidth = 320.0f;
+    frame.attachedHeight = 32.0f;
+    frame.attachedFollowParentWidth = true;
+    frame.clientFd = frameSockets[0];
+    frame.configuredWidth = 320.0f;
+    frame.configuredHeight = 32.0f;
+    frame.pendingConfigureSerial = 1;
+    frame.acceptedConfigureSerial = 1;
+    frame.nextConfigureSerial = 2;
+    frame.hasCommittedBuffer = true;
+    graphics::DisplayListBuilder frameBuilder;
+    frameBuilder.drawText({0, 0}, "attachment", {255, 255, 255, 255}, 12);
+    frame.displayList = frameBuilder.build();
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes);
+    auto& window = manager.getWindowsMutable().back();
+    window.pendingWidth = 420.0f;
+    window.pendingHeight = 280.0f;
+    window.geometryPhase = render::GeometryPhase::Resize;
+
+    router.syncWindowState();
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        parentSockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::ConfigureBounds);
+    const auto* parentConfigure = reinterpret_cast<const
+        protocol::LCLMsgConfigureBounds*>(payload.data());
+    EXPECT_EQ(parentConfigure->surfaceId, 1u);
+    EXPECT_FLOAT_EQ(parentConfigure->width, 420.0f);
+    EXPECT_FLOAT_EQ(parentConfigure->height, 248.0f);
+    EXPECT_EQ(parentConfigure->resizeReason,
+              protocol::LCLConfigureResizeReason::Interactive);
+
+    EXPECT_EQ(parent.atomicConfigureGeneration, window.geometryGeneration);
+    EXPECT_EQ(frame.atomicConfigureGeneration, window.geometryGeneration);
+
+    // Terminal snaps the requested 420 width to 416. The attachment must not
+    // be configured until that committed parent width is known.
+    parent.configuredWidth = 416.0f;
+    parent.configuredHeight = 248.0f;
+    parent.acceptedConfigureSerial = parent.pendingConfigureSerial;
+    SurfaceRegistry::queuePresentation(
+        parent, parent.acceptedConfigureSerial);
+    EXPECT_TRUE(registry.hasIncompleteAtomicConfigure(
+        std::chrono::steady_clock::now()));
+    router.syncWindowState();
+
+    payload.clear();
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        frameSockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::ConfigureBounds);
+    const auto* frameConfigure = reinterpret_cast<const
+        protocol::LCLMsgConfigureBounds*>(payload.data());
+    EXPECT_EQ(frameConfigure->surfaceId, 1000u);
+    EXPECT_FLOAT_EQ(frameConfigure->width, 416.0f);
+    EXPECT_FLOAT_EQ(frameConfigure->height, 32.0f);
+    EXPECT_EQ(frameConfigure->resizeReason,
+              protocol::LCLConfigureResizeReason::Interactive);
+    EXPECT_EQ(parent.configuredGeometryGeneration,
+              frame.configuredGeometryGeneration);
+
+    // The barrier opens only after the attachment commits the parent's exact
+    // snapped geometry; both presentation credits are then completed together.
+    frame.acceptedConfigureSerial = frame.pendingConfigureSerial;
+    SurfaceRegistry::queuePresentation(
+        frame, frame.acceptedConfigureSerial);
+    EXPECT_FALSE(registry.hasIncompleteAtomicConfigure(
+        std::chrono::steady_clock::now()));
+    parent.lastConfigureSent = {};
+    frame.lastConfigureSent = {};
+    window.pendingWidth = 460.0f;
+    router.syncWindowState();
+
+    const int parentFlags = fcntl(parentSockets[1], F_GETFL, 0);
+    const int frameFlags = fcntl(frameSockets[1], F_GETFL, 0);
+    ASSERT_GE(parentFlags, 0);
+    ASSERT_GE(frameFlags, 0);
+    ASSERT_EQ(fcntl(parentSockets[1], F_SETFL, parentFlags | O_NONBLOCK), 0);
+    ASSERT_EQ(fcntl(frameSockets[1], F_SETFL, frameFlags | O_NONBLOCK), 0);
+    payload.clear();
+    EXPECT_EQ(protocol::recvPacketWithFd(
+                  parentSockets[1], header, payload, receivedFd),
+              protocol::ReceiveStatus::WouldBlock);
+    EXPECT_EQ(protocol::recvPacketWithFd(
+                  frameSockets[1], header, payload, receivedFd),
+              protocol::ReceiveStatus::WouldBlock);
+
+    SurfaceRegistry::completePresentation(frame);
+    router.syncWindowState();
+    EXPECT_EQ(protocol::recvPacketWithFd(
+                  parentSockets[1], header, payload, receivedFd),
+              protocol::ReceiveStatus::WouldBlock);
+    EXPECT_EQ(protocol::recvPacketWithFd(
+                  frameSockets[1], header, payload, receivedFd),
+              protocol::ReceiveStatus::WouldBlock);
+
+    SurfaceRegistry::completePresentation(parent);
+    router.syncWindowState();
+    ASSERT_EQ(protocol::recvPacketWithFd(
+                  parentSockets[1], header, payload, receivedFd),
+              protocol::ReceiveStatus::Received);
+    parentConfigure = reinterpret_cast<const
+        protocol::LCLMsgConfigureBounds*>(payload.data());
+    EXPECT_FLOAT_EQ(parentConfigure->width, 460.0f);
+    parent.acceptedConfigureSerial = parent.pendingConfigureSerial;
+    SurfaceRegistry::queuePresentation(
+        parent, parent.acceptedConfigureSerial);
+    router.syncWindowState();
+    payload.clear();
+    ASSERT_EQ(protocol::recvPacketWithFd(
+                  frameSockets[1], header, payload, receivedFd),
+              protocol::ReceiveStatus::Received);
+    frameConfigure = reinterpret_cast<const
+        protocol::LCLMsgConfigureBounds*>(payload.data());
+    EXPECT_FLOAT_EQ(frameConfigure->width, 460.0f);
+
+    close(parentSockets[0]);
+    close(parentSockets[1]);
+    close(frameSockets[0]);
+    close(frameSockets[1]);
 }
 
 TEST(InputRouterTest, LiveResizeWaitsForPresentationThenPublishesLatestWithWorkspaceBacking) {
@@ -1502,7 +1808,7 @@ TEST(WindowGroupTransformTest, ExplicitLaunchBoundsSupportNonUniformIconMorph) {
     EXPECT_NEAR(mapped.height, iconBounds.height, 0.0001f);
 }
 
-TEST(CompositorRendererTest, LocalBackdropStartsBelowSsdTitlebar) {
+TEST(CompositorRendererTest, LocalBackdropStartsBelowManagedFrameInset) {
     protocol::EffectRegion region{};
     region.x = 0;
     region.y = 0;
@@ -1535,15 +1841,6 @@ TEST(CompositorRendererTest, NonLocalFiltersRequireDamageDependencyClosure) {
     EXPECT_TRUE(filterReadsNeighboringPixels(protocol::FilterType::Glass));
     EXPECT_FALSE(filterReadsNeighboringPixels(protocol::FilterType::Tint));
     EXPECT_FALSE(filterReadsNeighboringPixels(protocol::FilterType::Brightness));
-}
-
-TEST(CompositorRendererTest, EdgeToEdgeRemovesOnlyTheOpaqueSsdBackground) {
-    EXPECT_EQ(kOpaqueSsdTitlebarMaterial.r, 17u);
-    EXPECT_EQ(kOpaqueSsdTitlebarMaterial.g, 19u);
-    EXPECT_EQ(kOpaqueSsdTitlebarMaterial.b, 23u);
-    EXPECT_EQ(kOpaqueSsdTitlebarMaterial.a, 255u);
-    EXPECT_TRUE(paintsOpaqueSsdTitlebar(false));
-    EXPECT_FALSE(paintsOpaqueSsdTitlebar(true));
 }
 
 TEST(CompositorRendererTest, DoubleInsetBorderKeepsLogicalStrokeInDisplayList) {
@@ -2018,6 +2315,7 @@ TEST(SceneStateTest, RegistryReflectsWindowLifecycleAndFocusWithoutOwningWindowM
 
     const uint32_t terminalWindow = windowManager.createWindow("Terminal", 80, 60, 540, 360);
     const uint32_t demoWindow = windowManager.createWindow("Demo", 140, 100, 480, 320);
+    windowManager.setEdgeToEdge(terminalWindow, true);
 
     SceneRegistry scenes;
     const auto terminalScene = scenes.mapClientSurface(
@@ -2034,6 +2332,9 @@ TEST(SceneStateTest, RegistryReflectsWindowLifecycleAndFocusWithoutOwningWindowM
     EXPECT_EQ(demo->x, 140);
     EXPECT_EQ(demo->height, 320);
     EXPECT_EQ(demo->visibility, SceneVisibility::Visible);
+    const auto* terminal = scenes.find(terminalScene);
+    ASSERT_NE(terminal, nullptr);
+    EXPECT_TRUE(terminal->edgeToEdge);
 
     FocusController focus;
     const auto initialFocus = focus.reconcile(scenes, windowManager);

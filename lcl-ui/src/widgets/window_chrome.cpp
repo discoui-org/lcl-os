@@ -34,6 +34,14 @@ graphics::DisplayList WindowChromeSurface::buildChromeDisplayList(
     });
 }
 
+void WindowChromeSurface::setFrameSize(float width, float height) {
+    if (width <= 0.0f || height <= 0.0f) return;
+    m_titleHeight = height;
+    getYogaNode().setWidth(width);
+    getYogaNode().setHeight(height);
+    markDirty();
+}
+
 void WindowChromeSurface::syncLayout(float parentAbsX, float parentAbsY) {
     Widget::syncLayout(parentAbsX, parentAbsY);
     m_layout = m_chrome.layout(

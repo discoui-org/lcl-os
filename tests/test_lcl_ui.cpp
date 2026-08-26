@@ -4140,6 +4140,34 @@ TEST(LclUiTest, TitlebarRadiusMatchesWindowMaskByDefault) {
     EXPECT_TRUE(titleBar->getChildren().empty());
 }
 
+TEST(LclUiTest, MountedTitlebarResizesWithoutReplacingItsWidgetTree) {
+    auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
+        400.0f, 32.0f, 20.0f, "Window", 15.0f);
+    auto* identity = titleBar.get();
+    const float initialTitleWidth = titleBar->chromeLayout().titleWidth;
+    titleBar->setFrameSize(640.0f, 32.0f);
+    titleBar->getYogaNode().calculateLayout(640.0f, 32.0f);
+    titleBar->syncLayout();
+
+    EXPECT_EQ(titleBar.get(), identity);
+    EXPECT_FLOAT_EQ(titleBar->getAbsoluteBounds().width, 640.0f);
+    EXPECT_GT(titleBar->chromeLayout().titleWidth, initialTitleWidth);
+}
+
+TEST(LclUiTest, EdgeToEdgeTitlebarDoesNotAddAnOpaqueBackground) {
+    lcl::ui::chrome::WindowChromeStyle style;
+    style.titleBarBackground = {0, 0, 0, 0};
+    const auto titleBar = lcl::ui::chrome::buildWindowTitlebar(
+        400.0f, 32.0f, 20.0f, "Window", 15.0f, style);
+    const auto displayList = titleBar->buildChromeDisplayList(
+        {0.0f, 0.0f, 400.0f, 32.0f});
+    ASSERT_FALSE(displayList.commands().empty());
+    const auto* background = std::get_if<graphics::DrawPathCommand>(
+        &displayList.commands().front());
+    ASSERT_NE(background, nullptr);
+    EXPECT_EQ(background->paint.color.a, 0u);
+}
+
 TEST(LclUiTest, TitlebarLayoutComesFromSharedCsdAndSsdChromeCore) {
     const lcl::ui::chrome::WindowChromeStyle style;
     const auto layout = lcl::ui::chrome::calculateWindowTitlebarLayout(

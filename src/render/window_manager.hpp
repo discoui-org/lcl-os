@@ -7,7 +7,6 @@
 #include "core/input/input_manager.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "render/damage_tracker.hpp"
-#include "lcl-window-chrome/window_chrome.hpp"
 #include "lcl-motion/motion.hpp"
 #include "lcl-graphics/geometry.hpp"
 
@@ -164,10 +163,6 @@ struct Window {
     protocol::LCLResizePresentationMode resizePresentation{
         protocol::LCLResizePresentationMode::CompositorMorph};
 
-    uint32_t headerColor{0xFF0A84FF};
-    // Window is the parent presentation group. The compositor-owned titlebar
-    // widget and the attached client surface are its two children.
-    lcl::chrome::WindowChromeWidget chrome{};
 
     // Damage Tracking & Occlusion Culling
     bool isDirty{true};
@@ -238,7 +233,7 @@ public:
      * @brief Create a new window dynamically.
      */
     uint32_t createWindow(const std::string& title, float x, float y, float width, float height,
-                          uint32_t headerColor = 0xFF0A84FF, bool focus = true);
+                          bool focus = true);
 
     /**
      * @brief Remove / close a window by ID.
@@ -250,6 +245,9 @@ public:
      * @return Redraw state plus the generation of any newly authoritative interaction.
      */
     WindowInputResult processInputEvent(const core::InputEvent& ev);
+
+    /** Resolve the compositor-owned resize border at one global point. */
+    ResizeEdge resizeEdgeAt(uint32_t windowId, float x, float y) const noexcept;
 
     /**
      * @brief Advance spring snap-back animations for dragged windows.
@@ -368,7 +366,6 @@ private:
     uint64_t beginGeometryInteraction(Window& window, GeometryPhase phase);
     void initializeResizeInteraction(Window& window, ResizeEdge edge);
     void settleGeometry(Window& window, GeometryPhase phase = GeometryPhase::Idle);
-    void refreshChromeHoverState();
 
     float m_screenWidth{1024.0f};
     float m_screenHeight{768.0f};

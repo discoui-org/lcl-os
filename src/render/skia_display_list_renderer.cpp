@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -218,14 +219,23 @@ bool SkiaDisplayListRenderer::initialize(
         lcl::platform::IGraphicsContext* graphicsContext) {
     shutdown();
     if (graphicsContext) {
-        if (!graphicsContext->isHardwareAccelerated() ||
-            !graphicsContext->makeCurrent()) {
+        // Ganesh requires a valid GL context, not a physical GPU. Mesa's
+        // llvmpipe is software-emulated but still exposes a complete EGL/GLES
+        // context and must use the same DisplayList replay path.
+        if (!graphicsContext->makeCurrent()) {
+            std::cerr << "[LCL Skia] Failed to make the EGL context current.\n";
             return false;
         }
         auto interface = GrGLMakeNativeInterface();
-        if (!interface || !interface->validate()) return false;
+        if (!interface || !interface->validate()) {
+            std::cerr << "[LCL Skia] Failed to create a valid native GLES interface.\n";
+            return false;
+        }
         m_impl->directContext = GrDirectContexts::MakeGL(std::move(interface));
-        if (!m_impl->directContext) return false;
+        if (!m_impl->directContext) {
+            std::cerr << "[LCL Skia] Failed to create the Ganesh GL context.\n";
+            return false;
+        }
     }
     m_impl->graphicsContext = graphicsContext;
     return true;

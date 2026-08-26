@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -10,6 +11,9 @@
 
 #include "core/ipc/lcl_protocol.hpp"
 #include "core/session/session_client.hpp"
+#include "core/shell/shell_state_client.hpp"
+#include "core/shell/shell_state_model.hpp"
+#include "apps/mobile_shell/gesture_indicator.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/image.hpp"
@@ -35,6 +39,16 @@ constexpr float kRowGap = 22.0f;
 constexpr uint64_t kLaunchTokenMask = (uint64_t{1} << 63) - 1;
 constexpr uint32_t kHomeSurfaceId = 1;
 constexpr uint32_t kWallpaperSurfaceId = 2;
+
+std::unique_ptr<lcl::ui::Container> makeGesturePill(float width,
+                                                    float height) {
+    auto pill = std::make_unique<lcl::ui::Container>();
+    pill->setBackgroundColor({255, 255, 255, 235});
+    pill->setBorderRadius(height * 0.5f);
+    pill->getYogaNode().setWidth(width);
+    pill->getYogaNode().setHeight(height);
+    return pill;
+}
 
 struct LauncherIcon {
     std::unique_ptr<lcl::ui::Widget> widget;
@@ -369,9 +383,92 @@ int main() {
     });
     home.setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 
+    lcl::shell::ShellStateModel wmState;
+    lcl::shell::ShellStateClient shellState;
+    lcl::ui::HostedSurfaceHandle gesturePillHandle = 0;
+    uint32_t nextGesturePillSurfaceId = 3;
+    uint64_t gesturePillSceneId = 0;
+    int32_t gesturePillSceneWidth = 0;
+    int32_t gesturePillSceneHeight = 0;
+    auto refreshGesturePill = [&]() {
+        const auto& snapshot = wmState.snapshot();
+        const auto scene = std::find_if(
+            snapshot.scenes.begin(), snapshot.scenes.end(),
+            [&snapshot](const auto& item) {
+                return item.sceneId == snapshot.activeSceneId &&
+                    item.visibility ==
+                        lcl::protocol::LCLSceneVisibility::Visible;
+            });
+        if (scene == snapshot.scenes.end() || scene->windowId == 0) {
+            if (gesturePillHandle != 0) {
+                home.removeHostedSurface(gesturePillHandle);
+                gesturePillHandle = 0;
+            }
+            gesturePillSceneId = 0;
+            return;
+        }
+        if (gesturePillHandle != 0 && gesturePillSceneId == scene->sceneId &&
+            gesturePillSceneWidth == scene->width &&
+            gesturePillSceneHeight == scene->height) return;
+        if (gesturePillHandle != 0) {
+            home.removeHostedSurface(gesturePillHandle);
+            gesturePillHandle = 0;
+        }
+
+        const float parentWidth = static_cast<float>(std::max(1, scene->width));
+        const float parentHeight = static_cast<float>(std::max(1, scene->height));
+        const auto layout = lcl::mobile::layoutGestureIndicator(
+            {0.0f, 0.0f, parentWidth, parentHeight});
+        const float pillWidth = layout.bounds.width;
+        const float pillHeight = layout.bounds.height;
+        auto pill = std::make_unique<lcl::ui::WindowApp>(
+            lcl::render::makeDisplayListCanvas(), pillWidth, pillHeight,
+            "MobileWM Gesture Indicator");
+        pill->setSurfaceId(nextGesturePillSurfaceId++);
+        pill->setAppId("org.lcl.mobile-wm");
+        pill->setInputEnabled(false);
+        pill->configureAttachedSurface(
+            scene->windowId,
+            lcl::protocol::LCLAttachedSurfaceRole::Adornment,
+            layout.bounds.x, layout.bounds.y, pillWidth, pillHeight,
+            false, false, false);
+        pill->setRootWidget(makeGesturePill(pillWidth, pillHeight));
+        if (!pill->connectCompositor()) {
+            std::cerr << "[MobileWM] Could not attach gesture indicator to window "
+                      << scene->windowId << "\n";
+            return;
+        }
+        gesturePillHandle = home.hostSurface(std::move(pill));
+        gesturePillSceneId = scene->sceneId;
+        gesturePillSceneWidth = scene->width;
+        gesturePillSceneHeight = scene->height;
+    };
+    shellState.setOnSnapshot([&](
+            const lcl::shell::ShellStateSnapshot& snapshot) {
+        wmState.applySnapshot(snapshot);
+        refreshGesturePill();
+    });
+    shellState.setOnDelta([&](const lcl::shell::ShellStateDelta& delta) {
+        wmState.applyDelta(delta);
+        refreshGesturePill();
+    });
+    auto nextShellReconnect = std::chrono::steady_clock::now();
+    home.setOnFrame([&] {
+        if (!shellState.isConnected() &&
+            std::chrono::steady_clock::now() >= nextShellReconnect) {
+            shellState.connect();
+            nextShellReconnect =
+                std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        }
+        shellState.poll();
+    });
+
     if (!wallpaper->connectCompositor()) return 1;
     home.hostSurface(std::move(wallpaper));
     if (!home.connectCompositor()) return 1;
+    if (!shellState.connect()) {
+        std::cerr << "[LCL Mobile Shell] Could not subscribe to shell state\n";
+    }
     home.runEventLoop();
     return 0;
 }

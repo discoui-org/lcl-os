@@ -169,6 +169,46 @@ TEST(LCLProtocolTest, PopupSurfaceRejectsSelfParentAndUnknownRole) {
     EXPECT_FALSE(encodePacket(header, &popup, packet));
 }
 
+TEST(LCLProtocolTest, AttachedSurfaceRoundTripsGenericParentRelationship) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    LCLMsgAttachedSurfaceCreate attached{};
+    attached.surfaceId = 27;
+    attached.targetWindowId = 9;
+    attached.role = LCLAttachedSurfaceRole::Frame;
+    attached.x = 0.0f;
+    attached.y = 0.0f;
+    attached.width = 720.0f;
+    attached.height = 32.0f;
+    attached.followParentWidth = 1;
+    attached.acceptsInput = 1;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::AttachedSurfaceCreate;
+    header.payloadSize = sizeof(attached);
+    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &attached));
+
+    LCLHeader received{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sockets[1], received, payload, receivedFd));
+    ASSERT_EQ(received.opcode, LCLOpcode::AttachedSurfaceCreate);
+    ASSERT_EQ(payload.size(), sizeof(LCLMsgAttachedSurfaceCreate));
+    const auto* decoded = reinterpret_cast<const
+        LCLMsgAttachedSurfaceCreate*>(payload.data());
+    EXPECT_EQ(decoded->surfaceId, 27u);
+    EXPECT_EQ(decoded->targetWindowId, 9u);
+    EXPECT_EQ(decoded->role, LCLAttachedSurfaceRole::Frame);
+    EXPECT_FLOAT_EQ(decoded->width, 720.0f);
+    EXPECT_FLOAT_EQ(decoded->height, 32.0f);
+    EXPECT_EQ(decoded->followParentWidth, 1u);
+    EXPECT_EQ(decoded->followParentHeight, 0u);
+    EXPECT_EQ(decoded->acceptsInput, 1u);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(LCLProtocolTest, ConfigureAndAttachRoundTripTheSameSerial) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
@@ -703,6 +743,37 @@ TEST(LCLProtocolTest, SendAndReceiveWindowActionMsg) {
     close(sv[1]);
 }
 
+TEST(LCLProtocolTest, SendAndReceiveManagedWindowActionMsg) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    LCLMsgRequestManagedWindowAction action{};
+    action.targetWindowId = 42;
+    action.action = LCLWindowAction::BeginDrag;
+    action.localX = 88.5f;
+    action.localY = 14.0f;
+    LCLHeader header{};
+    header.opcode = LCLOpcode::RequestManagedWindowAction;
+    header.payloadSize = sizeof(action);
+    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &action));
+
+    LCLHeader received{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(recvMsgWithFd(sockets[1], received, payload, receivedFd));
+    ASSERT_EQ(received.opcode, LCLOpcode::RequestManagedWindowAction);
+    ASSERT_EQ(payload.size(), sizeof(LCLMsgRequestManagedWindowAction));
+    const auto* decoded = reinterpret_cast<const
+        LCLMsgRequestManagedWindowAction*>(payload.data());
+    EXPECT_EQ(decoded->targetWindowId, 42u);
+    EXPECT_EQ(decoded->action, LCLWindowAction::BeginDrag);
+    EXPECT_FLOAT_EQ(decoded->localX, 88.5f);
+    EXPECT_FLOAT_EQ(decoded->localY, 14.0f);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     int sv[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
@@ -882,6 +953,8 @@ TEST(LCLProtocolTest, ShellStateSnapshotAndDeltaRoundTripWithExplicitRevision) {
     scene.width = 540;
     scene.height = 360;
     scene.visibility = LCLSceneVisibility::Visible;
+    scene.decorationMode = LCLDecorationMode::CSD;
+    scene.edgeToEdge = 1;
     std::strncpy(scene.appId, "org.lcl.terminal", sizeof(scene.appId) - 1);
     std::strncpy(scene.title, "LCL Terminal", sizeof(scene.title) - 1);
 
@@ -906,6 +979,8 @@ TEST(LCLProtocolTest, ShellStateSnapshotAndDeltaRoundTripWithExplicitRevision) {
     EXPECT_EQ(decodedSnapshot->revision, snapshot.revision);
     EXPECT_EQ(decodedSnapshot->activeSceneId, 42u);
     EXPECT_EQ(decodedScene->sceneId, 42u);
+    EXPECT_EQ(decodedScene->decorationMode, LCLDecorationMode::CSD);
+    EXPECT_EQ(decodedScene->edgeToEdge, 1u);
     EXPECT_STREQ(decodedScene->appId, "org.lcl.terminal");
 
     LCLMsgShellStateDelta delta{};

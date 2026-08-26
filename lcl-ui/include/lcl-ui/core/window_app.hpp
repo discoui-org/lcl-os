@@ -134,6 +134,14 @@ public:
                                lcl::protocol::LCLPopupRole role,
                                float x, float y);
     bool isPopupSurface() const noexcept { return m_popupParentSurfaceId != 0; }
+    /** Configure a trusted WM-owned child of another process' toplevel. */
+    void configureAttachedSurface(uint32_t targetWindowId,
+                                  lcl::protocol::LCLAttachedSurfaceRole role,
+                                  float x, float y, float width, float height,
+                                  bool followParentWidth,
+                                  bool followParentHeight,
+                                  bool acceptsInput);
+    bool isAttachedSurface() const noexcept { return m_attachedWindowId != 0; }
 
     void setSurfaceId(uint32_t surfaceId) { if (!m_ipcConnected && surfaceId > 0) m_surfaceId = surfaceId; }
     uint32_t getSurfaceId() const { return m_surfaceId; }
@@ -173,6 +181,10 @@ public:
     /** Toggle between maximized and restored geometry. */
     bool requestWindowToggleMaximize();
     bool requestWindowClose();
+    /** Request an action for the toplevel managed by this attached WM surface. */
+    bool requestManagedWindowAction(lcl::protocol::LCLWindowAction action,
+                                    float localX = 0.0f,
+                                    float localY = 0.0f);
     /** Begin an immediate compositor-owned launch placeholder from HomeScreen. */
     bool beginLaunchPlaceholder(uint64_t launchToken, const std::string& appId,
                                 const graphics::RectF& origin,
@@ -270,6 +282,16 @@ private:
     std::string m_appId;
     std::string m_compositorSocketPath{"/Runtime/lcl-compositor.sock"};
     lcl::protocol::LCLSystemSurfaceKind m_systemSurfaceKind{lcl::protocol::LCLSystemSurfaceKind::None};
+    uint32_t m_attachedWindowId{0};
+    lcl::protocol::LCLAttachedSurfaceRole m_attachedRole{
+        lcl::protocol::LCLAttachedSurfaceRole::Adornment};
+    float m_attachedX{0.0f};
+    float m_attachedY{0.0f};
+    float m_attachedWidth{0.0f};
+    float m_attachedHeight{0.0f};
+    bool m_attachedFollowParentWidth{false};
+    bool m_attachedFollowParentHeight{false};
+    bool m_attachedAcceptsInput{false};
     lcl::protocol::LCLResizePresentationMode m_resizePresentationMode{
         lcl::protocol::LCLResizePresentationMode::CompositorMorph};
     uint32_t m_nextRequestId{1};

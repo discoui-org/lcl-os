@@ -6,7 +6,7 @@ change is explicitly approved before implementation.
 
 The numbered implementation records below are historical checkpoints and keep
 the protocol versions and test totals that were true at each checkpoint. The
-current wire contract is protocol v22; current rendering uses backend-neutral
+current wire contract is protocol v25; current rendering uses backend-neutral
 logical display lists, `WindowGroupTransform`, and raster-boundary device
 scaling. Do not read an older step's version label as a compatibility promise.
 
@@ -44,7 +44,7 @@ The following behavior is part of the baseline and must remain:
 - Terminal rendering stays in `TerminalView` under `WindowApp`; the previous
   handwritten terminal socket/frame renderer is not restored.
 - Widgets draw through the backend-neutral `Canvas` contract.
-- CSD and SSD host the same renderer-independent `WindowChromeWidget` for
+- CSD and DesktopWM frames host the same renderer-independent `WindowChromeWidget` for
   geometry, hit testing, actions, interaction state, motion, and visual colors.
 
 The following compatibility bridges have been removed after their replacement
@@ -65,10 +65,11 @@ paths received equivalent revisioned-state coverage:
 
 ### Terminal
 
-- The terminal uses compositor-owned SSD controls with edge-to-edge material;
+- The terminal uses DesktopWM-owned frame controls with edge-to-edge material;
   its outer-surface backdrop material extends beneath the titlebar.
 - The terminal client buffer is content-only. Titlebar layout, hit testing,
-  actions, motion, and painting stay on the compositor's single SSD path.
+  actions, motion, and painting stay in DesktopWM's attached frame surface;
+  compositor policy sees only a generic parent-child surface relationship.
 - The terminal root and backdrop remain passive: hovering or clicking the
   window background must not brighten the entire window like a button.
 - Backdrop blur/glass and translucency remain visible over the wallpaper.

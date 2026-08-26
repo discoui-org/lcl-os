@@ -2,8 +2,6 @@
 #include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/mobile_launch_backdrop.hpp"
-#include "core/compositor/mobile_window_decoration.hpp"
-#include "core/compositor/window_chrome_material.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
 #include "lcl-theme/theme.hpp"
 #include "render/window_group_transform.hpp"
@@ -92,6 +90,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 SurfaceRegistry::Key parentSurfaceKey = 0;
                 for (const auto& surface : surfaces) {
                     if (surface.entry && !surface.entry->isPopup() &&
+                        !surface.entry->isAttached() &&
                         surface.entry->windowId == window.id) {
                         parentSurfaceKey = surface.key;
                         break;
@@ -199,34 +198,6 @@ void CompositorRenderer::render(render::Renderer& renderer,
         return std::clamp(win.cornerRoundness, 2.0f, 8.0f);
     };
 
-    auto drawChrome = [&](const render::Window& win, const render::WindowGroupTransform& group,
-                          float chromeOpacity, bool drawTitlebar) {
-        const lcl::graphics::RectF logicalBounds = group.localBounds;
-        const float unscaledTitleHeight = group.scale > 0.0f
-            ? group.titleHeight / group.scale : 0.0f;
-        const lcl::graphics::Color titlebarColor =
-            drawTitlebar && paintsOpaqueSsdTitlebar(win.edgeToEdge)
-                ? lcl::graphics::Color{kOpaqueSsdTitlebarMaterial.r,
-                                       kOpaqueSsdTitlebarMaterial.g,
-                                       kOpaqueSsdTitlebarMaterial.b,
-                                       kOpaqueSsdTitlebarMaterial.a}
-                : lcl::graphics::Color{};
-        const auto displayList = win.chrome.buildDisplayList({
-            logicalBounds,
-            unscaledTitleHeight,
-            resolveWindowCornerRadiusLogical(win),
-            16.0f,
-            chromeOpacity,
-            drawTitlebar,
-            titlebarColor,
-        });
-        raster->replayDisplayList(displayList,
-            {{static_cast<float>(renderer.getWidth()) / outputScale,
-              static_cast<float>(renderer.getHeight()) / outputScale},
-             {renderer.getWidth(), renderer.getHeight()}, outputScale},
-            group.localToGlobal);
-    };
-
     auto replayLogicalList = [&](const graphics::DisplayList& displayList,
                                  const graphics::Matrix3& rootTransform = {}) {
         raster->replayDisplayList(displayList,
@@ -294,6 +265,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
             const auto surface = std::find_if(
                 surfaces.begin(), surfaces.end(), [&](const auto& item) {
                     return item.entry && !item.entry->isPopup() &&
+                        !item.entry->isAttached() &&
                         item.entry->windowId == winIt->id &&
                         item.entry->systemSurfaceKind ==
                             protocol::LCLSystemSurfaceKind::None;
@@ -482,7 +454,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
         SurfaceRegistry::Key matchingSurfaceKey = 0;
         for (const auto& surface : surfaces) {
             const auto* entry = surface.entry;
-            if (entry && !entry->isPopup() && entry->windowId == win.id &&
+            if (entry && !entry->isPopup() && !entry->isAttached() &&
+                entry->windowId == win.id &&
                 (entry->hasRenderableBuffer() ||
                  entry->launchPlaceholderActive ||
                  entry->isLaunchPlaceholder)) {
@@ -545,7 +518,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
             if (win.decorationMode == render::DecorationMode::SSD) {
                 // The client buffer occupies the remaining exact pixels of
-                // the same transformed group rect used by the titlebar.
+                // the same transformed group rect used by an attached frame.
                 drawY += group.titleHeight;
                 drawH = std::max(1.0f, group.globalBounds.height - group.titleHeight);
             }
@@ -711,42 +684,74 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     {brightness});
             }
 
-            if (useMobilePresentation &&
-                matchingSurface->systemSurfaceKind ==
-                    protocol::LCLSystemSurfaceKind::None &&
-                matchingSurface->hasRenderableBuffer()) {
-                const float pillOpacity = windowOpacity * std::clamp(
-                    matchingSurface->launchContentOpacity, 0.0f, 1.0f);
-                const MobileGesturePillMetrics metrics{};
-                const auto pill = layoutMobileGesturePill(
-                    group.globalBounds, metrics);
-                if (pill.bounds.width > 0.0f &&
-                    pill.bounds.height > 0.0f && pillOpacity > 0.0f) {
-                    auto color = metrics.color;
-                    color.a = static_cast<uint8_t>(std::clamp(std::lround(
-                        static_cast<float>(color.a) * pillOpacity),
-                        0l, 255l));
-
-                    // Keep the final mobile decoration in the same GLES/raster
-                    // ownership epoch as the cached client texture. Re-entering
-                    // Ganesh here wrapped the live scene FBO after legacy GLES
-                    // had composited the application and could invalidate that
-                    // content on some Android drivers, producing a one-frame
-                    // wallpaper+pill flash.
-                    raster->drawRoundedRect(
-                        {pill.bounds.x, pill.bounds.y,
-                         pill.bounds.width, pill.bounds.height},
-                        pill.bounds.height * 0.5f,
-                        {color.r, color.g, color.b, color.a},
-                        {}, 0.0f, 2.0f);
-                }
-            }
-
         }
 
-        // C. Render Server-Side Window Frame (Titlebar & Inset Border) on top of content.
-        if (win.decorationMode == render::DecorationMode::SSD) {
-            drawChrome(win, group, windowOpacity, true);
+        // C. Compose generic WM-owned children in the same WindowGroup. The
+        // compositor knows attachment geometry, ordering and input policy, not
+        // whether the pixels represent a frame, adornment, or future chrome.
+        std::vector<SurfaceRegistry::SnapshotEntry> attachments;
+        for (const auto& surface : surfaces) {
+            const auto* attached = surface.entry;
+            if (attached && attached->isAttached() &&
+                attached->attachedWindowId == win.id &&
+                attached->hasCommittedBuffer &&
+                attached->hasRenderableBuffer() &&
+                !attached->pendingDestroy) {
+                attachments.push_back(surface);
+            }
+        }
+        std::sort(attachments.begin(), attachments.end(),
+                  [](const auto& lhs, const auto& rhs) {
+            if (lhs.entry->attachedRole != rhs.entry->attachedRole) {
+                return static_cast<uint32_t>(lhs.entry->attachedRole) <
+                    static_cast<uint32_t>(rhs.entry->attachedRole);
+            }
+            return lhs.entry->attachmentOrder < rhs.entry->attachmentOrder;
+        });
+        for (const auto& attachedSurface : attachments) {
+            const auto* attached = attachedSurface.entry;
+            const graphics::RectF localBounds{
+                attached->attachedX,
+                attached->attachedY,
+                attached->attachedFollowParentWidth
+                    ? group.localBounds.width : attached->attachedWidth,
+                attached->attachedFollowParentHeight
+                    ? group.localBounds.height : attached->attachedHeight,
+            };
+            const auto bounds = group.mapRect(localBounds);
+            const float opacity = windowOpacity * std::clamp(
+                attached->transitionOpacity, 0.0f, 1.0f);
+            if (attached->pixels) {
+                drawShmSurface(
+                    attachedSurface.key, attached->shmContentSerial,
+                    bounds.x, bounds.y,
+                    static_cast<int>(attached->width),
+                    static_cast<int>(attached->height),
+                    static_cast<int>(attached->backingWidth),
+                    static_cast<int>(attached->backingHeight),
+                    reinterpret_cast<const uint32_t*>(attached->pixels),
+                    static_cast<int>(attached->stride / 4),
+                    static_cast<int>(attached->shmDamageX),
+                    static_cast<int>(attached->shmDamageY),
+                    static_cast<int>(attached->shmDamageWidth),
+                    static_cast<int>(attached->shmDamageHeight),
+                    opacity, 0.0f, 2.0f, false,
+                    bounds.width, bounds.height);
+            } else if (attached->dmaBufTexture != 0) {
+                raster->drawDmaBufTextureTransformed(
+                    bounds.x, bounds.y,
+                    static_cast<int>(attached->width),
+                    static_cast<int>(attached->height),
+                    static_cast<int>(attached->backingWidth),
+                    static_cast<int>(attached->backingHeight),
+                    attached->dmaBufTexture, opacity,
+                    0.0f, 2.0f, false, bounds.width, bounds.height);
+            } else if (ensureDisplayListLayer(*attached, false)) {
+                raster->drawCachedDisplayLayer(
+                    attached->displayListCacheId,
+                    {bounds.x, bounds.y, bounds.width, bounds.height},
+                    opacity);
+            }
         }
 
         // Forced compositor-owned inset border for every window, independent from app UI.

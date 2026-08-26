@@ -34,6 +34,8 @@ public:
         return m_chrome;
     }
     const WindowTitlebarLayout& chromeLayout() const noexcept { return m_layout; }
+    /** Resize the mounted chrome without replacing its widget/event tree. */
+    void setFrameSize(float width, float height);
     graphics::DisplayList buildChromeDisplayList(
         const graphics::RectF& bounds) const;
 

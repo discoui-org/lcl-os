@@ -1,6 +1,7 @@
 #include "core/shell/shell_state_client.hpp"
 
 #include <cstring>
+#include <iostream>
 
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -23,6 +24,8 @@ ShellScene fromWire(const protocol::LCLMsgShellScene& wire) {
     scene.width = wire.width;
     scene.height = wire.height;
     scene.visibility = wire.visibility;
+    scene.decorationMode = wire.decorationMode;
+    scene.edgeToEdge = wire.edgeToEdge != 0;
     scene.appId = wire.appId;
     scene.title = wire.title;
     return scene;
@@ -87,7 +90,18 @@ bool ShellStateClient::poll() {
             m_socketFd = -1;
             return false;
         }
-        if (header.opcode == protocol::LCLOpcode::AckResponse) continue;
+        if (header.opcode == protocol::LCLOpcode::AckResponse) {
+            if (payload.size() == sizeof(protocol::LCLMsgAckResponse)) {
+                const auto* ack = reinterpret_cast<const
+                    protocol::LCLMsgAckResponse*>(payload.data());
+                if (ack->status != 0) {
+                    std::cerr << "[LCL Shell State ERROR] Compositor rejected request "
+                              << header.requestId << " (status " << ack->status
+                              << "): " << ack->message << "\n";
+                }
+            }
+            continue;
+        }
 
         if (header.opcode == protocol::LCLOpcode::ShellStateSnapshot) {
             if (payload.size() < sizeof(protocol::LCLMsgShellStateSnapshot)) {

@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 23;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 25;
 constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
 constexpr uint64_t LCL_CAPABILITY_AHB_V1 = 1ull << 0;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
@@ -69,7 +69,13 @@ enum class LCLOpcode : uint32_t {
     // Immutable image pixels uploaded once and referenced by logical frames.
     UploadImageResource = 38,
     // Mandatory lcl-ui frame path: a versioned backend-neutral DisplayList.
-    CommitDisplayList = 39
+    CommitDisplayList = 39,
+    // Trusted window-manager surface composited as a child of an existing
+    // toplevel.  The compositor treats its contents as opaque UI policy.
+    AttachedSurfaceCreate = 40,
+    // Trusted window-manager action targeting the parent toplevel rather than
+    // the manager-owned attached surface that originated the interaction.
+    RequestManagedWindowAction = 41
 };
 
 enum class LCLNativeBufferTransport : uint32_t {
@@ -79,6 +85,12 @@ enum class LCLNativeBufferTransport : uint32_t {
 /** Minimal v1 popup role. Feature semantics remain in client-side UI policy. */
 enum class LCLPopupRole : uint32_t {
     Transient = 1,
+};
+
+/** Generic relationship between a trusted WM surface and a toplevel group. */
+enum class LCLAttachedSurfaceRole : uint32_t {
+    Frame = 1,
+    Adornment = 2,
 };
 
 enum class LCLSystemSurfaceKind : uint32_t {
@@ -307,6 +319,26 @@ struct LCLMsgPopupSurfaceCreate {
     float height{0.0f};
 };
 
+/**
+ * Creates a trusted cross-process child of an existing toplevel WindowGroup.
+ * Bounds are parent-group logical coordinates.  Follow flags let one immutable
+ * WM surface track the parent without per-frame geometry IPC.
+ */
+struct LCLMsgAttachedSurfaceCreate {
+    uint32_t surfaceId{0};
+    uint32_t targetWindowId{0};
+    LCLAttachedSurfaceRole role{LCLAttachedSurfaceRole::Adornment};
+    float x{0.0f};
+    float y{0.0f};
+    float width{0.0f};
+    float height{0.0f};
+    uint8_t followParentWidth{0};
+    uint8_t followParentHeight{0};
+    uint8_t acceptsInput{0};
+};
+
+static_assert(sizeof(LCLMsgAttachedSurfaceCreate) == 31);
+
 struct LCLMsgSurfaceDestroy {
     uint32_t surfaceId{0};
 };
@@ -322,7 +354,6 @@ struct LCLMsgConfigureBounds {
     // width x height and must fit inside this extent without being scaled.
     float backingWidth{0.0f};
     float backingHeight{0.0f};
-    uint32_t headerColor{0};
     uint8_t isFocused{0};
     char title[128]{0};
     float bufferScale{1.0f}; // v14 buffer mapping; bounds and input are logical.
@@ -515,6 +546,14 @@ struct LCLMsgRequestWindowAction {
     float localY{0.0f};
 };
 
+struct LCLMsgRequestManagedWindowAction {
+    uint32_t targetWindowId{0};
+    LCLWindowAction action{LCLWindowAction::BeginDrag};
+    // Parent-group local logical coordinates, used by BeginDrag only.
+    float localX{0.0f};
+    float localY{0.0f};
+};
+
 struct LCLMsgSetInsetBorder {
     uint32_t surfaceId{0};
     uint8_t enabled{1};
@@ -554,9 +593,13 @@ struct LCLMsgShellScene {
     float width{0.0f};
     float height{0.0f};
     LCLSceneVisibility visibility{LCLSceneVisibility::Visible};
+    LCLDecorationMode decorationMode{LCLDecorationMode::SSD};
+    uint8_t edgeToEdge{0};
     char appId[64]{0};
     char title[128]{0};
 };
+
+static_assert(sizeof(LCLMsgShellScene) == 246);
 
 /** Followed by sceneCount LCLMsgShellScene records. */
 struct LCLMsgShellStateSnapshot {
@@ -568,6 +611,8 @@ struct LCLMsgShellStateSnapshot {
     uint64_t activeSceneId{0};
 };
 
+static_assert(sizeof(LCLMsgShellStateSnapshot) == 32);
+
 /** A scene record is populated for scene changes; focus changes carry focus only. */
 struct LCLMsgShellStateDelta {
     uint64_t revision{0};
@@ -578,6 +623,8 @@ struct LCLMsgShellStateDelta {
     uint64_t activeSceneId{0};
     LCLMsgShellScene scene{};
 };
+
+static_assert(sizeof(LCLMsgShellStateDelta) == 278);
 
 #pragma pack(pop)
 

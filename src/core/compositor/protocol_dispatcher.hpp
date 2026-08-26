@@ -44,6 +44,7 @@ private:
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     using SurfaceEffectRegion = SurfaceRegistry::SurfaceEffectRegion;
     void recomputeSystemReservedZone();
+    void commitClientSurfaceGeometry(SurfaceEntry& entry);
 
     render::Renderer& m_renderer;
     render::WindowManager& m_windowManager;

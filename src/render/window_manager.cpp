@@ -1,6 +1,5 @@
 #include "render/window_manager.hpp"
 #include "render/window_group_transform.hpp"
-#include "lcl-theme/theme.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cmath>
@@ -30,14 +29,13 @@ void WindowManager::unfocusAll() {
     for (auto& w : m_windows) {
         if (w.isFocused) {
             w.isFocused = false;
-            w.headerColor = lcl::theme::defaultTheme().colors.windowTitleBlurred.toARGB();
             w.markDirty();
         }
     }
 }
 
 uint32_t WindowManager::createWindow(const std::string& title, float x, float y, float width, float height,
-                                     uint32_t headerColor, bool focus) {
+                                     bool focus) {
     if (focus) {
         unfocusAll();
     }
@@ -64,8 +62,6 @@ uint32_t WindowManager::createWindow(const std::string& title, float x, float y,
     win.presentationWidth = static_cast<float>(width);
     win.presentationHeight = static_cast<float>(height);
     win.presentationInitialized = true;
-    win.chrome.setTitle(title);
-    win.headerColor = headerColor;
     win.isFocused = focus;
     win.markDirty();
 
@@ -90,7 +86,6 @@ bool WindowManager::removeWindow(uint32_t windowId) {
             for (auto revIt = m_windows.rbegin(); revIt != m_windows.rend(); ++revIt) {
                 if (!revIt->isUnfocusable && !revIt->isMinimized) {
                     revIt->isFocused = true;
-                    revIt->headerColor = lcl::theme::defaultTheme().colors.windowTitleFocused.toARGB();
                     break;
                 }
             }
@@ -124,43 +119,18 @@ namespace {
 
         return ResizeEdge::None;
     }
-
-    int hitWindowChromeControl(const Window& win, float mouseX, float mouseY) {
-        if (win.decorationMode != DecorationMode::SSD) return -1;
-        const float cornerRadius = win.cornerRadius >= 0.0f
-            ? win.cornerRadius
-            : 20.0f;
-        const auto group = makeWindowGroupTransform(win, 32.0f, 1.0f);
-        const auto local = group.unmapPoint({mouseX, mouseY});
-        return win.chrome.hitTest(
-            local.x, local.y,
-            group.localBounds.width, 32.0f,
-            cornerRadius);
-    }
 }
 
-void WindowManager::refreshChromeHoverState() {
-    uint32_t hoveredWindowId = 0;
-    int hoveredControl = -1;
-    for (auto it = m_windows.rbegin(); it != m_windows.rend(); ++it) {
-        const auto& window = *it;
-        if (window.isMinimized || window.isUnfocusable ||
-            window.layer == protocol::LCLWindowLayer::Bottom) {
-            continue;
-        }
-        const auto group = makeWindowGroupTransform(window, 0.0f, 1.0f);
-        if (!group.containsGlobalPoint(m_mouseX, m_mouseY)) {
-            continue;
-        }
-        hoveredControl = hitWindowChromeControl(window, m_mouseX, m_mouseY);
-        if (hoveredControl >= 0) hoveredWindowId = window.id;
-        break;
-    }
-
-    for (auto& window : m_windows) {
-        const int nextHover = window.id == hoveredWindowId ? hoveredControl : -1;
-        if (window.chrome.pointerMove(nextHover)) window.markDirty();
-    }
+ResizeEdge WindowManager::resizeEdgeAt(
+        uint32_t windowId, float x, float y) const noexcept {
+    const auto window = std::find_if(
+        m_windows.begin(), m_windows.end(), [windowId](const auto& candidate) {
+            return candidate.id == windowId;
+        });
+    return window == m_windows.end() || window->isMinimized ||
+            window->isUnfocusable
+        ? ResizeEdge::None
+        : detectResizeEdge(x, y, *window);
 }
 
 WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event) {
@@ -204,7 +174,6 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
         if (m_mouseX != oldX || m_mouseY != oldY || event.dx != 0.0 || event.dy != 0.0 || event.absoluteX >= 0.0) {
             m_mouseDirty = true;
             stateChanged = true;
-            refreshChromeHoverState();
         }
 
         const float topInset = m_reservedZone.top;
@@ -383,25 +352,12 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
 
                 if (targetIt != m_windows.end()) {
                     auto& targetWin = *targetIt;
-                    const float titleH = (targetWin.decorationMode == DecorationMode::SSD) ? 32.0f : 0.0f;
-                    const auto group = makeWindowGroupTransform(targetWin, titleH, 1.0f);
+                    const auto group = makeWindowGroupTransform(targetWin, 0.0f, 1.0f);
                     const auto localPointer = group.unmapPoint({m_mouseX, m_mouseY});
-                    const int chromeControl = hitWindowChromeControl(targetWin, m_mouseX, m_mouseY);
-                    if (chromeControl >= 0 && !event.superPressed) {
-                        if (targetWin.chrome.pointerDown(chromeControl)) {
-                            targetWin.markDirty();
-                            stateChanged = true;
-                        }
-                    }
 
-                    // Controls share the exact WindowChrome layout used to draw SSD.
                     if (event.superPressed && event.button == lcl::platform::PointerButton::Middle) {
                         targetWin.closeRequested = true;
                         targetWin.markDirty();
-                        stateChanged = true;
-                    } else if (!event.superPressed && chromeControl >= 0) {
-                        // Standard controls activate on release so their pressed
-                        // presentation is visible and drag-out cancels the action.
                         stateChanged = true;
                     } else if (event.superPressed) {
                         // GNOME / KDE Style Super Shortcuts
@@ -458,16 +414,6 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                             interaction = GeometryInteraction::manual(targetWin.id, generation);
                             targetWin.markDirty();
                             stateChanged = true;
-                        } else if (titleH > 0 && localPointer.y >= 0.0f &&
-                                   localPointer.y < titleH) {
-                            // Header Drag Move
-                            const uint64_t generation = beginGeometryInteraction(
-                                targetWin, GeometryPhase::Drag);
-                            targetWin.dragOffsetX = m_mouseX - targetWin.x;
-                            targetWin.dragOffsetY = m_mouseY - targetWin.y;
-                            interaction = GeometryInteraction::manual(targetWin.id, generation);
-                            targetWin.markDirty();
-                            stateChanged = true;
                         }
                     }
                 }
@@ -484,32 +430,11 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
             const float safeRight = m_screenWidth - m_reservedZone.right;
             const float safeBottom = m_screenHeight - m_reservedZone.bottom;
 
-            uint32_t activatedWindowId = 0;
-            int activatedControl = -1;
-            for (auto& win : m_windows) {
-                const int hoveredControl = hitWindowChromeControl(win, m_mouseX, m_mouseY);
-                const int control = win.chrome.pointerUp(hoveredControl);
-                if (control >= 0) {
-                    activatedWindowId = win.id;
-                    activatedControl = control;
-                }
-                if (control >= 0 || win.chrome.hoveredControl() == hoveredControl) {
-                    win.markDirty();
-                    stateChanged = true;
-                }
-            }
-
             if (event.source == lcl::platform::PointerSource::Touch) {
                 m_subpixelX = -10000.0;
                 m_subpixelY = -10000.0;
                 m_mouseX = -10000;
                 m_mouseY = -10000;
-                for (auto& win : m_windows) {
-                    if (win.chrome.cancelPointer()) {
-                        win.markDirty();
-                        stateChanged = true;
-                    }
-                }
             }
 
             for (auto& win : m_windows) {
@@ -562,43 +487,6 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                     stateChanged = true;
                 }
             }
-            if (activatedWindowId > 0) {
-                auto found = std::find_if(m_windows.begin(), m_windows.end(),
-                    [activatedWindowId](const Window& window) { return window.id == activatedWindowId; });
-                if (found == m_windows.end()) return {stateChanged, interaction};
-                switch (lcl::chrome::WindowChromeWidget::actionForControl(
-                        static_cast<size_t>(activatedControl))) {
-                    case lcl::chrome::WindowChromeAction::Close:
-                        std::cout << "[LCL WM] Close button clicked on window ID: "
-                                  << found->id << "\n";
-                        found->closeRequested = true;
-                        found->markDirty();
-                        break;
-                    case lcl::chrome::WindowChromeAction::Minimize:
-                        stateChanged = minimizeWindow(activatedWindowId) || stateChanged;
-                        break;
-                    case lcl::chrome::WindowChromeAction::ToggleMaximize: {
-                        const graphics::RectF previousBounds = found->getBounds();
-                        const bool previousWasMaximized = found->isMaximized;
-                        const bool previousWasMinimized = found->isMinimized;
-                        if (toggleMaximizeWindow(activatedWindowId)) {
-                            const auto transitioned = std::find_if(
-                                m_windows.begin(), m_windows.end(),
-                                [activatedWindowId](const Window& window) {
-                                    return window.id == activatedWindowId;
-                                });
-                            if (transitioned != m_windows.end()) {
-                                interaction = GeometryInteraction::windowStateTransition(
-                                    transitioned->id, transitioned->geometryGeneration,
-                                    previousBounds, previousWasMaximized,
-                                    previousWasMinimized);
-                            }
-                            stateChanged = true;
-                        }
-                        break;
-                    }
-                }
-            }
         }
     }
     return {stateChanged, interaction};
@@ -621,10 +509,6 @@ bool WindowManager::updateAnimations(float dt) {
     (void)changedChannels;
 
     for (auto& win : m_windows) {
-        if (win.chrome.tick(dt)) {
-            win.markDirty();
-            changed = true;
-        }
         if (win.isLiveTransitioning()) {
             const auto x = m_motionEngine.findChannel({win.id, 10});
             const auto y = m_motionEngine.findChannel({win.id, 11});
@@ -844,7 +728,6 @@ void WindowManager::setDecorationMode(uint32_t windowId, DecorationMode mode) {
     for (auto& win : m_windows) {
         if (win.id == windowId) {
             win.decorationMode = mode;
-            if (mode != DecorationMode::SSD) win.chrome.cancelPointer();
             win.markDirty();
             m_mouseDirty = true;
             break;
@@ -872,7 +755,6 @@ void WindowManager::setWindowLayer(uint32_t windowId, protocol::LCLWindowLayer l
             win.isUnfocusable = unfocusable;
             if (unfocusable && win.isFocused) {
                 win.isFocused = false;
-                win.headerColor = lcl::theme::defaultTheme().colors.windowTitleBlurred.toARGB();
             }
             win.markDirty();
             break;
@@ -1182,7 +1064,6 @@ void WindowManager::focusWindow(uint32_t windowId) {
         if (!target.isUnfocusable) {
             unfocusAll();
             target.isFocused = true;
-            target.headerColor = lcl::theme::defaultTheme().colors.windowTitleFocused.toARGB();
         }
 
         target.markDirty();
@@ -1205,8 +1086,6 @@ bool WindowManager::transferFocusFromWindow(uint32_t windowId) {
             continue;
         }
         it->isFocused = true;
-        it->headerColor =
-            lcl::theme::defaultTheme().colors.windowTitleFocused.toARGB();
         it->markDirty();
         break;
     }
@@ -1218,7 +1097,6 @@ void WindowManager::focusTopmostVisibleWindow() {
     for (auto it = m_windows.rbegin(); it != m_windows.rend(); ++it) {
         if (!it->isMinimized && !it->isUnfocusable) {
             it->isFocused = true;
-            it->headerColor = lcl::theme::defaultTheme().colors.windowTitleFocused.toARGB();
             it->markDirty();
             break;
         }

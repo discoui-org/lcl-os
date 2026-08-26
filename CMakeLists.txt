@@ -165,7 +165,6 @@ if(ANDROID)
         lcl-graphics
         lcl-theme
         lcl-path-raster
-        lcl-window-chrome
         lcl-protocol
         lcl-font-metrics
         lcl-platform-common
@@ -183,7 +182,6 @@ else()
         lcl-graphics
         lcl-theme
         lcl-path-raster
-        lcl-window-chrome
         lcl-protocol
         lcl-font-metrics
         lcl-platform-common
@@ -406,6 +404,7 @@ if(ANDROID)
         lcl-ui
         lcl-raster
         lcl-protocol
+        lcl-shell-state
         lcl-session
         Threads::Threads
     )
@@ -644,6 +643,7 @@ else()
         lcl-ui
         lcl-raster
         lcl-protocol
+        lcl-shell-state
         lcl-session
         Threads::Threads
     )

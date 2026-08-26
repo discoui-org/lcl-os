@@ -21,6 +21,8 @@ struct ShellScene {
     int32_t width{0};
     int32_t height{0};
     protocol::LCLSceneVisibility visibility{protocol::LCLSceneVisibility::Visible};
+    protocol::LCLDecorationMode decorationMode{protocol::LCLDecorationMode::SSD};
+    bool edgeToEdge{false};
     std::string appId;
     std::string title;
 };

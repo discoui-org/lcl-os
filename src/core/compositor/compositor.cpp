@@ -52,7 +52,7 @@ bool Compositor::handleSystemGesture(
 
     const auto surface = std::find_if(
         m_surfaces.begin(), m_surfaces.end(), [windowId](const auto& item) {
-            return !item.second.isPopup() &&
+            return !item.second.isPopup() && !item.second.isAttached() &&
                 item.second.systemSurfaceKind ==
                     protocol::LCLSystemSurfaceKind::None &&
                 item.second.windowId == windowId;
@@ -392,6 +392,12 @@ void Compositor::renderDiagnosticOverlay() {
 
 void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
+    // Keep the already-scanned-out compositor frame untouched until every
+    // surface in a resized WindowGroup has committed the same geometry.
+    if (m_surfaces.hasIncompleteAtomicConfigure(
+            std::chrono::steady_clock::now())) {
+        return;
+    }
 
     const bool hasActiveTransitions = m_frameScheduler.advanceTransitions(m_surfaces);
     const auto handoffNow = std::chrono::steady_clock::now();
@@ -497,17 +503,39 @@ void Compositor::renderFrame() {
     for (const auto& [surfaceKey, entry] : m_surfaces) {
         if (entry.pendingDestroy && !entry.launchIconHandoffActive) {
             surfacesToRemove.push_back(surfaceKey);
+            if (!entry.isAttached() && entry.windowId != 0) {
+                const auto attachments =
+                    m_surfaces.attachedChildren(entry.windowId);
+                surfacesToRemove.insert(surfacesToRemove.end(),
+                                        attachments.begin(), attachments.end());
+            }
         }
     }
+    std::sort(surfacesToRemove.begin(), surfacesToRemove.end());
+    surfacesToRemove.erase(
+        std::unique(surfacesToRemove.begin(), surfacesToRemove.end()),
+        surfacesToRemove.end());
     for (const auto surfaceKey : surfacesToRemove) {
         const auto found = m_surfaces.find(surfaceKey);
-        if (found != m_surfaces.end() && found->second.windowId > 0) {
+        if (found != m_surfaces.end() && !found->second.isAttached() &&
+            found->second.windowId > 0) {
             m_windowManager.removeWindow(found->second.windowId);
         }
         if (found != m_surfaces.end()) {
-            // The client was already asked to destroy this surface, so it no
-            // longer needs a ReleaseDmaBuf message. It does need its imported
-            // textures released before the registry entry disappears.
+            if (found->second.isAttached() &&
+                !found->second.pendingDestroy &&
+                found->second.clientFd >= 0) {
+                protocol::LCLHeader header{};
+                header.opcode = protocol::LCLOpcode::SurfaceDestroy;
+                header.payloadSize = sizeof(protocol::LCLMsgSurfaceDestroy);
+                protocol::LCLMsgSurfaceDestroy destroy{};
+                destroy.surfaceId = static_cast<uint32_t>(
+                    surfaceKey & 0xFFFFFFFFu);
+                protocol::sendMsgWithFd(
+                    found->second.clientFd, header, &destroy);
+            }
+            // Destruction ends the sampling epoch, so no ReleaseDmaBuf message
+            // is needed. Imported textures still leave before registry erase.
             SurfaceRegistry::releaseBuffer(found->second);
             for (const auto& release : found->second.pendingDmaBufReleases) {
                 if (release.texture != 0) {

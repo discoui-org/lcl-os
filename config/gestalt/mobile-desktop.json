@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Google Pixel 8 Pro AVD (Pixel_8_Pro)",
-  "shell": "mobile",
+  "shell": "desktop",
   "display": {
     "width": 1344,
     "height": 2992,

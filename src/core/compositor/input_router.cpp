@@ -104,6 +104,15 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
     } else if (pointerEvent) {
         popupTarget = findPopupAt(pointerX(), pointerY());
     }
+    SurfaceRegistry::Key attachedTarget = 0;
+    const auto activeAttached = m_surfaces.find(m_activeAttachedSurface);
+    if (pointerEvent && m_activeAttachedSurface != 0 &&
+        activeAttached != m_surfaces.end() &&
+        !activeAttached->second.pendingDestroy) {
+        attachedTarget = m_activeAttachedSurface;
+    } else if (pointerEvent && popupTarget == 0) {
+        attachedTarget = findAttachedAt(pointerX(), pointerY());
+    }
 
     bool visibilityInputBlocked = false;
     if (event.type == InputEventType::PointerButton && event.pressed) {
@@ -111,7 +120,8 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
         const auto surface = std::find_if(
             m_surfaces.begin(), m_surfaces.end(),
             [focusedWindowId](const auto& item) {
-                if (item.second.windowId != focusedWindowId) return false;
+                if (item.second.isAttached() ||
+                    item.second.windowId != focusedWindowId) return false;
                 const auto phase = item.second.transitionPhase;
                 return phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing ||
                        phase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing;
@@ -120,10 +130,29 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
     }
     const bool popupButtonEvent = event.type == InputEventType::PointerButton &&
         popupTarget != 0;
-    auto result = (visibilityInputBlocked || popupButtonEvent ||
+    // WM resize borders remain authoritative even when an interactive Frame
+    // attachment covers the same pixels. The Frame owns only the interior
+    // press; otherwise a titlebar reaching the window edge makes that edge
+    // impossible to resize.
+    bool attachedCoversResizeBorder = false;
+    if (attachedTarget != 0) {
+        const auto attached = m_surfaces.find(attachedTarget);
+        if (attached != m_surfaces.end()) {
+            attachedCoversResizeBorder =
+                m_windowManager.resizeEdgeAt(
+                    attached->second.attachedWindowId,
+                    pointerX(), pointerY()) != render::ResizeEdge::None;
+        }
+    }
+    const bool attachedButtonEvent = event.type == InputEventType::PointerButton &&
+        event.pressed && attachedTarget != 0 && !attachedCoversResizeBorder;
+    auto result = (visibilityInputBlocked || popupButtonEvent || attachedButtonEvent ||
                    !m_desktopWindowManagementEnabled)
         ? render::WindowInputResult{}
         : m_windowManager.processInputEvent(event);
+    const bool geometryPressTookPrecedence = attachedTarget != 0 &&
+        event.type == InputEventType::PointerButton && event.pressed &&
+        result.interaction.isManual();
 
     if (event.type == InputEventType::PointerMotion) {
         const auto active = m_surfaces.find(m_activePopupSurface);
@@ -131,6 +160,12 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
                 !active->second.pendingDestroy
             ? m_activePopupSurface
             : findPopupAt(pointerX(), pointerY());
+        const auto attached = m_surfaces.find(m_activeAttachedSurface);
+        attachedTarget = m_activeAttachedSurface != 0 &&
+                attached != m_surfaces.end() &&
+                !attached->second.pendingDestroy
+            ? m_activeAttachedSurface
+            : (popupTarget == 0 ? findAttachedAt(pointerX(), pointerY()) : 0);
     }
 
     if (event.type == InputEventType::PointerButton && event.pressed &&
@@ -145,12 +180,22 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
         }
         m_activePopupSurface = popupTarget;
         m_surfaces.focusKeyboardSurface(popupTarget);
+    } else if (event.type == InputEventType::PointerButton && event.pressed &&
+               attachedTarget != 0 && !geometryPressTookPrecedence) {
+        const auto attached = m_surfaces.find(attachedTarget);
+        if (attached != m_surfaces.end()) {
+            m_windowManager.focusWindow(attached->second.attachedWindowId);
+            result.stateChanged = true;
+        }
+        m_activeAttachedSurface = attachedTarget;
+        m_surfaces.focusKeyboardSurface(0);
     } else if (event.type == InputEventType::PointerButton && event.pressed) {
         m_surfaces.focusKeyboardSurface(0);
     }
     if (result.interaction) {
         for (auto& [_, entry] : m_surfaces) {
-            if (entry.windowId == result.interaction.windowId) {
+            if (!entry.isAttached() &&
+                entry.windowId == result.interaction.windowId) {
                 if (result.interaction.isWindowStateTransition() &&
                     entry.resizePresentation ==
                         protocol::LCLResizePresentationMode::CompositorMorph) {
@@ -181,7 +226,10 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
         ((event.type == InputEventType::PointerButton && !event.pressed) ||
          event.type == InputEventType::PointerCancel);
     if (touchDown) {
-        const auto target = popupTarget != 0 ? popupTarget : focusedSurfaceKey();
+        const auto target = popupTarget != 0
+            ? popupTarget
+            : (attachedTarget != 0 && !geometryPressTookPrecedence
+                   ? attachedTarget : focusedSurfaceKey());
         if (target != 0) m_touchTargets[event.pointerId] = target;
     }
 
@@ -198,12 +246,15 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
         forwardToSurface(event, capturedTouch->second);
     } else if (popupTarget != 0) {
         forwardToSurface(event, popupTarget);
+    } else if (attachedTarget != 0 && !geometryPressTookPrecedence) {
+        forwardToSurface(event, attachedTarget);
     } else {
         forwardToFocusedSurface(event);
     }
     if ((event.type == InputEventType::PointerButton && !event.pressed) ||
         event.type == InputEventType::PointerCancel) {
         m_activePopupSurface = 0;
+        m_activeAttachedSurface = 0;
     }
     if (touchFinished) m_touchTargets.erase(event.pointerId);
     if (stateChanged) {
@@ -211,7 +262,7 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
         const auto focusedSurface = std::find_if(
             m_surfaces.begin(), m_surfaces.end(),
             [focusedWindowId](const auto& item) {
-                return !item.second.isPopup() &&
+                return !item.second.isPopup() && !item.second.isAttached() &&
                     item.second.windowId == focusedWindowId;
             });
         if (focusedSurface != m_surfaces.end()) {
@@ -237,8 +288,152 @@ void InputRouter::sendPendingConfigures() {
         if (window.isMinimized) {
             continue;
         }
+
+        const auto parentSurface = std::find_if(
+            m_surfaces.begin(), m_surfaces.end(), [&window](const auto& item) {
+                return !item.second.isPopup() && !item.second.isAttached() &&
+                    item.second.windowId == window.id;
+            });
+        const float titleOffset =
+            window.decorationMode == render::DecorationMode::SSD ? 32.0f : 0.0f;
+        const float configuredX = window.isLiveTransitioning()
+            ? window.pendingX : window.x;
+        const float configuredY = window.isLiveTransitioning()
+            ? window.pendingY : window.y;
+        const float logicalContentW = window.pendingWidth > 0.0f
+            ? window.pendingWidth : window.width;
+        const float logicalContentH = std::max(
+            1.0f,
+            (window.pendingHeight > 0.0f
+                 ? window.pendingHeight : window.height) - titleOffset);
+        const bool livePositionChanged =
+            window.isLiveTransitioning() && parentSurface != m_surfaces.end() &&
+            (configuredX != parentSurface->second.configuredX ||
+             configuredY != parentSurface->second.configuredY);
+        const bool parentGeometryNeedsConfigure =
+            parentSurface != m_surfaces.end() &&
+            (logicalContentW != parentSurface->second.configuredWidth ||
+             logicalContentH != parentSurface->second.configuredHeight ||
+             livePositionChanged);
+        const bool resizingGeometry = window.isResizing() ||
+            window.isLiveTransitioning() ||
+            window.activeResizeEdge != render::ResizeEdge::None;
+
+        // Phase two of an atomic resize: the parent has committed its real
+        // (possibly client-snapped) size. Configure every attachment exactly
+        // once from that committed size while the previous scanout is held.
+        if (parentSurface != m_surfaces.end() &&
+            parentSurface->second.atomicConfigureGeneration != 0) {
+            auto& parent = parentSurface->second;
+            const uint64_t generation = parent.atomicConfigureGeneration;
+            const bool parentReady =
+                parent.configuredGeometryGeneration == generation &&
+                parent.acceptedConfigureSerial == parent.pendingConfigureSerial &&
+                parent.presentationSerial == parent.pendingConfigureSerial;
+            if (parentReady) {
+                const float committedParentWidth = parent.configuredWidth;
+                const float committedParentHeight =
+                    parent.configuredHeight + titleOffset;
+                for (const auto attachmentKey :
+                     m_surfaces.attachedChildren(window.id)) {
+                    auto attachment = m_surfaces.find(attachmentKey);
+                    if (attachment == m_surfaces.end()) continue;
+                    auto& entry = attachment->second;
+                    if (entry.atomicConfigureGeneration != generation ||
+                        entry.atomicConfigureIssued ||
+                        entry.clientFd < 0 || entry.pendingDestroy ||
+                        entry.ignoreBufferCommits) continue;
+
+                    const float width = entry.attachedFollowParentWidth
+                        ? committedParentWidth : entry.attachedWidth;
+                    const float height = entry.attachedFollowParentHeight
+                        ? committedParentHeight : entry.attachedHeight;
+                    protocol::LCLHeader header{};
+                    header.opcode = protocol::LCLOpcode::ConfigureBounds;
+                    header.payloadSize =
+                        sizeof(protocol::LCLMsgConfigureBounds);
+                    protocol::LCLMsgConfigureBounds configure{};
+                    configure.surfaceId = static_cast<uint32_t>(
+                        attachmentKey & 0xFFFFFFFFu);
+                    configure.configureSerial = entry.nextConfigureSerial++;
+                    configure.x = entry.attachedX;
+                    configure.y = entry.attachedY;
+                    configure.width = width;
+                    configure.height = height;
+                    configure.backingWidth = width;
+                    configure.backingHeight = height;
+                    configure.bufferScale = entry.bufferScale;
+                    configure.resizeReason = (!window.isMaximized &&
+                                              window.isResizing())
+                        ? protocol::LCLConfigureResizeReason::Interactive
+                        : protocol::LCLConfigureResizeReason::WindowStateTransition;
+                    if (protocol::sendMsgWithFd(
+                            entry.clientFd, header, &configure)) {
+                        entry.pendingConfigureSerial = configure.configureSerial;
+                        entry.configuredGeometryGeneration = generation;
+                        entry.atomicConfigureIssued = true;
+                        entry.configuredX = entry.attachedX;
+                        entry.configuredY = entry.attachedY;
+                        entry.configuredWidth = width;
+                        entry.configuredHeight = height;
+                        entry.lastConfigureSent = now;
+                        entry.forceConfigure = false;
+                    }
+                }
+            }
+            continue;
+        }
+
+        std::vector<SurfaceRegistry::Key> atomicAttachments;
+        for (const auto attachmentKey : m_surfaces.attachedChildren(window.id)) {
+            const auto attachment = m_surfaces.find(attachmentKey);
+            if (attachment == m_surfaces.end()) continue;
+            const auto& entry = attachment->second;
+            if (entry.clientFd < 0 || entry.pendingDestroy ||
+                entry.ignoreBufferCommits || !entry.hasCommittedBuffer ||
+                !entry.hasRenderableBuffer()) continue;
+            const float targetWidth = entry.attachedFollowParentWidth
+                ? logicalContentW : entry.attachedWidth;
+            const float targetHeight = entry.attachedFollowParentHeight
+                ? (window.pendingHeight > 0.0f
+                       ? window.pendingHeight : window.height)
+                : entry.attachedHeight;
+            if (targetWidth != entry.configuredWidth ||
+                targetHeight != entry.configuredHeight) {
+                atomicAttachments.push_back(attachmentKey);
+            }
+        }
+        const bool atomicResize = resizingGeometry &&
+            parentGeometryNeedsConfigure && parentSurface != m_surfaces.end() &&
+            parentSurface->second.hasCommittedBuffer &&
+            parentSurface->second.hasRenderableBuffer() &&
+            !atomicAttachments.empty();
+        if (atomicResize) {
+            const auto blocked = [this, now](
+                    const SurfaceRegistry::SurfaceEntry& entry) {
+                const bool refreshLimited =
+                    entry.lastConfigureSent.time_since_epoch().count() != 0 &&
+                    now - entry.lastConfigureSent < m_refreshInterval;
+                return SurfaceRegistry::hasOutstandingConfigure(entry) ||
+                    SurfaceRegistry::hasUnpresentedFrame(entry) ||
+                    refreshLimited;
+            };
+            bool batchBlocked = blocked(parentSurface->second);
+            for (const auto key : atomicAttachments) {
+                const auto attachment = m_surfaces.find(key);
+                if (attachment == m_surfaces.end() ||
+                    blocked(attachment->second)) {
+                    batchBlocked = true;
+                    break;
+                }
+            }
+            if (batchBlocked) continue;
+        }
+
+        bool parentConfigurePublished = !atomicResize;
         for (auto& [surfaceKey, entry] : m_surfaces) {
-            if (entry.windowId != window.id || entry.clientFd < 0) {
+            if (entry.isAttached() || entry.windowId != window.id ||
+                entry.clientFd < 0) {
                 continue;
             }
 
@@ -256,17 +451,6 @@ void InputRouter::sendPendingConfigures() {
                 break;
             }
 
-            const float titleOffset = (window.decorationMode == render::DecorationMode::SSD)
-                ? 32.0f
-                : 0.0f;
-            const float configuredX = window.isLiveTransitioning() ? window.pendingX : window.x;
-            const float configuredY = window.isLiveTransitioning() ? window.pendingY : window.y;
-            const float logicalContentW = window.pendingWidth > 0.0f
-                ? window.pendingWidth : window.width;
-            const float logicalContentH = std::max(1.0f,
-                (window.pendingHeight > 0.0f ? window.pendingHeight : window.height) - titleOffset);
-            const bool livePositionChanged = window.isLiveTransitioning() &&
-                (configuredX != entry.configuredX || configuredY != entry.configuredY);
             if (logicalContentW == entry.configuredWidth && logicalContentH == entry.configuredHeight &&
                 !entry.forceConfigure &&
                 !livePositionChanged) {
@@ -307,8 +491,90 @@ void InputRouter::sendPendingConfigures() {
                 entry.configuredFocused = configure.isFocused;
                 entry.lastConfigureSent = now;
                 entry.forceConfigure = false;
+                parentConfigurePublished = true;
             }
             break;
+        }
+
+        for (const auto attachmentKey : m_surfaces.attachedChildren(window.id)) {
+            auto attachment = m_surfaces.find(attachmentKey);
+            if (attachment == m_surfaces.end() ||
+                attachment->second.clientFd < 0 ||
+                attachment->second.pendingDestroy ||
+                attachment->second.ignoreBufferCommits) continue;
+            auto& entry = attachment->second;
+            // Follow the same newest logical frame target used for the parent
+            // surface configure. window.width/height are only the last
+            // committed client geometry during interactive resize, so using
+            // them here leaves WM chrome stuck at its old extent.
+            const float parentWidth = window.pendingWidth > 0.0f
+                ? window.pendingWidth : window.width;
+            const float parentHeight = window.pendingHeight > 0.0f
+                ? window.pendingHeight : window.height;
+            const float configuredWidth = entry.attachedFollowParentWidth
+                ? parentWidth : entry.attachedWidth;
+            const float configuredHeight = entry.attachedFollowParentHeight
+                ? parentHeight : entry.attachedHeight;
+            if (!entry.forceConfigure &&
+                configuredWidth == entry.configuredWidth &&
+                configuredHeight == entry.configuredHeight) continue;
+            if (resizingGeometry && parentGeometryNeedsConfigure &&
+                !parentConfigurePublished) {
+                continue;
+            }
+            const bool atomicAttachment = atomicResize &&
+                std::find(atomicAttachments.begin(), atomicAttachments.end(),
+                          attachmentKey) != atomicAttachments.end();
+            if (atomicAttachment) continue;
+            const bool refreshLimited =
+                entry.lastConfigureSent.time_since_epoch().count() != 0 &&
+                now - entry.lastConfigureSent < m_refreshInterval;
+            if (SurfaceRegistry::hasOutstandingConfigure(entry) ||
+                SurfaceRegistry::hasUnpresentedFrame(entry) ||
+                refreshLimited) continue;
+
+            protocol::LCLHeader header{};
+            header.opcode = protocol::LCLOpcode::ConfigureBounds;
+            header.payloadSize = sizeof(protocol::LCLMsgConfigureBounds);
+            protocol::LCLMsgConfigureBounds configure{};
+            configure.surfaceId = static_cast<uint32_t>(
+                attachmentKey & 0xFFFFFFFFu);
+            configure.configureSerial = entry.nextConfigureSerial++;
+            configure.x = entry.attachedX;
+            configure.y = entry.attachedY;
+            configure.width = configuredWidth;
+            configure.height = configuredHeight;
+            configure.backingWidth = configuredWidth;
+            configure.backingHeight = configuredHeight;
+            configure.bufferScale = entry.bufferScale;
+            configure.resizeReason = (!window.isMaximized &&
+                                      (window.isResizing() ||
+                                       window.activeResizeEdge !=
+                                           render::ResizeEdge::None))
+                ? protocol::LCLConfigureResizeReason::Interactive
+                : protocol::LCLConfigureResizeReason::WindowStateTransition;
+            if (protocol::sendMsgWithFd(entry.clientFd, header, &configure)) {
+                entry.pendingConfigureSerial = configure.configureSerial;
+                entry.configuredGeometryGeneration = window.geometryGeneration;
+                entry.configuredX = entry.attachedX;
+                entry.configuredY = entry.attachedY;
+                entry.configuredWidth = configuredWidth;
+                entry.configuredHeight = configuredHeight;
+                entry.lastConfigureSent = now;
+                entry.forceConfigure = false;
+            }
+        }
+        if (atomicResize && parentConfigurePublished) {
+            std::vector<SurfaceRegistry::Key> participants;
+            participants.reserve(1 + atomicAttachments.size());
+            participants.push_back(parentSurface->first);
+            participants.insert(participants.end(), atomicAttachments.begin(),
+                                atomicAttachments.end());
+            constexpr auto kAtomicConfigureTimeout =
+                std::chrono::milliseconds(250);
+            m_surfaces.beginAtomicConfigure(
+                window.id, window.geometryGeneration, participants,
+                now + kAtomicConfigureTimeout);
         }
     }
 }
@@ -330,7 +596,8 @@ void InputRouter::processCloseRequests() {
         }
 
         auto surfaceIt = std::find_if(m_surfaces.begin(), m_surfaces.end(), [windowId](const auto& item) {
-            return !item.second.isPopup() && item.second.windowId == windowId;
+            return !item.second.isPopup() && !item.second.isAttached() &&
+                item.second.windowId == windowId;
         });
         if (surfaceIt == m_surfaces.end()) {
             m_windowManager.removeWindow(windowId);
@@ -371,7 +638,8 @@ SurfaceRegistry::Key InputRouter::focusedSurfaceKey() const {
     if (focusedWindowId == 0) return 0;
     const auto surface = std::find_if(
         m_surfaces.begin(), m_surfaces.end(), [focusedWindowId](const auto& item) {
-            return !item.second.isPopup() && item.second.windowId == focusedWindowId &&
+            return !item.second.isPopup() && !item.second.isAttached() &&
+                item.second.windowId == focusedWindowId &&
                 item.second.clientFd >= 0;
         });
     return surface == m_surfaces.end() ? 0 : surface->first;
@@ -387,7 +655,10 @@ void InputRouter::forwardToSurface(const InputEvent& event,
     // System panels and surfaces that have not committed a complete frame are
     // never normal client input targets, even if focus state was stale. Geometry
     // morphs deliberately remain interactive while their presentation catches up.
-    if (entry.unfocusable || !entry.hasCommittedBuffer || entry.pendingDestroy) {
+    const bool rejectsInput = entry.isAttached()
+        ? !entry.attachedAcceptsInput
+        : entry.unfocusable;
+    if (rejectsInput || !entry.hasCommittedBuffer || entry.pendingDestroy) {
         return;
     }
     if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::Minimizing ||
@@ -429,6 +700,8 @@ void InputRouter::forwardToSurface(const InputEvent& event,
         const auto parent = m_surfaces.find(entry.parentSurfaceKey);
         if (parent == m_surfaces.end()) return;
         targetWindowId = parent->second.windowId;
+    } else if (entry.isAttached()) {
+        targetWindowId = entry.attachedWindowId;
     }
     const auto windowIt = std::find_if(m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(), [targetWindowId](const render::Window& window) {
         return window.id == targetWindowId;
@@ -437,7 +710,7 @@ void InputRouter::forwardToSurface(const InputEvent& event,
         return;
     }
 
-    const float titleOffset = !entry.isPopup() &&
+    const float titleOffset = !entry.isPopup() && !entry.isAttached() &&
         windowIt->decorationMode == render::DecorationMode::SSD
             ? 32.0f
             : 0.0f;
@@ -471,6 +744,31 @@ void InputRouter::forwardToSurface(const InputEvent& event,
         if (parent == m_surfaces.end()) return;
         const auto popupBounds = resolvePopupSurfaceBounds(*windowIt, parent->second, entry);
         surfacePoint = popupBounds.unmapPoint(globalPointerX, globalPointerY);
+    } else if (entry.isAttached()) {
+        const auto parentSurface = std::find_if(
+            m_surfaces.begin(), m_surfaces.end(),
+            [targetWindowId](const auto& item) {
+                return !item.second.isPopup() && !item.second.isAttached() &&
+                    item.second.windowId == targetWindowId;
+            });
+        const float parentTitleOffset = windowIt->decorationMode ==
+                render::DecorationMode::SSD
+            ? 32.0f : 0.0f;
+        const float parentScale = parentSurface == m_surfaces.end()
+            ? 1.0f : parentSurface->second.transitionScale;
+        const auto group = parentSurface != m_surfaces.end() &&
+                parentSurface->second.launchMorphActive
+            ? render::makeWindowGroupTransformToBounds(
+                *windowIt, parentTitleOffset,
+                {parentSurface->second.launchMorphX,
+                 parentSurface->second.launchMorphY,
+                 parentSurface->second.launchMorphWidth,
+                 parentSurface->second.launchMorphHeight})
+            : render::makeWindowGroupTransform(
+                *windowIt, parentTitleOffset, parentScale);
+        surfacePoint = group.unmapPoint({globalPointerX, globalPointerY});
+        surfacePoint.x -= entry.attachedX;
+        surfacePoint.y -= entry.attachedY;
     } else {
         const auto group = entry.launchMorphActive
             ? render::makeWindowGroupTransformToBounds(
@@ -493,13 +791,65 @@ void InputRouter::forwardToSurface(const InputEvent& event,
     protocol::sendMsgWithFd(entry.clientFd, header, &input);
 }
 
+SurfaceRegistry::Key InputRouter::findAttachedAt(
+        float globalX, float globalY) const {
+    for (auto window = m_windowManager.getWindows().rbegin();
+         window != m_windowManager.getWindows().rend(); ++window) {
+        if (window->isMinimized) continue;
+        const auto parent = std::find_if(
+            m_surfaces.begin(), m_surfaces.end(),
+            [&window](const auto& item) {
+                return !item.second.isPopup() && !item.second.isAttached() &&
+                    item.second.windowId == window->id;
+            });
+        if (parent == m_surfaces.end()) continue;
+
+        const float titleOffset = window->decorationMode ==
+                render::DecorationMode::SSD
+            ? 32.0f : 0.0f;
+        const auto group = parent->second.launchMorphActive
+            ? render::makeWindowGroupTransformToBounds(
+                *window, titleOffset,
+                {parent->second.launchMorphX,
+                 parent->second.launchMorphY,
+                 parent->second.launchMorphWidth,
+                 parent->second.launchMorphHeight})
+            : render::makeWindowGroupTransform(
+                *window, titleOffset, parent->second.transitionScale);
+        const auto local = group.unmapPoint({globalX, globalY});
+        const auto children = m_surfaces.attachedChildren(window->id);
+        for (auto childKey = children.rbegin(); childKey != children.rend();
+             ++childKey) {
+            const auto child = m_surfaces.find(*childKey);
+            if (child == m_surfaces.end() ||
+                !child->second.attachedAcceptsInput ||
+                !child->second.hasCommittedBuffer ||
+                !child->second.hasRenderableBuffer() ||
+                child->second.pendingDestroy) continue;
+            const float width = child->second.attachedFollowParentWidth
+                ? group.localBounds.width : child->second.attachedWidth;
+            const float height = child->second.attachedFollowParentHeight
+                ? group.localBounds.height : child->second.attachedHeight;
+            if (local.x >= child->second.attachedX &&
+                local.x < child->second.attachedX + width &&
+                local.y >= child->second.attachedY &&
+                local.y < child->second.attachedY + height) {
+                return child->first;
+            }
+        }
+        if (group.containsGlobalPoint(globalX, globalY)) return 0;
+    }
+    return 0;
+}
+
 SurfaceRegistry::Key InputRouter::findPopupAt(float globalX, float globalY) const {
     for (auto window = m_windowManager.getWindows().rbegin();
          window != m_windowManager.getWindows().rend(); ++window) {
         if (window->isMinimized) continue;
         const auto parent = std::find_if(m_surfaces.begin(), m_surfaces.end(),
             [&window](const auto& item) {
-                return !item.second.isPopup() && item.second.windowId == window->id;
+                return !item.second.isPopup() && !item.second.isAttached() &&
+                    item.second.windowId == window->id;
             });
         if (parent != m_surfaces.end()) {
             const auto children = m_surfaces.popupChildren(parent->first);

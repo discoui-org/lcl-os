@@ -54,6 +54,7 @@ private:
                           SurfaceRegistry::Key surfaceKey) const;
     SurfaceRegistry::Key focusedSurfaceKey() const;
     SurfaceRegistry::Key findPopupAt(float globalX, float globalY) const;
+    SurfaceRegistry::Key findAttachedAt(float globalX, float globalY) const;
     void destroyPopupChildren(SurfaceRegistry::Key parentSurfaceKey);
 
     render::WindowManager& m_windowManager;
@@ -66,6 +67,7 @@ private:
     SystemGestureHandler m_systemGestureHandler;
     std::unordered_map<uint32_t, SurfaceRegistry::Key> m_touchTargets;
     SurfaceRegistry::Key m_activePopupSurface{0};
+    SurfaceRegistry::Key m_activeAttachedSurface{0};
     std::chrono::nanoseconds m_refreshInterval{std::chrono::nanoseconds(16666667)};
 };
 

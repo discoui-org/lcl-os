@@ -63,6 +63,17 @@ public:
 
         uint32_t windowId{0};
         uint64_t parentSurfaceKey{0};
+        uint32_t attachedWindowId{0};
+        protocol::LCLAttachedSurfaceRole attachedRole{
+            protocol::LCLAttachedSurfaceRole::Adornment};
+        float attachedX{0.0f};
+        float attachedY{0.0f};
+        float attachedWidth{0.0f};
+        float attachedHeight{0.0f};
+        bool attachedFollowParentWidth{false};
+        bool attachedFollowParentHeight{false};
+        bool attachedAcceptsInput{false};
+        uint64_t attachmentOrder{0};
         protocol::LCLPopupRole popupRole{protocol::LCLPopupRole::Transient};
         float popupX{0.0f};
         float popupY{0.0f};
@@ -135,6 +146,12 @@ public:
         // compositor frame containing it has been presented. Live resize also
         // uses this credit to serialize configure -> commit -> presentation.
         uint64_t presentationSerial{0};
+        // Metadata-only WindowGroup barrier. Buffer ownership remains in the
+        // normal current slot; scanout waits until every participant commits.
+        uint64_t atomicConfigureGeneration{0};
+        uint32_t atomicConfigureParticipantCount{0};
+        bool atomicConfigureIssued{false};
+        std::chrono::steady_clock::time_point atomicConfigureDeadline{};
         bool forceConfigure{false};
         std::chrono::steady_clock::time_point lastConfigureSent{};
 
@@ -230,6 +247,7 @@ public:
             return pixels != nullptr || dmaBufTexture != 0 || !displayList.empty();
         }
         bool isPopup() const noexcept { return parentSurfaceKey != 0; }
+        bool isAttached() const noexcept { return attachedWindowId != 0; }
     };
 
     using Key = uint64_t;
@@ -272,7 +290,9 @@ public:
 
     Snapshot snapshot() const;
     std::vector<Key> popupChildren(Key parentSurfaceKey) const;
+    std::vector<Key> attachedChildren(uint32_t windowId) const;
     uint64_t allocatePopupOrder() noexcept { return m_nextPopupOrder++; }
+    uint64_t allocateAttachmentOrder() noexcept { return m_nextAttachmentOrder++; }
 
     /** Keyboard routing target within the currently focused WindowGroup. */
     Key keyboardFocusSurface() const noexcept { return m_keyboardFocusSurface; }
@@ -308,9 +328,26 @@ public:
                                         float bufferScale) noexcept;
     static bool hasOutstandingConfigure(const SurfaceEntry& entry) noexcept;
     static bool hasUnpresentedFrame(const SurfaceEntry& entry) noexcept;
+    bool beginAtomicConfigure(
+        uint32_t windowId, uint64_t generation,
+        const std::vector<Key>& participants,
+        std::chrono::steady_clock::time_point deadline) noexcept;
+    void cancelAtomicConfigure(uint32_t windowId,
+                               uint64_t generation) noexcept;
+    /** True keeps the previous scanout intact; ready/expired barriers clear. */
+    bool hasIncompleteAtomicConfigure(
+        std::chrono::steady_clock::time_point now) noexcept;
     static void queuePresentation(SurfaceEntry& entry,
                                   uint64_t configureSerial) noexcept;
     static void completePresentation(SurfaceEntry& entry) noexcept;
+    /**
+     * Drop immutable image uploads that are no longer referenced by either
+     * retained DisplayList. Referenced pixel vectors remain pointer-stable for
+     * replay; stale assets can no longer exhaust a long-lived surface budget.
+     */
+    static void pruneUnreferencedImageResources(
+        SurfaceEntry& entry, size_t targetCount,
+        size_t targetBytes) noexcept;
     /** A process may own several independent surface sockets; disconnect is per socket. */
     static bool isOwnedByClientConnection(const SurfaceEntry& entry,
                                           int clientFd) noexcept;
@@ -318,6 +355,7 @@ public:
 private:
     Entries m_entries;
     uint64_t m_nextPopupOrder{1};
+    uint64_t m_nextAttachmentOrder{1};
     Key m_keyboardFocusSurface{0};
 };
 

@@ -77,7 +77,7 @@ TEST(WindowManagerTest, UnfocusableSystemWindowDoesNotStealApplicationFocus) {
     ASSERT_EQ(manager.getFocusedWindowId(), appWindow);
 
     const uint32_t panel = manager.createWindow(
-        "Panel", 0, 0, 1000, 32, 0xFF38BDF8, false);
+        "Panel", 0, 0, 1000, 32, false);
     manager.setWindowLayer(panel, lcl::protocol::LCLWindowLayer::TopMost, true);
 
     EXPECT_EQ(manager.getFocusedWindowId(), appWindow);
@@ -330,70 +330,6 @@ TEST(WindowManagerTest, NewDragInvalidatesSnapRollbackAndLateResizeCommit) {
     EXPECT_FLOAT_EQ(findWindow(manager, id)->width, pinnedWidth);
 }
 
-TEST(WindowManagerTest, ServerChromeControlsAnimateHoverPressWithoutGlyphState) {
-    lcl::render::WindowManager manager;
-    ASSERT_TRUE(manager.initialize(800, 600));
-    const uint32_t id = manager.createWindow("Chrome", 80, 60, 400, 300);
-
-    lcl::core::InputEvent move{};
-    move.type = lcl::core::InputEventType::PointerMotion;
-    move.absoluteX = 100.0;
-    move.absoluteY = 80.0;
-    EXPECT_TRUE(manager.processInputEvent(move));
-    ASSERT_EQ(findWindow(manager, id)->chrome.hoveredControl(), 0);
-    for (int index = 0; index < 60; ++index) manager.updateAnimations(1.0f / 240.0f);
-    EXPECT_GT(findWindow(manager, id)->chrome.control(0).scale, 1.0f);
-
-    lcl::core::InputEvent down{};
-    down.type = lcl::core::InputEventType::PointerButton;
-    down.pressed = true;
-    EXPECT_TRUE(manager.processInputEvent(down));
-    ASSERT_EQ(findWindow(manager, id)->chrome.pressedControl(), 0);
-    EXPECT_FALSE(findWindow(manager, id)->closeRequested);
-    for (int index = 0; index < 60; ++index) manager.updateAnimations(1.0f / 240.0f);
-    EXPECT_LT(findWindow(manager, id)->chrome.control(0).scale, 1.0f);
-
-    lcl::core::InputEvent up{};
-    up.type = lcl::core::InputEventType::PointerButton;
-    up.pressed = false;
-    EXPECT_TRUE(manager.processInputEvent(up));
-    ASSERT_EQ(findWindow(manager, id)->chrome.pressedControl(), -1);
-    for (int index = 0; index < 90; ++index) manager.updateAnimations(1.0f / 240.0f);
-    EXPECT_GT(findWindow(manager, id)->chrome.control(0).scale, 1.0f);
-}
-
-TEST(WindowManagerTest, ServerChromeControlsRemainInteractiveDuringGeometryMorph) {
-    lcl::render::WindowManager manager;
-    ASSERT_TRUE(manager.initialize(800, 600));
-    const uint32_t id = manager.createWindow("Morph chrome", 80, 60, 400, 300);
-    auto& window = manager.getWindowsMutable().back();
-    ASSERT_EQ(window.id, id);
-    window.geometryPhase = lcl::render::GeometryPhase::Morph;
-    window.presentationX = 70.0f;
-    window.presentationY = 50.0f;
-    window.presentationWidth = 480.0f;
-    window.presentationHeight = 360.0f;
-
-    lcl::core::InputEvent move{};
-    move.type = lcl::core::InputEventType::PointerMotion;
-    move.absoluteX = 90.0;
-    move.absoluteY = 70.0;
-    EXPECT_TRUE(manager.processInputEvent(move));
-    ASSERT_EQ(findWindow(manager, id)->chrome.hoveredControl(), 0);
-
-    lcl::core::InputEvent down{};
-    down.type = lcl::core::InputEventType::PointerButton;
-    down.pressed = true;
-    EXPECT_TRUE(manager.processInputEvent(down));
-    EXPECT_EQ(findWindow(manager, id)->chrome.pressedControl(), 0);
-
-    lcl::core::InputEvent up{};
-    up.type = lcl::core::InputEventType::PointerButton;
-    up.pressed = false;
-    EXPECT_TRUE(manager.processInputEvent(up));
-    EXPECT_EQ(findWindow(manager, id)->chrome.pressedControl(), -1);
-}
-
 TEST(WindowManagerRegressionTest, SuperLeftDragMovesWindow) {
     lcl::render::WindowManager manager;
     ASSERT_TRUE(manager.initialize(1920, 1080));
@@ -490,50 +426,4 @@ TEST(WindowManagerRegressionTest, SuperRightDragResizesWindow) {
     up.pressed = false;
     manager.processInputEvent(up);
     EXPECT_FALSE(findWindow(manager, id)->isResizing());
-}
-
-TEST(WindowManagerRegressionTest, SsdTitlebarDragMovesWindow) {
-    lcl::render::WindowManager manager;
-    ASSERT_TRUE(manager.initialize(1920, 1080));
-    const uint32_t id = manager.createWindow("TestWindow", 100, 100, 400, 300);
-    auto* winMut = const_cast<lcl::render::Window*>(findWindow(manager, id));
-    ASSERT_NE(winMut, nullptr);
-    winMut->decorationMode = lcl::render::DecorationMode::SSD;
-
-    // Titlebar height is 32px; titlebar spans y: [100, 132), center at (200, 116)
-    // 1. Move pointer to titlebar
-    lcl::core::InputEvent motion{};
-    motion.type = lcl::core::InputEventType::PointerMotion;
-    motion.absoluteX = 200.0;
-    motion.absoluteY = 116.0;
-    manager.processInputEvent(motion);
-
-    // 2. Normal Left Click (Super = false) on titlebar
-    lcl::core::InputEvent down{};
-    down.type = lcl::core::InputEventType::PointerButton;
-    down.button = lcl::platform::PointerButton::Left;
-    down.pressed = true;
-    down.superPressed = false;
-    const auto downResult = manager.processInputEvent(down);
-    EXPECT_TRUE(downResult.stateChanged);
-
-    const auto* draggingWin = findWindow(manager, id);
-    ASSERT_NE(draggingWin, nullptr);
-    EXPECT_TRUE(draggingWin->isDragging());
-
-    // 3. Drag window (+80px X, +50px Y)
-    motion.absoluteX = 280.0;
-    motion.absoluteY = 166.0;
-    EXPECT_TRUE(manager.processInputEvent(motion));
-
-    const auto* movedWin = findWindow(manager, id);
-    ASSERT_NE(movedWin, nullptr);
-    EXPECT_EQ(movedWin->x, 180);
-    EXPECT_EQ(movedWin->y, 150);
-
-    // 4. Release Left Button
-    lcl::core::InputEvent up = down;
-    up.pressed = false;
-    manager.processInputEvent(up);
-    EXPECT_FALSE(findWindow(manager, id)->isDragging());
 }

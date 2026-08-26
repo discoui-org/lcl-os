@@ -28,6 +28,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/image.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "lcl-ui/widgets/window_chrome.hpp"
 #include "render/raster_canvas.hpp"
 
 namespace {
@@ -44,6 +45,8 @@ struct DockWindow {
   std::string title;
   std::string appId;
   bool focused{};
+
+  bool operator==(const DockWindow &) const = default;
 };
 struct DockLayout {
   int x{}, y{}, width{}, height{}, first{}, count{};
@@ -57,6 +60,14 @@ struct DockView {
   std::vector<lcl::ui::Widget *> dynamicChildren;
   uint32_t width{0};
   uint32_t height{0};
+};
+
+struct DesktopDecoration {
+  uint32_t windowId{0};
+  int32_t width{0};
+  std::string title;
+  bool edgeToEdge{false};
+  std::unique_ptr<lcl::ui::WindowApp> surface;
 };
 
 /** Shell-local projection: Dock groups scenes by application, never by raw
@@ -338,6 +349,9 @@ int main() {
   std::unique_ptr<lcl::ui::WindowApp> dock;
   lcl::ui::Text *clock = nullptr;
   DockStateModel dockState;
+  lcl::shell::ShellStateModel wmState;
+  std::unordered_map<uint64_t, DesktopDecoration> decorations;
+  uint32_t nextDecorationSurfaceId = 1000;
   DockView dockView;
   std::vector<lcl::session::CatalogEntry> catalogEntries;
   std::string catalogError;
@@ -348,21 +362,111 @@ int main() {
               << "\n";
   }
   auto catalog = iconCatalog(catalogEntries);
+  std::vector<DockWindow> presentedDockItems;
 
   auto refreshDock = [&]() {
     if (!dock || !dockView.root)
       return;
-    updateDockView(dockView, dockState.items(), catalog);
+    auto items = dockState.items();
+    if (items == presentedDockItems)
+      return;
+    updateDockView(dockView, items, catalog);
+    presentedDockItems = std::move(items);
+  };
+
+  auto refreshDecorations = [&]() {
+    std::vector<uint64_t> stale;
+    for (const auto &[sceneId, decoration] : decorations) {
+      const auto scene = std::find_if(
+          wmState.snapshot().scenes.begin(), wmState.snapshot().scenes.end(),
+          [sceneId](const auto &item) { return item.sceneId == sceneId; });
+      if (scene == wmState.snapshot().scenes.end() ||
+          scene->visibility != lcl::protocol::LCLSceneVisibility::Visible ||
+          scene->decorationMode != lcl::protocol::LCLDecorationMode::SSD ||
+          scene->windowId != decoration.windowId ||
+          scene->title != decoration.title ||
+          scene->edgeToEdge != decoration.edgeToEdge) {
+        stale.push_back(sceneId);
+      }
+    }
+    for (const auto sceneId : stale)
+      decorations.erase(sceneId);
+
+    for (const auto &scene : wmState.snapshot().scenes) {
+      if (scene.visibility != lcl::protocol::LCLSceneVisibility::Visible ||
+          scene.decorationMode != lcl::protocol::LCLDecorationMode::SSD ||
+          scene.windowId == 0 || decorations.contains(scene.sceneId))
+        continue;
+
+      const float frameWidth = static_cast<float>(std::max(1, scene.width));
+      constexpr float kTitleHeight = 32.0f;
+      auto surface = std::make_unique<lcl::ui::WindowApp>(
+          lcl::render::makeDisplayListCanvas(), frameWidth, kTitleHeight,
+          "DesktopWM Frame");
+      surface->setSurfaceId(nextDecorationSurfaceId++);
+      surface->setAppId("org.lcl.desktop-wm");
+      surface->setInputEnabled(true);
+      surface->configureAttachedSurface(
+          scene.windowId, lcl::protocol::LCLAttachedSurfaceRole::Frame,
+          0.0f, 0.0f, frameWidth, kTitleHeight,
+          true, false, true);
+
+      auto *surfacePtr = surface.get();
+      lcl::ui::chrome::WindowChromeStyle style{};
+      style.titleBarBackground = scene.edgeToEdge
+          ? lcl::graphics::Color{0, 0, 0, 0}
+          : lcl::graphics::Color{17, 19, 23, 255};
+      lcl::ui::chrome::WindowChromeActions actions{};
+      actions.close = [surfacePtr] {
+        return surfacePtr->requestManagedWindowAction(
+            lcl::protocol::LCLWindowAction::Close);
+      };
+      actions.minimize = [surfacePtr] {
+        return surfacePtr->requestManagedWindowAction(
+            lcl::protocol::LCLWindowAction::Minimize);
+      };
+      actions.toggleMaximize = [surfacePtr] {
+        return surfacePtr->requestManagedWindowAction(
+            lcl::protocol::LCLWindowAction::ToggleMaximize);
+      };
+      actions.beginDrag = [surfacePtr](float x, float y) {
+        return surfacePtr->requestManagedWindowAction(
+            lcl::protocol::LCLWindowAction::BeginDrag, x, y);
+      };
+      auto titlebar = lcl::ui::chrome::buildWindowTitlebar(
+          frameWidth, kTitleHeight, 20.0f, scene.title, 15.0f,
+          style, actions);
+      auto *titlebarPtr = titlebar.get();
+      surface->setRootWidget(std::move(titlebar));
+      surface->setOnResize(
+          [titlebarPtr](uint32_t resizedWidth, uint32_t resizedHeight) {
+            titlebarPtr->setFrameSize(
+                static_cast<float>(resizedWidth),
+                static_cast<float>(resizedHeight));
+          });
+      if (!surface->connectCompositor()) {
+        std::cerr << "[DesktopWM] Could not attach frame to window "
+                  << scene.windowId << "\n";
+        continue;
+      }
+      decorations.emplace(scene.sceneId, DesktopDecoration{
+          scene.windowId, scene.width, scene.title, scene.edgeToEdge,
+          std::move(surface)});
+    }
   };
 
   lcl::shell::ShellStateClient shellState;
   shellState.setOnSnapshot([&](const lcl::shell::ShellStateSnapshot &snapshot) {
     dockState.applySnapshot(snapshot);
+    wmState.applySnapshot(snapshot);
     refreshDock();
+    refreshDecorations();
   });
   shellState.setOnDelta([&](const lcl::shell::ShellStateDelta &delta) {
     dockState.applyDelta(delta);
+    wmState.applyDelta(delta);
     refreshDock();
+    refreshDecorations();
   });
   if (!shellState.connect()) {
     std::cerr << "[LCL Shell] Could not subscribe to compositor shell state\n";
@@ -443,6 +547,8 @@ int main() {
     shellState.poll();
     rendered = menu->tick() || rendered;
     rendered = dock->tick() || rendered;
+    for (auto &[_, decoration] : decorations)
+      rendered = decoration.surface->tick() || rendered;
 
     // This process drives three WindowApps itself, so it must provide the
     // same active-frame pacing as WindowApp::runEventLoop().  The old fixed

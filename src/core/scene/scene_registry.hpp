@@ -44,6 +44,9 @@ struct SceneRecord {
     int width{0};
     int height{0};
     SceneVisibility visibility{SceneVisibility::Visible};
+    protocol::LCLDecorationMode decorationMode{
+        protocol::LCLDecorationMode::SSD};
+    bool edgeToEdge{false};
 };
 
 struct SceneStateChange {
@@ -69,7 +72,9 @@ public:
                              uint32_t windowId,
                              std::string appId,
                              std::string title,
-                             uint64_t appInstanceId = 0);
+                             uint64_t appInstanceId = 0,
+                             protocol::LCLDecorationMode decorationMode =
+                                 protocol::LCLDecorationMode::SSD);
 
     void markClosing(SurfaceRegistry::Key surfaceKey);
     void removeSurface(SurfaceRegistry::Key surfaceKey);

@@ -1,7 +1,6 @@
 #include "core/compositor/protocol_dispatcher.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "lcl-motion/motion.hpp"
-#include "lcl-theme/theme.hpp"
 #include "lcl-graphics/display_list_wire.hpp"
 #include "platform/common/native_buffer.hpp"
 
@@ -49,6 +48,8 @@ protocol::LCLMsgShellScene toWireScene(const SceneRecord& scene) {
             wire.visibility = protocol::LCLSceneVisibility::Visible;
             break;
     }
+    wire.decorationMode = scene.decorationMode;
+    wire.edgeToEdge = scene.edgeToEdge ? 1 : 0;
     std::strncpy(wire.appId, scene.appId.c_str(), sizeof(wire.appId) - 1);
     std::strncpy(wire.title, scene.title.c_str(), sizeof(wire.title) - 1);
     return wire;
@@ -132,6 +133,47 @@ ProtocolDispatcher::~ProtocolDispatcher() {
     }
 }
 
+void ProtocolDispatcher::commitClientSurfaceGeometry(SurfaceEntry& entry) {
+    if (entry.isPopup() || entry.isAttached() || entry.windowId == 0) return;
+
+    float titleOffset = 0.0f;
+    const auto window = std::find_if(
+        m_windowManager.getWindows().begin(),
+        m_windowManager.getWindows().end(),
+        [&entry](const auto& candidate) {
+            return candidate.id == entry.windowId;
+        });
+    if (window == m_windowManager.getWindows().end()) return;
+    if (window->decorationMode == render::DecorationMode::SSD) {
+        titleOffset = 32.0f;
+    }
+
+    const float requestedContentW = entry.configuredWidth;
+    const float requestedContentH = entry.configuredHeight;
+    const bool displayListFrame = !entry.pixels && entry.dmaBufTexture == 0 &&
+        entry.displayListSerial != 0 &&
+        entry.displayListWidth > 0.0f && entry.displayListHeight > 0.0f;
+    const float committedContentW = displayListFrame
+        ? entry.displayListWidth
+        : SurfaceRegistry::committedLogicalExtent(
+              entry.width, requestedContentW, entry.bufferScale);
+    const float committedContentH = displayListFrame
+        ? entry.displayListHeight
+        : SurfaceRegistry::committedLogicalExtent(
+              entry.height, requestedContentH, entry.bufferScale);
+    const float frameHeight = committedContentH + titleOffset;
+    const bool preserveNewerTarget =
+        window->pendingWidth != requestedContentW ||
+        window->pendingHeight != requestedContentH + titleOffset;
+
+    entry.configuredWidth = committedContentW;
+    entry.configuredHeight = committedContentH;
+    m_windowManager.commitSurfaceGeometry(
+        entry.windowId, committedContentW, frameHeight,
+        preserveNewerTarget, entry.configuredX, entry.configuredY,
+        entry.configuredGeometryGeneration);
+}
+
 bool ProtocolDispatcher::process(IPCManager& ipcManager) {
     bool changed = false;
     auto toRenderDecorationMode = [](protocol::LCLDecorationMode mode) {
@@ -148,6 +190,18 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             return false;
         }
 
+        if (entry.isAttached()) {
+            const auto parent = std::find_if(
+                m_windowManager.getWindows().begin(),
+                m_windowManager.getWindows().end(),
+                [&entry](const auto& window) {
+                    return window.id == entry.attachedWindowId;
+                });
+            if (parent == m_windowManager.getWindows().end()) return false;
+            entry.hasCommittedBuffer = true;
+            return true;
+        }
+
         if (entry.windowId != 0) {
             if (!entry.hasCommittedBuffer) {
                 entry.hasCommittedBuffer = true;
@@ -160,7 +214,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     protocol::LCLSystemSurfaceKind::None) {
                     m_scenes.mapClientSurface(
                         surfaceKey, clientPid, entry.windowId,
-                        entry.appId, entry.title, entry.appInstanceId);
+                        entry.appId, entry.title, entry.appInstanceId,
+                        entry.decorationMode);
                 }
             }
             return true;
@@ -174,7 +229,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             entry.title, entry.initialX, entry.initialY,
             entry.initialWidth,
             entry.initialHeight + static_cast<float>(titleOffset),
-            ::lcl::theme::defaultTheme().colors.windowTitleFocused.toARGB(),
             !entry.unfocusable);
         m_windowManager.setDecorationMode(entry.windowId, decorationMode);
         m_windowManager.setEdgeToEdge(entry.windowId, entry.edgeToEdge);
@@ -201,7 +255,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         if (entry.systemSurfaceKind == protocol::LCLSystemSurfaceKind::None) {
             m_scenes.mapClientSurface(surfaceKey, clientPid, entry.windowId,
                                       entry.appId, entry.title,
-                                      entry.appInstanceId);
+                                      entry.appInstanceId,
+                                      entry.decorationMode);
         }
         std::cout << "[LCL Compositor] Mapped Window (ID: " << entry.windowId
                   << ") after first client buffer commit\n";
@@ -239,7 +294,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         auto it = m_surfaces.find(surfaceKey);
         if (it == m_surfaces.end()) return;
 
-        destroyPopupChildren(surfaceKey);
+        if (!it->second.isAttached()) destroyPopupChildren(surfaceKey);
 
         // Ask the client to stop its loop while compositor animates its frozen
         // last frame.  All close entry points use this same transition path.
@@ -253,7 +308,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         }
 
         m_surfaces.releaseKeyboardFocus(surfaceKey);
-        if (it->second.isPopup()) {
+        if (it->second.isPopup() || it->second.isAttached()) {
             it->second.ignoreBufferCommits = true;
             it->second.pendingDestroy = true;
             changed = true;
@@ -267,6 +322,104 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             changed = true;
         } else {
             m_scenes.markClosing(surfaceKey);
+        }
+    };
+
+    auto applyManagedWindowAction = [&] (
+            SurfaceRegistry::Key surfaceKey,
+            protocol::LCLWindowAction action,
+            float localX, float localY) {
+        const auto surfaceIt = m_surfaces.find(surfaceKey);
+        if (surfaceIt == m_surfaces.end() || surfaceIt->second.isPopup() ||
+            surfaceIt->second.isAttached()) return;
+
+        const uint32_t windowId = surfaceIt->second.windowId;
+        const auto currentWindow = std::find_if(
+            m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
+            [windowId](const auto& window) { return window.id == windowId; });
+        const bool hasCurrentWindow =
+            currentWindow != m_windowManager.getWindows().end();
+        const float rollbackX = hasCurrentWindow ? currentWindow->x : 0.0f;
+        const float rollbackY = hasCurrentWindow ? currentWindow->y : 0.0f;
+        const float rollbackWidth = hasCurrentWindow ? currentWindow->width : 0.0f;
+        const float rollbackHeight = hasCurrentWindow ? currentWindow->height : 0.0f;
+        const bool rollbackWasMaximized =
+            hasCurrentWindow && currentWindow->isMaximized;
+        const bool rollbackWasMinimized =
+            hasCurrentWindow && currentWindow->isMinimized;
+        const bool compositorMorph = surfaceIt->second.resizePresentation ==
+            protocol::LCLResizePresentationMode::CompositorMorph;
+        const auto beginResizeTransition = [&] {
+            if (!hasCurrentWindow || !compositorMorph) return;
+            auto& entry = surfaceIt->second;
+            const auto transitionedWindow = std::find_if(
+                m_windowManager.getWindows().begin(),
+                m_windowManager.getWindows().end(),
+                [windowId](const auto& window) { return window.id == windowId; });
+            if (transitionedWindow == m_windowManager.getWindows().end()) return;
+            SurfaceRegistry::beginGeometryTransition(
+                entry, transitionedWindow->geometryGeneration,
+                rollbackX, rollbackY, rollbackWidth, rollbackHeight,
+                rollbackWasMaximized, rollbackWasMinimized);
+        };
+
+        switch (action) {
+            case protocol::LCLWindowAction::BeginDrag:
+                if (const auto interaction = m_windowManager.beginWindowDrag(
+                        windowId, localX, localY)) {
+                    SurfaceRegistry::interruptGeometryTransaction(
+                        surfaceIt->second, interaction.generation);
+                    changed = true;
+                }
+                break;
+            case protocol::LCLWindowAction::Minimize:
+                if (windowId != 0 &&
+                    surfaceIt->second.transitionPhase ==
+                        SurfaceEntry::TransitionPhase::None) {
+                    surfaceIt->second.transitionPhase =
+                        SurfaceEntry::TransitionPhase::Minimizing;
+                    surfaceIt->second.transitionElapsedSec = 0.0f;
+                    surfaceIt->second.transitionDurationSec = 0.18f;
+                    surfaceIt->second.transitionOpacity = 1.0f;
+                    surfaceIt->second.transitionScale = 1.0f;
+                    m_windowManager.transferFocusFromWindow(windowId);
+                    changed = true;
+                }
+                break;
+            case protocol::LCLWindowAction::Maximize:
+                if (m_windowManager.maximizeWindow(windowId)) {
+                    beginResizeTransition();
+                    changed = true;
+                }
+                break;
+            case protocol::LCLWindowAction::Restore:
+                if (hasCurrentWindow && currentWindow->isMinimized) {
+                    if (m_windowManager.restoreWindow(windowId)) {
+                        surfaceIt->second.transitionPhase =
+                            SurfaceEntry::TransitionPhase::Restoring;
+                        surfaceIt->second.transitionElapsedSec = 0.0f;
+                        surfaceIt->second.transitionDurationSec = 0.22f;
+                        surfaceIt->second.transitionOpacity = 0.0f;
+                        surfaceIt->second.transitionScale = 0.92f;
+                        changed = true;
+                    }
+                } else if (m_windowManager.restoreWindow(windowId)) {
+                    beginResizeTransition();
+                    changed = true;
+                }
+                break;
+            case protocol::LCLWindowAction::ToggleMaximize:
+                if (m_windowManager.toggleMaximizeWindow(windowId)) {
+                    beginResizeTransition();
+                    changed = true;
+                }
+                break;
+            case protocol::LCLWindowAction::Close:
+                requestSurfaceClose(
+                    surfaceKey, static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu));
+                break;
+            default:
+                break;
         }
     };
 
@@ -291,7 +444,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                     continue;
                 }
                 if (SurfaceRegistry::isOwnedByClientConnection(entry, msg.clientFd) &&
-                    !entry.isPopup()) {
+                    !entry.isPopup() && !entry.isAttached()) {
                     ownedParentSurfaces.push_back(surfKey);
                 }
             }
@@ -306,7 +459,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 if (SurfaceRegistry::isOwnedByClientConnection(entry, msg.clientFd)) {
                     m_surfaces.releaseKeyboardFocus(surfKey);
                     entry.clientFd = -1;
-                    if (entry.isPopup()) {
+                    if (entry.isPopup() || entry.isAttached()) {
                         entry.ignoreBufferCommits = true;
                         entry.pendingDestroy = true;
                     } else if (!beginClosingTransition(entry)) {
@@ -333,6 +486,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         const bool isSurfaceCreate = msg.header.opcode == lcl::protocol::LCLOpcode::SurfaceCreate;
         const bool isPopupSurfaceCreate =
             msg.header.opcode == lcl::protocol::LCLOpcode::PopupSurfaceCreate;
+        const bool isAttachedSurfaceCreate =
+            msg.header.opcode == lcl::protocol::LCLOpcode::AttachedSurfaceCreate;
         const bool isAttachBuffer = msg.header.opcode == lcl::protocol::LCLOpcode::AttachBuffer;
         const bool isAttachDmaBuf = msg.header.opcode == lcl::protocol::LCLOpcode::AttachDmaBuf;
         const bool isAttachNativeBuffer =
@@ -467,10 +622,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             const auto configureLaunchWindow = [&](SurfaceEntry& entry) {
                 if (entry.windowId == 0) {
                     entry.windowId = m_windowManager.createWindow(
-                        request->appId, 0.0f, 0.0f, width, height,
-                        ::lcl::theme::defaultTheme().colors
-                            .windowTitleFocused.toARGB(),
-                        true);
+                        request->appId, 0.0f, 0.0f, width, height, true);
                 }
                 m_windowManager.setDecorationMode(
                     entry.windowId, render::DecorationMode::None);
@@ -707,7 +859,100 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             continue;
         }
 
-        if (isPopupSurfaceCreate) {
+        if (isAttachedSurfaceCreate) {
+            if (!SystemSurfacePolicyRegistry::isTrustedShellPeer(msg.pid)) {
+                std::cerr << "[LCL Compositor ERROR] Attached surface denied for PID "
+                          << msg.pid << ": untrusted WM peer\n";
+                requestAck.error(5, "attached surfaces require trusted WM capability");
+                continue;
+            }
+            if (msg.payload.size() !=
+                sizeof(lcl::protocol::LCLMsgAttachedSurfaceCreate)) {
+                requestAck.error(3, "invalid attached surface request");
+                continue;
+            }
+            const auto* attached = reinterpret_cast<const
+                lcl::protocol::LCLMsgAttachedSurfaceCreate*>(msg.payload.data());
+            const bool validGeometry = std::isfinite(attached->x) &&
+                std::isfinite(attached->y) &&
+                std::isfinite(attached->width) &&
+                std::isfinite(attached->height) &&
+                attached->width > 0.0f && attached->height > 0.0f;
+            const auto parent = std::find_if(
+                m_windowManager.getWindows().begin(),
+                m_windowManager.getWindows().end(),
+                [attached](const auto& window) {
+                    return window.id == attached->targetWindowId;
+                });
+            if (!validGeometry ||
+                parent == m_windowManager.getWindows().end()) {
+                std::cerr << "[LCL Compositor ERROR] Attached surface target "
+                          << attached->targetWindowId << " is unavailable\n";
+                requestAck.error(7, "attached surface target is unavailable");
+                continue;
+            }
+
+            const auto surfaceKey = SurfaceRegistry::makeKey(
+                msg.clientFd, msg.pid, attached->surfaceId);
+            if (m_surfaces.contains(surfaceKey)) {
+                requestAck.error(8, "attached surface ID is already registered");
+                continue;
+            }
+
+            SurfaceEntry entry{};
+            entry.attachedWindowId = attached->targetWindowId;
+            entry.attachedRole = attached->role;
+            entry.attachedX = attached->x;
+            entry.attachedY = attached->y;
+            entry.attachedWidth = attached->width;
+            entry.attachedHeight = attached->height;
+            entry.attachedFollowParentWidth = attached->followParentWidth != 0;
+            entry.attachedFollowParentHeight = attached->followParentHeight != 0;
+            entry.attachedAcceptsInput = attached->acceptsInput != 0;
+            entry.attachmentOrder = m_surfaces.allocateAttachmentOrder();
+            entry.windowId = attached->targetWindowId;
+            entry.initialWidth = attached->width;
+            entry.initialHeight = attached->height;
+            entry.clientFd = msg.clientFd;
+            entry.bufferScale = m_renderer.getRasterRenderer()->getDeviceScale();
+            entry.decorationMode = protocol::LCLDecorationMode::None;
+            entry.insetBorderEnabled = false;
+            entry.suppressInitialTransition = true;
+            entry.unfocusable = true;
+            entry.resizePresentation =
+                protocol::LCLResizePresentationMode::Live;
+            m_surfaces[surfaceKey] = std::move(entry);
+
+            auto& configured = m_surfaces[surfaceKey];
+            const float configuredWidth = configured.attachedFollowParentWidth
+                ? parent->width : configured.attachedWidth;
+            const float configuredHeight = configured.attachedFollowParentHeight
+                ? parent->height : configured.attachedHeight;
+            protocol::LCLHeader header{};
+            header.opcode = protocol::LCLOpcode::ConfigureBounds;
+            header.payloadSize = sizeof(protocol::LCLMsgConfigureBounds);
+            protocol::LCLMsgConfigureBounds configure{};
+            configure.surfaceId = attached->surfaceId;
+            configure.configureSerial = configured.nextConfigureSerial++;
+            configure.x = configured.attachedX;
+            configure.y = configured.attachedY;
+            configure.width = configuredWidth;
+            configure.height = configuredHeight;
+            configure.backingWidth = configuredWidth;
+            configure.backingHeight = configuredHeight;
+            configure.bufferScale = configured.bufferScale;
+            configure.resizeReason = protocol::LCLConfigureResizeReason::Initial;
+            configured.pendingConfigureSerial = configure.configureSerial;
+            configured.configuredX = configured.attachedX;
+            configured.configuredY = configured.attachedY;
+            configured.configuredWidth = configuredWidth;
+            configured.configuredHeight = configuredHeight;
+            configured.configuredGeometryGeneration =
+                parent->geometryGeneration;
+            protocol::sendMsgWithFd(msg.clientFd, header, &configure);
+            changed = true;
+
+        } else if (isPopupSurfaceCreate) {
             const auto* popup = reinterpret_cast<const lcl::protocol::LCLMsgPopupSurfaceCreate*>(
                 msg.payload.data());
             const auto owner = static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd);
@@ -969,6 +1214,11 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             auto& entry = surfaceIt->second;
             if (!entry.imageResources.contains(resourceKey)) {
                 constexpr size_t kMaxImageResourcesPerSurface = 256;
+                const size_t requiredBytes = static_cast<size_t>(
+                    upload->byteSize);
+                SurfaceRegistry::pruneUnreferencedImageResources(
+                    entry, kMaxImageResourcesPerSurface - 1,
+                    static_cast<size_t>(kMaxImageBytes) - requiredBytes);
                 if (entry.imageResources.size() >= kMaxImageResourcesPerSurface ||
                     upload->byteSize > kMaxImageBytes -
                         std::min<uint64_t>(entry.imageResourceBytes,
@@ -997,7 +1247,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                             static_cast<size_t>(upload->byteSize));
                 munmap(mapping, static_cast<size_t>(upload->byteSize));
                 entry.imageResources.emplace(resourceKey, std::move(resource));
-                entry.imageResourceBytes += static_cast<size_t>(upload->byteSize);
+                entry.imageResourceBytes += requiredBytes;
             }
             close(msg.passedFd);
 
@@ -1173,47 +1423,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.resizeCrossfadeElapsedSec = 0.0f;
                 entry.resizeCrossfadeProgress = 0.0f;
             }
-            if (entry.isPopup()) {
+            if (entry.isPopup() || entry.isAttached()) {
                 entry.hasCommittedBuffer = true;
             } else if (!entry.hasCommittedBuffer &&
                        !mapSurface(surfaceKey, entry, msg.pid)) {
                 discardRejected();
                 continue;
             }
-            if (!entry.isPopup()) {
-                int titleOffset = 0;
-                for (const auto& win : m_windowManager.getWindows()) {
-                    if (win.id == entry.windowId &&
-                        win.decorationMode == render::DecorationMode::SSD) {
-                        titleOffset = 32;
-                        break;
-                    }
-                }
-                const float frameWidth = commit->logicalWidth;
-                const float frameHeight = commit->logicalHeight +
-                    static_cast<float>(titleOffset);
-                bool preserveNewerTarget = false;
-                const auto configuredWindow = std::find_if(
-                    m_windowManager.getWindows().begin(),
-                    m_windowManager.getWindows().end(),
-                    [&entry](const auto& window) {
-                        return window.id == entry.windowId;
-                    });
-                if (configuredWindow != m_windowManager.getWindows().end()) {
-                    const float configuredFrameHeight = entry.configuredHeight +
-                        static_cast<float>(titleOffset);
-                    preserveNewerTarget =
-                        configuredWindow->pendingWidth != entry.configuredWidth ||
-                        configuredWindow->pendingHeight != configuredFrameHeight;
-                }
-                entry.configuredWidth = commit->logicalWidth;
-                entry.configuredHeight = commit->logicalHeight;
-                m_windowManager.commitSurfaceGeometry(
-                    entry.windowId, frameWidth, frameHeight,
-                    preserveNewerTarget, entry.configuredX, entry.configuredY,
-                    entry.configuredGeometryGeneration);
-            }
             SurfaceRegistry::queuePresentation(entry, commit->configureSerial);
+            commitClientSurfaceGeometry(entry);
             changed = true;
 
         // --- ATTACH_DMA_BUF: import one client GBM allocation as a GPU texture ---
@@ -1326,52 +1544,16 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.resizeCrossfadeElapsedSec = 0.0f;
                 entry.resizeCrossfadeProgress = 0.0f;
             }
-            if (entry.isPopup()) {
+            if (entry.isPopup() || entry.isAttached()) {
                 entry.hasCommittedBuffer = true;
             } else if (!entry.hasCommittedBuffer &&
                        !mapSurface(surfaceKey, entry, msg.pid)) {
                 continue;
             }
 
-            if (entry.isPopup()) {
-                SurfaceRegistry::queuePresentation(entry, bufferMessage->configureSerial);
-                changed = true;
-                continue;
-            }
-
-            int titleOffset = 0;
-            for (const auto& win : m_windowManager.getWindows()) {
-                if (win.id == entry.windowId && win.decorationMode == render::DecorationMode::SSD) {
-                    titleOffset = 32;
-                    break;
-                }
-            }
-            const float requestedContentW = entry.configuredWidth;
-            const float requestedContentH = entry.configuredHeight;
-            const float committedContentW = SurfaceRegistry::committedLogicalExtent(
-                entry.width, requestedContentW, entry.bufferScale);
-            const float committedContentH = SurfaceRegistry::committedLogicalExtent(
-                entry.height, requestedContentH, entry.bufferScale);
-            const float frameW = committedContentW;
-            const float frameH = committedContentH + static_cast<float>(titleOffset);
-            bool preserveNewerTarget = false;
-            const auto configuredWindow = std::find_if(
-                m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
-                [&entry](const auto& window) { return window.id == entry.windowId; });
-            if (configuredWindow != m_windowManager.getWindows().end()) {
-                const float configuredFrameHeight =
-                    requestedContentH + static_cast<float>(titleOffset);
-                preserveNewerTarget = configuredWindow->pendingWidth != requestedContentW ||
-                    configuredWindow->pendingHeight != configuredFrameHeight;
-            }
-            entry.configuredWidth = committedContentW;
-            entry.configuredHeight = committedContentH;
-            m_windowManager.commitSurfaceGeometry(entry.windowId, frameW, frameH,
-                                                  preserveNewerTarget, entry.configuredX,
-                                                  entry.configuredY,
-                                                  entry.configuredGeometryGeneration);
             SurfaceRegistry::queuePresentation(
                 entry, bufferMessage->configureSerial);
+            commitClientSurfaceGeometry(entry);
             changed = true;
 
         // --- ATTACH_NATIVE_BUFFER: import an opaque AHB as a GPU texture ---
@@ -1511,60 +1693,15 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.resizeCrossfadeElapsedSec = 0.0f;
                 entry.resizeCrossfadeProgress = 0.0f;
             }
-            if (entry.isPopup()) {
+            if (entry.isPopup() || entry.isAttached()) {
                 entry.hasCommittedBuffer = true;
             } else if (!entry.hasCommittedBuffer &&
                        !mapSurface(surfaceKey, entry, msg.pid)) {
                 continue;
             }
-            if (entry.isPopup()) {
-                SurfaceRegistry::queuePresentation(
-                    entry, bufferMessage->configureSerial);
-                changed = true;
-                continue;
-            }
-
-            int titleOffset = 0;
-            for (const auto& win : m_windowManager.getWindows()) {
-                if (win.id == entry.windowId &&
-                    win.decorationMode == render::DecorationMode::SSD) {
-                    titleOffset = 32;
-                    break;
-                }
-            }
-            const float requestedContentW = entry.configuredWidth;
-            const float requestedContentH = entry.configuredHeight;
-            const float committedContentW =
-                SurfaceRegistry::committedLogicalExtent(
-                    entry.width, requestedContentW, entry.bufferScale);
-            const float committedContentH =
-                SurfaceRegistry::committedLogicalExtent(
-                    entry.height, requestedContentH, entry.bufferScale);
-            const float frameW = committedContentW;
-            const float frameH = committedContentH +
-                static_cast<float>(titleOffset);
-            bool preserveNewerTarget = false;
-            const auto configuredWindow = std::find_if(
-                m_windowManager.getWindows().begin(),
-                m_windowManager.getWindows().end(),
-                [&entry](const auto& window) {
-                    return window.id == entry.windowId;
-                });
-            if (configuredWindow != m_windowManager.getWindows().end()) {
-                const float configuredFrameHeight = requestedContentH +
-                    static_cast<float>(titleOffset);
-                preserveNewerTarget =
-                    configuredWindow->pendingWidth != requestedContentW ||
-                    configuredWindow->pendingHeight != configuredFrameHeight;
-            }
-            entry.configuredWidth = committedContentW;
-            entry.configuredHeight = committedContentH;
-            m_windowManager.commitSurfaceGeometry(
-                entry.windowId, frameW, frameH, preserveNewerTarget,
-                entry.configuredX, entry.configuredY,
-                entry.configuredGeometryGeneration);
             SurfaceRegistry::queuePresentation(
                 entry, bufferMessage->configureSerial);
+            commitClientSurfaceGeometry(entry);
             changed = true;
 #else
             if (msg.passedFd >= 0) close(msg.passedFd);
@@ -1754,7 +1891,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             // successfully mapped SHM buffer while retrying its first commit;
             // the surface must then become visible as soon as that buffer is
             // known to be valid.
-            if (entry.isPopup()) {
+            if (entry.isPopup() || entry.isAttached()) {
                 entry.hasCommittedBuffer = true;
             } else if (!entry.hasCommittedBuffer &&
                        !mapSurface(surfaceKey, entry, msg.pid)) {
@@ -1762,52 +1899,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 continue;
             }
 
-            if (entry.isPopup()) {
-                SurfaceRegistry::queuePresentation(
-                    entry, bufferMessage->configureSerial);
-                changed = true;
-                continue;
-            }
-
-            // Calculate titleOffset based on the mapped window decoration mode.
-            int titleOffset = 0;
-            for (const auto& win : m_windowManager.getWindows()) {
-                if (win.id == entry.windowId) {
-                    if (win.decorationMode == render::DecorationMode::SSD) {
-                        titleOffset = 32;
-                    }
-                    break;
-                }
-            }
-
-            // Notify WindowManager of client surface buffer commit
-            const float requestedContentW = entry.configuredWidth;
-            const float requestedContentH = entry.configuredHeight;
-            const float committedContentW = SurfaceRegistry::committedLogicalExtent(
-                entry.width, requestedContentW, entry.bufferScale);
-            const float committedContentH = SurfaceRegistry::committedLogicalExtent(
-                entry.height, requestedContentH, entry.bufferScale);
-            const float frameW = committedContentW;
-            const float frameH = committedContentH + static_cast<float>(titleOffset);
-            bool preserveNewerTarget = false;
-            const auto configuredWindow = std::find_if(
-                m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
-                [&entry](const auto& window) { return window.id == entry.windowId; });
-            if (configuredWindow != m_windowManager.getWindows().end()) {
-                const float configuredFrameHeight =
-                    requestedContentH + static_cast<float>(titleOffset);
-                preserveNewerTarget =
-                    configuredWindow->pendingWidth != requestedContentW ||
-                    configuredWindow->pendingHeight != configuredFrameHeight;
-            }
-            entry.configuredWidth = committedContentW;
-            entry.configuredHeight = committedContentH;
-            m_windowManager.commitSurfaceGeometry(
-                entry.windowId, frameW, frameH, preserveNewerTarget,
-                entry.configuredX, entry.configuredY,
-                entry.configuredGeometryGeneration);
             SurfaceRegistry::queuePresentation(
                 entry, bufferMessage->configureSerial);
+            commitClientSurfaceGeometry(entry);
             changed = true;
 
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::SetDecorationMode) {
@@ -1876,76 +1970,46 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             if (surfaceIt == m_surfaces.end()) {
                 continue;
             }
+            applyManagedWindowAction(surfaceKey, request->action,
+                                     request->localX, request->localY);
 
-            const uint32_t windowId = surfaceIt->second.windowId;
-            const auto currentWindow = std::find_if(
-                m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
-                [windowId](const auto& window) { return window.id == windowId; });
-            const bool hasCurrentWindow = currentWindow != m_windowManager.getWindows().end();
-            const float rollbackX = hasCurrentWindow ? currentWindow->x : 0.0f;
-            const float rollbackY = hasCurrentWindow ? currentWindow->y : 0.0f;
-            const float rollbackWidth = hasCurrentWindow ? currentWindow->width : 0.0f;
-            const float rollbackHeight = hasCurrentWindow ? currentWindow->height : 0.0f;
-            const bool rollbackWasMaximized = hasCurrentWindow && currentWindow->isMaximized;
-            const bool rollbackWasMinimized = hasCurrentWindow && currentWindow->isMinimized;
-            const bool compositorMorph = surfaceIt->second.resizePresentation ==
-                protocol::LCLResizePresentationMode::CompositorMorph;
-            const auto beginResizeTransition = [&] {
-                if (!hasCurrentWindow || !compositorMorph) return;
-                auto& entry = surfaceIt->second;
-                const auto transitionedWindow = std::find_if(
-                    m_windowManager.getWindows().begin(), m_windowManager.getWindows().end(),
-                    [windowId](const auto& window) { return window.id == windowId; });
-                if (transitionedWindow == m_windowManager.getWindows().end()) return;
-                SurfaceRegistry::beginGeometryTransition(
-                    entry, transitionedWindow->geometryGeneration,
-                    rollbackX, rollbackY, rollbackWidth, rollbackHeight,
-                    rollbackWasMaximized, rollbackWasMinimized);
-            };
-            switch (request->action) {
-                case lcl::protocol::LCLWindowAction::BeginDrag:
-                    if (const auto interaction = m_windowManager.beginWindowDrag(
-                        windowId, request->localX, request->localY)) {
-                        SurfaceRegistry::interruptGeometryTransaction(
-                            surfaceIt->second, interaction.generation);
-                        changed = true;
-                    }
-                    break;
-                case lcl::protocol::LCLWindowAction::Minimize:
-                    if (windowId != 0 && surfaceIt->second.transitionPhase == SurfaceEntry::TransitionPhase::None) {
-                        surfaceIt->second.transitionPhase = SurfaceEntry::TransitionPhase::Minimizing;
-                        surfaceIt->second.transitionElapsedSec = 0.0f;
-                        surfaceIt->second.transitionDurationSec = 0.18f;
-                        surfaceIt->second.transitionOpacity = 1.0f;
-                        surfaceIt->second.transitionScale = 1.0f;
-                        m_windowManager.transferFocusFromWindow(windowId);
-                        changed = true;
-                    }
-                    break;
-                case lcl::protocol::LCLWindowAction::Maximize:
-                    if (m_windowManager.maximizeWindow(windowId)) { beginResizeTransition(); changed = true; }
-                    break;
-                case lcl::protocol::LCLWindowAction::Restore:
-                    if (hasCurrentWindow && currentWindow->isMinimized) {
-                        if (m_windowManager.restoreWindow(windowId)) {
-                            surfaceIt->second.transitionPhase = SurfaceEntry::TransitionPhase::Restoring;
-                            surfaceIt->second.transitionElapsedSec = 0.0f;
-                            surfaceIt->second.transitionDurationSec = 0.22f;
-                            surfaceIt->second.transitionOpacity = 0.0f;
-                            surfaceIt->second.transitionScale = 0.92f;
-                            changed = true;
-                        }
-                    } else if (m_windowManager.restoreWindow(windowId)) { beginResizeTransition(); changed = true; }
-                    break;
-                case lcl::protocol::LCLWindowAction::ToggleMaximize:
-                    if (m_windowManager.toggleMaximizeWindow(windowId)) { beginResizeTransition(); changed = true; }
-                    break;
-                case lcl::protocol::LCLWindowAction::Close:
-                    requestSurfaceClose(surfaceKey, request->surfaceId);
-                    break;
-                default:
-                    break;
+        } else if (msg.header.opcode ==
+                   lcl::protocol::LCLOpcode::RequestManagedWindowAction) {
+            if (!SystemSurfacePolicyRegistry::isTrustedShellPeer(msg.pid)) {
+                requestAck.error(5, "managed window action requires trusted WM capability");
+                continue;
             }
+            if (msg.payload.size() != sizeof(
+                    lcl::protocol::LCLMsgRequestManagedWindowAction)) {
+                requestAck.error(3, "invalid managed window action");
+                continue;
+            }
+            const auto* request = reinterpret_cast<const
+                lcl::protocol::LCLMsgRequestManagedWindowAction*>(
+                    msg.payload.data());
+            const bool desktopOnlyAction =
+                request->action == lcl::protocol::LCLWindowAction::BeginDrag ||
+                request->action == lcl::protocol::LCLWindowAction::Maximize ||
+                request->action == lcl::protocol::LCLWindowAction::Restore ||
+                request->action ==
+                    lcl::protocol::LCLWindowAction::ToggleMaximize;
+            if (desktopOnlyAction &&
+                !m_windowingPolicy.usesDesktopWindowManagement()) {
+                requestAck.error(5, "window action unavailable in mobile mode");
+                continue;
+            }
+            const auto target = std::find_if(
+                m_surfaces.begin(), m_surfaces.end(),
+                [request](const auto& item) {
+                    return !item.second.isPopup() && !item.second.isAttached() &&
+                        item.second.windowId == request->targetWindowId;
+                });
+            if (target == m_surfaces.end()) {
+                requestAck.error(7, "managed window target is unavailable");
+                continue;
+            }
+            applyManagedWindowAction(target->first, request->action,
+                                     request->localX, request->localY);
 
         } else if (msg.header.opcode == lcl::protocol::LCLOpcode::BeginWindowMove) {
             if (!m_windowingPolicy.usesDesktopWindowManagement()) {

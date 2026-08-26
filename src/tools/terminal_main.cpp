@@ -66,14 +66,14 @@ int main() {
   window.setEdgeToEdge(true);
   window.setWindowCornerStyle(kCornerRadius, 2.0f);
 
-  // The compositor owns the SSD chrome and final rounded window mask. The
-  // client surface contains only terminal content.
+  // DesktopWM owns the attached frame; the compositor owns only the generic
+  // WindowGroup shape. The client surface contains terminal content only.
   auto root = std::make_unique<lcl::ui::Container>();
   root->getYogaNode().setWidth(static_cast<float>(kSurfaceWidth));
   root->getYogaNode().setHeight(static_cast<float>(kSurfaceHeight));
 
   // One outer-surface effect chain supplies the same material behind both the
-  // compositor-owned titlebar and the client content.
+  // DesktopWM titlebar and the client content.
   auto backdrop = std::make_unique<lcl::ui::BackdropSurface>();
   lcl::ui::BackdropSurface *backdropPtr = backdrop.get();
   backdrop->setInteractive(false);

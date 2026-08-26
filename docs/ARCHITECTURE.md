@@ -51,7 +51,7 @@ The LCL architecture consists of 5 main decoupled layers:
   or heuristic measurement path exists.
 * **Window Manager:** Decoupled spatial engine tracking z-index, logical
   coordinates (`x, y, width, height`), focus, drag/resize state, and window
-  presentation transforms. It does not paint window contents. Shell-specific
+  presentation transforms. It paints neither contents nor system UI. Shell-specific
   behavior is selected through `WindowingPolicy`: desktop policy permits
   floating/SSD/CSD move-resize behavior, while mobile policy makes normal app
   surfaces fullscreen and frameless and disables desktop pointer manipulation.
@@ -66,8 +66,8 @@ The LCL architecture consists of 5 main decoupled layers:
 * **Session RPC:** `lcl-sessiond` exposes an owner-only `SOCK_SEQPACKET`
   endpoint at `/run/user/1000/lcl-sessiond.sock`. Its explicit little-endian
   requests cover catalog snapshots and launch/process-exit lifecycle; this is
-  distinct from compositor protocol v22 surface IPC.
-* **Secure Unix Domain Socket IPC:** Compositor protocol v22 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`. Live resize carries independent logical content/backing extents, SHM damage, compositor presentation timestamps, and explicit discarded-frame credits. Edge-to-edge is a platform-neutral surface policy: one outer-surface effect chain can extend beneath desktop or mobile system insets while client widgets remain inside the safe content rect. `PopupSurface v1` reuses the same buffer infrastructure while binding a popup to a same-process parent surface; it is composed and hit-tested inside that parent's WindowGroup rather than entering the normal window stack.
+  distinct from compositor protocol v25 surface IPC.
+* **Secure Unix Domain Socket IPC:** Compositor protocol v25 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`. Live resize carries independent logical content/backing extents, SHM damage, compositor presentation timestamps, and explicit discarded-frame credits. Edge-to-edge is a platform-neutral surface policy: one outer-surface effect chain can extend beneath desktop or mobile system insets while client widgets remain inside the safe content rect. `PopupSurface v1` reuses the same buffer infrastructure while binding a popup to a same-process parent surface; `AttachedSurface` lets a trusted WM bind generic frame/adornment buffers across process boundaries. Both are composed and hit-tested inside the parent's WindowGroup rather than entering the normal window stack.
 * **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`. Manifests declare a stable `id`; older bundles receive a deterministic `bundle.<name>` compatibility ID.
 * **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ session client. It sends `LaunchRequest` to sessiond and optionally waits for `ProcessExited`; it never forks or execs applications itself.
 
@@ -238,23 +238,23 @@ Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı deği
 
 ---
 
-## 6. Z-Indexing & Hybrid Decoration Protocol (SSD/CSD Negotiation)
+## 6. Blind Composition & WM-Owned Decoration
 
 1. **Sub-surface Grouping & Atomic Z-Stacking (`window_manager` & `compositor`):**
-   - Her pencere ve ona ait tüm alt yüzeyler (Titlebar + Window Border + Client SHM Buffer) tek bir **Pencere Grubu (Window Stack Element)** olarak ele alınır.
+   - Her pencere ve ona ait tüm generic attached surface'ler tek bir **Pencere Grubu (Window Stack Element)** olarak ele alınır.
    - Compositor render döngüsü (`renderFrame`), `WindowManager` z-order sıralamasını (`m_windows` vektörünü) en alttan en üste doğru izler.
-   - Her pencere için önce başlık çubuğu/çerçeve (SSD), hemen ardından istemcinin SHM tamponu çizilir. Odaklanan pencere atomik olarak Z-Stack'in en üstüne (\(Z_{\text{max}}\)) yükseltildiğinde hem çerçeve hem de içerik tamponu en üste taşınır.
+   - Compositor çocukların UI anlamını bilmeden app buffer ve attached surface'leri generic rol/sıra ile compose eder. Odaklanan pencere atomik olarak Z-Stack'in en üstüne (\(Z_{\text{max}}\)) yükseltildiğinde bütün grup birlikte taşınır.
 
-2. **Common Decoration Negotiation Protocol (`lcl_protocol`):**
-   - `LCLOpcode::SetDecorationMode` IPC mesajı ile istemciler `SSD` (Server-Side Decoration) veya `CSD` (Client-Side Decoration) modlarını talep eder.
-   - **Compositor WindowManager:** Varsayılan olarak `SSD` modunda pencere başlık çubuğunu çizer. İstemci `CSD` talep ederse başlık çubuğu çizimini devre dışı bırakarak tüm render alanını istemciye devreder.
-   - Her iki mod da renderer bağımsız `lcl-window-chrome` hedefindeki aynı
-     `WindowChromeWidget` layout, hit-test, aksiyon, interaction, motion ve
-     görsel renk çözümlemesini kullanır. Aynı stil girdileri aynı mantıksal
-     `DisplayList`i üretir: CSD bu listeyi client `Canvas`ına kaydeder, SSD ise
-     compositor raster hedefinde replay eder. İkinci bir chrome painter veya
-     kontrol ağacı yoktur.
-   - Mobil shell gelecekte aynı compositor ve revisioned shell-state sözleşmesini tüketir; ayrı bir `lcl-mobile-wm` veya paralel pencere otoritesi yoktur.
+2. **Generic Attached Surface Protocol (`lcl_protocol`):**
+   - Güvenilir presentation client'ları `AttachedSurfaceCreate` ile başka bir
+     toplevel'in WindowGroup'una `Frame` veya `Adornment` yüzeyi ekler.
+   - DesktopWM `lcl-window-chrome` ile titlebar'ın layout, hit-test, action,
+     motion ve `DisplayList` üretimini yapar; `RequestManagedWindowAction` ile
+     hedef toplevel'e drag/minimize/maximize/close isteği yollar.
+   - MobileWM gesture indicator'ı `Adornment` olarak kaydeder. Compositor
+     titlebar, button veya gesture-pill türlerini ve renk/theme tokenlarını
+     içermez; yalnız buffer yaşam döngüsü, transform, opacity, z-order, input
+     capture ve yetki doğrulamasını uygular.
 
 ---
 

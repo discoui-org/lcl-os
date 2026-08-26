@@ -5,9 +5,9 @@
 
 #include "lcl-graphics/display_list.hpp"
 
-namespace lcl::core {
+namespace lcl::mobile {
 
-struct MobileGesturePillMetrics {
+struct GestureIndicatorMetrics {
     float referenceWidth{393.0f};
     float width{134.0f};
     float height{5.0f};
@@ -15,14 +15,14 @@ struct MobileGesturePillMetrics {
     lcl::graphics::Color color{255, 255, 255, 235};
 };
 
-struct MobileGesturePillLayout {
+struct GestureIndicatorLayout {
     lcl::graphics::RectF bounds{};
     float scale{1.0f};
 };
 
-inline MobileGesturePillLayout layoutMobileGesturePill(
+inline GestureIndicatorLayout layoutGestureIndicator(
         const lcl::graphics::RectF& windowBounds,
-        const MobileGesturePillMetrics& metrics = {}) noexcept {
+        const GestureIndicatorMetrics& metrics = {}) noexcept {
     const float referenceWidth = std::max(1.0f, metrics.referenceWidth);
     const float scale = std::max(0.0f, windowBounds.width) / referenceWidth;
     const float width = std::min(
@@ -32,28 +32,23 @@ inline MobileGesturePillLayout layoutMobileGesturePill(
         std::max(0.0f, windowBounds.height),
         std::max(0.0f, metrics.height * scale));
     const float bottomInset = std::max(0.0f, metrics.bottomInset * scale);
-    return {
-        {
-            windowBounds.x + (windowBounds.width - width) * 0.5f,
-            windowBounds.y + std::max(
-                0.0f, windowBounds.height - bottomInset - height),
-            width,
-            height,
-        },
-        scale,
-    };
+    return {{
+        windowBounds.x + (windowBounds.width - width) * 0.5f,
+        windowBounds.y + std::max(
+            0.0f, windowBounds.height - bottomInset - height),
+        width,
+        height,
+    }, scale};
 }
 
-inline lcl::graphics::DisplayList buildMobileGesturePillDisplayList(
+inline lcl::graphics::DisplayList buildGestureIndicatorDisplayList(
         const lcl::graphics::RectF& windowBounds,
         float opacity,
-        const MobileGesturePillMetrics& metrics = {}) {
+        const GestureIndicatorMetrics& metrics = {}) {
     lcl::graphics::DisplayListBuilder builder;
-    const auto layout = layoutMobileGesturePill(windowBounds, metrics);
+    const auto layout = layoutGestureIndicator(windowBounds, metrics);
     if (layout.bounds.width <= 0.0f || layout.bounds.height <= 0.0f ||
-        opacity <= 0.0f) {
-        return builder.build();
-    }
+        opacity <= 0.0f) return builder.build();
 
     auto color = metrics.color;
     color.a = static_cast<uint8_t>(std::clamp(std::lround(
@@ -66,4 +61,4 @@ inline lcl::graphics::DisplayList buildMobileGesturePillDisplayList(
     return builder.build();
 }
 
-} // namespace lcl::core
+} // namespace lcl::mobile

@@ -463,7 +463,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         }
     }
 
-    if (!isPopupSurface() &&
+    if (!isPopupSurface() && !isAttachedSurface() &&
         m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::None) {
         lcl::protocol::LCLMsgSetSystemSurfaceKind systemSurface{};
         systemSurface.kind = m_systemSurfaceKind;
@@ -474,11 +474,27 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         }
     }
 
-    // 2. Request normal or parent-bound popup surface creation. Both continue
-    // through the same configure, buffer transport, render, and input paths.
+    // 2. Request a normal, popup, or WM-owned attached surface. All three
+    // continue through the same configure, buffer transport, render, and input
+    // paths; the compositor only receives generic scene relationships here.
     m_waitingForInitialConfigure = true;
     bool createSent = false;
-    if (isPopupSurface()) {
+    if (isAttachedSurface()) {
+        lcl::protocol::LCLMsgAttachedSurfaceCreate attached{};
+        attached.surfaceId = m_surfaceId;
+        attached.targetWindowId = m_attachedWindowId;
+        attached.role = m_attachedRole;
+        attached.x = m_attachedX;
+        attached.y = m_attachedY;
+        attached.width = m_attachedWidth;
+        attached.height = m_attachedHeight;
+        attached.followParentWidth = m_attachedFollowParentWidth ? 1 : 0;
+        attached.followParentHeight = m_attachedFollowParentHeight ? 1 : 0;
+        attached.acceptsInput = m_attachedAcceptsInput ? 1 : 0;
+        createSent = sendProtocolMessage(
+            lcl::protocol::LCLOpcode::AttachedSurfaceCreate,
+            &attached, sizeof(attached));
+    } else if (isPopupSurface()) {
         lcl::protocol::LCLMsgPopupSurfaceCreate popup{};
         popup.surfaceId = m_surfaceId;
         popup.parentSurfaceId = m_popupParentSurfaceId;
@@ -527,13 +543,13 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // Decoration state belongs to the surface contract, not to a later frame.
     // Send preconfigured values before the first effect graph/buffer attach so a
     // CSD client never flashes the compositor's default title chrome.
-    if (!isPopupSurface() && m_hasRequestedDecorationMode) {
+    if (!isPopupSurface() && !isAttachedSurface() && m_hasRequestedDecorationMode) {
         setDecorationMode(m_requestedDecorationMode);
     }
-    if (!isPopupSurface() && m_hasRequestedEdgeToEdge) {
+    if (!isPopupSurface() && !isAttachedSurface() && m_hasRequestedEdgeToEdge) {
         setEdgeToEdge(m_requestedEdgeToEdge);
     }
-    if (m_hasRequestedCornerRadius) {
+    if (!isAttachedSurface() && m_hasRequestedCornerRadius) {
         setWindowCornerStyle(m_requestedCornerRadius, m_requestedCornerRoundness);
     }
     if (m_windowRoot) m_windowRoot->markDirty();
@@ -608,11 +624,32 @@ void WindowApp::setInitialBounds(float x, float y, float width, float height) {
 void WindowApp::configurePopupSurface(uint32_t parentSurfaceId,
                                       lcl::protocol::LCLPopupRole role,
                                       float x, float y) {
-    if (m_ipcConnected || parentSurfaceId == 0) return;
+    if (m_ipcConnected || parentSurfaceId == 0 || isAttachedSurface()) return;
     m_popupParentSurfaceId = parentSurfaceId;
     m_popupRole = role;
     m_popupX = x;
     m_popupY = y;
+}
+
+void WindowApp::configureAttachedSurface(
+        uint32_t targetWindowId,
+        lcl::protocol::LCLAttachedSurfaceRole role,
+        float x, float y, float width, float height,
+        bool followParentWidth, bool followParentHeight,
+        bool acceptsInput) {
+    if (m_ipcConnected || targetWindowId == 0 || isPopupSurface() ||
+        width <= 0.0f || height <= 0.0f) return;
+
+    m_attachedWindowId = targetWindowId;
+    m_attachedRole = role;
+    m_attachedX = x;
+    m_attachedY = y;
+    m_attachedWidth = width;
+    m_attachedHeight = height;
+    m_attachedFollowParentWidth = followParentWidth;
+    m_attachedFollowParentHeight = followParentHeight;
+    m_attachedAcceptsInput = acceptsInput;
+    setInitialBounds(x, y, width, height);
 }
 
 void WindowApp::pollIPC() {
@@ -777,6 +814,27 @@ void WindowApp::pollIPC() {
             } else if (header.opcode == lcl::protocol::LCLOpcode::AckResponse &&
                        payload.size() == sizeof(lcl::protocol::LCLMsgAckResponse)) {
                 const auto* ack = reinterpret_cast<const lcl::protocol::LCLMsgAckResponse*>(payload.data());
+                if (ack->status != 0) {
+                    std::cerr << "[lcl-ui ERROR] Compositor rejected request "
+                              << header.requestId << " for " << m_title
+                              << " (status " << ack->status << "): "
+                              << ack->message << "\n";
+                }
+                if (ack->status == 3 &&
+                    std::strncmp(
+                        ack->message,
+                        "DisplayList references an unknown image",
+                        sizeof(ack->message)) == 0) {
+                    // Upload admission is acknowledged asynchronously. If the
+                    // compositor lost or rejected one immutable resource, its
+                    // optimistic client cache must not turn one miss into an
+                    // endless rejected-frame loop.
+                    m_uploadedImageRevisions.clear();
+                    m_submittedConfigureSerial = 0;
+                    m_submittedDmaBufId = 0;
+                    m_frameGateOpen = true;
+                    m_firstFrame = true;
+                }
                 if (ack->status == 4 &&
                     std::strncmp(ack->message, "DMA-BUF import unavailable",
                                  sizeof(ack->message)) == 0 &&
@@ -1158,7 +1216,8 @@ void WindowApp::setExternalIpcSocket(int socketFd) {
 
 bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
                                     float localX, float localY) {
-    if (!m_ipcConnected || m_socketFd < 0 || isPopupSurface()) return false;
+    if (!m_ipcConnected || m_socketFd < 0 || isPopupSurface() ||
+        isAttachedSurface()) return false;
 
     lcl::protocol::LCLMsgRequestWindowAction msg{};
     msg.surfaceId = m_surfaceId;
@@ -1168,6 +1227,21 @@ bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
 
     return sendProtocolMessage(lcl::protocol::LCLOpcode::RequestWindowAction,
                                &msg, sizeof(msg));
+}
+
+bool WindowApp::requestManagedWindowAction(
+        lcl::protocol::LCLWindowAction action,
+        float localX, float localY) {
+    if (!m_ipcConnected || m_socketFd < 0 || !isAttachedSurface()) return false;
+
+    lcl::protocol::LCLMsgRequestManagedWindowAction msg{};
+    msg.targetWindowId = m_attachedWindowId;
+    msg.action = action;
+    msg.localX = localX;
+    msg.localY = localY;
+    return sendProtocolMessage(
+        lcl::protocol::LCLOpcode::RequestManagedWindowAction,
+        &msg, sizeof(msg));
 }
 
 bool WindowApp::requestSurfaceDestroy(uint32_t surfaceId) {
@@ -1265,7 +1339,7 @@ bool WindowApp::requestWindowToggleMaximize() {
 }
 
 bool WindowApp::requestWindowClose() {
-    if (isPopupSurface()) {
+    if (isPopupSurface() || isAttachedSurface()) {
         return requestSurfaceDestroy(m_surfaceId);
     }
     return requestWindowAction(lcl::protocol::LCLWindowAction::Close);
@@ -1782,6 +1856,21 @@ bool WindowApp::renderFrame() {
     if (m_ipcConnected && m_socketFd >= 0 &&
         m_canvas->usesDisplayListTransport()) {
         if (auto frame = m_canvas->takeDisplayListFrame()) {
+            // The compositor may reclaim uploads absent from the retained
+            // frame. Mirror that lifetime locally so an asset that leaves and
+            // later re-enters the scene is uploaded again instead of relying
+            // on stale optimistic admission state.
+            std::erase_if(
+                m_uploadedImageRevisions,
+                [&frame](const auto& uploaded) {
+                    return std::none_of(
+                        frame->imageResources.begin(),
+                        frame->imageResources.end(),
+                        [&uploaded](const auto& active) {
+                            return active.id == uploaded.first &&
+                                active.contentRevision == uploaded.second;
+                        });
+                });
             bool resourcesReady = true;
             for (const auto& resource : frame->imageResources) {
                 if (!uploadImageResource(resource)) {

@@ -16,7 +16,12 @@ namespace {
 
 std::atomic<uint64_t> nextImageResourceId{1};
 std::mutex sharedImageCacheMutex;
-std::unordered_map<std::string, std::weak_ptr<const ImageData>> sharedImageCache;
+// Hot immutable assets keep a stable identity across retained UI rebuilds.
+// Besides avoiding repeated decode work, this is the resource identity
+// contract used by the DisplayList upload cache. The bounded table prevents
+// arbitrary image-path churn from becoming process-lifetime memory growth.
+std::unordered_map<std::string, std::shared_ptr<const ImageData>> sharedImageCache;
+constexpr size_t kMaxSharedImageCacheEntries = 256;
 
 uint64_t allocateImageResourceId() {
     return nextImageResourceId.fetch_add(1, std::memory_order_relaxed);
@@ -69,8 +74,7 @@ std::shared_ptr<const ImageData> ImageLoader::loadSharedArgb32(
         std::lock_guard lock(sharedImageCacheMutex);
         if (const auto found = sharedImageCache.find(key);
             found != sharedImageCache.end()) {
-            if (auto cached = found->second.lock()) return cached;
-            sharedImageCache.erase(found);
+            return found->second;
         }
     }
 
@@ -79,10 +83,12 @@ std::shared_ptr<const ImageData> ImageLoader::loadSharedArgb32(
     auto resource = std::make_shared<const ImageData>(std::move(*decoded));
     {
         std::lock_guard lock(sharedImageCacheMutex);
+        if (sharedImageCache.size() >= kMaxSharedImageCacheEntries) {
+            sharedImageCache.erase(sharedImageCache.begin());
+        }
         const auto [found, inserted] = sharedImageCache.try_emplace(key, resource);
         if (!inserted) {
-            if (auto cached = found->second.lock()) return cached;
-            found->second = resource;
+            return found->second;
         }
     }
     return resource;

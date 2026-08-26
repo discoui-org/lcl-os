@@ -23,7 +23,8 @@ SceneId SceneRegistry::mapClientSurface(SurfaceRegistry::Key surfaceKey,
                                         uint32_t windowId,
                                         std::string appId,
                                         std::string title,
-                                        uint64_t appInstanceId) {
+                                        uint64_t appInstanceId,
+                                        protocol::LCLDecorationMode decorationMode) {
     const auto existing = m_sceneBySurface.find(surfaceKey);
     if (existing != m_sceneBySurface.end()) {
         return existing->second;
@@ -37,6 +38,7 @@ SceneId SceneRegistry::mapClientSurface(SurfaceRegistry::Key surfaceKey,
     scene.windowId = windowId;
     scene.appId = std::move(appId);
     scene.title = std::move(title);
+    scene.decorationMode = decorationMode;
     m_sceneBySurface.emplace(surfaceKey, scene.id);
     m_sceneByWindow.emplace(windowId, scene.id);
     m_scenes.push_back(scene);
@@ -92,9 +94,17 @@ void SceneRegistry::reconcileWindowState(const render::WindowManager& windowMana
         const SceneVisibility visibility = window->isMinimized
             ? SceneVisibility::Minimized
             : SceneVisibility::Visible;
+        const auto decorationMode = window->decorationMode ==
+                render::DecorationMode::CSD
+            ? protocol::LCLDecorationMode::CSD
+            : (window->decorationMode == render::DecorationMode::None
+                ? protocol::LCLDecorationMode::None
+                : protocol::LCLDecorationMode::SSD);
         if (scene.x == window->x && scene.y == window->y &&
             scene.width == window->width && scene.height == window->height &&
-            scene.title == window->title && scene.visibility == visibility) {
+            scene.title == window->title && scene.visibility == visibility &&
+            scene.decorationMode == decorationMode &&
+            scene.edgeToEdge == window->edgeToEdge) {
             continue;
         }
 
@@ -104,6 +114,8 @@ void SceneRegistry::reconcileWindowState(const render::WindowManager& windowMana
         scene.height = window->height;
         scene.title = window->title;
         scene.visibility = visibility;
+        scene.decorationMode = decorationMode;
+        scene.edgeToEdge = window->edgeToEdge;
         queueChange(SceneStateChange::Kind::Updated, scene);
     }
 }
