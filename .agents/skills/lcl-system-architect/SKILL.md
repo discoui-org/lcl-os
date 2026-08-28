@@ -17,6 +17,7 @@ Provides domain-specific expertise for building LCL Core Linux components includ
 
 ## Usage Guidelines
 - When generating graphics code, keep widgets and chrome backend-neutral, record through `lcl::graphics::Canvas`, and let the raster backend own EGL/GLES details and device scaling.
-- Keep application DisplayList replay outside the compositor presentation loop. The compositor retains the last committed layer and animates presentation state independently; a brand-new surface remains unmapped until its first layer is ready. Treat protocol-v25 compositor-side `CommitDisplayList` replay as migration debt, not the target design.
+- Keep application DisplayList replay in supervised central `lcl-rasterd`, outside the compositor presentation loop. Protocol v26 grants each surface a 128-bit producer capability; only rasterd's private channel may publish `LayerReady`. The compositor retains the last committed layer and animates presentation state independently; a brand-new surface remains unmapped until its first layer is ready.
+- Treat resize as one non-selectable `AtomicRetained` WindowGroup transaction. Parent, size-changing attachments, and size-changing popups share one generation; never serialize them parent-first, stretch old content, reveal fill, crossfade snapshots, or timeout into a partial group.
 - When generating input code, account for non-blocking read calls on input event file descriptors.
 - Enforce the Same-Binary Invariant: platform differences terminate strictly below the LCL userspace ABI.

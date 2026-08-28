@@ -38,9 +38,11 @@ DEVICE_GESTALT_DIR = ROOT_DIR / "devices"
 TARGET_ARCH = "aarch64"
 BUILD_ANDROID_DIR = ROOT_DIR / "build-android-arm64"
 BINARY_NAME = "lcl-core-android"
+RASTERD_NAME = "lcl-rasterd-android"
 HIDL_BRIDGE_NAME = "liblcl-android-hidl-bridge.so"
 DEVICE_TMP_DIR = "/data/local/tmp"
 DEVICE_BINARY_PATH = f"{DEVICE_TMP_DIR}/{BINARY_NAME}"
+DEVICE_RASTERD_PATH = f"{DEVICE_TMP_DIR}/{RASTERD_NAME}"
 DEVICE_HIDL_BRIDGE_PATH = f"{DEVICE_TMP_DIR}/{HIDL_BRIDGE_NAME}"
 DEVICE_LOG_PATH = f"{DEVICE_TMP_DIR}/lcl-core.log"
 DEVICE_RUNTIME_DIR = f"{DEVICE_TMP_DIR}/lcl-runtime"
@@ -982,7 +984,7 @@ def wait_for_compositor_socket(
 
 
 def push_binary() -> None:
-    """Push lcl-core-android and its optional HIDL ABI bridge to device."""
+    """Push compositor, raster service and optional HIDL bridge to device."""
     binary = BUILD_ANDROID_DIR / BINARY_NAME
     if not binary.is_file():
         err(f"Binary not found: {binary}")
@@ -994,6 +996,13 @@ def push_binary() -> None:
 
     run_adb("push", str(binary), DEVICE_TMP_DIR)
     adb_shell(f"chmod 755 {DEVICE_BINARY_PATH}", as_root=True)
+    rasterd = BUILD_ANDROID_DIR / RASTERD_NAME
+    if not rasterd.is_file():
+        err(f"Raster service not found: {rasterd}")
+        err(f"  -> Build target: lcl-rasterd-android")
+        sys.exit(1)
+    run_adb("push", str(rasterd), DEVICE_TMP_DIR)
+    adb_shell(f"chmod 755 {DEVICE_RASTERD_PATH}", as_root=True)
     bridge = BUILD_ANDROID_DIR / HIDL_BRIDGE_NAME
     if bridge.is_file():
         bridge_size_mb = bridge.stat().st_size / (1024 * 1024)
@@ -1158,7 +1167,8 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
         # Set LCL_RUNTIME_DIR so lcl-core-android uses the writable path
         # ANDROID_DATA=/data is required for linker and binder initialization
         launch_env = (
-            f"LCL_RUNTIME_DIR={runtime_dir} LCL_FONT_ROOT={DEVICE_FONT_DIR} ANDROID_DATA=/data "
+            f"LCL_RUNTIME_DIR={runtime_dir} LCL_FONT_ROOT={DEVICE_FONT_DIR} "
+            f"LCL_RASTERD_PATH={DEVICE_RASTERD_PATH} ANDROID_DATA=/data "
             f"LD_LIBRARY_PATH={DEVICE_TMP_DIR}:/system/lib64:/vendor/lib64:/system_ext/lib64"
         )
         if selected_gestalt_path is not None:

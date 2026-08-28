@@ -267,6 +267,19 @@ lcl-render/fast:
 .PHONY : lcl-render/fast
 
 #=============================================================================
+# Target rules for targets named lcl-raster-protocol
+
+# Build rule for target.
+lcl-raster-protocol: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-raster-protocol
+.PHONY : lcl-raster-protocol
+
+# fast build rule for target.
+lcl-raster-protocol/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster-protocol.dir/build.make CMakeFiles/lcl-raster-protocol.dir/build
+.PHONY : lcl-raster-protocol/fast
+
+#=============================================================================
 # Target rules for targets named lcl-core-engine
 
 # Build rule for target.
@@ -278,6 +291,19 @@ lcl-core-engine: cmake_check_build_system
 lcl-core-engine/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/build
 .PHONY : lcl-core-engine/fast
+
+#=============================================================================
+# Target rules for targets named lcl-rasterd-android
+
+# Build rule for target.
+lcl-rasterd-android: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lcl-rasterd-android
+.PHONY : lcl-rasterd-android
+
+# fast build rule for target.
+lcl-rasterd-android/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-rasterd-android.dir/build.make CMakeFiles/lcl-rasterd-android.dir/build
+.PHONY : lcl-rasterd-android/fast
 
 #=============================================================================
 # Target rules for targets named lcl-raster
@@ -831,6 +857,30 @@ src/core/compositor/input_router.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/input_router.cpp.s
 .PHONY : src/core/compositor/input_router.cpp.s
 
+src/core/compositor/layer_feedback_handler.o: src/core/compositor/layer_feedback_handler.cpp.o
+.PHONY : src/core/compositor/layer_feedback_handler.o
+
+# target to build an object file
+src/core/compositor/layer_feedback_handler.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/layer_feedback_handler.cpp.o
+.PHONY : src/core/compositor/layer_feedback_handler.cpp.o
+
+src/core/compositor/layer_feedback_handler.i: src/core/compositor/layer_feedback_handler.cpp.i
+.PHONY : src/core/compositor/layer_feedback_handler.i
+
+# target to preprocess a source file
+src/core/compositor/layer_feedback_handler.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/layer_feedback_handler.cpp.i
+.PHONY : src/core/compositor/layer_feedback_handler.cpp.i
+
+src/core/compositor/layer_feedback_handler.s: src/core/compositor/layer_feedback_handler.cpp.s
+.PHONY : src/core/compositor/layer_feedback_handler.s
+
+# target to generate assembly for a file
+src/core/compositor/layer_feedback_handler.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/layer_feedback_handler.cpp.s
+.PHONY : src/core/compositor/layer_feedback_handler.cpp.s
+
 src/core/compositor/protocol_dispatcher.o: src/core/compositor/protocol_dispatcher.cpp.o
 .PHONY : src/core/compositor/protocol_dispatcher.o
 
@@ -855,6 +905,30 @@ src/core/compositor/protocol_dispatcher.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/protocol_dispatcher.cpp.s
 .PHONY : src/core/compositor/protocol_dispatcher.cpp.s
 
+src/core/compositor/raster_service_host.o: src/core/compositor/raster_service_host.cpp.o
+.PHONY : src/core/compositor/raster_service_host.o
+
+# target to build an object file
+src/core/compositor/raster_service_host.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/raster_service_host.cpp.o
+.PHONY : src/core/compositor/raster_service_host.cpp.o
+
+src/core/compositor/raster_service_host.i: src/core/compositor/raster_service_host.cpp.i
+.PHONY : src/core/compositor/raster_service_host.i
+
+# target to preprocess a source file
+src/core/compositor/raster_service_host.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/raster_service_host.cpp.i
+.PHONY : src/core/compositor/raster_service_host.cpp.i
+
+src/core/compositor/raster_service_host.s: src/core/compositor/raster_service_host.cpp.s
+.PHONY : src/core/compositor/raster_service_host.s
+
+# target to generate assembly for a file
+src/core/compositor/raster_service_host.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/raster_service_host.cpp.s
+.PHONY : src/core/compositor/raster_service_host.cpp.s
+
 src/core/compositor/surface_registry.o: src/core/compositor/surface_registry.cpp.o
 .PHONY : src/core/compositor/surface_registry.o
 
@@ -878,6 +952,30 @@ src/core/compositor/surface_registry.s: src/core/compositor/surface_registry.cpp
 src/core/compositor/surface_registry.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/surface_registry.cpp.s
 .PHONY : src/core/compositor/surface_registry.cpp.s
+
+src/core/compositor/surface_transaction_coordinator.o: src/core/compositor/surface_transaction_coordinator.cpp.o
+.PHONY : src/core/compositor/surface_transaction_coordinator.o
+
+# target to build an object file
+src/core/compositor/surface_transaction_coordinator.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/surface_transaction_coordinator.cpp.o
+.PHONY : src/core/compositor/surface_transaction_coordinator.cpp.o
+
+src/core/compositor/surface_transaction_coordinator.i: src/core/compositor/surface_transaction_coordinator.cpp.i
+.PHONY : src/core/compositor/surface_transaction_coordinator.i
+
+# target to preprocess a source file
+src/core/compositor/surface_transaction_coordinator.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/surface_transaction_coordinator.cpp.i
+.PHONY : src/core/compositor/surface_transaction_coordinator.cpp.i
+
+src/core/compositor/surface_transaction_coordinator.s: src/core/compositor/surface_transaction_coordinator.cpp.s
+.PHONY : src/core/compositor/surface_transaction_coordinator.s
+
+# target to generate assembly for a file
+src/core/compositor/surface_transaction_coordinator.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-core-engine.dir/build.make CMakeFiles/lcl-core-engine.dir/src/core/compositor/surface_transaction_coordinator.cpp.s
+.PHONY : src/core/compositor/surface_transaction_coordinator.cpp.s
 
 src/core/compositor/system_surface_policy.o: src/core/compositor/system_surface_policy.cpp.o
 .PHONY : src/core/compositor/system_surface_policy.o
@@ -1025,6 +1123,30 @@ src/core/ipc/lcl_protocol.s: src/core/ipc/lcl_protocol.cpp.s
 src/core/ipc/lcl_protocol.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-protocol.dir/build.make CMakeFiles/lcl-protocol.dir/src/core/ipc/lcl_protocol.cpp.s
 .PHONY : src/core/ipc/lcl_protocol.cpp.s
+
+src/core/ipc/raster_protocol.o: src/core/ipc/raster_protocol.cpp.o
+.PHONY : src/core/ipc/raster_protocol.o
+
+# target to build an object file
+src/core/ipc/raster_protocol.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster-protocol.dir/build.make CMakeFiles/lcl-raster-protocol.dir/src/core/ipc/raster_protocol.cpp.o
+.PHONY : src/core/ipc/raster_protocol.cpp.o
+
+src/core/ipc/raster_protocol.i: src/core/ipc/raster_protocol.cpp.i
+.PHONY : src/core/ipc/raster_protocol.i
+
+# target to preprocess a source file
+src/core/ipc/raster_protocol.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster-protocol.dir/build.make CMakeFiles/lcl-raster-protocol.dir/src/core/ipc/raster_protocol.cpp.i
+.PHONY : src/core/ipc/raster_protocol.cpp.i
+
+src/core/ipc/raster_protocol.s: src/core/ipc/raster_protocol.cpp.s
+.PHONY : src/core/ipc/raster_protocol.s
+
+# target to generate assembly for a file
+src/core/ipc/raster_protocol.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster-protocol.dir/build.make CMakeFiles/lcl-raster-protocol.dir/src/core/ipc/raster_protocol.cpp.s
+.PHONY : src/core/ipc/raster_protocol.cpp.s
 
 src/core/scene/focus_controller.o: src/core/scene/focus_controller.cpp.o
 .PHONY : src/core/scene/focus_controller.o
@@ -3719,6 +3841,7 @@ src/render/client_egl_context.o: src/render/client_egl_context.cpp.o
 
 # target to build an object file
 src/render/client_egl_context.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-rasterd-android.dir/build.make CMakeFiles/lcl-rasterd-android.dir/src/render/client_egl_context.cpp.o
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/client_egl_context.cpp.o
 .PHONY : src/render/client_egl_context.cpp.o
 
@@ -3727,6 +3850,7 @@ src/render/client_egl_context.i: src/render/client_egl_context.cpp.i
 
 # target to preprocess a source file
 src/render/client_egl_context.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-rasterd-android.dir/build.make CMakeFiles/lcl-rasterd-android.dir/src/render/client_egl_context.cpp.i
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/client_egl_context.cpp.i
 .PHONY : src/render/client_egl_context.cpp.i
 
@@ -3735,6 +3859,7 @@ src/render/client_egl_context.s: src/render/client_egl_context.cpp.s
 
 # target to generate assembly for a file
 src/render/client_egl_context.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-rasterd-android.dir/build.make CMakeFiles/lcl-rasterd-android.dir/src/render/client_egl_context.cpp.s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-raster.dir/build.make CMakeFiles/lcl-raster.dir/src/render/client_egl_context.cpp.s
 .PHONY : src/render/client_egl_context.cpp.s
 
@@ -3960,6 +4085,30 @@ src/tools/js_main.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/tools/js_main.cpp.s
 .PHONY : src/tools/js_main.cpp.s
 
+src/tools/rasterd_main.o: src/tools/rasterd_main.cpp.o
+.PHONY : src/tools/rasterd_main.o
+
+# target to build an object file
+src/tools/rasterd_main.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-rasterd-android.dir/build.make CMakeFiles/lcl-rasterd-android.dir/src/tools/rasterd_main.cpp.o
+.PHONY : src/tools/rasterd_main.cpp.o
+
+src/tools/rasterd_main.i: src/tools/rasterd_main.cpp.i
+.PHONY : src/tools/rasterd_main.i
+
+# target to preprocess a source file
+src/tools/rasterd_main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-rasterd-android.dir/build.make CMakeFiles/lcl-rasterd-android.dir/src/tools/rasterd_main.cpp.i
+.PHONY : src/tools/rasterd_main.cpp.i
+
+src/tools/rasterd_main.s: src/tools/rasterd_main.cpp.s
+.PHONY : src/tools/rasterd_main.s
+
+# target to generate assembly for a file
+src/tools/rasterd_main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-rasterd-android.dir/build.make CMakeFiles/lcl-rasterd-android.dir/src/tools/rasterd_main.cpp.s
+.PHONY : src/tools/rasterd_main.cpp.s
+
 src/tools/terminal_main.o: src/tools/terminal_main.cpp.o
 .PHONY : src/tools/terminal_main.o
 
@@ -4082,6 +4231,8 @@ help:
 	@echo "... lcl-platform-common"
 	@echo "... lcl-protocol"
 	@echo "... lcl-raster"
+	@echo "... lcl-raster-protocol"
+	@echo "... lcl-rasterd-android"
 	@echo "... lcl-render"
 	@echo "... lcl-session"
 	@echo "... lcl-session-protocol"
@@ -4131,12 +4282,21 @@ help:
 	@echo "... src/core/compositor/input_router.o"
 	@echo "... src/core/compositor/input_router.i"
 	@echo "... src/core/compositor/input_router.s"
+	@echo "... src/core/compositor/layer_feedback_handler.o"
+	@echo "... src/core/compositor/layer_feedback_handler.i"
+	@echo "... src/core/compositor/layer_feedback_handler.s"
 	@echo "... src/core/compositor/protocol_dispatcher.o"
 	@echo "... src/core/compositor/protocol_dispatcher.i"
 	@echo "... src/core/compositor/protocol_dispatcher.s"
+	@echo "... src/core/compositor/raster_service_host.o"
+	@echo "... src/core/compositor/raster_service_host.i"
+	@echo "... src/core/compositor/raster_service_host.s"
 	@echo "... src/core/compositor/surface_registry.o"
 	@echo "... src/core/compositor/surface_registry.i"
 	@echo "... src/core/compositor/surface_registry.s"
+	@echo "... src/core/compositor/surface_transaction_coordinator.o"
+	@echo "... src/core/compositor/surface_transaction_coordinator.i"
+	@echo "... src/core/compositor/surface_transaction_coordinator.s"
 	@echo "... src/core/compositor/system_surface_policy.o"
 	@echo "... src/core/compositor/system_surface_policy.i"
 	@echo "... src/core/compositor/system_surface_policy.s"
@@ -4155,6 +4315,9 @@ help:
 	@echo "... src/core/ipc/lcl_protocol.o"
 	@echo "... src/core/ipc/lcl_protocol.i"
 	@echo "... src/core/ipc/lcl_protocol.s"
+	@echo "... src/core/ipc/raster_protocol.o"
+	@echo "... src/core/ipc/raster_protocol.i"
+	@echo "... src/core/ipc/raster_protocol.s"
 	@echo "... src/core/scene/focus_controller.o"
 	@echo "... src/core/scene/focus_controller.i"
 	@echo "... src/core/scene/focus_controller.s"
@@ -4521,6 +4684,9 @@ help:
 	@echo "... src/tools/js_main.o"
 	@echo "... src/tools/js_main.i"
 	@echo "... src/tools/js_main.s"
+	@echo "... src/tools/rasterd_main.o"
+	@echo "... src/tools/rasterd_main.i"
+	@echo "... src/tools/rasterd_main.s"
 	@echo "... src/tools/terminal_main.o"
 	@echo "... src/tools/terminal_main.i"
 	@echo "... src/tools/terminal_main.s"

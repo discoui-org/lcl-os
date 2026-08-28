@@ -24,6 +24,7 @@ add_library(lcl-ui STATIC
     src/core/render_pass.cpp
     src/core/event_dispatcher.cpp
     src/core/window_app.cpp
+    src/core/raster_service_client.cpp
     src/layout/yoga_node.cpp
     src/widgets/widget.cpp
     src/widgets/container.cpp
@@ -59,6 +60,7 @@ target_link_libraries(lcl-ui PUBLIC
     lcl-theme
     lcl-window-chrome
     lcl-protocol
+    lcl-raster-protocol
     lcl-font-metrics
     yogacore
     Threads::Threads

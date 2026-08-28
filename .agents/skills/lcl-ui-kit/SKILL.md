@@ -5,7 +5,7 @@ description: Complete technical reference, API contracts, and usage patterns for
 
 # LCL-UI Application Development Framework Guide
 
-`lcl-ui` is the backend-neutral C++20 user-space GUI framework for **LCL Core Linux (LCL OS)**. It runs in client processes over protocol-v13 Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by default), using DMA-BUF transport with a lazy shared-memory (`memfd`) fallback. Applications explicitly inject a `lcl::graphics::Canvas`; the standard client adapter is provided by `lcl-raster`.
+`lcl-ui` is the backend-neutral C++20 user-space GUI framework for **LCL Core Linux (LCL OS)**. It creates surfaces over protocol-v26 Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by default). The compositor returns a 128-bit producer grant; the standard DisplayList Canvas sends sealed frame/resource memfds to supervised central `lcl-rasterd`, and only rasterd publishes immutable ready layers to the compositor.
 
 ---
 
@@ -16,29 +16,36 @@ description: Complete technical reference, API contracts, and usage patterns for
 |                      lcl-ui Application                   |
 | (WindowApp -> Widget Tree -> Yoga -> logical DisplayList) |
 +-----------------------------+-----------------------------+
-                              | DMA-BUF or SHM + Unix Domain Socket
+                              | sealed frame + producer grant
+                              v
++-----------------------------------------------------------+
+|                    Central lcl-rasterd                    |
+|       (DisplayList replay -> immutable ready layer)       |
++-----------------------------+-----------------------------+
+                              | private LayerReady channel
                               v
 +-----------------------------------------------------------+
 |                      LCL Core Compositor                  |
-|        (Direct DRM/KMS scanout + LCL raster replay)       |
+|       (retain -> transform/effect -> atomic present)      |
 +-----------------------------------------------------------+
 ```
 
 Widgets, chrome, text, clips, and effects are described in float logical
-units. `RasterCanvas` records an immutable display list and
-`RasterRenderer` applies `RenderTarget.deviceScale` while replaying it through
-the GLES or software path. Do not multiply widget geometry by display scale.
+units. `RasterCanvas` records an immutable display list and rasterd applies
+`RenderTarget.deviceScale` while replaying it through the platform raster
+backend. Do not multiply widget geometry by display scale. The compositor never
+replays application DisplayLists.
 
 ---
 
 ## 2. Key Framework Classes
 
 ### `lcl::ui::WindowApp` ([`window_app.hpp`](../../../lcl-ui/include/lcl-ui/core/window_app.hpp))
-Manages application initialization, window surface creation, DMA-BUF allocation with lazy SHM fallback, IPC event processing, and frame loop execution.
+Manages application initialization, window surface creation, raster producer grants, IPC event processing, frame restoration after rasterd restart, and presentation pacing.
 
 - `WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height, const std::string& title)`: Constructor with logical dimensions and an explicit backend-neutral Canvas.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Mounts the top-level widget container.
-- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to compositor IPC and registers a v13 surface.
+- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to compositor IPC and registers a v26 surface.
 - `void runEventLoop()`: Runs the main non-blocking event loop at **144 Hz target frame pacing** (~6.9ms period).
 
 ### `lcl::ui::Widget` ([`widget.hpp`](../../../lcl-ui/include/lcl-ui/widgets/widget.hpp))
@@ -79,7 +86,7 @@ using namespace lcl::ui;
 
 int main() {
     // 1. Create 800x600 Window App instance
-    WindowApp app(lcl::render::makeRasterCanvas(), 800, 600, "My LCL Application");
+    WindowApp app(lcl::render::makeDisplayListCanvas(), 800, 600, "My LCL Application");
 
     // 2. Build Flexbox layout hierarchy
     auto root = std::make_unique<Container>();
@@ -139,6 +146,12 @@ public:
 };
 ```
 
-Client applications link both `lcl-ui` and `lcl-raster`. Compositor code links
-the rendering, graphics, and chrome layers directly; it must not link `lcl-ui`.
-EGL/DRM/GBM/GLES remain below the `lcl-ui` boundary.
+Client applications link both `lcl-ui` and `lcl-raster`. Compositor code must
+not link `lcl-ui` or application DisplayList replay. EGL/DRM/GBM/GLES and
+AHardwareBuffer selection remain below the raster-service/platform boundary.
+
+Resize has no public presentation selector. All surfaces use strict
+`AtomicRetained`: an old WindowGroup stays completely unchanged until every
+size-changing parent/frame/popup layer for the newest geometry generation is
+ready. Client code must not implement resize snapshots, stretch, background
+reveal, or crossfade.

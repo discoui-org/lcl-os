@@ -23,6 +23,19 @@ if(NOT ANDROID)
     pkg_check_modules(UDEV libudev)
 endif()
 
+# The packaged Skia archive was built with EGL/GLES support, so those system
+# libraries are link requirements of the archive itself.  Keeping them on the
+# imported target also places them after libskia.a for linkers using
+# --as-needed (including the canonical QEMU builder).
+if(ANDROID)
+    target_link_libraries(LCL::Skia INTERFACE EGL GLESv3)
+else()
+    target_link_libraries(LCL::Skia INTERFACE
+        ${EGL_LIBRARIES}
+        ${GLES2_LIBRARIES}
+    )
+endif()
+
 # QuickJS Engine (C-based JavaScript Runtime)
 include(FetchContent)
 FetchContent_Declare(
@@ -194,13 +207,23 @@ else()
 endif()
 
 # Platform-agnostic Core Compositor Engine Library
+add_library(lcl-raster-protocol STATIC
+    src/core/ipc/raster_protocol.cpp
+)
+target_include_directories(lcl-raster-protocol PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
 add_library(lcl-core-engine STATIC
     src/core/compositor/compositor.cpp
     src/core/compositor/compositor_renderer.cpp
     src/core/compositor/frame_scheduler.cpp
     src/core/compositor/input_router.cpp
+    src/core/compositor/layer_feedback_handler.cpp
     src/core/compositor/protocol_dispatcher.cpp
+    src/core/compositor/raster_service_host.cpp
     src/core/compositor/surface_registry.cpp
+    src/core/compositor/surface_transaction_coordinator.cpp
     src/core/compositor/system_surface_policy.cpp
     src/core/compositor/windowing_policy.cpp
     src/core/scene/focus_controller.cpp
@@ -221,10 +244,54 @@ target_link_libraries(lcl-core-engine PUBLIC
     lcl-protocol
     lcl-theme
     lcl-session
-        lcl-motion
-        lcl-graphics
+    lcl-motion
+    lcl-graphics
+    lcl-raster-protocol
     Threads::Threads
 )
+
+if(ANDROID)
+    add_executable(lcl-rasterd-android
+        src/tools/rasterd_main.cpp
+        src/render/client_egl_context.cpp
+    )
+    target_link_libraries(lcl-rasterd-android PRIVATE
+        lcl-render
+        lcl-raster-protocol
+        lcl-graphics
+        EGL
+        GLESv3
+        android
+        Threads::Threads
+    )
+else()
+    add_executable(lcl-rasterd
+        src/tools/rasterd_main.cpp
+        src/render/client_egl_context.cpp
+    )
+    target_include_directories(lcl-rasterd PRIVATE
+        ${DRM_INCLUDE_DIRS}
+        ${GBM_INCLUDE_DIRS}
+        ${EGL_INCLUDE_DIRS}
+        ${GLES2_INCLUDE_DIRS}
+    )
+    target_link_libraries(lcl-rasterd PRIVATE
+        lcl-render
+        lcl-raster-protocol
+        lcl-graphics
+        ${DRM_LIBRARIES}
+        ${GBM_LIBRARIES}
+        ${EGL_LIBRARIES}
+        ${GLES2_LIBRARIES}
+        Threads::Threads
+    )
+    target_compile_options(lcl-rasterd PRIVATE
+        ${DRM_CFLAGS_OTHER}
+        ${GBM_CFLAGS_OTHER}
+        ${EGL_CFLAGS_OTHER}
+        ${GLES2_CFLAGS_OTHER}
+    )
+endif()
 
 if(ANDROID)
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -710,6 +777,8 @@ else()
             tests/test_gestalt.cpp
             tests/test_motion.cpp
             tests/test_lcl_protocol.cpp
+            tests/test_raster_protocol.cpp
+            tests/test_raster_service_integration.cpp
             tests/test_app_bundle_parser.cpp
             tests/test_session_service.cpp
             tests/test_ipc_manager.cpp
@@ -729,7 +798,9 @@ else()
             src/core/ipc/ipc_manager.cpp
             src/core/compositor/frame_scheduler.cpp
             src/core/compositor/input_router.cpp
+            src/core/compositor/layer_feedback_handler.cpp
             src/core/compositor/surface_registry.cpp
+            src/core/compositor/surface_transaction_coordinator.cpp
             src/core/compositor/system_surface_policy.cpp
             src/core/compositor/windowing_policy.cpp
             src/core/scene/focus_controller.cpp
@@ -758,6 +829,10 @@ else()
         )
 
         target_compile_options(lcl_unit_tests PRIVATE -frtti)
+        target_compile_definitions(lcl_unit_tests PRIVATE
+            LCL_TEST_RASTERD_PATH="$<TARGET_FILE:lcl-rasterd>"
+        )
+        add_dependencies(lcl_unit_tests lcl-rasterd)
         target_compile_options(gtest PRIVATE -frtti)
         target_compile_options(gtest_main PRIVATE -frtti)
 
@@ -778,6 +853,7 @@ else()
             lcl-raster
             lcl-platform-desktop
             lcl-protocol
+            lcl-raster-protocol
             lcl-session
             qjs
             ${LIBINPUT_LIBRARIES}
@@ -789,6 +865,13 @@ else()
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
         add_test(NAME LclUiBoundarySmoke COMMAND lcl_ui_boundary_smoke)
         set_tests_properties(LclUiBoundarySmoke PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        add_test(
+            NAME AndroidCliBuildTargets
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_main_cli.py)
+        set_tests_properties(AndroidCliBuildTargets PROPERTIES
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     endif()
 endif()

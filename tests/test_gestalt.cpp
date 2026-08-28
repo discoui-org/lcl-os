@@ -162,7 +162,7 @@ TEST(GestaltTest, CheckedInMobileDefaultProfileMatchesStrictSchema) {
     EXPECT_EQ(gestalt.shell, ShellKind::Mobile);
     EXPECT_EQ(gestalt.display.width, 1344u);
     EXPECT_EQ(gestalt.display.height, 2992u);
-    EXPECT_EQ(gestalt.display.refreshRateHz, 60u);
+    EXPECT_EQ(gestalt.display.refreshRateHz, 120u);
     EXPECT_EQ(gestalt.display.scale, 4.0f);
     EXPECT_EQ(gestalt.display.naturalOrientation, NaturalOrientation::Portrait);
     EXPECT_FLOAT_EQ(gestalt.display.safeArea.top, 117.0f);

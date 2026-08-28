@@ -37,10 +37,6 @@ bool DesktopWindowPolicy::usesMobileWindowDecorations() const noexcept {
     return false;
 }
 
-bool DesktopWindowPolicy::forcesOpaqueNormalSurfaces() const noexcept {
-    return false;
-}
-
 lcl::platform::ShellKind MobileWindowPolicy::shellKind() const noexcept {
     return lcl::platform::ShellKind::Mobile;
 }
@@ -80,10 +76,6 @@ bool MobileWindowPolicy::usesSystemGestures() const noexcept {
 }
 
 bool MobileWindowPolicy::usesMobileWindowDecorations() const noexcept {
-    return true;
-}
-
-bool MobileWindowPolicy::forcesOpaqueNormalSurfaces() const noexcept {
     return true;
 }
 

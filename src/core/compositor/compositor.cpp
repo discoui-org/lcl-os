@@ -1,4 +1,5 @@
 #include "core/compositor/compositor.hpp"
+#include "core/compositor/surface_transaction_coordinator.hpp"
 #include "platform/common/output_scale.hpp"
 
 #include <algorithm>
@@ -173,7 +174,14 @@ bool Compositor::initialize() {
     m_windowingPolicy = makeWindowingPolicy(m_platformServices.gestalt().shell);
     m_protocolDispatcher = std::make_unique<ProtocolDispatcher>(
         m_renderer, m_windowManager, m_surfaces, m_sceneRegistry,
-        m_focusController, m_shellStateBroker, *m_windowingPolicy);
+        m_focusController, m_shellStateBroker, *m_windowingPolicy,
+        m_rasterService);
+
+    if (!m_rasterService.initialize(paths.rasterServiceExecutable(),
+                                    paths.rasterSocketPath())) {
+        std::cerr << "[LCL Core ERROR] retained raster service could not start\n";
+        return false;
+    }
 
     // --- IPC (Unix Domain Socket, SO_PEERCRED auth, 0600 perms) ---
     m_ipcManager.initialize(paths.compositorSocketPath());
@@ -224,6 +232,15 @@ void Compositor::processInput() {
 }
 
 void Compositor::processIPC() {
+    m_rasterService.poll();
+    if (m_protocolDispatcher) {
+        for (auto& layer : m_rasterService.takeReadyLayers()) {
+            if (m_protocolDispatcher->acceptRasterLayer(std::move(layer))) {
+                m_needsRedraw = true;
+                m_shellStateDirty = true;
+            }
+        }
+    }
     if (m_protocolDispatcher && m_protocolDispatcher->process(m_ipcManager)) {
         if (m_inputRouter) {
             m_inputRouter->syncWindowState();
@@ -392,18 +409,12 @@ void Compositor::renderDiagnosticOverlay() {
 
 void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
-    // Resolve ready/expired WindowGroup epochs without stalling the output.
+    // Resolve ready WindowGroup epochs without stalling the output.
     // CompositorRenderer retains only an incomplete group's last complete
     // layer; the rest of the scene and all shell transitions keep presenting.
-    (void)m_surfaces.hasIncompleteAtomicConfigure(
-        std::chrono::steady_clock::now());
+    (void)SurfaceTransactionCoordinator::promoteReady(m_surfaces);
 
     const bool hasActiveTransitions = m_frameScheduler.advanceTransitions(m_surfaces);
-    const bool hasCompositorOwnedMotion = std::any_of(
-        m_surfaces.begin(), m_surfaces.end(), [](const auto& pair) {
-            return pair.second.transitionPhase !=
-                SurfaceRegistry::SurfaceEntry::TransitionPhase::None;
-        });
     const auto handoffNow = std::chrono::steady_clock::now();
     constexpr auto kLaunchIconHandoffTimeout = std::chrono::milliseconds(750);
     for (auto& [surfaceKey, entry] : m_surfaces) {
@@ -427,27 +438,12 @@ void Compositor::renderFrame() {
             entry.launchMorphActive = false;
         }
     }
-    const bool hasPendingGpuRelease = std::any_of(
-        m_surfaces.begin(), m_surfaces.end(), [](const auto& pair) {
-            return !pair.second.pendingDmaBufReleases.empty();
-        });
-    const int releaseFenceFd = hasPendingGpuRelease
-        ? m_renderer.createNativeFence() : -1;
     for (auto& [surfaceKey, entry] : m_surfaces) {
         if (entry.pendingMinimize && !entry.launchIconHandoffActive) {
             m_windowManager.minimizeWindow(entry.windowId);
             entry.pendingMinimize = false;
             entry.transitionOpacity = 1.0f;
             entry.transitionScale = 1.0f;
-        }
-        if (entry.rollbackRequested) {
-            m_windowManager.rollbackWindowGeometry(
-                entry.windowId,
-                {entry.rollbackX, entry.rollbackY, entry.rollbackWidth, entry.rollbackHeight},
-                entry.rollbackWasMaximized, entry.rollbackWasMinimized,
-                entry.resizeGeometryGeneration);
-            entry.rollbackRequested = false;
-            entry.resizeGeometryGeneration = 0;
         }
     }
     const auto surfaces = m_surfaces.snapshot();
@@ -457,35 +453,28 @@ void Compositor::renderFrame() {
         [this] { renderDiagnosticOverlay(); },
         !hasActiveTransitions && !m_showFpsOverlay,
         m_windowingPolicy &&
-            m_windowingPolicy->usesMobileWindowDecorations(),
-        hasCompositorOwnedMotion);
+            m_windowingPolicy->usesMobileWindowDecorations());
     m_lastComposeMs = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - composeStart).count();
 
-    // The frame that stopped referencing these textures has now been handed
-    // to EGL/KMS. Destroy the compositor import and tell the producer that
-    // its GBM pool slot is reusable. Mesa's DMA-BUF implicit fence is the
-    // synchronization contract for this first zero-copy transport revision.
+    // Old raster layers are released only after the frame that stopped
+    // referencing them has been handed to the platform presenter. A pending
+    // atomic group still presents its retained old snapshot, so its sources
+    // remain owned until that group is promoted and composed.
     for (auto& [surfaceKey, entry] : m_surfaces) {
-        for (const auto& release : entry.pendingDmaBufReleases) {
+        (void)surfaceKey;
+        if (entry.atomicConfigureGeneration != 0) continue;
+        for (const auto& release : entry.pendingRasterLayerReleases) {
             if (release.texture != 0) {
-                m_renderer.getRasterRenderer()->releaseDmaBufTexture(release.texture);
+                m_renderer.getRasterRenderer()->releaseDmaBufTexture(
+                    release.texture);
             }
-            if (entry.clientFd >= 0 && release.bufferId != 0) {
-                protocol::LCLHeader header{};
-                header.opcode = protocol::LCLOpcode::ReleaseDmaBuf;
-                header.payloadSize = sizeof(protocol::LCLMsgReleaseDmaBuf);
-                protocol::LCLMsgReleaseDmaBuf message{};
-                message.surfaceId = static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu);
-                message.bufferId = release.bufferId;
-                protocol::sendMsgWithFd(
-                    entry.clientFd, header, &message, releaseFenceFd);
-            }
+            m_rasterService.releaseLayer(release.layerId);
         }
-        entry.pendingDmaBufReleases.clear();
+        entry.pendingRasterLayerReleases.clear();
     }
-    if (releaseFenceFd >= 0) close(releaseFenceFd);
 
+    const uint64_t displaySequence = ++m_displaySequence;
     const uint64_t presentedAtNs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -498,6 +487,11 @@ void Compositor::renderFrame() {
         header.payloadSize = sizeof(protocol::LCLMsgFramePresented);
         protocol::LCLMsgFramePresented message{};
         message.surfaceId = static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu);
+        message.configureSerial = entry.presentationSerial;
+        message.frameSerial = entry.frameSerial != 0
+            ? entry.frameSerial : entry.presentationSerial;
+        message.geometryGeneration = entry.layerGeometryGeneration;
+        message.displaySequence = displaySequence;
         message.timestampNs = presentedAtNs;
         message.refreshIntervalNs = m_refreshIntervalNs;
         if (protocol::sendMsgWithFd(entry.clientFd, header, &message)) {
@@ -528,6 +522,28 @@ void Compositor::renderFrame() {
             m_windowManager.removeWindow(found->second.windowId);
         }
         if (found != m_surfaces.end()) {
+            if (found->second.producerGrant.tokenHigh != 0 ||
+                found->second.producerGrant.tokenLow != 0) {
+                m_rasterService.revokeSurface(found->second.producerGrant);
+            }
+            if (found->second.rasterLayerId != 0) {
+                if (found->second.rasterLayerTexture != 0) {
+                    m_renderer.getRasterRenderer()->releaseDmaBufTexture(
+                        found->second.rasterLayerTexture);
+                    found->second.rasterLayerTexture = 0;
+                }
+                m_rasterService.releaseLayer(found->second.rasterLayerId);
+                found->second.rasterLayerId = 0;
+            }
+            for (const auto& release :
+                 found->second.pendingRasterLayerReleases) {
+                if (release.texture != 0) {
+                    m_renderer.getRasterRenderer()->releaseDmaBufTexture(
+                        release.texture);
+                }
+                m_rasterService.releaseLayer(release.layerId);
+            }
+            found->second.pendingRasterLayerReleases.clear();
             if (found->second.isAttached() &&
                 !found->second.pendingDestroy &&
                 found->second.clientFd >= 0) {
@@ -540,15 +556,7 @@ void Compositor::renderFrame() {
                 protocol::sendMsgWithFd(
                     found->second.clientFd, header, &destroy);
             }
-            // Destruction ends the sampling epoch, so no ReleaseDmaBuf message
-            // is needed. Imported textures still leave before registry erase.
             SurfaceRegistry::releaseBuffer(found->second);
-            for (const auto& release : found->second.pendingDmaBufReleases) {
-                if (release.texture != 0) {
-                    m_renderer.getRasterRenderer()->releaseDmaBufTexture(release.texture);
-                }
-            }
-            found->second.pendingDmaBufReleases.clear();
         }
         m_sceneRegistry.removeSurface(surfaceKey);
         m_surfaces.erase(surfaceKey);

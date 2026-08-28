@@ -20,6 +20,8 @@
 
 namespace lcl::ui {
 
+class RasterServiceClient;
+
 using RawKeyCallback = std::function<bool(const KeyEvent&)>;
 using RawPointerCallback = std::function<bool(const PointerEvent&)>;
 using RawTextInputCallback = std::function<bool(const TextInputEvent&)>;
@@ -151,13 +153,6 @@ public:
     void setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind kind) {
         if (!m_ipcConnected) m_systemSurfaceKind = kind;
     }
-    /** Choose direct live resize or compositor-retained-buffer morph before connect. */
-    void setResizePresentationMode(lcl::protocol::LCLResizePresentationMode mode) {
-        if (!m_ipcConnected) m_resizePresentationMode = mode;
-    }
-    lcl::protocol::LCLResizePresentationMode getResizePresentationMode() const {
-        return m_resizePresentationMode;
-    }
     /** Disable widget-event dispatch for visual-only surfaces such as shell panels. */
     void setInputEnabled(bool enabled);
     bool isInputEnabled() const { return m_inputEnabled; }
@@ -211,18 +206,11 @@ public:
     void updateLayout();
     bool renderFrame();
 
-    uint32_t* getPixelBuffer() { return m_shmPixels ? m_shmPixels : m_pixelBuffer.data(); }
+    uint32_t* getPixelBuffer() { return m_pixelBuffer.data(); }
 
 private:
     void updateCanvasRenderTarget();
     void pollIPC();
-    void allocateSHM(float width, float height);
-    void startMorphCrossfade(std::vector<uint32_t> snapshot,
-                             uint32_t pixelWidth, uint32_t pixelHeight,
-                             const lcl::motion::Motion& motion);
-    bool advanceMorphCrossfade(float dtSec);
-    void blendMorphSnapshot();
-    void clearMorphCrossfade();
     bool requestWindowAction(lcl::protocol::LCLWindowAction action,
                              float localX = 0.0f, float localY = 0.0f);
     bool requestSurfaceDestroy(uint32_t surfaceId);
@@ -254,6 +242,10 @@ private:
     TransientController m_transients{m_dispatcher};
     MotionCoordinator m_motionCoordinator;
     std::unique_ptr<graphics::Canvas> m_canvas;
+    // Logical frames are rasterized outside the compositor. This private
+    // client owns only the producer grant and the raster-service connection;
+    // widgets remain backend-neutral DisplayList producers.
+    std::unique_ptr<RasterServiceClient> m_rasterClient;
 
     RawKeyCallback m_onRawKey{nullptr};
     RawPointerCallback m_onRawPointer{nullptr};
@@ -265,17 +257,6 @@ private:
 
     std::vector<uint32_t> m_pixelBuffer;
     int m_socketFd{-1};
-    // Optional platform-native handle channel negotiated over the compositor
-    // protocol. It is never exposed to widgets or application code.
-    int m_nativeBufferSocketFd{-1};
-    int m_shmFd{-1};
-    size_t m_shmSize{0};
-    uint32_t* m_shmPixels{nullptr};
-    // SHM keeps a workspace-sized backing during live resize. The Canvas still
-    // rasterizes into a tightly packed active-size vector; only the published
-    // memfd uses this stable row stride and capacity.
-    uint32_t m_shmCapacityWidth{0};
-    uint32_t m_shmCapacityHeight{0};
     bool m_ipcConnected{false};
     bool m_ownsSocketFd{true};
     uint32_t m_surfaceId{1};
@@ -292,11 +273,10 @@ private:
     bool m_attachedFollowParentWidth{false};
     bool m_attachedFollowParentHeight{false};
     bool m_attachedAcceptsInput{false};
-    lcl::protocol::LCLResizePresentationMode m_resizePresentationMode{
-        lcl::protocol::LCLResizePresentationMode::CompositorMorph};
     uint32_t m_nextRequestId{1};
     uint64_t m_configureSerial{1};
     uint64_t m_pendingConfigureSerial{1};
+    uint64_t m_geometryGeneration{0};
     float m_backingWidth{0.0f};
     float m_backingHeight{0.0f};
     // SurfaceCreate is only a request. Do not commit the provisional client
@@ -312,28 +292,35 @@ private:
 
     bool m_initialized{false};
     bool m_firstFrame{true};
-    bool m_shmNeedsAttach{true};
     bool m_effectGraphActive{false};
     std::vector<uint8_t> m_lastEffectGraphPayload;
     float m_pendingResizeWidth{0.0f};
     float m_pendingResizeHeight{0.0f};
     bool m_hasPendingResize{false};
-    // Both pointer resize and maximize/restore are frame-paced in Live mode.
+    // Pointer resize and maximize/restore share rasterd presentation pacing.
     // Initial configure remains an immediate, content-sized transaction.
-    bool m_liveResizeFramePacing{false};
-    // One compositor presentation credit applies to both SHM and DMA-BUF.
-    // This prevents software clients from producing obsolete resize frames
-    // faster than Android can upload and present them.
+    bool m_atomicResizeFramePacing{false};
+    // One compositor presentation credit applies to each rasterd layer frame.
+    // This prevents clients from producing obsolete generations faster than
+    // the display can present them.
     bool m_frameGateOpen{true};
     uint64_t m_lastPresentedTimestampNs{0};
     uint64_t m_refreshIntervalNs{0};
     uint64_t m_submittedConfigureSerial{0};
-    uint32_t m_submittedDmaBufId{0};
+    uint64_t m_nextFrameSerial{1};
+    uint64_t m_submittedFrameSerial{0};
+    uint64_t m_submittedGeometryGeneration{0};
+    uint64_t m_rasterConnectionGeneration{0};
     std::unordered_map<uint64_t, uint64_t> m_uploadedImageRevisions;
     // A launch icon becomes compositor-visible only after the HomeScreen
     // buffer containing it has been committed on this same ordered socket.
     std::optional<lcl::protocol::LCLMsgLaunchIconVisibilityAck>
         m_pendingLaunchIconVisibilityAck;
+    // Attached chrome actions are published only after the unpressed frame
+    // generated by pointer-up has actually left presentation backpressure.
+    std::optional<lcl::protocol::LCLMsgRequestManagedWindowAction>
+        m_pendingManagedWindowAction;
+    uint64_t m_pendingManagedActionAfterFrameSerial{0};
     std::chrono::steady_clock::time_point m_lastResizeApply{};
     bool m_running{false};
     bool m_surfaceEnded{false};
@@ -341,12 +328,6 @@ private:
     std::vector<HostedSurfaceEntry> m_hostedSurfaces;
     HostedSurfaceHandle m_nextHostedSurfaceHandle{1};
     bool m_morphInputFrozen{false};
-    lcl::motion::AnimationEngine m_morphBlendEngine;
-    lcl::motion::ChannelId m_morphBlendChannel{0};
-    std::vector<uint32_t> m_morphSnapshotPixels;
-    uint32_t m_morphSnapshotWidth{0};
-    uint32_t m_morphSnapshotHeight{0};
-    float m_morphBlendProgress{1.0f};
     std::chrono::steady_clock::time_point m_lastAnimationTick{};
 
     // Opt-in, aggregate diagnostics. Enabled with LCL_TRACE_FRAMES=1.
@@ -358,21 +339,14 @@ private:
     uint64_t m_traceInteractiveConfigureCount{0};
     uint64_t m_traceTransitionConfigureCount{0};
     uint64_t m_tracePresentedFrames{0};
-    uint64_t m_traceDmaBufAttaches{0};
-    uint64_t m_traceDmaBufPoolBlocks{0};
-    uint64_t m_traceRejectedDmaBufFrames{0};
     uint64_t m_traceResizeApplies{0};
-    uint64_t m_traceShmAllocations{0};
     uint64_t m_traceDamagePixels{0};
     uint64_t m_traceClearedBytes{0};
-    uint64_t m_traceCopiedBytes{0};
     double m_traceLayoutMs{0.0};
     double m_tracePaintMs{0.0};
     double m_traceClearMs{0.0};
     double m_traceDrawMs{0.0};
-    double m_traceCopyMs{0.0};
-    double m_traceAttachMs{0.0};
-    double m_traceShmMs{0.0};
+    double m_traceRasterSubmitMs{0.0};
     std::chrono::steady_clock::time_point m_traceLastLog{};
 
     lcl::protocol::LCLDecorationMode m_requestedDecorationMode{lcl::protocol::LCLDecorationMode::None};

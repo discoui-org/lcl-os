@@ -18,6 +18,8 @@
 
 namespace lcl::platform::desktop {
 
+static_assert(kDmaBufFormatArgb8888 == GBM_FORMAT_ARGB8888);
+
 GbmGraphicsContext::~GbmGraphicsContext() {
     shutdown();
 }
@@ -425,7 +427,7 @@ lcl::platform::TextureHandle GbmGraphicsContext::importTexture(const lcl::platfo
     uint64_t modifier = dmaBuf->modifier();
 
     if (!m_initialized || fd < 0 || width == 0 || height == 0 ||
-        stride < width * 4 || format != 1 || !makeCurrent()) {
+        stride < width * 4 || format != kDmaBufFormatArgb8888 || !makeCurrent()) {
         return lcl::platform::kInvalidTextureHandle;
     }
 
@@ -440,11 +442,10 @@ lcl::platform::TextureHandle GbmGraphicsContext::importTexture(const lcl::platfo
         eglGetProcAddress("glEGLImageTargetTexture2DOES"));
     if (!createImage || !imageTarget) return lcl::platform::kInvalidTextureHandle;
 
-    const uint32_t fourcc = GBM_FORMAT_ARGB8888;
     EGLint attributes[32] = {
         EGL_WIDTH, static_cast<EGLint>(width),
         EGL_HEIGHT, static_cast<EGLint>(height),
-        EGL_LINUX_DRM_FOURCC_EXT, static_cast<EGLint>(fourcc),
+        EGL_LINUX_DRM_FOURCC_EXT, static_cast<EGLint>(format),
         EGL_DMA_BUF_PLANE0_FD_EXT, fd,
         EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
         EGL_DMA_BUF_PLANE0_PITCH_EXT, static_cast<EGLint>(stride),

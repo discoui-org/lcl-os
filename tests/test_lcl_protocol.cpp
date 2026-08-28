@@ -36,7 +36,6 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     msg.y = 200;
     msg.width = 800;
     msg.height = 600;
-    msg.resizePresentation = LCLResizePresentationMode::Live;
     msg.hasLaunchOrigin = 1;
     msg.launchOriginX = 24.0f;
     msg.launchOriginY = 32.0f;
@@ -74,7 +73,6 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     EXPECT_FLOAT_EQ(msgRecv->y, 200.0f);
     EXPECT_FLOAT_EQ(msgRecv->width, 800.0f);
     EXPECT_FLOAT_EQ(msgRecv->height, 600.0f);
-    EXPECT_EQ(msgRecv->resizePresentation, LCLResizePresentationMode::Live);
     EXPECT_EQ(msgRecv->hasLaunchOrigin, 1);
     EXPECT_FLOAT_EQ(msgRecv->launchOriginX, 24.0f);
     EXPECT_FLOAT_EQ(msgRecv->launchOriginY, 32.0f);
@@ -97,6 +95,9 @@ TEST(LCLProtocolTest, FrameDiscardedRoundTripsConfigureSerial) {
     LCLMsgFrameDiscarded discarded{};
     discarded.surfaceId = 4;
     discarded.configureSerial = 91;
+    discarded.frameSerial = 92;
+    discarded.geometryGeneration = 7;
+    discarded.reason = LCLFrameDiscardReason::Superseded;
     LCLHeader header{};
     header.opcode = LCLOpcode::FrameDiscarded;
     header.payloadSize = sizeof(discarded);
@@ -111,6 +112,9 @@ TEST(LCLProtocolTest, FrameDiscardedRoundTripsConfigureSerial) {
     const auto* decoded = reinterpret_cast<const LCLMsgFrameDiscarded*>(payload.data());
     EXPECT_EQ(decoded->surfaceId, 4u);
     EXPECT_EQ(decoded->configureSerial, 91u);
+    EXPECT_EQ(decoded->frameSerial, 92u);
+    EXPECT_EQ(decoded->geometryGeneration, 7u);
+    EXPECT_EQ(decoded->reason, LCLFrameDiscardReason::Superseded);
 
     close(sockets[0]);
     close(sockets[1]);
@@ -250,8 +254,7 @@ void appendLe32(std::vector<uint8_t>& bytes, uint32_t value) {
     bytes.push_back(static_cast<uint8_t>(value >> 24));
 }
 
-std::vector<uint8_t> surfaceCreatePacket(
-    LCLResizePresentationMode mode = LCLResizePresentationMode::CompositorMorph) {
+std::vector<uint8_t> surfaceCreatePacket() {
     LCLHeader header{};
     header.opcode = LCLOpcode::SurfaceCreate;
     header.requestId = 91;
@@ -260,7 +263,6 @@ std::vector<uint8_t> surfaceCreatePacket(
     create.surfaceId = 4;
     create.width = 640;
     create.height = 480;
-    create.resizePresentation = mode;
     std::strncpy(create.title, "Codec Test", sizeof(create.title) - 1);
     std::strncpy(create.appId, "org.lcl.codec-test", sizeof(create.appId) - 1);
     std::vector<uint8_t> packet;
@@ -334,8 +336,6 @@ TEST(LCLProtocolTest, RejectsTruncatedAndNonFiniteLogicalSurfaceGeometry) {
     packet[xOffset + 3] = static_cast<uint8_t>(nanBits >> 24);
     EXPECT_FALSE(decodePacket(packet.data(), packet.size(), header, payload));
 
-    EXPECT_TRUE(surfaceCreatePacket(
-        static_cast<LCLResizePresentationMode>(2)).empty());
 }
 
 TEST(LCLProtocolTest, QueuedPacketsPreserveRequestOrder) {
@@ -404,192 +404,23 @@ TEST(LCLProtocolTest, SeqpacketRejectsTruncatedPayload) {
     close(sv[1]);
 }
 
-TEST(LCLProtocolTest, FileDescriptorIsAcceptedOnlyForBufferAttachOpcodes) {
-    int sv[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv), 0);
-    int descriptor = dup(STDIN_FILENO);
-    ASSERT_GE(descriptor, 0);
-
-    LCLMsgAttachBuffer attach{};
-    attach.surfaceId = 3;
-    attach.configureSerial = 7;
-    attach.width = 16;
-    attach.height = 16;
-    attach.stride = 64;
-    attach.format = 1;
-    attach.damageX = 2;
-    attach.damageY = 3;
-    attach.damageWidth = 8;
-    attach.damageHeight = 9;
-    LCLHeader attachHeader{};
-    attachHeader.opcode = LCLOpcode::AttachBuffer;
-    attachHeader.requestId = 5;
-    attachHeader.payloadSize = sizeof(attach);
-    ASSERT_TRUE(sendMsgWithFd(sv[0], attachHeader, &attach, descriptor));
-
-    LCLHeader receivedHeader{};
-    std::vector<uint8_t> payload;
-    int receivedFd = -1;
-    ASSERT_EQ(recvPacketWithFd(sv[1], receivedHeader, payload, receivedFd),
-              ReceiveStatus::Received);
-    EXPECT_GE(receivedFd, 0);
-    EXPECT_EQ(receivedHeader.requestId, 5u);
-    ASSERT_EQ(payload.size(), sizeof(LCLMsgAttachBuffer));
-    const auto* decodedAttach =
-        reinterpret_cast<const LCLMsgAttachBuffer*>(payload.data());
-    EXPECT_EQ(decodedAttach->damageX, 2u);
-    EXPECT_EQ(decodedAttach->damageY, 3u);
-    EXPECT_EQ(decodedAttach->damageWidth, 8u);
-    EXPECT_EQ(decodedAttach->damageHeight, 9u);
-    if (receivedFd >= 0)
-        close(receivedFd);
-
-    LCLMsgSurfaceDestroy destroy{};
-    destroy.surfaceId = 3;
-    LCLHeader destroyHeader{};
-    destroyHeader.opcode = LCLOpcode::SurfaceDestroy;
-    destroyHeader.payloadSize = sizeof(destroy);
-    EXPECT_FALSE(sendMsgWithFd(sv[0], destroyHeader, &destroy, descriptor));
-
-    close(descriptor);
-    close(sv[0]);
-    close(sv[1]);
-}
-
-TEST(LCLProtocolTest, DmaBufAttachCarriesMetadataAndFileDescriptor) {
+TEST(LCLProtocolTest, AppProtocolRejectsAllFileDescriptors) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
     const int descriptor = dup(STDIN_FILENO);
     ASSERT_GE(descriptor, 0);
-
-    LCLMsgAttachDmaBuf sent{};
-    sent.surfaceId = 9;
-    sent.configureSerial = 123;
-    sent.bufferId = 2;
-    sent.width = 640;
-    sent.height = 480;
-    sent.backingWidth = 800;
-    sent.backingHeight = 600;
-    sent.stride = 3200;
-    sent.format = LCL_BUFFER_FORMAT_ARGB8888;
-    sent.modifier = 0x0102030405060708ull;
+    LCLMsgSurfaceDestroy destroy{};
+    destroy.surfaceId = 3;
     LCLHeader header{};
-    header.opcode = LCLOpcode::AttachDmaBuf;
-    header.payloadSize = sizeof(sent);
-    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &sent, descriptor));
-
-    LCLHeader receivedHeader{};
-    std::vector<uint8_t> payload;
-    int receivedFd = -1;
-    ASSERT_TRUE(recvMsgWithFd(sockets[1], receivedHeader, payload, receivedFd));
-    ASSERT_EQ(receivedHeader.opcode, LCLOpcode::AttachDmaBuf);
-    ASSERT_EQ(payload.size(), sizeof(LCLMsgAttachDmaBuf));
-    const auto* received = reinterpret_cast<const LCLMsgAttachDmaBuf*>(payload.data());
-    EXPECT_EQ(received->surfaceId, sent.surfaceId);
-    EXPECT_EQ(received->configureSerial, sent.configureSerial);
-    EXPECT_EQ(received->bufferId, sent.bufferId);
-    EXPECT_EQ(received->width, 640u);
-    EXPECT_EQ(received->backingWidth, 800u);
-    EXPECT_EQ(received->modifier, sent.modifier);
-    EXPECT_GE(receivedFd, 0);
-
-    close(receivedFd);
+    header.opcode = LCLOpcode::SurfaceDestroy;
+    header.payloadSize = sizeof(destroy);
+    EXPECT_FALSE(sendMsgWithFd(sockets[0], header, &destroy, descriptor));
     close(descriptor);
     close(sockets[0]);
     close(sockets[1]);
 }
 
-TEST(LCLProtocolTest, DmaBufReleaseNeedsNoFileDescriptor) {
-    LCLMsgReleaseDmaBuf release{};
-    release.surfaceId = 9;
-    release.bufferId = 2;
-    LCLHeader header{};
-    header.opcode = LCLOpcode::ReleaseDmaBuf;
-    header.payloadSize = sizeof(release);
-    std::vector<uint8_t> packet;
-    ASSERT_TRUE(encodePacket(header, &release, packet));
-
-    LCLHeader decodedHeader{};
-    std::vector<uint8_t> decodedPayload;
-    ASSERT_TRUE(decodePacket(packet.data(), packet.size(), decodedHeader, decodedPayload));
-    ASSERT_EQ(decodedPayload.size(), sizeof(LCLMsgReleaseDmaBuf));
-    const auto* decoded = reinterpret_cast<const LCLMsgReleaseDmaBuf*>(decodedPayload.data());
-    EXPECT_EQ(decoded->surfaceId, release.surfaceId);
-    EXPECT_EQ(decoded->bufferId, release.bufferId);
-}
-
-TEST(LCLProtocolTest, AhbV1CapabilityCarriesDedicatedTransportSocket) {
-    int sockets[2];
-    int transport[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, transport), 0);
-
-    LCLMsgCapabilities sent{};
-    sent.supported = LCL_CAPABILITY_AHB_V1;
-    LCLHeader header{};
-    header.opcode = LCLOpcode::Capabilities;
-    header.payloadSize = sizeof(sent);
-    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &sent, transport[1]));
-
-    LCLHeader receivedHeader{};
-    std::vector<uint8_t> payload;
-    int receivedFd = -1;
-    ASSERT_TRUE(recvMsgWithFd(sockets[1], receivedHeader, payload, receivedFd));
-    ASSERT_EQ(receivedHeader.opcode, LCLOpcode::Capabilities);
-    ASSERT_EQ(payload.size(), sizeof(LCLMsgCapabilities));
-    EXPECT_EQ(reinterpret_cast<const LCLMsgCapabilities*>(payload.data())->supported,
-              LCL_CAPABILITY_AHB_V1);
-    EXPECT_GE(receivedFd, 0);
-
-    close(receivedFd);
-    close(transport[0]);
-    close(transport[1]);
-    close(sockets[0]);
-    close(sockets[1]);
-}
-
-TEST(LCLProtocolTest, NativeBufferAttachRoundTripsWithAcquireFence) {
-    int sockets[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
-    const int fence = dup(STDIN_FILENO);
-    ASSERT_GE(fence, 0);
-
-    LCLMsgAttachNativeBuffer sent{};
-    sent.surfaceId = 9;
-    sent.configureSerial = 123;
-    sent.bufferId = 7;
-    sent.width = 640;
-    sent.height = 480;
-    sent.backingWidth = 800;
-    sent.backingHeight = 600;
-    sent.format = LCL_BUFFER_FORMAT_ARGB8888;
-    sent.transport = LCLNativeBufferTransport::AndroidHardwareBufferV1;
-    LCLHeader header{};
-    header.opcode = LCLOpcode::AttachNativeBuffer;
-    header.payloadSize = sizeof(sent);
-    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &sent, fence));
-
-    LCLHeader receivedHeader{};
-    std::vector<uint8_t> payload;
-    int receivedFence = -1;
-    ASSERT_TRUE(recvMsgWithFd(sockets[1], receivedHeader, payload, receivedFence));
-    ASSERT_EQ(receivedHeader.opcode, LCLOpcode::AttachNativeBuffer);
-    ASSERT_EQ(payload.size(), sizeof(LCLMsgAttachNativeBuffer));
-    const auto* received =
-        reinterpret_cast<const LCLMsgAttachNativeBuffer*>(payload.data());
-    EXPECT_EQ(received->bufferId, sent.bufferId);
-    EXPECT_EQ(received->backingWidth, sent.backingWidth);
-    EXPECT_EQ(received->transport,
-              LCLNativeBufferTransport::AndroidHardwareBufferV1);
-    EXPECT_GE(receivedFence, 0);
-
-    close(receivedFence);
-    close(fence);
-    close(sockets[0]);
-    close(sockets[1]);
-}
-
-TEST(LCLProtocolTest, ContentExtentMustFitInsideGpuBacking) {
+TEST(LCLProtocolTest, ContentExtentMustFitInsideConfiguredBacking) {
     LCLMsgConfigureBounds configure{};
     configure.surfaceId = 1;
     configure.configureSerial = 2;
@@ -604,24 +435,15 @@ TEST(LCLProtocolTest, ContentExtentMustFitInsideGpuBacking) {
     std::vector<uint8_t> packet;
     EXPECT_FALSE(encodePacket(header, &configure, packet));
 
-    LCLMsgAttachDmaBuf attach{};
-    attach.surfaceId = 1;
-    attach.configureSerial = 2;
-    attach.bufferId = 3;
-    attach.width = 640;
-    attach.height = 480;
-    attach.backingWidth = 800;
-    attach.backingHeight = 600;
-    attach.stride = 800 * 4 - 1;
-    attach.format = LCL_BUFFER_FORMAT_ARGB8888;
-    header.opcode = LCLOpcode::AttachDmaBuf;
-    header.payloadSize = sizeof(attach);
-    EXPECT_FALSE(encodePacket(header, &attach, packet));
 }
 
 TEST(LCLProtocolTest, FramePresentedRoundTripsWithoutFileDescriptor) {
     LCLMsgFramePresented presented{};
     presented.surfaceId = 9;
+    presented.configureSerial = 11;
+    presented.frameSerial = 13;
+    presented.geometryGeneration = 17;
+    presented.displaySequence = 19;
     presented.timestampNs = 123456789;
     presented.refreshIntervalNs = 6944444;
     LCLHeader header{};
@@ -633,6 +455,10 @@ TEST(LCLProtocolTest, FramePresentedRoundTripsWithoutFileDescriptor) {
     std::vector<uint8_t> payload;
     ASSERT_TRUE(decodePacket(packet.data(), packet.size(), decodedHeader, payload));
     const auto* decoded = reinterpret_cast<const LCLMsgFramePresented*>(payload.data());
+    EXPECT_EQ(decoded->configureSerial, presented.configureSerial);
+    EXPECT_EQ(decoded->frameSerial, presented.frameSerial);
+    EXPECT_EQ(decoded->geometryGeneration, presented.geometryGeneration);
+    EXPECT_EQ(decoded->displaySequence, presented.displaySequence);
     EXPECT_EQ(decoded->timestampNs, presented.timestampNs);
     EXPECT_EQ(decoded->refreshIntervalNs, presented.refreshIntervalNs);
 
@@ -1183,74 +1009,4 @@ TEST(LCLProtocolTest, InputEventCodecRoundTripWithPointerIdentityAndCancel) {
     EXPECT_FLOAT_EQ(decodedInput->y, 678.90f);
     EXPECT_FLOAT_EQ(decodedInput->deltaX, -1.5f);
     EXPECT_FLOAT_EQ(decodedInput->deltaY, 2.5f);
-}
-
-TEST(LCLProtocolTest, ImageResourceUploadCarriesStableIdentityAndDescriptor) {
-    int sockets[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
-    const int descriptor = dup(STDIN_FILENO);
-    ASSERT_GE(descriptor, 0);
-
-    LCLMsgUploadImageResource sent{};
-    sent.surfaceId = 3;
-    sent.resourceId = 41;
-    sent.contentRevision = 7;
-    sent.width = 8;
-    sent.height = 4;
-    sent.stridePixels = 8;
-    sent.opaque = 1;
-    sent.byteSize = 8u * 4u * sizeof(uint32_t);
-    LCLHeader header{};
-    header.opcode = LCLOpcode::UploadImageResource;
-    header.payloadSize = sizeof(sent);
-    ASSERT_TRUE(sendMsgWithFd(sockets[0], header, &sent, descriptor));
-
-    LCLHeader receivedHeader{};
-    std::vector<uint8_t> payload;
-    int receivedFd = -1;
-    ASSERT_TRUE(recvMsgWithFd(
-        sockets[1], receivedHeader, payload, receivedFd));
-    ASSERT_EQ(receivedHeader.opcode, LCLOpcode::UploadImageResource);
-    ASSERT_EQ(payload.size(), sizeof(sent));
-    const auto* received = reinterpret_cast<const
-        LCLMsgUploadImageResource*>(payload.data());
-    EXPECT_EQ(received->resourceId, 41u);
-    EXPECT_EQ(received->contentRevision, 7u);
-    EXPECT_EQ(received->byteSize, sent.byteSize);
-    EXPECT_GE(receivedFd, 0);
-
-    close(receivedFd);
-    close(descriptor);
-    close(sockets[0]);
-    close(sockets[1]);
-}
-
-TEST(LCLProtocolTest, DisplayListCommitRoundTripsBoundedVariablePayload) {
-    constexpr std::array<uint8_t, 12> wire{
-        0x4c, 0x44, 0x4c, 0x31, 1, 0, 0, 0, 0, 0, 0, 0};
-    LCLMsgCommitDisplayList commit{};
-    commit.surfaceId = 5;
-    commit.configureSerial = 19;
-    commit.logicalWidth = 448.0f;
-    commit.logicalHeight = 997.333f;
-    commit.displayListSize = wire.size();
-    std::vector<uint8_t> native(sizeof(commit) + wire.size());
-    std::memcpy(native.data(), &commit, sizeof(commit));
-    std::memcpy(native.data() + sizeof(commit), wire.data(), wire.size());
-
-    LCLHeader header{};
-    header.opcode = LCLOpcode::CommitDisplayList;
-    header.payloadSize = native.size();
-    std::vector<uint8_t> packet;
-    ASSERT_TRUE(encodePacket(header, native.data(), packet));
-
-    LCLHeader decodedHeader{};
-    std::vector<uint8_t> decoded;
-    ASSERT_TRUE(decodePacket(
-        packet.data(), packet.size(), decodedHeader, decoded));
-    ASSERT_EQ(decoded, native);
-    const auto* decodedCommit = reinterpret_cast<const
-        LCLMsgCommitDisplayList*>(decoded.data());
-    EXPECT_EQ(decodedCommit->configureSerial, 19u);
-    EXPECT_FLOAT_EQ(decodedCommit->logicalWidth, 448.0f);
 }

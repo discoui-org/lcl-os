@@ -22,9 +22,10 @@
 ## 1. Architecture Overview
 
 `lcl-ui` applications execute in user space as standalone processes. Their
-normative frame boundary is a ready immutable layer committed to `lcl-core`
-through Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by
-default), DMA-BUF, or retained shared-memory (`memfd`) fallback.
+normative frame boundary is a ready immutable layer. Protocol v26 creates a
+surface and returns a producer grant; `WindowApp` submits sealed logical frames
+to central `lcl-rasterd` over `/Runtime/lcl-raster.sock`. Only rasterd publishes
+the resulting layer to `lcl-core` through its private compositor channel.
 
 ```text
 +-----------------------------------------------------------+
@@ -49,10 +50,9 @@ rasterization, or DisplayList replay. If an application is late, its last
 committed layer remains visible and compositor-owned motion continues. A new
 surface becomes visible only after its first complete layer commit.
 
-The current protocol-v25 `CommitDisplayList` path is a migration bridge while
-producer-side `FrameTransport` is completed. It is not a public direction for
-new APIs and must not be used to move more application raster work into the
-compositor.
+Protocol v26 has no app-facing `CommitDisplayList`, SHM attach, DMA-BUF attach,
+or native-buffer attach message. These are raster-service backend details, not
+`lcl-ui` APIs.
 
 ---
 
@@ -62,8 +62,8 @@ compositor.
 *Header:* [`lcl-ui/include/lcl-ui/core/window_app.hpp`](../lcl-ui/include/lcl-ui/core/window_app.hpp)
 
 `WindowApp` is the top-level application container. It handles window surface
-creation, DMA-BUF allocation with lazy SHM fallback, IPC message dispatching,
-and active-frame pacing.
+creation, raster producer-grant management, IPC message dispatching, retained
+frame restoration after rasterd restart, and presentation-credit pacing.
 
 #### Public Methods
 - `WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height, const std::string& title = "lcl-ui Application")`: Constructs a logical-size window with an explicitly selected drawing backend.
@@ -72,7 +72,7 @@ and active-frame pacing.
 - `void setTheme(theme::Theme theme)`: Replaces the window-owned semantic theme and propagates it through the widget tree and hosted popup surfaces.
 - `const theme::Theme& getTheme() const`: Returns the active window theme.
 - `void setAppId(std::string appId)`: Sets the required canonical application identity before connecting.
-- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v15 normal or configured popup surface.
+- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v26 normal, popup, or attached surface.
 - `registerLocalTransient(...)`: Registers an ordinary absolute-positioned Widget in the single WindowRoot tree with generic lifecycle/dismissal policy.
 - `configurePopupSurface(parentSurfaceId, role, x, y)`: Configures this `WindowApp` as a compositor-level popup that reuses the normal configure and buffer path.
 - `hostSurface(...)`: Owns and ticks an additional generic `WindowApp` surface from the same event loop; it contains no Popover-specific policy.
@@ -205,9 +205,8 @@ font engine.
 Applications select the standard adapter explicitly with
 `lcl::render::makeDisplayListCanvas()` and link `lcl-raster`. Widgets themselves
 depend only on `Canvas`; `lcl-ui` does not link EGL, DRM, GBM, or GLES.
-During the protocol-v25 migration this adapter may still serialize a DisplayList
-to the compositor; that behavior is implementation debt and not the stable
-`lcl-ui` frame contract.
+The adapter serializes the sealed logical frame only to central `lcl-rasterd`.
+The compositor never decodes or replays application DisplayLists.
 
 ---
 

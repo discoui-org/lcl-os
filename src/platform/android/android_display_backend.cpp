@@ -10,6 +10,8 @@
 #include <aidl/android/hardware/graphics/composer3/Buffer.h>
 #include <aidl/android/hardware/graphics/composer3/CommandResultPayload.h>
 #include <aidl/android/hardware/graphics/composer3/PresentOrValidate.h>
+#include <aidl/android/hardware/graphics/composer3/ClientTarget.h>
+#include <aidl/android/hardware/graphics/composer3/DisplayRequest.h>
 #include <aidl/android/hardware/graphics/composer3/ParcelableComposition.h>
 #include <aidl/android/hardware/graphics/composer3/ParcelableBlendMode.h>
 #include <aidl/android/hardware/graphics/composer3/ParcelableDataspace.h>
@@ -67,6 +69,8 @@ using aidl::android::hardware::graphics::composer3::LayerCommand;
 using aidl::android::hardware::graphics::composer3::Buffer;
 using aidl::android::hardware::graphics::composer3::CommandResultPayload;
 using aidl::android::hardware::graphics::composer3::PresentOrValidate;
+using aidl::android::hardware::graphics::composer3::ClientTarget;
+using aidl::android::hardware::graphics::composer3::DisplayRequest;
 using aidl::android::hardware::graphics::composer3::ParcelableComposition;
 using aidl::android::hardware::graphics::composer3::Composition;
 using aidl::android::hardware::graphics::composer3::ParcelableBlendMode;
@@ -106,6 +110,9 @@ struct AndroidDisplayBackend::Impl {
     bool vsyncEnabled{false};
     std::array<const AHardwareBuffer*, 4> layerBufferSlots{};
     std::array<bool, 4> layerBufferHandlesSent{};
+    // Client-target and layer caches are distinct Composer namespaces even
+    // when both refer to the same AHardwareBuffer and numeric slot.
+    std::array<bool, 4> clientTargetHandlesSent{};
     std::array<std::vector<int>, 4> pendingSlotFences{};
     uint32_t nextLayerBufferSlot{0};
     std::optional<uint32_t> activeLayerBufferSlot;
@@ -301,6 +308,14 @@ bool AndroidDisplayBackend::initializeAidl() {
         m_displayConnected = true;
     }
 
+    const auto clientTargetSlotsStatus =
+        m_impl->client->setClientTargetSlotCount(m_displayId, 4);
+    if (!clientTargetSlotsStatus.isOk()) {
+        std::cerr << "[AndroidDisplayBackend] setClientTargetSlotCount failed: "
+                  << clientTargetSlotsStatus.getDescription() << "\n";
+        return false;
+    }
+
     // 5. Query active display configurations dynamically
     std::vector<::aidl::android::hardware::graphics::composer3::DisplayConfiguration> configs;
     auto cfgStatus = m_impl->client->getDisplayConfigurations(m_displayId, 0, &configs);
@@ -407,6 +422,7 @@ void AndroidDisplayBackend::shutdownAidl() {
 
     m_impl->layerBufferSlots.fill(nullptr);
     m_impl->layerBufferHandlesSent.fill(false);
+    m_impl->clientTargetHandlesSent.fill(false);
     m_impl->nextLayerBufferSlot = 0;
     m_impl->activeLayerBufferSlot.reset();
     m_impl->vsyncSerial = 0;
@@ -488,6 +504,7 @@ bool AndroidDisplayBackend::prepareBufferForRenderAidl(AHardwareBuffer* buffer) 
         waitAndClearFenceFds(m_impl->pendingSlotFences[bufferSlot]);
         m_impl->layerBufferSlots[bufferSlot] = buffer;
         m_impl->layerBufferHandlesSent[bufferSlot] = false;
+        m_impl->clientTargetHandlesSent[bufferSlot] = false;
         m_impl->nextLayerBufferSlot =
             (m_impl->nextLayerBufferSlot + 1) % m_impl->layerBufferSlots.size();
     } else {
@@ -536,17 +553,21 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
     LayerCommand layerCmd;
     layerCmd.layer = m_layerId;
 
+    const auto duplicateHandle = [&]() {
+        NativeHandle handle;
+        for (int i = 0; i < nh->numFds; ++i) {
+            handle.fds.emplace_back(dup(nh->data[i]));
+        }
+        for (int i = 0; i < nh->numInts; ++i) {
+            handle.ints.push_back(nh->data[nh->numFds + i]);
+        }
+        return handle;
+    };
+
     Buffer buf;
     buf.slot = static_cast<int32_t>(bufferSlot);
     if (!m_impl->layerBufferHandlesSent[bufferSlot]) {
-        NativeHandle aidlHandle;
-        for (int i = 0; i < nh->numFds; ++i) {
-            aidlHandle.fds.emplace_back(dup(nh->data[i]));
-        }
-        for (int i = 0; i < nh->numInts; ++i) {
-            aidlHandle.ints.push_back(nh->data[nh->numFds + i]);
-        }
-        buf.handle = std::move(aidlHandle);
+        buf.handle = duplicateHandle();
     }
     if (acquireFenceFd >= 0) {
         // The caller retains ownership; the Composer command owns this dup.
@@ -565,6 +586,9 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
     df.right = w;
     df.bottom = h;
     layerCmd.displayFrame = df;
+    const std::vector<std::optional<Rect>> fullRegion{df};
+    layerCmd.damage = fullRegion;
+    layerCmd.visibleRegion = fullRegion;
 
     FRect sc;
     sc.left = 0.0f;
@@ -600,6 +624,7 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
     }
 
     bool hasChangedTypes = false;
+    bool needsClientTarget = false;
     bool alreadyPresented = false;
     int commandErrors = 0;
     const auto collectResults = [&](const std::vector<CommandResultPayload>& results,
@@ -614,6 +639,22 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
             } else if (payload.getTag() ==
                        CommandResultPayload::Tag::changedCompositionTypes) {
                 hasChangedTypes = true;
+                const auto& changes = payload.get<
+                    CommandResultPayload::Tag::changedCompositionTypes>();
+                for (const auto& layer : changes.layers) {
+                    if (layer.layer == m_layerId &&
+                        layer.composition == Composition::CLIENT) {
+                        needsClientTarget = true;
+                    }
+                }
+            } else if (payload.getTag() ==
+                       CommandResultPayload::Tag::displayRequest) {
+                const auto& request = payload.get<
+                    CommandResultPayload::Tag::displayRequest>();
+                if (request.display == m_displayId &&
+                    (request.mask & DisplayRequest::FLIP_CLIENT_TARGET) != 0) {
+                    needsClientTarget = true;
+                }
             } else if (payload.getTag() ==
                        CommandResultPayload::Tag::presentOrValidateResult) {
                 const auto& result = payload.get<
@@ -662,6 +703,19 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
     if (hasChangedTypes) {
         presCmd.acceptDisplayChanges = true;
     }
+    if (needsClientTarget) {
+        ClientTarget target;
+        target.buffer.slot = static_cast<int32_t>(bufferSlot);
+        if (!m_impl->clientTargetHandlesSent[bufferSlot]) {
+            target.buffer.handle = duplicateHandle();
+        }
+        target.buffer.fence = ::ndk::ScopedFileDescriptor(
+            acquireFenceFd >= 0 ? dup(acquireFenceFd) : -1);
+        target.dataspace = Dataspace::UNKNOWN;
+        target.damage = {df};
+        target.hdrSdrRatio = 1.0f;
+        presCmd.clientTarget = std::move(target);
+    }
     presCmd.presentDisplay = true;
 
     std::vector<DisplayCommand> presCmds;
@@ -676,6 +730,9 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
 
     collectResults(presResults, "Present");
     if (commandErrors == 0) {
+        if (needsClientTarget) {
+            m_impl->clientTargetHandlesSent[bufferSlot] = true;
+        }
         m_impl->activeLayerBufferSlot = bufferSlot;
         return true;
     }

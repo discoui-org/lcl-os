@@ -96,6 +96,8 @@ public:
 class MockRuntimePaths final : public IRuntimePaths {
 public:
     std::string compositorSocketPath() const override { return "/tmp/mock-compositor.sock"; }
+    std::string rasterSocketPath() const override { return "/tmp/mock-raster.sock"; }
+    std::string rasterServiceExecutable() const override { return "/tmp/mock-rasterd"; }
     std::string sessionSocketPath() const override { return "/tmp/mock-session.sock"; }
     std::string appCatalogDirectory() const override { return "/tmp/mock-apps"; }
     std::vector<std::string> fontSearchDirectories() const override { return {"/tmp/mock-fonts"}; }

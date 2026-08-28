@@ -286,6 +286,8 @@ bool AndroidGraphicsContext::presentFromFramebuffer(uint32_t framebuffer,
     // Blit with inverted destination Y to map UI top to display top scanline.
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, scanout.fbo);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    // The scanout copy is full-frame; scene damage may have left scissoring on.
+    glDisable(GL_SCISSOR_TEST);
     glBlitFramebuffer(0, 0, width, height,
                       0, height, width, 0,
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);

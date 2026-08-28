@@ -3,8 +3,6 @@
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
-#include "core/ipc/lcl_protocol.hpp"
-
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -531,7 +529,7 @@ std::optional<ClientEGLContext::DmaBufExport> ClientEGLContext::exportCurrentDma
     }
     if (acquireFenceFd < 0) glFinish();
     return DmaBufExport{slot.id, slot.width, slot.height, slot.stride,
-                        lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888,
+                        lcl::platform::kDmaBufFormatArgb8888,
                         ~uint64_t{0}, -1, true, acquireFenceFd};
 #else
     if (m_currentDmaBuf < 0 || static_cast<size_t>(m_currentDmaBuf) >= m_dmaBufs.size()) return std::nullopt;
@@ -544,7 +542,7 @@ std::optional<ClientEGLContext::DmaBufExport> ClientEGLContext::exportCurrentDma
     }
     glFlush();
     return DmaBufExport{slot.id, slot.width, slot.height, slot.stride,
-                        lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888, slot.modifier,
+                        lcl::platform::kDmaBufFormatArgb8888, slot.modifier,
                         fd, false, -1};
 #endif
 }

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace lcl::core {
@@ -19,8 +20,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                                  const SurfaceRegistry::Snapshot& surfaces,
                                  const std::function<void()>& beforePresent,
                                  bool allowIncrementalMove,
-                                 bool useMobilePresentation,
-                                 bool deferDisplayListRaster) const {
+                                 bool useMobilePresentation) const {
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     // The snapshot contains only const entry pointers, so protocol/input work
     // cannot mutate the surface state while this frame is being composed.
@@ -30,19 +30,9 @@ void CompositorRenderer::render(render::Renderer& renderer,
     for (const auto& window : windowManager.getWindows()) {
         liveWindowIds.insert(window.id);
     }
-    std::unordered_set<uint32_t> retainedWindowIds;
-    for (const auto& surface : surfaces) {
-        const auto* entry = surface.entry;
-        if (entry && entry->isAttached() && !entry->pendingDestroy &&
-            (entry->attachedFollowParentWidth ||
-             entry->attachedFollowParentHeight)) {
-            retainedWindowIds.insert(entry->attachedWindowId);
-        }
-    }
     for (auto cached = m_retainedWindowGroups.begin();
          cached != m_retainedWindowGroups.end();) {
-        if (liveWindowIds.contains(cached->first) &&
-            retainedWindowIds.contains(cached->first)) {
+        if (liveWindowIds.contains(cached->first)) {
             ++cached;
             continue;
         }
@@ -54,33 +44,13 @@ void CompositorRenderer::render(render::Renderer& renderer,
         cached = m_retainedWindowGroups.erase(cached);
     }
 
-    std::unordered_set<uint64_t> liveDisplayCacheIds;
-    for (const auto& surface : surfaces) {
-        if (!surface.entry) continue;
-        const auto& entry = *surface.entry;
-        if (entry.displayListCacheId != 0)
-            liveDisplayCacheIds.insert(entry.displayListCacheId);
-        if (entry.previousDisplayListCacheId != 0)
-            liveDisplayCacheIds.insert(entry.previousDisplayListCacheId);
-        for (const auto& [_, cacheId] : entry.cachedLayerNamespaces) {
-            if (cacheId != 0) liveDisplayCacheIds.insert(cacheId);
-        }
-    }
-    for (const uint64_t oldCacheId : m_liveDisplayCacheIds) {
-        if (liveDisplayCacheIds.contains(oldCacheId)) continue;
-        raster->releaseCachedDisplayLayer(oldCacheId);
-        m_displayListRasterSerials.erase(oldCacheId);
-    }
-    m_liveDisplayCacheIds = std::move(liveDisplayCacheIds);
-
+    std::optional<graphics::RectF> incrementalDamage;
+#if defined(__ANDROID__)
     const bool hasPendingAtomicConfigure = std::any_of(
         surfaces.begin(), surfaces.end(), [](const auto& surface) {
             return surface.entry &&
                 surface.entry->atomicConfigureGeneration != 0;
         });
-
-    std::optional<graphics::RectF> incrementalDamage;
-#if defined(__ANDROID__)
     // Blur and Glass sample pixels outside their own effect bounds. Replaying
     // only old+new window damage would therefore sample a partly stale retained
     // scene and leave trails. Until damage dependencies are closed transitively,
@@ -173,6 +143,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
     // The Android scene FBO is the retained source of truth. Other platform
     // binaries keep their existing full-frame beginFrame behavior.
     raster->setRetainsFrameBacking(true);
+#else
+    (void)allowIncrementalMove;
 #endif
 
     // --- Begin LCL raster frame ---
@@ -185,9 +157,6 @@ void CompositorRenderer::render(render::Renderer& renderer,
         0.0f, 0.0f,
         windowManager.getScreenWidth(),
         windowManager.getScreenHeight(),
-    };
-    auto groupHasGeometryFollowingAttachment = [&](uint32_t windowId) {
-        return retainedWindowIds.contains(windowId);
     };
     auto groupHasPendingAtomicConfigure = [&](uint32_t windowId) {
         return std::any_of(
@@ -337,52 +306,6 @@ void CompositorRenderer::render(render::Renderer& renderer,
              {renderer.getWidth(), renderer.getHeight()}, outputScale},
             rootTransform);
     };
-    auto ensureDisplayListLayer = [&](const SurfaceEntry& surface,
-                                      bool previous) {
-        const auto& displayList = previous
-            ? surface.previousDisplayList : surface.displayList;
-        const uint64_t serial = previous
-            ? surface.previousDisplayListSerial : surface.displayListSerial;
-        const uint64_t cacheId = previous
-            ? surface.previousDisplayListCacheId : surface.displayListCacheId;
-        const float logicalWidth = previous
-            ? surface.previousDisplayListWidth : surface.displayListWidth;
-        const float logicalHeight = previous
-            ? surface.previousDisplayListHeight : surface.displayListHeight;
-        if (displayList.empty() || serial == 0 || cacheId == 0 ||
-            logicalWidth <= 0.0f || logicalHeight <= 0.0f) {
-            return false;
-        }
-        const bool hasCachedLayer = raster->hasCachedDisplayLayer(cacheId);
-        if (const auto found = m_displayListRasterSerials.find(cacheId);
-            found != m_displayListRasterSerials.end() &&
-            found->second == serial && hasCachedLayer) {
-            return true;
-        }
-        // Client DisplayList replay can be arbitrarily expensive. Freeze an
-        // existing layer during compositor-owned motion, but never defer the
-        // first raster: without a cached fallback the window would animate as
-        // an empty shell on both desktop and mobile.
-        if (shouldDeferDisplayListRasterUpdate(
-                deferDisplayListRaster, hasCachedLayer)) {
-            return true;
-        }
-        const float scale = std::clamp(surface.bufferScale, 0.5f, 4.0f);
-        const graphics::RenderTarget target{
-            {logicalWidth, logicalHeight},
-            {std::max(1u, static_cast<uint32_t>(std::ceil(logicalWidth * scale))),
-             std::max(1u, static_cast<uint32_t>(std::ceil(logicalHeight * scale)))},
-            scale,
-        };
-        if (!raster->updateCachedDisplayLayer(
-                cacheId, {0.0f, 0.0f, logicalWidth, logicalHeight},
-                displayList, target)) {
-            return false;
-        }
-        m_displayListRasterSerials[cacheId] = serial;
-        return true;
-    };
-
     const SurfaceEntry* homeScreenSurface = nullptr;
     for (const auto& surface : surfaces) {
         if (surface.entry &&
@@ -485,15 +408,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 surface.launchMorphWidth, surface.launchMorphHeight,
                 render::RasterBufferSampling::
                     TopLeftAnchoredExtendTrailingEdge);
-        } else if (home.dmaBufTexture != 0) {
+        } else if (home.rasterLayerTexture != 0) {
             raster->drawDmaBufTextureRegionTransformed(
                 surface.launchMorphX, surface.launchMorphY,
                 surface.launchMorphWidth, surface.launchMorphHeight,
-                static_cast<int>(home.width), static_cast<int>(home.height),
+                static_cast<int>(home.width),
+                static_cast<int>(home.height),
                 static_cast<int>(home.backingWidth),
                 static_cast<int>(home.backingHeight),
                 sourceX, sourceY, sourceWidth, sourceHeight,
-                home.dmaBufTexture, 1.0f,
+                home.rasterLayerTexture, 1.0f,
                 surface.launchMorphCornerRadius,
                 surface.launchMorphCornerRoundness);
         }
@@ -690,11 +614,11 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 matchingSurface->launchMorphActive
                 ? matchingSurface->launchMorphCornerRoundness
                 : resolveWindowCornerRoundness(win);
-            const render::RasterBufferSampling contentSampling =
-                matchingSurface->launchMorphActive
-                ? render::RasterBufferSampling::
-                    TopLeftAnchoredCropTrailingEdge
-                : render::RasterBufferSampling::Stretch;
+            // Application layers are never resized by sampling. A matching
+            // geometry generation has identical extents; a defensive mismatch
+            // is cropped at the trailing edge instead of stretched.
+            constexpr render::RasterBufferSampling contentSampling =
+                render::RasterBufferSampling::TopLeftAnchoredCropTrailingEdge;
 
             if (matchingSurface->launchPlaceholderActive) {
                 raster->drawRoundedRect(
@@ -709,75 +633,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
             const float contentOpacity = windowOpacity * std::clamp(
                 matchingSurface->launchContentOpacity, 0.0f, 1.0f);
 
-            if (matchingSurface->forceOpaque &&
-                matchingSurface->hasRenderableBuffer()) {
-                const auto background =
-                    lcl::theme::defaultTheme().colors.primarySurface;
-                raster->drawRoundedRect(
-                    {drawX, drawY, drawW, drawH},
-                    maskToWindowShape ? presentedCornerRadius : 0.0f,
-                    {background.r, background.g, background.b,
-                     static_cast<uint8_t>(std::clamp(
-                         std::lround(contentOpacity * 255.0f), 0l, 255l))},
-                    {}, 0.0f, presentedCornerRoundness);
-            }
-
-            const bool hasPrevious = matchingSurface->previousPixels ||
-                                     matchingSurface->previousDmaBufTexture != 0 ||
-                                     !matchingSurface->previousDisplayList.empty();
-            if (matchingSurface->previousPixels) {
-                // Android retains current and crossfade source independently.
-                // Surface keys are PID-backed and therefore never use bit 63.
-                constexpr uint64_t kPreviousShmCacheBit = uint64_t{1} << 63;
-                drawShmSurface(
-                    matchingSurfaceKey ^ kPreviousShmCacheBit,
-                    matchingSurface->previousShmContentSerial,
-                    drawX, drawY,
-                    static_cast<int>(matchingSurface->previousWidth),
-                    static_cast<int>(matchingSurface->previousHeight),
-                    static_cast<int>(matchingSurface->previousBackingWidth),
-                    static_cast<int>(matchingSurface->previousBackingHeight),
-                    reinterpret_cast<const uint32_t*>(matchingSurface->previousPixels),
-                    static_cast<int>(matchingSurface->previousStride / 4),
-                    0, 0,
-                    static_cast<int>(matchingSurface->previousWidth),
-                    static_cast<int>(matchingSurface->previousHeight),
-                    contentOpacity *
-                        (1.0f - matchingSurface->resizeCrossfadeProgress),
-                    maskToWindowShape ? presentedCornerRadius : 0.0f,
-                    presentedCornerRoundness,
-                    win.decorationMode == render::DecorationMode::SSD,
-                    drawW,
-                    drawH,
-                    contentSampling);
-            } else if (matchingSurface->previousDmaBufTexture != 0) {
-                renderer.getRasterRenderer()->drawDmaBufTextureTransformed(
-                    drawX, drawY,
-                    static_cast<int>(matchingSurface->previousWidth),
-                    static_cast<int>(matchingSurface->previousHeight),
-                    static_cast<int>(matchingSurface->previousBackingWidth),
-                    static_cast<int>(matchingSurface->previousBackingHeight),
-                    matchingSurface->previousDmaBufTexture,
-                    contentOpacity *
-                        (1.0f - matchingSurface->resizeCrossfadeProgress),
-                    maskToWindowShape ? presentedCornerRadius : 0.0f,
-                    presentedCornerRoundness,
-                    win.decorationMode == render::DecorationMode::SSD,
-                    drawW, drawH, contentSampling);
-            } else if (ensureDisplayListLayer(*matchingSurface, true)) {
-                raster->drawCachedDisplayLayer(
-                    matchingSurface->previousDisplayListCacheId,
-                    {drawX, drawY, drawW, drawH},
-                    contentOpacity *
-                        (1.0f - matchingSurface->resizeCrossfadeProgress),
-                    maskToWindowShape ? presentedCornerRadius : 0.0f,
-                    presentedCornerRoundness,
-                    win.decorationMode == render::DecorationMode::SSD,
-                    contentSampling);
-            }
-
-            const float currentOpacity = contentOpacity *
-                (hasPrevious ? matchingSurface->resizeCrossfadeProgress : 1.0f);
+            const float currentOpacity = contentOpacity;
             if (matchingSurface->pixels) {
                 drawShmSurface(
                     matchingSurfaceKey, matchingSurface->shmContentSerial,
@@ -795,25 +651,17 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     presentedCornerRoundness,
                     win.decorationMode == render::DecorationMode::SSD,
                     drawW, drawH, contentSampling);
-            } else if (matchingSurface->dmaBufTexture != 0) {
-                renderer.getRasterRenderer()->drawDmaBufTextureTransformed(
+            } else if (matchingSurface->rasterLayerTexture != 0) {
+                raster->drawDmaBufTextureTransformed(
                     drawX, drawY, srcW, srcH,
                     static_cast<int>(matchingSurface->backingWidth),
                     static_cast<int>(matchingSurface->backingHeight),
-                    matchingSurface->dmaBufTexture,
+                    matchingSurface->rasterLayerTexture,
                     currentOpacity,
                     maskToWindowShape ? presentedCornerRadius : 0.0f,
                     presentedCornerRoundness,
                     win.decorationMode == render::DecorationMode::SSD,
                     drawW, drawH, contentSampling);
-            } else if (ensureDisplayListLayer(*matchingSurface, false)) {
-                raster->drawCachedDisplayLayer(
-                    matchingSurface->displayListCacheId,
-                    {drawX, drawY, drawW, drawH}, currentOpacity,
-                    maskToWindowShape ? presentedCornerRadius : 0.0f,
-                    presentedCornerRoundness,
-                    win.decorationMode == render::DecorationMode::SSD,
-                    contentSampling);
             }
 
             if (matchingSurface->hasRenderableBuffer() &&
@@ -893,20 +741,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     static_cast<int>(attached->shmDamageHeight),
                     opacity, 0.0f, 2.0f, false,
                     bounds.width, bounds.height);
-            } else if (attached->dmaBufTexture != 0) {
+            } else if (attached->rasterLayerTexture != 0) {
                 raster->drawDmaBufTextureTransformed(
                     bounds.x, bounds.y,
                     static_cast<int>(attached->width),
                     static_cast<int>(attached->height),
                     static_cast<int>(attached->backingWidth),
                     static_cast<int>(attached->backingHeight),
-                    attached->dmaBufTexture, opacity,
-                    0.0f, 2.0f, false, bounds.width, bounds.height);
-            } else if (ensureDisplayListLayer(*attached, false)) {
-                raster->drawCachedDisplayLayer(
-                    attached->displayListCacheId,
-                    {bounds.x, bounds.y, bounds.width, bounds.height},
-                    opacity);
+                    attached->rasterLayerTexture, opacity,
+                    0.0f, 2.0f, false,
+                    bounds.width, bounds.height);
             }
         }
 
@@ -961,21 +805,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
                         static_cast<int>(popup->shmDamageHeight), opacity,
                         0.0f, 2.0f, false,
                         popupBounds.width, popupBounds.height);
-                } else if (popup->dmaBufTexture != 0) {
-                    renderer.getRasterRenderer()->drawDmaBufTextureTransformed(
+                } else if (popup->rasterLayerTexture != 0) {
+                    raster->drawDmaBufTextureTransformed(
                         popupBounds.x, popupBounds.y,
-                        static_cast<int>(popup->width), static_cast<int>(popup->height),
+                        static_cast<int>(popup->width),
+                        static_cast<int>(popup->height),
                         static_cast<int>(popup->backingWidth),
                         static_cast<int>(popup->backingHeight),
-                        popup->dmaBufTexture, opacity,
+                        popup->rasterLayerTexture, opacity,
                         0.0f, 2.0f, false,
                         popupBounds.width, popupBounds.height);
-                } else if (ensureDisplayListLayer(*popup, false)) {
-                    raster->drawCachedDisplayLayer(
-                        popup->displayListCacheId,
-                        {popupBounds.x, popupBounds.y,
-                         popupBounds.width, popupBounds.height},
-                        opacity);
                 }
 
                 if (popup->insetBorderEnabled) {
@@ -997,8 +836,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
             }
         }
 
-        if (!atomicConfigurePending &&
-            groupHasGeometryFollowingAttachment(win.id)) {
+        if (!atomicConfigurePending) {
             const float retainedCornerRadius =
                 matchingSurface && matchingSurface->launchMorphActive
                     ? matchingSurface->launchMorphCornerRadius

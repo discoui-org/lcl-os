@@ -1,11 +1,11 @@
 #include "lcl-ui/core/window_app.hpp"
+#include "raster_service_client.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-graphics/display_list_wire.hpp"
 #include <iostream>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/mman.h>
 #include <fcntl.h>
 #include <cstring>
 #include <signal.h>
@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <limits>
+#include <filesystem>
 
 namespace lcl::ui {
 
@@ -52,19 +53,6 @@ float sanitizeBufferScale(float scale) {
 
 uint32_t toBufferPixels(float logical, float scale) {
     return std::max(1u, static_cast<uint32_t>(std::ceil(logical * scale)));
-}
-
-uint32_t crossfadePixel(uint32_t oldPixel, uint32_t newPixel, float progress) {
-    const uint32_t newWeight = static_cast<uint32_t>(
-        std::clamp(std::lround(progress * 256.0f), 0l, 256l));
-    const uint32_t oldWeight = 256u - newWeight;
-    const auto blendChannel = [oldWeight, newWeight](uint32_t oldValue, uint32_t newValue) {
-        return (oldValue * oldWeight + newValue * newWeight + 128u) >> 8u;
-    };
-    return (blendChannel((oldPixel >> 24u) & 0xFFu, (newPixel >> 24u) & 0xFFu) << 24u) |
-           (blendChannel((oldPixel >> 16u) & 0xFFu, (newPixel >> 16u) & 0xFFu) << 16u) |
-           (blendChannel((oldPixel >> 8u) & 0xFFu, (newPixel >> 8u) & 0xFFu) << 8u) |
-           blendChannel(oldPixel & 0xFFu, newPixel & 0xFFu);
 }
 
 bool frameTraceEnabled() {
@@ -148,7 +136,8 @@ void drawLayoutOverlay(const Widget& widget, graphics::Canvas& canvas, uint32_t 
 
 WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height,
                      const std::string& title)
-    : m_width(width), m_height(height), m_title(title), m_canvas(std::move(canvas)) {
+    : m_width(width), m_height(height), m_title(title), m_canvas(std::move(canvas)),
+      m_rasterClient(std::make_unique<RasterServiceClient>()) {
     setupAppSignalHandlers();
     if (!m_canvas) return;
     m_frameTraceEnabled = frameTraceEnabled();
@@ -185,22 +174,10 @@ WindowApp::~WindowApp() {
     m_transients.setWindowRoot(nullptr);
     m_hostedSurfaces.clear();
     if (m_windowRoot) m_windowRoot->setMotionCoordinator(nullptr);
-    if (m_shmPixels) {
-        munmap(m_shmPixels, m_shmSize);
-        m_shmPixels = nullptr;
-    }
-    if (m_shmFd >= 0) {
-        close(m_shmFd);
-        m_shmFd = -1;
-    }
     if (m_socketFd >= 0 && m_ownsSocketFd) {
         lcl::protocol::discardPendingWrites(m_socketFd);
         close(m_socketFd);
         m_socketFd = -1;
-    }
-    if (m_nativeBufferSocketFd >= 0) {
-        close(m_nativeBufferSocketFd);
-        m_nativeBufferSocketFd = -1;
     }
 }
 
@@ -334,79 +311,13 @@ void WindowApp::setInputEnabled(bool enabled) {
     m_inputEnabled = enabled;
 }
 
-void WindowApp::allocateSHM(float width, float height) {
-    const auto started = std::chrono::steady_clock::now();
-    const uint32_t pixelWidth = toBufferPixels(width, m_bufferScale);
-    const uint32_t pixelHeight = toBufferPixels(height, m_bufferScale);
-    const uint32_t requestedCapacityWidth = toBufferPixels(
-        std::max(width, m_backingWidth), m_bufferScale);
-    const uint32_t requestedCapacityHeight = toBufferPixels(
-        std::max(height, m_backingHeight), m_bufferScale);
-
-    const bool canReuseMapping = m_shmPixels && m_shmFd >= 0 &&
-        pixelWidth <= m_shmCapacityWidth && pixelHeight <= m_shmCapacityHeight;
-
-    const size_t requestedCapacityPixels =
-        static_cast<size_t>(requestedCapacityWidth) * requestedCapacityHeight;
-    if (m_pixelBuffer.capacity() < requestedCapacityPixels) {
-        m_pixelBuffer.reserve(requestedCapacityPixels);
-    }
-    m_pixelBuffer.resize(static_cast<size_t>(pixelWidth) * pixelHeight, 0xFF14161D);
-
-    if (!canReuseMapping) {
-        const size_t nextShmSize = requestedCapacityPixels * sizeof(uint32_t);
-        int nextShmFd = memfd_create("lcl_ui_app_shm", MFD_CLOEXEC);
-        uint32_t* nextShmPixels = nullptr;
-        if (nextShmFd >= 0 && ftruncate(nextShmFd, nextShmSize) == 0) {
-            nextShmPixels = reinterpret_cast<uint32_t*>(
-                mmap(nullptr, nextShmSize, PROT_READ | PROT_WRITE,
-                     MAP_SHARED, nextShmFd, 0));
-            if (nextShmPixels == MAP_FAILED) nextShmPixels = nullptr;
-        }
-        if (!nextShmPixels) {
-            if (nextShmFd >= 0) close(nextShmFd);
-            // Do not publish the previous mapping with dimensions that exceed
-            // its stride/capacity. Keeping it would make the next attach both
-            // invalid and impossible to recover from presentation pacing.
-            if (pixelWidth > m_shmCapacityWidth ||
-                pixelHeight > m_shmCapacityHeight) {
-                if (m_shmPixels) munmap(m_shmPixels, m_shmSize);
-                if (m_shmFd >= 0) close(m_shmFd);
-                m_shmPixels = nullptr;
-                m_shmFd = -1;
-                m_shmSize = 0;
-                m_shmCapacityWidth = 0;
-                m_shmCapacityHeight = 0;
-            }
-            std::cerr << "[lcl-ui ERROR] Failed to allocate retained SHM backing for "
-                      << m_title << "\n";
-        } else {
-            std::fill_n(nextShmPixels, requestedCapacityPixels, 0xFF14161D);
-            if (m_shmPixels) munmap(m_shmPixels, m_shmSize);
-            if (m_shmFd >= 0) close(m_shmFd);
-            m_shmPixels = nextShmPixels;
-            m_shmFd = nextShmFd;
-            m_shmSize = nextShmSize;
-            m_shmCapacityWidth = requestedCapacityWidth;
-            m_shmCapacityHeight = requestedCapacityHeight;
-            m_shmNeedsAttach = true;
-        }
-    }
-
-    // Resize path: keep existing renderer instance and only retarget the backing pixels.
-    // Re-initializing renderer every configure event causes heavy stalls while dragging.
-    m_canvas->setTargetPixels(m_pixelBuffer.data(), pixelWidth, pixelHeight);
-    updateCanvasRenderTarget();
-    if (m_frameTraceEnabled) {
-        ++m_traceShmAllocations;
-        m_traceShmMs += std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - started).count();
-    }
-}
-
 bool WindowApp::connectCompositor(const std::string& socketPath) {
     if (m_appId.empty()) {
         std::cerr << "[lcl-ui ERROR] WindowApp requires a canonical app ID before connection\n";
+        return false;
+    }
+    if (!m_canvas || !m_canvas->usesDisplayListTransport()) {
+        std::cerr << "[lcl-ui ERROR] Protocol v26 requires the retained DisplayList canvas\n";
         return false;
     }
     std::string effectiveSocketPath = socketPath;
@@ -448,21 +359,6 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         fcntl(m_socketFd, F_SETFL, flags | O_NONBLOCK);
     }
 
-    // 1. System-surface policy is declared separately. The compositor verifies
-    // the declaration against the trusted shell peer; normal clients have no
-    // role-selection protocol.
-    if (!m_canvas->usesDisplayListTransport() &&
-        m_canvas->supportsNativeBufferTransport(
-            lcl::graphics::NativeBufferTransport::AndroidHardwareBufferV1)) {
-        lcl::protocol::LCLMsgQueryCapabilities capabilityQuery{};
-        capabilityQuery.requested = lcl::protocol::LCL_CAPABILITY_AHB_V1;
-        if (!sendProtocolMessage(lcl::protocol::LCLOpcode::QueryCapabilities,
-                                 &capabilityQuery, sizeof(capabilityQuery))) {
-            std::cerr << "[lcl-ui ERROR] Failed to query compositor capabilities\n";
-            return false;
-        }
-    }
-
     if (!isPopupSurface() && !isAttachedSurface() &&
         m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::None) {
         lcl::protocol::LCLMsgSetSystemSurfaceKind systemSurface{};
@@ -475,7 +371,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     }
 
     // 2. Request a normal, popup, or WM-owned attached surface. All three
-    // continue through the same configure, buffer transport, render, and input
+    // continue through the same configure, raster grant, render, and input
     // paths; the compositor only receives generic scene relationships here.
     m_waitingForInitialConfigure = true;
     bool createSent = false;
@@ -512,7 +408,6 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         surface.y = m_initialY;
         surface.width = m_width;
         surface.height = m_height;
-        surface.resizePresentation = m_resizePresentationMode;
         std::strncpy(surface.title, m_title.c_str(), sizeof(surface.title) - 1);
         std::strncpy(surface.appId, m_appId.c_str(), sizeof(surface.appId) - 1);
         takeLaunchOrigin(surface);
@@ -530,16 +425,6 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     m_uploadedImageRevisions.clear();
     m_backingWidth = m_width;
     m_backingHeight = m_height;
-    if (!m_canvas->usesDisplayListTransport()) {
-        m_canvas->setDmaBufTransportEnabled(true);
-        if (!m_canvas->hasDmaBufTransport() ||
-            !m_canvas->configureDmaBufFrame(
-                getPixelWidth(), getPixelHeight(),
-                getPixelWidth(), getPixelHeight())) {
-            m_canvas->setDmaBufTransportEnabled(false);
-            allocateSHM(m_width, m_height);
-        }
-    }
     // Decoration state belongs to the surface contract, not to a later frame.
     // Send preconfigured values before the first effect graph/buffer attach so a
     // CSD client never flashes the compositor's default title chrome.
@@ -565,7 +450,6 @@ void WindowApp::resize(float width, float height) {
 
     m_width = width;
     m_height = height;
-    clearMorphCrossfade();
 
     if (m_windowRoot) {
         m_windowRoot->getYogaNode().setWidth(static_cast<float>(width));
@@ -574,21 +458,7 @@ void WindowApp::resize(float width, float height) {
     }
 
     if (m_ipcConnected) {
-        const uint32_t backingPixelWidth = toBufferPixels(
-            std::max(width, m_backingWidth), m_bufferScale);
-        const uint32_t backingPixelHeight = toBufferPixels(
-            std::max(height, m_backingHeight), m_bufferScale);
-        if (m_canvas->usesDisplayListTransport()) {
-            updateCanvasRenderTarget();
-        } else if (m_canvas->hasDmaBufTransport()) {
-            if (!m_canvas->configureDmaBufFrame(getPixelWidth(), getPixelHeight(),
-                                                backingPixelWidth, backingPixelHeight)) {
-                m_canvas->setDmaBufTransportEnabled(false);
-                allocateSHM(width, height);
-            }
-        } else {
-            allocateSHM(width, height);
-        }
+        updateCanvasRenderTarget();
         // Defer render+attach to the main loop's renderFrame() so each resize tick
         // produces at most one frame and one attach commit.
         m_firstFrame = true;
@@ -655,11 +525,34 @@ void WindowApp::configureAttachedSurface(
 void WindowApp::pollIPC() {
     if (!m_ipcConnected || m_socketFd < 0) return;
 
+    const bool rasterWasConnected = m_rasterClient->isConnected();
+    for (const auto& discarded : m_rasterClient->pollDiscards()) {
+        if (discarded.surfaceId != m_surfaceId ||
+            discarded.frameSerial != m_submittedFrameSerial) continue;
+        m_submittedConfigureSerial = 0;
+        m_submittedFrameSerial = 0;
+        m_submittedGeometryGeneration = 0;
+        m_frameGateOpen = true;
+        m_firstFrame = true;
+    }
+    if (rasterWasConnected && !m_rasterClient->isConnected()) {
+        // rasterd is supervised independently. Keep compositor IPC and input
+        // alive, restore frame credit, then resend the complete retained app
+        // frame/resource state when the daemon's socket returns.
+        m_uploadedImageRevisions.clear();
+        m_submittedConfigureSerial = 0;
+        m_submittedFrameSerial = 0;
+        m_submittedGeometryGeneration = 0;
+        m_frameGateOpen = true;
+        m_firstFrame = true;
+    }
+
     float latestWidth = 0.0f;
     float latestHeight = 0.0f;
     float latestBackingWidth = 0.0f;
     float latestBackingHeight = 0.0f;
     float latestScale = m_bufferScale;
+    uint64_t latestGeometryGeneration = m_geometryGeneration;
     lcl::protocol::LCLConfigureResizeReason latestResizeReason =
         lcl::protocol::LCLConfigureResizeReason::Initial;
     bool pendingResize = false;
@@ -735,6 +628,19 @@ void WindowApp::pollIPC() {
                 auto* cfg = reinterpret_cast<const lcl::protocol::LCLMsgConfigureBounds*>(payload.data());
                 if (cfg->surfaceId != m_surfaceId) continue;
                 if (cfg->width > 0 && cfg->height > 0) {
+                    if (m_submittedFrameSerial != 0 &&
+                        cfg->geometryGeneration >
+                            m_submittedGeometryGeneration) {
+                        // A newer geometry target invalidates the older raster
+                        // credit locally. rasterd/compositor discard that late
+                        // layer by serial; the client may immediately produce
+                        // the coalesced latest generation.
+                        m_submittedConfigureSerial = 0;
+                        m_submittedFrameSerial = 0;
+                        m_submittedGeometryGeneration = 0;
+                        m_frameGateOpen = true;
+                        m_firstFrame = true;
+                    }
                     if (m_frameTraceEnabled) {
                         ++m_traceConfigureCount;
                         if (cfg->resizeReason == lcl::protocol::LCLConfigureResizeReason::Interactive) {
@@ -750,64 +656,71 @@ void WindowApp::pollIPC() {
                     latestScale = cfg->bufferScale;
                     latestResizeReason = cfg->resizeReason;
                     m_pendingConfigureSerial = cfg->configureSerial;
+                    latestGeometryGeneration = cfg->geometryGeneration;
                     receivedInitialConfigure = receivedInitialConfigure || m_waitingForInitialConfigure;
                     pendingResize = true;
                 }
-            } else if (header.opcode == lcl::protocol::LCLOpcode::Capabilities &&
-                       payload.size() == sizeof(lcl::protocol::LCLMsgCapabilities)) {
-                const auto* capabilities = reinterpret_cast<
-                    const lcl::protocol::LCLMsgCapabilities*>(payload.data());
-                if ((capabilities->supported & lcl::protocol::LCL_CAPABILITY_AHB_V1) != 0 &&
-                    receivedFd >= 0) {
-                    if (m_nativeBufferSocketFd >= 0) close(m_nativeBufferSocketFd);
-                    m_nativeBufferSocketFd = receivedFd;
-                    receivedFdConsumed = true;
-                } else if (m_canvas->hasDmaBufTransport()) {
-#if defined(__ANDROID__)
-                    m_canvas->setDmaBufTransportEnabled(false);
-                    allocateSHM(m_width, m_height);
-#endif
-                }
-            } else if (header.opcode == lcl::protocol::LCLOpcode::ReleaseDmaBuf &&
-                       payload.size() == sizeof(lcl::protocol::LCLMsgReleaseDmaBuf)) {
-                const auto* release = reinterpret_cast<const lcl::protocol::LCLMsgReleaseDmaBuf*>(payload.data());
-                if (release->surfaceId == m_surfaceId) {
-                    receivedFdConsumed = m_canvas->releaseDmaBufFrameWithFence(
-                        release->bufferId, receivedFd);
-                    if (release->bufferId == m_submittedDmaBufId) {
-                        // The compositor returned the frame before presenting
-                        // it (for example after a genuine transaction cancel).
-                        // Return the presentation credit so pending damage can
-                        // produce the newest frame instead of remaining gated.
-                        m_submittedConfigureSerial = 0;
-                        m_submittedDmaBufId = 0;
-                        m_frameGateOpen = true;
-                        m_firstFrame = true;
-                        if (m_frameTraceEnabled) ++m_traceRejectedDmaBufFrames;
-                    }
+            } else if (header.opcode ==
+                           lcl::protocol::LCLOpcode::SurfaceProducerGrant &&
+                       payload.size() == sizeof(
+                           lcl::protocol::LCLMsgSurfaceProducerGrant)) {
+                const auto* grant = reinterpret_cast<const
+                    lcl::protocol::LCLMsgSurfaceProducerGrant*>(payload.data());
+                if (grant->surfaceId == m_surfaceId) {
+                    raster_protocol::SurfaceGrant rasterGrant{};
+                    rasterGrant.surfaceId = grant->surfaceId;
+                    rasterGrant.ownerPid = grant->ownerPid;
+                    rasterGrant.flags = grant->flags;
+                    rasterGrant.tokenHigh = grant->tokenHigh;
+                    rasterGrant.tokenLow = grant->tokenLow;
+                    const auto runtimeDirectory = std::filesystem::path(
+                        m_compositorSocketPath).parent_path();
+                    m_rasterClient->configure(
+                        (runtimeDirectory / "lcl-raster.sock").string(),
+                        rasterGrant);
+                    m_uploadedImageRevisions.clear();
+                    m_rasterConnectionGeneration = 0;
+                    m_firstFrame = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::FramePresented &&
                        payload.size() == sizeof(lcl::protocol::LCLMsgFramePresented)) {
                 const auto* presented = reinterpret_cast<const lcl::protocol::LCLMsgFramePresented*>(payload.data());
                 if (presented->surfaceId == m_surfaceId) {
+                    if (m_submittedFrameSerial != 0 &&
+                        presented->frameSerial != m_submittedFrameSerial) {
+                        continue;
+                    }
                     m_lastPresentedTimestampNs = presented->timestampNs;
                     m_refreshIntervalNs = presented->refreshIntervalNs;
                     m_submittedConfigureSerial = 0;
-                    m_submittedDmaBufId = 0;
+                    m_submittedFrameSerial = 0;
+                    m_submittedGeometryGeneration = 0;
                     m_frameGateOpen = true;
                     if (m_frameTraceEnabled) ++m_tracePresentedFrames;
+                    if (m_pendingManagedWindowAction &&
+                        presented->frameSerial >=
+                            m_pendingManagedActionAfterFrameSerial) {
+                        const auto action = *m_pendingManagedWindowAction;
+                        if (sendProtocolMessage(
+                                lcl::protocol::LCLOpcode::RequestManagedWindowAction,
+                                &action, sizeof(action))) {
+                            m_pendingManagedWindowAction.reset();
+                            m_pendingManagedActionAfterFrameSerial = 0;
+                        }
+                    }
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::FrameDiscarded &&
                        payload.size() == sizeof(lcl::protocol::LCLMsgFrameDiscarded)) {
                 const auto* discarded = reinterpret_cast<
                     const lcl::protocol::LCLMsgFrameDiscarded*>(payload.data());
                 if (discarded->surfaceId == m_surfaceId &&
-                    discarded->configureSerial == m_submittedConfigureSerial) {
-                    // A newer configure overtook this SHM frame. It can never
+                    discarded->frameSerial == m_submittedFrameSerial) {
+                    // A newer configure overtook this raster frame. It can never
                     // be presented, so restore the single-frame credit and
                     // repaint using the newest configure serial.
                     m_submittedConfigureSerial = 0;
-                    m_submittedDmaBufId = 0;
+                    m_submittedFrameSerial = 0;
+                    m_submittedGeometryGeneration = 0;
                     m_frameGateOpen = true;
                     m_firstFrame = true;
                 }
@@ -819,32 +732,6 @@ void WindowApp::pollIPC() {
                               << header.requestId << " for " << m_title
                               << " (status " << ack->status << "): "
                               << ack->message << "\n";
-                }
-                if (ack->status == 3 &&
-                    std::strncmp(
-                        ack->message,
-                        "DisplayList references an unknown image",
-                        sizeof(ack->message)) == 0) {
-                    // Upload admission is acknowledged asynchronously. If the
-                    // compositor lost or rejected one immutable resource, its
-                    // optimistic client cache must not turn one miss into an
-                    // endless rejected-frame loop.
-                    m_uploadedImageRevisions.clear();
-                    m_submittedConfigureSerial = 0;
-                    m_submittedDmaBufId = 0;
-                    m_frameGateOpen = true;
-                    m_firstFrame = true;
-                }
-                if (ack->status == 4 &&
-                    std::strncmp(ack->message, "DMA-BUF import unavailable",
-                                 sizeof(ack->message)) == 0 &&
-                    m_canvas->hasDmaBufTransport()) {
-                    m_canvas->setDmaBufTransportEnabled(false);
-                    allocateSHM(m_width, m_height);
-                    m_firstFrame = true;
-                    m_submittedConfigureSerial = 0;
-                    m_submittedDmaBufId = 0;
-                    m_frameGateOpen = true;
                 }
             } else if (header.opcode ==
                            lcl::protocol::LCLOpcode::LaunchIconVisibility &&
@@ -863,6 +750,7 @@ void WindowApp::pollIPC() {
                 if (payload.size() >= sizeof(lcl::protocol::LCLMsgSurfaceDestroy)) {
                     auto* destroy = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceDestroy*>(payload.data());
                     if (destroy->surfaceId == m_surfaceId) {
+                        m_dispatcher.cancelPointerCaptures();
                         m_running = false;
                         m_surfaceEnded = true;
                     }
@@ -874,6 +762,7 @@ void WindowApp::pollIPC() {
             break;
         } else {
             std::cerr << "[lcl-ui ERROR] Compositor connection closed or rejected\n";
+            m_dispatcher.cancelPointerCaptures();
             m_ipcConnected = false;
             m_running = false;
             m_surfaceEnded = true;
@@ -894,10 +783,10 @@ void WindowApp::pollIPC() {
 
         m_backingWidth = std::max(latestWidth, latestBackingWidth);
         m_backingHeight = std::max(latestHeight, latestBackingHeight);
-        m_liveResizeFramePacing =
-            m_resizePresentationMode == lcl::protocol::LCLResizePresentationMode::Live &&
-            (latestResizeReason == lcl::protocol::LCLConfigureResizeReason::Interactive ||
-             latestResizeReason == lcl::protocol::LCLConfigureResizeReason::WindowStateTransition);
+        m_geometryGeneration = latestGeometryGeneration;
+        m_atomicResizeFramePacing =
+            latestResizeReason == lcl::protocol::LCLConfigureResizeReason::Interactive ||
+            latestResizeReason == lcl::protocol::LCLConfigureResizeReason::WindowStateTransition;
 
         latestScale = sanitizeBufferScale(latestScale);
         if (std::fabs(latestScale - m_bufferScale) > 0.0001f) {
@@ -905,16 +794,7 @@ void WindowApp::pollIPC() {
             updateCanvasRenderTarget();
             // A scale-only configure has identical logical bounds but needs a new buffer.
             if (latestWidth == m_width && latestHeight == m_height && m_ipcConnected) {
-                if (m_canvas->usesDisplayListTransport()) {
-                    updateCanvasRenderTarget();
-                } else if (m_canvas->hasDmaBufTransport()) {
-                    m_canvas->configureDmaBufFrame(
-                        getPixelWidth(), getPixelHeight(),
-                        toBufferPixels(std::max(m_width, m_backingWidth), m_bufferScale),
-                        toBufferPixels(std::max(m_height, m_backingHeight), m_bufferScale));
-                } else {
-                    allocateSHM(m_width, m_height);
-                }
+                updateCanvasRenderTarget();
                 m_firstFrame = true;
             }
         }
@@ -925,7 +805,7 @@ void WindowApp::pollIPC() {
 
     // Throttled resize apply: demos update every pixel while dragging; applying each
     // configure causes SHM recreate storms. Keep latest target and apply at a bounded rate.
-    if (m_hasPendingResize && (!m_liveResizeFramePacing || m_frameGateOpen) &&
+    if (m_hasPendingResize && (!m_atomicResizeFramePacing || m_frameGateOpen) &&
         (m_pendingResizeWidth != m_width || m_pendingResizeHeight != m_height)) {
         const auto now = std::chrono::steady_clock::now();
         constexpr auto kMinResizeInterval = std::chrono::milliseconds(22);
@@ -939,7 +819,7 @@ void WindowApp::pollIPC() {
         // The first configure establishes the only serial eligible for an
         // initial commit. It must never wait for interactive-resize throttling,
         // even when the compositor adjusted the requested bounds by a few px.
-        if (m_liveResizeFramePacing || receivedInitialConfigure || largeJump || intervalElapsed) {
+        if (m_atomicResizeFramePacing || receivedInitialConfigure || largeJump || intervalElapsed) {
             m_configureSerial = m_pendingConfigureSerial;
             resize(m_pendingResizeWidth, m_pendingResizeHeight);
             m_waitingForInitialConfigure = false;
@@ -947,20 +827,13 @@ void WindowApp::pollIPC() {
             m_hasPendingResize = false;
             m_lastResizeApply = now;
         }
-    } else if (m_hasPendingResize && (!m_liveResizeFramePacing || m_frameGateOpen)) {
+    } else if (m_hasPendingResize && (!m_atomicResizeFramePacing || m_frameGateOpen)) {
         // The compositor often confirms the initial logical size verbatim.
         // It requires no SHM reallocation, but it still needs one commit to
         // acknowledge the configure serial and release compositor backpressure.
         m_hasPendingResize = false;
         m_configureSerial = m_pendingConfigureSerial;
         m_waitingForInitialConfigure = false;
-        if (!m_canvas->usesDisplayListTransport() &&
-            m_canvas->hasDmaBufTransport()) {
-            m_canvas->configureDmaBufFrame(
-                getPixelWidth(), getPixelHeight(),
-                toBufferPixels(std::max(m_width, m_backingWidth), m_bufferScale),
-                toBufferPixels(std::max(m_height, m_backingHeight), m_bufferScale));
-        }
         m_firstFrame = true;
     }
 }
@@ -973,7 +846,7 @@ void WindowApp::runEventLoop() {
 
         bool rendered = tick();
 
-        if (rendered && !m_liveResizeFramePacing) {
+        if (rendered && !m_atomicResizeFramePacing) {
             auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::high_resolution_clock::now() - frameStart);
             // Keep app-side pacing close to terminal loop to avoid resize thrash.
@@ -991,10 +864,6 @@ void WindowApp::runEventLoop() {
         lcl::protocol::discardPendingWrites(m_socketFd);
         close(m_socketFd);
         m_socketFd = -1;
-    }
-    if (m_nativeBufferSocketFd >= 0) {
-        close(m_nativeBufferSocketFd);
-        m_nativeBufferSocketFd = -1;
     }
 }
 
@@ -1090,19 +959,7 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
                         const std::function<void()>& changes) {
     if (!changes) return;
     std::unordered_map<uint64_t, graphics::RectF> oldBounds;
-    std::vector<uint32_t> oldPixels;
-    uint32_t snapshotWidth = 0;
-    uint32_t snapshotHeight = 0;
     if (options.layout == LayoutMode::Morph) {
-        // Flush pending old-state damage before copying the backing raster. The
-        // snapshot owns its pixels, so later SHM reuse and resize cannot mutate it.
-        renderFrame();
-        snapshotWidth = getPixelWidth();
-        snapshotHeight = getPixelHeight();
-        if (const auto* pixels = m_canvas->rasterBuffer()) {
-            const size_t pixelCount = static_cast<size_t>(snapshotWidth) * snapshotHeight;
-            oldPixels.assign(pixels, pixels + pixelCount);
-        }
         collectWidgetBounds(m_windowRoot.get(), oldBounds);
     }
     m_motionCoordinator.beginTransaction(motion, options);
@@ -1117,89 +974,19 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
         updateLayout();
         bool anyMorph = false;
         startMorphs(m_windowRoot.get(), oldBounds, m_motionCoordinator, motion, anyMorph);
-        startMorphCrossfade(std::move(oldPixels), snapshotWidth, snapshotHeight, motion);
-        m_morphInputFrozen = anyMorph || m_morphBlendEngine.hasActiveAnimations();
+        m_morphInputFrozen = anyMorph;
         if (m_morphInputFrozen) m_dispatcher.cancelPointerCaptures();
     }
 }
 
 bool WindowApp::advanceAnimations(float dtSec) {
     const bool motionActive = m_motionCoordinator.tick(dtSec);
-    const bool morphBlendActive = advanceMorphCrossfade(dtSec);
-    if (m_morphInputFrozen && !motionActive && !morphBlendActive) m_morphInputFrozen = false;
-    return motionActive || morphBlendActive;
+    if (m_morphInputFrozen && !motionActive) m_morphInputFrozen = false;
+    return motionActive;
 }
 
 bool WindowApp::hasActiveAnimations() const noexcept {
-    return m_motionCoordinator.hasActiveAnimations() || m_morphBlendEngine.hasActiveAnimations();
-}
-
-void WindowApp::startMorphCrossfade(std::vector<uint32_t> snapshot,
-                                    uint32_t pixelWidth, uint32_t pixelHeight,
-                                    const lcl::motion::Motion& motion) {
-    clearMorphCrossfade();
-    const size_t expectedPixels = static_cast<size_t>(pixelWidth) * pixelHeight;
-    if (snapshot.size() != expectedPixels || pixelWidth != getPixelWidth() ||
-        pixelHeight != getPixelHeight()) {
-        return;
-    }
-
-    m_morphSnapshotPixels = std::move(snapshot);
-    m_morphSnapshotWidth = pixelWidth;
-    m_morphSnapshotHeight = pixelHeight;
-    m_morphBlendProgress = 0.0f;
-    m_morphBlendChannel = m_morphBlendEngine.createChannel({1u, 1u}, 0.0f);
-    m_morphBlendEngine.animateTo(m_morphBlendChannel, 1.0f, motion);
-    const auto sample = m_morphBlendEngine.sample(m_morphBlendChannel);
-    m_morphBlendProgress = std::clamp(sample.value, 0.0f, 1.0f);
-    if (!sample.active) {
-        clearMorphCrossfade();
-        return;
-    }
-    m_renderPass.addDirtyRect({0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height)});
-}
-
-bool WindowApp::advanceMorphCrossfade(float dtSec) {
-    if (m_morphBlendChannel == 0) return false;
-    const auto changed = m_morphBlendEngine.tick(dtSec);
-    const auto sample = m_morphBlendEngine.sample(m_morphBlendChannel);
-    m_morphBlendProgress = std::clamp(sample.value, 0.0f, 1.0f);
-    if (!changed.empty() || sample.active) {
-        m_renderPass.addDirtyRect({0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height)});
-    }
-    if (!sample.active) {
-        clearMorphCrossfade();
-        m_renderPass.addDirtyRect({0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height)});
-        return false;
-    }
-    return true;
-}
-
-void WindowApp::blendMorphSnapshot() {
-    if (m_morphSnapshotPixels.empty() || m_morphBlendChannel == 0) return;
-    if (m_morphSnapshotWidth != getPixelWidth() || m_morphSnapshotHeight != getPixelHeight()) {
-        clearMorphCrossfade();
-        return;
-    }
-    auto* newPixels = m_canvas->rasterBuffer();
-    if (!newPixels) {
-        clearMorphCrossfade();
-        return;
-    }
-    const size_t pixelCount = static_cast<size_t>(m_morphSnapshotWidth) * m_morphSnapshotHeight;
-    for (size_t index = 0; index < pixelCount; ++index) {
-        newPixels[index] = crossfadePixel(m_morphSnapshotPixels[index], newPixels[index],
-                                         m_morphBlendProgress);
-    }
-}
-
-void WindowApp::clearMorphCrossfade() {
-    m_morphBlendEngine.clearAll();
-    m_morphBlendChannel = 0;
-    m_morphSnapshotPixels.clear();
-    m_morphSnapshotWidth = 0;
-    m_morphSnapshotHeight = 0;
-    m_morphBlendProgress = 1.0f;
+    return m_motionCoordinator.hasActiveAnimations();
 }
 
 void WindowApp::setExternalIpcSocket(int socketFd) {
@@ -1209,9 +996,6 @@ void WindowApp::setExternalIpcSocket(int socketFd) {
     m_surfaceEnded = false;
     m_ownsSocketFd = false;
     m_uploadedImageRevisions.clear();
-    if (!m_canvas->usesDisplayListTransport()) {
-        m_canvas->setDmaBufTransportEnabled(true);
-    }
 }
 
 bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
@@ -1239,6 +1023,12 @@ bool WindowApp::requestManagedWindowAction(
     msg.action = action;
     msg.localX = localX;
     msg.localY = localY;
+    if (action != lcl::protocol::LCLWindowAction::BeginDrag) {
+        m_pendingManagedWindowAction = msg;
+        m_pendingManagedActionAfterFrameSerial = m_nextFrameSerial;
+        m_firstFrame = true;
+        return true;
+    }
     return sendProtocolMessage(
         lcl::protocol::LCLOpcode::RequestManagedWindowAction,
         &msg, sizeof(msg));
@@ -1275,45 +1065,7 @@ bool WindowApp::uploadImageResource(const graphics::ImageResourceView& resource)
         return true;
     }
 
-    constexpr uint64_t kMaxImageBytes = 512ull * 1024ull * 1024ull;
-    const uint64_t rowBytes = static_cast<uint64_t>(resource.stridePixels) *
-        sizeof(uint32_t);
-    if (rowBytes > kMaxImageBytes ||
-        static_cast<uint64_t>(resource.height) > kMaxImageBytes / rowBytes) {
-        return false;
-    }
-    const uint64_t byteSize = rowBytes * resource.height;
-    if (byteSize > static_cast<uint64_t>(std::numeric_limits<off_t>::max())) {
-        return false;
-    }
-
-    const int fd = memfd_create("lcl-image-resource", MFD_CLOEXEC);
-    if (fd < 0 || ftruncate(fd, static_cast<off_t>(byteSize)) != 0) {
-        if (fd >= 0) close(fd);
-        return false;
-    }
-    void* mapping = mmap(nullptr, static_cast<size_t>(byteSize),
-                         PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (mapping == MAP_FAILED) {
-        close(fd);
-        return false;
-    }
-    std::memcpy(mapping, resource.pixels, static_cast<size_t>(byteSize));
-    munmap(mapping, static_cast<size_t>(byteSize));
-
-    lcl::protocol::LCLMsgUploadImageResource message{};
-    message.surfaceId = m_surfaceId;
-    message.resourceId = resource.id;
-    message.contentRevision = resource.contentRevision;
-    message.width = resource.width;
-    message.height = resource.height;
-    message.stridePixels = resource.stridePixels;
-    message.opaque = resource.opaque ? 1 : 0;
-    message.byteSize = byteSize;
-    const bool sent = sendProtocolMessage(
-        lcl::protocol::LCLOpcode::UploadImageResource,
-        &message, sizeof(message), fd);
-    close(fd);
+    const bool sent = m_rasterClient->uploadImage(resource);
     if (sent) m_uploadedImageRevisions[resource.id] = resource.contentRevision;
     return sent;
 }
@@ -1624,51 +1376,7 @@ bool WindowApp::renderFrame() {
         damageRects.assign(1, surfaceBounds);
     }
 
-    struct PhysicalDamageRect {
-        uint32_t left{0};
-        uint32_t top{0};
-        uint32_t right{0};
-        uint32_t bottom{0};
-    };
-    const uint32_t activePixelWidth = getPixelWidth();
-    const uint32_t activePixelHeight = getPixelHeight();
-    std::vector<PhysicalDamageRect> physicalDamage;
-    physicalDamage.reserve(damageRects.size());
-    uint32_t damageLeft = activePixelWidth;
-    uint32_t damageTop = activePixelHeight;
-    uint32_t damageRight = 0;
-    uint32_t damageBottom = 0;
-    for (const graphics::RectF& damage : damageRects) {
-        PhysicalDamageRect rect{};
-        rect.left = std::min(
-            activePixelWidth, static_cast<uint32_t>(std::floor(
-                std::max(0.0f, damage.x * m_bufferScale))));
-        rect.top = std::min(
-            activePixelHeight, static_cast<uint32_t>(std::floor(
-                std::max(0.0f, damage.y * m_bufferScale))));
-        rect.right = std::min(
-            activePixelWidth, static_cast<uint32_t>(std::ceil(
-                std::max(0.0f, (damage.x + damage.width) * m_bufferScale))));
-        rect.bottom = std::min(
-            activePixelHeight, static_cast<uint32_t>(std::ceil(
-                std::max(0.0f, (damage.y + damage.height) * m_bufferScale))));
-        if (rect.left >= rect.right || rect.top >= rect.bottom) continue;
-        damageLeft = std::min(damageLeft, rect.left);
-        damageTop = std::min(damageTop, rect.top);
-        damageRight = std::max(damageRight, rect.right);
-        damageBottom = std::max(damageBottom, rect.bottom);
-        physicalDamage.push_back(rect);
-    }
     m_canvas->beginFrame();
-    if (m_canvas->isDmaBufFrameBlocked()) {
-        // Keep the last compositor-owned DMA-BUF visible until a release
-        // arrives. Requeue the exact damage instead of CPU-rendering it into
-        // SHM during configure/transition pressure.
-        for (const graphics::RectF& damage : damageRects) {
-            m_renderPass.addDirtyRect(damage);
-        }
-        return false;
-    }
 
     const auto paintStarted = std::chrono::steady_clock::now();
     if (m_frameTraceEnabled) {
@@ -1681,7 +1389,6 @@ bool WindowApp::renderFrame() {
     }
 
     const auto clearStarted = paintStarted;
-    const bool dmaBufFrame = m_canvas->isDmaBufFrameActive();
     for (const graphics::RectF& damage : damageRects) {
         m_canvas->clearRect(damage, {0, 0, 0, 0});
         if (m_frameTraceEnabled) {
@@ -1718,8 +1425,6 @@ bool WindowApp::renderFrame() {
 
     m_renderPass.end(*m_canvas);
     m_canvas->endFrame();
-    if (!dmaBufFrame && !m_canvas->usesDisplayListTransport()) blendMorphSnapshot();
-
     if (m_ipcConnected && m_socketFd >= 0) {
         auto toProtoSource = [](EffectSource source) {
             return (source == EffectSource::Foreground)
@@ -1820,42 +1525,22 @@ bool WindowApp::renderFrame() {
             std::chrono::steady_clock::now() - drawStarted).count();
     }
 
-    // The SHM mapping is retained as well. Copy only changed scanline spans;
-    // the first frame and resize paths already invalidate the full surface.
-    const auto copyStarted = std::chrono::steady_clock::now();
-    if (!dmaBufFrame && m_shmPixels && !m_pixelBuffer.empty()) {
-        const uint32_t shmStridePixels = m_shmCapacityWidth > 0
-            ? m_shmCapacityWidth : activePixelWidth;
-        for (const PhysicalDamageRect& damage : physicalDamage) {
-            const size_t rowBytes =
-                static_cast<size_t>(damage.right - damage.left) * sizeof(uint32_t);
-            for (uint32_t y = damage.top; y < damage.bottom; ++y) {
-                const size_t sourceOffset =
-                    static_cast<size_t>(y) * activePixelWidth + damage.left;
-                const size_t destinationOffset =
-                    static_cast<size_t>(y) * shmStridePixels + damage.left;
-                if ((destinationOffset + (damage.right - damage.left)) *
-                        sizeof(uint32_t) > m_shmSize) break;
-                std::memcpy(m_shmPixels + destinationOffset,
-                            m_pixelBuffer.data() + sourceOffset,
-                            rowBytes);
-            }
-            if (m_frameTraceEnabled) {
-                m_traceCopiedBytes += rowBytes * (damage.bottom - damage.top);
-            }
-        }
-    }
-    if (m_frameTraceEnabled) {
-        m_traceCopyMs += std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - copyStarted).count();
-    }
-
-    // If connected over IPC, notify compositor of buffer commit
-    const auto attachStarted = std::chrono::steady_clock::now();
+    // Connected clients submit the closed logical frame to central rasterd.
+    const auto rasterSubmitStarted = std::chrono::steady_clock::now();
     bool frameAttached = false;
     if (m_ipcConnected && m_socketFd >= 0 &&
         m_canvas->usesDisplayListTransport()) {
         if (auto frame = m_canvas->takeDisplayListFrame()) {
+            if (!m_rasterClient->prepare()) {
+                m_firstFrame = true;
+                return false;
+            }
+            const uint64_t connectionGeneration =
+                m_rasterClient->connectionGeneration();
+            if (connectionGeneration != m_rasterConnectionGeneration) {
+                m_uploadedImageRevisions.clear();
+                m_rasterConnectionGeneration = connectionGeneration;
+            }
             // The compositor may reclaim uploads absent from the retained
             // frame. Mirror that lifetime locally so an asset that leaves and
             // later re-enters the scene is uploaded again instead of relying
@@ -1879,139 +1564,42 @@ bool WindowApp::renderFrame() {
                 }
             }
 
-            constexpr size_t kMaxWireBytes =
-                lcl::protocol::LCL_PROTOCOL_MAX_PAYLOAD -
-                sizeof(lcl::protocol::LCLMsgCommitDisplayList);
+            constexpr size_t kMaxWireBytes = raster_protocol::kMaxPayload;
             auto encoded = resourcesReady
                 ? graphics::encodeDisplayList(frame->displayList, kMaxWireBytes)
                 : graphics::DisplayListEncodeResult{};
             if (resourcesReady && encoded) {
-                lcl::protocol::LCLMsgCommitDisplayList commit{};
-                commit.surfaceId = m_surfaceId;
-                commit.configureSerial = m_configureSerial;
-                commit.logicalWidth = m_width;
-                commit.logicalHeight = m_height;
-                commit.displayListSize = static_cast<uint32_t>(encoded.bytes.size());
-
-                std::vector<uint8_t> payload(sizeof(commit) + encoded.bytes.size());
-                std::memcpy(payload.data(), &commit, sizeof(commit));
-                if (!encoded.bytes.empty()) {
-                    std::memcpy(payload.data() + sizeof(commit), encoded.bytes.data(),
-                                encoded.bytes.size());
-                }
-                if (sendProtocolMessage(lcl::protocol::LCLOpcode::CommitDisplayList,
-                                        payload.data(),
-                                        static_cast<uint32_t>(payload.size()))) {
+                const uint64_t frameSerial = m_nextFrameSerial++;
+                if (m_nextFrameSerial == 0) m_nextFrameSerial = 1;
+                if (m_rasterClient->submitFrame(
+                        m_configureSerial, frameSerial, m_geometryGeneration,
+                        m_width, m_height, m_bufferScale, encoded.bytes)) {
                     m_submittedConfigureSerial = m_configureSerial;
+                    m_submittedFrameSerial = frameSerial;
+                    m_submittedGeometryGeneration = m_geometryGeneration;
+                    const uint64_t connectionGeneration =
+                        m_rasterClient->connectionGeneration();
+                    if (m_rasterConnectionGeneration != 0 &&
+                        connectionGeneration != m_rasterConnectionGeneration) {
+                        // The daemon restarted between resource admission and
+                        // frame submission. Retry with a complete resource set.
+                        m_uploadedImageRevisions.clear();
+                        m_firstFrame = true;
+                    }
+                    m_rasterConnectionGeneration = connectionGeneration;
                     m_frameGateOpen = false;
                     frameAttached = true;
                 }
             }
             if (!frameAttached) {
+                m_uploadedImageRevisions.clear();
+                m_rasterClient->disconnect();
                 m_firstFrame = true;
                 std::cerr << "[lcl-ui ERROR] DisplayList commit failed for "
                           << m_title << "; retrying\n";
             }
         } else {
             m_firstFrame = true;
-        }
-    } else if (m_ipcConnected && m_socketFd >= 0 && dmaBufFrame) {
-        if (auto frame = m_canvas->takeDmaBufFrame()) {
-            bool dmaBufAttached = false;
-            if (frame->transport ==
-                lcl::graphics::NativeBufferTransport::AndroidHardwareBufferV1) {
-                lcl::protocol::LCLMsgAttachNativeBuffer attachMsg{};
-                attachMsg.surfaceId = m_surfaceId;
-                attachMsg.configureSerial = m_configureSerial;
-                attachMsg.bufferId = frame->bufferId;
-                attachMsg.width = frame->width;
-                attachMsg.height = frame->height;
-                attachMsg.backingWidth = frame->backingWidth;
-                attachMsg.backingHeight = frame->backingHeight;
-                attachMsg.format = frame->format;
-                attachMsg.transport =
-                    lcl::protocol::LCLNativeBufferTransport::AndroidHardwareBufferV1;
-                const bool handleSent = m_nativeBufferSocketFd >= 0 &&
-                    m_canvas->sendNativeBufferHandle(
-                        m_nativeBufferSocketFd, frame->bufferId);
-                dmaBufAttached = handleSent && sendProtocolMessage(
-                    lcl::protocol::LCLOpcode::AttachNativeBuffer,
-                    &attachMsg, sizeof(attachMsg), frame->acquireFenceFd);
-            } else {
-                lcl::protocol::LCLMsgAttachDmaBuf attachMsg{};
-                attachMsg.surfaceId = m_surfaceId;
-                attachMsg.configureSerial = m_configureSerial;
-                attachMsg.bufferId = frame->bufferId;
-                attachMsg.width = frame->width;
-                attachMsg.height = frame->height;
-                attachMsg.backingWidth = frame->backingWidth;
-                attachMsg.backingHeight = frame->backingHeight;
-                attachMsg.stride = frame->stride;
-                attachMsg.format = frame->format;
-                attachMsg.modifier = frame->modifier;
-                dmaBufAttached = sendProtocolMessage(
-                    lcl::protocol::LCLOpcode::AttachDmaBuf,
-                    &attachMsg, sizeof(attachMsg), frame->fd);
-            }
-            if (frame->fd >= 0) close(frame->fd);
-            if (frame->acquireFenceFd >= 0) close(frame->acquireFenceFd);
-            if (!dmaBufAttached) {
-                m_canvas->cancelDmaBufFrame(frame->bufferId);
-                if (frame->transport ==
-                    lcl::graphics::NativeBufferTransport::AndroidHardwareBufferV1) {
-                    m_canvas->setDmaBufTransportEnabled(false);
-                    allocateSHM(m_width, m_height);
-                    if (m_nativeBufferSocketFd >= 0) {
-                        close(m_nativeBufferSocketFd);
-                        m_nativeBufferSocketFd = -1;
-                    }
-                }
-                m_firstFrame = true;
-            } else {
-                m_submittedConfigureSerial = m_configureSerial;
-                m_submittedDmaBufId = frame->bufferId;
-                m_frameGateOpen = false;
-                frameAttached = true;
-            }
-            if (dmaBufAttached && m_frameTraceEnabled) ++m_traceDmaBufAttaches;
-        } else {
-            // The GPU pool may be temporarily full. Keep the currently shown
-            // client buffer and retry after the compositor releases a slot.
-            m_firstFrame = true;
-            if (m_frameTraceEnabled) ++m_traceDmaBufPoolBlocks;
-        }
-    }
-    if (!m_canvas->usesDisplayListTransport() && !dmaBufFrame &&
-        m_ipcConnected && m_socketFd >= 0 && m_shmFd >= 0) {
-        lcl::protocol::LCLMsgAttachBuffer attachMsg{};
-        attachMsg.surfaceId = m_surfaceId;
-        attachMsg.configureSerial = m_configureSerial;
-        attachMsg.width = activePixelWidth;
-        attachMsg.height = activePixelHeight;
-        attachMsg.stride = (m_shmCapacityWidth > 0
-            ? m_shmCapacityWidth : activePixelWidth) * sizeof(uint32_t);
-        attachMsg.format = lcl::protocol::LCL_BUFFER_FORMAT_ARGB8888;
-        if (damageRight > damageLeft && damageBottom > damageTop) {
-            attachMsg.damageX = damageLeft;
-            attachMsg.damageY = damageTop;
-            attachMsg.damageWidth = damageRight - damageLeft;
-            attachMsg.damageHeight = damageBottom - damageTop;
-        }
-
-        const int passFd = m_shmNeedsAttach ? m_shmFd : -1;
-        if (sendProtocolMessage(lcl::protocol::LCLOpcode::AttachBuffer,
-                                &attachMsg, sizeof(attachMsg), passFd)) {
-            m_shmNeedsAttach = false;
-            m_submittedConfigureSerial = m_configureSerial;
-            m_frameGateOpen = false;
-            frameAttached = true;
-        } else if (m_shmNeedsAttach) {
-            // A lazy-mapped surface has no fallback window to keep it alive.
-            // Keep the first buffer eligible for another SCM_RIGHTS commit if
-            // a non-blocking socket briefly rejects this send.
-            m_firstFrame = true;
-            std::cerr << "[lcl-ui ERROR] Initial SHM attach failed for " << m_title
-                      << "; retrying\n";
         }
     }
     if (frameAttached && m_pendingLaunchIconVisibilityAck) {
@@ -2023,8 +1611,8 @@ bool WindowApp::renderFrame() {
         }
     }
     if (m_frameTraceEnabled) {
-        m_traceAttachMs += std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - attachStarted).count();
+        m_traceRasterSubmitMs += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - rasterSubmitStarted).count();
     }
 
     if (m_frameTraceEnabled) {
@@ -2047,39 +1635,27 @@ void WindowApp::logFrameTraceIfDue() {
               << " paint=" << average(m_tracePaintMs, m_traceRenderedFrames) << " ms"
               << " stages=(clear=" << average(m_traceClearMs, m_traceRenderedFrames)
               << ", draw=" << average(m_traceDrawMs, m_traceRenderedFrames)
-              << ", copy=" << average(m_traceCopyMs, m_traceRenderedFrames)
-              << ", attach=" << average(m_traceAttachMs, m_traceRenderedFrames) << " ms)"
+              << ", raster-submit=" << average(m_traceRasterSubmitMs, m_traceRenderedFrames) << " ms)"
               << " damage=" << m_traceDamagePixels << " px"
-              << " clear/copy=" << (m_traceClearedBytes / 1024) << '/' << (m_traceCopiedBytes / 1024) << " KiB"
+              << " clear=" << (m_traceClearedBytes / 1024) << " KiB"
               << " cfg=" << m_traceConfigureCount << " (interactive=" << m_traceInteractiveConfigureCount
               << ", transition=" << m_traceTransitionConfigureCount << ')'
-              << " dma=(attach=" << m_traceDmaBufAttaches
-              << ", presented=" << m_tracePresentedFrames
-              << ", rejected=" << m_traceRejectedDmaBufFrames
-              << ", pool-blocked=" << m_traceDmaBufPoolBlocks << ')'
-              << " resize=" << m_traceResizeApplies
-              << " shm=" << m_traceShmAllocations << " (" << average(m_traceShmMs, m_traceShmAllocations) << " ms)\n";
+              << " presented=" << m_tracePresentedFrames
+              << " resize=" << m_traceResizeApplies << '\n';
     m_traceLayoutPasses = 0;
     m_traceRenderedFrames = 0;
     m_traceConfigureCount = 0;
     m_traceInteractiveConfigureCount = 0;
     m_traceTransitionConfigureCount = 0;
     m_tracePresentedFrames = 0;
-    m_traceDmaBufAttaches = 0;
-    m_traceDmaBufPoolBlocks = 0;
-    m_traceRejectedDmaBufFrames = 0;
     m_traceResizeApplies = 0;
-    m_traceShmAllocations = 0;
     m_traceDamagePixels = 0;
     m_traceClearedBytes = 0;
-    m_traceCopiedBytes = 0;
     m_traceLayoutMs = 0.0;
     m_tracePaintMs = 0.0;
     m_traceClearMs = 0.0;
     m_traceDrawMs = 0.0;
-    m_traceCopyMs = 0.0;
-    m_traceAttachMs = 0.0;
-    m_traceShmMs = 0.0;
+    m_traceRasterSubmitMs = 0.0;
     m_traceLastLog = now;
 }
 

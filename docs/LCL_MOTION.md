@@ -62,10 +62,12 @@ adapters over the shared channel engine.
 
 ## Compositor resize ownership
 
-Protocol v15 pairs `ConfigureBounds` and buffer attachment with a monotonic
-`configureSerial`. Maximize/restore retains the old mapped client buffer while
-the shared spring animates one `WindowGroupTransform` for client, chrome,
-popups, effects, and inverse hit testing. A
-matching resized buffer crossfades in; stale serials are closed and rejected.
-If no matching buffer arrives within 750 ms, geometry and state roll back and
-a fresh rollback configure is issued.
+Protocol v26 pairs `ConfigureBounds` with a monotonic `configureSerial` and
+`geometryGeneration`. Resize has one `AtomicRetained` policy: parent and every
+size-changing attached/popup surface raster in parallel through central
+`lcl-rasterd`. The previous complete WindowGroup remains byte-for-byte and
+geometry-for-geometry unchanged until all matching layers are ready, then the
+new snapshot is promoted in one display transaction. There is no stretch,
+snapshot, crossfade, background reveal, timeout partial publish, or
+parent-first acknowledgement barrier. A newer target discards the obsolete
+generation; a slow app does not stall other compositor-owned motion.

@@ -12,6 +12,8 @@ public:
     ~DesktopRuntimePaths() override = default;
 
     std::string compositorSocketPath() const override;
+    std::string rasterSocketPath() const override;
+    std::string rasterServiceExecutable() const override;
     std::string sessionSocketPath() const override;
     std::string appCatalogDirectory() const override;
     std::vector<std::string> fontSearchDirectories() const override;

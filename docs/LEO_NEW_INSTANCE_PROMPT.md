@@ -21,7 +21,7 @@
 Before analyzing requirements or framing prompts, read `docs/ARCHITECTURE.md`:
 - **No X11 / No Wayland:** Direct Linux DRM/KMS + `evdev` C++20 engine.
 - **Decoupled Architecture:** Window Manager (spatial layout), Compositor (blind renderer), and Client Apps.
-- **IPC & Disconnects:** Protocol-v15 Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`, `0600`). Socket EOF automatically triggers surface/window reclamation.
+- **IPC & Disconnects:** Protocol-v26 compositor `SOCK_SEQPACKET` plus central `lcl-rasterd`; only rasterd's private channel publishes ready layer FDs. Socket EOF automatically triggers surface/window reclamation.
 - **Initramfs Isolation:** No host shell tool dependencies inside initramfs (`grep`, `cut`, `sed`, `awk`). Use native C++ binaries (`lcl-open`).
 
 ---

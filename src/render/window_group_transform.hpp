@@ -70,7 +70,7 @@ inline WindowGroupTransform makeWindowGroupTransform(const Window& window,
     // Exact resting frames remain pixel-aligned and therefore crisp. During
     // scale or geometry motion, preserve subpixel presentation coordinates so
     // the GPU sampler can blend movement instead of stepping whole pixels.
-    if (!window.isMorphing() && std::fabs(group.scale - 1.0f) < 0.0001f) {
+    if (std::fabs(group.scale - 1.0f) < 0.0001f) {
         globalX = std::round(globalX);
         globalY = std::round(globalY);
     }

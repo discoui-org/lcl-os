@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "core/ipc/lcl_protocol.hpp"
-#include "lcl-graphics/display_list.hpp"
+#include "core/ipc/raster_protocol.hpp"
 
 namespace lcl::core {
 
@@ -28,28 +28,6 @@ public:
     };
 
     struct SurfaceEntry {
-        struct ImageResourceKey {
-            uint64_t id{0};
-            uint64_t revision{0};
-            bool operator==(const ImageResourceKey&) const = default;
-        };
-        struct ImageResourceKeyHash {
-            size_t operator()(const ImageResourceKey& key) const noexcept {
-                const uint64_t mixed = key.id ^
-                    (key.revision + 0x9e3779b97f4a7c15ull +
-                     (key.id << 6u) + (key.id >> 2u));
-                return static_cast<size_t>(mixed);
-            }
-        };
-        struct ImageResource {
-            uint64_t compositorId{0};
-            uint32_t width{0};
-            uint32_t height{0};
-            uint32_t stridePixels{0};
-            bool opaque{false};
-            std::vector<uint32_t> pixels;
-        };
-
         enum class TransitionPhase {
             None,
             Entering,
@@ -58,8 +36,6 @@ public:
             Restoring,
             Interactive,
         };
-
-        enum class ResizeTransitionPhase { None, AwaitingBuffer, Crossfading };
 
         uint32_t windowId{0};
         uint64_t parentSurfaceKey{0};
@@ -79,11 +55,18 @@ public:
         float popupY{0.0f};
         uint64_t popupOrder{0};
         int clientFd{-1};
+        raster_protocol::SurfaceGrant producerGrant{};
+        struct RasterLayerRelease {
+            uint64_t layerId{0};
+            uint32_t texture{0};
+        };
+        uint64_t rasterLayerId{0};
+        uint32_t rasterLayerTexture{0};
+        uint64_t frameSerial{0};
+        uint64_t layerGeometryGeneration{0};
+        std::vector<RasterLayerRelease> pendingRasterLayerReleases;
         int shmFd{-1};
         void* pixels{nullptr};
-        uint32_t dmaBufId{0};
-        uint32_t dmaBufTexture{0};
-        bool dmaBufTransportActive{false};
         uint32_t width{0};
         uint32_t height{0};
         uint32_t backingWidth{0};
@@ -99,17 +82,6 @@ public:
         uint32_t shmDamageY{0};
         uint32_t shmDamageWidth{0};
         uint32_t shmDamageHeight{0};
-        // Backend-neutral client frame. Pixels are resolved from immutable
-        // uploaded resources and replayed only by the compositor's renderer.
-        lcl::graphics::DisplayList displayList;
-        uint64_t displayListSerial{0};
-        uint64_t displayListCacheId{0};
-        float displayListWidth{0.0f};
-        float displayListHeight{0.0f};
-        std::unordered_map<ImageResourceKey, ImageResource, ImageResourceKeyHash>
-            imageResources;
-        size_t imageResourceBytes{0};
-        std::unordered_map<uint64_t, uint64_t> cachedLayerNamespaces;
         // A surface is registered before it is mapped.  Keep its window policy
         // here until the first complete client buffer is ready to present.
         std::string title;
@@ -123,12 +95,9 @@ public:
         protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
         bool unfocusable{false};
         bool insetBorderEnabled{true};
-        protocol::LCLResizePresentationMode resizePresentation{
-            protocol::LCLResizePresentationMode::CompositorMorph};
         float cornerRadius{-1.0f};
         float cornerRoundness{2.0f};
         bool suppressInitialTransition{false};
-        bool forceOpaque{false};
         std::string appId;
         uint64_t appInstanceId{0};
         std::vector<SurfaceEffectRegion> effectRegions;
@@ -142,16 +111,14 @@ public:
         uint64_t pendingConfigureSerial{0};
         uint64_t acceptedConfigureSerial{0};
         uint64_t configuredGeometryGeneration{0};
-        // Non-zero after any buffer commit has been accepted and before the
-        // compositor frame containing it has been presented. Live resize also
-        // uses this credit to serialize configure -> commit -> presentation.
+        // Non-zero after rasterd's immutable layer has been accepted and before
+        // the compositor frame containing it has been presented.
         uint64_t presentationSerial{0};
         // Metadata-only WindowGroup barrier. Buffer ownership remains in the
         // normal current slot; scanout waits until every participant commits.
         uint64_t atomicConfigureGeneration{0};
         uint32_t atomicConfigureParticipantCount{0};
         bool atomicConfigureIssued{false};
-        std::chrono::steady_clock::time_point atomicConfigureDeadline{};
         bool forceConfigure{false};
         std::chrono::steady_clock::time_point lastConfigureSent{};
 
@@ -203,48 +170,8 @@ public:
         bool pendingDestroy{false};
         bool pendingMinimize{false};
 
-        // During compositor geometry morphs the last accepted client frame is
-        // retained until the matching configure serial arrives.
-        int previousShmFd{-1};
-        void* previousPixels{nullptr};
-        uint32_t previousDmaBufId{0};
-        uint32_t previousDmaBufTexture{0};
-        uint32_t previousWidth{0};
-        uint32_t previousHeight{0};
-        uint32_t previousBackingWidth{0};
-        uint32_t previousBackingHeight{0};
-        uint32_t previousStride{0};
-        size_t previousShmSize{0};
-        uint64_t previousShmContentSerial{0};
-        lcl::graphics::DisplayList previousDisplayList;
-        uint64_t previousDisplayListSerial{0};
-        uint64_t previousDisplayListCacheId{0};
-        float previousDisplayListWidth{0.0f};
-        float previousDisplayListHeight{0.0f};
-        ResizeTransitionPhase resizeTransitionPhase{ResizeTransitionPhase::None};
-        std::chrono::steady_clock::time_point resizeDeadline{};
-        float resizeCrossfadeElapsedSec{0.0f};
-        float resizeCrossfadeProgress{1.0f};
-        bool resizeBufferReady{true};
-        bool rollbackRequested{false};
-        uint64_t resizeGeometryGeneration{0};
-        float rollbackX{0.0f};
-        float rollbackY{0.0f};
-        float rollbackWidth{0.0f};
-        float rollbackHeight{0.0f};
-        bool rollbackWasMaximized{false};
-        bool rollbackWasMinimized{false};
-
-        struct PendingDmaBufRelease {
-            uint32_t bufferId{0};
-            uint32_t texture{0};
-        };
-        // Drained only after a compositor presentation. This is the client
-        // reuse barrier for the three-slot GBM pool.
-        std::vector<PendingDmaBufRelease> pendingDmaBufReleases;
-
         bool hasRenderableBuffer() const noexcept {
-            return pixels != nullptr || dmaBufTexture != 0 || !displayList.empty();
+            return pixels != nullptr || rasterLayerTexture != 0;
         }
         bool isPopup() const noexcept { return parentSurfaceKey != 0; }
         bool isAttached() const noexcept { return attachedWindowId != 0; }
@@ -304,22 +231,11 @@ public:
     size_t erase(Key key);
     void clear() noexcept;
 
-    /** Release an entry's mapped SHM or imported DMA-BUF without erasing metadata. */
+    /** Release an entry's retained raster layer without erasing metadata. */
     static void releaseBuffer(SurfaceEntry& entry) noexcept;
-    static void releasePreviousBuffer(SurfaceEntry& entry) noexcept;
     /** Cancel a superseded geometry transaction without releasing the current frame. */
     static void interruptGeometryTransaction(SurfaceEntry& entry,
                                              uint64_t newGeneration) noexcept;
-    /**
-     * Begin a maximize/restore buffer transaction while retaining the current
-     * frame as the rollback and crossfade source.
-     */
-    static void beginGeometryTransition(SurfaceEntry& entry,
-                                        uint64_t newGeneration,
-                                        float rollbackX, float rollbackY,
-                                        float rollbackWidth, float rollbackHeight,
-                                        bool rollbackWasMaximized,
-                                        bool rollbackWasMinimized) noexcept;
     static bool acceptsBufferCommit(const SurfaceEntry& entry,
                                     uint64_t configureSerial) noexcept;
     /** Resolve a client-constrained logical extent from its physical commit. */
@@ -328,26 +244,9 @@ public:
                                         float bufferScale) noexcept;
     static bool hasOutstandingConfigure(const SurfaceEntry& entry) noexcept;
     static bool hasUnpresentedFrame(const SurfaceEntry& entry) noexcept;
-    bool beginAtomicConfigure(
-        uint32_t windowId, uint64_t generation,
-        const std::vector<Key>& participants,
-        std::chrono::steady_clock::time_point deadline) noexcept;
-    void cancelAtomicConfigure(uint32_t windowId,
-                               uint64_t generation) noexcept;
-    /** True keeps the previous scanout intact; ready/expired barriers clear. */
-    bool hasIncompleteAtomicConfigure(
-        std::chrono::steady_clock::time_point now) noexcept;
     static void queuePresentation(SurfaceEntry& entry,
                                   uint64_t configureSerial) noexcept;
     static void completePresentation(SurfaceEntry& entry) noexcept;
-    /**
-     * Drop immutable image uploads that are no longer referenced by either
-     * retained DisplayList. Referenced pixel vectors remain pointer-stable for
-     * replay; stale assets can no longer exhaust a long-lived surface budget.
-     */
-    static void pruneUnreferencedImageResources(
-        SurfaceEntry& entry, size_t targetCount,
-        size_t targetBytes) noexcept;
     /** A process may own several independent surface sockets; disconnect is per socket. */
     static bool isOwnedByClientConnection(const SurfaceEntry& entry,
                                           int clientFd) noexcept;

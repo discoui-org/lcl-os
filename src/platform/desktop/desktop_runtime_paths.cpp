@@ -1,11 +1,24 @@
 #include "platform/desktop/desktop_runtime_paths.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 
 namespace lcl::platform::desktop {
 
 std::string DesktopRuntimePaths::compositorSocketPath() const {
     return "/Runtime/lcl-compositor.sock";
+}
+
+std::string DesktopRuntimePaths::rasterSocketPath() const {
+    return "/Runtime/lcl-raster.sock";
+}
+
+std::string DesktopRuntimePaths::rasterServiceExecutable() const {
+    if (const char* overridePath = std::getenv("LCL_RASTERD_PATH");
+        overridePath && overridePath[0] != '\0') {
+        return overridePath;
+    }
+    return "/System/Core/lcl-rasterd";
 }
 
 std::string DesktopRuntimePaths::sessionSocketPath() const {

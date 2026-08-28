@@ -42,6 +42,10 @@ ANDROID_NATIVE_CLIENT_ARTIFACTS = {
     "lcl-js": Path("lcl-js"),
 }
 ANDROID_NATIVE_CLIENT_TARGETS = tuple(ANDROID_NATIVE_CLIENT_ARTIFACTS)
+ANDROID_PLATFORM_TARGETS = (
+    "lcl-core-android",
+    "lcl-rasterd-android",
+)
 
 
 def log(msg: str) -> None:
@@ -286,7 +290,7 @@ def build_android_phone_artifacts(
     subprocess.check_call(configure_args, cwd=ROOT_DIR)
 
     jobs = max(1, int(args.jobs))
-    android_targets = ["lcl-core-android"]
+    android_targets = list(ANDROID_PLATFORM_TARGETS)
     if is_arm64 and use_rootfs and not args.software_clients:
         android_targets.extend(ANDROID_NATIVE_CLIENT_TARGETS)
     build_args = [
@@ -295,7 +299,7 @@ def build_android_phone_artifacts(
     ]
     if args.rebuild:
         build_args.append("--clean-first")
-    log(f"Building {abi} Android compositor...")
+    log(f"Building {abi} Android compositor and raster service...")
     subprocess.check_call(build_args, cwd=ROOT_DIR)
 
     if use_rootfs:

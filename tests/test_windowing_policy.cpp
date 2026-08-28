@@ -31,10 +31,9 @@ TEST(WindowingPolicyTest, DesktopPreservesRequestedWindowContract) {
     EXPECT_TRUE(policy.usesDesktopWindowManagement());
     EXPECT_FALSE(policy.usesSystemGestures());
     EXPECT_FALSE(policy.usesMobileWindowDecorations());
-    EXPECT_FALSE(policy.forcesOpaqueNormalSurfaces());
 }
 
-TEST(WindowingPolicyTest, MobileForcesFullscreenFramelessWindowContract) {
+TEST(WindowingPolicyTest, MobileUsesFullscreenFramelessWindowContract) {
     MobileWindowPolicy policy;
     float x = 80.0f;
     float y = 60.0f;
@@ -62,7 +61,6 @@ TEST(WindowingPolicyTest, MobileForcesFullscreenFramelessWindowContract) {
     EXPECT_FALSE(policy.usesDesktopWindowManagement());
     EXPECT_TRUE(policy.usesSystemGestures());
     EXPECT_TRUE(policy.usesMobileWindowDecorations());
-    EXPECT_TRUE(policy.forcesOpaqueNormalSurfaces());
 }
 
 TEST(WindowingPolicyTest, GestaltShellKindSelectsMatchingPolicy) {

@@ -16,9 +16,11 @@
 #include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/input_router.hpp"
+#include "core/compositor/layer_feedback_handler.hpp"
 #include "core/compositor/mobile_launch_backdrop.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
 #include "core/compositor/surface_registry.hpp"
+#include "core/compositor/surface_transaction_coordinator.hpp"
 #include "core/compositor/system_surface_policy.hpp"
 #include "render/window_group_transform.hpp"
 #include "core/scene/focus_controller.hpp"
@@ -31,10 +33,37 @@
 
 namespace lcl::core {
 
-TEST(CompositorRendererTest, MotionNeverDefersAnUncachedFirstDisplayList) {
-    EXPECT_FALSE(shouldDeferDisplayListRasterUpdate(true, false));
-    EXPECT_TRUE(shouldDeferDisplayListRasterUpdate(true, true));
-    EXPECT_FALSE(shouldDeferDisplayListRasterUpdate(false, true));
+TEST(LayerFeedbackHandlerTest, RejectedStaleLayerReturnsExactFrameCredit) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+
+    raster_protocol::LayerReady layer{};
+    layer.grant.surfaceId = 42;
+    layer.configureSerial = 17;
+    layer.frameSerial = 23;
+    layer.geometryGeneration = 31;
+    ASSERT_TRUE(LayerFeedbackHandler::discard(
+        sockets[0], layer, protocol::LCLFrameDiscardReason::Superseded));
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    EXPECT_EQ(receivedFd, -1);
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::FrameDiscarded);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgFrameDiscarded));
+    const auto* discarded = reinterpret_cast<const
+        protocol::LCLMsgFrameDiscarded*>(payload.data());
+    EXPECT_EQ(discarded->surfaceId, 42u);
+    EXPECT_EQ(discarded->configureSerial, 17u);
+    EXPECT_EQ(discarded->frameSerial, 23u);
+    EXPECT_EQ(discarded->geometryGeneration, 31u);
+    EXPECT_EQ(discarded->reason,
+              protocol::LCLFrameDiscardReason::Superseded);
+
+    close(sockets[0]);
+    close(sockets[1]);
 }
 
 TEST(MobileLaunchBackdropTest, UsesScaleAndBrightnessWithoutEffectOpacity) {
@@ -124,24 +153,21 @@ TEST(SurfaceRegistryTest, AtomicConfigureWaitsWithoutDuplicatingBuffers) {
     frame.acceptedConfigureSerial = 7;
     frame.configuredGeometryGeneration = 22;
 
-    const auto now = std::chrono::steady_clock::now();
-    ASSERT_TRUE(registry.beginAtomicConfigure(
-        9, 22, {parentKey, frameKey}, now + std::chrono::seconds(1)));
-    EXPECT_TRUE(registry.hasIncompleteAtomicConfigure(now));
+    ASSERT_TRUE(SurfaceTransactionCoordinator::begin(
+        registry, 9, 22, {parentKey, frameKey}));
+    EXPECT_TRUE(SurfaceTransactionCoordinator::promoteReady(registry));
 
     parent.acceptedConfigureSerial = 5;
     SurfaceRegistry::queuePresentation(parent, 5);
-    EXPECT_TRUE(registry.hasIncompleteAtomicConfigure(now));
+    EXPECT_TRUE(SurfaceTransactionCoordinator::promoteReady(registry));
     frame.atomicConfigureIssued = true;
     frame.acceptedConfigureSerial = 8;
     SurfaceRegistry::queuePresentation(frame, 8);
-    EXPECT_FALSE(registry.hasIncompleteAtomicConfigure(now));
+    EXPECT_FALSE(SurfaceTransactionCoordinator::promoteReady(registry));
     EXPECT_EQ(parent.atomicConfigureGeneration, 0u);
     EXPECT_EQ(frame.atomicConfigureGeneration, 0u);
     EXPECT_EQ(parent.presentationSerial, 5u);
     EXPECT_EQ(frame.presentationSerial, 8u);
-    EXPECT_EQ(parent.previousPixels, nullptr);
-    EXPECT_EQ(frame.previousPixels, nullptr);
 }
 
 TEST(SurfaceRegistryTest, AtomicConfigureWithoutDeadlineNeverOpensTornGroup) {
@@ -159,60 +185,33 @@ TEST(SurfaceRegistryTest, AtomicConfigureWithoutDeadlineNeverOpensTornGroup) {
     frame.acceptedConfigureSerial = 2;
     frame.configuredGeometryGeneration = 23;
 
-    ASSERT_TRUE(registry.beginAtomicConfigure(
-        10, 23, {parentKey, frameKey}, {}));
-    EXPECT_TRUE(registry.hasIncompleteAtomicConfigure(
-        std::chrono::steady_clock::now() + std::chrono::hours(24)));
+    ASSERT_TRUE(SurfaceTransactionCoordinator::begin(
+        registry, 10, 23, {parentKey, frameKey}));
+    EXPECT_TRUE(SurfaceTransactionCoordinator::promoteReady(registry));
     EXPECT_EQ(parent.atomicConfigureGeneration, 23u);
     EXPECT_EQ(frame.atomicConfigureGeneration, 23u);
 }
 
-TEST(SurfaceRegistryTest, ImageBudgetPruningProtectsRetainedDisplayListPixels) {
-    SurfaceRegistry::SurfaceEntry entry;
-    using ResourceKey = SurfaceRegistry::SurfaceEntry::ImageResourceKey;
-    using Resource = SurfaceRegistry::SurfaceEntry::ImageResource;
-    const ResourceKey currentKey{1, 1};
-    const ResourceKey previousKey{2, 1};
-    const ResourceKey staleKey{3, 1};
+TEST(SurfaceRegistryTest, AtomicReplacementChangesMembershipOnlyAfterValidation) {
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(14, 74, 1);
+    const auto frameKey = SurfaceRegistry::makeKey(15, 75, 2);
+    registry[parentKey].windowId = 11;
+    registry[frameKey].windowId = 11;
 
-    const auto insertResource = [&entry](ResourceKey key, uint32_t color) {
-        Resource resource{};
-        resource.compositorId = key.id + 100;
-        resource.width = 2;
-        resource.height = 2;
-        resource.stridePixels = 2;
-        resource.pixels.assign(4, color);
-        entry.imageResourceBytes += resource.pixels.size() * sizeof(uint32_t);
-        return entry.imageResources.emplace(key, std::move(resource)).first;
-    };
-    insertResource(currentKey, 0xFFFF0000u);
-    insertResource(previousKey, 0xFF00FF00u);
-    insertResource(staleKey, 0xFF0000FFu);
-    const auto& current = entry.imageResources.at(currentKey);
-    const auto& previous = entry.imageResources.at(previousKey);
+    ASSERT_TRUE(SurfaceTransactionCoordinator::begin(
+        registry, 11, 30, {parentKey, frameKey}));
+    const auto missingKey = SurfaceRegistry::makeKey(16, 76, 3);
+    EXPECT_FALSE(SurfaceTransactionCoordinator::begin(
+        registry, 11, 31, {parentKey, missingKey}));
+    EXPECT_EQ(registry[parentKey].atomicConfigureGeneration, 30u);
+    EXPECT_EQ(registry[frameKey].atomicConfigureGeneration, 30u);
 
-    graphics::DisplayListBuilder currentBuilder;
-    currentBuilder.drawImage(
-        {0, 0, 2, 2},
-        reinterpret_cast<uintptr_t>(current.pixels.data()),
-        2, 2, 2, 1.0f, 0.0f, 2.0f, false,
-        current.compositorId, currentKey.revision, true);
-    entry.displayList = currentBuilder.build();
-    graphics::DisplayListBuilder previousBuilder;
-    previousBuilder.drawImage(
-        {0, 0, 2, 2},
-        reinterpret_cast<uintptr_t>(previous.pixels.data()),
-        2, 2, 2, 1.0f, 0.0f, 2.0f, false,
-        previous.compositorId, previousKey.revision, true);
-    entry.previousDisplayList = previousBuilder.build();
-
-    SurfaceRegistry::pruneUnreferencedImageResources(
-        entry, 2, 2 * 4 * sizeof(uint32_t));
-    EXPECT_TRUE(entry.imageResources.contains(currentKey));
-    EXPECT_TRUE(entry.imageResources.contains(previousKey));
-    EXPECT_FALSE(entry.imageResources.contains(staleKey));
-    EXPECT_EQ(entry.imageResources.size(), 2u);
-    EXPECT_EQ(entry.imageResourceBytes, 2u * 4u * sizeof(uint32_t));
+    ASSERT_TRUE(SurfaceTransactionCoordinator::begin(
+        registry, 11, 31, {parentKey}));
+    EXPECT_EQ(registry[parentKey].atomicConfigureGeneration, 31u);
+    EXPECT_EQ(registry[parentKey].atomicConfigureParticipantCount, 1u);
+    EXPECT_EQ(registry[frameKey].atomicConfigureGeneration, 0u);
 }
 
 TEST(SurfaceRegistryTest, PopupChildrenKeepStableParentLocalStackOrder) {
@@ -321,7 +320,7 @@ TEST(SurfaceRegistryTest, ClientConstrainedCommitDefinesSnappedLogicalExtent) {
                     536.0f);
 }
 
-TEST(SurfaceRegistryTest, CloseTransitionAcceptsShmAndDmaBufFrozenFrames) {
+TEST(SurfaceRegistryTest, CloseTransitionAcceptsRetainedRasterLayers) {
     SurfaceRegistry::SurfaceEntry shm;
     shm.windowId = 1;
     shm.width = 640;
@@ -337,20 +336,20 @@ TEST(SurfaceRegistryTest, CloseTransitionAcceptsShmAndDmaBufFrozenFrames) {
     EXPECT_FLOAT_EQ(shm.transitionScale, 1.0f);
     EXPECT_FALSE(shm.pendingDestroy);
 
-    SurfaceRegistry::SurfaceEntry dmaBuf;
-    dmaBuf.windowId = 2;
-    dmaBuf.width = 800;
-    dmaBuf.height = 600;
-    dmaBuf.dmaBufTexture = 77;
+    SurfaceRegistry::SurfaceEntry secondLayer;
+    secondLayer.windowId = 2;
+    secondLayer.width = 800;
+    secondLayer.height = 600;
+    secondLayer.pixels = reinterpret_cast<void*>(2);
 
-    ASSERT_TRUE(SurfaceRegistry::beginClosingTransition(dmaBuf));
-    EXPECT_TRUE(dmaBuf.ignoreBufferCommits);
-    EXPECT_EQ(dmaBuf.transitionPhase,
+    ASSERT_TRUE(SurfaceRegistry::beginClosingTransition(secondLayer));
+    EXPECT_TRUE(secondLayer.ignoreBufferCommits);
+    EXPECT_EQ(secondLayer.transitionPhase,
               SurfaceRegistry::SurfaceEntry::TransitionPhase::Closing);
-    EXPECT_GT(dmaBuf.transitionDurationSec, 0.0f);
-    EXPECT_FLOAT_EQ(dmaBuf.transitionOpacity, 1.0f);
-    EXPECT_FLOAT_EQ(dmaBuf.transitionScale, 1.0f);
-    EXPECT_FALSE(dmaBuf.pendingDestroy);
+    EXPECT_GT(secondLayer.transitionDurationSec, 0.0f);
+    EXPECT_FLOAT_EQ(secondLayer.transitionOpacity, 1.0f);
+    EXPECT_FLOAT_EQ(secondLayer.transitionScale, 1.0f);
+    EXPECT_FALSE(secondLayer.pendingDestroy);
 }
 
 TEST(SurfaceRegistryTest, CloseTransitionSkipsUnrenderableAndSuppressedSurfaces) {
@@ -367,7 +366,7 @@ TEST(SurfaceRegistryTest, CloseTransitionSkipsUnrenderableAndSuppressedSurfaces)
     systemSurface.windowId = 2;
     systemSurface.width = 640;
     systemSurface.height = 32;
-    systemSurface.dmaBufTexture = 88;
+    systemSurface.pixels = reinterpret_cast<void*>(1);
     systemSurface.suppressInitialTransition = true;
     EXPECT_FALSE(SurfaceRegistry::beginClosingTransition(systemSurface));
     EXPECT_TRUE(systemSurface.ignoreBufferCommits);
@@ -435,70 +434,8 @@ TEST(CompositorRendererTest, CurrentPreviousAndPopupDestinationsUseOneDprRule) {
     }
 }
 
-TEST(SurfaceRegistryTest, DmaBufSlotIsReleasedOnlyAfterLeavingThePresentedSet) {
+TEST(SurfaceRegistryTest, GeometryInterruptionPreservesInFlightSerial) {
     SurfaceRegistry::SurfaceEntry entry;
-    entry.dmaBufId = 2;
-    entry.dmaBufTexture = 17;
-    SurfaceRegistry::releaseBuffer(entry);
-    ASSERT_EQ(entry.pendingDmaBufReleases.size(), 1u);
-    EXPECT_EQ(entry.pendingDmaBufReleases.front().bufferId, 2u);
-    EXPECT_EQ(entry.pendingDmaBufReleases.front().texture, 17u);
-    EXPECT_EQ(entry.dmaBufId, 0u);
-    EXPECT_EQ(entry.dmaBufTexture, 0u);
-}
-
-TEST(SurfaceRegistryTest, GeometryInterruptionInvalidatesRollbackSerialAndPreviousBuffer) {
-    SurfaceRegistry::SurfaceEntry entry;
-    entry.resizeTransitionPhase =
-        SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::Crossfading;
-    entry.rollbackRequested = true;
-    entry.pendingConfigureSerial = 9;
-    entry.acceptedConfigureSerial = 7;
-    entry.previousDmaBufId = 3;
-    entry.previousDmaBufTexture = 19;
-
-    SurfaceRegistry::interruptGeometryTransaction(entry, 42);
-
-    EXPECT_EQ(entry.resizeTransitionPhase,
-              SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None);
-    EXPECT_FALSE(entry.rollbackRequested);
-    EXPECT_TRUE(entry.resizeBufferReady);
-    EXPECT_FLOAT_EQ(entry.resizeCrossfadeProgress, 1.0f);
-    EXPECT_EQ(entry.pendingConfigureSerial, 0u);
-    EXPECT_FALSE(SurfaceRegistry::acceptsBufferCommit(entry, 7));
-    EXPECT_EQ(entry.configuredGeometryGeneration, 42u);
-    EXPECT_TRUE(entry.forceConfigure);
-    ASSERT_EQ(entry.pendingDmaBufReleases.size(), 1u);
-    EXPECT_EQ(entry.pendingDmaBufReleases.front().bufferId, 3u);
-    EXPECT_EQ(entry.pendingDmaBufReleases.front().texture, 19u);
-}
-
-TEST(SurfaceRegistryTest, GeometryTransitionRetainsCurrentBufferWhileAwaitingReplacement) {
-    SurfaceRegistry::SurfaceEntry entry;
-    entry.dmaBufId = 8;
-    entry.dmaBufTexture = 23;
-    entry.pendingConfigureSerial = 9;
-    entry.acceptedConfigureSerial = 7;
-
-    SurfaceRegistry::beginGeometryTransition(
-        entry, 42, 80, 90, 400, 300, false, false);
-
-    EXPECT_EQ(entry.resizeTransitionPhase,
-              SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer);
-    EXPECT_EQ(entry.resizeGeometryGeneration, 42u);
-    EXPECT_EQ(entry.dmaBufId, 8u);
-    EXPECT_EQ(entry.dmaBufTexture, 23u);
-    EXPECT_TRUE(entry.pendingDmaBufReleases.empty());
-    EXPECT_EQ(entry.rollbackX, 80);
-    EXPECT_EQ(entry.rollbackY, 90);
-    EXPECT_EQ(entry.rollbackWidth, 400);
-    EXPECT_EQ(entry.rollbackHeight, 300);
-    EXPECT_FALSE(entry.resizeBufferReady);
-}
-
-TEST(SurfaceRegistryTest, LiveGeometryInterruptionPreservesInFlightSerial) {
-    SurfaceRegistry::SurfaceEntry entry;
-    entry.resizePresentation = protocol::LCLResizePresentationMode::Live;
     entry.pendingConfigureSerial = 9;
     entry.acceptedConfigureSerial = 7;
     entry.configuredGeometryGeneration = 12;
@@ -511,9 +448,8 @@ TEST(SurfaceRegistryTest, LiveGeometryInterruptionPreservesInFlightSerial) {
     EXPECT_TRUE(entry.forceConfigure);
 }
 
-TEST(SurfaceRegistryTest, DmaBufPresentationCreditIsQueuedForEveryResizeMode) {
+TEST(SurfaceRegistryTest, RasterLayerPresentationCreditIsExplicit) {
     SurfaceRegistry::SurfaceEntry entry;
-    entry.resizePresentation = protocol::LCLResizePresentationMode::Live;
 
     EXPECT_FALSE(SurfaceRegistry::hasUnpresentedFrame(entry));
     SurfaceRegistry::queuePresentation(entry, 21);
@@ -524,7 +460,6 @@ TEST(SurfaceRegistryTest, DmaBufPresentationCreditIsQueuedForEveryResizeMode) {
     EXPECT_FALSE(SurfaceRegistry::hasUnpresentedFrame(entry));
     EXPECT_EQ(entry.presentationSerial, 0u);
 
-    entry.resizePresentation = protocol::LCLResizePresentationMode::CompositorMorph;
     SurfaceRegistry::queuePresentation(entry, 22);
     EXPECT_TRUE(SurfaceRegistry::hasUnpresentedFrame(entry));
     EXPECT_EQ(entry.presentationSerial, 22u);
@@ -996,6 +931,7 @@ TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
 
     window.pendingWidth = 400;
     window.pendingHeight = 280;
+    ++window.geometryGeneration;
     router.syncWindowState();
     const int flags = fcntl(sockets[1], F_GETFL, 0);
     ASSERT_GE(flags, 0);
@@ -1004,6 +940,8 @@ TEST(InputRouterTest, CoalescesPointerGeometryWhileConfigureIsOutstanding) {
               protocol::ReceiveStatus::WouldBlock);
 
     surface.acceptedConfigureSerial = surface.pendingConfigureSerial;
+    surface.lastConfigureSent = std::chrono::steady_clock::now() -
+        std::chrono::milliseconds(20);
     router.syncWindowState();
     ASSERT_EQ(protocol::recvPacketWithFd(sockets[1], header, payload, receivedFd),
               protocol::ReceiveStatus::Received);
@@ -1028,6 +966,8 @@ TEST(InputRouterTest, AttachedFrameFollowsPendingParentResizeGeometry) {
         "Attached resize", 80, 90, 320, 232);
 
     SurfaceRegistry registry;
+    uint32_t parentPixel = 0xFF000000u;
+    uint32_t framePixel = 0xFF000000u;
     auto& parent = registry[
         SurfaceRegistry::makeKey(parentSockets[0], 102, 1)];
     parent.windowId = windowId;
@@ -1040,9 +980,9 @@ TEST(InputRouterTest, AttachedFrameFollowsPendingParentResizeGeometry) {
     parent.acceptedConfigureSerial = 1;
     parent.nextConfigureSerial = 2;
     parent.hasCommittedBuffer = true;
-    graphics::DisplayListBuilder parentBuilder;
-    parentBuilder.drawText({0, 0}, "parent", {255, 255, 255, 255}, 12);
-    parent.displayList = parentBuilder.build();
+    parent.pixels = &parentPixel;
+    parent.width = 1;
+    parent.height = 1;
     auto& frame = registry[
         SurfaceRegistry::makeKey(frameSockets[0], 103, 1000)];
     frame.windowId = windowId;
@@ -1058,9 +998,9 @@ TEST(InputRouterTest, AttachedFrameFollowsPendingParentResizeGeometry) {
     frame.acceptedConfigureSerial = 1;
     frame.nextConfigureSerial = 2;
     frame.hasCommittedBuffer = true;
-    graphics::DisplayListBuilder frameBuilder;
-    frameBuilder.drawText({0, 0}, "attachment", {255, 255, 255, 255}, 12);
-    frame.displayList = frameBuilder.build();
+    frame.pixels = &framePixel;
+    frame.width = 1;
+    frame.height = 1;
 
     SceneRegistry scenes;
     InputRouter router(manager, registry, scenes);
@@ -1085,25 +1025,6 @@ TEST(InputRouterTest, AttachedFrameFollowsPendingParentResizeGeometry) {
     EXPECT_EQ(parentConfigure->resizeReason,
               protocol::LCLConfigureResizeReason::Interactive);
 
-    EXPECT_EQ(parent.atomicConfigureGeneration, window.geometryGeneration);
-    EXPECT_EQ(frame.atomicConfigureGeneration, window.geometryGeneration);
-
-    // Terminal snaps the requested 420 width to 416. The attachment must not
-    // be configured until that committed parent width is known.
-    parent.configuredWidth = 416.0f;
-    parent.configuredHeight = 248.0f;
-    parent.acceptedConfigureSerial = parent.pendingConfigureSerial;
-    SurfaceRegistry::queuePresentation(
-        parent, parent.acceptedConfigureSerial);
-    // The frame repaints its released maximize button at the old geometry
-    // after the atomic epoch began. Phase two must discard this superseded
-    // presentation credit or the frame cannot render its new configure.
-    SurfaceRegistry::queuePresentation(
-        frame, frame.acceptedConfigureSerial);
-    EXPECT_TRUE(registry.hasIncompleteAtomicConfigure(
-        std::chrono::steady_clock::now()));
-    router.syncWindowState();
-
     payload.clear();
     ASSERT_TRUE(protocol::recvMsgWithFd(
         frameSockets[1], header, payload, receivedFd));
@@ -1111,76 +1032,23 @@ TEST(InputRouterTest, AttachedFrameFollowsPendingParentResizeGeometry) {
     const auto* frameConfigure = reinterpret_cast<const
         protocol::LCLMsgConfigureBounds*>(payload.data());
     EXPECT_EQ(frameConfigure->surfaceId, 1000u);
-    EXPECT_FLOAT_EQ(frameConfigure->width, 416.0f);
+    EXPECT_FLOAT_EQ(frameConfigure->width, 420.0f);
     EXPECT_FLOAT_EQ(frameConfigure->height, 32.0f);
-    EXPECT_EQ(frameConfigure->resizeReason,
-              protocol::LCLConfigureResizeReason::Interactive);
-    EXPECT_EQ(parent.configuredGeometryGeneration,
-              frame.configuredGeometryGeneration);
-    payload.clear();
-    ASSERT_TRUE(protocol::recvMsgWithFd(
-        frameSockets[1], header, payload, receivedFd));
-    ASSERT_EQ(header.opcode, protocol::LCLOpcode::FrameDiscarded);
-    const auto* discarded = reinterpret_cast<const
-        protocol::LCLMsgFrameDiscarded*>(payload.data());
-    EXPECT_EQ(discarded->surfaceId, 1000u);
-    EXPECT_EQ(discarded->configureSerial, 1u);
-    EXPECT_EQ(frame.presentationSerial, 0u);
+    EXPECT_EQ(frameConfigure->geometryGeneration,
+              parentConfigure->geometryGeneration);
+    EXPECT_EQ(parent.atomicConfigureGeneration, window.geometryGeneration);
+    EXPECT_EQ(frame.atomicConfigureGeneration, window.geometryGeneration);
 
-    // The barrier opens only after the attachment commits the parent's exact
-    // snapped geometry; both presentation credits are then completed together.
-    frame.acceptedConfigureSerial = frame.pendingConfigureSerial;
-    SurfaceRegistry::queuePresentation(
-        frame, frame.acceptedConfigureSerial);
-    EXPECT_FALSE(registry.hasIncompleteAtomicConfigure(
-        std::chrono::steady_clock::now()));
-    parent.lastConfigureSent = {};
-    frame.lastConfigureSent = {};
-    window.pendingWidth = 460.0f;
-    router.syncWindowState();
-
-    const int parentFlags = fcntl(parentSockets[1], F_GETFL, 0);
-    const int frameFlags = fcntl(frameSockets[1], F_GETFL, 0);
-    ASSERT_GE(parentFlags, 0);
-    ASSERT_GE(frameFlags, 0);
-    ASSERT_EQ(fcntl(parentSockets[1], F_SETFL, parentFlags | O_NONBLOCK), 0);
-    ASSERT_EQ(fcntl(frameSockets[1], F_SETFL, frameFlags | O_NONBLOCK), 0);
-    payload.clear();
-    EXPECT_EQ(protocol::recvPacketWithFd(
-                  parentSockets[1], header, payload, receivedFd),
-              protocol::ReceiveStatus::WouldBlock);
-    EXPECT_EQ(protocol::recvPacketWithFd(
-                  frameSockets[1], header, payload, receivedFd),
-              protocol::ReceiveStatus::WouldBlock);
-
-    SurfaceRegistry::completePresentation(frame);
-    router.syncWindowState();
-    EXPECT_EQ(protocol::recvPacketWithFd(
-                  parentSockets[1], header, payload, receivedFd),
-              protocol::ReceiveStatus::WouldBlock);
-    EXPECT_EQ(protocol::recvPacketWithFd(
-                  frameSockets[1], header, payload, receivedFd),
-              protocol::ReceiveStatus::WouldBlock);
-
-    SurfaceRegistry::completePresentation(parent);
-    router.syncWindowState();
-    ASSERT_EQ(protocol::recvPacketWithFd(
-                  parentSockets[1], header, payload, receivedFd),
-              protocol::ReceiveStatus::Received);
-    parentConfigure = reinterpret_cast<const
-        protocol::LCLMsgConfigureBounds*>(payload.data());
-    EXPECT_FLOAT_EQ(parentConfigure->width, 460.0f);
+    // Parent and frame raster independently. The retained group remains closed
+    // after only the parent layer is ready.
     parent.acceptedConfigureSerial = parent.pendingConfigureSerial;
     SurfaceRegistry::queuePresentation(
         parent, parent.acceptedConfigureSerial);
-    router.syncWindowState();
-    payload.clear();
-    ASSERT_EQ(protocol::recvPacketWithFd(
-                  frameSockets[1], header, payload, receivedFd),
-              protocol::ReceiveStatus::Received);
-    frameConfigure = reinterpret_cast<const
-        protocol::LCLMsgConfigureBounds*>(payload.data());
-    EXPECT_FLOAT_EQ(frameConfigure->width, 460.0f);
+    EXPECT_TRUE(SurfaceTransactionCoordinator::promoteReady(registry));
+    frame.acceptedConfigureSerial = frame.pendingConfigureSerial;
+    SurfaceRegistry::queuePresentation(
+        frame, frame.acceptedConfigureSerial);
+    EXPECT_FALSE(SurfaceTransactionCoordinator::promoteReady(registry));
 
     close(parentSockets[0]);
     close(parentSockets[1]);
@@ -1188,7 +1056,7 @@ TEST(InputRouterTest, AttachedFrameFollowsPendingParentResizeGeometry) {
     close(frameSockets[1]);
 }
 
-TEST(InputRouterTest, LiveResizeWaitsForPresentationThenPublishesLatestWithWorkspaceBacking) {
+TEST(InputRouterTest, SingleSurfaceResizeUsesStrictAtomicGeneration) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
     lcl::render::WindowManager manager;
@@ -1196,6 +1064,7 @@ TEST(InputRouterTest, LiveResizeWaitsForPresentationThenPublishesLatestWithWorks
     const uint32_t windowId = manager.createWindow("Live", 40, 50, 320, 200);
     manager.setDecorationMode(windowId, lcl::render::DecorationMode::None);
     SurfaceRegistry registry;
+    uint32_t pixel = 0xFF000000u;
     auto& surface = registry[SurfaceRegistry::makeKey(sockets[0], 102, 1)];
     surface.windowId = windowId;
     surface.clientFd = sockets[0];
@@ -1204,11 +1073,12 @@ TEST(InputRouterTest, LiveResizeWaitsForPresentationThenPublishesLatestWithWorks
     surface.pendingConfigureSerial = 4;
     surface.acceptedConfigureSerial = 4;
     surface.nextConfigureSerial = 5;
-    surface.resizePresentation = protocol::LCLResizePresentationMode::Live;
+    surface.hasCommittedBuffer = true;
+    surface.pixels = &pixel;
     SceneRegistry scenes;
     InputRouter router(manager, registry, scenes);
     auto& window = manager.getWindowsMutable().back();
-    window.geometryPhase = lcl::render::GeometryPhase::LiveTransition;
+    window.geometryPhase = lcl::render::GeometryPhase::AtomicTargetTransition;
     window.isMaximized = true;
     window.pendingWidth = 360;
     window.pendingHeight = 240;
@@ -1222,46 +1092,17 @@ TEST(InputRouterTest, LiveResizeWaitsForPresentationThenPublishesLatestWithWorks
     EXPECT_EQ(first->configureSerial, 5u);
     EXPECT_EQ(first->resizeReason,
               protocol::LCLConfigureResizeReason::WindowStateTransition);
-    EXPECT_EQ(first->backingWidth, 1000u);
-    EXPECT_EQ(first->backingHeight, 700u);
-
-    window.pendingWidth = 400;
-    window.pendingHeight = 280;
-    router.syncWindowState();
-    const int flags = fcntl(sockets[1], F_GETFL, 0);
-    ASSERT_GE(flags, 0);
-    ASSERT_EQ(fcntl(sockets[1], F_SETFL, flags | O_NONBLOCK), 0);
-    EXPECT_EQ(protocol::recvPacketWithFd(sockets[1], header, payload, fd),
-              protocol::ReceiveStatus::WouldBlock);
-
-    surface.lastConfigureSent = {};
-    router.syncWindowState();
-    EXPECT_EQ(protocol::recvPacketWithFd(sockets[1], header, payload, fd),
-              protocol::ReceiveStatus::WouldBlock);
-
-    surface.acceptedConfigureSerial = 5;
-    SurfaceRegistry::queuePresentation(surface, 5);
-    router.syncWindowState();
-    EXPECT_EQ(protocol::recvPacketWithFd(sockets[1], header, payload, fd),
-              protocol::ReceiveStatus::WouldBlock);
-
-    SurfaceRegistry::completePresentation(surface);
-    surface.lastConfigureSent = {};
-    router.syncWindowState();
-    ASSERT_EQ(protocol::recvPacketWithFd(sockets[1], header, payload, fd),
-              protocol::ReceiveStatus::Received);
-    const auto* latest = reinterpret_cast<const protocol::LCLMsgConfigureBounds*>(payload.data());
-    EXPECT_EQ(latest->configureSerial, 6u);
-    EXPECT_EQ(latest->width, 400u);
-    EXPECT_EQ(latest->backingWidth, 1000u);
-    EXPECT_EQ(latest->backingHeight, 700u);
-    EXPECT_EQ(surface.acceptedConfigureSerial, 5u);
+    EXPECT_EQ(first->backingWidth, 360u);
+    EXPECT_EQ(first->backingHeight, 240u);
+    EXPECT_EQ(surface.atomicConfigureGeneration, window.geometryGeneration);
+    EXPECT_EQ(surface.atomicConfigureParticipantCount, 1u);
+    EXPECT_TRUE(SurfaceTransactionCoordinator::promoteReady(registry));
 
     close(sockets[0]);
     close(sockets[1]);
 }
 
-TEST(InputRouterTest, SsdMaximizeBeginsMorphTransactionWithoutReleasingCurrentTexture) {
+TEST(InputRouterTest, SsdMaximizeBeginsStrictAtomicGeneration) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
 
@@ -1269,6 +1110,7 @@ TEST(InputRouterTest, SsdMaximizeBeginsMorphTransactionWithoutReleasingCurrentTe
     ASSERT_TRUE(manager.initialize(1000, 700));
     const uint32_t windowId = manager.createWindow("SSD", 80, 60, 400, 300);
     SurfaceRegistry registry;
+    uint32_t pixel = 0xFF000000u;
     auto& surface = registry[SurfaceRegistry::makeKey(sockets[0], 105, 1)];
     surface.windowId = windowId;
     surface.clientFd = sockets[0];
@@ -1277,8 +1119,7 @@ TEST(InputRouterTest, SsdMaximizeBeginsMorphTransactionWithoutReleasingCurrentTe
     surface.backingWidth = 400;
     surface.backingHeight = 268;
     surface.stride = 400 * 4;
-    surface.dmaBufId = 6;
-    surface.dmaBufTexture = 17;
+    surface.pixels = &pixel;
     surface.hasCommittedBuffer = true;
     surface.configuredX = 80;
     surface.configuredY = 60;
@@ -1291,32 +1132,14 @@ TEST(InputRouterTest, SsdMaximizeBeginsMorphTransactionWithoutReleasingCurrentTe
 
     SceneRegistry scenes;
     InputRouter router(manager, registry, scenes);
-    InputEvent move{};
-    move.type = InputEventType::PointerMotion;
-    move.absoluteX = 140.0;
-    move.absoluteY = 80.0;
-    router.route(move);
-    InputEvent down{};
-    down.type = InputEventType::PointerButton;
-    down.button = lcl::platform::PointerButton::Left;
-    down.pressed = true;
-    ASSERT_TRUE(router.route(down));
-    InputEvent up = down;
-    up.pressed = false;
-    ASSERT_TRUE(router.route(up));
+    ASSERT_TRUE(manager.maximizeWindow(windowId));
+    ASSERT_TRUE(manager.updateAnimations(1.0f));
+    router.syncWindowState();
 
     const auto& window = manager.getWindows().back();
     EXPECT_TRUE(window.isMaximized);
-    EXPECT_EQ(surface.resizeTransitionPhase,
-              SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer);
-    EXPECT_EQ(surface.resizeGeometryGeneration, window.geometryGeneration);
-    EXPECT_EQ(surface.rollbackX, 80);
-    EXPECT_EQ(surface.rollbackY, 60);
-    EXPECT_EQ(surface.rollbackWidth, 400);
-    EXPECT_EQ(surface.rollbackHeight, 300);
-    EXPECT_EQ(surface.dmaBufId, 6u);
-    EXPECT_EQ(surface.dmaBufTexture, 17u);
-    EXPECT_TRUE(surface.pendingDmaBufReleases.empty());
+    EXPECT_EQ(surface.atomicConfigureGeneration, window.geometryGeneration);
+    EXPECT_EQ(surface.atomicConfigureParticipantCount, 1u);
 
     protocol::LCLHeader header{};
     std::vector<uint8_t> payload;
@@ -1338,7 +1161,7 @@ TEST(InputRouterTest, SsdMaximizeBeginsMorphTransactionWithoutReleasingCurrentTe
     close(sockets[1]);
 }
 
-TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
+TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryIsRetained) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
 
@@ -1347,7 +1170,7 @@ TEST(InputRouterTest, ForwardsPointerWhileWindowGeometryMorphs) {
     const uint32_t windowId = manager.createWindow("Morph", 80, 90, 320, 200);
     manager.setDecorationMode(windowId, lcl::render::DecorationMode::None);
     auto& window = manager.getWindowsMutable().back();
-    window.geometryPhase = lcl::render::GeometryPhase::Morph;
+    window.geometryPhase = lcl::render::GeometryPhase::AtomicTargetTransition;
     window.x = 400;
     window.y = 300;
     window.width = 700;
@@ -1582,55 +1405,6 @@ TEST(InputRouterTest, MobileBottomEdgeClaimCancelsClientThenTriggersHome) {
     up.pressed = false;
     EXPECT_TRUE(router.route(up));
     EXPECT_EQ(homeEvents, 1);
-
-    close(sockets[0]);
-    close(sockets[1]);
-}
-
-TEST(InputRouterTest, ManualGestureCancelsOutstandingGeometryRollback) {
-    int sockets[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
-
-    lcl::render::WindowManager manager;
-    ASSERT_TRUE(manager.initialize(1000, 700));
-    const uint32_t windowId = manager.createWindow("Gesture", 80, 90, 320, 200);
-    SurfaceRegistry registry;
-    auto& surface = registry[SurfaceRegistry::makeKey(sockets[0], 103, 1)];
-    surface.windowId = windowId;
-    surface.clientFd = sockets[0];
-    surface.hasCommittedBuffer = true;
-    surface.width = 320;
-    surface.height = 168;
-    surface.configuredWidth = 320;
-    surface.configuredHeight = 168;
-    surface.pendingConfigureSerial = 9;
-    surface.acceptedConfigureSerial = 7;
-    surface.nextConfigureSerial = 10;
-    surface.resizeTransitionPhase =
-        SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
-    surface.rollbackRequested = true;
-
-    SceneRegistry scenes;
-    InputRouter router(manager, registry, scenes);
-    InputEvent move{};
-    move.type = InputEventType::PointerMotion;
-    move.absoluteX = 200.0;
-    move.absoluteY = 100.0;
-    router.route(move);
-
-    InputEvent down{};
-    down.type = InputEventType::PointerButton;
-    down.button = lcl::platform::PointerButton::Left;
-    down.pressed = true;
-    EXPECT_TRUE(router.route(down));
-
-    const auto& window = manager.getWindows().back();
-    EXPECT_TRUE(window.isDragging());
-    EXPECT_EQ(surface.resizeTransitionPhase,
-              SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None);
-    EXPECT_FALSE(surface.rollbackRequested);
-    EXPECT_EQ(surface.pendingConfigureSerial, 10u);
-    EXPECT_EQ(surface.configuredGeometryGeneration, window.geometryGeneration);
 
     close(sockets[0]);
     close(sockets[1]);
@@ -2310,42 +2084,6 @@ TEST(FrameSchedulerTest, LaunchTokenPreservesSpringAcrossSurfaceHandoff) {
         registry, start + std::chrono::milliseconds(9 * 16));
 
     EXPECT_GE(adopted.launchMorphWidth, widthBeforeHandoff);
-}
-
-TEST(FrameSchedulerTest, ResizeCrossfadeAndTimeoutOwnBufferLifecycle) {
-    SurfaceRegistry registry;
-    auto& crossfade = registry[1];
-    crossfade.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::Crossfading;
-    crossfade.resizeCrossfadeProgress = 0.0f;
-    crossfade.resizeBufferReady = false;
-    crossfade.previousDmaBufId = 3;
-    crossfade.previousDmaBufTexture = 19;
-
-    FrameScheduler scheduler;
-    const auto start = std::chrono::steady_clock::now();
-    scheduler.reset(start);
-    EXPECT_TRUE(scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(50)));
-    EXPECT_GT(crossfade.resizeCrossfadeProgress, 0.0f);
-    EXPECT_LT(crossfade.resizeCrossfadeProgress, 1.0f);
-    EXPECT_EQ(crossfade.previousDmaBufTexture, 19u);
-    EXPECT_TRUE(crossfade.pendingDmaBufReleases.empty());
-    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(100));
-    EXPECT_EQ(crossfade.resizeTransitionPhase, SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None);
-    EXPECT_TRUE(crossfade.resizeBufferReady);
-    EXPECT_EQ(crossfade.previousDmaBufTexture, 0u);
-    ASSERT_EQ(crossfade.pendingDmaBufReleases.size(), 1u);
-    EXPECT_EQ(crossfade.pendingDmaBufReleases.front().bufferId, 3u);
-    EXPECT_EQ(crossfade.pendingDmaBufReleases.front().texture, 19u);
-
-    auto& timeout = registry[2];
-    timeout.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
-    timeout.resizeDeadline = start + std::chrono::milliseconds(750);
-    timeout.pendingConfigureSerial = 9;
-    timeout.acceptedConfigureSerial = 7;
-    scheduler.advanceTransitions(registry, start + std::chrono::milliseconds(751));
-    EXPECT_TRUE(timeout.rollbackRequested);
-    EXPECT_EQ(timeout.pendingConfigureSerial, 7u);
-    EXPECT_TRUE(timeout.resizeBufferReady);
 }
 
 TEST(FrameSchedulerTest, FrameBudgetUsesTheExistingCadence) {

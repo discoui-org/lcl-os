@@ -1,6 +1,7 @@
 #include "core/compositor/input_router.hpp"
 
 #include "core/compositor/popup_surface_geometry.hpp"
+#include "core/compositor/surface_transaction_coordinator.hpp"
 #include "render/window_group_transform.hpp"
 
 #include <algorithm>
@@ -196,16 +197,7 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
         for (auto& [_, entry] : m_surfaces) {
             if (!entry.isAttached() &&
                 entry.windowId == result.interaction.windowId) {
-                if (result.interaction.isWindowStateTransition() &&
-                    entry.resizePresentation ==
-                        protocol::LCLResizePresentationMode::CompositorMorph) {
-                    const auto& previous = result.interaction.previousBounds;
-                    SurfaceRegistry::beginGeometryTransition(
-                        entry, result.interaction.generation,
-                        previous.x, previous.y, previous.width, previous.height,
-                        result.interaction.previousWasMaximized,
-                        result.interaction.previousWasMinimized);
-                } else if (result.interaction.isManual()) {
+                if (result.interaction.isManual()) {
                     SurfaceRegistry::interruptGeometryTransaction(
                         entry, result.interaction.generation);
                 }
@@ -296,9 +288,9 @@ void InputRouter::sendPendingConfigures() {
             });
         const float titleOffset =
             window.decorationMode == render::DecorationMode::SSD ? 32.0f : 0.0f;
-        const float configuredX = window.isLiveTransitioning()
+        const float configuredX = window.isAtomicTargetTransitioning()
             ? window.pendingX : window.x;
-        const float configuredY = window.isLiveTransitioning()
+        const float configuredY = window.isAtomicTargetTransitioning()
             ? window.pendingY : window.y;
         const float logicalContentW = window.pendingWidth > 0.0f
             ? window.pendingWidth : window.width;
@@ -307,7 +299,7 @@ void InputRouter::sendPendingConfigures() {
             (window.pendingHeight > 0.0f
                  ? window.pendingHeight : window.height) - titleOffset);
         const bool livePositionChanged =
-            window.isLiveTransitioning() && parentSurface != m_surfaces.end() &&
+            window.isAtomicTargetTransitioning() && parentSurface != m_surfaces.end() &&
             (configuredX != parentSurface->second.configuredX ||
              configuredY != parentSurface->second.configuredY);
         const bool parentGeometryNeedsConfigure =
@@ -316,101 +308,49 @@ void InputRouter::sendPendingConfigures() {
              logicalContentH != parentSurface->second.configuredHeight ||
              livePositionChanged);
         const bool resizingGeometry = window.isResizing() ||
-            window.isLiveTransitioning() ||
+            window.isAtomicTargetTransitioning() ||
             window.activeResizeEdge != render::ResizeEdge::None;
 
-        // Phase two of an atomic resize: the parent has committed its real
-        // (possibly client-snapped) size. Configure every attachment exactly
-        // once from that committed size while the previous scanout is held.
+        // A pending generation retains the complete old WindowGroup. At most
+        // once per output interval, a newer pointer target supersedes the
+        // unfinished batch; it never waits for obsolete raster/presentation.
         if (parentSurface != m_surfaces.end() &&
             parentSurface->second.atomicConfigureGeneration != 0) {
-            auto& parent = parentSurface->second;
-            const uint64_t generation = parent.atomicConfigureGeneration;
-            const bool parentReady =
-                parent.configuredGeometryGeneration == generation &&
-                parent.acceptedConfigureSerial == parent.pendingConfigureSerial &&
-                parent.presentationSerial == parent.pendingConfigureSerial;
-            if (parentReady) {
-                const float committedParentWidth = parent.configuredWidth;
-                const float committedParentHeight =
-                    parent.configuredHeight + titleOffset;
-                for (const auto attachmentKey :
-                     m_surfaces.attachedChildren(window.id)) {
-                    auto attachment = m_surfaces.find(attachmentKey);
-                    if (attachment == m_surfaces.end()) continue;
-                    auto& entry = attachment->second;
-                    if (entry.atomicConfigureGeneration != generation ||
-                        entry.atomicConfigureIssued ||
-                        entry.clientFd < 0 || entry.pendingDestroy ||
-                        entry.ignoreBufferCommits) continue;
-
-                    const float width = entry.attachedFollowParentWidth
-                        ? committedParentWidth : entry.attachedWidth;
-                    const float height = entry.attachedFollowParentHeight
-                        ? committedParentHeight : entry.attachedHeight;
-                    protocol::LCLHeader header{};
-                    header.opcode = protocol::LCLOpcode::ConfigureBounds;
-                    header.payloadSize =
-                        sizeof(protocol::LCLMsgConfigureBounds);
-                    protocol::LCLMsgConfigureBounds configure{};
-                    configure.surfaceId = static_cast<uint32_t>(
-                        attachmentKey & 0xFFFFFFFFu);
-                    configure.configureSerial = entry.nextConfigureSerial++;
-                    configure.x = entry.attachedX;
-                    configure.y = entry.attachedY;
-                    configure.width = width;
-                    configure.height = height;
-                    configure.backingWidth = width;
-                    configure.backingHeight = height;
-                    configure.bufferScale = entry.bufferScale;
-                    configure.resizeReason = (!window.isMaximized &&
-                                              window.isResizing())
-                        ? protocol::LCLConfigureResizeReason::Interactive
-                        : protocol::LCLConfigureResizeReason::WindowStateTransition;
-                    const uint64_t supersededPresentationSerial =
-                        entry.presentationSerial;
-                    if (protocol::sendMsgWithFd(
-                            entry.clientFd, header, &configure)) {
-                        entry.pendingConfigureSerial = configure.configureSerial;
-                        entry.configuredGeometryGeneration = generation;
-                        entry.atomicConfigureIssued = true;
-                        entry.configuredX = entry.attachedX;
-                        entry.configuredY = entry.attachedY;
-                        entry.configuredWidth = width;
-                        entry.configuredHeight = height;
-                        entry.lastConfigureSent = now;
-                        entry.forceConfigure = false;
-
-                        // A titlebar can commit its pointer-up repaint after
-                        // the parent started this epoch but before phase two
-                        // configured the attachment. That old-size frame is
-                        // intentionally absent from the retained atomic group;
-                        // return its client frame credit as discarded so the
-                        // attachment can render this new configure. Holding
-                        // the credit here deadlocks maximize/restore and leaves
-                        // the last presented control visually pressed.
-                        if (supersededPresentationSerial != 0 &&
-                            supersededPresentationSerial !=
-                                configure.configureSerial) {
-                            protocol::LCLHeader discardHeader{};
-                            discardHeader.opcode =
-                                protocol::LCLOpcode::FrameDiscarded;
-                            discardHeader.payloadSize = sizeof(
-                                protocol::LCLMsgFrameDiscarded);
-                            protocol::LCLMsgFrameDiscarded discard{};
-                            discard.surfaceId = static_cast<uint32_t>(
-                                attachmentKey & 0xFFFFFFFFu);
-                            discard.configureSerial =
-                                supersededPresentationSerial;
-                            if (protocol::sendMsgWithFd(
-                                    entry.clientFd, discardHeader, &discard)) {
-                                SurfaceRegistry::completePresentation(entry);
-                            }
-                        }
-                    }
-                }
+            const uint64_t pendingGeneration =
+                parentSurface->second.atomicConfigureGeneration;
+            if (window.geometryGeneration <= pendingGeneration ||
+                (parentSurface->second.lastConfigureSent.time_since_epoch().count() != 0 &&
+                 now - parentSurface->second.lastConfigureSent <
+                     m_refreshInterval)) {
+                continue;
             }
-            continue;
+            for (auto& [surfaceKey, entry] : m_surfaces) {
+                if (entry.windowId != window.id ||
+                    entry.atomicConfigureGeneration != pendingGeneration) continue;
+                if (entry.presentationSerial != 0 && entry.clientFd >= 0) {
+                    protocol::LCLHeader discardHeader{};
+                    discardHeader.opcode = protocol::LCLOpcode::FrameDiscarded;
+                    discardHeader.payloadSize = sizeof(
+                        protocol::LCLMsgFrameDiscarded);
+                    protocol::LCLMsgFrameDiscarded discard{};
+                    discard.surfaceId = static_cast<uint32_t>(
+                        surfaceKey & 0xFFFFFFFFu);
+                    discard.configureSerial = entry.presentationSerial;
+                    discard.frameSerial = entry.frameSerial != 0
+                        ? entry.frameSerial : entry.presentationSerial;
+                    discard.geometryGeneration = pendingGeneration;
+                    discard.reason = protocol::LCLFrameDiscardReason::Superseded;
+                    (void)protocol::sendMsgWithFd(
+                        entry.clientFd, discardHeader, &discard);
+                }
+                SurfaceRegistry::completePresentation(entry);
+                entry.pendingConfigureSerial = entry.acceptedConfigureSerial;
+            }
+            // Keep the old barrier installed until every configure in the
+            // replacement batch has been queued. If any participant socket
+            // rejects the batch, CompositorRenderer must continue drawing the
+            // last complete retained group rather than exposing an obsolete
+            // intermediate parent layer.
         }
 
         std::vector<SurfaceRegistry::Key> atomicAttachments;
@@ -435,8 +375,7 @@ void InputRouter::sendPendingConfigures() {
         const bool atomicResize = resizingGeometry &&
             parentGeometryNeedsConfigure && parentSurface != m_surfaces.end() &&
             parentSurface->second.hasCommittedBuffer &&
-            parentSurface->second.hasRenderableBuffer() &&
-            !atomicAttachments.empty();
+            parentSurface->second.hasRenderableBuffer();
         if (atomicResize) {
             const auto blocked = [this, now](
                     const SurfaceRegistry::SurfaceEntry& entry) {
@@ -466,16 +405,14 @@ void InputRouter::sendPendingConfigures() {
                 continue;
             }
 
-            // Every resize policy permits only one configure at a time. Live
-            // additionally waits until the accepted client buffer has actually been
-            // presented before publishing the newest coalesced geometry.
-            const bool live = entry.resizePresentation ==
-                protocol::LCLResizePresentationMode::Live;
-            const bool refreshLimited = live &&
+            // AtomicRetained permits one in-flight generation per surface.
+            // A newer pointer target supersedes the old generation above; it
+            // never causes presentation geometry to move ahead of its layer.
+            const bool refreshLimited =
                 entry.lastConfigureSent.time_since_epoch().count() != 0 &&
                 now - entry.lastConfigureSent < m_refreshInterval;
             if (SurfaceRegistry::hasOutstandingConfigure(entry) ||
-                (live && SurfaceRegistry::hasUnpresentedFrame(entry)) ||
+                SurfaceRegistry::hasUnpresentedFrame(entry) ||
                 refreshLimited) {
                 break;
             }
@@ -492,6 +429,7 @@ void InputRouter::sendPendingConfigures() {
             protocol::LCLMsgConfigureBounds configure{};
             configure.surfaceId = static_cast<uint32_t>(surfaceKey & 0xFFFFFFFFu);
             configure.configureSerial = entry.nextConfigureSerial++;
+            configure.geometryGeneration = window.geometryGeneration;
             configure.x = configuredX;
             configure.y = configuredY;
             configure.width = logicalContentW;
@@ -503,12 +441,6 @@ void InputRouter::sendPendingConfigures() {
                 : protocol::LCLConfigureResizeReason::WindowStateTransition;
             configure.backingWidth = configure.width;
             configure.backingHeight = configure.height;
-            if (live &&
-                (configure.resizeReason == protocol::LCLConfigureResizeReason::Interactive ||
-                 configure.resizeReason == protocol::LCLConfigureResizeReason::WindowStateTransition)) {
-                configure.backingWidth = m_windowManager.getScreenWidth();
-                configure.backingHeight = m_windowManager.getScreenHeight();
-            }
             configure.isFocused = window.isFocused ? 1 : 0;
             if (protocol::sendMsgWithFd(entry.clientFd, header, &configure)) {
                 entry.pendingConfigureSerial = configure.configureSerial;
@@ -523,6 +455,57 @@ void InputRouter::sendPendingConfigures() {
                 parentConfigurePublished = true;
             }
             break;
+        }
+
+        bool atomicAttachmentsPublished = !atomicResize;
+        if (atomicResize && parentConfigurePublished) {
+            atomicAttachmentsPublished = true;
+            for (const auto attachmentKey : atomicAttachments) {
+                auto attachment = m_surfaces.find(attachmentKey);
+                if (attachment == m_surfaces.end()) {
+                    atomicAttachmentsPublished = false;
+                    break;
+                }
+                auto& entry = attachment->second;
+                const float width = entry.attachedFollowParentWidth
+                    ? logicalContentW : entry.attachedWidth;
+                const float height = entry.attachedFollowParentHeight
+                    ? (window.pendingHeight > 0.0f
+                           ? window.pendingHeight : window.height)
+                    : entry.attachedHeight;
+                protocol::LCLHeader header{};
+                header.opcode = protocol::LCLOpcode::ConfigureBounds;
+                header.payloadSize = sizeof(protocol::LCLMsgConfigureBounds);
+                protocol::LCLMsgConfigureBounds configure{};
+                configure.surfaceId = static_cast<uint32_t>(
+                    attachmentKey & 0xFFFFFFFFu);
+                configure.configureSerial = entry.nextConfigureSerial++;
+                configure.geometryGeneration = window.geometryGeneration;
+                configure.x = entry.attachedX;
+                configure.y = entry.attachedY;
+                configure.width = width;
+                configure.height = height;
+                configure.backingWidth = width;
+                configure.backingHeight = height;
+                configure.bufferScale = entry.bufferScale;
+                configure.resizeReason = (!window.isMaximized &&
+                                          window.isResizing())
+                    ? protocol::LCLConfigureResizeReason::Interactive
+                    : protocol::LCLConfigureResizeReason::WindowStateTransition;
+                if (!protocol::sendMsgWithFd(entry.clientFd, header, &configure)) {
+                    atomicAttachmentsPublished = false;
+                    entry.forceConfigure = true;
+                    break;
+                }
+                entry.pendingConfigureSerial = configure.configureSerial;
+                entry.configuredGeometryGeneration = window.geometryGeneration;
+                entry.configuredX = entry.attachedX;
+                entry.configuredY = entry.attachedY;
+                entry.configuredWidth = width;
+                entry.configuredHeight = height;
+                entry.lastConfigureSent = now;
+                entry.forceConfigure = false;
+            }
         }
 
         for (const auto attachmentKey : m_surfaces.attachedChildren(window.id)) {
@@ -569,6 +552,7 @@ void InputRouter::sendPendingConfigures() {
             configure.surfaceId = static_cast<uint32_t>(
                 attachmentKey & 0xFFFFFFFFu);
             configure.configureSerial = entry.nextConfigureSerial++;
+            configure.geometryGeneration = window.geometryGeneration;
             configure.x = entry.attachedX;
             configure.y = entry.attachedY;
             configure.width = configuredWidth;
@@ -593,7 +577,8 @@ void InputRouter::sendPendingConfigures() {
                 entry.forceConfigure = false;
             }
         }
-        if (atomicResize && parentConfigurePublished) {
+        if (atomicResize && parentConfigurePublished &&
+            atomicAttachmentsPublished) {
             std::vector<SurfaceRegistry::Key> participants;
             participants.reserve(1 + atomicAttachments.size());
             participants.push_back(parentSurface->first);
@@ -602,9 +587,12 @@ void InputRouter::sendPendingConfigures() {
             // There is no time-based escape into a torn WindowGroup. A slow
             // participant leaves only this group on its retained layer; erase
             // or disconnect cancels the epoch through SurfaceRegistry.
-            m_surfaces.beginAtomicConfigure(
-                window.id, window.geometryGeneration, participants,
-                {});
+            SurfaceTransactionCoordinator::begin(
+                m_surfaces, window.id, window.geometryGeneration,
+                participants);
+            // begin() replaces any older barrier only after this complete
+            // configure batch exists. Surface teardown cancels an abandoned
+            // epoch; publishing a partial group is never an escape path.
         }
     }
 }

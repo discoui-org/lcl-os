@@ -16,6 +16,7 @@
 #include "core/compositor/protocol_dispatcher.hpp"
 #include "core/compositor/windowing_policy.hpp"
 #include "core/compositor/compositor_renderer.hpp"
+#include "core/compositor/raster_service_host.hpp"
 #include "core/scene/focus_controller.hpp"
 #include "core/scene/scene_registry.hpp"
 #include "core/scene/shell_state_broker.hpp"
@@ -85,6 +86,7 @@ private:
 
     /// IPC surface registry: (clientFd << 32 | surfaceId) → SurfaceEntry
     SurfaceRegistry m_surfaces;
+    RasterServiceHost m_rasterService;
     SceneRegistry m_sceneRegistry;
     FocusController m_focusController;
     ShellStateBroker m_shellStateBroker;
@@ -101,6 +103,7 @@ private:
     bool                                 m_shellStateDirty{true};
     uint64_t                             m_loopTicks{0};
     uint64_t                             m_refreshIntervalNs{16666667};
+    uint64_t                             m_displaySequence{0};
 
     // Diagnostic Overlay & FPS metrics
     bool                                 m_showFpsOverlay{false};

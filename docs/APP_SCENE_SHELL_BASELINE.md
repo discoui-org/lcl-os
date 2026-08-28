@@ -6,11 +6,10 @@ change is explicitly approved before implementation.
 
 The numbered implementation records below are historical checkpoints and keep
 the protocol versions and test totals that were true at each checkpoint. The
-current wire contract is protocol v25; current migration code still transports
-backend-neutral logical display lists in places. That transport is not the
-architectural destination: producer-side raster must commit a ready immutable
-layer, while the compositor retains and presents it independently. Do not read
-an older step's version label as a compatibility promise or future direction.
+current wire contract is protocol v26. Central `lcl-rasterd` receives sealed
+logical frames and privately publishes ready immutable layers; app-facing
+DisplayList and native-buffer attach messages have been removed. Do not read an
+older step's version label as a compatibility promise or future direction.
 
 ## Baseline anchor
 
@@ -37,10 +36,11 @@ The following behavior is part of the baseline and must remain:
 
 - A client surface is not mapped as a window before its first complete,
   presentable layer commit.
-- Unknown-surface buffer attachments are rejected and their received FDs are
-  closed.
-- Replacing a `WindowApp` root schedules a real frame and an initial SHM attach
-  can be retried without leaving the surface permanently unmapped.
+- Unknown or mismatched producer grants/layers are rejected and their received
+  FDs are closed.
+- Replacing a `WindowApp` root schedules a real frame; the complete retained
+  frame/resource state is retried after rasterd restart without mapping an
+  empty surface.
 - Wallpaper and shell panels start without app-window enter transitions, do not
   steal application focus, and do not receive ordinary application input.
 - Terminal rendering stays in `TerminalView` under `WindowApp`; the previous
@@ -143,23 +143,25 @@ No subsequent refactor step may proceed until:
 
 Step 2 separates build ownership without changing protocol or shell behavior:
 
-- `lcl-ui` now contains only widgets, Yoga layout, event/render-pass logic,
-  `WindowApp`, image loading, and IPC/SHM client lifecycle.
+- `lcl-ui` contains widgets, Yoga layout, event/render-pass logic,
+  `WindowApp`, image loading, compositor IPC, and the rasterd producer client.
 - `lcl-display-scale` owns the shared logical-pixel policy.
-- `lcl-raster` owns the client Canvas and font renderer. It first tries a
-  render-node-only EGL/GLES context for GPU drawing, then reads that frame into
-  the existing SHM staging buffer. If no audited hardware renderer is available
-  it falls back to the software raster path. It never opens a KMS scanout card
-  or presents a frame.
+- `lcl-raster` owns the Canvas implementation. A connected protocol-v26 client
+  uses `makeDisplayListCanvas()` and sends only sealed logical frames/resources
+  to central `lcl-rasterd`; it neither attaches a client buffer to the
+  compositor nor presents a frame. The current host rasterd backend publishes
+  immutable memfd/SHM layers. DMA-BUF and AHardwareBuffer remain platform
+  backend work below this same private raster-service contract.
 - `lcl-render` owns compositor rendering, window management, EGL, DRM, GBM,
   GLES, and presentation.
 - `WindowApp` requires an injected Canvas. Native clients and the JS binding
-  explicitly inject `makeRasterCanvas()`.
+  explicitly inject `makeDisplayListCanvas()` for compositor-connected
+  surfaces.
 
 The boundary gate proves that `liblcl-ui.a` has no EGL/DRM/GBM/GLES dependency.
-Client executables may link those libraries solely through `lcl-raster`;
-the client context must use `/dev/dri/renderD*`, while KMS scanout and display
-presentation remain exclusively in `lcl-render`.
+KMS scanout and display presentation remain exclusively compositor/platform
+responsibilities; rasterd native allocation/import backends stay below the
+private layer-ready boundary.
 
 ## Step 3 implementation record
 

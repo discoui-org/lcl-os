@@ -32,8 +32,7 @@ enum class DecorationMode {
 
 enum class GeometryPhase {
     Idle,
-    Morph,
-    LiveTransition,
+    AtomicTargetTransition,
     Drag,
     Resize,
     SnapBack,
@@ -110,14 +109,13 @@ struct Window {
     bool presentationInitialized{false};
     GeometryPhase geometryPhase{GeometryPhase::Idle};
     uint64_t geometryGeneration{1};
-    // Live resize animates configure bounds and waits for matching client
-    // buffers. Unlike a compositor morph, the currently displayed buffer is
-    // never scaled to the interpolated geometry.
-    bool liveResizeMotionFinished{false};
-    float liveResizeTargetX{0.0f};
-    float liveResizeTargetY{0.0f};
-    float liveResizeTargetWidth{0.0f};
-    float liveResizeTargetHeight{0.0f};
+    // AtomicRetained resize updates target model geometry. Presentation stays
+    // on the last complete WindowGroup until matching raster layers are ready.
+    bool atomicTargetMotionFinished{false};
+    float atomicTargetX{0.0f};
+    float atomicTargetY{0.0f};
+    float atomicTargetWidth{0.0f};
+    float atomicTargetHeight{0.0f};
     int zIndex{0};
     bool isFocused{false};
     bool isUnfocusable{false};
@@ -160,9 +158,6 @@ struct Window {
     bool drawInsetBorder{true};
     float cornerRadius{-1.0f}; // < 0 means use compositor default policy
     float cornerRoundness{2.0f};
-    protocol::LCLResizePresentationMode resizePresentation{
-        protocol::LCLResizePresentationMode::CompositorMorph};
-
 
     // Damage Tracking & Occlusion Culling
     bool isDirty{true};
@@ -193,9 +188,8 @@ struct Window {
 
     bool isDragging() const noexcept { return geometryPhase == GeometryPhase::Drag; }
     bool isResizing() const noexcept { return geometryPhase == GeometryPhase::Resize; }
-    bool isMorphing() const noexcept { return geometryPhase == GeometryPhase::Morph; }
-    bool isLiveTransitioning() const noexcept {
-        return geometryPhase == GeometryPhase::LiveTransition;
+    bool isAtomicTargetTransitioning() const noexcept {
+        return geometryPhase == GeometryPhase::AtomicTargetTransition;
     }
     bool isSnappingBack() const noexcept { return geometryPhase == GeometryPhase::SnapBack; }
 };
@@ -292,8 +286,6 @@ public:
     void setWindowCornerRadius(uint32_t windowId, float radius);
     /** Set compositor mask radius and superellipse exponent as one WindowGroup style. */
     void setWindowCornerStyle(uint32_t windowId, float radius, float roundness);
-    void setResizePresentationMode(uint32_t windowId,
-                                   protocol::LCLResizePresentationMode mode);
 
     /**
      * @brief Set reserved desktop struts (No Window Move Zone for Menu Bar / Dock).

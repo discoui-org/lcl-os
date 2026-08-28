@@ -41,12 +41,15 @@ The LCL architecture consists of 5 main decoupled layers:
   immutable backend-neutral `DisplayList` commands using float logical
   coordinates, paths, paints, clips, layers, text, images, and cached-layer
   references. No device-pixel conversion occurs while the list is recorded.
-* **Raster execution (`lcl-raster`):** `RasterCanvas` records one frame and
-  closes it once at `endFrame()`. A producer-owned raster stage turns that
-  logical frame into an immutable presentable layer using either a
-  Ganesh/OpenGL surface or a CPU raster surface. `RenderTarget.deviceScale` is
-  applied only at this raster boundary. Application DisplayList replay must not
-  run in the compositor's vSync-critical presentation loop.
+* **Raster execution (`lcl-rasterd`):** `RasterCanvas` records one frame and
+  closes it once at `endFrame()`. The supervised central raster service accepts
+  sealed DisplayList/resource memfds through `/Runtime/lcl-raster.sock`, then
+  produces an immutable DMA-BUF, AHardwareBuffer, or SHM layer through its
+  platform backend. `RenderTarget.deviceScale` is applied only at this boundary.
+  Application DisplayList replay never runs in the compositor's vSync-critical
+  presentation loop. The checked-in host implementation currently exercises
+  the memfd/SHM backend; DMA-BUF and AHardwareBuffer allocation/import are the
+  remaining platform-backend implementations, not alternate surface protocols.
 * **Font & Text Engine:** Skia owns packaged typeface loading, glyph advances,
   ascent/descent/line-height metrics, UTF-8 drawing, and GPU/CPU rasterization.
   Layout and drawing use the same prepared `SkFont`; no second font rasterizer
@@ -68,8 +71,8 @@ The LCL architecture consists of 5 main decoupled layers:
 * **Session RPC:** `lcl-sessiond` exposes an owner-only `SOCK_SEQPACKET`
   endpoint at `/run/user/1000/lcl-sessiond.sock`. Its explicit little-endian
   requests cover catalog snapshots and launch/process-exit lifecycle; this is
-  distinct from compositor protocol v25 surface IPC.
-* **Secure Unix Domain Socket IPC:** Compositor protocol v25 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions. Explicit little-endian packets preserve payload and `SCM_RIGHTS` boundaries; kernel peer authentication (`SO_PEERCRED`) supplies `PID`, `UID`, and `GID`. Live resize carries independent logical content/backing extents, SHM damage, compositor presentation timestamps, and explicit discarded-frame credits. Edge-to-edge is a platform-neutral surface policy: one outer-surface effect chain can extend beneath desktop or mobile system insets while client widgets remain inside the safe content rect. `PopupSurface v1` reuses the same buffer infrastructure while binding a popup to a same-process parent surface; `AttachedSurface` lets a trusted WM bind generic frame/adornment buffers across process boundaries. Both are composed and hit-tested inside the parent's WindowGroup rather than entering the normal window stack.
+  distinct from compositor protocol v26 surface IPC.
+* **Secure Unix Domain Socket IPC:** Compositor protocol v26 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Application-facing surface IPC carries lifecycle, configure, input, effect, action, producer-grant and frame-feedback messages; it accepts no client layer descriptor or DisplayList commit. A 128-bit surface grant authorizes the same process on rasterd's owner-only socket. Only rasterd's private socketpair may publish `LayerReady` descriptors to the compositor. Edge-to-edge remains platform-neutral, and neither desktop nor mobile policy may rewrite client alpha. `PopupSurface` and `AttachedSurface` are composed and hit-tested inside their parent WindowGroup rather than entering the normal window stack.
 * **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`. Manifests declare a stable `id`; older bundles receive a deterministic `bundle.<name>` compatibility ID.
 * **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ session client. It sends `LaunchRequest` to sessiond and optionally waits for `ProcessExited`; it never forks or execs applications itself.
 
@@ -101,11 +104,24 @@ optimization:
    committed-layer transaction. Platform differences begin below native-buffer
    import, synchronization, and scanout/present.
 
-Protocol-v25 `CommitDisplayList` and compositor-side client DisplayList replay
-are a migration bridge in the current implementation, not the destination
-contract. New work must not deepen that dependency. The migration ends with a
-producer-side `FrameTransport`/layer-production boundary and a compositor that
-only imports, retains, transforms, composites, and presents ready layers.
+Protocol v26 completes this boundary: `CommitDisplayList`, direct SHM/DMA-BUF/
+native-buffer attach, and compositor-side application replay are not part of
+the surface ABI. The compositor only imports rasterd layers, retains,
+transforms, composites, and presents them.
+
+### Strict Atomic WindowGroup Resize
+
+Resize has one non-selectable `AtomicRetained` behavior. Pointer motion updates
+only target model geometry and creates a coalescible `geometryGeneration`.
+Parent, size-changing attached surfaces, and size-changing popups receive that
+generation without parent-first acknowledgement barriers. Until every required
+layer and acquire fence is ready, the complete previously presented WindowGroup
+keeps its old geometry, transforms, effects, and content. Readiness promotes
+the new immutable group snapshot in one display transaction/vSync. There is no
+stretch, clip-to-new-geometry, background reveal, snapshot, crossfade, or
+timeout-based partial publish. A newer target discards the obsolete generation;
+pointer release waits for the final complete generation without stalling other
+WindowGroups or compositor-owned animation.
 
 ---
 
@@ -260,11 +276,12 @@ Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı deği
 `Compositor`, alt sistemleri başlatır ve ana döngüyü sıralar; client kaynakları veya
 çizim ayrıntıları için ikinci bir sahip değildir.
 
-- `SurfaceRegistry`: `(client, surfaceId)` yüzey kaydı ile memfd/SHM eşlemesinin
-  tek sahibidir. Disconnect, kapatma geçişi ve shutdown aynı idempotent kaynak
-  serbest bırakma yolunu kullanır.
-- `ProtocolDispatcher`: IPC mesajlarını doğrular/dispatch eder; client rolü,
-  surface create/attach, effect graph ve shell window-list yayınını yönetir.
+- `SurfaceRegistry`: `(client, surfaceId)` kimliği, producer grant'i, son hazır
+  raster layer, pending generation ve presentation credit'inin tek sahibidir.
+  Disconnect, kapatma geçişi ve shutdown aynı idempotent kaynak serbest bırakma
+  yolunu kullanır; application DisplayList/image pixel kaynağı tutmaz.
+- `ProtocolDispatcher`: App-facing lifecycle/action/effect mesajlarını ve private
+  rasterd `LayerReady` kabulünü doğrular; başka kanaldan layer kabul etmez.
 - `InputRouter`: WindowManager'ın hit-test/focus/resize sonucunu client'a logical
   koordinatlı input ve configure mesajlarına dönüştürür.
 - `FrameScheduler`: frame bütçesi, cursor blink ve surface enter/close
@@ -299,8 +316,8 @@ Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı deği
 
 ## 7. Unix Domain Socket IPC & Disconnect Detection
 
-1. **Secure Domain Socket Protocol:** Compositor IPC v15 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`).
-2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v15 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
+1. **Secure Domain Socket Protocol:** Compositor IPC v26 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Rasterd uses a separate owner-only public producer socket plus a private compositor socketpair.
+2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v26 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
 3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits a typed disconnect event upon socket EOF. `ProtocolDispatcher` ilgili pencereyi `WindowManager`dan kaldırır; `SurfaceRegistry` SHM eşlemesini ve memfd'yi tek sahip olarak serbest bırakır.
 
 ---

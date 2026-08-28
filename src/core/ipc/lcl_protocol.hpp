@@ -10,9 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 25;
-constexpr uint32_t LCL_BUFFER_FORMAT_ARGB8888 = 1;
-constexpr uint64_t LCL_CAPABILITY_AHB_V1 = 1ull << 0;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 26;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 constexpr uint32_t LCL_LAUNCH_ICON_MAX_DIMENSION = 256u;
@@ -21,7 +19,6 @@ enum class LCLOpcode : uint32_t {
     SurfaceCreate = 2,
     SurfaceDestroy = 3,
     ConfigureBounds = 4,
-    AttachBuffer = 5,
     InputEvent = 6,
     AckResponse = 7,
     SetDecorationMode = 8,
@@ -39,47 +36,27 @@ enum class LCLOpcode : uint32_t {
     ShellStateDelta = 21,
     SetSystemSurfaceKind = 22,
     SetWindowCornerStyle = 23,
-    // A single-plane DRM/GBM buffer. The file descriptor travels through
-    // SCM_RIGHTS, while this message carries the metadata needed for import.
-    AttachDmaBuf = 24,
-    // Sent by the compositor only after it has stopped sampling a DMA-BUF.
-    // Clients must not render into that pool slot before this message arrives.
-    ReleaseDmaBuf = 25,
-    // Presentation timing is separate from DMA-BUF ownership. A release makes
-    // a pool slot writable; this callback paces the next interactive frame.
+    // Presentation timing returns the app/raster producer's frame credit.
     FramePresented = 26,
     SetEdgeToEdge = 27,
     PopupSurfaceCreate = 28,
     // Returns the single-frame presentation credit when a commit cannot be
     // presented, commonly because a newer configure serial superseded it.
     FrameDiscarded = 29,
-    // Negotiates optional transports without making the base surface ABI
-    // depend on a concrete platform graphics stack.
-    QueryCapabilities = 30,
-    Capabilities = 31,
-    // Opaque native-buffer commit. AndroidHardwareBufferV1 transfers the
-    // AHardwareBuffer handle over the negotiated side channel; an optional
-    // acquire-fence fd accompanies this commit through SCM_RIGHTS.
-    AttachNativeBuffer = 32,
     BeginLaunchPlaceholder = 33,
     ResolveLaunchPlaceholder = 34,
     CancelLaunchPlaceholder = 35,
     LaunchIconVisibility = 36,
     LaunchIconVisibilityAck = 37,
-    // Immutable image pixels uploaded once and referenced by logical frames.
-    UploadImageResource = 38,
-    // Mandatory lcl-ui frame path: a versioned backend-neutral DisplayList.
-    CommitDisplayList = 39,
     // Trusted window-manager surface composited as a child of an existing
     // toplevel.  The compositor treats its contents as opaque UI policy.
     AttachedSurfaceCreate = 40,
     // Trusted window-manager action targeting the parent toplevel rather than
     // the manager-owned attached surface that originated the interaction.
-    RequestManagedWindowAction = 41
-};
-
-enum class LCLNativeBufferTransport : uint32_t {
-    AndroidHardwareBufferV1 = 1,
+    RequestManagedWindowAction = 41,
+    // Grants one surface-specific capability for the out-of-process raster
+    // service. Application content never carries this token to the compositor.
+    SurfaceProducerGrant = 42
 };
 
 /** Minimal v1 popup role. Feature semantics remain in client-side UI policy. */
@@ -128,16 +105,6 @@ enum class LCLDecorationMode : uint32_t {
     SSD = 0, // Server-Side Decoration
     CSD = 1, // Client-Side Decoration
     None = 2 // Frameless / No Decoration
-};
-
-/**
- * How the compositor presents a surface while its configured size changes.
- * Live advances only after each matching client buffer commit; CompositorMorph
- * animates the compositor presentation while a replacement buffer is pending.
- */
-enum class LCLResizePresentationMode : uint8_t {
-    Live = 0,
-    CompositorMorph = 1,
 };
 
 /** Why the compositor is issuing a size configure. */
@@ -247,7 +214,6 @@ struct LCLMsgSurfaceCreate {
     float height{0.0f};
     char title[128]{0};
     char appId[64]{0};
-    LCLResizePresentationMode resizePresentation{LCLResizePresentationMode::CompositorMorph};
     uint8_t hasLaunchOrigin{0};
     float launchOriginX{0.0f};
     float launchOriginY{0.0f};
@@ -346,6 +312,10 @@ struct LCLMsgSurfaceDestroy {
 struct LCLMsgConfigureBounds {
     uint32_t surfaceId{0};
     uint64_t configureSerial{0};
+    // All surfaces participating in one WindowGroup geometry transaction
+    // receive the same generation. Zero is reserved for non-geometric chrome
+    // refreshes which keep the currently presented group geometry.
+    uint64_t geometryGeneration{0};
     float x{0.0f};
     float y{0.0f};
     float width{0.0f};
@@ -360,103 +330,42 @@ struct LCLMsgConfigureBounds {
     LCLConfigureResizeReason resizeReason{LCLConfigureResizeReason::Initial};
 };
 
-struct LCLMsgAttachBuffer {
-    uint32_t surfaceId{0};
-    uint64_t configureSerial{0};
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t stride{0};
-    uint32_t format{0}; // Straight-alpha LCL_BUFFER_FORMAT_ARGB8888
-    // Physical-pixel damage within width x height. Zero extent means the
-    // complete active surface, preserving compatibility with old producers.
-    uint32_t damageX{0};
-    uint32_t damageY{0};
-    uint32_t damageWidth{0};
-    uint32_t damageHeight{0};
-};
-
-struct LCLMsgAttachDmaBuf {
-    uint32_t surfaceId{0};
-    uint64_t configureSerial{0};
-    uint32_t bufferId{0};
-    // Physical pixels containing valid newly rendered content.
-    uint32_t width{0};
-    uint32_t height{0};
-    // Physical dimensions of the exported GBM allocation.
-    uint32_t backingWidth{0};
-    uint32_t backingHeight{0};
-    uint32_t stride{0};
-    // GPU surfaces use premultiplied alpha end-to-end. This is intentionally
-    // distinct from the straight-alpha SHM buffer contract above.
-    uint32_t format{0}; // Premultiplied-alpha LCL_BUFFER_FORMAT_ARGB8888
-    uint64_t modifier{~uint64_t{0}}; // DRM_FORMAT_MOD_INVALID when unspecified
-};
-
-struct LCLMsgQueryCapabilities {
-    uint64_t requested{0};
-};
-
-struct LCLMsgCapabilities {
-    uint64_t supported{0};
-};
-
-struct LCLMsgAttachNativeBuffer {
-    uint32_t surfaceId{0};
-    uint64_t configureSerial{0};
-    uint32_t bufferId{0};
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t backingWidth{0};
-    uint32_t backingHeight{0};
-    uint32_t format{0};
-    LCLNativeBufferTransport transport{
-        LCLNativeBufferTransport::AndroidHardwareBufferV1};
-};
-
-struct LCLMsgUploadImageResource {
-    uint32_t surfaceId{0};
-    uint32_t reserved0{0};
-    uint64_t resourceId{0};
-    uint64_t contentRevision{0};
-    uint32_t width{0};
-    uint32_t height{0};
-    uint32_t stridePixels{0};
-    uint8_t opaque{0};
-    uint8_t reserved1[3]{};
-    uint64_t byteSize{0};
-};
-
-/** Followed by displayListSize bytes encoded as LDL1. */
-struct LCLMsgCommitDisplayList {
-    uint32_t surfaceId{0};
-    uint32_t reserved0{0};
-    uint64_t configureSerial{0};
-    float logicalWidth{0.0f};
-    float logicalHeight{0.0f};
-    uint32_t displayListSize{0};
-    uint32_t reserved1{0};
-};
-
-static_assert(sizeof(LCLMsgUploadImageResource) == 48);
-static_assert(sizeof(LCLMsgCommitDisplayList) == 32);
-
-struct LCLMsgReleaseDmaBuf {
-    uint32_t surfaceId{0};
-    uint32_t bufferId{0};
-};
-
 struct LCLMsgFramePresented {
     // Sent after the compositor presents the latest accepted buffer commit.
     // Clients keep at most one frame in flight and coalesce newer damage until
     // this acknowledgement returns the presentation credit.
     uint32_t surfaceId{0};
+    uint64_t configureSerial{0};
+    uint64_t frameSerial{0};
+    uint64_t geometryGeneration{0};
+    // Monotonic compositor display-frame identity. Every surface promoted in
+    // one atomic WindowGroup snapshot receives the same sequence.
+    uint64_t displaySequence{0};
     uint64_t timestampNs{0};
     uint64_t refreshIntervalNs{0};
+};
+
+enum class LCLFrameDiscardReason : uint32_t {
+    Superseded = 1,
+    InvalidFrame = 2,
+    SurfaceClosed = 3,
 };
 
 struct LCLMsgFrameDiscarded {
     uint32_t surfaceId{0};
     uint64_t configureSerial{0};
+    uint64_t frameSerial{0};
+    uint64_t geometryGeneration{0};
+    LCLFrameDiscardReason reason{LCLFrameDiscardReason::InvalidFrame};
+};
+
+struct LCLMsgSurfaceProducerGrant {
+    uint32_t surfaceId{0};
+    int32_t ownerPid{0};
+    uint32_t flags{0};
+    uint32_t reserved{0};
+    uint64_t tokenHigh{0};
+    uint64_t tokenLow{0};
 };
 
 struct LCLMsgAckResponse {

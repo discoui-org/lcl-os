@@ -5,6 +5,10 @@
 
 namespace lcl::platform {
 
+// DRM_FORMAT_ARGB8888 ("AR24"). DMA-BUF descriptors always carry a DRM
+// fourcc here, never an internal pixel-format enum.
+inline constexpr uint32_t kDmaBufFormatArgb8888 = 0x34325241u;
+
 /**
  * @brief Opaque polymorphic representation of a hardware-allocated graphic buffer.
  *

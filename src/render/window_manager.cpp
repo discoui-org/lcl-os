@@ -295,6 +295,12 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                     win.pendingY = newY;
                     win.pendingWidth = newW;
                     win.pendingHeight = newH;
+                    // Every coalescible resize target is a distinct atomic
+                    // generation. InputRouter may discard an older in-flight
+                    // raster batch without ever publishing its geometry.
+                    if (++win.geometryGeneration == 0) {
+                        win.geometryGeneration = 1;
+                    }
                     win.markDirty();
                     stateChanged = true;
                 }
@@ -509,7 +515,7 @@ bool WindowManager::updateAnimations(float dt) {
     (void)changedChannels;
 
     for (auto& win : m_windows) {
-        if (win.isLiveTransitioning()) {
+        if (win.isAtomicTargetTransitioning()) {
             const auto x = m_motionEngine.findChannel({win.id, 10});
             const auto y = m_motionEngine.findChannel({win.id, 11});
             const auto width = m_motionEngine.findChannel({win.id, 12});
@@ -529,49 +535,17 @@ bool WindowManager::updateAnimations(float dt) {
                     win.pendingY = pendingY;
                     win.pendingWidth = pendingWidth;
                     win.pendingHeight = pendingHeight;
+                    if (++win.geometryGeneration == 0) {
+                        win.geometryGeneration = 1;
+                    }
                     win.markDirty();
                     changed = true;
                 }
                 if (!sx.active && !sy.active && !sw.active && !sh.active) {
-                    win.liveResizeMotionFinished = true;
+                    win.atomicTargetMotionFinished = true;
                 }
             } else {
-                win.liveResizeMotionFinished = true;
-            }
-        }
-        if (win.isMorphing()) {
-            const graphics::RectF before{win.presentationX, win.presentationY,
-                                         win.presentationWidth, win.presentationHeight};
-            const auto x = m_motionEngine.findChannel({win.id, 10});
-            const auto y = m_motionEngine.findChannel({win.id, 11});
-            const auto width = m_motionEngine.findChannel({win.id, 12});
-            const auto height = m_motionEngine.findChannel({win.id, 13});
-            if (x && y && width && height) {
-                const auto sx = m_motionEngine.sample(*x);
-                const auto sy = m_motionEngine.sample(*y);
-                const auto sw = m_motionEngine.sample(*width);
-                const auto sh = m_motionEngine.sample(*height);
-                win.presentationX = sx.value;
-                win.presentationY = sy.value;
-                win.presentationWidth = sw.value;
-                win.presentationHeight = sh.value;
-                if (!sx.active && !sy.active && !sw.active && !sh.active) {
-                    win.geometryPhase = GeometryPhase::Idle;
-                    win.presentationX = static_cast<float>(win.x);
-                    win.presentationY = static_cast<float>(win.y);
-                    win.presentationWidth = static_cast<float>(win.width);
-                    win.presentationHeight = static_cast<float>(win.height);
-                    win.pendingX = win.x;
-                    win.pendingY = win.y;
-                    win.pendingWidth = win.width;
-                    win.pendingHeight = win.height;
-                }
-                const graphics::RectF after{win.presentationX, win.presentationY,
-                                            win.presentationWidth, win.presentationHeight};
-                win.markDirty(before.unionWith(after));
-                changed = true;
-            } else {
-                settleGeometry(win);
+                win.atomicTargetMotionFinished = true;
             }
         }
         if (!win.isSnappingBack()) continue;
@@ -646,7 +620,7 @@ bool WindowManager::commitSurfaceGeometry(uint32_t windowId, float frameW, float
     float finalX = win.x;
     float finalY = win.y;
 
-    if (win.isLiveTransitioning()) {
+    if (win.isAtomicTargetTransitioning()) {
         finalX = configuredX;
         finalY = configuredY;
     }
@@ -691,12 +665,10 @@ bool WindowManager::commitSurfaceGeometry(uint32_t windowId, float frameW, float
         win.height = frameH;
         win.x = finalX;
         win.y = finalY;
-        if (!win.isMorphing()) {
-            win.presentationX = static_cast<float>(finalX);
-            win.presentationY = static_cast<float>(finalY);
-            win.presentationWidth = static_cast<float>(frameW);
-            win.presentationHeight = static_cast<float>(frameH);
-        }
+        win.presentationX = static_cast<float>(finalX);
+        win.presentationY = static_cast<float>(finalY);
+        win.presentationWidth = static_cast<float>(frameW);
+        win.presentationHeight = static_cast<float>(frameH);
         if (!preservePendingTarget) {
             win.pendingX = finalX;
             win.pendingY = finalY;
@@ -708,12 +680,12 @@ bool WindowManager::commitSurfaceGeometry(uint32_t windowId, float frameW, float
         win.markDirty();
     }
 
-    if (win.isLiveTransitioning() && win.liveResizeMotionFinished &&
-        finalX == win.liveResizeTargetX && finalY == win.liveResizeTargetY &&
-        frameW == win.liveResizeTargetWidth && frameH == win.liveResizeTargetHeight) {
+    if (win.isAtomicTargetTransitioning() && win.atomicTargetMotionFinished &&
+        finalX == win.atomicTargetX && finalY == win.atomicTargetY &&
+        frameW == win.atomicTargetWidth && frameH == win.atomicTargetHeight) {
         m_motionEngine.clearObjectChannels(win.id);
         win.geometryPhase = GeometryPhase::Idle;
-        win.liveResizeMotionFinished = false;
+        win.atomicTargetMotionFinished = false;
     }
     return true;
 }
@@ -798,19 +770,6 @@ void WindowManager::setWindowCornerStyle(uint32_t windowId, float radius, float 
     }
 }
 
-void WindowManager::setResizePresentationMode(uint32_t windowId,
-                                              protocol::LCLResizePresentationMode mode) {
-    for (auto& win : m_windows) {
-        if (win.id == windowId) {
-            if (win.resizePresentation != mode) {
-                win.resizePresentation = mode;
-                win.markDirty();
-            }
-            break;
-        }
-    }
-}
-
 void WindowManager::setReservedZone(float top, float bottom, float left, float right) {
     if (m_reservedZone.top == top && m_reservedZone.bottom == bottom &&
         m_reservedZone.left == left && m_reservedZone.right == right) {
@@ -834,7 +793,7 @@ uint64_t WindowManager::beginGeometryInteraction(Window& window, GeometryPhase p
     window.presentationInitialized = true;
     window.geometryPhase = phase;
     if (++window.geometryGeneration == 0) window.geometryGeneration = 1;
-    window.liveResizeMotionFinished = false;
+    window.atomicTargetMotionFinished = false;
     window.resizeEdge = ResizeEdge::None;
     window.activeResizeEdge = ResizeEdge::None;
     window.anchorRight = 0;
@@ -870,7 +829,7 @@ void WindowManager::settleGeometry(Window& window, GeometryPhase phase) {
     window.pendingWidth = window.width;
     window.pendingHeight = window.height;
     window.geometryPhase = phase;
-    window.liveResizeMotionFinished = false;
+    window.atomicTargetMotionFinished = false;
 }
 
 GeometryInteraction WindowManager::beginWindowDrag(uint32_t windowId, float localX, float localY) {
@@ -989,7 +948,7 @@ void WindowManager::startGeometryTransition(Window& window, float targetX, float
         window.presentationHeight = static_cast<float>(targetHeight);
         window.presentationInitialized = true;
         window.geometryPhase = GeometryPhase::Idle;
-        window.liveResizeMotionFinished = false;
+        window.atomicTargetMotionFinished = false;
         window.markDirty();
         return;
     }
@@ -1002,25 +961,14 @@ void WindowManager::startGeometryTransition(Window& window, float targetX, float
     animateProperty(11, window.presentationY, static_cast<float>(targetY));
     animateProperty(12, window.presentationWidth, static_cast<float>(targetWidth));
     animateProperty(13, window.presentationHeight, static_cast<float>(targetHeight));
-    if (window.resizePresentation == protocol::LCLResizePresentationMode::Live) {
-        // Keep the rendered geometry tied to the latest committed client
-        // buffer. updateAnimations() publishes interpolated pending bounds;
-        // InputRouter then sends them one-at-a-time as ConfigureBounds.
-        window.geometryPhase = GeometryPhase::LiveTransition;
-        window.liveResizeMotionFinished = false;
-        window.liveResizeTargetX = targetX;
-        window.liveResizeTargetY = targetY;
-        window.liveResizeTargetWidth = targetWidth;
-        window.liveResizeTargetHeight = targetHeight;
-        window.markDirty();
-        return;
-    }
-    window.x = window.pendingX = targetX;
-    window.y = window.pendingY = targetY;
-    window.width = window.pendingWidth = targetWidth;
-    window.height = window.pendingHeight = targetHeight;
-    window.liveResizeMotionFinished = false;
-    window.geometryPhase = GeometryPhase::Morph;
+    // AtomicRetained is the only resize contract. The model may advance, but
+    // visible group geometry is promoted only with its matching ready layers.
+    window.geometryPhase = GeometryPhase::AtomicTargetTransition;
+    window.atomicTargetMotionFinished = false;
+    window.atomicTargetX = targetX;
+    window.atomicTargetY = targetY;
+    window.atomicTargetWidth = targetWidth;
+    window.atomicTargetHeight = targetHeight;
     window.markDirty();
 }
 
@@ -1045,7 +993,7 @@ bool WindowManager::rollbackWindowGeometry(uint32_t windowId, const graphics::Re
     found->presentationHeight = static_cast<float>(found->height);
     found->presentationInitialized = true;
     found->geometryPhase = GeometryPhase::Idle;
-    found->liveResizeMotionFinished = false;
+    found->atomicTargetMotionFinished = false;
     found->isMaximized = wasMaximized;
     found->isMinimized = wasMinimized;
     found->markDirty();

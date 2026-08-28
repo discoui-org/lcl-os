@@ -82,7 +82,7 @@ Leo: Sayın Katrina, ...
 - **Native C++ Tooling:** System launcher binaries (e.g. `lcl-open` / `/usr/bin/open`) must be implemented as native C++ targets linking against core parsers (`AppBundleParser`) to guarantee 100% dependency-free execution.
 
 ### 2. Secure Unix Domain Socket IPC Architecture
-- **Unix Domain Socket Backend:** Compositor IPC uses Unix Domain `SOCK_SEQPACKET` at `/run/user/1000/lcl-compositor.sock` (or `/Runtime/lcl-compositor.sock` under multi-platform substrates). Protocol v13 keeps each explicit little-endian header, payload, and optional `SCM_RIGHTS` descriptor in one packet; stream and text-command fallbacks are forbidden.
+- **Unix Domain Socket Backend:** Compositor IPC uses Unix Domain `SOCK_SEQPACKET` at `/run/user/1000/lcl-compositor.sock` (or `/Runtime/lcl-compositor.sock` under multi-platform substrates). Protocol v26 keeps each explicit little-endian header and payload in one packet; app-facing layer descriptors and DisplayList commits are forbidden. Central `lcl-rasterd` receives sealed producer memfds on its owner-only socket and publishes `LayerReady` descriptors only through a private compositor socketpair.
 - **Strict File Permissions (`0600`):** Socket permissions must be explicitly set to `0600` (read/write only by the desktop owner user).
 - **Kernel Peer Authentication (`SO_PEERCRED`):** The Compositor must validate incoming client socket connections using `getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len)` to verify `PID`, `UID`, and `GID` directly from the Linux kernel before servicing administrative IPC commands.
 

@@ -60,8 +60,6 @@ int main() {
                             kSurfaceHeight, "LCL Terminal");
   window.setAppId("org.lcl.terminal");
   window.setInitialBounds(80, 60, kSurfaceWidth, kSurfaceHeight);
-  window.setResizePresentationMode(
-      lcl::protocol::LCLResizePresentationMode::Live);
   window.setDecorationMode(lcl::protocol::LCLDecorationMode::SSD);
   window.setEdgeToEdge(true);
   window.setWindowCornerStyle(kCornerRadius, 2.0f);

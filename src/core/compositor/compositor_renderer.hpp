@@ -7,17 +7,9 @@
 
 #include <functional>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace lcl::core {
-
-inline bool shouldDeferDisplayListRasterUpdate(
-        bool compositorMotionActive, bool hasCachedLayer) noexcept {
-    // Motion may freeze an already-presented layer, but a first frame has no
-    // fallback. Deferring that initial raster would animate an empty window.
-    return compositorMotionActive && hasCachedLayer;
-}
 
 /** Draws and presents one immutable surface snapshot through the compositor backend. */
 class CompositorRenderer {
@@ -28,8 +20,7 @@ public:
                 const SurfaceRegistry::Snapshot& surfaces,
                 const std::function<void()>& beforePresent = {},
                 bool allowIncrementalMove = false,
-                bool useMobilePresentation = false,
-                bool deferDisplayListRaster = false) const;
+                bool useMobilePresentation = false) const;
 
 private:
     struct RetainedWindowGroup {
@@ -48,8 +39,6 @@ private:
     // Android's compositor scene FBO is authoritative across frames. Partial
     // move damage is enabled only after one complete frame initialized it.
     mutable bool m_hasCompleteRetainedFrame{false};
-    mutable std::unordered_map<uint64_t, uint64_t> m_displayListRasterSerials;
-    mutable std::unordered_set<uint64_t> m_liveDisplayCacheIds;
     mutable std::unordered_map<uint32_t, RetainedWindowGroup>
         m_retainedWindowGroups;
 };

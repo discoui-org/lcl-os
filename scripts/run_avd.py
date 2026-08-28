@@ -119,11 +119,14 @@ def is_android_core_stale(android_core: Path) -> bool:
     return False
 
 
-def is_android_images_stale(out_system_img: Path, out_ramdisk_img: Path, android_core: Path) -> bool:
+def is_android_images_stale(out_system_img: Path, out_ramdisk_img: Path,
+                            android_core: Path, rasterd: Path) -> bool:
     if not out_system_img.is_file() or not out_ramdisk_img.is_file():
         return True
     sys_mtime = out_system_img.stat().st_mtime
     if android_core.is_file() and android_core.stat().st_mtime > sys_mtime:
+        return True
+    if rasterd.is_file() and rasterd.stat().st_mtime > sys_mtime:
         return True
     scripts = [
         SCRIPT_DIR / "build_android_images.py",
@@ -150,8 +153,9 @@ def build_targets(env: AndroidEnvironment, force_rebuild: bool = False, arch: st
 
     # 2. Build Android Platform Composition Root (lcl-core-android)
     android_core = BUILD_ANDROID_DIR / "lcl-core-android"
-    if force_rebuild or is_android_core_stale(android_core):
-        log("Building Android platform compositor (lcl-core-android)...")
+    rasterd = BUILD_ANDROID_DIR / "lcl-rasterd-android"
+    if force_rebuild or is_android_core_stale(android_core) or not rasterd.is_file():
+        log("Building Android compositor and raster service...")
         if not env.ndk_root:
             raise RuntimeError("Android NDK not found. Set ANDROID_NDK_ROOT.")
         toolchain = env.ndk_root / "build/cmake/android.toolchain.cmake"
@@ -165,7 +169,7 @@ def build_targets(env: AndroidEnvironment, force_rebuild: bool = False, arch: st
         ], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([
             "cmake", "--build", str(BUILD_ANDROID_DIR),
-            "--target", "lcl-core-android",
+            "--target", "lcl-core-android", "lcl-rasterd-android",
             "-j", str(os.cpu_count() or 4)
         ], check=True, stdout=subprocess.DEVNULL)
 
@@ -218,10 +222,12 @@ def launch_avd(args: argparse.Namespace) -> None:
     out_system_img = BUILD_DIR / "android" / "lcl-system.img"
     out_ramdisk_img = BUILD_DIR / "android" / "lcl-ramdisk.img"
     android_core = BUILD_ANDROID_DIR / "lcl-core-android"
+    rasterd = BUILD_ANDROID_DIR / "lcl-rasterd-android"
 
     if not args.no_build:
         build_targets(env, force_rebuild=args.rebuild, arch=getattr(args, "arch", "x86_64") or "x86_64")
-        if args.rebuild or is_android_images_stale(out_system_img, out_ramdisk_img, android_core):
+        if args.rebuild or is_android_images_stale(
+                out_system_img, out_ramdisk_img, android_core, rasterd):
             sys.path.insert(0, str(SCRIPT_DIR))
             from build_android_images import build_android_images
             out_system_img, out_ramdisk_img = build_android_images()

@@ -405,29 +405,6 @@ bool FrameScheduler::advanceTransitions(SurfaceRegistry& surfaces,
                 entry.launchContentOpacity = 1.0f;
             }
         }
-        if (entry.resizeTransitionPhase == SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer) {
-            active = true;
-            if (now >= entry.resizeDeadline) {
-                entry.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None;
-                entry.pendingConfigureSerial = entry.acceptedConfigureSerial;
-                entry.forceConfigure = true;
-                entry.resizeBufferReady = true;
-                entry.rollbackRequested = true;
-                SurfaceRegistry::releasePreviousBuffer(entry);
-            }
-        } else if (entry.resizeTransitionPhase == SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::Crossfading) {
-            active = true;
-            entry.resizeCrossfadeElapsedSec += elapsed;
-            const float progress = std::clamp(entry.resizeCrossfadeElapsedSec / 0.10f, 0.0f, 1.0f);
-            entry.resizeCrossfadeProgress = lcl::motion::Easing(lcl::motion::EasingName::EaseOutCubic).evaluate(progress);
-            if (progress >= 1.0f) {
-                entry.resizeTransitionPhase = SurfaceRegistry::SurfaceEntry::ResizeTransitionPhase::None;
-                entry.resizeCrossfadeProgress = 1.0f;
-                entry.resizeBufferReady = true;
-                SurfaceRegistry::releasePreviousBuffer(entry);
-                entry.resizeGeometryGeneration = 0;
-            }
-        }
         if (entry.transitionPhase == SurfaceRegistry::SurfaceEntry::TransitionPhase::None) {
             continue;
         }

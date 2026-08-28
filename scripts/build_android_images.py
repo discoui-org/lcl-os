@@ -128,7 +128,8 @@ def parse_gpt_partitions(disk_path: Path) -> list[dict]:
     return partitions
 
 
-def modify_system_image(system_ext4_path: Path, android_core: Path) -> None:
+def modify_system_image(system_ext4_path: Path, android_core: Path,
+                        rasterd: Path) -> None:
     """Modifies the unpacked ext4 system.img using debugfs for platform substrate only."""
     log("Modifying system.img (configuring LCL Android substrate & init services)...")
 
@@ -533,12 +534,15 @@ sleep 5
     debugfs_script.append(f"write {fstab_path} fstab")
     debugfs_script.append("sif fstab mode 0100644")
 
-    # Install lcl-core-android and lcl-bootstrap.sh in /system/bin
+    # Install the compositor, its out-of-process raster service and bootstrap.
     debugfs_script.extend([
         "cd /system/bin",
         "rm lcl-core-android",
         f"write {android_core} lcl-core-android",
         "sif lcl-core-android mode 0100755",
+        "rm lcl-rasterd-android",
+        f"write {rasterd} lcl-rasterd-android",
+        "sif lcl-rasterd-android mode 0100755",
         "rm lcl-bootstrap.sh",
         f"write {lcl_bootstrap_path} lcl-bootstrap.sh",
         "sif lcl-bootstrap.sh mode 0100755",
@@ -620,6 +624,10 @@ def build_android_images() -> tuple[Path, Path]:
 
     core_sha = get_sha256(android_core)
     log(f"  Android Core Platform Compositor SHA-256: {core_sha}")
+    rasterd = BUILD_ANDROID_DIR / "lcl-rasterd-android"
+    if not rasterd.is_file():
+        raise FileNotFoundError(f"Android raster service ({rasterd}) not found.")
+    log(f"  Android Raster Service SHA-256: {get_sha256(rasterd)}")
 
     # 3. Parse GPT partitions dynamically
     partitions = parse_gpt_partitions(paths.stock_system)
@@ -653,7 +661,7 @@ def build_android_images() -> tuple[Path, Path]:
 
     # 6. Modify ONLY system.img (vendor.img, product.img, system_ext.img, system_dlkm.img stay 100% stock)
     system_img = unpacked_dir / "system.img"
-    modify_system_image(system_img, android_core)
+    modify_system_image(system_img, android_core, rasterd)
 
     # 7. Rebuild dynamic super partition with lpmake
     log("Rebuilding dynamic super partition with lpmake...")

@@ -15,6 +15,8 @@ public:
     virtual ~IRuntimePaths() = default;
 
     virtual std::string compositorSocketPath() const = 0;
+    virtual std::string rasterSocketPath() const = 0;
+    virtual std::string rasterServiceExecutable() const = 0;
     virtual std::string sessionSocketPath() const = 0;
     virtual std::string appCatalogDirectory() const = 0;
     virtual std::vector<std::string> fontSearchDirectories() const = 0;

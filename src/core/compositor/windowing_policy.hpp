@@ -28,7 +28,6 @@ public:
     virtual bool usesDesktopWindowManagement() const noexcept = 0;
     virtual bool usesSystemGestures() const noexcept = 0;
     virtual bool usesMobileWindowDecorations() const noexcept = 0;
-    virtual bool forcesOpaqueNormalSurfaces() const noexcept = 0;
 };
 
 class DesktopWindowPolicy final : public WindowingPolicy {
@@ -46,7 +45,6 @@ public:
     bool usesDesktopWindowManagement() const noexcept override;
     bool usesSystemGestures() const noexcept override;
     bool usesMobileWindowDecorations() const noexcept override;
-    bool forcesOpaqueNormalSurfaces() const noexcept override;
 };
 
 class MobileWindowPolicy final : public WindowingPolicy {
@@ -64,7 +62,6 @@ public:
     bool usesDesktopWindowManagement() const noexcept override;
     bool usesSystemGestures() const noexcept override;
     bool usesMobileWindowDecorations() const noexcept override;
-    bool forcesOpaqueNormalSurfaces() const noexcept override;
 };
 
 std::unique_ptr<WindowingPolicy> makeWindowingPolicy(

@@ -1,4 +1,5 @@
 #include "core/compositor/surface_registry.hpp"
+#include "core/compositor/surface_transaction_coordinator.hpp"
 #include "lcl-motion/motion.hpp"
 
 #include <algorithm>
@@ -19,7 +20,7 @@ SurfaceRegistry::Key SurfaceRegistry::makeKey(int clientFd, pid_t pid, uint32_t 
 
 bool SurfaceRegistry::beginClosingTransition(SurfaceEntry& entry) noexcept {
     // Stop accepting replacement frames before deciding whether the frozen
-    // current frame can be animated. Both SHM and DMA-BUF are valid sources.
+    // current retained raster layer can be animated.
     entry.ignoreBufferCommits = true;
     if (entry.suppressInitialTransition || entry.windowId == 0 ||
         !entry.hasRenderableBuffer() || entry.width == 0 || entry.height == 0) {
@@ -107,7 +108,8 @@ SurfaceRegistry::iterator SurfaceRegistry::erase(iterator position) {
         const uint64_t atomicGeneration =
             position->second.atomicConfigureGeneration;
         if (atomicGeneration != 0) {
-            cancelAtomicConfigure(windowId, atomicGeneration);
+            SurfaceTransactionCoordinator::cancel(
+                *this, windowId, atomicGeneration);
         }
         releaseKeyboardFocus(position->first);
         releaseBuffer(position->second);
@@ -134,12 +136,6 @@ void SurfaceRegistry::clear() noexcept {
 
 void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
     completePresentation(entry);
-    releasePreviousBuffer(entry);
-    if (entry.dmaBufTexture != 0 || entry.dmaBufId != 0) {
-        entry.pendingDmaBufReleases.push_back({entry.dmaBufId, entry.dmaBufTexture});
-    }
-    entry.dmaBufId = 0;
-    entry.dmaBufTexture = 0;
     if (entry.pixels && entry.shmSize > 0) {
         munmap(entry.pixels, entry.shmSize);
     }
@@ -148,13 +144,6 @@ void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
     entry.shmContentSerial = 0;
     entry.shmDamageX = entry.shmDamageY = 0;
     entry.shmDamageWidth = entry.shmDamageHeight = 0;
-    entry.displayList = {};
-    entry.displayListSerial = 0;
-    entry.displayListCacheId = 0;
-    entry.displayListWidth = entry.displayListHeight = 0.0f;
-    entry.imageResources.clear();
-    entry.imageResourceBytes = 0;
-    entry.cachedLayerNamespaces.clear();
 
     if (entry.shmFd >= 0) {
         close(entry.shmFd);
@@ -162,73 +151,19 @@ void SurfaceRegistry::releaseBuffer(SurfaceEntry& entry) noexcept {
     entry.shmFd = -1;
 }
 
-void SurfaceRegistry::releasePreviousBuffer(SurfaceEntry& entry) noexcept {
-    if (entry.previousDmaBufTexture != 0 || entry.previousDmaBufId != 0) {
-        entry.pendingDmaBufReleases.push_back({entry.previousDmaBufId, entry.previousDmaBufTexture});
-    }
-    entry.previousDmaBufId = 0;
-    entry.previousDmaBufTexture = 0;
-    if (entry.previousPixels && entry.previousShmSize > 0) {
-        munmap(entry.previousPixels, entry.previousShmSize);
-    }
-    entry.previousPixels = nullptr;
-    entry.previousShmSize = 0;
-    entry.previousShmContentSerial = 0;
-    entry.previousDisplayList = {};
-    entry.previousDisplayListSerial = 0;
-    entry.previousDisplayListCacheId = 0;
-    entry.previousDisplayListWidth = entry.previousDisplayListHeight = 0.0f;
-    if (entry.previousShmFd >= 0) close(entry.previousShmFd);
-    entry.previousShmFd = -1;
-    entry.previousWidth = entry.previousHeight = entry.previousStride = 0;
-    entry.previousBackingWidth = entry.previousBackingHeight = 0;
-}
-
 void SurfaceRegistry::interruptGeometryTransaction(SurfaceEntry& entry,
                                                    uint64_t newGeneration) noexcept {
     const bool preserveLiveFlight =
-        entry.resizePresentation == protocol::LCLResizePresentationMode::Live &&
-        (hasOutstandingConfigure(entry) || hasUnpresentedFrame(entry));
-    releasePreviousBuffer(entry);
-    entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::None;
-    entry.resizeCrossfadeElapsedSec = 0.0f;
-    entry.resizeCrossfadeProgress = 1.0f;
-    entry.resizeBufferReady = true;
-    entry.rollbackRequested = false;
-    entry.resizeGeometryGeneration = 0;
+        hasOutstandingConfigure(entry) || hasUnpresentedFrame(entry);
 
-    // A Live client may already be rendering the only in-flight serial. Keep
-    // that serial valid until its real buffer is accepted and presented; the
-    // generation check prevents it from committing obsolete window geometry.
-    // The forced configure below then publishes only the newest target. Morph
-    // transactions retain their existing cancellation semantics.
+    // Rasterd may already be producing the only in-flight serial. Keep it valid
+    // until accepted/presented; generation validation rejects obsolete geometry.
+    // The forced configure below then publishes only the newest target.
     if (!preserveLiveFlight) {
         entry.pendingConfigureSerial = 0;
         entry.configuredGeometryGeneration = newGeneration;
     }
     entry.forceConfigure = true;
-}
-
-void SurfaceRegistry::beginGeometryTransition(SurfaceEntry& entry,
-                                              uint64_t newGeneration,
-                                              float rollbackX, float rollbackY,
-                                              float rollbackWidth, float rollbackHeight,
-                                              bool rollbackWasMaximized,
-                                              bool rollbackWasMinimized) noexcept {
-    interruptGeometryTransaction(entry, newGeneration);
-    entry.rollbackX = rollbackX;
-    entry.rollbackY = rollbackY;
-    entry.rollbackWidth = rollbackWidth;
-    entry.rollbackHeight = rollbackHeight;
-    entry.rollbackWasMaximized = rollbackWasMaximized;
-    entry.rollbackWasMinimized = rollbackWasMinimized;
-    entry.resizeTransitionPhase = SurfaceEntry::ResizeTransitionPhase::AwaitingBuffer;
-    entry.resizeGeometryGeneration = newGeneration;
-    entry.resizeDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
-    entry.resizeCrossfadeElapsedSec = 0.0f;
-    entry.resizeCrossfadeProgress = 0.0f;
-    entry.resizeBufferReady = false;
-    entry.rollbackRequested = false;
 }
 
 bool SurfaceRegistry::acceptsBufferCommit(const SurfaceEntry& entry,
@@ -267,91 +202,6 @@ bool SurfaceRegistry::hasUnpresentedFrame(const SurfaceEntry& entry) noexcept {
     return entry.presentationSerial != 0;
 }
 
-bool SurfaceRegistry::beginAtomicConfigure(
-        uint32_t windowId, uint64_t generation,
-        const std::vector<Key>& participants,
-        std::chrono::steady_clock::time_point deadline) noexcept {
-    if (windowId == 0 || generation == 0 || participants.size() < 2) {
-        return false;
-    }
-    for (const auto key : participants) {
-        const auto found = m_entries.find(key);
-        if (found == m_entries.end() || found->second.windowId != windowId) {
-            return false;
-        }
-    }
-    const auto participantCount = static_cast<uint32_t>(participants.size());
-    for (const auto key : participants) {
-        auto& entry = m_entries.at(key);
-        entry.atomicConfigureGeneration = generation;
-        entry.atomicConfigureParticipantCount = participantCount;
-        entry.atomicConfigureIssued = key == participants.front();
-        entry.atomicConfigureDeadline = deadline;
-    }
-    return true;
-}
-
-void SurfaceRegistry::cancelAtomicConfigure(
-        uint32_t windowId, uint64_t generation) noexcept {
-    for (auto& [_, entry] : m_entries) {
-        if (entry.windowId != windowId ||
-            entry.atomicConfigureGeneration != generation) continue;
-        entry.atomicConfigureGeneration = 0;
-        entry.atomicConfigureParticipantCount = 0;
-        entry.atomicConfigureIssued = false;
-        entry.atomicConfigureDeadline = {};
-    }
-}
-
-bool SurfaceRegistry::hasIncompleteAtomicConfigure(
-        std::chrono::steady_clock::time_point now) noexcept {
-    struct GroupState {
-        uint32_t windowId{0};
-        uint64_t generation{0};
-        uint32_t expected{0};
-        uint32_t seen{0};
-        bool ready{true};
-        bool expired{false};
-    };
-    std::vector<GroupState> groups;
-    for (const auto& [_, entry] : m_entries) {
-        if (entry.atomicConfigureGeneration == 0) continue;
-        auto group = std::find_if(
-            groups.begin(), groups.end(), [&entry](const GroupState& item) {
-                return item.windowId == entry.windowId &&
-                    item.generation == entry.atomicConfigureGeneration;
-            });
-        if (group == groups.end()) {
-            groups.push_back({entry.windowId,
-                              entry.atomicConfigureGeneration,
-                              entry.atomicConfigureParticipantCount});
-            group = groups.end() - 1;
-        }
-        ++group->seen;
-        group->expected = std::max(
-            group->expected, entry.atomicConfigureParticipantCount);
-        group->ready = group->ready &&
-            entry.atomicConfigureIssued &&
-            entry.configuredGeometryGeneration == group->generation &&
-            entry.acceptedConfigureSerial == entry.pendingConfigureSerial &&
-            entry.presentationSerial == entry.pendingConfigureSerial;
-        group->expired = group->expired ||
-            (entry.atomicConfigureDeadline.time_since_epoch().count() != 0 &&
-             now >= entry.atomicConfigureDeadline);
-    }
-
-    bool incomplete = false;
-    for (const auto& group : groups) {
-        const bool ready = group.ready && group.seen == group.expected;
-        if (!ready && !group.expired) {
-            incomplete = true;
-            continue;
-        }
-        cancelAtomicConfigure(group.windowId, group.generation);
-    }
-    return incomplete;
-}
-
 void SurfaceRegistry::queuePresentation(SurfaceEntry& entry,
                                         uint64_t configureSerial) noexcept {
     entry.presentationSerial = configureSerial;
@@ -359,41 +209,6 @@ void SurfaceRegistry::queuePresentation(SurfaceEntry& entry,
 
 void SurfaceRegistry::completePresentation(SurfaceEntry& entry) noexcept {
     entry.presentationSerial = 0;
-}
-
-void SurfaceRegistry::pruneUnreferencedImageResources(
-        SurfaceEntry& entry, size_t targetCount,
-        size_t targetBytes) noexcept {
-    const auto isReferenced = [&entry](
-            const SurfaceEntry::ImageResource& resource) {
-        const uintptr_t pixels = reinterpret_cast<uintptr_t>(
-            resource.pixels.data());
-        const auto listReferences = [pixels](const graphics::DisplayList& list) {
-            return std::any_of(
-                list.commands().begin(), list.commands().end(),
-                [pixels](const graphics::DisplayCommand& command) {
-                    const auto* image = std::get_if<graphics::DrawImageCommand>(
-                        &command);
-                    return image && image->resourceKey == pixels;
-                });
-        };
-        return listReferences(entry.displayList) ||
-            listReferences(entry.previousDisplayList);
-    };
-
-    for (auto resource = entry.imageResources.begin();
-         resource != entry.imageResources.end() &&
-             (entry.imageResources.size() > targetCount ||
-              entry.imageResourceBytes > targetBytes);) {
-        if (isReferenced(resource->second)) {
-            ++resource;
-            continue;
-        }
-        const size_t bytes = resource->second.pixels.size() * sizeof(uint32_t);
-        entry.imageResourceBytes = bytes > entry.imageResourceBytes
-            ? 0 : entry.imageResourceBytes - bytes;
-        resource = entry.imageResources.erase(resource);
-    }
 }
 
 bool SurfaceRegistry::isOwnedByClientConnection(const SurfaceEntry& entry,

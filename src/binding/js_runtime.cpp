@@ -555,25 +555,6 @@ JSValue js_window_app_setWindowCornerStyle(JSContext* ctx, JSValueConst this_val
         static_cast<float>(radius), static_cast<float>(roundness)));
 }
 
-JSValue js_window_app_setResizePresentationMode(JSContext* ctx, JSValueConst this_val,
-                                                int argc, JSValueConst* argv) {
-    auto* appWrap = static_cast<JsWindowAppWrapper*>(JS_GetOpaque2(ctx, this_val, g_window_app_class_id));
-    if (!appWrap || !appWrap->app) return JS_EXCEPTION;
-    if (argc < 1) return JS_ThrowTypeError(ctx, "resize presentation mode is required");
-    const char* value = JS_ToCString(ctx, argv[0]);
-    if (!value) return JS_EXCEPTION;
-    const std::string mode(value);
-    JS_FreeCString(ctx, value);
-    if (mode == "live") {
-        appWrap->app->setResizePresentationMode(lcl::protocol::LCLResizePresentationMode::Live);
-    } else if (mode == "compositor-morph") {
-        appWrap->app->setResizePresentationMode(lcl::protocol::LCLResizePresentationMode::CompositorMorph);
-    } else {
-        return JS_ThrowRangeError(ctx, "resize presentation must be 'live' or 'compositor-morph'");
-    }
-    return JS_UNDEFINED;
-}
-
 // ------------------------------------------------------------
 // Widget / Container / Button / Text Constructors
 // ------------------------------------------------------------
@@ -1746,7 +1727,6 @@ void JsRuntime::registerLclBindings() {
     JS_SetPropertyStr(m_ctx, windowAppProto, "setDecorationMode", JS_NewCFunction(m_ctx, js_window_app_setDecorationMode, "setDecorationMode", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setEdgeToEdge", JS_NewCFunction(m_ctx, js_window_app_setEdgeToEdge, "setEdgeToEdge", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "setWindowCornerStyle", JS_NewCFunction(m_ctx, js_window_app_setWindowCornerStyle, "setWindowCornerStyle", 2));
-    JS_SetPropertyStr(m_ctx, windowAppProto, "setResizePresentationMode", JS_NewCFunction(m_ctx, js_window_app_setResizePresentationMode, "setResizePresentationMode", 1));
     JS_SetPropertyStr(m_ctx, windowAppProto, "animate", JS_NewCFunction(m_ctx, js_window_app_animate, "animate", 2));
     JS_SetClassProto(m_ctx, g_window_app_class_id, windowAppProto);
 

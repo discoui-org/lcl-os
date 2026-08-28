@@ -22,7 +22,8 @@ namespace lcl::render {
 
 // Client-only EGL target.  It opens a DRM render node, never a KMS card, so it
 // cannot page-flip or otherwise own the display.  Its output is read back to
-// WindowApp's existing SHM staging buffer until the DMA-BUF protocol arrives.
+// Optional local GPU render target. Its export metadata is consumed only by
+// trusted raster backends; v26 applications submit sealed DisplayLists.
 class ClientEGLContext final : public lcl::platform::IGraphicsContext {
 public:
     struct DmaBufTarget {

@@ -24,6 +24,16 @@ public:
         return runtimeDirectory() + "/lcl-compositor.sock";
     }
 
+    std::string rasterSocketPath() const override {
+        return runtimeDirectory() + "/lcl-raster.sock";
+    }
+
+    std::string rasterServiceExecutable() const override {
+        const char* overridePath = std::getenv("LCL_RASTERD_PATH");
+        return overridePath && overridePath[0] != '\0'
+            ? overridePath : "/system/bin/lcl-rasterd-android";
+    }
+
     std::string sessionSocketPath() const override {
         return runtimeDirectory() + "/lcl-sessiond.sock";
     }

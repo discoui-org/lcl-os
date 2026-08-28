@@ -28,15 +28,21 @@ TEST(WindowManagerTest, WindowActionsPreserveRestoreGeometryAndFocus) {
     ASSERT_EQ(manager.getFocusedWindowId(), second);
 
     ASSERT_TRUE(manager.maximizeWindow(first));
+    ASSERT_TRUE(manager.updateAnimations(1.0f));
     const auto* maximized = findWindow(manager, first);
     ASSERT_NE(maximized, nullptr);
     EXPECT_TRUE(maximized->isMaximized);
     EXPECT_FALSE(maximized->isMinimized);
-    EXPECT_EQ(maximized->x, 0);
-    EXPECT_EQ(maximized->y, 32);
-    EXPECT_EQ(maximized->width, 1000);
-    EXPECT_EQ(maximized->height, 608);
+    EXPECT_EQ(maximized->x, 80);
+    EXPECT_EQ(maximized->y, 80);
+    EXPECT_EQ(maximized->width, 400);
+    EXPECT_EQ(maximized->height, 300);
+    EXPECT_EQ(maximized->pendingX, 0);
+    EXPECT_EQ(maximized->pendingY, 32);
+    EXPECT_EQ(maximized->pendingWidth, 1000);
+    EXPECT_EQ(maximized->pendingHeight, 608);
     EXPECT_EQ(manager.getFocusedWindowId(), first);
+    manager.commitSurfaceGeometry(first, 1000, 608, false, 0, 32);
 
     ASSERT_TRUE(manager.minimizeWindow(first));
     const auto* minimized = findWindow(manager, first);
@@ -53,6 +59,8 @@ TEST(WindowManagerTest, WindowActionsPreserveRestoreGeometryAndFocus) {
     EXPECT_EQ(manager.getFocusedWindowId(), first);
 
     ASSERT_TRUE(manager.toggleMaximizeWindow(first));
+    ASSERT_TRUE(manager.updateAnimations(1.0f));
+    manager.commitSurfaceGeometry(first, 400, 300, false, 80, 80);
     const auto* restored = findWindow(manager, first);
     ASSERT_NE(restored, nullptr);
     EXPECT_FALSE(restored->isMaximized);
@@ -128,7 +136,7 @@ TEST(WindowManagerTest, EdgeToEdgeIsExplicitWindowState) {
     EXPECT_TRUE(window->edgeToEdge);
 }
 
-TEST(WindowManagerTest, MaximizeRestoreMorphRetargetsFromPresentationGeometry) {
+TEST(WindowManagerTest, MaximizeRestoreRetargetKeepsPresentedGroupUntilCommit) {
     lcl::render::WindowManager manager;
     ASSERT_TRUE(manager.initialize(1000, 700));
     manager.setReservedZone(32, 60, 0, 0);
@@ -137,16 +145,16 @@ TEST(WindowManagerTest, MaximizeRestoreMorphRetargetsFromPresentationGeometry) {
     ASSERT_TRUE(manager.maximizeWindow(id));
     const auto* logical = findWindow(manager, id);
     ASSERT_NE(logical, nullptr);
-    EXPECT_EQ(logical->x, 0);
+    EXPECT_EQ(logical->x, 80);
     EXPECT_FLOAT_EQ(logical->presentationX, 80.0f);
     manager.updateAnimations(0.10f);
     const float midWidth = findWindow(manager, id)->presentationWidth;
-    EXPECT_GT(midWidth, 400.0f);
-    EXPECT_LT(midWidth, 1000.0f);
+    EXPECT_FLOAT_EQ(midWidth, 400.0f);
 
     ASSERT_TRUE(manager.restoreWindow(id));
-    EXPECT_NEAR(findWindow(manager, id)->presentationWidth, midWidth, 0.001f);
+    EXPECT_FLOAT_EQ(findWindow(manager, id)->presentationWidth, midWidth);
     for (int index = 0; index < 240; ++index) manager.updateAnimations(1.0f / 240.0f);
+    manager.commitSurfaceGeometry(id, 400, 300, false, 80, 90);
     const auto* restored = findWindow(manager, id);
     EXPECT_EQ(restored->geometryPhase, lcl::render::GeometryPhase::Idle);
     EXPECT_NEAR(restored->presentationX, 80.0f, 0.01f);
@@ -155,19 +163,17 @@ TEST(WindowManagerTest, MaximizeRestoreMorphRetargetsFromPresentationGeometry) {
     EXPECT_NEAR(restored->presentationHeight, 300.0f, 0.01f);
 }
 
-TEST(WindowManagerTest, LiveResizePresentationUsesCommittedBuffersWithoutMorph) {
+TEST(WindowManagerTest, AtomicRetainedResizeUsesCommittedBuffersWithoutMorph) {
     lcl::render::WindowManager manager;
     ASSERT_TRUE(manager.initialize(1000, 700));
     manager.setReservedZone(32, 60, 0, 0);
     const uint32_t id = manager.createWindow("Live", 80, 90, 400, 300);
 
-    manager.setResizePresentationMode(id, lcl::protocol::LCLResizePresentationMode::Live);
     ASSERT_TRUE(manager.maximizeWindow(id));
     const auto* started = findWindow(manager, id);
     ASSERT_NE(started, nullptr);
     EXPECT_TRUE(started->isMaximized);
-    EXPECT_TRUE(started->isLiveTransitioning());
-    EXPECT_FALSE(started->isMorphing());
+    EXPECT_TRUE(started->isAtomicTargetTransitioning());
     EXPECT_EQ(started->width, 400);
     EXPECT_EQ(started->height, 300);
 
@@ -182,8 +188,7 @@ TEST(WindowManagerTest, LiveResizePresentationUsesCommittedBuffersWithoutMorph) 
     manager.commitSurfaceGeometry(id, 1000, 608, false, 0, 32);
     const auto* committed = findWindow(manager, id);
     ASSERT_NE(committed, nullptr);
-    EXPECT_FALSE(committed->isLiveTransitioning());
-    EXPECT_FALSE(committed->isMorphing());
+    EXPECT_FALSE(committed->isAtomicTargetTransitioning());
     EXPECT_EQ(committed->x, 0);
     EXPECT_EQ(committed->y, 32);
     EXPECT_EQ(committed->width, 1000);
@@ -256,12 +261,12 @@ TEST(WindowManagerTest, RestoreMorphIsPreemptedByDragAtThePresentedRect) {
                     static_cast<float>(findWindow(manager, id)->x));
 }
 
-TEST(WindowManagerTest, PresentedBoundsOwnResizeHitTestingDuringMorph) {
+TEST(WindowManagerTest, PresentedBoundsOwnResizeHitTestingDuringRetainedTransition) {
     lcl::render::WindowManager manager;
     ASSERT_TRUE(manager.initialize(1000, 700));
     const uint32_t id = manager.createWindow("Presented edge", 0, 32, 1000, 668);
     auto& window = manager.getWindowsMutable().back();
-    window.geometryPhase = lcl::render::GeometryPhase::Morph;
+    window.geometryPhase = lcl::render::GeometryPhase::AtomicTargetTransition;
     window.presentationX = 100.0f;
     window.presentationY = 100.0f;
     window.presentationWidth = 400.0f;
