@@ -30,7 +30,7 @@ the resulting layer to `lcl-core` through its private compositor channel.
 ```text
 +-----------------------------------------------------------+
 |                      lcl-ui Application                   |
-| (WindowApp -> Widget Tree -> Yoga -> logical DisplayList) |
+| (WindowApp -> Widget Tree -> LCL Layout -> DisplayList)   |
 +-----------------------------+-----------------------------+
                               | producer-side raster
                               v
@@ -121,7 +121,10 @@ plain `Container` trees so window traversal can continue past them.
 Base polymorphic class for all UI components.
 
 #### Public Methods
-- `YogaNode& getYogaNode()`: Accesses the Yoga Flexbox node to configure layout attributes (`setWidth`, `setHeight`, `setPadding`, `setGap`, `setDirection`, `setJustifyContent`, `setAlignItems`).
+- Type-safe layout setters such as `setDirection`, `setJustifyContent`,
+  `setAlignItems`, `setWidth`, `setHeight`, `setPadding`, `setMargin`,
+  `setGap`, and `setPosition` accept only types from `lcl::ui::layout`.
+  The underlying layout engine and its node types are private to `lcl-ui`.
 - `void addChild(std::unique_ptr<Widget> child)`: Appends a child widget into the hierarchy.
 - `void removeChild(Widget* child)`: Removes a child widget.
 - `const std::vector<std::unique_ptr<Widget>>& getChildren() const`: Returns list of children.
@@ -134,6 +137,23 @@ Base polymorphic class for all UI components.
 - `const theme::Theme& getTheme() const`: Returns the inherited window theme.
 - `virtual void setOnClick(std::function<void()> callback)`: Makes any widget clickable without a pointer-event subclass.
 - `void setInteractionEnabled(bool enabled)`: Enables or disables declarative pointer behavior.
+
+### `lcl::ui::MeasuredWidget`
+
+Custom leaf widgets with intrinsic content size derive from `MeasuredWidget`
+and implement `measure(const layout::Constraints&)`. The width and height
+constraints carry an LCL-owned `MeasureMode` (`Undefined`, `Exactly`, or
+`AtMost`). Call `invalidateMeasurement()` whenever content that affects the
+intrinsic size changes.
+
+```cpp
+class Swatch final : public MeasuredWidget {
+protected:
+    layout::Size measure(const layout::Constraints&) override {
+        return {24.0f, 24.0f};
+    }
+};
+```
 
 ---
 
@@ -231,20 +251,20 @@ int main() {
 
     // 2. Build Centered Flexbox Layout Tree
     auto rootContainer = std::make_unique<Container>();
-    rootContainer->getYogaNode().setWidth(600.0f);
-    rootContainer->getYogaNode().setHeight(400.0f);
-    rootContainer->getYogaNode().setDirection(YGFlexDirectionColumn);
-    rootContainer->getYogaNode().setJustifyContent(YGJustifyCenter);
-    rootContainer->getYogaNode().setAlignItems(YGAlignCenter);
-    rootContainer->getYogaNode().setGap(YGGutterAll, 16.0f);
+    rootContainer->setWidth(600.0f);
+    rootContainer->setHeight(400.0f);
+    rootContainer->setDirection(layout::Direction::Column);
+    rootContainer->setJustifyContent(layout::Justify::Center);
+    rootContainer->setAlignItems(layout::Align::Center);
+    rootContainer->setGap(16.0f);
 
     auto statusText = std::make_unique<Text>("Click counter: 0");
     statusText->setFontSize(18.0f);
     Text* textPtr = statusText.get();
 
     auto actionButton = std::make_unique<Button>("Click Me");
-    actionButton->getYogaNode().setWidth(140.0f);
-    actionButton->getYogaNode().setHeight(40.0f);
+    actionButton->setWidth(140.0f);
+    actionButton->setHeight(40.0f);
 
     static int counter = 0;
     actionButton->setOnClick([textPtr]() {

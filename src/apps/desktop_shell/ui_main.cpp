@@ -33,6 +33,8 @@
 
 namespace {
 
+namespace layout = lcl::ui::layout;
+
 constexpr uint32_t kMenuBarHeight = 32;
 constexpr uint32_t kDockHeight = 88;
 constexpr uint32_t kDockBottomInset = 4;
@@ -173,19 +175,18 @@ std::string timeText() {
 
 void absolute(lcl::ui::Widget &widget, float x, float y, float width,
               float height) {
-  auto &yoga = widget.getYogaNode();
-  yoga.setPositionType(YGPositionTypeAbsolute);
-  yoga.setPosition(YGEdgeLeft, x);
-  yoga.setPosition(YGEdgeTop, y);
-  yoga.setWidth(width);
-  yoga.setHeight(height);
+  widget.setPositionType(layout::PositionType::Absolute);
+  widget.setPosition(layout::Edge::Left, x);
+  widget.setPosition(layout::Edge::Top, y);
+  widget.setWidth(width);
+  widget.setHeight(height);
 }
 
 std::unique_ptr<lcl::ui::Container> makeMenuRoot(uint32_t width,
                                                  lcl::ui::Text *&clock) {
   auto root = std::make_unique<lcl::ui::Container>();
-  root->getYogaNode().setWidth(width);
-  root->getYogaNode().setHeight(kMenuBarHeight);
+  root->setWidth(width);
+  root->setHeight(kMenuBarHeight);
 
   // Backdrop geometry, material tint and foreground chrome remain separate:
   // filtering never decides the alpha of the menu-bar surface itself.
@@ -202,10 +203,10 @@ std::unique_ptr<lcl::ui::Container> makeMenuRoot(uint32_t width,
   absolute(*tint, 0, 0, width, kMenuBarHeight);
 
   auto foreground = std::make_unique<lcl::ui::Container>();
-  foreground->getYogaNode().setDirection(YGFlexDirectionRow);
-  foreground->getYogaNode().setJustifyContent(YGJustifyFlexEnd);
-  foreground->getYogaNode().setAlignItems(YGAlignCenter);
-  foreground->getYogaNode().setPadding(YGEdgeRight, 20.0f);
+  foreground->setDirection(layout::Direction::Row);
+  foreground->setJustifyContent(layout::Justify::FlexEnd);
+  foreground->setAlignItems(layout::Align::Center);
+  foreground->setPadding(layout::Edge::Right, 20.0f);
   absolute(*foreground, 0, 0, width, kMenuBarHeight);
 
   auto text = std::make_unique<lcl::ui::Text>(timeText());
@@ -214,7 +215,7 @@ std::unique_ptr<lcl::ui::Container> makeMenuRoot(uint32_t width,
   text->setTextColor({241, 245, 249, 255});
   // Fill the logical row so TextAlign::End uses the renderer's measured
   // glyph width, while the parent keeps the label vertically centred.
-  text->getYogaNode().setFlexGrow(1.0f);
+  text->setFlexGrow(1.0f);
   text->setTextAlign(lcl::ui::TextAlign::End);
   foreground->addChild(std::move(text));
 
@@ -235,8 +236,8 @@ std::unique_ptr<lcl::ui::Container> makeDockView(DockView &view, uint32_t width,
   view.height = height;
   auto root = std::make_unique<lcl::ui::Container>();
   view.root = root.get();
-  root->getYogaNode().setWidth(width);
-  root->getYogaNode().setHeight(height);
+  root->setWidth(width);
+  root->setHeight(height);
 
   auto panel = std::make_unique<lcl::ui::Container>();
   view.panel = panel.get();
@@ -338,8 +339,8 @@ int main() {
   wallpaper->setInitialBounds(0, 0, width, height);
   auto wallpaperImage = std::make_unique<lcl::ui::Image>(wallpaperPath);
   wallpaperImage->setFit(lcl::ui::ImageFit::Cover);
-  wallpaperImage->getYogaNode().setWidth(static_cast<float>(width));
-  wallpaperImage->getYogaNode().setHeight(static_cast<float>(height));
+  wallpaperImage->setWidth(static_cast<float>(width));
+  wallpaperImage->setHeight(static_cast<float>(height));
   wallpaper->setRootWidget(std::move(wallpaperImage));
   if (!wallpaper->connectCompositor())
     return 1;

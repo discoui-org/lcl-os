@@ -7,8 +7,8 @@ Button::Button(const std::string& label) {
     m_textWidget = text.get();
     addChild(std::move(text));
 
-    m_yogaNode.setJustifyContent(YGJustifyCenter);
-    m_yogaNode.setAlignItems(YGAlignCenter);
+    setJustifyContent(layout::Justify::Center);
+    setAlignItems(layout::Align::Center);
     setFocusable(true);
     styleDidChange();
 }
@@ -97,10 +97,10 @@ void Button::styleDidChange() {
     const auto* style = resolvedStyle();
     if (!style) return;
     if (!m_hasHeight) {
-        m_yogaNode.setHeight(getTheme().metrics.regularControlHeight);
+        setDefaultHeight(getTheme().metrics.regularControlHeight);
     }
-    setPadding(YGEdgeHorizontal, style->horizontalPadding.value_or(0.0f));
-    setPadding(YGEdgeVertical, style->verticalPadding.value_or(0.0f));
+    setPadding(layout::Edge::Horizontal, style->horizontalPadding.value_or(0.0f));
+    setPadding(layout::Edge::Vertical, style->verticalPadding.value_or(0.0f));
     applyStateMotion(m_state);
 }
 

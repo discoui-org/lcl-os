@@ -25,8 +25,9 @@ add_library(lcl-ui STATIC
     src/core/event_dispatcher.cpp
     src/core/window_app.cpp
     src/core/raster_service_client.cpp
-    src/layout/yoga_node.cpp
+    src/layout/layout_node.cpp
     src/widgets/widget.cpp
+    src/widgets/measured_widget.cpp
     src/widgets/container.cpp
     src/widgets/text.cpp
     src/widgets/text_field.cpp
@@ -50,6 +51,10 @@ add_library(lcl-ui STATIC
 target_include_directories(lcl-ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
+)
+
+target_include_directories(lcl-ui PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${yoga_SOURCE_DIR}
 )
 
@@ -62,6 +67,7 @@ target_link_libraries(lcl-ui PUBLIC
     lcl-protocol
     lcl-raster-protocol
     lcl-font-metrics
-    yogacore
     Threads::Threads
 )
+
+target_link_libraries(lcl-ui PRIVATE yogacore)

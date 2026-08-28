@@ -46,7 +46,7 @@ graphics::RectF positionedAt(const graphics::RectF& rect,
 
 ScrollView::ScrollView() {
     setClipsToBounds(true);
-    m_yogaNode.setAlignItems(YGAlignStretch);
+    setAlignItems(layout::Align::Stretch);
 }
 
 void ScrollView::setContent(std::unique_ptr<Widget> content) {
@@ -59,9 +59,9 @@ void ScrollView::setContent(std::unique_ptr<Widget> content) {
     }
     if (!content) return;
     m_contentWidget = content.get();
-    m_contentWidget->getYogaNode().setFlexShrink(0.0f);
+    m_contentWidget->setFlexShrink(0.0f);
     if (!m_contentWidget->m_hasHeight) {
-        m_contentWidget->getYogaNode().setHeightAuto();
+        m_contentWidget->setHeightAuto();
     }
     addChild(std::move(content));
     clampScrollOffset();
@@ -223,9 +223,9 @@ void ScrollView::syncLayout(float parentAbsX, float parentAbsY) {
     }
 
     if (m_contentWidget) {
-        m_contentWidget->getYogaNode().setFlexShrink(0.0f);
+        m_contentWidget->setFlexShrink(0.0f);
         if (!m_contentWidget->m_hasHeight) {
-            m_contentWidget->getYogaNode().setHeightAuto();
+            m_contentWidget->setHeightAuto();
         }
     }
 

@@ -20,6 +20,8 @@
 
 namespace lcl::binding {
 
+namespace layout = lcl::ui::layout;
+
 namespace {
 
 // QuickJS Class IDs
@@ -663,9 +665,9 @@ JSValue js_widget_setDirection(JSContext* ctx, JSValueConst this_val, int argc, 
             std::string d = str;
             JS_FreeCString(ctx, str);
             if (d == "row") {
-                wrap->widget->getYogaNode().setDirection(YGFlexDirectionRow);
+                wrap->widget->setDirection(layout::Direction::Row);
             } else {
-                wrap->widget->getYogaNode().setDirection(YGFlexDirectionColumn);
+                wrap->widget->setDirection(layout::Direction::Column);
             }
         }
     }
@@ -681,12 +683,12 @@ JSValue js_widget_setJustifyContent(JSContext* ctx, JSValueConst this_val, int a
         if (str) {
             std::string j = str;
             JS_FreeCString(ctx, str);
-            if (j == "center") wrap->widget->getYogaNode().setJustifyContent(YGJustifyCenter);
-            else if (j == "flex-start" || j == "start") wrap->widget->getYogaNode().setJustifyContent(YGJustifyFlexStart);
-            else if (j == "flex-end" || j == "end") wrap->widget->getYogaNode().setJustifyContent(YGJustifyFlexEnd);
-            else if (j == "space-between") wrap->widget->getYogaNode().setJustifyContent(YGJustifySpaceBetween);
-            else if (j == "space-around") wrap->widget->getYogaNode().setJustifyContent(YGJustifySpaceAround);
-            else if (j == "space-evenly") wrap->widget->getYogaNode().setJustifyContent(YGJustifySpaceEvenly);
+            if (j == "center") wrap->widget->setJustifyContent(layout::Justify::Center);
+            else if (j == "flex-start" || j == "start") wrap->widget->setJustifyContent(layout::Justify::FlexStart);
+            else if (j == "flex-end" || j == "end") wrap->widget->setJustifyContent(layout::Justify::FlexEnd);
+            else if (j == "space-between") wrap->widget->setJustifyContent(layout::Justify::SpaceBetween);
+            else if (j == "space-around") wrap->widget->setJustifyContent(layout::Justify::SpaceAround);
+            else if (j == "space-evenly") wrap->widget->setJustifyContent(layout::Justify::SpaceEvenly);
         }
     }
     return JS_UNDEFINED;
@@ -701,10 +703,10 @@ JSValue js_widget_setAlignItems(JSContext* ctx, JSValueConst this_val, int argc,
         if (str) {
             std::string a = str;
             JS_FreeCString(ctx, str);
-            if (a == "center") wrap->widget->getYogaNode().setAlignItems(YGAlignCenter);
-            else if (a == "flex-start" || a == "start") wrap->widget->getYogaNode().setAlignItems(YGAlignFlexStart);
-            else if (a == "flex-end" || a == "end") wrap->widget->getYogaNode().setAlignItems(YGAlignFlexEnd);
-            else if (a == "stretch") wrap->widget->getYogaNode().setAlignItems(YGAlignStretch);
+            if (a == "center") wrap->widget->setAlignItems(layout::Align::Center);
+            else if (a == "flex-start" || a == "start") wrap->widget->setAlignItems(layout::Align::FlexStart);
+            else if (a == "flex-end" || a == "end") wrap->widget->setAlignItems(layout::Align::FlexEnd);
+            else if (a == "stretch") wrap->widget->setAlignItems(layout::Align::Stretch);
         }
     }
     return JS_UNDEFINED;
@@ -717,7 +719,7 @@ JSValue js_widget_setPadding(JSContext* ctx, JSValueConst this_val, int argc, JS
     if (argc >= 1) {
         double val = 0.0;
         JS_ToFloat64(ctx, &val, argv[0]);
-        wrap->widget->setPadding(YGEdgeAll, static_cast<float>(val));
+        wrap->widget->setPadding(layout::Edge::All, static_cast<float>(val));
     }
     return JS_UNDEFINED;
 }
@@ -729,7 +731,7 @@ JSValue js_widget_setGap(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     if (argc >= 1) {
         double val = 0.0;
         JS_ToFloat64(ctx, &val, argv[0]);
-        wrap->widget->setGap(YGGutterAll, static_cast<float>(val));
+        wrap->widget->setGap(layout::Gutter::All, static_cast<float>(val));
     }
     return JS_UNDEFINED;
 }

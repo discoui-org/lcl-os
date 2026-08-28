@@ -5,11 +5,12 @@
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/events.hpp"
 #include "lcl-ui/core/motion.hpp"
-#include "lcl-ui/layout/yoga_node.hpp"
+#include "lcl-ui/layout/layout.hpp"
 #include "lcl-theme/theme.hpp"
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <vector>
 #include <memory>
 #include <optional>
@@ -17,8 +18,13 @@
 
 namespace lcl::ui {
 
+namespace detail {
+class LayoutNode;
+}
+
 class WindowApp;
 class ScrollView;
+class MeasuredWidget;
 
 class Widget {
 public:
@@ -27,9 +33,6 @@ public:
 
     Widget(const Widget&) = delete;
     Widget& operator=(const Widget&) = delete;
-
-    YogaNode& getYogaNode() { return m_yogaNode; }
-    const YogaNode& getYogaNode() const { return m_yogaNode; }
 
     void addChild(std::unique_ptr<Widget> child);
     void removeChild(Widget* child);
@@ -75,10 +78,34 @@ public:
     bool clipsToBounds() const noexcept { return m_clipsToBounds; }
 
     void setWidth(float width);
+    void setWidthAuto();
     void setHeight(float height);
-    void setPadding(YGEdge edge, float value);
-    void setGap(YGGutter gutter, float value);
-    void setPosition(YGEdge edge, float value);
+    void setHeightAuto();
+    void setMinWidth(float width);
+    void setMinHeight(float height);
+    void setMaxWidth(float width);
+    void setMaxHeight(float height);
+    void setDirection(layout::Direction direction);
+    void setJustifyContent(layout::Justify justify);
+    void setAlignItems(layout::Align align);
+    void setAlignSelf(layout::Align align);
+    void setPositionType(layout::PositionType type);
+    void setWrap(layout::Wrap wrap);
+    void setFlexGrow(float value);
+    void setFlexShrink(float value);
+    void setFlexBasis(float value);
+    void setFlexBasisAuto();
+    void setPadding(layout::Edge edge, float value);
+    void setPadding(float value) { setPadding(layout::Edge::All, value); }
+    void setMargin(layout::Edge edge, float value);
+    void setMargin(float value) { setMargin(layout::Edge::All, value); }
+    void setGap(layout::Gutter gutter, float value);
+    void setGap(float value) { setGap(layout::Gutter::All, value); }
+    void setPosition(layout::Edge edge, float value);
+
+    /** Calculate this tree without exposing the private layout engine. */
+    void calculateLayout();
+    void calculateLayout(float availableWidth, float availableHeight);
 
     void setVisible(bool visible) { m_visible = visible; markDirty(); }
     bool isVisible() const { return m_visible; }
@@ -175,8 +202,16 @@ protected:
         return m_absoluteBounds;
     }
     virtual void styleDidChange() {}
+    /** Apply a control-owned default without marking it as an app override. */
+    void setDefaultWidth(float width);
+    void setDefaultHeight(float height);
 
-    YogaNode m_yogaNode;
+private:
+    // Declared before child ownership so children release their layout nodes
+    // before the parent node during reverse-order member destruction.
+    std::unique_ptr<detail::LayoutNode> m_layoutNode;
+
+protected:
     Widget* m_parent{nullptr};
     std::vector<std::unique_ptr<Widget>> m_children;
 
@@ -221,6 +256,11 @@ protected:
 private:
     friend class WindowApp;
     friend class ScrollView;
+    friend class MeasuredWidget;
+    void setMeasureCallback(
+        std::function<layout::Size(const layout::Constraints&)> callback);
+    void invalidateMeasurement();
+    layout::PositionType positionType() const;
     void markPresentationDirty(const graphics::RectF& previousBounds);
     graphics::RectF mapPresentationRect(
         const graphics::RectF& rect, const Widget* firstTransform) const;

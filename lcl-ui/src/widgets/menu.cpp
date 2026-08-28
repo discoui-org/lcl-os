@@ -45,8 +45,8 @@ public:
                 float itemHeight, std::function<void(size_t)> activate,
                 std::function<void()> close)
         : m_activate(std::move(activate)), m_close(std::move(close)) {
-        getYogaNode().setDirection(YGFlexDirectionColumn);
-        setGap(YGGutterAll, 2.0f);
+        setDirection(layout::Direction::Column);
+        setGap(layout::Gutter::All, 2.0f);
         setWidth(width);
 
         m_items.reserve(items.size());
@@ -56,7 +56,7 @@ public:
             MenuItemButton* item = button.get();
             item->setWidth(width);
             item->setHeight(itemHeight);
-            item->getYogaNode().setJustifyContent(YGJustifyFlexStart);
+            item->setJustifyContent(layout::Justify::FlexStart);
             item->setEnabled(items[index].enabled);
             item->setOnClick([activate = m_activate, index] {
                 if (activate) activate(index);

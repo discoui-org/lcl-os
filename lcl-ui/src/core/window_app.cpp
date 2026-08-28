@@ -158,8 +158,8 @@ WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, floa
         [this](const graphics::RectF& rect) { if (!rect.isEmpty()) m_renderPass.addDirtyRect(rect); });
 
     auto defaultRoot = std::make_unique<Container>();
-    defaultRoot->getYogaNode().setWidth(static_cast<float>(width));
-    defaultRoot->getYogaNode().setHeight(static_cast<float>(height));
+    defaultRoot->setWidth(static_cast<float>(width));
+    defaultRoot->setHeight(static_cast<float>(height));
     setRootWidget(std::move(defaultRoot));
     m_lastResizeApply = std::chrono::steady_clock::now();
     m_lastAnimationTick = std::chrono::steady_clock::now();
@@ -205,21 +205,20 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
 
     auto windowRoot = std::make_unique<Container>();
     windowRoot->setThemeContext(&m_themeContext);
-    windowRoot->getYogaNode().setWidth(static_cast<float>(m_width));
-    windowRoot->getYogaNode().setHeight(static_cast<float>(m_height));
+    windowRoot->setWidth(static_cast<float>(m_width));
+    windowRoot->setHeight(static_cast<float>(m_height));
     // A normal application root represents the complete client surface.
     // App-provided startup dimensions must not remain as fixed cross-axis
     // constraints after the compositor configures a new window size. Absolute
     // roots are intentional surface fragments (for example a titlebar-only
     // test host) and keep their own geometry.
-    if (YGNodeStyleGetPositionType(root->getYogaNode().getRef()) !=
-        YGPositionTypeAbsolute) {
-        root->getYogaNode().setWidthAuto();
-        root->getYogaNode().setHeightAuto();
-        root->getYogaNode().setAlignSelf(YGAlignStretch);
+    if (root->positionType() != layout::PositionType::Absolute) {
+        root->setWidthAuto();
+        root->setHeightAuto();
+        root->setAlignSelf(layout::Align::Stretch);
     }
-    root->getYogaNode().setFlexGrow(1.0f);
-    root->getYogaNode().setFlexShrink(1.0f);
+    root->setFlexGrow(1.0f);
+    root->setFlexShrink(1.0f);
     Widget* contentRoot = root.get();
     windowRoot->addChild(std::move(root));
     windowRoot->setRenderPass(&m_renderPass);
@@ -230,7 +229,7 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     m_transients.setWindowRoot(m_windowRoot.get());
     m_windowRoot->markLayoutDirty();
     m_windowRoot->markDirty();
-    // A newly mounted tree has not been through Yoga/syncLayout yet, so its
+    // A newly mounted tree has not been through layout/sync yet, so its
     // absolute bounds are still empty and markDirty() cannot produce damage.
     // Force one full frame after layout; runtime root replacement must not
     // leave old pixels in the client buffer.
@@ -250,7 +249,7 @@ void WindowApp::setTheme(lcl::theme::Theme theme) {
 TransientHandle WindowApp::registerLocalTransient(std::unique_ptr<Widget> widget,
                                                   TransientOptions options) {
     if (!widget) return 0;
-    widget->getYogaNode().setPositionType(YGPositionTypeAbsolute);
+    widget->setPositionType(layout::PositionType::Absolute);
     return m_transients.registerLocal(std::move(widget), std::move(options));
 }
 
@@ -452,8 +451,8 @@ void WindowApp::resize(float width, float height) {
     m_height = height;
 
     if (m_windowRoot) {
-        m_windowRoot->getYogaNode().setWidth(static_cast<float>(width));
-        m_windowRoot->getYogaNode().setHeight(static_cast<float>(height));
+        m_windowRoot->setWidth(static_cast<float>(width));
+        m_windowRoot->setHeight(static_cast<float>(height));
         m_windowRoot->markDirty();
     }
 
@@ -485,8 +484,8 @@ void WindowApp::setInitialBounds(float x, float y, float width, float height) {
     }
     updateCanvasRenderTarget();
     if (m_windowRoot) {
-        m_windowRoot->getYogaNode().setWidth(static_cast<float>(width));
-        m_windowRoot->getYogaNode().setHeight(static_cast<float>(height));
+        m_windowRoot->setWidth(static_cast<float>(width));
+        m_windowRoot->setHeight(static_cast<float>(height));
         m_windowRoot->markDirty();
     }
 }
@@ -1310,10 +1309,10 @@ void WindowApp::updateLayout() {
     if (m_windowRoot) {
         const auto started = std::chrono::steady_clock::now();
         // Clear the request being serviced before calculation. A widget that
-        // performs a genuine Yoga mutation from syncLayout() will set it again
+        // performs a genuine layout mutation from syncLayout() will set it again
         // and receive another layout pass on the next frame.
         m_windowRoot->clearLayoutDirty();
-        m_windowRoot->getYogaNode().calculateLayout(static_cast<float>(m_width), static_cast<float>(m_height));
+        m_windowRoot->calculateLayout(static_cast<float>(m_width), static_cast<float>(m_height));
         m_windowRoot->syncLayout(0.0f, 0.0f);
         if (m_frameTraceEnabled) {
             ++m_traceLayoutPasses;
@@ -1338,7 +1337,7 @@ bool WindowApp::renderFrame() {
         m_renderPass.addDirtyRect(m_windowRoot->getAbsoluteBounds());
     }
 
-    // A resize can leave old-layout damage queued before Yoga computes the
+    // A resize can leave old-layout damage queued before layout computes the
     // new child positions. Always include the complete post-layout root extent
     // on the first frame so children moved outside the old damage are painted.
     if (m_firstFrame) {

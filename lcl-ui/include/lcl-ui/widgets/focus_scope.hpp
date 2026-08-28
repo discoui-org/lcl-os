@@ -7,7 +7,7 @@ namespace lcl::ui {
 /**
  * Container-based keyboard focus traversal boundary.
  *
- * FocusScope uses Container's normal Yoga/layout/render behavior and owns no
+ * FocusScope uses Container's normal layout/render behavior and owns no
  * focus itself. EventDispatcher treats the nearest ancestor scope of the
  * focused widget as the active, wrapping traversal context.
  */

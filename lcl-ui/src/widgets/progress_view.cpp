@@ -22,15 +22,15 @@ graphics::PointF pointOnCircle(float centerX, float centerY, float radius,
 } // namespace
 
 ProgressView::ProgressView() {
-    m_yogaNode.setWidth(kCircularSize);
-    m_yogaNode.setHeight(kCircularSize);
+    setDefaultWidth(kCircularSize);
+    setDefaultHeight(kCircularSize);
 }
 
 ProgressView::ProgressView(float value, float total)
     : m_value(value), m_total(std::max(0.0001f, total)) {
     m_value = std::clamp(*m_value, 0.0f, m_total);
-    m_yogaNode.setWidth(kLinearWidth);
-    m_yogaNode.setHeight(kLinearHeight);
+    setDefaultWidth(kLinearWidth);
+    setDefaultHeight(kLinearHeight);
 }
 
 void ProgressView::setValue(std::optional<float> value) {
@@ -38,9 +38,9 @@ void ProgressView::setValue(std::optional<float> value) {
     if (m_value == value) return;
     m_value = value;
     if (m_style == ProgressViewStyle::Automatic) {
-        if (!m_hasWidth) m_yogaNode.setWidth(
+        if (!m_hasWidth) setDefaultWidth(
             m_value ? kLinearWidth : kCircularSize);
-        if (!m_hasHeight) m_yogaNode.setHeight(
+        if (!m_hasHeight) setDefaultHeight(
             m_value ? kLinearHeight : kCircularSize);
     }
     updatePresentationRegistration();
@@ -60,8 +60,8 @@ void ProgressView::setProgressViewStyle(ProgressViewStyle style) {
     m_style = style;
     const bool circular = resolvedProgressViewStyle() ==
         ProgressViewStyle::Circular;
-    if (!m_hasWidth) m_yogaNode.setWidth(circular ? kCircularSize : kLinearWidth);
-    if (!m_hasHeight) m_yogaNode.setHeight(circular ? kCircularSize : kLinearHeight);
+    if (!m_hasWidth) setDefaultWidth(circular ? kCircularSize : kLinearWidth);
+    if (!m_hasHeight) setDefaultHeight(circular ? kCircularSize : kLinearHeight);
     markDirty();
 }
 

@@ -64,7 +64,7 @@ LCL OS features a comprehensive GoogleTest CTest suite (**167 passing test cases
 - Display scaling DPIScale calculations and subpixel antialiasing
 - Unix Domain Socket permission (`0600`) and kernel peer credentials (`SO_PEERCRED`)
 - Dynamic Input Hotplug (`AF_NETLINK` uevent) and Touchpad `EV_ABS` delta math
-- Yoga Flexbox layout engine tree hierarchy and layout passes
+- LCL layout API tree hierarchy and layout passes
 - LCL raster 2D canvas rendering and backdrop blur filter chain
 - Hit-testing and declarative event routing
 - JavaScript ES2022+ runtime bindings, widget hierarchy, and animations
@@ -92,7 +92,7 @@ summary:
 LCL_TRACE_FRAMES=1 /usr/bin/lcl-terminal
 ```
 
-The `[LCL TRACE ...]` line reports Yoga layout passes and mean duration,
+The `[LCL TRACE ...]` line reports layout passes and mean duration,
 rendered frame count and end-to-end paint duration, plus its `stages` split:
 logical clear, widget/effect DisplayList recording, and sealed rasterd submit.
 It also reports total logical damage, received configure reasons, applied
@@ -102,7 +102,7 @@ maximize/restore atomic target changes. Application raster duration belongs to
 `lcl-rasterd`, not the compositor presentation trace.
 
 Add `LCL_DEBUG_LAYOUT=1` to draw a depth-coloured outline for every resolved
-Yoga widget bound; the red outline is the client damage rect for that frame.
+widget bound; the red outline is the client damage rect for that frame.
 
 Set `LCL_DEBUG_OVERLAY=1` in the compositor environment to display compositor
 FPS, frame time, render backend/vsync state, and the previous compose/present
@@ -141,8 +141,8 @@ int main() {
     app.setAppId("org.example.my-custom-app");
 
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setWidth(600.0f);
-    root->getYogaNode().setHeight(400.0f);
+    root->setWidth(600.0f);
+    root->setHeight(400.0f);
 
     auto text = std::make_unique<Text>("Hello from MyCustomApp!");
     root->addChild(std::move(text));

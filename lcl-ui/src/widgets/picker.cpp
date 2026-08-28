@@ -26,7 +26,7 @@ Picker::Picker(WindowApp& window, PopupCanvasFactory popupCanvasFactory,
       m_label(std::move(label)), m_options(std::move(options)),
       m_selectedIndex(selectedIndex) {
     normalizeSelection();
-    m_yogaNode.setWidth(kDefaultWidth);
+    setDefaultWidth(kDefaultWidth);
     updateDefaultSize();
     setFocusable(true);
     styleDidChange();
@@ -85,10 +85,10 @@ void Picker::updateDefaultSize() {
     if (m_hasHeight) return;
     if (resolvedPickerStyle() == PickerStyle::RadioGroup) {
         const float labelHeight = m_label.empty() ? 0.0f : kLabelHeight;
-        m_yogaNode.setHeight(labelHeight +
+        setDefaultHeight(labelHeight +
             static_cast<float>(m_options.size()) * kRadioRowHeight);
     } else {
-        m_yogaNode.setHeight(getTheme().metrics.regularControlHeight);
+        setDefaultHeight(getTheme().metrics.regularControlHeight);
     }
 }
 

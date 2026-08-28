@@ -12,6 +12,8 @@
 
 namespace {
 
+namespace layout = lcl::ui::layout;
+
 constexpr uint32_t kSurfaceWidth = 540;
 constexpr uint32_t kSurfaceHeight = 360;
 constexpr float kCornerRadius = 20.0f;
@@ -67,8 +69,8 @@ int main() {
   // DesktopWM owns the attached frame; the compositor owns only the generic
   // WindowGroup shape. The client surface contains terminal content only.
   auto root = std::make_unique<lcl::ui::Container>();
-  root->getYogaNode().setWidth(static_cast<float>(kSurfaceWidth));
-  root->getYogaNode().setHeight(static_cast<float>(kSurfaceHeight));
+  root->setWidth(static_cast<float>(kSurfaceWidth));
+  root->setHeight(static_cast<float>(kSurfaceHeight));
 
   // One outer-surface effect chain supplies the same material behind both the
   // DesktopWM titlebar and the client content.
@@ -76,11 +78,11 @@ int main() {
   lcl::ui::BackdropSurface *backdropPtr = backdrop.get();
   backdrop->setInteractive(false);
   backdrop->setEffectBounds(lcl::ui::EffectBounds::OuterSurface);
-  backdrop->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-  backdrop->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-  backdrop->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-  backdrop->getYogaNode().setWidth(static_cast<float>(kSurfaceWidth));
-  backdrop->getYogaNode().setHeight(static_cast<float>(kSurfaceHeight));
+  backdrop->setPositionType(layout::PositionType::Absolute);
+  backdrop->setPosition(layout::Edge::Left, 0.0f);
+  backdrop->setPosition(layout::Edge::Top, 0.0f);
+  backdrop->setWidth(static_cast<float>(kSurfaceWidth));
+  backdrop->setHeight(static_cast<float>(kSurfaceHeight));
 
   backdrop->addFilter(lcl::protocol::FilterType::Blur, 50.0f);
   backdrop->addFilter(lcl::protocol::FilterType::Saturation, 2.0f);
@@ -89,21 +91,21 @@ int main() {
 
   auto terminalView = std::make_unique<lcl::apps::TerminalView>(terminal);
   lcl::apps::TerminalView *terminalViewPtr = terminalView.get();
-  terminalView->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-  terminalView->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-  terminalView->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-  terminalView->getYogaNode().setWidth(static_cast<float>(kSurfaceWidth));
-  terminalView->getYogaNode().setHeight(static_cast<float>(kSurfaceHeight));
+  terminalView->setPositionType(layout::PositionType::Absolute);
+  terminalView->setPosition(layout::Edge::Left, 0.0f);
+  terminalView->setPosition(layout::Edge::Top, 0.0f);
+  terminalView->setWidth(static_cast<float>(kSurfaceWidth));
+  terminalView->setHeight(static_cast<float>(kSurfaceHeight));
 
   root->addChild(std::move(backdrop));
   root->addChild(std::move(terminalView));
   window.setRootWidget(std::move(root));
 
   const auto updateTerminalGeometry = [&](uint32_t width, uint32_t height) {
-    backdropPtr->getYogaNode().setWidth(static_cast<float>(width));
-    backdropPtr->getYogaNode().setHeight(static_cast<float>(height));
-    terminalViewPtr->getYogaNode().setWidth(static_cast<float>(width));
-    terminalViewPtr->getYogaNode().setHeight(static_cast<float>(height));
+    backdropPtr->setWidth(static_cast<float>(width));
+    backdropPtr->setHeight(static_cast<float>(height));
+    terminalViewPtr->setWidth(static_cast<float>(width));
+    terminalViewPtr->setHeight(static_cast<float>(height));
     terminal.resize(static_cast<int>(width), static_cast<int>(height));
     terminalViewPtr->markDirty();
   };

@@ -6,20 +6,19 @@
 namespace lcl::ui {
 
 Text::Text(const std::string& content) : m_text(content) {
-    updateMeasureFunc();
     styleDidChange();
 }
 
 void Text::setText(const std::string& text) {
     m_text = text;
-    updateMeasureFunc();
+    invalidateMeasurement();
     markDirty();
 }
 
 void Text::setFontSize(float size) {
     m_hasExplicitFontSize = true;
     m_fontSize = size;
-    updateMeasureFunc();
+    invalidateMeasurement();
     markDirty();
 }
 
@@ -38,7 +37,7 @@ void Text::setTextRole(lcl::theme::TextRole role) {
 void Text::setFontFamily(graphics::FontFamily family) {
     if (m_fontFamily == family) return;
     m_fontFamily = family;
-    updateMeasureFunc();
+    invalidateMeasurement();
     markDirty();
 }
 
@@ -63,7 +62,7 @@ void Text::styleDidChange() {
         getTheme(), m_textRole);
     if (!m_hasExplicitFontSize) {
         m_fontSize = typography.fontSize;
-        updateMeasureFunc();
+        invalidateMeasurement();
     }
     if (!m_hasExplicitTextColor) {
         if (hasStyleOverride()) {
@@ -77,14 +76,11 @@ void Text::styleDidChange() {
     markDirty();
 }
 
-void Text::updateMeasureFunc() {
-    m_yogaNode.setMeasureFunc([this](float width, YGMeasureMode widthMode, float height, YGMeasureMode heightMode) {
-        (void)width; (void)widthMode; (void)height; (void)heightMode;
-        const auto metrics = lcl::render::text_metrics::measure(
-            m_text, m_fontSize, m_fontFamily);
-        return YGSize{metrics.advanceWidth, metrics.lineHeight};
-    });
-    m_yogaNode.markDirty();
+layout::Size Text::measure(const layout::Constraints& constraints) {
+    (void)constraints;
+    const auto metrics = lcl::render::text_metrics::measure(
+        m_text, m_fontSize, m_fontFamily);
+    return {metrics.advanceWidth, metrics.lineHeight};
 }
 
 void Text::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {

@@ -21,11 +21,11 @@ TabView::TabView() {
 void TabView::addTab(Tab tab) {
     if (!tab.content) return;
     Widget* content = tab.content.get();
-    content->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    content->setPosition(YGEdgeLeft, 0.0f);
-    content->setPosition(YGEdgeTop, 0.0f);
-    content->setPosition(YGEdgeRight, 0.0f);
-    content->setPosition(YGEdgeBottom, getTheme().metrics.tabBarHeight);
+    content->setPositionType(layout::PositionType::Absolute);
+    content->setPosition(layout::Edge::Left, 0.0f);
+    content->setPosition(layout::Edge::Top, 0.0f);
+    content->setPosition(layout::Edge::Right, 0.0f);
+    content->setPosition(layout::Edge::Bottom, getTheme().metrics.tabBarHeight);
     m_tabs.push_back(TabState{std::move(tab.title), content, tab.enabled});
     addChild(std::move(tab.content));
     updateContentVisibility();
@@ -59,7 +59,7 @@ void TabView::updateContentVisibility() {
 
 void TabView::updateContentInsets() {
     for (auto& tab : m_tabs) {
-        tab.content->setPosition(YGEdgeBottom, getTheme().metrics.tabBarHeight);
+        tab.content->setPosition(layout::Edge::Bottom, getTheme().metrics.tabBarHeight);
     }
 }
 

@@ -1,6 +1,8 @@
 #include "lcl-ui/widgets/widget.hpp"
+#include "layout/layout_node.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace lcl::ui {
@@ -8,8 +10,9 @@ namespace lcl::ui {
 std::atomic<uint64_t> Widget::s_nextObjectId{1};
 
 Widget::Widget()
-    : m_objectId(s_nextObjectId.fetch_add(1, std::memory_order_relaxed)) {
-    m_yogaNode.setLayoutInvalidationCallback([this] { invalidateLayout(); });
+    : m_layoutNode(std::make_unique<detail::LayoutNode>()),
+      m_objectId(s_nextObjectId.fetch_add(1, std::memory_order_relaxed)) {
+    m_layoutNode->setInvalidationCallback([this] { invalidateLayout(); });
 }
 
 Widget::~Widget() {
@@ -24,7 +27,7 @@ void Widget::addChild(std::unique_ptr<Widget> child) {
     child->setRenderPass(m_renderPass);
     child->setMotionCoordinator(m_motionCoordinator);
     child->setThemeContext(m_themeContext);
-    m_yogaNode.appendChild(&child->getYogaNode());
+    m_layoutNode->appendChild(*child->m_layoutNode);
     m_children.push_back(std::move(child));
     markDirty();
 }
@@ -243,7 +246,7 @@ void Widget::removeChild(Widget* child) {
     auto it = std::find_if(m_children.begin(), m_children.end(),
         [child](const std::unique_ptr<Widget>& ptr) { return ptr.get() == child; });
     if (it != m_children.end()) {
-        m_yogaNode.removeChild(&child->getYogaNode());
+        m_layoutNode->removeChild(*child->m_layoutNode);
         (*it)->m_parent = nullptr;
         m_children.erase(it);
         markDirty();
@@ -381,61 +384,134 @@ void Widget::setWidth(float value) {
     value = std::max(0.0f, value);
     if (!m_hasWidth) m_presentWidth = m_bounds.width;
     m_hasWidth = true; m_modelWidth = value;
-    const auto apply = [this](float next) { m_presentWidth = next; m_yogaNode.setWidth(next); markDirty(); };
+    const auto apply = [this](float next) { m_presentWidth = next; m_layoutNode->setWidth(next); markDirty(); };
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::Width, m_presentWidth, value, apply, true);
     else apply(value);
+}
+void Widget::setWidthAuto() {
+    m_hasWidth = false;
+    m_layoutNode->setWidthAuto();
 }
 void Widget::setHeight(float value) {
     value = std::max(0.0f, value);
     if (!m_hasHeight) m_presentHeight = m_bounds.height;
     m_hasHeight = true; m_modelHeight = value;
-    const auto apply = [this](float next) { m_presentHeight = next; m_yogaNode.setHeight(next); markDirty(); };
+    const auto apply = [this](float next) { m_presentHeight = next; m_layoutNode->setHeight(next); markDirty(); };
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::Height, m_presentHeight, value, apply, true);
     else apply(value);
 }
+void Widget::setHeightAuto() {
+    m_hasHeight = false;
+    m_layoutNode->setHeightAuto();
+}
+
+void Widget::setDefaultWidth(float value) {
+    m_layoutNode->setWidth(std::max(0.0f, value));
+}
+
+void Widget::setDefaultHeight(float value) {
+    m_layoutNode->setHeight(std::max(0.0f, value));
+}
+
+void Widget::setMinWidth(float value) { m_layoutNode->setMinWidth(value); }
+void Widget::setMinHeight(float value) { m_layoutNode->setMinHeight(value); }
+void Widget::setMaxWidth(float value) { m_layoutNode->setMaxWidth(value); }
+void Widget::setMaxHeight(float value) { m_layoutNode->setMaxHeight(value); }
+void Widget::setDirection(layout::Direction value) { m_layoutNode->setDirection(value); }
+void Widget::setJustifyContent(layout::Justify value) { m_layoutNode->setJustifyContent(value); }
+void Widget::setAlignItems(layout::Align value) { m_layoutNode->setAlignItems(value); }
+void Widget::setAlignSelf(layout::Align value) { m_layoutNode->setAlignSelf(value); }
+void Widget::setPositionType(layout::PositionType value) { m_layoutNode->setPositionType(value); }
+void Widget::setWrap(layout::Wrap value) { m_layoutNode->setWrap(value); }
+void Widget::setFlexGrow(float value) { m_layoutNode->setFlexGrow(value); }
+void Widget::setFlexShrink(float value) { m_layoutNode->setFlexShrink(value); }
+void Widget::setFlexBasis(float value) { m_layoutNode->setFlexBasis(value); }
+void Widget::setFlexBasisAuto() { m_layoutNode->setFlexBasisAuto(); }
 
 namespace {
-int edgeIndex(YGEdge edge) {
-    switch (edge) { case YGEdgeLeft: return 0; case YGEdgeTop: return 1; case YGEdgeRight: return 2; case YGEdgeBottom: return 3; default: return -1; }
+int edgeIndex(layout::Edge edge) {
+    switch (edge) {
+        case layout::Edge::Left: return 0;
+        case layout::Edge::Top: return 1;
+        case layout::Edge::Right: return 2;
+        case layout::Edge::Bottom: return 3;
+        default: return -1;
+    }
 }
 AnimatableProperty paddingProperty(int index) { return static_cast<AnimatableProperty>(static_cast<uint32_t>(AnimatableProperty::PaddingLeft) + index); }
 AnimatableProperty positionProperty(int index) { return static_cast<AnimatableProperty>(static_cast<uint32_t>(AnimatableProperty::PositionLeft) + index); }
 }
 
-void Widget::setPadding(YGEdge edge, float value) {
-    const auto applyOne = [this, value](int index, YGEdge yogaEdge) {
+void Widget::setPadding(layout::Edge edge, float value) {
+    const auto applyOne = [this, value](int index, layout::Edge layoutEdge) {
         m_modelPadding[index] = value;
-        const auto apply = [this, index, yogaEdge](float next) { m_presentPadding[index] = next; m_yogaNode.setPadding(yogaEdge, next); markDirty(); };
+        const auto apply = [this, index, layoutEdge](float next) { m_presentPadding[index] = next; m_layoutNode->setPadding(layoutEdge, next); markDirty(); };
         if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, paddingProperty(index), m_presentPadding[index], value, apply, true);
         else apply(value);
     };
     const int index = edgeIndex(edge);
     if (index >= 0) applyOne(index, edge);
-    else if (edge == YGEdgeHorizontal) { applyOne(0, YGEdgeLeft); applyOne(2, YGEdgeRight); }
-    else if (edge == YGEdgeVertical) { applyOne(1, YGEdgeTop); applyOne(3, YGEdgeBottom); }
-    else if (edge == YGEdgeAll) for (int i = 0; i < 4; ++i) applyOne(i, static_cast<YGEdge>(i));
+    else if (edge == layout::Edge::Horizontal) { applyOne(0, layout::Edge::Left); applyOne(2, layout::Edge::Right); }
+    else if (edge == layout::Edge::Vertical) { applyOne(1, layout::Edge::Top); applyOne(3, layout::Edge::Bottom); }
+    else if (edge == layout::Edge::All) {
+        applyOne(0, layout::Edge::Left);
+        applyOne(1, layout::Edge::Top);
+        applyOne(2, layout::Edge::Right);
+        applyOne(3, layout::Edge::Bottom);
+    } else {
+        m_layoutNode->setPadding(edge, value);
+    }
 }
 
-void Widget::setGap(YGGutter gutter, float value) {
-    const auto applyOne = [this, value](int index, YGGutter yogaGutter) {
+void Widget::setMargin(layout::Edge edge, float value) {
+    m_layoutNode->setMargin(edge, value);
+}
+
+void Widget::setGap(layout::Gutter gutter, float value) {
+    const auto applyOne = [this, value](int index, layout::Gutter layoutGutter) {
         m_modelGap[index] = value;
-        const auto apply = [this, index, yogaGutter](float next) { m_presentGap[index] = next; m_yogaNode.setGap(yogaGutter, next); markDirty(); };
+        const auto apply = [this, index, layoutGutter](float next) { m_presentGap[index] = next; m_layoutNode->setGap(layoutGutter, next); markDirty(); };
         const auto property = index == 0 ? AnimatableProperty::GapColumn : AnimatableProperty::GapRow;
         if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, property, m_presentGap[index], value, apply, true);
         else apply(value);
     };
-    if (gutter == YGGutterColumn) applyOne(0, gutter);
-    else if (gutter == YGGutterRow) applyOne(1, gutter);
-    else { applyOne(0, YGGutterColumn); applyOne(1, YGGutterRow); }
+    if (gutter == layout::Gutter::Column) applyOne(0, gutter);
+    else if (gutter == layout::Gutter::Row) applyOne(1, gutter);
+    else { applyOne(0, layout::Gutter::Column); applyOne(1, layout::Gutter::Row); }
 }
 
-void Widget::setPosition(YGEdge edge, float value) {
+void Widget::setPosition(layout::Edge edge, float value) {
     const int index = edgeIndex(edge);
-    if (index < 0) return;
+    if (index < 0) {
+        m_layoutNode->setPosition(edge, value);
+        return;
+    }
     m_modelPosition[index] = value;
-    const auto apply = [this, index, edge](float next) { m_presentPosition[index] = next; m_yogaNode.setPosition(edge, next); markDirty(); };
+    const auto apply = [this, index, edge](float next) { m_presentPosition[index] = next; m_layoutNode->setPosition(edge, next); markDirty(); };
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, positionProperty(index), m_presentPosition[index], value, apply, true);
     else apply(value);
+}
+
+void Widget::setMeasureCallback(
+        std::function<layout::Size(const layout::Constraints&)> callback) {
+    m_layoutNode->setMeasureCallback(std::move(callback));
+}
+
+void Widget::invalidateMeasurement() {
+    m_layoutNode->invalidateMeasurement();
+}
+
+layout::PositionType Widget::positionType() const {
+    return m_layoutNode->positionType();
+}
+
+void Widget::calculateLayout() {
+    const float undefined = std::numeric_limits<float>::quiet_NaN();
+    calculateLayout(undefined, undefined);
+}
+
+void Widget::calculateLayout(float availableWidth, float availableHeight) {
+    m_layoutNode->calculateLayout(availableWidth, availableHeight);
 }
 
 float Widget::getPresentationValue(AnimatableProperty property) const {
@@ -500,10 +576,10 @@ lcl::motion::AnimationHandle Widget::animate(
 
 void Widget::syncLayout(float parentAbsX, float parentAbsY) {
     m_bounds = graphics::RectF{
-        m_yogaNode.getLayoutX(),
-        m_yogaNode.getLayoutY(),
-        m_yogaNode.getLayoutWidth(),
-        m_yogaNode.getLayoutHeight()
+        m_layoutNode->layoutX(),
+        m_layoutNode->layoutY(),
+        m_layoutNode->layoutWidth(),
+        m_layoutNode->layoutHeight()
     };
 
     m_absoluteBounds = graphics::RectF{

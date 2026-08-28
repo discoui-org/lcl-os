@@ -18,8 +18,8 @@ int main() {
 
     auto root = std::make_unique<lcl::ui::Container>();
     auto* rootView = root.get();
-    root->getYogaNode().setWidth(kWidth);
-    root->getYogaNode().setHeight(kHeight);
+    root->setWidth(kWidth);
+    root->setHeight(kHeight);
     root->setBackgroundColor({30, 90, 220, 255});
     window.setRootWidget(std::move(root));
 

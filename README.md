@@ -15,7 +15,7 @@ lcl-os/
 │   ├── core/                 # DRM/KMS, EGL, Evdev Input, Hotplug, IPC, Session
 │   ├── render/               # Ready-layer production, presentation, WindowManager
 │   └── tools/                # Core System Daemons & Binaries (lcl-core, lcl-terminal, lcl-open)
-├── lcl-ui/                   # Decoupled UI Application Framework (Yoga Flexbox, Widget Tree)
+├── lcl-ui/                   # Decoupled UI Application Framework (LCL Layout, Widget Tree)
 ├── apps/                     # User-Space Desktop Applications (Terminal.app, UIDemo.app, ShaderDemo.app)
 ├── docs/                     # Technical Documentation & Guides
 │   ├── ARCHITECTURE.md       # Low-level system & architectural design

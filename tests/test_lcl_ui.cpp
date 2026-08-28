@@ -5,7 +5,7 @@
 #include "lcl-graphics/display_list_wire.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/window_app.hpp"
-#include "lcl-ui/layout/yoga_node.hpp"
+#include "lcl-ui/widgets/measured_widget.hpp"
 #include "lcl-ui/widgets/widget.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
@@ -548,14 +548,14 @@ TEST(LclUiTest, WidgetsUseBackendNeutralCanvas) {
     RecordingCanvas canvas;
     auto root = std::make_unique<Container>();
     root->setBackgroundColor({10, 20, 30, 255});
-    root->getYogaNode().setWidth(120.0f);
-    root->getYogaNode().setHeight(80.0f);
+    root->setWidth(120.0f);
+    root->setHeight(80.0f);
 
     auto label = std::make_unique<Text>("graphics::Canvas");
     label->setTextColor({230, 231, 232, 255});
     root->addChild(std::move(label));
 
-    root->getYogaNode().calculateLayout(120.0f, 80.0f);
+    root->calculateLayout(120.0f, 80.0f);
     root->syncLayout();
     root->draw(canvas, {0.0f, 0.0f, 120.0f, 80.0f});
 
@@ -565,7 +565,7 @@ TEST(LclUiTest, WidgetsUseBackendNeutralCanvas) {
     EXPECT_EQ(canvas.texts.front(), "graphics::Canvas");
 }
 
-TEST(LclUiTest, TextYogaMeasurementMatchesRendererGlyphAdvances) {
+TEST(LclUiTest, TextIntrinsicMeasurementMatchesRendererGlyphAdvances) {
     std::vector<uint32_t> pixels(512 * 96, 0x00000000u);
     lcl::render::RasterRenderer renderer;
     ASSERT_TRUE(renderer.initialize(512, 96, nullptr, pixels.data()));
@@ -573,11 +573,12 @@ TEST(LclUiTest, TextYogaMeasurementMatchesRendererGlyphAdvances) {
     for (const std::string& value : {"iiiiiiii", "WWWWWWWW", "ScrollView Test Paneli"}) {
         Text text(value);
         text.setFontSize(18.0f);
-        text.getYogaNode().calculateLayout(YGUndefined, YGUndefined);
+        text.calculateLayout();
+        text.syncLayout();
 
-        // Yoga rounds layout edges to physical pixels while glyph advances
+        // The layout engine rounds edges to physical pixels while glyph advances
         // remain fractional inside that one-pixel envelope.
-        EXPECT_NEAR(text.getYogaNode().getLayoutWidth(), renderer.measureString(value, 18.0f), 1.0f)
+        EXPECT_NEAR(text.getBounds().width, renderer.measureString(value, 18.0f), 1.0f)
             << value;
     }
 }
@@ -589,16 +590,16 @@ TEST(LclUiTest, FlexCenteredTextUsesItsMeasuredGlyphWidthForOrigin) {
 
     for (const std::string& value : {"iiiiiiii", "WWWWWWWW", "ScrollView Test Paneli"}) {
         auto root = std::make_unique<Container>();
-        root->getYogaNode().setWidth(400.0f);
-        root->getYogaNode().setHeight(96.0f);
-        root->getYogaNode().setAlignItems(YGAlignCenter);
+        root->setWidth(400.0f);
+        root->setHeight(96.0f);
+        root->setAlignItems(layout::Align::Center);
 
         auto label = std::make_unique<Text>(value);
         label->setFontSize(18.0f);
         Text* labelPtr = label.get();
         root->addChild(std::move(label));
 
-        root->getYogaNode().calculateLayout(400.0f, 96.0f);
+        root->calculateLayout(400.0f, 96.0f);
         root->syncLayout();
 
         const float renderedWidth = renderer.measureString(value, 18.0f);
@@ -620,30 +621,34 @@ TEST(LclUiTest, TextMeasurementUpdatesAfterContentAndFamilyChanges) {
 
     Text text("iiiiiiii");
     text.setFontSize(18.0f);
-    text.getYogaNode().calculateLayout(YGUndefined, YGUndefined);
-    const float narrowWidth = text.getYogaNode().getLayoutWidth();
+    text.calculateLayout();
+    text.syncLayout();
+    const float narrowWidth = text.getBounds().width;
 
     text.setText("WWWWWWWW");
-    text.getYogaNode().calculateLayout(YGUndefined, YGUndefined);
-    const float wideWidth = text.getYogaNode().getLayoutWidth();
+    text.calculateLayout();
+    text.syncLayout();
+    const float wideWidth = text.getBounds().width;
     EXPECT_NE(wideWidth, narrowWidth);
     EXPECT_NEAR(wideWidth, renderer.measureString("WWWWWWWW", 18.0f), 1.0f);
 
     text.setFontSize(24.0f);
-    text.getYogaNode().calculateLayout(YGUndefined, YGUndefined);
-    EXPECT_NEAR(text.getYogaNode().getLayoutWidth(), renderer.measureString("WWWWWWWW", 24.0f), 1.0f);
+    text.calculateLayout();
+    text.syncLayout();
+    EXPECT_NEAR(text.getBounds().width, renderer.measureString("WWWWWWWW", 24.0f), 1.0f);
 
     text.setFontFamily(graphics::FontFamily::Monospace);
-    text.getYogaNode().calculateLayout(YGUndefined, YGUndefined);
-    EXPECT_NEAR(text.getYogaNode().getLayoutWidth(),
+    text.calculateLayout();
+    text.syncLayout();
+    EXPECT_NEAR(text.getBounds().width,
                 renderer.measureMonospaceString("WWWWWWWW", 24.0f), 1.0f);
 }
 
 TEST(LclUiTest, TextFieldPlaceholderAndCaretFollowFocusAndValueState) {
     TextField field;
     field.setPlaceholder("Search");
-    field.getYogaNode().setWidth(180.0f);
-    field.getYogaNode().calculateLayout(180.0f, 36.0f);
+    field.setWidth(180.0f);
+    field.calculateLayout(180.0f, 36.0f);
     field.syncLayout();
     const graphics::RectF damage{-10.0f, -10.0f, 220.0f, 80.0f};
 
@@ -750,7 +755,7 @@ TEST(LclUiTest, IndeterminateProgressUsesPresentationInvalidation) {
     ProgressView progress;
     progress.setRenderPass(&pass);
     progress.setMotionCoordinator(&coordinator);
-    progress.getYogaNode().calculateLayout(22.0f, 22.0f);
+    progress.calculateLayout(22.0f, 22.0f);
     progress.syncLayout();
     progress.draw(canvas, {-10.0f, -10.0f, 42.0f, 42.0f});
     pass.clear();
@@ -770,8 +775,8 @@ TEST(LclUiTest, TextFieldCaretPresentationResetsForEditingAndCaretActivity) {
     TextField field("abc");
     MotionCoordinator coordinator;
     field.setMotionCoordinator(&coordinator);
-    field.getYogaNode().setWidth(180.0f);
-    field.getYogaNode().calculateLayout(180.0f, 36.0f);
+    field.setWidth(180.0f);
+    field.calculateLayout(180.0f, 36.0f);
     field.syncLayout();
     field.onFocusGained(FocusEvent{FocusEventType::Gained});
     const graphics::RectF damage{-10.0f, -10.0f, 220.0f, 80.0f};
@@ -892,8 +897,8 @@ TEST(LclUiTest, TextFieldFocusTransferMovesTheActiveCaretPresentation) {
     first.setMotionCoordinator(&coordinator);
     second.setMotionCoordinator(&coordinator);
     for (TextField* field : {&first, &second}) {
-        field->getYogaNode().setWidth(180.0f);
-        field->getYogaNode().calculateLayout(180.0f, 36.0f);
+        field->setWidth(180.0f);
+        field->calculateLayout(180.0f, 36.0f);
         field->syncLayout();
     }
 
@@ -925,8 +930,8 @@ TEST(LclUiTest, CaretPhaseChangesProduceDamageButIntermediateTicksDoNot) {
     TextField field;
     field.setMotionCoordinator(&coordinator);
     field.setRenderPass(&pass);
-    field.getYogaNode().setWidth(180.0f);
-    field.getYogaNode().calculateLayout(180.0f, 36.0f);
+    field.setWidth(180.0f);
+    field.calculateLayout(180.0f, 36.0f);
     field.syncLayout();
     field.onFocusGained(FocusEvent{FocusEventType::Gained});
     pass.clear();
@@ -945,8 +950,8 @@ TEST(LclUiTest, CaretPhaseChangesProduceDamageButIntermediateTicksDoNot) {
 
 TEST(LclUiTest, TextFieldCaretUsesActiveCanvasProportionalMetrics) {
     TextField field;
-    field.getYogaNode().setWidth(240.0f);
-    field.getYogaNode().calculateLayout(240.0f, 36.0f);
+    field.setWidth(240.0f);
+    field.calculateLayout(240.0f, 36.0f);
     field.syncLayout();
     field.onFocusGained(FocusEvent{FocusEventType::Gained});
     const graphics::RectF damage{-10.0f, -10.0f, 280.0f, 80.0f};
@@ -972,8 +977,8 @@ TEST(LclUiTest, TextFieldCaretUsesActiveCanvasProportionalMetrics) {
 TEST(LclUiTest, TextFieldHorizontallyScrollsLongTextAndClipsCaret) {
     const std::string value = "abcçdefşğıİöüǩžʒ";
     TextField field(value);
-    field.getYogaNode().setWidth(56.0f);
-    field.getYogaNode().calculateLayout(56.0f, 36.0f);
+    field.setWidth(56.0f);
+    field.calculateLayout(56.0f, 36.0f);
     field.syncLayout();
     field.onFocusGained(FocusEvent{FocusEventType::Gained});
 
@@ -1008,8 +1013,8 @@ TEST(LclUiTest, TextFieldCaretWalkUsesCodepointPrefixesForAsciiAndUtf8) {
         const std::string& value = prefixes.back();
         SCOPED_TRACE(value);
         TextField field(value);
-        field.getYogaNode().setWidth(640.0f);
-        field.getYogaNode().calculateLayout(640.0f, 36.0f);
+        field.setWidth(640.0f);
+        field.calculateLayout(640.0f, 36.0f);
         field.syncLayout();
         field.onFocusGained(FocusEvent{FocusEventType::Gained});
         ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Home,
@@ -1054,8 +1059,8 @@ TEST(LclUiTest, TextFieldCaretWalkUsesCodepointPrefixesForAsciiAndUtf8) {
 
 TEST(LclUiTest, TextFieldPointerCaretPositionUsesUtf8CodepointBoundaries) {
     TextField field("abcçdef");
-    field.getYogaNode().setWidth(300.0f);
-    field.getYogaNode().calculateLayout(300.0f, 36.0f);
+    field.setWidth(300.0f);
+    field.calculateLayout(300.0f, 36.0f);
     field.syncLayout();
     field.onFocusGained(FocusEvent{FocusEventType::Gained});
     const graphics::RectF damage{-10.0f, -10.0f, 340.0f, 80.0f};
@@ -1082,8 +1087,8 @@ TEST(LclUiTest, TextFieldPointerCaretPositionUsesUtf8CodepointBoundaries) {
 
 TEST(LclUiTest, TextFieldUtf8InsertionLeavesCaretAfterInsertedCodepoints) {
     TextField field("aç");
-    field.getYogaNode().setWidth(300.0f);
-    field.getYogaNode().calculateLayout(300.0f, 36.0f);
+    field.setWidth(300.0f);
+    field.calculateLayout(300.0f, 36.0f);
     field.syncLayout();
     field.onFocusGained(FocusEvent{FocusEventType::Gained});
     ASSERT_TRUE(field.onKeyDown(KeyEvent{lcl::platform::PhysicalKey::Home,
@@ -1112,8 +1117,8 @@ TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
 
     auto root = std::make_unique<Container>();
     root->setBackgroundColor({1, 2, 3, 255});
-    root->getYogaNode().setWidth(64.0f);
-    root->getYogaNode().setHeight(48.0f);
+    root->setWidth(64.0f);
+    root->setHeight(48.0f);
     app.setRootWidget(std::move(root));
 
     EXPECT_TRUE(app.renderFrame());
@@ -1133,8 +1138,8 @@ TEST(LclUiTest, LocalTransientRendersAboveContentInSingleWindowRootLayout) {
     root->setWidth(64.0f);
     root->setHeight(48.0f);
     root->setBackgroundColor({10, 20, 30, 255});
-    root->getYogaNode().setAlignItems(YGAlignCenter);
-    root->getYogaNode().setJustifyContent(YGJustifyCenter);
+    root->setAlignItems(layout::Align::Center);
+    root->setJustifyContent(layout::Justify::Center);
     auto content = std::make_unique<Widget>();
     content->setWidth(10.0f);
     content->setHeight(10.0f);
@@ -1145,8 +1150,8 @@ TEST(LclUiTest, LocalTransientRendersAboveContentInSingleWindowRootLayout) {
     auto overlay = std::make_unique<PointerProbeWidget>(graphics::Color{40, 50, 60, 255});
     overlay->setWidth(24.0f);
     overlay->setHeight(18.0f);
-    overlay->setPosition(YGEdgeLeft, 8.0f);
-    overlay->setPosition(YGEdgeTop, 6.0f);
+    overlay->setPosition(layout::Edge::Left, 8.0f);
+    overlay->setPosition(layout::Edge::Top, 6.0f);
     PointerProbeWidget* overlayPtr = overlay.get();
     const TransientHandle handle = app.registerLocalTransient(std::move(overlay));
     ASSERT_NE(handle, 0u);
@@ -1179,16 +1184,16 @@ TEST(LclUiTest, LocalTransientPrioritizesTopmostHitWithoutBlockingEmptySpace) {
     auto first = std::make_unique<PointerProbeWidget>();
     first->setWidth(40.0f);
     first->setHeight(30.0f);
-    first->setPosition(YGEdgeLeft, 10.0f);
-    first->setPosition(YGEdgeTop, 10.0f);
+    first->setPosition(layout::Edge::Left, 10.0f);
+    first->setPosition(layout::Edge::Top, 10.0f);
     PointerProbeWidget* firstPtr = first.get();
     const TransientHandle firstHandle = app.registerLocalTransient(std::move(first));
 
     auto second = std::make_unique<PointerProbeWidget>();
     second->setWidth(40.0f);
     second->setHeight(30.0f);
-    second->setPosition(YGEdgeLeft, 10.0f);
-    second->setPosition(YGEdgeTop, 10.0f);
+    second->setPosition(layout::Edge::Left, 10.0f);
+    second->setPosition(layout::Edge::Top, 10.0f);
     PointerProbeWidget* secondPtr = second.get();
     const TransientHandle secondHandle = app.registerLocalTransient(std::move(second));
     ASSERT_NE(firstHandle, 0u);
@@ -1228,8 +1233,8 @@ TEST(LclUiTest, TransientControllerMouseDismissAndRemovalAreLifecycleSafe) {
     insideOverlay->cancelCountSink = &overlayCancelCount;
     insideOverlay->setWidth(40.0f);
     insideOverlay->setHeight(30.0f);
-    insideOverlay->setPosition(YGEdgeLeft, 10.0f);
-    insideOverlay->setPosition(YGEdgeTop, 10.0f);
+    insideOverlay->setPosition(layout::Edge::Left, 10.0f);
+    insideOverlay->setPosition(layout::Edge::Top, 10.0f);
     PointerProbeWidget* insidePtr = insideOverlay.get();
     const TransientHandle insideHandle = app.registerLocalTransient(
         std::move(insideOverlay), TransientOptions{.dismissOnOutsidePointer = true});
@@ -1249,8 +1254,8 @@ TEST(LclUiTest, TransientControllerMouseDismissAndRemovalAreLifecycleSafe) {
     auto outsideOverlay = std::make_unique<PointerProbeWidget>();
     outsideOverlay->setWidth(40.0f);
     outsideOverlay->setHeight(30.0f);
-    outsideOverlay->setPosition(YGEdgeLeft, 10.0f);
-    outsideOverlay->setPosition(YGEdgeTop, 10.0f);
+    outsideOverlay->setPosition(layout::Edge::Left, 10.0f);
+    outsideOverlay->setPosition(layout::Edge::Top, 10.0f);
     app.registerLocalTransient(std::move(outsideOverlay), TransientOptions{
         .dismissOnOutsidePointer = true,
         .onDismiss = [&] { ++dismissCount; },
@@ -1409,9 +1414,9 @@ protected:
         root->setWidth(300.0f);
         root->setHeight(220.0f);
         auto anchorWidget = std::make_unique<Button>("Menu anchor");
-        anchorWidget->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-        anchorWidget->setPosition(YGEdgeLeft, 20.0f);
-        anchorWidget->setPosition(YGEdgeTop, 20.0f);
+        anchorWidget->setPositionType(layout::PositionType::Absolute);
+        anchorWidget->setPosition(layout::Edge::Left, 20.0f);
+        anchorWidget->setPosition(layout::Edge::Top, 20.0f);
         anchorWidget->setWidth(100.0f);
         anchorWidget->setHeight(32.0f);
         anchor = anchorWidget.get();
@@ -1663,16 +1668,16 @@ TEST(LclUiTest, PopoverPlacesBelowLeftAndAlwaysUsesPopupSurface) {
     root->setHeight(200.0f);
     Container* rootPtr = root.get();
     auto localAnchor = std::make_unique<Widget>();
-    localAnchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    localAnchor->setPosition(YGEdgeLeft, 20.0f);
-    localAnchor->setPosition(YGEdgeTop, 30.0f);
+    localAnchor->setPositionType(layout::PositionType::Absolute);
+    localAnchor->setPosition(layout::Edge::Left, 20.0f);
+    localAnchor->setPosition(layout::Edge::Top, 30.0f);
     localAnchor->setWidth(50.0f);
     localAnchor->setHeight(20.0f);
     Widget* localAnchorPtr = localAnchor.get();
     auto edgeAnchor = std::make_unique<Widget>();
-    edgeAnchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    edgeAnchor->setPosition(YGEdgeLeft, 260.0f);
-    edgeAnchor->setPosition(YGEdgeTop, 160.0f);
+    edgeAnchor->setPositionType(layout::PositionType::Absolute);
+    edgeAnchor->setPosition(layout::Edge::Left, 260.0f);
+    edgeAnchor->setPosition(layout::Edge::Top, 160.0f);
     edgeAnchor->setWidth(30.0f);
     edgeAnchor->setHeight(20.0f);
     Widget* edgeAnchorPtr = edgeAnchor.get();
@@ -1892,9 +1897,9 @@ TEST(LclUiTest, PopupPopoverContentReceivesInputAndOutsideMouseDismisses) {
     background->setHeight(200.0f);
     root->addChild(std::move(background));
     auto anchor = std::make_unique<Button>("Anchor");
-    anchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    anchor->setPosition(YGEdgeLeft, 20.0f);
-    anchor->setPosition(YGEdgeTop, 20.0f);
+    anchor->setPositionType(layout::PositionType::Absolute);
+    anchor->setPosition(layout::Edge::Left, 20.0f);
+    anchor->setPosition(layout::Edge::Top, 20.0f);
     anchor->setWidth(60.0f);
     anchor->setHeight(20.0f);
     Button* anchorPtr = anchor.get();
@@ -1970,9 +1975,9 @@ TEST(LclUiTest, PopoverTouchDismissRequiresValidatedOutsideTap) {
     background->setHeight(200.0f);
     root->addChild(std::move(background));
     auto anchor = std::make_unique<Button>("Anchor");
-    anchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    anchor->setPosition(YGEdgeLeft, 20.0f);
-    anchor->setPosition(YGEdgeTop, 20.0f);
+    anchor->setPositionType(layout::PositionType::Absolute);
+    anchor->setPosition(layout::Edge::Left, 20.0f);
+    anchor->setPosition(layout::Edge::Top, 20.0f);
     anchor->setWidth(60.0f);
     anchor->setHeight(20.0f);
     Button* anchorPtr = anchor.get();
@@ -2083,9 +2088,9 @@ TEST(LclUiTest, PopupPopoverUsesWidgetInputAndDropsStaleHandleOnSurfaceDestroy) 
     root->setWidth(300.0f);
     root->setHeight(200.0f);
     auto anchor = std::make_unique<Button>("Anchor");
-    anchor->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    anchor->setPosition(YGEdgeLeft, 260.0f);
-    anchor->setPosition(YGEdgeTop, 160.0f);
+    anchor->setPositionType(layout::PositionType::Absolute);
+    anchor->setPosition(layout::Edge::Left, 260.0f);
+    anchor->setPosition(layout::Edge::Top, 160.0f);
     anchor->setWidth(30.0f);
     anchor->setHeight(20.0f);
     Button* anchorPtr = anchor.get();
@@ -2279,7 +2284,7 @@ TEST(LclUiTest, WindowAppSurfaceTransientRemovalRequestsPopupDestroy) {
     close(sockets[1]);
 }
 
-TEST(LclUiTest, WindowAppGatesYogaLayoutToLayoutAffectingMutations) {
+TEST(LclUiTest, WindowAppGatesLayoutToLayoutAffectingMutations) {
     auto canvas = std::make_unique<RecordingCanvas>();
     WindowApp app(std::move(canvas), 64, 48, "Layout dirty gating");
 
@@ -2304,7 +2309,7 @@ TEST(LclUiTest, WindowAppGatesYogaLayoutToLayoutAffectingMutations) {
     ASSERT_TRUE(app.renderFrame());
     EXPECT_EQ(rootPointer->syncLayoutCount, 1);
 
-    rootPointer->getYogaNode().setWidth(60.0f);
+    rootPointer->setWidth(60.0f);
     EXPECT_TRUE(rootPointer->isLayoutDirty());
     ASSERT_TRUE(app.renderFrame());
     EXPECT_FALSE(rootPointer->isLayoutDirty());
@@ -2370,10 +2375,10 @@ TEST(LclUiTest, ResizeFirstFramePaintsPostLayoutRootExtent) {
     WindowApp app(std::move(canvas), 100, 100, "Resize damage");
 
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setWidth(100.0f);
-    root->getYogaNode().setHeight(100.0f);
-    root->getYogaNode().setAlignItems(YGAlignCenter);
-    root->getYogaNode().setJustifyContent(YGJustifyCenter);
+    root->setWidth(100.0f);
+    root->setHeight(100.0f);
+    root->setAlignItems(layout::Align::Center);
+    root->setJustifyContent(layout::Justify::Center);
     auto child = std::make_unique<Button>("Moved");
     child->setWidth(40.0f);
     child->setHeight(24.0f);
@@ -2402,8 +2407,8 @@ TEST(LclUiTest, WindowContentRootFollowsBothResizeAxes) {
     WindowApp app(std::move(canvas), 100, 80, "Two-axis resize");
 
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setWidth(100.0f);
-    root->getYogaNode().setHeight(80.0f);
+    root->setWidth(100.0f);
+    root->setHeight(80.0f);
     app.setRootWidget(std::move(root));
     ASSERT_TRUE(app.renderFrame());
 
@@ -2657,7 +2662,7 @@ TEST(LclUiTest, ToggleFocusedSpaceAndWindowTraversalRespectEligibility) {
     auto root = std::make_unique<Container>();
     root->setWidth(180.0f);
     root->setHeight(160.0f);
-    root->getYogaNode().setDirection(YGFlexDirectionColumn);
+    root->setDirection(layout::Direction::Column);
 
     auto before = std::make_unique<Button>("Before");
     Button* beforePtr = before.get();
@@ -2705,7 +2710,7 @@ TEST(LclUiTest, ToggleValueIsImmediateWhileThumbAnimationRetargetsOneChannel) {
     MotionCoordinator coordinator;
     Toggle toggle;
     toggle.setMotionCoordinator(&coordinator);
-    toggle.getYogaNode().calculateLayout(60.0f, 44.0f);
+    toggle.calculateLayout(60.0f, 44.0f);
     toggle.syncLayout();
     const uint64_t objectId = toggle.getObjectId();
 
@@ -2738,7 +2743,7 @@ TEST(LclUiTest, ToggleValueIsImmediateWhileThumbAnimationRetargetsOneChannel) {
 
 TEST(LclUiTest, ToggleThumbTargetsAndLogicalGeometryStayStableAcrossCanvasScale) {
     Toggle toggle;
-    toggle.getYogaNode().calculateLayout(60.0f, 44.0f);
+    toggle.calculateLayout(60.0f, 44.0f);
     toggle.syncLayout();
     const graphics::RectF damage{-10.0f, -10.0f, 100.0f, 80.0f};
 
@@ -2911,8 +2916,8 @@ TEST(LclUiTest, WindowAppRendersReplacementRootAfterInitialFrame) {
 
     auto initialRoot = std::make_unique<Container>();
     initialRoot->setBackgroundColor({1, 2, 3, 255});
-    initialRoot->getYogaNode().setWidth(64.0f);
-    initialRoot->getYogaNode().setHeight(48.0f);
+    initialRoot->setWidth(64.0f);
+    initialRoot->setHeight(48.0f);
     app.setRootWidget(std::move(initialRoot));
     ASSERT_TRUE(app.renderFrame());
     ASSERT_FALSE(app.renderFrame());
@@ -2922,8 +2927,8 @@ TEST(LclUiTest, WindowAppRendersReplacementRootAfterInitialFrame) {
 
     auto replacementRoot = std::make_unique<Container>();
     replacementRoot->setBackgroundColor({20, 40, 60, 255});
-    replacementRoot->getYogaNode().setWidth(64.0f);
-    replacementRoot->getYogaNode().setHeight(48.0f);
+    replacementRoot->setWidth(64.0f);
+    replacementRoot->setHeight(48.0f);
     app.setRootWidget(std::move(replacementRoot));
 
     ASSERT_TRUE(app.renderFrame());
@@ -2960,15 +2965,15 @@ TEST(LclUiTest, AbsoluteEdgePinnedLayerTracksWindowResize) {
     WindowApp app(std::move(canvas), 64, 48, "Edge-pinned resize test");
 
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setWidth(64.0f);
-    root->getYogaNode().setHeight(48.0f);
+    root->setWidth(64.0f);
+    root->setHeight(48.0f);
     auto layer = std::make_unique<Container>();
     Container* layerPointer = layer.get();
-    layer->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    layer->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-    layer->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-    layer->getYogaNode().setPosition(YGEdgeRight, 0.0f);
-    layer->getYogaNode().setPosition(YGEdgeBottom, 0.0f);
+    layer->setPositionType(layout::PositionType::Absolute);
+    layer->setPosition(layout::Edge::Left, 0.0f);
+    layer->setPosition(layout::Edge::Top, 0.0f);
+    layer->setPosition(layout::Edge::Right, 0.0f);
+    layer->setPosition(layout::Edge::Bottom, 0.0f);
     root->addChild(std::move(layer));
     app.setRootWidget(std::move(root));
 
@@ -3139,14 +3144,14 @@ TEST(LclUiTest, PassiveBackdropSurfaceKeepsItsVisualStateOnPointerEvents) {
 
 TEST(LclUiTest, GlassUsesTheGenericAddFilterChain) {
     BackdropSurface surface;
-    surface.getYogaNode().setWidth(100.0f);
-    surface.getYogaNode().setHeight(100.0f);
+    surface.setWidth(100.0f);
+    surface.setHeight(100.0f);
     surface.setBorderRoundness(3.2f);
     surface.setEffectBounds(EffectBounds::OuterSurface);
     surface.addFilter(lcl::protocol::FilterType::Blur, 8.0f);
     surface.addFilter(lcl::protocol::FilterType::Glass, 30.0f, 3.0f, 12.0f);
     surface.setTint({15, 23, 42, 128});
-    surface.getYogaNode().calculateLayout(100.0f, 100.0f);
+    surface.calculateLayout(100.0f, 100.0f);
     surface.syncLayout();
 
     std::vector<EffectRegion> effects;
@@ -3173,10 +3178,10 @@ TEST(LclUiTest, GlassUsesTheGenericAddFilterChain) {
 
 TEST(LclUiTest, GlassPreservesZeroControlsInsteadOfSynthesizingDefaults) {
     BackdropSurface surface;
-    surface.getYogaNode().setWidth(32.0f);
-    surface.getYogaNode().setHeight(24.0f);
+    surface.setWidth(32.0f);
+    surface.setHeight(24.0f);
     surface.addFilter(lcl::protocol::FilterType::Glass, 0.0f, 0.0f, 0.0f);
-    surface.getYogaNode().calculateLayout(32.0f, 24.0f);
+    surface.calculateLayout(32.0f, 24.0f);
     surface.syncLayout();
 
     std::vector<EffectRegion> effects;
@@ -3350,20 +3355,20 @@ TEST(LclUiTest, PassiveBackdropEffectDoesNotRequireAFullWindowRoundedRaster) {
     RecordingCanvas canvas;
     auto root = std::make_unique<Container>();
     root->setBackgroundColor({17, 19, 23, 184});
-    root->getYogaNode().setWidth(540.0f);
-    root->getYogaNode().setHeight(360.0f);
+    root->setWidth(540.0f);
+    root->setHeight(360.0f);
 
     auto effect = std::make_unique<BackdropSurface>();
     effect->setInteractive(false);
     effect->setBorderRadius(20.0f);
     effect->setBorderRoundness(3.2f);
     effect->addFilter(lcl::protocol::FilterType::Blur, 3.5f);
-    effect->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    effect->getYogaNode().setWidth(540.0f);
-    effect->getYogaNode().setHeight(360.0f);
+    effect->setPositionType(layout::PositionType::Absolute);
+    effect->setWidth(540.0f);
+    effect->setHeight(360.0f);
     root->addChild(std::move(effect));
 
-    root->getYogaNode().calculateLayout(540.0f, 360.0f);
+    root->calculateLayout(540.0f, 360.0f);
     root->syncLayout();
     root->draw(canvas, {0.0f, 0.0f, 540.0f, 360.0f});
 
@@ -3382,8 +3387,8 @@ TEST(LclUiTest, RasterCanvasInjectionPreservesRasterOutput) {
     WindowApp app(lcl::render::makeRasterCanvas(), 8, 8, "LCL raster graphics::Canvas Test");
     auto root = std::make_unique<Container>();
     root->setBackgroundColor({11, 22, 33, 255});
-    root->getYogaNode().setWidth(8.0f);
-    root->getYogaNode().setHeight(8.0f);
+    root->setWidth(8.0f);
+    root->setHeight(8.0f);
     app.setRootWidget(std::move(root));
 
     ASSERT_TRUE(app.renderFrame());
@@ -3433,7 +3438,7 @@ TEST(LclUiTest, ChildPaintInvalidationDoesNotExpandDamageToRootBounds) {
     child->setWidth(30.0f);
     child->setHeight(20.0f);
     root->addChild(std::move(child));
-    root->getYogaNode().calculateLayout(200.0f, 120.0f);
+    root->calculateLayout(200.0f, 120.0f);
     root->syncLayout();
     root->setRenderPass(&pass);
     pass.clear();
@@ -3452,7 +3457,7 @@ TEST(LclUiTest, ExplicitWidgetPaintDamageKeepsTheRequestedSubregion) {
     auto widget = std::make_unique<CountingPaintWidget>();
     widget->setWidth(100.0f);
     widget->setHeight(80.0f);
-    widget->getYogaNode().calculateLayout(100.0f, 80.0f);
+    widget->calculateLayout(100.0f, 80.0f);
     widget->syncLayout();
     widget->setRenderPass(&pass);
     pass.clear();
@@ -3568,7 +3573,7 @@ TEST(LclUiTest, PresentationTransformDamagesOldAndNewBoundsWithoutPaintInvalidat
     auto widget = std::make_unique<CountingPaintWidget>();
     widget->setWidth(30.0f);
     widget->setHeight(20.0f);
-    widget->getYogaNode().calculateLayout(200.0f, 120.0f);
+    widget->calculateLayout(200.0f, 120.0f);
     widget->syncLayout();
     widget->setRenderPass(&pass);
     pass.clear();
@@ -3585,42 +3590,193 @@ TEST(LclUiTest, PresentationTransformDamagesOldAndNewBoundsWithoutPaintInvalidat
     EXPECT_GT(widget->getPresentationRevision(), 0u);
 }
 
-TEST(LclUiTest, YogaNodeFlexLayout) {
-    YogaNode root;
-    root.setDirection(YGFlexDirectionColumn);
-    root.setWidth(200.0f);
-    root.setHeight(400.0f);
-    root.setPadding(YGEdgeAll, 10.0f);
+TEST(LclUiTest, LayoutFlexTreeUsesPublicWidgetApi) {
+    auto root = std::make_unique<Container>();
+    root->setDirection(layout::Direction::Column);
+    root->setWidth(200.0f);
+    root->setHeight(400.0f);
+    root->setPadding(10.0f);
 
-    YogaNode child1;
-    child1.setHeight(50.0f);
-    root.appendChild(&child1);
+    auto child1 = std::make_unique<Widget>();
+    Widget* child1Ptr = child1.get();
+    child1->setHeight(50.0f);
+    root->addChild(std::move(child1));
 
-    YogaNode child2;
-    child2.setFlexGrow(1.0f);
-    root.appendChild(&child2);
+    auto child2 = std::make_unique<Widget>();
+    Widget* child2Ptr = child2.get();
+    child2->setFlexGrow(1.0f);
+    root->addChild(std::move(child2));
 
-    root.calculateLayout(200.0f, 400.0f);
+    root->calculateLayout(200.0f, 400.0f);
+    root->syncLayout();
 
-    EXPECT_EQ(child1.getLayoutY(), 10.0f);
-    EXPECT_EQ(child1.getLayoutHeight(), 50.0f);
+    EXPECT_EQ(child1Ptr->getBounds().y, 10.0f);
+    EXPECT_EQ(child1Ptr->getBounds().height, 50.0f);
 
-    EXPECT_EQ(child2.getLayoutY(), 60.0f);
-    EXPECT_EQ(child2.getLayoutHeight(), 330.0f); // 400 - 20 (padding) - 50 = 330
+    EXPECT_EQ(child2Ptr->getBounds().y, 60.0f);
+    EXPECT_EQ(child2Ptr->getBounds().height, 330.0f); // 400 - 20 (padding) - 50 = 330
+}
+
+TEST(LclUiTest, LayoutSupportsReverseWrapAbsoluteAndSizingConstraints) {
+    auto root = std::make_unique<Container>();
+    root->setDirection(layout::Direction::RowReverse);
+    root->setWrap(layout::Wrap::Wrap);
+    root->setJustifyContent(layout::Justify::FlexStart);
+    root->setAlignItems(layout::Align::Center);
+    root->setWidth(120.0f);
+    root->setHeight(90.0f);
+    root->setPadding(layout::Edge::Horizontal, 10.0f);
+    root->setGap(layout::Gutter::Column, 5.0f);
+
+    auto first = std::make_unique<Widget>();
+    Widget* firstPtr = first.get();
+    first->setWidth(50.0f);
+    first->setHeight(20.0f);
+    first->setMinWidth(40.0f);
+    first->setMaxWidth(60.0f);
+    root->addChild(std::move(first));
+
+    auto second = std::make_unique<Widget>();
+    Widget* secondPtr = second.get();
+    second->setFlexBasis(50.0f);
+    second->setFlexShrink(0.0f);
+    second->setHeight(20.0f);
+    second->setMargin(layout::Edge::Left, 5.0f);
+    root->addChild(std::move(second));
+
+    auto absolute = std::make_unique<Widget>();
+    Widget* absolutePtr = absolute.get();
+    absolute->setPositionType(layout::PositionType::Absolute);
+    absolute->setPosition(layout::Edge::Left, 7.0f);
+    absolute->setPosition(layout::Edge::Top, 9.0f);
+    absolute->setWidth(11.0f);
+    absolute->setHeight(13.0f);
+    root->addChild(std::move(absolute));
+
+    root->calculateLayout(120.0f, 90.0f);
+    root->syncLayout();
+
+    EXPECT_GT(firstPtr->getBounds().x, secondPtr->getBounds().x);
+    EXPECT_EQ(absolutePtr->getBounds().x, 7.0f);
+    EXPECT_EQ(absolutePtr->getBounds().y, 9.0f);
+    EXPECT_EQ(absolutePtr->getBounds().width, 11.0f);
+    EXPECT_EQ(absolutePtr->getBounds().height, 13.0f);
+
+    root->setDirection(layout::Direction::ColumnReverse);
+    root->setWrap(layout::Wrap::NoWrap);
+    root->calculateLayout(120.0f, 90.0f);
+    root->syncLayout();
+    EXPECT_GT(firstPtr->getBounds().y, secondPtr->getBounds().y);
+
+    firstPtr->setWidthAuto();
+    firstPtr->setFlexBasisAuto();
+    root->calculateLayout(120.0f, 90.0f);
+    root->syncLayout();
+    EXPECT_GE(firstPtr->getBounds().width, 40.0f);
+    EXPECT_LE(firstPtr->getBounds().width, 60.0f);
+}
+
+TEST(LclUiTest, LayoutDistinguishesStaticRelativeAndAbsolutePositioning) {
+    auto root = std::make_unique<Container>();
+    root->setDirection(layout::Direction::Row);
+    root->setWidth(100.0f);
+    root->setHeight(40.0f);
+
+    auto staticChild = std::make_unique<Widget>();
+    Widget* staticPtr = staticChild.get();
+    staticChild->setPositionType(layout::PositionType::Static);
+    staticChild->setPosition(layout::Edge::Left, 30.0f);
+    staticChild->setWidth(20.0f);
+    staticChild->setHeight(10.0f);
+    root->addChild(std::move(staticChild));
+
+    auto relativeChild = std::make_unique<Widget>();
+    Widget* relativePtr = relativeChild.get();
+    relativeChild->setPositionType(layout::PositionType::Relative);
+    relativeChild->setPosition(layout::Edge::Left, 30.0f);
+    relativeChild->setWidth(20.0f);
+    relativeChild->setHeight(10.0f);
+    root->addChild(std::move(relativeChild));
+
+    auto absoluteChild = std::make_unique<Widget>();
+    Widget* absolutePtr = absoluteChild.get();
+    absoluteChild->setPositionType(layout::PositionType::Absolute);
+    absoluteChild->setPosition(layout::Edge::Right, 5.0f);
+    absoluteChild->setPosition(layout::Edge::Bottom, 6.0f);
+    absoluteChild->setWidth(10.0f);
+    absoluteChild->setHeight(8.0f);
+    root->addChild(std::move(absoluteChild));
+
+    root->calculateLayout(100.0f, 40.0f);
+    root->syncLayout();
+    EXPECT_EQ(staticPtr->getBounds().x, 0.0f);
+    EXPECT_EQ(relativePtr->getBounds().x, 50.0f);
+    EXPECT_EQ(absolutePtr->getBounds().x, 85.0f);
+    EXPECT_EQ(absolutePtr->getBounds().y, 26.0f);
+}
+
+TEST(LclUiTest, MeasuredWidgetUsesLclConstraintsAndCanInvalidateMeasurement) {
+    class Probe final : public MeasuredWidget {
+    public:
+        void setIntrinsicSize(layout::Size value) {
+            intrinsicSize = value;
+            invalidateMeasurement();
+        }
+
+        layout::Constraints lastConstraints{};
+        layout::Size intrinsicSize{23.0f, 17.0f};
+        int measureCount{0};
+
+    protected:
+        layout::Size measure(const layout::Constraints& constraints) override {
+            lastConstraints = constraints;
+            ++measureCount;
+            return intrinsicSize;
+        }
+    };
+
+    Probe probe;
+    probe.calculateLayout();
+    probe.syncLayout();
+    EXPECT_EQ(probe.lastConstraints.width.mode, layout::MeasureMode::Undefined);
+    EXPECT_EQ(probe.lastConstraints.height.mode, layout::MeasureMode::Undefined);
+    EXPECT_EQ(probe.getBounds().width, 23.0f);
+    EXPECT_EQ(probe.getBounds().height, 17.0f);
+    const int initialMeasureCount = probe.measureCount;
+
+    probe.setIntrinsicSize({41.0f, 29.0f});
+    probe.calculateLayout();
+    probe.syncLayout();
+    EXPECT_GT(probe.measureCount, initialMeasureCount);
+    EXPECT_EQ(probe.getBounds().width, 41.0f);
+    EXPECT_EQ(probe.getBounds().height, 29.0f);
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(100.0f);
+    root->setHeight(60.0f);
+    root->setAlignItems(layout::Align::FlexStart);
+    auto constrained = std::make_unique<Probe>();
+    Probe* constrainedPtr = constrained.get();
+    root->addChild(std::move(constrained));
+    root->calculateLayout(100.0f, 60.0f);
+    root->syncLayout();
+    EXPECT_EQ(constrainedPtr->lastConstraints.width.mode,
+              layout::MeasureMode::AtMost);
+    EXPECT_FLOAT_EQ(constrainedPtr->lastConstraints.width.value, 100.0f);
 }
 
 TEST(LclUiTest, WidgetTreeHierarchy) {
     RenderPass pass;
     auto root = std::make_unique<Container>();
     root->setRenderPass(&pass);
-    root->getYogaNode().setWidth(300.0f);
-    root->getYogaNode().setHeight(300.0f);
+    root->setWidth(300.0f);
+    root->setHeight(300.0f);
 
     auto btn = std::make_unique<Button>("Click Me");
     Button* btnPtr = btn.get();
     root->addChild(std::move(btn));
 
-    root->getYogaNode().calculateLayout(300.0f, 300.0f);
+    root->calculateLayout(300.0f, 300.0f);
     root->syncLayout(0.0f, 0.0f);
 
     EXPECT_EQ(root->getBounds().width, 300.0f);
@@ -3632,12 +3788,12 @@ TEST(LclUiTest, RenderPassPropagatesToExistingDescendants) {
     auto root = std::make_unique<Container>();
     auto child = std::make_unique<Container>();
     Container* childPtr = child.get();
-    child->getYogaNode().setWidth(20.0f);
-    child->getYogaNode().setHeight(20.0f);
+    child->setWidth(20.0f);
+    child->setHeight(20.0f);
     root->addChild(std::move(child));
-    root->getYogaNode().setWidth(100.0f);
-    root->getYogaNode().setHeight(100.0f);
-    root->getYogaNode().calculateLayout(100.0f, 100.0f);
+    root->setWidth(100.0f);
+    root->setHeight(100.0f);
+    root->calculateLayout(100.0f, 100.0f);
     root->syncLayout();
     root->setRenderPass(&pass);
     pass.clear();
@@ -3648,9 +3804,9 @@ TEST(LclUiTest, RenderPassPropagatesToExistingDescendants) {
 
 TEST(LclUiTest, ButtonStateAndClick) {
     auto btn = std::make_unique<Button>("Submit");
-    btn->getYogaNode().setWidth(100.0f);
-    btn->getYogaNode().setHeight(40.0f);
-    btn->getYogaNode().calculateLayout(100.0f, 40.0f);
+    btn->setWidth(100.0f);
+    btn->setHeight(40.0f);
+    btn->calculateLayout(100.0f, 40.0f);
     btn->syncLayout(0.0f, 0.0f);
 
     bool clicked = false;
@@ -3734,7 +3890,7 @@ TEST(LclUiTest, MountedTitlebarResizesWithoutReplacingItsWidgetTree) {
     auto* identity = titleBar.get();
     const float initialTitleWidth = titleBar->chromeLayout().titleWidth;
     titleBar->setFrameSize(640.0f, 32.0f);
-    titleBar->getYogaNode().calculateLayout(640.0f, 32.0f);
+    titleBar->calculateLayout(640.0f, 32.0f);
     titleBar->syncLayout();
 
     EXPECT_EQ(titleBar.get(), identity);
@@ -3782,7 +3938,7 @@ TEST(LclUiTest, TitlebarLayoutComesFromSharedCsdAndSsdChromeCore) {
     EXPECT_EQ(ssdChrome.hitTest(layout.controlLeft + 1.0f,
                                 layout.controlTop + 1.0f,
                                 540.0f, 34.0f, 20.0f), 0);
-    titleBar->getYogaNode().calculateLayout(540.0f, 34.0f);
+    titleBar->calculateLayout(540.0f, 34.0f);
     titleBar->syncLayout();
 
     const graphics::RectF bounds{0.0f, 0.0f, 540.0f, 34.0f};
@@ -4234,7 +4390,7 @@ TEST(LclUiTest, ScrollViewClampsOffsetWhenContentLargerThanViewport) {
     content->setHeight(300.0f);
     scrollView->setContent(std::move(content));
 
-    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout(0.0f, 0.0f);
 
     EXPECT_FLOAT_EQ(scrollView->getContentHeight(), 300.0f);
@@ -4261,7 +4417,7 @@ TEST(LclUiTest, ScrollViewSkipsDirtyWorkWhenClampedOffsetDoesNotChange) {
     content->setWidth(200.0f);
     content->setHeight(300.0f);
     scrollView->setContent(std::move(content));
-    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout();
     pass.clear();
 
@@ -4299,7 +4455,7 @@ TEST(LclUiTest, ScrollViewCachesContentUntilPaintOrGeometryChanges) {
     paintedChild->setHeight(300.0f);
     content->addChild(std::move(paintedChild));
     scrollView->setContent(std::move(content));
-    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout();
 
     const graphics::RectF fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
@@ -4321,15 +4477,15 @@ TEST(LclUiTest, ScrollViewCachesContentUntilPaintOrGeometryChanges) {
     EXPECT_EQ(paintedChildPointer->paintCount, 2);
     EXPECT_EQ(canvas.cachedLayerBeginCount, 2);
 
-    paintedChildPointer->getYogaNode().setHeight(340.0f);
-    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    paintedChildPointer->setHeight(340.0f);
+    scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout();
     scrollView->draw(canvas, fullDamage);
     EXPECT_EQ(paintedChildPointer->paintCount, 3);
     EXPECT_EQ(canvas.cachedLayerBeginCount, 3);
 
-    scrollView->getYogaNode().setHeight(120.0f);
-    scrollView->getYogaNode().calculateLayout(200.0f, 120.0f);
+    scrollView->setHeight(120.0f);
+    scrollView->calculateLayout(200.0f, 120.0f);
     scrollView->syncLayout();
     scrollView->draw(canvas, fullDamage);
     EXPECT_EQ(paintedChildPointer->paintCount, 4);
@@ -4355,7 +4511,7 @@ TEST(LclUiTest, ScrollViewDoesNotRerasterLongContentEachAnimationTick) {
     animatedChild->setHeight(300.0f);
     content->addChild(std::move(animatedChild));
     scrollView->setContent(std::move(content));
-    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout();
 
     const graphics::RectF fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
@@ -4393,11 +4549,11 @@ TEST(LclUiTest, ScrollViewDefersOffscreenProceduralPresentationRaster) {
     content->setWidth(200.0f);
     content->setHeight(400.0f);
     auto spinner = std::make_unique<ProgressView>();
-    spinner->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    spinner->setPosition(YGEdgeTop, 300.0f);
+    spinner->setPositionType(layout::PositionType::Absolute);
+    spinner->setPosition(layout::Edge::Top, 300.0f);
     content->addChild(std::move(spinner));
     scrollView->setContent(std::move(content));
-    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout();
 
     const graphics::RectF fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
@@ -4428,7 +4584,7 @@ TEST(LclUiTest, ScrollViewCachedLayerRespectsViewportClip) {
     paintedChild->setHeight(40.0f);
     content->addChild(std::move(paintedChild));
     scrollView->setContent(std::move(content));
-    scrollView->getYogaNode().calculateLayout(32.0f, 16.0f);
+    scrollView->calculateLayout(32.0f, 16.0f);
     scrollView->syncLayout();
 
     canvas.beginFrame();
@@ -4460,7 +4616,7 @@ TEST(LclUiTest, ScrollViewHandlesWheelScroll) {
     content->setHeight(400.0f);
     scrollView->setContent(std::move(content));
 
-    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout(0.0f, 0.0f);
 
     EXPECT_FLOAT_EQ(scrollView->getScrollY(), 0.0f);
@@ -4490,7 +4646,7 @@ TEST(LclUiTest, ScrollViewZeroOffsetWhenContentSmallerThanViewport) {
     content->setHeight(150.0f);
     scrollView->setContent(std::move(content));
 
-    scrollView->getYogaNode().calculateLayout(200.0f, 300.0f);
+    scrollView->calculateLayout(200.0f, 300.0f);
     scrollView->syncLayout(0.0f, 0.0f);
 
     EXPECT_FLOAT_EQ(scrollView->getContentHeight(), 150.0f);
@@ -4522,8 +4678,8 @@ TEST(LclUiTest, ScrollViewHitTestRoutesToScrolledChild) {
     auto item2 = std::make_unique<Button>("Item 2");
     item2->setWidth(200.0f);
     item2->setHeight(50.0f);
-    item2->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    item2->setPosition(YGEdgeTop, 200.0f);
+    item2->setPositionType(layout::PositionType::Absolute);
+    item2->setPosition(layout::Edge::Top, 200.0f);
 
     Button* item1Ptr = item1.get();
     Button* item2Ptr = item2.get();
@@ -4532,7 +4688,7 @@ TEST(LclUiTest, ScrollViewHitTestRoutesToScrolledChild) {
     content->addChild(std::move(item2));
     scrollView->setContent(std::move(content));
 
-    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout(0.0f, 0.0f);
 
     EventDispatcher dispatcher;

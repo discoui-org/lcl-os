@@ -74,8 +74,8 @@ TextField::TextField(const std::string& text)
     : m_text(sanitizeSingleLine(text)),
       m_caretIndex(Utf8CodepointMap(m_text).count()) {
     setFocusable(true);
-    m_yogaNode.setMinWidth(80.0f);
-    m_yogaNode.setHeight(getTheme().metrics.regularControlHeight);
+    setMinWidth(80.0f);
+    setDefaultHeight(getTheme().metrics.regularControlHeight);
 }
 
 void TextField::setText(const std::string& text) {
@@ -383,7 +383,7 @@ const lcl::theme::WidgetStyle* TextField::defaultStyle() const noexcept {
 
 void TextField::styleDidChange() {
     if (!m_hasHeight) {
-        m_yogaNode.setHeight(getTheme().metrics.regularControlHeight);
+        setDefaultHeight(getTheme().metrics.regularControlHeight);
     }
     ensureCaretVisible();
     markDirty();

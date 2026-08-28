@@ -27,7 +27,7 @@ std::unique_ptr<FocusScope> makePanel(std::unique_ptr<Widget> content,
     auto panel = std::make_unique<FocusScope>();
     panel->setWidth(geometry.width);
     panel->setHeight(geometry.height);
-    panel->getYogaNode().setDirection(YGFlexDirectionColumn);
+    panel->setDirection(layout::Direction::Column);
     panel->useThemeStyle(lcl::theme::WidgetStyleRole::Popover);
     if (content) {
         panel->addChild(std::move(content));

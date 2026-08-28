@@ -24,6 +24,8 @@
 
 namespace {
 
+namespace layout = lcl::ui::layout;
+
 constexpr float kLauncherPaddingX = 24.0f;
 constexpr float kLauncherPaddingY = 32.0f;
 constexpr float kTileWidth = 84.0f;
@@ -45,8 +47,8 @@ std::unique_ptr<lcl::ui::Container> makeGesturePill(float width,
     auto pill = std::make_unique<lcl::ui::Container>();
     pill->setBackgroundColor({255, 255, 255, 235});
     pill->setBorderRadius(height * 0.5f);
-    pill->getYogaNode().setWidth(width);
-    pill->getYogaNode().setHeight(height);
+    pill->setWidth(width);
+    pill->setHeight(height);
     return pill;
 }
 
@@ -121,12 +123,11 @@ std::vector<uint32_t> makeContainedIconSnapshot(
 
 void absolute(lcl::ui::Widget& widget, float x, float y, float width,
               float height) {
-    auto& yoga = widget.getYogaNode();
-    yoga.setPositionType(YGPositionTypeAbsolute);
-    yoga.setPosition(YGEdgeLeft, x);
-    yoga.setPosition(YGEdgeTop, y);
-    yoga.setWidth(width);
-    yoga.setHeight(height);
+    widget.setPositionType(layout::PositionType::Absolute);
+    widget.setPosition(layout::Edge::Left, x);
+    widget.setPosition(layout::Edge::Top, y);
+    widget.setWidth(width);
+    widget.setHeight(height);
 }
 
 LauncherIcon makeIcon(
@@ -138,8 +139,8 @@ LauncherIcon makeIcon(
             image->setFit(lcl::ui::ImageFit::Contain);
             image->setCornerRadius(kIconRadius);
             image->setCornerRoundness(kIconRoundness);
-            image->getYogaNode().setWidth(kIconSize);
-            image->getYogaNode().setHeight(kIconSize);
+            image->setWidth(kIconSize);
+            image->setHeight(kIconSize);
             return {std::move(image), makeContainedIconSnapshot(*source)};
         }
     }
@@ -150,8 +151,8 @@ LauncherIcon makeIcon(
     placeholder->setBorderWidth(1.0f);
     placeholder->setBorderRadius(kIconRadius);
     placeholder->setBorderRoundness(kIconRoundness);
-    placeholder->getYogaNode().setWidth(kIconSize);
-    placeholder->getYogaNode().setHeight(kIconSize);
+    placeholder->setWidth(kIconSize);
+    placeholder->setHeight(kIconSize);
     std::vector<uint32_t> pixels(
         static_cast<size_t>(kIconPixelSize) * kIconPixelSize,
         0xD21E293Bu);
@@ -172,11 +173,11 @@ std::unique_ptr<lcl::ui::Container> makeLauncherTile(
     lcl::ui::WindowApp& home,
     LauncherState& launcherState) {
     auto tile = std::make_unique<lcl::ui::Container>();
-    tile->getYogaNode().setDirection(YGFlexDirectionColumn);
-    tile->getYogaNode().setAlignItems(YGAlignCenter);
-    tile->getYogaNode().setGap(YGGutterAll, 6.0f);
-    tile->getYogaNode().setWidth(kTileWidth);
-    tile->getYogaNode().setHeight(kTileHeight);
+    tile->setDirection(layout::Direction::Column);
+    tile->setAlignItems(layout::Align::Center);
+    tile->setGap(layout::Gutter::All, 6.0f);
+    tile->setWidth(kTileWidth);
+    tile->setHeight(kTileHeight);
 
     auto icon = makeIcon(app);
     lcl::ui::Widget* iconView = icon.widget.get();
@@ -189,7 +190,7 @@ std::unique_ptr<lcl::ui::Container> makeLauncherTile(
     label->setFontSize(12.0f);
     label->setTextColor({255, 255, 255, 255});
     label->setTextAlign(lcl::ui::TextAlign::Center);
-    label->getYogaNode().setWidth(kTileWidth);
+    label->setWidth(kTileWidth);
     tile->addChild(std::move(label));
 
     const std::string appId = app.appId;
@@ -271,8 +272,8 @@ std::unique_ptr<lcl::ui::Widget> makeWallpaperRoot(
     uint32_t height) {
     auto wallpaper = std::make_unique<lcl::ui::Image>(wallpaperPath);
     wallpaper->setFit(lcl::ui::ImageFit::Cover);
-    wallpaper->getYogaNode().setWidth(static_cast<float>(width));
-    wallpaper->getYogaNode().setHeight(static_cast<float>(height));
+    wallpaper->setWidth(static_cast<float>(width));
+    wallpaper->setHeight(static_cast<float>(height));
     return wallpaper;
 }
 
@@ -285,18 +286,18 @@ std::unique_ptr<lcl::ui::Container> makeHomeRoot(
     LauncherState& launcherState) {
     launcherState.beginRootRebuild();
     auto root = std::make_unique<lcl::ui::Container>();
-    root->getYogaNode().setWidth(static_cast<float>(width));
-    root->getYogaNode().setHeight(static_cast<float>(height));
+    root->setWidth(static_cast<float>(width));
+    root->setHeight(static_cast<float>(height));
 
     auto grid = std::make_unique<lcl::ui::Container>();
-    grid->getYogaNode().setDirection(YGFlexDirectionRow);
-    grid->getYogaNode().setFlexWrap(YGWrapWrap);
-    grid->getYogaNode().setAlignItems(YGAlignFlexStart);
-    grid->getYogaNode().setPadding(YGEdgeHorizontal, kLauncherPaddingX);
-    grid->getYogaNode().setPadding(YGEdgeVertical, kLauncherPaddingY);
-    grid->getYogaNode().setGap(YGGutterColumn, kColumnGap);
-    grid->getYogaNode().setGap(YGGutterRow, kRowGap);
-    grid->getYogaNode().setWidth(static_cast<float>(width));
+    grid->setDirection(layout::Direction::Row);
+    grid->setWrap(layout::Wrap::Wrap);
+    grid->setAlignItems(layout::Align::FlexStart);
+    grid->setPadding(layout::Edge::Horizontal, kLauncherPaddingX);
+    grid->setPadding(layout::Edge::Vertical, kLauncherPaddingY);
+    grid->setGap(layout::Gutter::Column, kColumnGap);
+    grid->setGap(layout::Gutter::Row, kRowGap);
+    grid->setWidth(static_cast<float>(width));
     for (const auto& app : apps) {
         grid->addChild(makeLauncherTile(
             app, session, home, launcherState));

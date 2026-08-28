@@ -1771,7 +1771,7 @@ def main() -> None:
     parser.add_argument(
         "--debug-layout",
         action="store_true",
-        help="Draw Yoga widget bounds and client damage rects in the guest",
+        help="Draw LCL widget bounds and client damage rects in the guest",
     )
     parser.add_argument(
         "--debug-overlay",

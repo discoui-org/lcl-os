@@ -1,7 +1,7 @@
 #pragma once
 
 #include "lcl-graphics/font.hpp"
-#include "lcl-ui/widgets/widget.hpp"
+#include "lcl-ui/widgets/measured_widget.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include <string>
 
@@ -13,7 +13,7 @@ enum class TextAlign {
     End,
 };
 
-class Text : public Widget {
+class Text : public MeasuredWidget {
 public:
     explicit Text(const std::string& content = "");
     ~Text() override = default;
@@ -43,10 +43,9 @@ public:
 protected:
     const lcl::theme::WidgetStyle* defaultStyle() const noexcept override;
     void styleDidChange() override;
+    layout::Size measure(const layout::Constraints& constraints) override;
 
 private:
-    void updateMeasureFunc();
-
     std::string m_text;
     float m_fontSize{14.0f};
     graphics::FontFamily m_fontFamily{graphics::FontFamily::Interface};

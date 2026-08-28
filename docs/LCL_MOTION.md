@@ -17,7 +17,7 @@ app.animate(
     });
 ```
 
-`Reflow` samples Yoga-facing values every frame, so painting and hit testing
+`Reflow` samples LCL layout values every frame, so painting and hit testing
 share the presentation geometry. `Morph` freezes the pre-transaction raster,
 computes and renders the final UI immediately, then crossfades the old pixels
 into the new presentation while its layout transforms settle. Input for that

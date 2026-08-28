@@ -94,14 +94,14 @@ class TextFieldFocusTree {
 public:
     TextFieldFocusTree() {
         root = std::make_unique<Container>();
-        root->getYogaNode().setWidth(240.0f);
-        root->getYogaNode().setHeight(80.0f);
+        root->setWidth(240.0f);
+        root->setHeight(80.0f);
 
         auto textField = std::make_unique<TextField>();
         field = textField.get();
-        textField->getYogaNode().setWidth(200.0f);
+        textField->setWidth(200.0f);
         root->addChild(std::move(textField));
-        root->getYogaNode().calculateLayout(240.0f, 80.0f);
+        root->calculateLayout(240.0f, 80.0f);
         root->syncLayout();
     }
 
@@ -119,28 +119,28 @@ class FocusTransferTree {
 public:
     FocusTransferTree() {
         root = std::make_unique<Container>();
-        root->getYogaNode().setDirection(YGFlexDirectionColumn);
-        root->getYogaNode().setWidth(240.0f);
-        root->getYogaNode().setHeight(180.0f);
+        root->setDirection(layout::Direction::Column);
+        root->setWidth(240.0f);
+        root->setHeight(180.0f);
 
         auto firstField = std::make_unique<TextField>("A");
         first = firstField.get();
-        firstField->getYogaNode().setWidth(200.0f);
-        firstField->getYogaNode().setHeight(36.0f);
+        firstField->setWidth(200.0f);
+        firstField->setHeight(36.0f);
 
         auto secondField = std::make_unique<TextField>("B");
         second = secondField.get();
-        secondField->getYogaNode().setWidth(200.0f);
-        secondField->getYogaNode().setHeight(36.0f);
+        secondField->setWidth(200.0f);
+        secondField->setHeight(36.0f);
 
         auto nonFocusableChild = std::make_unique<Container>();
-        nonFocusableChild->getYogaNode().setWidth(200.0f);
-        nonFocusableChild->getYogaNode().setHeight(36.0f);
+        nonFocusableChild->setWidth(200.0f);
+        nonFocusableChild->setHeight(36.0f);
 
         root->addChild(std::move(firstField));
         root->addChild(std::move(secondField));
         root->addChild(std::move(nonFocusableChild));
-        root->getYogaNode().calculateLayout(240.0f, 180.0f);
+        root->calculateLayout(240.0f, 180.0f);
         root->syncLayout();
     }
 
@@ -202,23 +202,23 @@ class PointerCaptureTree {
 public:
     PointerCaptureTree() {
         root = std::make_unique<Container>();
-        root->getYogaNode().setDirection(YGFlexDirectionRow);
-        root->getYogaNode().setWidth(200.0f);
-        root->getYogaNode().setHeight(100.0f);
+        root->setDirection(layout::Direction::Row);
+        root->setWidth(200.0f);
+        root->setHeight(100.0f);
 
         auto leftWidget = std::make_unique<PointerCaptureWidget>();
         left = leftWidget.get();
-        leftWidget->getYogaNode().setWidth(100.0f);
-        leftWidget->getYogaNode().setHeight(100.0f);
+        leftWidget->setWidth(100.0f);
+        leftWidget->setHeight(100.0f);
 
         auto rightWidget = std::make_unique<PointerCaptureWidget>();
         right = rightWidget.get();
-        rightWidget->getYogaNode().setWidth(100.0f);
-        rightWidget->getYogaNode().setHeight(100.0f);
+        rightWidget->setWidth(100.0f);
+        rightWidget->setHeight(100.0f);
 
         root->addChild(std::move(leftWidget));
         root->addChild(std::move(rightWidget));
-        root->getYogaNode().calculateLayout(200.0f, 100.0f);
+        root->calculateLayout(200.0f, 100.0f);
         root->syncLayout(0.0f, 0.0f);
     }
 
@@ -370,7 +370,7 @@ public:
         content->addChild(std::move(child));
         root->setContent(std::move(content));
 
-        root->getYogaNode().calculateLayout(200.0f, 100.0f);
+        root->calculateLayout(200.0f, 100.0f);
         root->syncLayout(0.0f, 0.0f);
     }
 
@@ -490,25 +490,25 @@ TEST(LclUiEventsTest, DepthFirstHitTesting) {
     EventDispatcher dispatcher;
 
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setWidth(400.0f);
-    root->getYogaNode().setHeight(400.0f);
+    root->setWidth(400.0f);
+    root->setHeight(400.0f);
 
     auto childContainer = std::make_unique<Container>();
-    childContainer->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    childContainer->getYogaNode().setPosition(YGEdgeLeft, 50.0f);
-    childContainer->getYogaNode().setPosition(YGEdgeTop, 50.0f);
-    childContainer->getYogaNode().setWidth(200.0f);
-    childContainer->getYogaNode().setHeight(200.0f);
+    childContainer->setPositionType(layout::PositionType::Absolute);
+    childContainer->setPosition(layout::Edge::Left, 50.0f);
+    childContainer->setPosition(layout::Edge::Top, 50.0f);
+    childContainer->setWidth(200.0f);
+    childContainer->setHeight(200.0f);
 
     auto leafBtn = std::make_unique<Button>("Target");
     Button* leafPtr = leafBtn.get();
-    leafBtn->getYogaNode().setWidth(100.0f);
-    leafBtn->getYogaNode().setHeight(40.0f);
+    leafBtn->setWidth(100.0f);
+    leafBtn->setHeight(40.0f);
 
     childContainer->addChild(std::move(leafBtn));
     root->addChild(std::move(childContainer));
 
-    root->getYogaNode().calculateLayout(400.0f, 400.0f);
+    root->calculateLayout(400.0f, 400.0f);
     root->syncLayout(0.0f, 0.0f);
 
     const auto textBounds = leafPtr->getTextWidget()->getAbsoluteBounds();
@@ -529,24 +529,24 @@ TEST(LclUiEventsTest, HoverTransitionEvents) {
     EventDispatcher dispatcher;
 
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setDirection(YGFlexDirectionRow);
-    root->getYogaNode().setWidth(400.0f);
-    root->getYogaNode().setHeight(200.0f);
+    root->setDirection(layout::Direction::Row);
+    root->setWidth(400.0f);
+    root->setHeight(200.0f);
 
     auto w1 = std::make_unique<TestWidget>();
     TestWidget* w1Ptr = w1.get();
-    w1->getYogaNode().setWidth(100.0f);
-    w1->getYogaNode().setHeight(100.0f);
+    w1->setWidth(100.0f);
+    w1->setHeight(100.0f);
 
     auto w2 = std::make_unique<TestWidget>();
     TestWidget* w2Ptr = w2.get();
-    w2->getYogaNode().setWidth(100.0f);
-    w2->getYogaNode().setHeight(100.0f);
+    w2->setWidth(100.0f);
+    w2->setHeight(100.0f);
 
     root->addChild(std::move(w1));
     root->addChild(std::move(w2));
 
-    root->getYogaNode().calculateLayout(400.0f, 200.0f);
+    root->calculateLayout(400.0f, 200.0f);
     root->syncLayout(0.0f, 0.0f);
 
     // Move pointer over w1 (10, 10)
@@ -570,13 +570,13 @@ TEST(LclUiEventsTest, ButtonClickPipeline) {
     EventDispatcher dispatcher;
 
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setWidth(200.0f);
-    root->getYogaNode().setHeight(200.0f);
+    root->setWidth(200.0f);
+    root->setHeight(200.0f);
 
     auto btn = std::make_unique<Button>("Click Test");
     Button* btnPtr = btn.get();
-    btn->getYogaNode().setWidth(120.0f);
-    btn->getYogaNode().setHeight(40.0f);
+    btn->setWidth(120.0f);
+    btn->setHeight(40.0f);
 
     bool clicked = false;
     btn->setOnClick([&clicked]() {
@@ -584,7 +584,7 @@ TEST(LclUiEventsTest, ButtonClickPipeline) {
     });
 
     root->addChild(std::move(btn));
-    root->getYogaNode().calculateLayout(200.0f, 200.0f);
+    root->calculateLayout(200.0f, 200.0f);
     root->syncLayout(0.0f, 0.0f);
 
     // Dispatch PointerDown over button (10, 10)
@@ -604,16 +604,16 @@ TEST(LclUiEventsTest, KeyboardEventRouting) {
     EventDispatcher dispatcher;
 
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setWidth(200.0f);
-    root->getYogaNode().setHeight(200.0f);
+    root->setWidth(200.0f);
+    root->setHeight(200.0f);
 
     auto widget = std::make_unique<TestWidget>();
     TestWidget* widgetPtr = widget.get();
-    widget->getYogaNode().setWidth(100.0f);
-    widget->getYogaNode().setHeight(40.0f);
+    widget->setWidth(100.0f);
+    widget->setHeight(40.0f);
 
     root->addChild(std::move(widget));
-    root->getYogaNode().calculateLayout(200.0f, 200.0f);
+    root->calculateLayout(200.0f, 200.0f);
     root->syncLayout(0.0f, 0.0f);
 
     // Focus widget by clicking it
@@ -1032,13 +1032,13 @@ TEST(LclUiEventsTest, TouchDragWithoutScrollDoesNotDismissOrCompleteTextFieldTap
 
     EventDispatcher dispatcher;
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setWidth(200.0f);
-    root->getYogaNode().setHeight(80.0f);
+    root->setWidth(200.0f);
+    root->setHeight(80.0f);
     auto field = std::make_unique<TapCompletionTextField>();
     TapCompletionTextField* fieldPtr = field.get();
-    field->getYogaNode().setWidth(200.0f);
+    field->setWidth(200.0f);
     root->addChild(std::move(field));
-    root->getYogaNode().calculateLayout(200.0f, 80.0f);
+    root->calculateLayout(200.0f, 80.0f);
     root->syncLayout();
     dispatcher.setFocus(fieldPtr);
 
@@ -1093,20 +1093,20 @@ TEST(LclUiEventsTest, TouchCancelAndNonFocusableTapUseGenericFocusSemantics) {
 TEST(LclUiEventsTest, ScrollViewDragCancelsPendingTextFieldTouchFocus) {
     EventDispatcher dispatcher;
     auto scrollView = std::make_unique<ScrollView>();
-    scrollView->getYogaNode().setWidth(200.0f);
-    scrollView->getYogaNode().setHeight(100.0f);
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(100.0f);
 
     auto content = std::make_unique<Container>();
-    content->getYogaNode().setDirection(YGFlexDirectionColumn);
+    content->setDirection(layout::Direction::Column);
     auto field = std::make_unique<TextField>();
-    field->getYogaNode().setWidth(200.0f);
+    field->setWidth(200.0f);
     auto filler = std::make_unique<Container>();
-    filler->getYogaNode().setWidth(200.0f);
-    filler->getYogaNode().setHeight(300.0f);
+    filler->setWidth(200.0f);
+    filler->setHeight(300.0f);
     content->addChild(std::move(field));
     content->addChild(std::move(filler));
     scrollView->setContent(std::move(content));
-    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout();
 
     constexpr uint32_t pointerId = 23;
@@ -1130,21 +1130,21 @@ TEST(LclUiEventsTest, ScrollViewDragCancelsPendingTextFieldTouchFocus) {
 TEST(LclUiEventsTest, ScrollViewTouchDragPreservesExistingFocus) {
     EventDispatcher dispatcher;
     auto scrollView = std::make_unique<ScrollView>();
-    scrollView->getYogaNode().setWidth(200.0f);
-    scrollView->getYogaNode().setHeight(100.0f);
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(100.0f);
 
     auto content = std::make_unique<Container>();
-    content->getYogaNode().setDirection(YGFlexDirectionColumn);
+    content->setDirection(layout::Direction::Column);
     auto field = std::make_unique<TextField>();
     TextField* fieldPtr = field.get();
-    field->getYogaNode().setWidth(200.0f);
+    field->setWidth(200.0f);
     auto filler = std::make_unique<Container>();
-    filler->getYogaNode().setWidth(200.0f);
-    filler->getYogaNode().setHeight(300.0f);
+    filler->setWidth(200.0f);
+    filler->setHeight(300.0f);
     content->addChild(std::move(field));
     content->addChild(std::move(filler));
     scrollView->setContent(std::move(content));
-    scrollView->getYogaNode().calculateLayout(200.0f, 100.0f);
+    scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout();
 
     ASSERT_TRUE(dispatcher.dispatchPointerEvent(scrollView.get(),
@@ -1445,13 +1445,13 @@ TEST(LclUiEventsTest, TouchPointerUpClearsHoverState) {
     EventDispatcher dispatcher;
 
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setWidth(200.0f);
-    root->getYogaNode().setHeight(200.0f);
+    root->setWidth(200.0f);
+    root->setHeight(200.0f);
 
     auto btn = std::make_unique<Button>("Touch Test");
     Button* btnPtr = btn.get();
-    btn->getYogaNode().setWidth(120.0f);
-    btn->getYogaNode().setHeight(40.0f);
+    btn->setWidth(120.0f);
+    btn->setHeight(40.0f);
 
     bool clicked = false;
     btn->setOnClick([&clicked]() {
@@ -1459,7 +1459,7 @@ TEST(LclUiEventsTest, TouchPointerUpClearsHoverState) {
     });
 
     root->addChild(std::move(btn));
-    root->getYogaNode().calculateLayout(200.0f, 200.0f);
+    root->calculateLayout(200.0f, 200.0f);
     root->syncLayout(0.0f, 0.0f);
 
     // 1. Touch move over button

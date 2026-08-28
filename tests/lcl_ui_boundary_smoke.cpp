@@ -78,8 +78,13 @@ int main() {
                            "lcl-ui boundary smoke");
     auto root = std::make_unique<lcl::ui::Container>();
     root->setBackgroundColor({12, 34, 56, 255});
-    root->getYogaNode().setWidth(8.0f);
-    root->getYogaNode().setHeight(8.0f);
+    root->setWidth(8.0f);
+    root->setHeight(8.0f);
+    root->setDirection(lcl::ui::layout::Direction::Column);
+    root->setAlignItems(lcl::ui::layout::Align::Stretch);
+    root->setPadding(0.0f);
+    root->setMargin(0.0f);
+    root->setGap(0.0f);
     app.setRootWidget(std::move(root));
 
     if (!app.renderFrame()) return 1;

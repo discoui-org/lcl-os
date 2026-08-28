@@ -14,7 +14,7 @@ description: Complete technical reference, API contracts, and usage patterns for
 ```
 +-----------------------------------------------------------+
 |                      lcl-ui Application                   |
-| (WindowApp -> Widget Tree -> Yoga -> logical DisplayList) |
+| (WindowApp -> Widget Tree -> LCL Layout -> DisplayList)   |
 +-----------------------------+-----------------------------+
                               | sealed frame + producer grant
                               v
@@ -51,10 +51,16 @@ Manages application initialization, window surface creation, raster producer gra
 ### `lcl::ui::Widget` ([`widget.hpp`](../../../lcl-ui/include/lcl-ui/widgets/widget.hpp))
 Base class for all UI elements.
 
-- `YogaNode& getYogaNode()`: Accesses the C++ Yoga Flexbox layout node.
+- Type-safe layout methods (`setDirection`, `setJustifyContent`,
+  `setAlignItems`, `setWidth`, `setHeight`, `setPadding`, `setMargin`,
+  `setGap`, and `setPosition`) accept only `lcl::ui::layout` types. The
+  underlying layout engine is a private implementation detail.
 - `void addChild(std::unique_ptr<Widget> child)`: Appends a child widget.
 - `void markDirty()`: Registers dirty damage bounds with `RenderPass` to trigger a frame redraw.
 - `virtual void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect)`: Backend-neutral render callback. Widgets must not cast the Canvas to a renderer implementation.
+- Intrinsically sized custom leaves derive from `MeasuredWidget`, override
+  `measure(const layout::Constraints&)`, and call `invalidateMeasurement()`
+  when their content size changes.
 - **Event Callbacks:**
   - `virtual bool onPointerEnter(const PointerEvent& event)`
   - `virtual bool onPointerLeave(const PointerEvent& event)`
@@ -90,19 +96,19 @@ int main() {
 
     // 2. Build Flexbox layout hierarchy
     auto root = std::make_unique<Container>();
-    root->getYogaNode().setWidth(800.0f);
-    root->getYogaNode().setHeight(600.0f);
-    root->getYogaNode().setDirection(YGFlexDirectionColumn);
-    root->getYogaNode().setJustifyContent(YGJustifyCenter);
-    root->getYogaNode().setAlignItems(YGAlignCenter);
-    root->getYogaNode().setGap(YGGutterAll, 16.0f);
+    root->setWidth(800.0f);
+    root->setHeight(600.0f);
+    root->setDirection(layout::Direction::Column);
+    root->setJustifyContent(layout::Justify::Center);
+    root->setAlignItems(layout::Align::Center);
+    root->setGap(16.0f);
 
     auto label = std::make_unique<Text>("Hello LCL OS!");
     label->setFontSize(20.0f);
 
     auto btn = std::make_unique<Button>("Click Me");
-    btn->getYogaNode().setWidth(140.0f);
-    btn->getYogaNode().setHeight(40.0f);
+    btn->setWidth(140.0f);
+    btn->setHeight(40.0f);
     btn->setOnClick([labelPtr = label.get()]() {
         labelPtr->setText("Button Clicked!");
     });

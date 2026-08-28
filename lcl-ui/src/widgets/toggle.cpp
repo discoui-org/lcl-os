@@ -26,8 +26,8 @@ Toggle::Toggle(bool value) : Toggle(std::string{}, value) {}
 Toggle::Toggle(std::string label, bool value)
     : m_value(value), m_thumbProgress(value ? 1.0f : 0.0f),
       m_label(std::move(label)) {
-    m_yogaNode.setWidth(m_label.empty() ? kDefaultWidth : kLabeledWidth);
-    m_yogaNode.setHeight(getTheme().metrics.largeControlHeight);
+    setDefaultWidth(m_label.empty() ? kDefaultWidth : kLabeledWidth);
+    setDefaultHeight(getTheme().metrics.largeControlHeight);
     setFocusable(true);
     styleDidChange();
 }
@@ -43,7 +43,7 @@ void Toggle::setToggleStyle(ToggleStyle style) {
     const graphics::RectF previous = getVisiblePresentationPaintBounds();
     m_style = style;
     if (m_label.empty() && !m_hasWidth) {
-        m_yogaNode.setWidth(style == ToggleStyle::Button
+        setDefaultWidth(style == ToggleStyle::Button
                                 ? kButtonWidth
                                 : kDefaultWidth);
     }
@@ -251,7 +251,7 @@ void Toggle::styleDidChange() {
     const auto* style = resolvedStyle();
     if (!style) return;
     if (!m_hasHeight) {
-        m_yogaNode.setHeight(getTheme().metrics.largeControlHeight);
+        setDefaultHeight(getTheme().metrics.largeControlHeight);
     }
     const auto sync = [this, style](InteractionState interaction,
                                     lcl::theme::StyleState state) {

@@ -14,11 +14,11 @@ WindowChromeSurface::WindowChromeSurface(
                                titleFontSize)),
       m_titleHeight(titleHeight), m_cornerRadius(cornerRadius),
       m_titleFontSize(titleFontSize) {
-    getYogaNode().setPositionType(YGPositionTypeAbsolute);
-    getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-    getYogaNode().setPosition(YGEdgeTop, 0.0f);
-    getYogaNode().setWidth(width);
-    getYogaNode().setHeight(titleHeight);
+    setPositionType(layout::PositionType::Absolute);
+    setPosition(layout::Edge::Left, 0.0f);
+    setPosition(layout::Edge::Top, 0.0f);
+    setWidth(width);
+    setHeight(titleHeight);
 }
 
 graphics::DisplayList WindowChromeSurface::buildChromeDisplayList(
@@ -37,8 +37,8 @@ graphics::DisplayList WindowChromeSurface::buildChromeDisplayList(
 void WindowChromeSurface::setFrameSize(float width, float height) {
     if (width <= 0.0f || height <= 0.0f) return;
     m_titleHeight = height;
-    getYogaNode().setWidth(width);
-    getYogaNode().setHeight(height);
+    setWidth(width);
+    setHeight(height);
     markDirty();
 }
 

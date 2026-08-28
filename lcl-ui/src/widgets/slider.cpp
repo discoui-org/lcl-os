@@ -18,8 +18,8 @@ constexpr float kFocusInset = 3.0f;
 Slider::Slider(float value, float minimum, float maximum, float step)
     : m_minimum(std::min(minimum, maximum)),
       m_maximum(std::max(minimum, maximum)), m_step(std::max(0.0f, step)) {
-    m_yogaNode.setWidth(kDefaultWidth);
-    m_yogaNode.setHeight(kDefaultHeight);
+    setDefaultWidth(kDefaultWidth);
+    setDefaultHeight(kDefaultHeight);
     m_value = normalizedAndStepped(value);
     setFocusable(true);
     styleDidChange();

@@ -26,8 +26,8 @@ void Container::styleDidChange() {
     setBorderColor(visual.border);
     setBorderWidth(visual.borderWidth);
     setBorderRadius(visual.cornerRadius);
-    setPadding(YGEdgeHorizontal, style->horizontalPadding.value_or(0.0f));
-    setPadding(YGEdgeVertical, style->verticalPadding.value_or(0.0f));
+    setPadding(layout::Edge::Horizontal, style->horizontalPadding.value_or(0.0f));
+    setPadding(layout::Edge::Vertical, style->verticalPadding.value_or(0.0f));
 }
 
 void Container::setBackgroundColor(const graphics::Color& color) {

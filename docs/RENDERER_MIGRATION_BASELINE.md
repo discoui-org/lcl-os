@@ -16,7 +16,7 @@ raster work in its vSync-critical loop.
 
 | Layer | Migration contract |
 | --- | --- |
-| `lcl-ui` | Keeps `WindowApp -> Widget -> Yoga -> Canvas`; no Skia types enter widget APIs. |
+| `lcl-ui` | Keeps `WindowApp -> Widget -> LCL Layout -> Canvas`; layout-engine and Skia types do not enter widget APIs. |
 | `lcl-graphics` | Keeps logical geometry and the bounded DisplayList authoring contract inside the layer producer. DisplayList wire terminates at rasterd and is not part of the compositor surface ABI. |
 | Raster execution | Moves behind the producer-side Canvas/FrameTransport boundary and outputs an immutable DMA-BUF/native-buffer layer or SHM fallback before commit. |
 | Text | Measurement and drawing must use one packaged-font implementation on Android and DRM/KMS targets. |

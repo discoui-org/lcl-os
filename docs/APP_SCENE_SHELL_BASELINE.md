@@ -143,7 +143,7 @@ No subsequent refactor step may proceed until:
 
 Step 2 separates build ownership without changing protocol or shell behavior:
 
-- `lcl-ui` contains widgets, Yoga layout, event/render-pass logic,
+- `lcl-ui` contains widgets, its private layout implementation, event/render-pass logic,
   `WindowApp`, image loading, compositor IPC, and the rasterd producer client.
 - `lcl-display-scale` owns the shared logical-pixel policy.
 - `lcl-raster` owns the Canvas implementation. A connected protocol-v26 client

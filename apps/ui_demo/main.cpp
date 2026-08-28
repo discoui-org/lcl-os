@@ -41,8 +41,8 @@ int main() {
 
   // 2. Build Centered Flexbox Layout Tree in User-Space App
   auto rootContainer = std::make_unique<Container>();
-  rootContainer->getYogaNode().setWidth(800.0f);
-  rootContainer->getYogaNode().setHeight(600.0f);
+  rootContainer->setWidth(800.0f);
+  rootContainer->setHeight(600.0f);
 
   auto backdrop = std::make_unique<BackdropSurface>();
   backdrop->setInteractive(false);
@@ -53,30 +53,30 @@ int main() {
   backdrop->addFilter(lcl::protocol::FilterType::Saturation, 2.0f);
   backdrop->addFilter(lcl::protocol::FilterType::Brightness, 1.1f);
   backdrop->setTint(theme.colors.materialTint);
-  backdrop->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-  backdrop->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-  backdrop->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-  backdrop->getYogaNode().setPosition(YGEdgeRight, 0.0f);
-  backdrop->getYogaNode().setPosition(YGEdgeBottom, 0.0f);
+  backdrop->setPositionType(layout::PositionType::Absolute);
+  backdrop->setPosition(layout::Edge::Left, 0.0f);
+  backdrop->setPosition(layout::Edge::Top, 0.0f);
+  backdrop->setPosition(layout::Edge::Right, 0.0f);
+  backdrop->setPosition(layout::Edge::Bottom, 0.0f);
 
   auto content = std::make_unique<Container>();
-  content->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-  content->getYogaNode().setPosition(YGEdgeLeft, 0.0f);
-  content->getYogaNode().setPosition(YGEdgeTop, 0.0f);
-  content->getYogaNode().setPosition(YGEdgeRight, 0.0f);
-  content->getYogaNode().setPosition(YGEdgeBottom, 0.0f);
-  content->getYogaNode().setDirection(YGFlexDirectionColumn);
-  content->getYogaNode().setJustifyContent(YGJustifyCenter);
-  content->getYogaNode().setAlignItems(YGAlignCenter);
-  content->getYogaNode().setGap(YGGutterAll, 16.0f);
+  content->setPositionType(layout::PositionType::Absolute);
+  content->setPosition(layout::Edge::Left, 0.0f);
+  content->setPosition(layout::Edge::Top, 0.0f);
+  content->setPosition(layout::Edge::Right, 0.0f);
+  content->setPosition(layout::Edge::Bottom, 0.0f);
+  content->setDirection(layout::Direction::Column);
+  content->setJustifyContent(layout::Justify::Center);
+  content->setAlignItems(layout::Align::Center);
+  content->setGap(layout::Gutter::All, 16.0f);
 
   // Main Card Container
   auto cardContainer = std::make_unique<Container>();
-  cardContainer->getYogaNode().setDirection(YGFlexDirectionColumn);
-  cardContainer->getYogaNode().setAlignItems(YGAlignCenter);
+  cardContainer->setDirection(layout::Direction::Column);
+  cardContainer->setAlignItems(layout::Align::Center);
   cardContainer->useThemeStyle(lcl::theme::WidgetStyleRole::PrimarySurface);
-  cardContainer->getYogaNode().setPadding(YGEdgeAll, metrics.cardPadding);
-  cardContainer->getYogaNode().setGap(YGGutterAll, 12.0f);
+  cardContainer->setPadding(layout::Edge::All, metrics.cardPadding);
+  cardContainer->setGap(layout::Gutter::All, 12.0f);
 
   // Title & Status Label
   auto titleText = std::make_unique<Text>("ScrollView Test Paneli");
@@ -92,15 +92,15 @@ int main() {
   auto popoverStatus = std::make_unique<Text>("Popover: kapalı");
   Text *popoverStatusPtr = popoverStatus.get();
   popoverStatus->setTextRole(lcl::theme::TextRole::Description);
-  popoverStatus->getYogaNode().setWidth(300.0f);
-  popoverStatus->getYogaNode().setHeight(18.0f);
+  popoverStatus->setWidth(300.0f);
+  popoverStatus->setHeight(18.0f);
 
   auto makePopoverContent = [&popover, popoverStatusPtr](
                                 const std::string &message) {
     auto handleSlot = std::make_shared<TransientHandle>(0);
     auto panelContent = std::make_unique<Container>();
-    panelContent->getYogaNode().setDirection(YGFlexDirectionColumn);
-    panelContent->getYogaNode().setGap(YGGutterAll, 10.0f);
+    panelContent->setDirection(layout::Direction::Column);
+    panelContent->setGap(layout::Gutter::All, 10.0f);
 
     auto messageText = std::make_unique<Text>(message);
     messageText->setTextRole(lcl::theme::TextRole::Body);
@@ -150,16 +150,16 @@ int main() {
 
   // ScrollView Viewport (340x280)
   auto scrollView = std::make_unique<ScrollView>();
-  scrollView->getYogaNode().setWidth(340.0f);
-  scrollView->getYogaNode().setHeight(280.0f);
+  scrollView->setWidth(340.0f);
+  scrollView->setHeight(280.0f);
 
   // Scrollable Content Container
   auto scrollContent = std::make_unique<Container>();
-  scrollContent->getYogaNode().setDirection(YGFlexDirectionColumn);
-  scrollContent->getYogaNode().setGap(YGGutterAll, 8.0f);
+  scrollContent->setDirection(layout::Direction::Column);
+  scrollContent->setGap(layout::Gutter::All, 8.0f);
   scrollContent->useThemeStyle(
       lcl::theme::WidgetStyleRole::GroupedSurface);
-  scrollContent->getYogaNode().setPadding(YGEdgeAll, metrics.groupPadding);
+  scrollContent->setPadding(layout::Edge::All, metrics.groupPadding);
 
   // TextField Widget Lab section
   auto textFieldTitle = std::make_unique<Text>("TextField");
@@ -169,8 +169,8 @@ int main() {
       std::make_unique<Text>("Son değişiklik: Henüz yok");
   Text *textFieldStatusPtr = textFieldStatus.get();
   textFieldStatus->setTextRole(lcl::theme::TextRole::Description);
-  textFieldStatus->getYogaNode().setWidth(300.0f);
-  textFieldStatus->getYogaNode().setHeight(18.0f);
+  textFieldStatus->setWidth(300.0f);
+  textFieldStatus->setHeight(18.0f);
   textFieldStatus->setClipsToBounds(true);
 
   const auto makeTextField = [textFieldStatusPtr](
@@ -212,8 +212,8 @@ int main() {
   auto buttonStyleRow = std::make_unique<Container>();
   buttonStyleRow->setWidth(300.0f);
   buttonStyleRow->setHeight(metrics.largeControlHeight);
-  buttonStyleRow->getYogaNode().setDirection(YGFlexDirectionRow);
-  buttonStyleRow->getYogaNode().setGap(YGGutterAll, 10.0f);
+  buttonStyleRow->setDirection(layout::Direction::Row);
+  buttonStyleRow->setGap(layout::Gutter::All, 10.0f);
 
   auto defaultButton = std::make_unique<Button>("Default");
   defaultButton->setWidth(140.0f);
@@ -243,9 +243,9 @@ int main() {
     auto row = std::make_unique<Container>();
     row->setWidth(300.0f);
     row->setHeight(metrics.largeControlHeight);
-    row->getYogaNode().setDirection(YGFlexDirectionRow);
-    row->getYogaNode().setAlignItems(YGAlignCenter);
-    row->getYogaNode().setJustifyContent(YGJustifySpaceBetween);
+    row->setDirection(layout::Direction::Row);
+    row->setAlignItems(layout::Align::Center);
+    row->setJustifyContent(layout::Justify::SpaceBetween);
 
     auto rowLabel = std::make_unique<Text>(label);
     rowLabel->setTextRole(enabled ? lcl::theme::TextRole::Body
@@ -347,8 +347,8 @@ int main() {
   auto progressRow = std::make_unique<Container>();
   progressRow->setWidth(300.0f);
   progressRow->setHeight(32.0f);
-  progressRow->getYogaNode().setDirection(YGFlexDirectionRow);
-  progressRow->getYogaNode().setGap(YGGutterAll, 16.0f);
+  progressRow->setDirection(layout::Direction::Row);
+  progressRow->setGap(layout::Gutter::All, 16.0f);
   auto spinner = std::make_unique<ProgressView>();
   spinner->setProgressViewStyle(ProgressViewStyle::Circular);
   auto circularProgress = std::make_unique<ProgressView>(0.72f);
@@ -367,12 +367,12 @@ int main() {
   const auto makeTabContent = [&metrics](const std::string& title,
                                          const std::string& detail) {
     auto panel = std::make_unique<Container>();
-    panel->getYogaNode().setDirection(YGFlexDirectionColumn);
-    panel->getYogaNode().setJustifyContent(YGJustifyCenter);
-    panel->getYogaNode().setAlignItems(YGAlignCenter);
-    panel->setGap(YGGutterAll, 6.0f);
+    panel->setDirection(layout::Direction::Column);
+    panel->setJustifyContent(layout::Justify::Center);
+    panel->setAlignItems(layout::Align::Center);
+    panel->setGap(layout::Gutter::All, 6.0f);
     panel->useThemeStyle(lcl::theme::WidgetStyleRole::SecondarySurface);
-    panel->setPadding(YGEdgeAll, metrics.groupPadding);
+    panel->setPadding(layout::Edge::All, metrics.groupPadding);
     auto heading = std::make_unique<Text>(title);
     heading->setTextRole(lcl::theme::TextRole::Body);
     auto body = std::make_unique<Text>(detail);
@@ -425,11 +425,11 @@ int main() {
 
   // Normal form traversal area. FocusScope is reserved for transient traps.
   auto focusGroup = std::make_unique<Container>();
-  focusGroup->getYogaNode().setDirection(YGFlexDirectionColumn);
-  focusGroup->getYogaNode().setGap(YGGutterAll, 8.0f);
+  focusGroup->setDirection(layout::Direction::Column);
+  focusGroup->setGap(layout::Gutter::All, 8.0f);
   focusGroup->useThemeStyle(
       lcl::theme::WidgetStyleRole::SecondarySurface);
-  focusGroup->setPadding(YGEdgeAll, metrics.groupPadding);
+  focusGroup->setPadding(layout::Edge::All, metrics.groupPadding);
 
   auto focusTitle = std::make_unique<Text>("Focus Traversal");
   focusTitle->setTextRole(lcl::theme::TextRole::Body);
@@ -489,9 +489,9 @@ int main() {
   Button *edgePopoverButtonPtr = edgePopoverButton.get();
   edgePopoverButton->useThemeStyle(
       lcl::theme::WidgetStyleRole::QuietButton);
-  edgePopoverButton->getYogaNode().setPositionType(YGPositionTypeAbsolute);
-  edgePopoverButton->setPosition(YGEdgeLeft, 670.0f);
-  edgePopoverButton->setPosition(YGEdgeTop, 530.0f);
+  edgePopoverButton->setPositionType(layout::PositionType::Absolute);
+  edgePopoverButton->setPosition(layout::Edge::Left, 670.0f);
+  edgePopoverButton->setPosition(layout::Edge::Top, 530.0f);
   edgePopoverButton->setWidth(120.0f);
   edgePopoverButton->setHeight(metrics.regularControlHeight);
   edgePopoverButton->setOnClick(

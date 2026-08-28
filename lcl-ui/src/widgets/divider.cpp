@@ -4,10 +4,9 @@
 
 namespace lcl::ui {
 
-Divider::Divider() {
-    m_yogaNode.setMeasureFunc([](float, YGMeasureMode, float, YGMeasureMode) {
-        return YGSize{1.0f, 1.0f};
-    });
+layout::Size Divider::measure(const layout::Constraints& constraints) {
+    (void)constraints;
+    return {1.0f, 1.0f};
 }
 
 void Divider::draw(graphics::Canvas& canvas,
