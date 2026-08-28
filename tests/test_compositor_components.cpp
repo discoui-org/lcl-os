@@ -12,6 +12,7 @@
 
 #include "apps/mobile_shell/gesture_indicator.hpp"
 #include "core/compositor/frame_scheduler.hpp"
+#include "core/compositor/compositor_renderer.hpp"
 #include "core/compositor/double_inset_border.hpp"
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/input_router.hpp"
@@ -29,6 +30,12 @@
 #include "render/raster_destination.hpp"
 
 namespace lcl::core {
+
+TEST(CompositorRendererTest, MotionNeverDefersAnUncachedFirstDisplayList) {
+    EXPECT_FALSE(shouldDeferDisplayListRasterUpdate(true, false));
+    EXPECT_TRUE(shouldDeferDisplayListRasterUpdate(true, true));
+    EXPECT_FALSE(shouldDeferDisplayListRasterUpdate(false, true));
+}
 
 TEST(MobileLaunchBackdropTest, UsesScaleAndBrightnessWithoutEffectOpacity) {
     const auto start = resolveMobileLaunchBackdrop(0.0f);
@@ -135,6 +142,29 @@ TEST(SurfaceRegistryTest, AtomicConfigureWaitsWithoutDuplicatingBuffers) {
     EXPECT_EQ(frame.presentationSerial, 8u);
     EXPECT_EQ(parent.previousPixels, nullptr);
     EXPECT_EQ(frame.previousPixels, nullptr);
+}
+
+TEST(SurfaceRegistryTest, AtomicConfigureWithoutDeadlineNeverOpensTornGroup) {
+    SurfaceRegistry registry;
+    const auto parentKey = SurfaceRegistry::makeKey(12, 72, 1);
+    const auto frameKey = SurfaceRegistry::makeKey(13, 73, 2);
+    auto& parent = registry[parentKey];
+    parent.windowId = 10;
+    parent.pendingConfigureSerial = 2;
+    parent.acceptedConfigureSerial = 1;
+    parent.configuredGeometryGeneration = 23;
+    auto& frame = registry[frameKey];
+    frame.windowId = 10;
+    frame.pendingConfigureSerial = 3;
+    frame.acceptedConfigureSerial = 2;
+    frame.configuredGeometryGeneration = 23;
+
+    ASSERT_TRUE(registry.beginAtomicConfigure(
+        10, 23, {parentKey, frameKey}, {}));
+    EXPECT_TRUE(registry.hasIncompleteAtomicConfigure(
+        std::chrono::steady_clock::now() + std::chrono::hours(24)));
+    EXPECT_EQ(parent.atomicConfigureGeneration, 23u);
+    EXPECT_EQ(frame.atomicConfigureGeneration, 23u);
 }
 
 TEST(SurfaceRegistryTest, ImageBudgetPruningProtectsRetainedDisplayListPixels) {
@@ -1065,6 +1095,11 @@ TEST(InputRouterTest, AttachedFrameFollowsPendingParentResizeGeometry) {
     parent.acceptedConfigureSerial = parent.pendingConfigureSerial;
     SurfaceRegistry::queuePresentation(
         parent, parent.acceptedConfigureSerial);
+    // The frame repaints its released maximize button at the old geometry
+    // after the atomic epoch began. Phase two must discard this superseded
+    // presentation credit or the frame cannot render its new configure.
+    SurfaceRegistry::queuePresentation(
+        frame, frame.acceptedConfigureSerial);
     EXPECT_TRUE(registry.hasIncompleteAtomicConfigure(
         std::chrono::steady_clock::now()));
     router.syncWindowState();
@@ -1082,6 +1117,15 @@ TEST(InputRouterTest, AttachedFrameFollowsPendingParentResizeGeometry) {
               protocol::LCLConfigureResizeReason::Interactive);
     EXPECT_EQ(parent.configuredGeometryGeneration,
               frame.configuredGeometryGeneration);
+    payload.clear();
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        frameSockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::FrameDiscarded);
+    const auto* discarded = reinterpret_cast<const
+        protocol::LCLMsgFrameDiscarded*>(payload.data());
+    EXPECT_EQ(discarded->surfaceId, 1000u);
+    EXPECT_EQ(discarded->configureSerial, 1u);
+    EXPECT_EQ(frame.presentationSerial, 0u);
 
     // The barrier opens only after the attachment commits the parent's exact
     // snapped geometry; both presentation credits are then completed together.

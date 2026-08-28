@@ -723,6 +723,8 @@ bool RasterRenderer::initialize(uint32_t width, uint32_t height,
         ? "[LCL Raster] Skia/Ganesh DisplayList replay active.\n"
         : "[LCL Raster] Skia CPU DisplayList replay active.\n");
 
+    ++m_resourceGeneration;
+    if (m_resourceGeneration == 0) ++m_resourceGeneration;
     m_initialized = true;
     return true;
 }
@@ -951,6 +953,99 @@ void RasterRenderer::endCachedLayerTarget() {
     }
 #endif
     applyScissorState();
+}
+
+bool RasterRenderer::copyFrameRegionToCachedLayer(
+        uint32_t framebuffer, uint32_t texture,
+        uint32_t* softwarePixels, uint32_t pixelWidth, uint32_t pixelHeight,
+        const RasterRect& logicalBounds) {
+    if (!m_initialized || pixelWidth == 0 || pixelHeight == 0 ||
+        logicalBounds.width <= 0.0f || logicalBounds.height <= 0.0f) {
+        return false;
+    }
+    const RasterRect source = scaleRect(logicalBounds);
+    const int sourceX = std::clamp(
+        static_cast<int>(std::lround(source.x)), 0,
+        static_cast<int>(m_width));
+    const int sourceY = std::clamp(
+        static_cast<int>(std::lround(source.y)), 0,
+        static_cast<int>(m_height));
+    const int sourceRight = std::clamp(
+        static_cast<int>(std::lround(source.x + source.width)), sourceX,
+        static_cast<int>(m_width));
+    const int sourceBottom = std::clamp(
+        static_cast<int>(std::lround(source.y + source.height)), sourceY,
+        static_cast<int>(m_height));
+    const int sourceWidth = sourceRight - sourceX;
+    const int sourceHeight = sourceBottom - sourceY;
+    if (sourceWidth <= 0 || sourceHeight <= 0) return false;
+
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == RasterBackend::OpenGL_EGL) {
+        if (!m_eglBackend || framebuffer == 0 || texture == 0 ||
+            activeSceneFBO() == 0 || activeSceneTexture() == 0) return false;
+        m_eglBackend->makeCurrent();
+        const uint32_t sourceTexture = activeSceneTexture();
+        const uint32_t sourceCapacityWidth = std::max(
+            1u, m_glExternalFrameTexture != 0
+                ? m_glExternalBackingWidth
+                : m_glSceneCapacityWidth);
+        const uint32_t sourceCapacityHeight = std::max(
+            1u, m_glExternalFrameTexture != 0
+                ? m_glExternalBackingHeight
+                : m_glSceneCapacityHeight);
+        const float uMin = static_cast<float>(sourceX) /
+            static_cast<float>(sourceCapacityWidth);
+        const float uMax = static_cast<float>(sourceRight) /
+            static_cast<float>(sourceCapacityWidth);
+        const float vMin = static_cast<float>(m_height - sourceBottom) /
+            static_cast<float>(sourceCapacityHeight);
+        const float vMax = static_cast<float>(m_height - sourceY) /
+            static_cast<float>(sourceCapacityHeight);
+
+        glDisable(GL_SCISSOR_TEST);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glViewport(0, 0, pixelWidth, pixelHeight);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        const uint32_t sceneWidth = m_width;
+        const uint32_t sceneHeight = m_height;
+        m_width = pixelWidth;
+        m_height = pixelHeight;
+        drawTextureQuadRegion(
+            sourceTexture, 0.0f, 0.0f,
+            static_cast<float>(pixelWidth),
+            static_cast<float>(pixelHeight),
+            1.0f, uMin, vMin, uMax, vMax);
+        m_width = sceneWidth;
+        m_height = sceneHeight;
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+        glViewport(0, 0, m_width, m_height);
+        applyScissorState();
+        return true;
+    }
+#else
+    (void)framebuffer;
+    (void)texture;
+#endif
+
+    const uint32_t* sourcePixels = getRasterBuffer();
+    if (!sourcePixels || !softwarePixels) return false;
+    for (uint32_t y = 0; y < pixelHeight; ++y) {
+        const int sampleY = sourceY + std::min(
+            sourceHeight - 1,
+            static_cast<int>((static_cast<uint64_t>(y) * sourceHeight) /
+                             pixelHeight));
+        for (uint32_t x = 0; x < pixelWidth; ++x) {
+            const int sampleX = sourceX + std::min(
+                sourceWidth - 1,
+                static_cast<int>((static_cast<uint64_t>(x) * sourceWidth) /
+                                 pixelWidth));
+            softwarePixels[static_cast<size_t>(y) * pixelWidth + x] =
+                sourcePixels[static_cast<size_t>(sampleY) * m_width + sampleX];
+        }
+    }
+    return true;
 }
 
 void RasterRenderer::drawCachedLayerTexture(uint32_t texture,
@@ -1374,6 +1469,13 @@ int RasterRenderer::scaleLength(int value) const {
 #ifndef LCL_SOFTWARE_ONLY
 void RasterRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float w, float h,
                                    float opacity, float uMax, float vMax) {
+    drawTextureQuadRegion(
+        textureId, x, y, w, h, opacity, 0.0f, 0.0f, uMax, vMax);
+}
+
+void RasterRenderer::drawTextureQuadRegion(
+        uint32_t textureId, float x, float y, float w, float h,
+        float opacity, float uMin, float vMin, float uMax, float vMax) {
     if (textureId == 0 || m_glProgram == 0) return;
 
     float x1 = (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
@@ -1382,10 +1484,10 @@ void RasterRenderer::drawTextureQuad(uint32_t textureId, float x, float y, float
     float y2 = 1.0f - ((y + h) / static_cast<float>(m_height)) * 2.0f;
 
     float quad[16] = {
-        x1, y1,  0.0f, vMax,
-        x1, y2,  0.0f, 0.0f,
+        x1, y1,  uMin, vMax,
+        x1, y2,  uMin, vMin,
         x2, y1,  uMax, vMax,
-        x2, y2,  uMax, 0.0f,
+        x2, y2,  uMax, vMin,
     };
 
     glUseProgram(m_glProgram);

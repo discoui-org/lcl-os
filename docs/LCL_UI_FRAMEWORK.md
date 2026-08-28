@@ -21,20 +21,38 @@
 
 ## 1. Architecture Overview
 
-`lcl-ui` applications execute in user space as standalone processes and communicate with the `lcl-core` Compositor via protocol-v15 Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by default), DMA-BUF, and retained shared-memory (`memfd`) fallback.
+`lcl-ui` applications execute in user space as standalone processes. Their
+normative frame boundary is a ready immutable layer committed to `lcl-core`
+through Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by
+default), DMA-BUF, or retained shared-memory (`memfd`) fallback.
 
 ```text
 +-----------------------------------------------------------+
 |                      lcl-ui Application                   |
 | (WindowApp -> Widget Tree -> Yoga -> logical DisplayList) |
 +-----------------------------+-----------------------------+
-                              | DMA-BUF or SHM + Unix Domain Socket
+                              | producer-side raster
+                              v
++-----------------------------------------------------------+
+|        Immutable ready layer + atomic surface commit       |
++-----------------------------+-----------------------------+
+                              | DMA-BUF/native buffer or SHM
                               v
 +-----------------------------------------------------------+
 |                      LCL Core Compositor                  |
-|        (Direct DRM/KMS scanout + LCL raster replay)       |
+| (Retain last layer -> transform/blend -> atomic present)  |
 +-----------------------------------------------------------+
 ```
+
+The compositor presentation loop never performs application layout, text
+rasterization, or DisplayList replay. If an application is late, its last
+committed layer remains visible and compositor-owned motion continues. A new
+surface becomes visible only after its first complete layer commit.
+
+The current protocol-v25 `CommitDisplayList` path is a migration bridge while
+producer-side `FrameTransport` is completed. It is not a public direction for
+new APIs and must not be used to move more application raster work into the
+compositor.
 
 ---
 
@@ -176,14 +194,20 @@ The backend-neutral 2D drawing contract available inside `Widget::draw(...)`:
 - `drawBuffer(...)`
 
 Geometry, text sizes, radii, strokes, clips, and effects use float logical
-units. `RasterCanvas` records them into one immutable `DisplayList`; only
-`endFrame()` asks `RasterRenderer` to replay that list with
-`RenderTarget.deviceScale`. Cached layers remain display-list commands, while
-text measurement and GPU/CPU drawing share the same Skia font engine.
+units. `RasterCanvas` records them into one immutable `DisplayList`; `endFrame()`
+closes the logical frame and hands it to the producer-side raster stage.
+`RasterRenderer` applies `RenderTarget.deviceScale` while producing the
+immutable layer that will be atomically committed. Cached application layers
+are raster resources, not command streams replayed by the compositor on every
+presentation frame. Text measurement and GPU/CPU drawing share the same Skia
+font engine.
 
 Applications select the standard adapter explicitly with
 `lcl::render::makeDisplayListCanvas()` and link `lcl-raster`. Widgets themselves
 depend only on `Canvas`; `lcl-ui` does not link EGL, DRM, GBM, or GLES.
+During the protocol-v25 migration this adapter may still serialize a DisplayList
+to the compositor; that behavior is implementation debt and not the stable
+`lcl-ui` frame contract.
 
 ---
 

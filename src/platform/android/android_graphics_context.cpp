@@ -379,24 +379,36 @@ void AndroidGraphicsContext::releaseTexture(lcl::platform::TextureHandle texture
     glDeleteTextures(1, &tex);
 }
 
-bool AndroidGraphicsContext::waitNativeFence(int fenceFd) {
-    if (fenceFd < 0 || !makeCurrent()) return false;
+NativeFenceWaitResult AndroidGraphicsContext::waitNativeFence(int fenceFd) {
+    if (fenceFd < 0 || !makeCurrent()) {
+        return NativeFenceWaitResult::Unsupported;
+    }
     auto createSync = reinterpret_cast<pfn_eglCreateSyncKHR>(
         eglGetProcAddress("eglCreateSyncKHR"));
     auto destroySync = reinterpret_cast<pfn_eglDestroySyncKHR>(
         eglGetProcAddress("eglDestroySyncKHR"));
     auto waitSync = reinterpret_cast<pfn_eglWaitSyncKHR>(
         eglGetProcAddress("eglWaitSyncKHR"));
-    if (!createSync || !destroySync || !waitSync) return false;
+    if (!createSync || !destroySync || !waitSync) {
+        return NativeFenceWaitResult::Unsupported;
+    }
     const EGLint attributes[] = {
         EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fenceFd, EGL_NONE};
     EGLSyncKHR sync = createSync(
         m_eglDisplay, EGL_SYNC_NATIVE_FENCE_ANDROID, attributes);
-    if (sync == EGL_NO_SYNC_KHR) return false;
+    if (sync == EGL_NO_SYNC_KHR) {
+        return NativeFenceWaitResult::Unsupported;
+    }
     // EGL owns fenceFd after a successful native-fence import.
-    const bool waited = waitSync(m_eglDisplay, sync, 0) == EGL_TRUE;
+    // eglWaitSyncKHR enqueues a server-side dependency; it must never become
+    // an application-controlled CPU wait on the compositor thread. Both
+    // result paths below report consumed ownership, so callers cannot close a
+    // potentially recycled descriptor when enqueueing fails.
+    const bool enqueued = waitSync(m_eglDisplay, sync, 0) == EGL_TRUE;
     destroySync(m_eglDisplay, sync);
-    return waited;
+    return enqueued
+        ? NativeFenceWaitResult::Enqueued
+        : NativeFenceWaitResult::ConsumedFailure;
 }
 
 int AndroidGraphicsContext::createNativeFence() {

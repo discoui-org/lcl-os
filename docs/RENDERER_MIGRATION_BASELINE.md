@@ -4,20 +4,29 @@ This document is the acceptance anchor for replacing LCL's custom raster
 execution with Skia. It does not introduce a second UI framework or a parallel
 production renderer.
 
+This file also records a historical cross-process DisplayList checkpoint. That
+checkpoint is useful for visual comparison, but compositor-side application
+DisplayList replay is no longer the target architecture. The normative target
+is defined by `ARCHITECTURE.md`: producer-side raster creates an immutable ready
+layer, atomic commit publishes it, and the compositor retains and presents it
+without running client raster work in its vSync-critical loop.
+
 ## Architectural boundary
 
 | Layer | Migration contract |
 | --- | --- |
 | `lcl-ui` | Keeps `WindowApp -> Widget -> Yoga -> Canvas`; no Skia types enter widget APIs. |
-| `lcl-graphics` | Keeps logical geometry and the bounded, versioned DisplayList/wire contract. |
-| Raster execution | May move from the custom GLES/software implementation to Skia behind the existing Canvas/replay boundary. |
+| `lcl-graphics` | Keeps logical geometry and the bounded DisplayList authoring contract inside the layer producer. Cross-process DisplayList wire is a migration bridge, not the final surface ABI. |
+| Raster execution | Moves behind the producer-side Canvas/FrameTransport boundary and outputs an immutable DMA-BUF/native-buffer layer or SHM fallback before commit. |
 | Text | Measurement and drawing must use one packaged-font implementation on Android and DRM/KMS targets. |
 | Effects | `EffectRegion` and `FilterOp`, including Glass, remain LCL protocol semantics; compositor execution may map them to Skia filters and trusted SkSL. |
-| Compositor | Retains scene, damage, pacing, window policy, backdrop capture, and composition ownership. |
+| Compositor | Retains scene, last-ready layers, presentation state, damage, pacing, window policy, backdrop capture, composition, and present ownership. It does not replay application DisplayLists on the presentation thread. |
 | Platform | Android Composer and DRM/KMS differ only below the shared compositor/raster contract. |
 
 The migration must not create application-side Skia APIs, a Flutter/DOM layer,
 an Android-only application binary, or a permanent legacy renderer switch.
+It also must not preserve `CommitDisplayList` as the final compositor frame
+contract or let a late client stall compositor-owned motion.
 
 ## Source anchor
 

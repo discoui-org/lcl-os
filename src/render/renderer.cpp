@@ -54,8 +54,10 @@ void Renderer::swapBuffers() {
     }
 }
 
-bool Renderer::waitNativeFence(int fenceFd) {
-    return m_graphicsContext && m_graphicsContext->waitNativeFence(fenceFd);
+platform::NativeFenceWaitResult Renderer::waitNativeFence(int fenceFd) {
+    return m_graphicsContext
+        ? m_graphicsContext->waitNativeFence(fenceFd)
+        : platform::NativeFenceWaitResult::Unsupported;
 }
 
 int Renderer::createNativeFence() {

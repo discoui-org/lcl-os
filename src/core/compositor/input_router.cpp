@@ -367,6 +367,8 @@ void InputRouter::sendPendingConfigures() {
                                               window.isResizing())
                         ? protocol::LCLConfigureResizeReason::Interactive
                         : protocol::LCLConfigureResizeReason::WindowStateTransition;
+                    const uint64_t supersededPresentationSerial =
+                        entry.presentationSerial;
                     if (protocol::sendMsgWithFd(
                             entry.clientFd, header, &configure)) {
                         entry.pendingConfigureSerial = configure.configureSerial;
@@ -378,6 +380,33 @@ void InputRouter::sendPendingConfigures() {
                         entry.configuredHeight = height;
                         entry.lastConfigureSent = now;
                         entry.forceConfigure = false;
+
+                        // A titlebar can commit its pointer-up repaint after
+                        // the parent started this epoch but before phase two
+                        // configured the attachment. That old-size frame is
+                        // intentionally absent from the retained atomic group;
+                        // return its client frame credit as discarded so the
+                        // attachment can render this new configure. Holding
+                        // the credit here deadlocks maximize/restore and leaves
+                        // the last presented control visually pressed.
+                        if (supersededPresentationSerial != 0 &&
+                            supersededPresentationSerial !=
+                                configure.configureSerial) {
+                            protocol::LCLHeader discardHeader{};
+                            discardHeader.opcode =
+                                protocol::LCLOpcode::FrameDiscarded;
+                            discardHeader.payloadSize = sizeof(
+                                protocol::LCLMsgFrameDiscarded);
+                            protocol::LCLMsgFrameDiscarded discard{};
+                            discard.surfaceId = static_cast<uint32_t>(
+                                attachmentKey & 0xFFFFFFFFu);
+                            discard.configureSerial =
+                                supersededPresentationSerial;
+                            if (protocol::sendMsgWithFd(
+                                    entry.clientFd, discardHeader, &discard)) {
+                                SurfaceRegistry::completePresentation(entry);
+                            }
+                        }
                     }
                 }
             }
@@ -570,11 +599,12 @@ void InputRouter::sendPendingConfigures() {
             participants.push_back(parentSurface->first);
             participants.insert(participants.end(), atomicAttachments.begin(),
                                 atomicAttachments.end());
-            constexpr auto kAtomicConfigureTimeout =
-                std::chrono::milliseconds(250);
+            // There is no time-based escape into a torn WindowGroup. A slow
+            // participant leaves only this group on its retained layer; erase
+            // or disconnect cancels the epoch through SurfaceRegistry.
             m_surfaces.beginAtomicConfigure(
                 window.id, window.geometryGeneration, participants,
-                now + kAtomicConfigureTimeout);
+                {});
         }
     }
 }

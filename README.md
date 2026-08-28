@@ -13,7 +13,7 @@ lcl-os/
 ├── iso_root/                 # Limine bootloader configuration & boot tree
 ├── src/                      # Core OS Engine & Compositor
 │   ├── core/                 # DRM/KMS, EGL, Evdev Input, Hotplug, IPC, Session
-│   ├── render/               # Skia GPU/CPU replay, text metrics, WindowManager
+│   ├── render/               # Ready-layer production, presentation, WindowManager
 │   └── tools/                # Core System Daemons & Binaries (lcl-core, lcl-terminal, lcl-open)
 ├── lcl-ui/                   # Decoupled UI Application Framework (Yoga Flexbox, Widget Tree)
 ├── apps/                     # User-Space Desktop Applications (Terminal.app, UIDemo.app, ShaderDemo.app)
@@ -118,7 +118,7 @@ When LCL OS boots, launch applications from the built-in terminal or using the `
 
 1. **No X11 / No Wayland:** Direct EGL/DRM/KMS scanout on bare metal; native Composer3 AIDL or Composer 2.2–2.4 HIDL on mobile substrates.
 2. **Platform-Independent Application Binaries (Same-Binary Invariant):** For the same CPU architecture, LCL application executables (`Terminal.app`, `lcl-desktop-shell`, `lcl-sessiond`, etc.) are 100% byte-for-byte identical across Linux DRM/KMS and Android AVD targets.
-3. **Decoupled Window Manager & Compositor:** Window Manager owns spatial coordinates and geometry state; Compositor acts as a pure presentation engine.
+3. **Retained Presentation:** Clients atomically commit ready immutable layers; Window Manager owns spatial geometry, while the compositor retains the last ready layer and animates/composes it independently of application rendering.
 4. **Secure Unix Domain Socket IPC:** Robust little-endian protocol over `SOCK_SEQPACKET` with `0600` permissions and kernel peer credential verification (`SO_PEERCRED`).
 
 ---

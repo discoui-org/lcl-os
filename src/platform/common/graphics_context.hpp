@@ -5,6 +5,12 @@
 
 namespace lcl::platform {
 
+enum class NativeFenceWaitResult {
+    Unsupported,
+    Enqueued,
+    ConsumedFailure,
+};
+
 using TextureHandle = uint32_t;
 constexpr TextureHandle kInvalidTextureHandle = 0;
 
@@ -46,10 +52,14 @@ public:
     virtual TextureHandle importTexture(const INativeBuffer& buffer) = 0;
     virtual void releaseTexture(TextureHandle texture) = 0;
 
-    // Optional explicit-sync hooks for native buffers. A successful wait
-    // consumes the supplied sync-file fd. A returned fence fd is owned by the
-    // caller. Backends without explicit sync retain their existing contract.
-    virtual bool waitNativeFence(int) { return false; }
+    // Optional explicit-sync hooks for native buffers. This must enqueue a
+    // server-side dependency rather than block the compositor thread.
+    // Enqueued and ConsumedFailure consume the supplied sync-file fd; a
+    // returned fence fd is owned by the caller. Backends without explicit
+    // sync return Unsupported immediately.
+    virtual NativeFenceWaitResult waitNativeFence(int) {
+        return NativeFenceWaitResult::Unsupported;
+    }
     virtual int createNativeFence() { return -1; }
 
     // IPC DMA-BUF descriptor convenience import

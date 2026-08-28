@@ -18,7 +18,7 @@ The LCL architecture consists of 5 main decoupled layers:
 +-----------------------------------------------------------------------+
 |  Application & IPC Layer (lcl-ui clients, compositor AF_UNIX IPC)    |
 +-----------------------------------------------------------------------+
-|  Graphics & Window Manager (`lcl-graphics`, Skia GPU/CPU replay)           |
+|  Layer Production, Window Manager & Presentation Compositor             |
 +-----------------------------------------------------------------------+
 |  Linux Kernel & Hardware Layer (DRM/KMS, virtio_gpu, evdev, io_uring) |
 +-----------------------------------------------------------------------+
@@ -42,9 +42,11 @@ The LCL architecture consists of 5 main decoupled layers:
   coordinates, paths, paints, clips, layers, text, images, and cached-layer
   references. No device-pixel conversion occurs while the list is recorded.
 * **Raster execution (`lcl-raster`):** `RasterCanvas` records one frame and
-  submits it once at `endFrame()`. One Skia replay engine targets either a
+  closes it once at `endFrame()`. A producer-owned raster stage turns that
+  logical frame into an immutable presentable layer using either a
   Ganesh/OpenGL surface or a CPU raster surface. `RenderTarget.deviceScale` is
-  applied only at this raster boundary.
+  applied only at this raster boundary. Application DisplayList replay must not
+  run in the compositor's vSync-critical presentation loop.
 * **Font & Text Engine:** Skia owns packaged typeface loading, glyph advances,
   ascent/descent/line-height metrics, UTF-8 drawing, and GPU/CPU rasterization.
   Layout and drawing use the same prepared `SkFont`; no second font rasterizer
@@ -75,6 +77,36 @@ The LCL architecture consists of 5 main decoupled layers:
 * **Location:** `src/fs/`
 * **Architecture:** Non-blocking asynchronous I/O over Linux Kernel VFS using `io_uring` and POSIX async primitives to prevent main rendering thread stutters.
 
+### V. Retained Presentation Mission (Normative North Star)
+
+LCL follows a Quartz/Core Animation-style retained presentation boundary. This
+is a platform-neutral architectural requirement, not a desktop or mobile
+optimization:
+
+1. An application or trusted shell client owns widget layout, DisplayList
+   recording, and production of an immutable raster layer. It publishes only a
+   complete layer state through an atomic surface commit.
+2. The compositor owns a retained presentation tree containing the last
+   accepted layer, geometry, transform, opacity, clipping, z-order, effects,
+   and presentation timing. Model changes and in-flight presentation values
+   remain distinct.
+3. Window open/close, move, resize, minimize, restore, overview, and launch
+   animations transform or blend already-ready layers. They never wait for
+   application layout, font work, DisplayList decoding, or raster replay.
+4. If a client misses a frame deadline, the compositor continues presenting
+   its last complete layer. A brand-new toplevel with no presentable layer is
+   not mapped. A shell-owned launch icon/proxy may animate independently, but it
+   must not expose an empty application window.
+5. DRM/KMS, Android Composer, and future UEFI substrates consume the same
+   committed-layer transaction. Platform differences begin below native-buffer
+   import, synchronization, and scanout/present.
+
+Protocol-v25 `CommitDisplayList` and compositor-side client DisplayList replay
+are a migration bridge in the current implementation, not the destination
+contract. New work must not deepen that dependency. The migration ends with a
+producer-side `FrameTransport`/layer-production boundary and a compositor that
+only imports, retains, transforms, composites, and presents ready layers.
+
 ---
 
 ## 3. Communication & Event Flow Architecture
@@ -101,7 +133,12 @@ The LCL architecture consists of 5 main decoupled layers:
             |
             v
 +-----------+-----------+
-|  5. Renderer Engine   | (Skia replay & DRM/KMS buffer swap)
+|  5. Layer Producer    | (Skia replay -> immutable ready layer commit)
++-----------+-----------+
+            |
+            v
++-----------+-----------+
+|  6. Compositor        | (retained transform/blend -> atomic present)
 +-----------------------+
 ```
 
@@ -140,7 +177,7 @@ lcl-os/
     │   ├── ipc/                    # Secure Unix Domain Socket IPC server
     │   ├── session/                # App registry, session RPC, lifecycle authority
     │   └── terminal/               # PTY master/slave manager
-    ├── render/                     # Skia GPU/CPU replay and presentation helpers
+    ├── render/                     # Layer-production raster and presentation primitives
     ├── fs/                         # io_uring & POSIX async file system
     └── tools/                      # Native CLI utilities (lcl-open, lcl-sessiond)
 ```
@@ -210,9 +247,9 @@ window-local input then uses the inverse group transform.
 
 `lcl-os` grafik ve pencere katmanında sorumlulukların ayrıştırılması (Separation of Concerns) kesin kurallarla tanımlanmıştır:
 
-1. **Client Applications (User Space / UI Kits):** Kendi iç düzenini (Flexbox, Grid, Monospace Cell) yönetir. WM'den gelen `ConfigureBounds` isteklerini mantıksal ölçülerle alır. Uygun fiziksel DMA-BUF backing'i oluşturur; desteklenmeyen ortamlarda aynı sözleşmenin `memfd`/SHM fallback'ini kullanır. `bufferScale` yalnız buffer tahsisi ve eşleme sınırındadır. İstemci WM veya Compositor'ün ekran koordinatları (\(X, Y\)) hakkında bilgi sahibi değildir.
+1. **Client Applications (User Space / UI Kits):** Kendi iç düzenini (Flexbox, Grid, Monospace Cell) ve mantıksal `DisplayList` kaydını yönetir. Producer-side raster aşaması bu kaydı compositor presentation döngüsünün dışında hazır, immutable bir layer'a dönüştürür. WM'den gelen `ConfigureBounds` isteklerini mantıksal ölçülerle alır; uygun fiziksel DMA-BUF backing'i oluşturur, desteklenmeyen ortamlarda aynı sözleşmenin `memfd`/SHM fallback'ini kullanır ve tam layer state'ini atomik commit eder. `bufferScale` yalnız buffer tahsisi ve eşleme sınırındadır. İstemci WM veya Compositor'ün ekran koordinatları (\(X, Y\)) hakkında bilgi sahibi değildir.
 2. **Window Manager (WM):** Pencere geometrisi, odak yönetimi, sürükleme/boyutlandırma durum makinelerinin (`WM Drag/Resize State`) tek sahibidir. Sürüklenen kenara (`ResizeEdge`) göre sabit kalacak anchor noktasını korur. Client'tan gelen gerçek tampon boyutunu (\(frameW, frameH\)) kabul eder, `commitSurfaceGeometry` metodu üzerinden offset hesabını yapar ve pencerenin nihai dünya koordinatlarını (\(X_{final}, Y_{final}\)) belirler. Uygulamaya özel kod barındıramaz.
-3. **Compositor (Presentation Engine):** Tamponların ekrana çizimi, z-index harmanlaması (blending), sistem chrome display list'lerinin replay'i ve vSync eşzamanlamasını üstlenir. Pencere durum makinelerinin sahibi değildir; WM'in onayladığı mantıksal geometriyi, ortak `WindowGroupTransform`u ve Client'ın sunduğu fiziksel tamponu vSync anında atomik olarak birleştirir. Compositor `lcl-ui`ya bağlanmaz; `lcl-graphics`, `lcl-raster` ve `lcl-window-chrome` sınırında kalır.
+3. **Compositor (Presentation Engine):** Hazır layer'ların import/retention işlemini, z-index harmanlamasını, presentation tree transform/effect'lerini ve vSync eşzamanlamasını üstlenir. Pencere durum makinelerinin veya client çiziminin sahibi değildir; WM'in onayladığı mantıksal geometriyi, ortak `WindowGroupTransform`u ve Client'ın atomik olarak commit ettiği son hazır layer'ı birleştirir. Compositor `lcl-ui`ya veya `lcl-window-chrome`a bağlanmaz ve presentation deadline içinde application DisplayList replay etmez.
 
 Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı değildir. `WindowApp` içindeki widget-olmayan `TransientController` yalnız stable handle, dismissal ve teardown policy'sini yönetir; local transient primitive gerektiğinde tek normal WindowRoot ağacında absolute Widget sibling olarak çizilir. `Popover v1` ise her zaman parent-bound `PopupSurface v1` kullanır.
 
@@ -232,9 +269,10 @@ Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı deği
   koordinatlı input ve configure mesajlarına dönüştürür.
 - `FrameScheduler`: frame bütçesi, cursor blink ve surface enter/close
   transition zamanlamasını yönetir.
-- `CompositorRenderer`: o frame için salt-okunur `SurfaceRegistry` snapshot'ını
-  çizer ve present eder. Snapshot entry'leri SHM pixel veya effect graph kopyası
-  içermez; yalnızca frame boyunca geçerli `const` görünüm taşır.
+- `CompositorRenderer`: o frame için salt-okunur retained presentation snapshot'ını
+  compose ve present eder. Her surface için son tam layer'ı kullanır; yeni
+  client içeriği hazır değilse eski layer'ı korur. Snapshot yalnızca frame
+  boyunca geçerli `const` görünüm taşır ve client raster işini tetiklemez.
 
 ---
 
@@ -249,8 +287,9 @@ Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı deği
    - Güvenilir presentation client'ları `AttachedSurfaceCreate` ile başka bir
      toplevel'in WindowGroup'una `Frame` veya `Adornment` yüzeyi ekler.
    - DesktopWM `lcl-window-chrome` ile titlebar'ın layout, hit-test, action,
-     motion ve `DisplayList` üretimini yapar; `RequestManagedWindowAction` ile
-     hedef toplevel'e drag/minimize/maximize/close isteği yollar.
+     motion ve `DisplayList` üretimini yapar; bunu hazır attached layer'a
+     rasterize edip atomik commit eder ve `RequestManagedWindowAction` ile hedef
+     toplevel'e drag/minimize/maximize/close isteği yollar.
    - MobileWM gesture indicator'ı `Adornment` olarak kaydeder. Compositor
      titlebar, button veya gesture-pill türlerini ve renk/theme tokenlarını
      içermez; yalnız buffer yaşam döngüsü, transform, opacity, z-order, input

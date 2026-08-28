@@ -113,6 +113,11 @@ public:
                                 float effectiveScale,
                                 std::optional<lcl::graphics::RectF> updateBounds);
     void endCachedLayerTarget();
+    /** Copy a completed logical scene region into a compositor-owned cache. */
+    bool copyFrameRegionToCachedLayer(
+        uint32_t framebuffer, uint32_t texture,
+        uint32_t* softwarePixels, uint32_t pixelWidth, uint32_t pixelHeight,
+        const RasterRect& logicalBounds);
     void drawCachedLayerTexture(uint32_t texture, const RasterRect& destination,
                                 float opacity = 1.0f);
 
@@ -305,6 +310,7 @@ public:
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
     RasterBackend getBackendType() const { return m_backendType; }
+    uint64_t getResourceGeneration() const { return m_resourceGeneration; }
     uint32_t* getRasterBuffer() { return m_targetPixels ? m_targetPixels : m_rasterPixels.data(); }
 
 private:
@@ -388,6 +394,7 @@ private:
     float m_contentOriginY{0.0f};
     bool m_initialized{false};
     bool m_retainsFrameBacking{false};
+    uint64_t m_resourceGeneration{0};
 
     uint32_t m_glTexture{0};
     uint32_t m_glProgram{0};
@@ -514,6 +521,16 @@ private:
     // Helper for rendering textured quads on GPU
     void drawTextureQuad(uint32_t textureId, float x, float y, float w, float h,
                          float opacity = 1.0f, float uMax = 1.0f, float vMax = 1.0f);
+    void drawTextureQuadRegion(uint32_t textureId,
+                               float x,
+                               float y,
+                               float w,
+                               float h,
+                               float opacity,
+                               float uMin,
+                               float vMin,
+                               float uMax,
+                               float vMax);
     void drawMaskedTextureQuad(uint32_t textureId, float x, float y, float w, float h,
                                float cornerRadius, float cornerRoundness, float opacity,
                                bool squareTopCorners = false,

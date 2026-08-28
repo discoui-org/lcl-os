@@ -11,11 +11,12 @@ Provides domain-specific expertise for building LCL Core Linux components includ
 ## Capabilities
 1. **DRM/KMS Pipeline:** Setting up mode-setting, dumb buffers, and EGL surfaces directly on `/dev/dri/card0` / `/dev/dri/renderD128`.
 2. **Android Substrate Pipeline (Stage 4C.3):** Managing Android platform composition server (`lcl-core-android`), AIDL Composer3 / HWComposer integration, and mounting the canonical rootfs (`/mnt/lcl`) with isolated devpts (`/mnt/lcl/dev/pts`) and `/Runtime` IPC bridges.
-3. **Graphics/Raster Boundary:** Keeping `lcl-graphics` display lists in logical units while `lcl-raster` replays them through GLES or software and applies `RenderTarget.deviceScale` only at the raster boundary.
+3. **Graphics/Raster Boundary:** Keeping `lcl-graphics` display lists in logical units while a producer-side `lcl-raster` stage replays them through GLES or software, applies `RenderTarget.deviceScale`, and publishes an immutable ready layer before atomic commit.
 4. **Event Dispatching:** Converting raw `evdev` struct inputs into high-level LCL UI Events (`LCL_EVENT_MOUSE_MOVE`, `LCL_EVENT_KEY_DOWN`).
 5. **JS Bindings:** Exposing C++ methods to JavaScript runtime safely without memory corruption.
 
 ## Usage Guidelines
 - When generating graphics code, keep widgets and chrome backend-neutral, record through `lcl::graphics::Canvas`, and let the raster backend own EGL/GLES details and device scaling.
+- Keep application DisplayList replay outside the compositor presentation loop. The compositor retains the last committed layer and animates presentation state independently; a brand-new surface remains unmapped until its first layer is ready. Treat protocol-v25 compositor-side `CommitDisplayList` replay as migration debt, not the target design.
 - When generating input code, account for non-blocking read calls on input event file descriptors.
 - Enforce the Same-Binary Invariant: platform differences terminate strictly below the LCL userspace ABI.

@@ -392,14 +392,18 @@ void Compositor::renderDiagnosticOverlay() {
 
 void Compositor::renderFrame() {
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
-    // Keep the already-scanned-out compositor frame untouched until every
-    // surface in a resized WindowGroup has committed the same geometry.
-    if (m_surfaces.hasIncompleteAtomicConfigure(
-            std::chrono::steady_clock::now())) {
-        return;
-    }
+    // Resolve ready/expired WindowGroup epochs without stalling the output.
+    // CompositorRenderer retains only an incomplete group's last complete
+    // layer; the rest of the scene and all shell transitions keep presenting.
+    (void)m_surfaces.hasIncompleteAtomicConfigure(
+        std::chrono::steady_clock::now());
 
     const bool hasActiveTransitions = m_frameScheduler.advanceTransitions(m_surfaces);
+    const bool hasCompositorOwnedMotion = std::any_of(
+        m_surfaces.begin(), m_surfaces.end(), [](const auto& pair) {
+            return pair.second.transitionPhase !=
+                SurfaceRegistry::SurfaceEntry::TransitionPhase::None;
+        });
     const auto handoffNow = std::chrono::steady_clock::now();
     constexpr auto kLaunchIconHandoffTimeout = std::chrono::milliseconds(750);
     for (auto& [surfaceKey, entry] : m_surfaces) {
@@ -453,7 +457,8 @@ void Compositor::renderFrame() {
         [this] { renderDiagnosticOverlay(); },
         !hasActiveTransitions && !m_showFpsOverlay,
         m_windowingPolicy &&
-            m_windowingPolicy->usesMobileWindowDecorations());
+            m_windowingPolicy->usesMobileWindowDecorations(),
+        hasCompositorOwnedMotion);
     m_lastComposeMs = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - composeStart).count();
 
@@ -486,6 +491,7 @@ void Compositor::renderFrame() {
             std::chrono::steady_clock::now().time_since_epoch()).count());
     for (auto& [surfaceKey, entry] : m_surfaces) {
         if (entry.clientFd < 0 || !entry.hasCommittedBuffer ||
+            entry.atomicConfigureGeneration != 0 ||
             !SurfaceRegistry::hasUnpresentedFrame(entry)) continue;
         protocol::LCLHeader header{};
         header.opcode = protocol::LCLOpcode::FramePresented;

@@ -6,9 +6,11 @@ change is explicitly approved before implementation.
 
 The numbered implementation records below are historical checkpoints and keep
 the protocol versions and test totals that were true at each checkpoint. The
-current wire contract is protocol v25; current rendering uses backend-neutral
-logical display lists, `WindowGroupTransform`, and raster-boundary device
-scaling. Do not read an older step's version label as a compatibility promise.
+current wire contract is protocol v25; current migration code still transports
+backend-neutral logical display lists in places. That transport is not the
+architectural destination: producer-side raster must commit a ready immutable
+layer, while the compositor retains and presents it independently. Do not read
+an older step's version label as a compatibility promise or future direction.
 
 ## Baseline anchor
 
@@ -33,8 +35,8 @@ completed on the normal development host before Step 2 begins.
 
 The following behavior is part of the baseline and must remain:
 
-- A client surface is not mapped as a window before its first valid SHM buffer
-  commit.
+- A client surface is not mapped as a window before its first complete,
+  presentable layer commit.
 - Unknown-surface buffer attachments are rejected and their received FDs are
   closed.
 - Replacing a `WindowApp` root schedules a real frame and an initial SHM attach
@@ -93,8 +95,9 @@ paths received equivalent revisioned-state coverage:
 
 - Client EOF and explicit close release the surface buffer/FD and remove its
   window after the closing transition.
-- No placeholder window or fallback terminal text is drawn before a real
-  client buffer exists.
+- No blank placeholder window or fallback terminal text is drawn before a real
+  client layer exists. A shell-owned launch icon/proxy may animate without
+  mapping an empty application surface.
 - CSD drag/minimize/maximize/restore/close requests continue to use compositor
   owned window actions.
 - Logical input and layout coordinates remain independent from physical SHM

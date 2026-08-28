@@ -19,12 +19,41 @@ void CompositorRenderer::render(render::Renderer& renderer,
                                  const SurfaceRegistry::Snapshot& surfaces,
                                  const std::function<void()>& beforePresent,
                                  bool allowIncrementalMove,
-                                 bool useMobilePresentation) const {
+                                 bool useMobilePresentation,
+                                 bool deferDisplayListRaster) const {
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     // The snapshot contains only const entry pointers, so protocol/input work
     // cannot mutate the surface state while this frame is being composed.
 
     auto* raster = renderer.getRasterRenderer();
+    std::unordered_set<uint32_t> liveWindowIds;
+    for (const auto& window : windowManager.getWindows()) {
+        liveWindowIds.insert(window.id);
+    }
+    std::unordered_set<uint32_t> retainedWindowIds;
+    for (const auto& surface : surfaces) {
+        const auto* entry = surface.entry;
+        if (entry && entry->isAttached() && !entry->pendingDestroy &&
+            (entry->attachedFollowParentWidth ||
+             entry->attachedFollowParentHeight)) {
+            retainedWindowIds.insert(entry->attachedWindowId);
+        }
+    }
+    for (auto cached = m_retainedWindowGroups.begin();
+         cached != m_retainedWindowGroups.end();) {
+        if (liveWindowIds.contains(cached->first) &&
+            retainedWindowIds.contains(cached->first)) {
+            ++cached;
+            continue;
+        }
+        if (cached->second.resourceGeneration ==
+            raster->getResourceGeneration()) {
+            raster->destroyCachedLayerTarget(
+                cached->second.framebuffer, cached->second.texture);
+        }
+        cached = m_retainedWindowGroups.erase(cached);
+    }
+
     std::unordered_set<uint64_t> liveDisplayCacheIds;
     for (const auto& surface : surfaces) {
         if (!surface.entry) continue;
@@ -43,6 +72,12 @@ void CompositorRenderer::render(render::Renderer& renderer,
         m_displayListRasterSerials.erase(oldCacheId);
     }
     m_liveDisplayCacheIds = std::move(liveDisplayCacheIds);
+
+    const bool hasPendingAtomicConfigure = std::any_of(
+        surfaces.begin(), surfaces.end(), [](const auto& surface) {
+            return surface.entry &&
+                surface.entry->atomicConfigureGeneration != 0;
+        });
 
     std::optional<graphics::RectF> incrementalDamage;
 #if defined(__ANDROID__)
@@ -67,6 +102,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
         });
 
     if (allowIncrementalMove && m_hasCompleteRetainedFrame &&
+        !hasPendingAtomicConfigure &&
         !hasNonLocalSceneEffect) {
         bool hasDirtyWindow = false;
         bool moveOnly = true;
@@ -145,6 +181,101 @@ void CompositorRenderer::render(render::Renderer& renderer,
     constexpr float kWindowCornerRadiusLogical = 20.0f;
 
     const float outputScale = raster->getDeviceScale();
+    const graphics::RectF outputBounds{
+        0.0f, 0.0f,
+        windowManager.getScreenWidth(),
+        windowManager.getScreenHeight(),
+    };
+    auto groupHasGeometryFollowingAttachment = [&](uint32_t windowId) {
+        return retainedWindowIds.contains(windowId);
+    };
+    auto groupHasPendingAtomicConfigure = [&](uint32_t windowId) {
+        return std::any_of(
+            surfaces.begin(), surfaces.end(), [windowId](const auto& surface) {
+                return surface.entry && surface.entry->windowId == windowId &&
+                    surface.entry->atomicConfigureGeneration != 0;
+            });
+    };
+    auto drawRetainedWindowGroup = [&](const RetainedWindowGroup& cached) {
+        if (!cached.valid || cached.bounds.isEmpty() ||
+            cached.resourceGeneration != raster->getResourceGeneration()) {
+            return false;
+        }
+        if (cached.texture != 0) {
+            raster->drawDmaBufTextureTransformed(
+                cached.bounds.x, cached.bounds.y,
+                static_cast<int>(cached.pixelWidth),
+                static_cast<int>(cached.pixelHeight),
+                static_cast<int>(cached.pixelWidth),
+                static_cast<int>(cached.pixelHeight),
+                cached.texture, 1.0f,
+                cached.cornerRadius, cached.cornerRoundness, false,
+                cached.bounds.width, cached.bounds.height);
+            return true;
+        }
+        if (cached.pixels.empty()) return false;
+        raster->drawBufferTransformed(
+            cached.bounds.x, cached.bounds.y,
+            static_cast<int>(cached.pixelWidth),
+            static_cast<int>(cached.pixelHeight),
+            cached.pixels.data(), static_cast<int>(cached.pixelWidth),
+            1.0f, cached.cornerRadius, cached.cornerRoundness, false,
+            cached.bounds.width, cached.bounds.height);
+        return true;
+    };
+    auto retainWindowGroup = [&](uint32_t windowId,
+                                 const graphics::RectF& visualBounds,
+                                 float cornerRadius,
+                                 float cornerRoundness) {
+        const auto clipped = visualBounds.intersection(outputBounds);
+        if (clipped.isEmpty()) return;
+
+        const uint32_t pixelWidth = std::max(
+            1u, static_cast<uint32_t>(std::ceil(clipped.width * outputScale)));
+        const uint32_t pixelHeight = std::max(
+            1u, static_cast<uint32_t>(std::ceil(clipped.height * outputScale)));
+        auto& cached = m_retainedWindowGroups[windowId];
+        const bool gpu =
+            raster->getBackendType() == render::RasterBackend::OpenGL_EGL;
+        if (cached.resourceGeneration != raster->getResourceGeneration()) {
+            // Numeric GL names from a destroyed context must never be deleted
+            // or sampled in its replacement context.
+            cached = {};
+            cached.resourceGeneration = raster->getResourceGeneration();
+        }
+        if (cached.pixelWidth != pixelWidth ||
+            cached.pixelHeight != pixelHeight ||
+            (gpu && (cached.framebuffer == 0 || cached.texture == 0)) ||
+            (!gpu && (cached.framebuffer != 0 || cached.texture != 0))) {
+            raster->destroyCachedLayerTarget(
+                cached.framebuffer, cached.texture);
+            cached.framebuffer = 0;
+            cached.texture = 0;
+            cached.pixels.clear();
+            cached.valid = false;
+            if (gpu && !raster->createCachedLayerTarget(
+                    pixelWidth, pixelHeight,
+                    cached.framebuffer, cached.texture)) {
+                return;
+            }
+        }
+        cached.pixelWidth = pixelWidth;
+        cached.pixelHeight = pixelHeight;
+        cached.bounds = clipped;
+        cached.cornerRadius = cornerRadius;
+        cached.cornerRoundness = cornerRoundness;
+        if (gpu) {
+            cached.pixels.clear();
+        } else {
+            cached.pixels.resize(
+                static_cast<size_t>(pixelWidth) * pixelHeight);
+        }
+        cached.valid = raster->copyFrameRegionToCachedLayer(
+            cached.framebuffer, cached.texture,
+            cached.pixels.empty() ? nullptr : cached.pixels.data(),
+            pixelWidth, pixelHeight,
+            {clipped.x, clipped.y, clipped.width, clipped.height});
+    };
     auto drawShmSurface = [&](SurfaceRegistry::Key cacheKey,
                               uint64_t contentSerial,
                               float dstX, float dstY,
@@ -222,9 +353,18 @@ void CompositorRenderer::render(render::Renderer& renderer,
             logicalWidth <= 0.0f || logicalHeight <= 0.0f) {
             return false;
         }
+        const bool hasCachedLayer = raster->hasCachedDisplayLayer(cacheId);
         if (const auto found = m_displayListRasterSerials.find(cacheId);
-            found != m_displayListRasterSerials.end() && found->second == serial &&
-            raster->hasCachedDisplayLayer(cacheId)) {
+            found != m_displayListRasterSerials.end() &&
+            found->second == serial && hasCachedLayer) {
+            return true;
+        }
+        // Client DisplayList replay can be arbitrarily expensive. Freeze an
+        // existing layer during compositor-owned motion, but never defer the
+        // first raster: without a cached fallback the window would animate as
+        // an empty shell on both desktop and mobile.
+        if (shouldDeferDisplayListRasterUpdate(
+                deferDisplayListRaster, hasCachedLayer)) {
             return true;
         }
         const float scale = std::clamp(surface.bufferScale, 0.5f, 4.0f);
@@ -494,6 +634,22 @@ void CompositorRenderer::render(render::Renderer& renderer,
                      matchingSurface->launchMorphWidth,
                      matchingSurface->launchMorphHeight})
                 : render::makeWindowGroupTransform(win, titleOffset, windowScale);
+
+        // Atomicity is local to this WindowGroup. Keep presenting the last
+        // complete composited group while its parent and geometry-following
+        // attachments commit the next epoch; unrelated windows and shell
+        // transitions continue to advance and present every frame.
+        const bool atomicConfigurePending =
+            groupHasPendingAtomicConfigure(win.id);
+        if (atomicConfigurePending) {
+            const auto cached = m_retainedWindowGroups.find(win.id);
+            if (cached != m_retainedWindowGroups.end() &&
+                drawRetainedWindowGroup(cached->second)) {
+                continue;
+            }
+        }
+
+        const graphics::RectF groupVisualBounds = group.globalBounds;
 
         // B. Apply effect-graph backdrop regions (new pipeline only)
         if (matchingSurface && matchingSurface->hasRenderableBuffer() &&
@@ -839,6 +995,21 @@ void CompositorRenderer::render(render::Renderer& renderer,
                         group.localToGlobal);
                 }
             }
+        }
+
+        if (!atomicConfigurePending &&
+            groupHasGeometryFollowingAttachment(win.id)) {
+            const float retainedCornerRadius =
+                matchingSurface && matchingSurface->launchMorphActive
+                    ? matchingSurface->launchMorphCornerRadius
+                    : group.mapLength(resolveWindowCornerRadiusLogical(win));
+            const float retainedCornerRoundness =
+                matchingSurface && matchingSurface->launchMorphActive
+                    ? matchingSurface->launchMorphCornerRoundness
+                    : resolveWindowCornerRoundness(win);
+            retainWindowGroup(
+                win.id, groupVisualBounds,
+                retainedCornerRadius, retainedCornerRoundness);
         }
     }
 

@@ -3939,6 +3939,26 @@ TEST(LclUiTest, RasterRendererClearRectReplacesOnlyRequestedRetainedPixels) {
     EXPECT_EQ(pixels[5 + 5 * 8], 0xFF123456u);
 }
 
+TEST(LclUiTest, RasterRendererCopiesACompositedRegionIntoOwnedPixels) {
+    std::vector<uint32_t> pixels{
+        0xFF000001u, 0xFF000002u, 0xFF000003u, 0xFF000004u,
+        0xFF000005u, 0xFF000006u, 0xFF000007u, 0xFF000008u,
+        0xFF000009u, 0xFF00000Au, 0xFF00000Bu, 0xFF00000Cu,
+        0xFF00000Du, 0xFF00000Eu, 0xFF00000Fu, 0xFF000010u,
+    };
+    std::vector<uint32_t> retained(4, 0u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(4, 4, nullptr, pixels.data()));
+
+    ASSERT_TRUE(renderer.copyFrameRegionToCachedLayer(
+        0, 0, retained.data(), 2, 2, {1.0f, 1.0f, 2.0f, 2.0f}));
+
+    EXPECT_EQ(retained[0], 0xFF000006u);
+    EXPECT_EQ(retained[1], 0xFF000007u);
+    EXPECT_EQ(retained[2], 0xFF00000Au);
+    EXPECT_EQ(retained[3], 0xFF00000Bu);
+}
+
 TEST(LclUiTest, RasterRendererRetainedModeDoesNotClearUnchangedFramePixels) {
     std::vector<uint32_t> pixels(4 * 4, 0xFFABCDEFu);
     lcl::render::RasterRenderer renderer;

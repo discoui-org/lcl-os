@@ -1583,21 +1583,6 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 requestAck.error(4, "AHB_V1 handle receive failed");
                 continue;
             }
-            if (msg.passedFd >= 0) {
-                const int acquireFenceFd = msg.passedFd;
-                if (!m_renderer.waitNativeFence(acquireFenceFd)) {
-                    pollfd descriptor{acquireFenceFd, POLLIN, 0};
-                    (void)poll(&descriptor, 1, 3000);
-                    close(acquireFenceFd);
-                }
-            }
-
-            AHardwareBuffer_Desc hardwareDesc{};
-            AHardwareBuffer_describe(hardwareBuffer, &hardwareDesc);
-            const uint64_t surfaceKey =
-                (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) |
-                bufferMessage->surfaceId;
-            auto surfaceIt = m_surfaces.find(surfaceKey);
             const auto releaseRejected = [&] {
                 lcl::protocol::LCLHeader releaseHeader{};
                 releaseHeader.opcode = lcl::protocol::LCLOpcode::ReleaseDmaBuf;
@@ -1609,6 +1594,39 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 lcl::protocol::sendMsgWithFd(
                     msg.clientFd, releaseHeader, &release);
             };
+            if (msg.passedFd >= 0) {
+                const int acquireFenceFd = msg.passedFd;
+                pollfd descriptor{acquireFenceFd, POLLIN, 0};
+                const int ready = poll(&descriptor, 1, 0);
+                if (ready > 0 && (descriptor.revents & POLLIN) != 0) {
+                    close(acquireFenceFd);
+                } else {
+                    const auto fenceResult =
+                        m_renderer.waitNativeFence(acquireFenceFd);
+                    if (fenceResult ==
+                        platform::NativeFenceWaitResult::Enqueued) {
+                        // EGL owns the descriptor and the GPU wait is queued.
+                    } else {
+                        // Never block the compositor on one producer. If this
+                        // backend cannot enqueue the unsignaled fence on the
+                        // GPU, drop this frame and retain the prior one.
+                        if (fenceResult == platform::NativeFenceWaitResult::
+                                Unsupported) {
+                            close(acquireFenceFd);
+                        }
+                        AHardwareBuffer_release(hardwareBuffer);
+                        releaseRejected();
+                        continue;
+                    }
+                }
+            }
+
+            AHardwareBuffer_Desc hardwareDesc{};
+            AHardwareBuffer_describe(hardwareBuffer, &hardwareDesc);
+            const uint64_t surfaceKey =
+                (static_cast<uint64_t>(msg.pid > 0 ? msg.pid : msg.clientFd) << 32) |
+                bufferMessage->surfaceId;
+            auto surfaceIt = m_surfaces.find(surfaceKey);
             if (surfaceIt == m_surfaces.end()) {
                 AHardwareBuffer_release(hardwareBuffer);
                 continue;
