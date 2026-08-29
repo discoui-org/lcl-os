@@ -53,6 +53,27 @@ struct DrawImageCommand {
     float cornerRoundness{2.0f};
     bool squareTopCorners{false};
 };
+enum class ExternalBufferSampleKind : uint8_t {
+    Unresolved = 0,
+    ArgbPixels = 1,
+    GlTexture = 2,
+};
+/**
+ * Stable external-node placeholder. Only nodeId and destination cross the
+ * DisplayList wire; rasterd resolves the current granted buffer immediately
+ * before replay and fills the runtime-only fields below.
+ */
+struct DrawExternalBufferCommand {
+    uint64_t nodeId{0};
+    RectF destination{};
+    uintptr_t resourceKey{0};
+    uint64_t bufferId{0};
+    uint64_t contentRevision{0};
+    int sourceWidth{0};
+    int sourceHeight{0};
+    int stridePixels{0};
+    ExternalBufferSampleKind sampleKind{ExternalBufferSampleKind::Unresolved};
+};
 
 using DisplayCommand = std::variant<SaveCommand, RestoreCommand, ConcatCommand,
                                     BeginLayerCommand, EndLayerCommand,
@@ -61,7 +82,8 @@ using DisplayCommand = std::variant<SaveCommand, RestoreCommand, ConcatCommand,
                                     BeginCachedLayerCommand, EndCachedLayerCommand,
                                     DrawCachedLayerCommand,
                                     DrawPathCommand, DrawTextCommand,
-                                    DrawImageCommand>;
+                                    DrawImageCommand,
+                                    DrawExternalBufferCommand>;
 
 class DisplayList {
 public:
@@ -104,6 +126,7 @@ public:
                    float cornerRadius, float cornerRoundness,
                    bool squareTopCorners, uint64_t resourceId = 0,
                    uint64_t contentRevision = 0, bool opaque = false);
+    void drawExternalBuffer(uint64_t nodeId, const RectF& destination);
     DisplayList build() const;
     void reset();
 

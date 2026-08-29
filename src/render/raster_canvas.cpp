@@ -405,6 +405,13 @@ void RasterCanvas::drawImageResource(
     }
 }
 
+void RasterCanvas::drawExternalBufferPlaceholder(
+        uint64_t nodeId,
+        const lcl::graphics::RectF& destination) {
+    if (nodeId == 0 || destination.isEmpty()) return;
+    m_displayListBuilder.drawExternalBuffer(nodeId, destination);
+}
+
 std::unique_ptr<lcl::graphics::Canvas> makeRasterCanvas() {
     return std::make_unique<RasterCanvas>();
 }

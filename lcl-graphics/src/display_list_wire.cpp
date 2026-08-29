@@ -26,6 +26,7 @@ enum class WireCommand : uint8_t {
     DrawPath,
     DrawText,
     DrawImage,
+    DrawExternalBuffer,
 };
 
 constexpr uint32_t kMaxWireCommands = 65536;
@@ -442,6 +443,19 @@ DisplayListEncodeResult encodeDisplayList(const DisplayList& displayList,
                 payload.f32(item.cornerRadius);
                 payload.f32(item.cornerRoundness);
                 payload.u8(item.squareTopCorners ? 1 : 0);
+            } else if constexpr (
+                    std::is_same_v<T, DrawExternalBufferCommand>) {
+                if (item.nodeId == 0 || item.destination.isEmpty() ||
+                    item.resourceKey != 0 || item.bufferId != 0 ||
+                    item.contentRevision != 0 || item.sourceWidth != 0 ||
+                    item.sourceHeight != 0 || item.stridePixels != 0 ||
+                    item.sampleKind != ExternalBufferSampleKind::Unresolved) {
+                    supported = false;
+                    return;
+                }
+                opcode = WireCommand::DrawExternalBuffer;
+                payload.u64(item.nodeId);
+                writeRect(payload, item.destination);
             }
         }, command);
 
@@ -499,7 +513,8 @@ DisplayListDecodeResult decodeDisplayList(std::span<const uint8_t> bytes,
         const auto payloadBytes = input.span(payloadSize);
         if (!input.ok() || reserved0 != 0 || reserved1 != 0 ||
             rawOpcode < static_cast<uint8_t>(WireCommand::Save) ||
-            rawOpcode > static_cast<uint8_t>(WireCommand::DrawImage)) {
+            rawOpcode > static_cast<uint8_t>(
+                WireCommand::DrawExternalBuffer)) {
             result.error = DisplayListWireError::InvalidData;
             return result;
         }
@@ -644,6 +659,14 @@ DisplayListDecodeResult decodeDisplayList(std::span<const uint8_t> bytes,
                     squareTopCorners != 0, resourceId, contentRevision,
                     opaque != 0);
             }
+            break;
+        }
+        case WireCommand::DrawExternalBuffer: {
+            const uint64_t nodeId = payload.u64();
+            RectF destination{};
+            valid = nodeId != 0 && readRect(payload, destination) &&
+                !destination.isEmpty();
+            if (valid) builder.drawExternalBuffer(nodeId, destination);
             break;
         }
         }

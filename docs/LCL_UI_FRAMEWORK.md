@@ -176,6 +176,16 @@ updates only intersecting tiles; offscreen patches are applied when their tile
 is first materialized. Complete-scene replacement explicitly republishes the
 cache source and releases obsolete tile namespaces transactionally.
 
+`ExternalBufferView` is the retained leaf for camera/video-style producer
+frames. `setFrame()` duplicates the supplied descriptors, while the caller
+keeps ownership of its originals. A producer must rotate storage identities
+and reuse a `bufferId` only after its release callback. Buffer changes update
+retained presentation state without rebuilding the stable DisplayList
+placeholder. DMA-BUF acquire/release fences remain private to lcl-ui and
+rasterd; no application buffer is sent directly to compositor. An
+`ExternalBufferView` inside `ScrollView` follows the tiled patch path so live
+content is not baked into a stale tile or transform cache.
+
 ### `lcl::ui::MeasuredWidget`
 
 Custom leaf widgets with intrinsic content size derive from `MeasuredWidget`
@@ -216,6 +226,12 @@ auto label = std::make_unique<Text>("Hello LCL OS");
 label->setFontSize(18.0f);
 label->setTextColor(0xFFFFFFFF);
 ```
+
+#### `lcl::ui::ExternalBufferView` ([`external_buffer.hpp`](../lcl-ui/include/lcl-ui/widgets/external_buffer.hpp))
+
+A retained leaf for rotating immutable SHM or DMA-BUF producer frames. The
+release callback receives ownership of an optional release-fence descriptor;
+producers must not reuse a buffer identity before that callback.
 
 #### Selection and value controls
 

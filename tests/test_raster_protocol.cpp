@@ -3,6 +3,7 @@
 #include "core/ipc/raster_protocol.hpp"
 #include "render/retained_output_damage.hpp"
 #include "render/retained_scroll_tiles.hpp"
+#include "platform/common/native_buffer.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -104,7 +105,58 @@ fullPresentationDisplayList() {
     };
 }
 
+lcl::render::RetainedScrollTileCache::NodeMap externalNodes(
+        uint64_t revision) {
+    lcl::render::RetainedScrollTileCache::NodeMap nodes;
+    RetainedNodeState root{};
+    root.id = 1;
+    root.contentRevision = 1;
+    root.boundaryReasons = 1u << 0u;
+    root.layoutWidth = root.presentationWidth = 320.0f;
+    root.layoutHeight = root.presentationHeight = 200.0f;
+    nodes.emplace(root.id, root);
+
+    RetainedNodeState external{};
+    external.id = 30;
+    external.parentId = root.id;
+    external.contentRevision = 9;
+    external.propertyRevision = revision;
+    external.boundaryReasons = 1u << 7u;
+    external.flags = kNodeHasExternalBuffer;
+    external.externalBufferId = 70;
+    external.externalBufferRevision = revision;
+    external.layoutWidth = external.presentationWidth = 160.0f;
+    external.layoutHeight = external.presentationHeight = 90.0f;
+    nodes.emplace(external.id, external);
+    return nodes;
+}
+
 } // namespace
+
+TEST(RasterProtocolTest,
+     RetainedExternalPlaceholderSurvivesPropertyOnlyComposition) {
+    lcl::render::RetainedScrollTileCache cache;
+    const std::vector<lcl::graphics::DisplayCommand> commands{
+        lcl::graphics::DrawExternalBufferCommand{
+            30, {0.0f, 0.0f, 160.0f, 90.0f}},
+    };
+    uint64_t nextLayerId = 1;
+    auto first = lcl::render::RetainedScrollTileCache::prepare(
+        cache, &commands, externalNodes(1), {},
+        [&] { return nextLayerId++; }, true);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(first->next);
+    EXPECT_TRUE(first->retainedComposition);
+
+    auto second = lcl::render::RetainedScrollTileCache::prepare(
+        *first->next, nullptr, externalNodes(2), {},
+        [&] { return nextLayerId++; }, false, true, false);
+    ASSERT_TRUE(second.has_value());
+    ASSERT_EQ(second->displayList.commands().size(), 1u);
+    EXPECT_NE(std::get_if<lcl::graphics::DrawExternalBufferCommand>(
+                  &second->displayList.commands().front()),
+              nullptr);
+}
 
 TEST(RasterProtocolTest, LayerReadyCarriesGenerationAndOnePrivateDescriptor) {
     int sockets[2];
@@ -154,6 +206,63 @@ TEST(RasterProtocolTest, LayerReadyCarriesGenerationAndOnePrivateDescriptor) {
 
     close(receivedFd);
     close(descriptor);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(RasterProtocolTest,
+     ExternalBufferUploadAndReleaseCarryOnePrivateDescriptorEach) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    const int bufferFd = dup(STDIN_FILENO);
+    ASSERT_GE(bufferFd, 0);
+
+    UploadExternalBuffer upload{};
+    upload.grant = {7, 42, 0, 11, 13};
+    upload.bufferId = 91;
+    upload.contentRevision = 4;
+    upload.transport = ExternalBufferTransport::DmaBufArgb8888;
+    upload.width = 64;
+    upload.height = 32;
+    upload.stride = 256;
+    upload.format = lcl::platform::kDmaBufFormatArgb8888;
+    ASSERT_TRUE(sendPacket(
+        sockets[0], Opcode::UploadExternalBuffer, upload, bufferFd));
+
+    Header header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_EQ(receivePacket(sockets[1], header, payload, receivedFd),
+              ReceiveStatus::Received);
+    const auto* decoded = payloadAs<UploadExternalBuffer>(
+        header, payload, Opcode::UploadExternalBuffer);
+    ASSERT_NE(decoded, nullptr);
+    EXPECT_EQ(decoded->bufferId, 91u);
+    EXPECT_EQ(decoded->contentRevision, 4u);
+    EXPECT_EQ(decoded->transport, ExternalBufferTransport::DmaBufArgb8888);
+    EXPECT_GE(receivedFd, 0);
+    close(receivedFd);
+
+    const int releaseFenceFd = dup(STDIN_FILENO);
+    ASSERT_GE(releaseFenceFd, 0);
+    ExternalBufferReleased release{};
+    release.bufferId = upload.bufferId;
+    release.contentRevision = upload.contentRevision;
+    ASSERT_TRUE(sendPacket(
+        sockets[1], Opcode::ExternalBufferReleased,
+        release, releaseFenceFd));
+    receivedFd = -1;
+    ASSERT_EQ(receivePacket(sockets[0], header, payload, receivedFd),
+              ReceiveStatus::Received);
+    const auto* decodedRelease = payloadAs<ExternalBufferReleased>(
+        header, payload, Opcode::ExternalBufferReleased);
+    ASSERT_NE(decodedRelease, nullptr);
+    EXPECT_EQ(decodedRelease->bufferId, 91u);
+    EXPECT_GE(receivedFd, 0);
+
+    close(receivedFd);
+    close(releaseFenceFd);
+    close(bufferFd);
     close(sockets[0]);
     close(sockets[1]);
 }

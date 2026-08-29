@@ -141,6 +141,10 @@ public:
             const auto* draw = std::get_if<
                 graphics::DrawCachedLayerCommand>(&command);
             if (!draw) {
+                if (std::holds_alternative<
+                        graphics::DrawExternalBufferCommand>(command)) {
+                    prepared.retainedComposition = true;
+                }
                 commands->push_back(command);
                 continue;
             }
@@ -224,6 +228,7 @@ private:
     static constexpr uint32_t kRootReason = 1u << 0u;
     static constexpr uint32_t kTransformReason = 1u << 2u;
     static constexpr uint32_t kOpacityReason = 1u << 3u;
+    static constexpr uint32_t kExternalBufferReason = 1u << 7u;
     static constexpr float kEpsilon = 0.001f;
 
     static bool isScrollViewport(
@@ -245,6 +250,7 @@ private:
         return presentation &&
             (node.boundaryReasons & kRootReason) == 0 &&
             !isScrollViewport(node) && !isScrollContent(node) &&
+            (node.boundaryReasons & kExternalBufferReason) == 0 &&
             node.layoutWidth > 0.0f && node.layoutHeight > 0.0f &&
             node.layoutWidth <= 2048.0f && node.layoutHeight <= 2048.0f &&
             area <= 4194304.0f;
@@ -304,6 +310,11 @@ private:
         return false;
     }
 
+    static bool isExternalBuffer(
+            const raster_protocol::RetainedNodeState& node) noexcept {
+        return (node.boundaryReasons & kExternalBufferReason) != 0;
+    }
+
     static std::unordered_set<uint64_t> retainedPresentationNodes(
             const NodeMap& nodes) {
         std::unordered_set<uint64_t> result;
@@ -328,7 +339,13 @@ private:
                             isScrollContent(descendant.second)) &&
                         descendsFrom(nodes, descendant.first, id);
                 });
-            if (!containsScroll) result.insert(id);
+            const bool containsExternal = std::any_of(
+                nodes.begin(), nodes.end(), [&](const auto& descendant) {
+                    return isExternalBuffer(descendant.second) &&
+                        (descendant.first == id ||
+                         descendsFrom(nodes, descendant.first, id));
+                });
+            if (!containsScroll && !containsExternal) result.insert(id);
         }
         return result;
     }
@@ -393,6 +410,7 @@ private:
             graphics::DisplayCommand>>();
         composition->reserve(submitted.size());
         bool hasRetainedDraw = false;
+        bool hasExternalDraw = false;
 
         for (std::size_t index = 0; index < submitted.size();) {
             const auto* begin = std::get_if<
@@ -404,6 +422,11 @@ private:
                 presentationByLayer.contains(begin->id);
             if (!begin ||
                 (content == contentByLayer.end() && !genericBegin)) {
+                if (std::holds_alternative<
+                        graphics::DrawExternalBufferCommand>(
+                        submitted[index])) {
+                    hasExternalDraw = true;
+                }
                 if (const auto* draw = std::get_if<
                         graphics::DrawCachedLayerCommand>(
                             &submitted[index]);
@@ -482,7 +505,7 @@ private:
             index = end;
         }
 
-        if (!hasRetainedDraw) return std::nullopt;
+        if (!hasRetainedDraw && !hasExternalDraw) return std::nullopt;
         const auto immutable = std::shared_ptr<
             const std::vector<graphics::DisplayCommand>>(composition);
         return graphics::DisplayList(immutable);

@@ -23,6 +23,7 @@ enum class RenderBoundaryReason : uint32_t {
     ScrollViewport = 1u << 4u,
     ScrollContent = 1u << 5u,
     Effect = 1u << 6u,
+    ExternalBuffer = 1u << 7u,
 };
 
 constexpr RenderBoundaryReason operator|(RenderBoundaryReason lhs,
@@ -66,6 +67,8 @@ struct RenderNode {
     PresentationState presentation{};
     uint64_t contentRevision{0};
     uint64_t propertyRevision{0};
+    uint64_t externalBufferId{0};
+    uint64_t externalBufferRevision{0};
     bool layoutDirty{false};
     std::vector<uint64_t> children{};
 };
@@ -84,6 +87,8 @@ struct RetainedRenderNode {
     // descendants but excluding nested retained boundaries.
     uint64_t contentRevision{0};
     uint64_t propertyRevision{0};
+    uint64_t externalBufferId{0};
+    uint64_t externalBufferRevision{0};
     std::vector<uint64_t> children{};
 };
 

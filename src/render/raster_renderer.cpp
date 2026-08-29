@@ -1242,9 +1242,9 @@ bool RasterRenderer::updateCachedDisplayLayer(
             layer.effectiveScale, std::nullopt)) {
         return false;
     }
-    replayDisplayList(displayList, target);
+    const bool replayed = replayDisplayList(displayList, target);
     endCachedLayerTarget();
-    return true;
+    return replayed;
 }
 
 bool RasterRenderer::drawCachedDisplayLayer(uint64_t id,
@@ -1510,11 +1510,11 @@ void RasterRenderer::drawPath(const lcl::graphics::Path& path,
         static_cast<float>(rasterized.height) / m_deviceScale);
 }
 
-void RasterRenderer::replayDisplayList(
+bool RasterRenderer::replayDisplayList(
         const lcl::graphics::DisplayList& displayList,
         const lcl::graphics::RenderTarget& target,
         const lcl::graphics::Matrix3& rootTransform) {
-    if (!m_skiaDisplayListRenderer) return;
+    if (!m_skiaDisplayListRenderer) return false;
 
     std::optional<lcl::graphics::RectF> deviceDamage;
     if (m_frameDamageRect) {
@@ -1529,14 +1529,15 @@ void RasterRenderer::replayDisplayList(
     if (m_backendType == RasterBackend::OpenGL_EGL) {
         framebuffer = activeSceneFBO();
         rasterPixels = nullptr;
-        if (framebuffer == 0) return;
+        if (framebuffer == 0) return false;
     }
 #endif
 
     const bool attached = m_skiaDisplayListRenderer->beginFrame(
         framebuffer, m_width, m_height, rasterPixels, deviceDamage);
+    bool replayed = false;
     if (attached) {
-        (void)m_skiaDisplayListRenderer->replay(
+        replayed = m_skiaDisplayListRenderer->replay(
             displayList, target, rootTransform,
             m_contentOriginX, m_contentOriginY);
         m_skiaDisplayListRenderer->endFrame();
@@ -1550,6 +1551,7 @@ void RasterRenderer::replayDisplayList(
         applyScissorState();
     }
 #endif
+    return attached && replayed;
 }
 
 RasterRect RasterRenderer::scaleRect(const RasterRect& rect) const {
@@ -2228,6 +2230,22 @@ void RasterRenderer::releaseDmaBufTexture(uint32_t texture) {
     }
     if (cached->second.references > 0) --cached->second.references;
     trimDmaBufTextureCache();
+}
+
+void RasterRenderer::discardDmaBufBuffer(uint64_t bufferId) {
+#ifndef LCL_SOFTWARE_ONLY
+    const auto found = m_cachedDmaBufTextures.find(bufferId);
+    if (found == m_cachedDmaBufTextures.end() ||
+        found->second.references != 0) {
+        return;
+    }
+    const uint32_t texture = found->second.texture;
+    m_cachedDmaBufIdsByTexture.erase(texture);
+    releaseTexture(texture);
+    m_cachedDmaBufTextures.erase(found);
+#else
+    (void)bufferId;
+#endif
 }
 
 void RasterRenderer::releaseTexture(uint32_t texture) {

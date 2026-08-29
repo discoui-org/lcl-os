@@ -63,6 +63,8 @@ The LCL architecture consists of 5 main decoupled layers:
   client DisplayList or image upload. Nested candidates collapse into the
   outer useful boundary, candidates containing ScrollView are excluded, and
   identity/removal/geometry changes retire their namespace transactionally.
+  Candidates containing an external-buffer node are also excluded so a live
+  producer frame is never baked into a stale transform cache.
 * **Retained ScrollView tiles:** A ScrollContent cached-layer body is retained
   once in rasterd and split into 384-logical-pixel vertical tiles. Only tiles
   intersecting the viewport plus one tile of overscan remain resident. Pure
@@ -71,6 +73,14 @@ The LCL architecture consists of 5 main decoupled layers:
   template without another client DisplayList or image upload. Damage-scoped
   content patches are retained and applied both to resident tiles and to a tile
   first created later. Distant and removed tiles are explicitly evicted.
+* **External-buffer nodes:** Camera, video, and similar producers bind a
+  rotating immutable SHM or DMA-BUF frame to a stable retained node. The
+  DisplayList contains only that node's placeholder; descriptors and acquire
+  fences travel separately over the surface-grant-validated rasterd channel.
+  Rasterd samples the frame at the placeholder's exact z-order, publishes only
+  its own immutable output layer to compositor, and returns release ownership
+  (plus a release fence when available) after the input is no longer sampled.
+  The compositor never accepts an application-owned external buffer directly.
 * **Font & Text Engine:** Skia owns packaged typeface loading, glyph advances,
   ascent/descent/line-height metrics, UTF-8 drawing, and GPU/CPU rasterization.
   Layout and drawing use the same prepared `SkFont`; no second font rasterizer

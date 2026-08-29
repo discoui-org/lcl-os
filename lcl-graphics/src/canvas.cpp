@@ -51,6 +51,9 @@ void Canvas::drawDisplayList(const DisplayList& displayList) {
                      op.opaque},
                     op.opacity, op.cornerRadius, op.cornerRoundness,
                     op.squareTopCorners);
+            } else if constexpr (
+                    std::is_same_v<T, DrawExternalBufferCommand>) {
+                drawExternalBufferPlaceholder(op.nodeId, op.destination);
             }
         }, command);
     }

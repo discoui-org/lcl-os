@@ -2,6 +2,7 @@
 
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/filter_group.hpp"
+#include "lcl-ui/widgets/external_buffer.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/widget.hpp"
 
@@ -109,6 +110,8 @@ bool sameProperties(const RetainedRenderNode& lhs,
            sameRect(lhs.presentationBounds, rhs.presentationBounds) &&
            sameOptionalRect(lhs.clipBounds, rhs.clipBounds) &&
            samePresentation(lhs.presentation, rhs.presentation) &&
+           lhs.externalBufferId == rhs.externalBufferId &&
+           lhs.externalBufferRevision == rhs.externalBufferRevision &&
            lhs.children == rhs.children;
 }
 
@@ -170,6 +173,8 @@ void buildRetainedNode(const RenderNode& candidate,
     retained.clipBounds = candidate.clipBounds;
     retained.presentation = candidate.presentation;
     retained.propertyRevision = candidate.propertyRevision;
+    retained.externalBufferId = candidate.externalBufferId;
+    retained.externalBufferRevision = candidate.externalBufferRevision;
 
     uint64_t contentRevision = kFnvOffset;
     hashOwnedContent(
@@ -214,6 +219,8 @@ std::optional<std::size_t> compileWidget(const Widget& widget,
 
     const auto& presentation = widget.getPresentationState();
     const auto* scrollView = dynamic_cast<const ScrollView*>(&widget);
+    const auto* externalBuffer =
+        dynamic_cast<const ExternalBufferView*>(&widget);
     const bool isScrollContent = parentScrollView != nullptr &&
                                  parentScrollView->getContent() == &widget;
 
@@ -229,6 +236,9 @@ std::optional<std::size_t> compileWidget(const Widget& widget,
     if (scrollView != nullptr) reasons |= RenderBoundaryReason::ScrollViewport;
     if (isScrollContent) reasons |= RenderBoundaryReason::ScrollContent;
     if (isEffectBoundary(widget)) reasons |= RenderBoundaryReason::Effect;
+    if (externalBuffer != nullptr) {
+        reasons |= RenderBoundaryReason::ExternalBuffer;
+    }
 
     RenderNode node;
     node.id = widget.getObjectId();
@@ -246,6 +256,10 @@ std::optional<std::size_t> compileWidget(const Widget& widget,
     node.contentRevision = RetainedRenderAccess::localPaintRevision(widget);
     node.propertyRevision =
         RetainedRenderAccess::localPresentationRevision(widget);
+    if (externalBuffer != nullptr) {
+        node.externalBufferId = externalBuffer->bufferId();
+        node.externalBufferRevision = externalBuffer->contentRevision();
+    }
     node.layoutDirty = widget.isLayoutDirty();
 
     const std::size_t nodeIndex = tree.nodes.size();

@@ -136,6 +136,9 @@ public:
                    resource.stridePixels, opacity, cornerRadius,
                    cornerRoundness, squareTopCorners);
     }
+    /** Internal retained-node placeholder; rasterd resolves the granted frame. */
+    virtual void drawExternalBufferPlaceholder(
+        uint64_t, const RectF&) {}
 };
 
 } // namespace lcl::graphics

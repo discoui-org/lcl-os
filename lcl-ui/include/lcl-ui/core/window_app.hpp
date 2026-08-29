@@ -225,6 +225,7 @@ private:
     bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
                              uint32_t payloadSize, int passedFd = -1);
     bool uploadImageResource(const graphics::ImageResourceView& resource);
+    bool uploadExternalBufferResources(const Widget& widget);
     void invalidateRetainedWidgetCaches(Widget& widget) noexcept;
     void configureRetainedWidgetCaches(Widget& widget) noexcept;
     void logFrameTraceIfDue();
@@ -330,7 +331,14 @@ private:
     // another client DisplayList.
     bool m_scrollTransformFastPathReady{false};
     bool m_retainedPresentationFastPathReady{false};
+    bool m_externalBufferFastPathReady{false};
     std::unordered_map<uint64_t, uint64_t> m_uploadedImageRevisions;
+    struct ExternalBufferUploadState {
+        uint64_t contentRevision{0};
+        std::function<void(int releaseFenceFd)> completeRelease{};
+    };
+    std::unordered_map<uint64_t, ExternalBufferUploadState>
+        m_uploadedExternalBuffers;
     // A launch icon becomes compositor-visible only after the HomeScreen
     // buffer containing it has been committed on this same ordered socket.
     std::optional<lcl::protocol::LCLMsgLaunchIconVisibilityAck>

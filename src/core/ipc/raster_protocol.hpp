@@ -8,7 +8,7 @@
 namespace lcl::raster_protocol {
 
 inline constexpr uint32_t kMagic = 0x5254434c; // "LCTR"
-inline constexpr uint32_t kVersion = 7;
+inline constexpr uint32_t kVersion = 8;
 inline constexpr uint32_t kMaxPayload = 1024u * 1024u;
 
 enum class Opcode : uint32_t {
@@ -20,6 +20,9 @@ enum class Opcode : uint32_t {
     ReleaseLayer = 6,
     FrameDiscarded = 7,
     Ready = 8,
+    UploadExternalBuffer = 9,
+    SetExternalBufferFence = 10,
+    ExternalBufferReleased = 11,
 };
 
 enum class ReceiveStatus {
@@ -58,6 +61,45 @@ struct UploadImage {
     uint64_t byteSize{0};
 };
 
+enum class ExternalBufferTransport : uint32_t {
+    ImmutableShmArgb8888 = 0,
+    DmaBufArgb8888 = 1,
+};
+
+struct UploadExternalBuffer {
+    SurfaceGrant grant{};
+    uint64_t bufferId{0};
+    uint64_t contentRevision{0};
+    ExternalBufferTransport transport{ExternalBufferTransport::DmaBufArgb8888};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t stride{0};
+    uint32_t format{0};
+    uint64_t modifier{~uint64_t{0}};
+    uint64_t byteSize{0};
+    uint32_t flags{0};
+    uint32_t reserved{0};
+};
+
+struct SetExternalBufferFence {
+    SurfaceGrant grant{};
+    uint64_t bufferId{0};
+    uint64_t contentRevision{0};
+};
+
+enum class ExternalBufferReleaseReason : uint32_t {
+    Superseded = 0,
+    SurfaceRevoked = 1,
+    Rejected = 2,
+};
+
+struct ExternalBufferReleased {
+    uint64_t bufferId{0};
+    uint64_t contentRevision{0};
+    ExternalBufferReleaseReason reason{ExternalBufferReleaseReason::Superseded};
+    uint32_t reserved{0};
+};
+
 enum class NodeMutationType : uint32_t {
     CreateNode = 1,
     UpdateContent = 2,
@@ -66,6 +108,7 @@ enum class NodeMutationType : uint32_t {
 };
 
 inline constexpr uint32_t kNodeHasClip = 1u << 0;
+inline constexpr uint32_t kNodeHasExternalBuffer = 1u << 1;
 
 /**
  * Backend-neutral retained-node state carried only between lcl-ui and rasterd.
@@ -80,6 +123,8 @@ struct RetainedNodeState {
     uint32_t siblingIndex{0};
     uint32_t flags{0};
     uint32_t reserved{0};
+    uint64_t externalBufferId{0};
+    uint64_t externalBufferRevision{0};
     float layoutX{0.0f};
     float layoutY{0.0f};
     float layoutWidth{0.0f};

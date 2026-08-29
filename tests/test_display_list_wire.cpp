@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <variant>
 #include <vector>
@@ -94,6 +95,46 @@ TEST(DisplayListWireTest, RoundTripsStableImageResourceReferences) {
     EXPECT_FLOAT_EQ(image->opacity, 0.75f);
 }
 
+TEST(DisplayListWireTest, RoundTripsExternalBufferPlaceholderWithoutDescriptor) {
+    graphics::DisplayListBuilder builder;
+    builder.drawExternalBuffer(73, {4.0f, 5.0f, 160.0f, 90.0f});
+
+    const auto encoded = graphics::encodeDisplayList(builder.build());
+    ASSERT_TRUE(encoded);
+    const auto decoded = graphics::decodeDisplayList(encoded.bytes);
+    ASSERT_TRUE(decoded);
+    ASSERT_EQ(decoded.displayList.commands().size(), 1u);
+    const auto* external =
+        std::get_if<graphics::DrawExternalBufferCommand>(
+            &decoded.displayList.commands().front());
+    ASSERT_NE(external, nullptr);
+    EXPECT_EQ(external->nodeId, 73u);
+    EXPECT_EQ(external->bufferId, 0u);
+    EXPECT_EQ(external->resourceKey, 0u);
+    EXPECT_EQ(external->sampleKind,
+              graphics::ExternalBufferSampleKind::Unresolved);
+    EXPECT_FLOAT_EQ(external->destination.width, 160.0f);
+}
+
+TEST(DisplayListWireTest, RejectsResolvedExternalBufferRuntimeState) {
+    auto commands = std::make_shared<std::vector<graphics::DisplayCommand>>();
+    graphics::DrawExternalBufferCommand external{};
+    external.nodeId = 9;
+    external.destination = {0.0f, 0.0f, 8.0f, 8.0f};
+    external.bufferId = 11;
+    external.contentRevision = 3;
+    external.resourceKey = 0x1234u;
+    external.sourceWidth = 8;
+    external.sourceHeight = 8;
+    external.stridePixels = 8;
+    external.sampleKind = graphics::ExternalBufferSampleKind::ArgbPixels;
+    commands->emplace_back(external);
+    const graphics::DisplayList displayList(
+        std::shared_ptr<const std::vector<graphics::DisplayCommand>>(commands));
+    EXPECT_EQ(graphics::encodeDisplayList(displayList).error,
+              graphics::DisplayListWireError::UnsupportedCommand);
+}
+
 TEST(DisplayListWireTest, RejectsProcessLocalImagesWithoutResourceIdentity) {
     graphics::DisplayListBuilder builder;
     builder.drawImage({0.0f, 0.0f, 32.0f, 32.0f}, 0x1234u,
@@ -121,7 +162,7 @@ TEST(DisplayListWireTest, RejectsTruncationTrailingBytesAndUnknownVersion) {
               graphics::DisplayListWireError::InvalidData);
 
     std::vector<uint8_t> future = encoded.bytes;
-    future[4] = 4;
+    future[4] = 5;
     future[5] = 0;
     EXPECT_EQ(graphics::decodeDisplayList(future).error,
               graphics::DisplayListWireError::UnsupportedVersion);

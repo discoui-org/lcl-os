@@ -585,6 +585,146 @@ void ClientEGLContext::releaseDmaBuf(uint32_t bufferId, int releaseFenceFd) {
     if (releaseFenceFd >= 0) close(releaseFenceFd);
 }
 
+lcl::platform::TextureHandle ClientEGLContext::importDmaBuf(
+        const lcl::platform::DmaBufDescriptor& descriptor) {
+#if defined(__ANDROID__)
+    (void)descriptor;
+    return lcl::platform::kInvalidTextureHandle;
+#else
+    if (!m_initialized || descriptor.fd < 0 || descriptor.width == 0 ||
+        descriptor.height == 0 || descriptor.stride < descriptor.width * 4u ||
+        descriptor.format != lcl::platform::kDmaBufFormatArgb8888 ||
+        !makeCurrent()) {
+        return lcl::platform::kInvalidTextureHandle;
+    }
+    const char* extensions = eglQueryString(m_display, EGL_EXTENSIONS);
+    if (!hasExtension(extensions, "EGL_EXT_image_dma_buf_import")) {
+        return lcl::platform::kInvalidTextureHandle;
+    }
+    const auto createImage = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(
+        eglGetProcAddress("eglCreateImageKHR"));
+    const auto imageTarget =
+        reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(
+            eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+    if (!createImage || !imageTarget) {
+        return lcl::platform::kInvalidTextureHandle;
+    }
+
+    EGLint attributes[32] = {
+        EGL_WIDTH, static_cast<EGLint>(descriptor.width),
+        EGL_HEIGHT, static_cast<EGLint>(descriptor.height),
+        EGL_LINUX_DRM_FOURCC_EXT, static_cast<EGLint>(descriptor.format),
+        EGL_DMA_BUF_PLANE0_FD_EXT, descriptor.fd,
+        EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+        EGL_DMA_BUF_PLANE0_PITCH_EXT, static_cast<EGLint>(descriptor.stride),
+        EGL_NONE,
+    };
+    size_t end = 12;
+    if (descriptor.modifier != ~uint64_t{0} &&
+        hasExtension(extensions, "EGL_EXT_image_dma_buf_import_modifiers")) {
+        attributes[end++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+        attributes[end++] = static_cast<EGLint>(
+            descriptor.modifier & 0xffffffffu);
+        attributes[end++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+        attributes[end++] = static_cast<EGLint>(descriptor.modifier >> 32u);
+        attributes[end++] = EGL_NONE;
+    }
+    const EGLImageKHR image = createImage(
+        m_display, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attributes);
+    if (image == EGL_NO_IMAGE_KHR) {
+        return lcl::platform::kInvalidTextureHandle;
+    }
+
+    uint32_t texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    imageTarget(GL_TEXTURE_2D, image);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    if (glGetError() != GL_NO_ERROR) {
+        const auto destroyImage =
+            reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(
+                eglGetProcAddress("eglDestroyImageKHR"));
+        if (texture != 0) glDeleteTextures(1, &texture);
+        if (destroyImage) destroyImage(m_display, image);
+        return lcl::platform::kInvalidTextureHandle;
+    }
+    m_importedDmaBufImages.emplace(texture, image);
+    return texture;
+#endif
+}
+
+void ClientEGLContext::releaseTexture(
+        lcl::platform::TextureHandle texture) {
+    const auto found = m_importedDmaBufImages.find(texture);
+    if (found == m_importedDmaBufImages.end()) return;
+    if (m_initialized && makeCurrent()) {
+        glDeleteTextures(1, &texture);
+        const auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(
+            eglGetProcAddress("eglDestroyImageKHR"));
+        if (destroyImage) destroyImage(m_display, found->second);
+    }
+    m_importedDmaBufImages.erase(found);
+}
+
+lcl::platform::NativeFenceWaitResult ClientEGLContext::waitNativeFence(
+        int fenceFd) {
+    if (fenceFd < 0 || !makeCurrent()) {
+        return lcl::platform::NativeFenceWaitResult::Unsupported;
+    }
+    const auto createSync = reinterpret_cast<PFNEGLCREATESYNCKHRPROC>(
+        eglGetProcAddress("eglCreateSyncKHR"));
+    const auto destroySync = reinterpret_cast<PFNEGLDESTROYSYNCKHRPROC>(
+        eglGetProcAddress("eglDestroySyncKHR"));
+    const auto waitSync = reinterpret_cast<PFNEGLWAITSYNCKHRPROC>(
+        eglGetProcAddress("eglWaitSyncKHR"));
+    if (!createSync || !destroySync || !waitSync) {
+        return lcl::platform::NativeFenceWaitResult::Unsupported;
+    }
+    const EGLint attributes[] = {
+        EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fenceFd, EGL_NONE};
+    const EGLSyncKHR sync = createSync(
+        m_display, EGL_SYNC_NATIVE_FENCE_ANDROID, attributes);
+    if (sync == EGL_NO_SYNC_KHR) {
+        return lcl::platform::NativeFenceWaitResult::Unsupported;
+    }
+    const bool enqueued = waitSync(m_display, sync, 0) == EGL_TRUE;
+    destroySync(m_display, sync);
+    return enqueued
+        ? lcl::platform::NativeFenceWaitResult::Enqueued
+        : lcl::platform::NativeFenceWaitResult::ConsumedFailure;
+}
+
+int ClientEGLContext::createNativeFence() {
+    if (!makeCurrent()) return -1;
+    const auto createSync = reinterpret_cast<PFNEGLCREATESYNCKHRPROC>(
+        eglGetProcAddress("eglCreateSyncKHR"));
+    const auto destroySync = reinterpret_cast<PFNEGLDESTROYSYNCKHRPROC>(
+        eglGetProcAddress("eglDestroySyncKHR"));
+    const auto duplicateFence =
+        reinterpret_cast<PFNEGLDUPNATIVEFENCEFDANDROIDPROC>(
+            eglGetProcAddress("eglDupNativeFenceFDANDROID"));
+    if (!createSync || !destroySync || !duplicateFence) {
+        glFinish();
+        return -1;
+    }
+    const EGLint attributes[] = {EGL_NONE};
+    const EGLSyncKHR sync = createSync(
+        m_display, EGL_SYNC_NATIVE_FENCE_ANDROID, attributes);
+    if (sync == EGL_NO_SYNC_KHR) {
+        glFinish();
+        return -1;
+    }
+    glFlush();
+    const int fenceFd = duplicateFence(m_display, sync);
+    destroySync(m_display, sync);
+    if (fenceFd < 0) glFinish();
+    return fenceFd;
+}
+
 bool ClientEGLContext::readback(uint32_t* destination, uint32_t width, uint32_t height) {
     if (!destination || !m_initialized || width != m_width || height != m_height || !makeCurrent()) return false;
 
@@ -607,6 +747,14 @@ bool ClientEGLContext::readback(uint32_t* destination, uint32_t width, uint32_t 
 }
 
 void ClientEGLContext::shutdown() {
+    if (m_initialized && makeCurrent()) {
+        std::vector<uint32_t> textures;
+        textures.reserve(m_importedDmaBufImages.size());
+        for (const auto& [texture, _] : m_importedDmaBufImages) {
+            textures.push_back(texture);
+        }
+        for (uint32_t texture : textures) releaseTexture(texture);
+    }
     destroyDmaBufPool();
     if (m_display != EGL_NO_DISPLAY) {
         eglMakeCurrent(m_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);

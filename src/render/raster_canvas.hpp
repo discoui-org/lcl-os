@@ -83,6 +83,9 @@ public:
         const lcl::graphics::ImageResourceView& resource,
         float opacity, float cornerRadius, float cornerRoundness,
         bool squareTopCorners) override;
+    void drawExternalBufferPlaceholder(
+        uint64_t nodeId,
+        const lcl::graphics::RectF& destination) override;
 
     const lcl::graphics::DisplayList& lastDisplayList() const noexcept {
         return m_lastDisplayList;

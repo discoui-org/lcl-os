@@ -4,18 +4,21 @@
 #include "lcl-ui/widgets/backdrop_surface.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/filter_group.hpp"
+#include "lcl-ui/widgets/external_buffer.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <unistd.h>
 
 namespace {
 
 using lcl::ui::BackdropSurface;
 using lcl::ui::Container;
 using lcl::ui::FilterGroup;
+using lcl::ui::ExternalBufferView;
 using lcl::ui::ScrollView;
 using lcl::ui::detail::RenderBoundaryReason;
 using lcl::ui::detail::RenderNodeCompiler;
@@ -113,6 +116,71 @@ TEST(RetainedRenderTreeTest, MarksScrollViewportAndDirectContentBoundaries) {
     EXPECT_EQ(rowNode->parentId, contentId);
     EXPECT_EQ(rowNode->disposition, RenderNodeDisposition::Flattened);
     EXPECT_EQ(tree.retainedNodeCount(), 3u);
+}
+
+TEST(RetainedRenderTreeTest,
+     ExternalFrameChangesPropertiesWithoutChangingPlaceholderContent) {
+    Container root;
+    auto external = std::make_unique<ExternalBufferView>();
+    ExternalBufferView* externalPtr = external.get();
+    const uint64_t externalId = external->getObjectId();
+    root.addChild(std::move(external));
+
+    const RenderNodeCompiler compiler;
+    const auto initial = compiler.compile(root);
+    const auto* initialNode = findRetainedNode(initial, externalId);
+    ASSERT_NE(initialNode, nullptr);
+    EXPECT_TRUE(hasBoundaryReason(initialNode->boundaryReasons,
+                                  RenderBoundaryReason::ExternalBuffer));
+    EXPECT_EQ(initialNode->externalBufferId, 0u);
+    const uint64_t initialContentRevision = initialNode->contentRevision;
+
+    const int descriptor = dup(STDIN_FILENO);
+    ASSERT_GE(descriptor, 0);
+    lcl::ui::ExternalBufferFrame frame{};
+    frame.bufferId = 17;
+    frame.contentRevision = 3;
+    frame.width = 1;
+    frame.height = 1;
+    frame.stride = sizeof(uint32_t);
+    frame.bufferFd = descriptor;
+    ASSERT_TRUE(externalPtr->setFrame(frame));
+    close(descriptor);
+
+    const auto changed = compiler.compile(root);
+    const auto* changedNode = findRetainedNode(changed, externalId);
+    ASSERT_NE(changedNode, nullptr);
+    EXPECT_EQ(changedNode->externalBufferId, 17u);
+    EXPECT_EQ(changedNode->externalBufferRevision, 3u);
+    EXPECT_EQ(changedNode->contentRevision, initialContentRevision);
+
+    const auto transaction = RenderTreeDiffer{}.diff(&initial, changed);
+    const auto* update = findUpdate(transaction, externalId);
+    ASSERT_NE(update, nullptr);
+    EXPECT_FALSE(update->contentChanged);
+    EXPECT_TRUE(update->propertiesChanged);
+}
+
+TEST(RetainedRenderTreeTest,
+     ExternalBufferRejectsUnalignedStrideAndUnsupportedFormat) {
+    ExternalBufferView external;
+    const int descriptor = dup(STDIN_FILENO);
+    ASSERT_GE(descriptor, 0);
+
+    lcl::ui::ExternalBufferFrame frame{};
+    frame.bufferId = 17;
+    frame.contentRevision = 3;
+    frame.width = 1;
+    frame.height = 1;
+    frame.stride = sizeof(uint32_t) + 1;
+    frame.bufferFd = descriptor;
+    EXPECT_FALSE(external.setFrame(frame));
+
+    frame.stride = sizeof(uint32_t);
+    frame.format = 0;
+    EXPECT_FALSE(external.setFrame(frame));
+    EXPECT_FALSE(external.hasFrame());
+    close(descriptor);
 }
 
 TEST(RetainedRenderTreeTest, SeparatesPresentationAndEffectBoundaries) {

@@ -4,6 +4,7 @@
 #include "render/raster_renderer.hpp"
 #include "render/retained_output_damage.hpp"
 #include "render/retained_scroll_tiles.hpp"
+#include "platform/common/native_buffer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -82,6 +83,56 @@ struct ImageResource {
     std::vector<uint32_t> pixels;
 };
 
+using ExternalKey = ImageKey;
+using ExternalHash = ImageHash;
+
+struct ExternalBufferResource {
+    lcl::raster_protocol::ExternalBufferTransport transport{
+        lcl::raster_protocol::ExternalBufferTransport::DmaBufArgb8888};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t stride{0};
+    uint32_t format{0};
+    uint64_t modifier{~uint64_t{0}};
+    int bufferFd{-1};
+    int acquireFenceFd{-1};
+    int clientFd{-1};
+    std::vector<uint32_t> pixels{};
+
+    ExternalBufferResource() = default;
+    ExternalBufferResource(const ExternalBufferResource&) = delete;
+    ExternalBufferResource& operator=(const ExternalBufferResource&) = delete;
+    ExternalBufferResource(ExternalBufferResource&& other) noexcept {
+        *this = std::move(other);
+    }
+    ExternalBufferResource& operator=(ExternalBufferResource&& other) noexcept {
+        if (this == &other) return *this;
+        release();
+        transport = other.transport;
+        width = other.width;
+        height = other.height;
+        stride = other.stride;
+        format = other.format;
+        modifier = other.modifier;
+        bufferFd = other.bufferFd;
+        acquireFenceFd = other.acquireFenceFd;
+        clientFd = other.clientFd;
+        pixels = std::move(other.pixels);
+        other.bufferFd = -1;
+        other.acquireFenceFd = -1;
+        other.clientFd = -1;
+        return *this;
+    }
+    ~ExternalBufferResource() { release(); }
+
+    void release() noexcept {
+        if (bufferFd >= 0) close(bufferFd);
+        if (acquireFenceFd >= 0) close(acquireFenceFd);
+        bufferFd = -1;
+        acquireFenceFd = -1;
+    }
+};
+
 struct LayerSlot {
     uint64_t layerId{0};
     int fd{-1};
@@ -129,6 +180,8 @@ struct SurfaceState {
     uint64_t retainedRootId{0};
     lcl::render::RetainedScrollTileCache scrollTiles;
     std::unordered_map<ImageKey, ImageResource, ImageHash> images;
+    std::unordered_map<ExternalKey, ExternalBufferResource, ExternalHash>
+        externalBuffers;
     std::unordered_map<uint64_t, uint64_t> cachedLayerNamespaces;
     std::array<LayerSlot, 3> slots;
     std::vector<uint32_t> softwarePixels;
@@ -283,14 +336,36 @@ PixelDamage pixelDamageFor(const CommitTransaction& submit, uint32_t width,
 }
 
 bool validNodeState(const RetainedNodeState& node) noexcept {
-    constexpr uint32_t kBoundaryMask = 0x7fu;
+    constexpr uint32_t kBoundaryMask = 0xffu;
+    constexpr uint32_t kExternalReason = 1u << 7u;
+    constexpr uint32_t kAllowedFlags =
+        lcl::raster_protocol::kNodeHasClip |
+        lcl::raster_protocol::kNodeHasExternalBuffer;
     const auto finite = [](float value) { return std::isfinite(value); };
     if (node.id == 0 || node.contentRevision == 0 ||
         node.boundaryReasons == 0 || node.reserved != 0 ||
         (node.boundaryReasons & ~kBoundaryMask) != 0 ||
-        (node.flags & ~lcl::raster_protocol::kNodeHasClip) != 0) {
+        (node.flags & ~kAllowedFlags) != 0) {
         return false;
     }
+    const bool externalReason =
+        (node.boundaryReasons & kExternalReason) != 0;
+    const bool externalBinding =
+        (node.flags & lcl::raster_protocol::kNodeHasExternalBuffer) != 0;
+    const bool completeExternalBinding =
+        node.externalBufferId != 0 && node.externalBufferRevision != 0;
+    const bool partialExternalBinding =
+        (node.externalBufferId == 0) !=
+        (node.externalBufferRevision == 0);
+    if (partialExternalBinding ||
+        externalBinding != completeExternalBinding ||
+        (!externalReason &&
+         (externalBinding || node.externalBufferId != 0 ||
+          node.externalBufferRevision != 0))) {
+        return false;
+    }
+    // An external node may deliberately have no binding while waiting for its
+    // first producer frame. Every non-external node is forced empty above.
     const float values[]{
         node.layoutX, node.layoutY, node.layoutWidth, node.layoutHeight,
         node.presentationX, node.presentationY,
@@ -460,6 +535,8 @@ bool isScrollTranslationProperties(
         node.parentId == old->parentId &&
         node.siblingIndex == old->siblingIndex &&
         node.flags == old->flags &&
+        node.externalBufferId == old->externalBufferId &&
+        node.externalBufferRevision == old->externalBufferRevision &&
         same(node.layoutX, old->layoutX) &&
         same(node.layoutY, old->layoutY) &&
         same(node.layoutWidth, old->layoutWidth) &&
@@ -499,6 +576,7 @@ bool isRetainedPresentationCandidate(
     constexpr uint32_t kOpacityReason = 1u << 3u;
     constexpr uint32_t kScrollViewportReason = 1u << 4u;
     constexpr uint32_t kScrollContentReason = 1u << 5u;
+    constexpr uint32_t kExternalBufferReason = 1u << 7u;
     const bool presentation =
         (node.boundaryReasons &
          (kTransformReason | kOpacityReason)) != 0;
@@ -507,6 +585,7 @@ bool isRetainedPresentationCandidate(
         (node.boundaryReasons & kRootReason) == 0 &&
         (node.boundaryReasons &
          (kScrollViewportReason | kScrollContentReason)) == 0 &&
+        (node.boundaryReasons & kExternalBufferReason) == 0 &&
         node.layoutWidth > 0.0f && node.layoutHeight > 0.0f &&
         node.layoutWidth <= 2048.0f && node.layoutHeight <= 2048.0f &&
         area <= 4194304.0f;
@@ -518,6 +597,10 @@ bool isScrollViewport(const RetainedNodeState& node) noexcept {
 
 bool isScrollContent(const RetainedNodeState& node) noexcept {
     return (node.boundaryReasons & (1u << 5u)) != 0;
+}
+
+bool isExternalBuffer(const RetainedNodeState& node) noexcept {
+    return (node.boundaryReasons & (1u << 7u)) != 0;
 }
 
 bool isWithinScrollContent(
@@ -570,7 +653,13 @@ std::unordered_set<uint64_t> retainedPresentationNodeIds(
                         isScrollContent(descendant.second)) &&
                     descendsFrom(nodes, descendant.first, id);
             });
-        if (!containsScroll) result.insert(id);
+        const bool containsExternal = std::any_of(
+            nodes.begin(), nodes.end(), [&](const auto& descendant) {
+                return isExternalBuffer(descendant.second) &&
+                    (descendant.first == id ||
+                     descendsFrom(nodes, descendant.first, id));
+            });
+        if (!containsScroll && !containsExternal) result.insert(id);
     }
     return result;
 }
@@ -600,6 +689,8 @@ bool isRetainedPresentationProperties(
         node.parentId == old->parentId &&
         node.siblingIndex == old->siblingIndex &&
         node.flags == old->flags &&
+        node.externalBufferId == old->externalBufferId &&
+        node.externalBufferRevision == old->externalBufferRevision &&
         node.contentRevision == old->contentRevision &&
         same(node.layoutX, old->layoutX) &&
         same(node.layoutY, old->layoutY) &&
@@ -624,6 +715,61 @@ bool isRetainedPresentationOnly(
         });
 }
 
+bool isExternalBufferProperties(
+        const NodeMutation& mutation,
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes) noexcept {
+    constexpr float kEpsilon = 0.0001f;
+    const auto same = [=](float lhs, float rhs) {
+        return std::fabs(lhs - rhs) <= kEpsilon;
+    };
+    if (mutation.type !=
+            lcl::raster_protocol::NodeMutationType::SetProperties) {
+        return false;
+    }
+    const auto& node = mutation.node;
+    const auto* old = findRetainedNode(nodes, node.id);
+    if (!old || !validNodeState(node) || !isExternalBuffer(node) ||
+        !isExternalBuffer(*old) || isWithinScrollContent(nodes, node.id)) {
+        return false;
+    }
+    return node.parentId == old->parentId &&
+        node.siblingIndex == old->siblingIndex &&
+        node.boundaryReasons == old->boundaryReasons &&
+        ((node.flags ^ old->flags) &
+         ~lcl::raster_protocol::kNodeHasExternalBuffer) == 0 &&
+        node.contentRevision == old->contentRevision &&
+        same(node.layoutX, old->layoutX) &&
+        same(node.layoutY, old->layoutY) &&
+        same(node.layoutWidth, old->layoutWidth) &&
+        same(node.layoutHeight, old->layoutHeight) &&
+        same(node.presentationX, old->presentationX) &&
+        same(node.presentationY, old->presentationY) &&
+        same(node.presentationWidth, old->presentationWidth) &&
+        same(node.presentationHeight, old->presentationHeight) &&
+        same(node.clipX, old->clipX) && same(node.clipY, old->clipY) &&
+        same(node.clipWidth, old->clipWidth) &&
+        same(node.clipHeight, old->clipHeight) &&
+        same(node.opacity, old->opacity) &&
+        same(node.translationX, old->translationX) &&
+        same(node.translationY, old->translationY) &&
+        same(node.scaleX, old->scaleX) && same(node.scaleY, old->scaleY) &&
+        same(node.rotationRadians, old->rotationRadians) &&
+        same(node.originX, old->originX) && same(node.originY, old->originY) &&
+        (node.externalBufferId != old->externalBufferId ||
+         node.externalBufferRevision != old->externalBufferRevision);
+}
+
+bool isExternalBufferOnly(
+        const CommitTransaction& transaction,
+        std::span<const NodeMutation> mutations,
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes) noexcept {
+    return !replacesRetainedScene(transaction) && !mutations.empty() &&
+        std::all_of(
+            mutations.begin(), mutations.end(), [&](const auto& mutation) {
+                return isExternalBufferProperties(mutation, nodes);
+            });
+}
+
 bool isRetainedPropertyOnly(
         const CommitTransaction& transaction,
         std::span<const NodeMutation> mutations,
@@ -633,6 +779,7 @@ bool isRetainedPropertyOnly(
     return std::all_of(
         mutations.begin(), mutations.end(), [&](const NodeMutation& mutation) {
             return isScrollTranslationProperties(mutation, nodes) ||
+                isExternalBufferProperties(mutation, nodes) ||
                 isRetainedPresentationProperties(
                     mutation, nodes, candidates);
         });
@@ -702,6 +849,9 @@ bool invalidatesRetainedCompositionTemplate(
                      mutation, currentNodes))) {
                 return true;
             }
+            continue;
+        }
+        if (isExternalBufferProperties(mutation, currentNodes)) {
             continue;
         }
         if (!isWithinScrollContent(nextNodes, mutation.node.id)) return true;
@@ -845,6 +995,14 @@ private:
                 handleClientPacket(*it, header, payload, receivedFd);
             }
             if (!alive) {
+                for (auto& [_, surface] : m_surfaces) {
+                    for (auto& [key, resource] : surface.externalBuffers) {
+                        (void)key;
+                        if (resource.clientFd == it->fd) {
+                            resource.clientFd = -1;
+                        }
+                    }
+                }
                 close(it->fd);
                 it = m_clients.erase(it);
             } else {
@@ -857,7 +1015,9 @@ private:
                                     const SurfaceGrant& grant) {
         const auto found = m_surfaces.find(tokenOf(grant));
         if (found == m_surfaces.end() || found->second.grant.surfaceId != grant.surfaceId ||
-            found->second.grant.ownerPid != client.pid || grant.ownerPid != client.pid) {
+            found->second.grant.ownerPid != client.pid ||
+            grant.ownerPid != client.pid ||
+            found->second.grant.flags != grant.flags) {
             return nullptr;
         }
         return &found->second;
@@ -895,6 +1055,118 @@ private:
                     std::move(resource);
             }
             close(receivedFd);
+            return;
+        }
+
+        if (const auto* upload = lcl::raster_protocol::payloadAs<
+                lcl::raster_protocol::UploadExternalBuffer>(
+                header, payload, Opcode::UploadExternalBuffer)) {
+            auto* surface = authorizedSurface(client, upload->grant);
+            constexpr uint32_t kMaxDimension = 16384;
+            constexpr uint64_t kMaxByteSize =
+                512ull * 1024ull * 1024ull;
+            const ExternalKey key{upload->bufferId, upload->contentRevision};
+            if (surface) {
+                const auto existing = surface->externalBuffers.find(key);
+                if (existing != surface->externalBuffers.end() &&
+                    existing->second.transport == upload->transport &&
+                    existing->second.width == upload->width &&
+                    existing->second.height == upload->height &&
+                    existing->second.stride == upload->stride &&
+                    existing->second.format == upload->format &&
+                    existing->second.modifier == upload->modifier) {
+                    existing->second.clientFd = client.fd;
+                    if (receivedFd >= 0) close(receivedFd);
+                    return;
+                }
+            }
+            const bool commonValid = surface && receivedFd >= 0 &&
+                upload->bufferId != 0 && upload->contentRevision != 0 &&
+                upload->width > 0 && upload->height > 0 &&
+                upload->width <= kMaxDimension &&
+                upload->height <= kMaxDimension &&
+                upload->stride >= upload->width * sizeof(uint32_t) &&
+                upload->stride % sizeof(uint32_t) == 0 &&
+                upload->stride <= kMaxDimension * sizeof(uint32_t) &&
+                upload->format == lcl::platform::kDmaBufFormatArgb8888 &&
+                upload->byteSize <= kMaxByteSize &&
+                upload->flags == 0 && upload->reserved == 0 &&
+                !surface->externalBuffers.contains(key);
+            const bool shm = upload->transport ==
+                lcl::raster_protocol::ExternalBufferTransport::
+                    ImmutableShmArgb8888;
+            const bool dmaBuf = upload->transport ==
+                lcl::raster_protocol::ExternalBufferTransport::DmaBufArgb8888;
+            const bool transportValid = shm
+                ? upload->byteSize ==
+                      static_cast<uint64_t>(upload->stride) * upload->height &&
+                      isImmutableMemfd(receivedFd, upload->byteSize)
+                : dmaBuf && upload->byteSize == 0;
+            if (!commonValid || !transportValid) {
+                if (receivedFd >= 0) close(receivedFd);
+                lcl::raster_protocol::ExternalBufferReleased released{};
+                released.bufferId = upload->bufferId;
+                released.contentRevision = upload->contentRevision;
+                released.reason =
+                    lcl::raster_protocol::ExternalBufferReleaseReason::Rejected;
+                (void)lcl::raster_protocol::sendPacket(
+                    client.fd, Opcode::ExternalBufferReleased, released);
+                return;
+            }
+
+            ExternalBufferResource resource{};
+            resource.transport = upload->transport;
+            resource.width = upload->width;
+            resource.height = upload->height;
+            resource.stride = upload->stride;
+            resource.format = upload->format;
+            resource.modifier = upload->modifier;
+            resource.clientFd = client.fd;
+            if (shm) {
+                resource.pixels.resize(
+                    static_cast<size_t>(upload->stride / sizeof(uint32_t)) *
+                    upload->height);
+                if (!readExact(
+                        receivedFd, resource.pixels.data(), upload->byteSize)) {
+                    close(receivedFd);
+                    lcl::raster_protocol::ExternalBufferReleased released{};
+                    released.bufferId = upload->bufferId;
+                    released.contentRevision = upload->contentRevision;
+                    released.reason =
+                        lcl::raster_protocol::ExternalBufferReleaseReason::Rejected;
+                    (void)lcl::raster_protocol::sendPacket(
+                        client.fd, Opcode::ExternalBufferReleased, released);
+                    return;
+                }
+                close(receivedFd);
+            } else {
+                resource.bufferFd = receivedFd;
+            }
+            surface->externalBuffers.emplace(key, std::move(resource));
+            return;
+        }
+
+        if (const auto* fence = lcl::raster_protocol::payloadAs<
+                lcl::raster_protocol::SetExternalBufferFence>(
+                header, payload, Opcode::SetExternalBufferFence)) {
+            auto* surface = authorizedSurface(client, fence->grant);
+            const ExternalKey key{fence->bufferId, fence->contentRevision};
+            if (!surface || receivedFd < 0) {
+                if (receivedFd >= 0) close(receivedFd);
+                return;
+            }
+            const auto found = surface->externalBuffers.find(key);
+            if (found == surface->externalBuffers.end() ||
+                found->second.transport !=
+                    lcl::raster_protocol::ExternalBufferTransport::
+                        DmaBufArgb8888) {
+                close(receivedFd);
+                return;
+            }
+            if (found->second.acquireFenceFd >= 0) {
+                close(found->second.acquireFenceFd);
+            }
+            found->second.acquireFenceFd = receivedFd;
             return;
         }
 
@@ -1001,6 +1273,7 @@ private:
             // visible together; a failed replay never advances either base.
             surfaceIt->second.retainedNodes = std::move(nextNodes);
             surfaceIt->second.retainedRootId = nextRootId;
+            pruneExternalBuffers(surfaceIt->second);
         }
         if (frame.displayListFd >= 0) close(frame.displayListFd);
     }
@@ -1160,6 +1433,8 @@ private:
         const bool retainedPresentationTransaction =
             isRetainedPresentationOnly(
                 submit, mutations, surface.retainedNodes);
+        const bool externalBufferTransaction = isExternalBufferOnly(
+            submit, mutations, surface.retainedNodes);
         const bool invalidatesRetainedTemplate =
             invalidatesRetainedCompositionTemplate(
                 mutations, surface.retainedNodes, nextNodes);
@@ -1169,10 +1444,54 @@ private:
             nextNodes, nextLayerNamespaces,
             [this] { return m_nextCachedLayerId++; },
             replacesRetainedScene(submit),
-            scrollTransformTransaction || retainedPresentationTransaction,
+            scrollTransformTransaction || retainedPresentationTransaction ||
+                externalBufferTransaction,
             invalidatesRetainedTemplate);
         if (!tiled) return false;
-        const lcl::graphics::DisplayList& displayList = tiled->displayList;
+        auto resolvedCommands = std::make_shared<std::vector<
+            lcl::graphics::DisplayCommand>>(tiled->displayList.commands());
+        bool requiresGpuExternal = false;
+        for (auto& command : *resolvedCommands) {
+            auto* external = std::get_if<
+                lcl::graphics::DrawExternalBufferCommand>(&command);
+            if (!external) continue;
+            const auto node = nextNodes.find(external->nodeId);
+            if (node == nextNodes.end() || !isExternalBuffer(node->second)) {
+                return false;
+            }
+            external->resourceKey = 0;
+            external->bufferId = node->second.externalBufferId;
+            external->contentRevision =
+                node->second.externalBufferRevision;
+            external->sourceWidth = 0;
+            external->sourceHeight = 0;
+            external->stridePixels = 0;
+            external->sampleKind =
+                lcl::graphics::ExternalBufferSampleKind::Unresolved;
+            if (external->bufferId == 0 || external->contentRevision == 0) {
+                continue;
+            }
+            const auto resource = surface.externalBuffers.find({
+                external->bufferId, external->contentRevision});
+            if (resource == surface.externalBuffers.end()) return false;
+            external->sourceWidth = static_cast<int>(resource->second.width);
+            external->sourceHeight = static_cast<int>(resource->second.height);
+            if (resource->second.transport ==
+                    lcl::raster_protocol::ExternalBufferTransport::
+                        ImmutableShmArgb8888) {
+                external->resourceKey = reinterpret_cast<uintptr_t>(
+                    resource->second.pixels.data());
+                external->stridePixels = static_cast<int>(
+                    resource->second.stride / sizeof(uint32_t));
+                external->sampleKind =
+                    lcl::graphics::ExternalBufferSampleKind::ArgbPixels;
+            } else {
+                requiresGpuExternal = true;
+            }
+        }
+        const auto immutableResolved = std::shared_ptr<const std::vector<
+            lcl::graphics::DisplayCommand>>(resolvedCommands);
+        const lcl::graphics::DisplayList displayList(immutableResolved);
         const auto releaseCachedLayers = [&](std::span<const uint64_t> ids) {
             for (const uint64_t id : ids) {
                 if (surface.gpuRenderer) {
@@ -1196,6 +1515,12 @@ private:
         if (rasterGpuFrame(surface, submit, displayList)) {
             commitTiledState();
             return true;
+        }
+
+        // DMA-BUF frames are never silently omitted from a software output.
+        if (requiresGpuExternal) {
+            discardPreparedCaches();
+            return false;
         }
 
         if (!retainedBaseMatches(
@@ -1238,11 +1563,16 @@ private:
         renderer.setFrameDamageRect(lcl::render::RasterRect{
             submit.damageX, submit.damageY,
             submit.damageWidth, submit.damageHeight});
-        renderer.replayDisplayList(
+        const bool replayed = renderer.replayDisplayList(
             displayList,
             {{submit.logicalWidth, submit.logicalHeight},
              {slot->width, slot->height}, submit.bufferScale});
         renderer.endFrame();
+        if (!replayed) {
+            slot->busy = false;
+            discardPreparedCaches();
+            return false;
+        }
         std::copy(surface.softwarePixels.begin(),
                   surface.softwarePixels.end(), slot->pixels);
         const PixelDamage damage = pixelDamageFor(
@@ -1321,8 +1651,76 @@ private:
             !surface.gpuRenderer->ensureFrameBackingCapacity(width, height)) {
             return false;
         }
+        auto gpuCommands = std::make_shared<std::vector<
+            lcl::graphics::DisplayCommand>>(displayList.commands());
+        std::vector<uint32_t> importedExternalTextures;
+        const auto releaseExternalTextures = [&] {
+            for (uint32_t texture : importedExternalTextures) {
+                surface.gpuRenderer->releaseDmaBufTexture(texture);
+            }
+            importedExternalTextures.clear();
+        };
+        for (auto& command : *gpuCommands) {
+            auto* external = std::get_if<
+                lcl::graphics::DrawExternalBufferCommand>(&command);
+            if (!external || external->bufferId == 0 ||
+                external->sampleKind !=
+                    lcl::graphics::ExternalBufferSampleKind::Unresolved) {
+                continue;
+            }
+            const auto resource = surface.externalBuffers.find({
+                external->bufferId, external->contentRevision});
+            if (resource == surface.externalBuffers.end() ||
+                resource->second.transport !=
+                    lcl::raster_protocol::ExternalBufferTransport::
+                        DmaBufArgb8888 ||
+                resource->second.bufferFd < 0) {
+                releaseExternalTextures();
+                return false;
+            }
+            if (resource->second.acquireFenceFd >= 0) {
+                const auto wait = surface.gpuContext->waitNativeFence(
+                    resource->second.acquireFenceFd);
+                if (wait ==
+                        lcl::platform::NativeFenceWaitResult::Unsupported) {
+                    releaseExternalTextures();
+                    return false;
+                }
+                resource->second.acquireFenceFd = -1;
+                if (wait == lcl::platform::NativeFenceWaitResult::
+                                ConsumedFailure) {
+                    releaseExternalTextures();
+                    return false;
+                }
+            }
+            const lcl::platform::DmaBufDescriptor descriptor{
+                resource->second.bufferFd,
+                resource->second.width,
+                resource->second.height,
+                resource->second.stride,
+                resource->second.format,
+                resource->second.modifier,
+            };
+            const uint32_t texture = surface.gpuRenderer->importDmaBuf(
+                external->bufferId, descriptor);
+            if (texture == 0) {
+                releaseExternalTextures();
+                return false;
+            }
+            importedExternalTextures.push_back(texture);
+            external->resourceKey = texture;
+            external->sampleKind =
+                lcl::graphics::ExternalBufferSampleKind::GlTexture;
+        }
+        const auto immutableGpuCommands = std::shared_ptr<const std::vector<
+            lcl::graphics::DisplayCommand>>(gpuCommands);
+        const lcl::graphics::DisplayList gpuDisplayList(
+            immutableGpuCommands);
         const auto target = surface.gpuContext->acquireDmaBufTarget();
-        if (!target) return false;
+        if (!target) {
+            releaseExternalTextures();
+            return false;
+        }
         const lcl::render::RetainedOutputDamageTracker::Frame outputFrame{
             submit.frameSerial,
             submit.baseFrameSerial,
@@ -1345,12 +1743,19 @@ private:
         surface.gpuRenderer->setFrameDamageRect(lcl::render::RasterRect{
             submit.damageX, submit.damageY,
             submit.damageWidth, submit.damageHeight});
-        surface.gpuRenderer->replayDisplayList(
-            displayList,
+        const bool replayed = surface.gpuRenderer->replayDisplayList(
+            gpuDisplayList,
             {{submit.logicalWidth, submit.logicalHeight},
              {width, height}, submit.bufferScale});
         surface.gpuRenderer->setOutputFrameDamageRect(outputDamage);
         surface.gpuRenderer->endFrame();
+        releaseExternalTextures();
+        if (!replayed) {
+            surface.gpuRenderer->clearExternalFrameTarget();
+            surface.gpuContext->cancelCurrentDmaBuf();
+            surface.gpuOutputDamage.invalidateBuffer(target->bufferId);
+            return false;
+        }
         const auto exported = surface.gpuContext->exportCurrentDmaBuf();
         surface.gpuRenderer->clearExternalFrameTarget();
         if (!exported || exported->fd < 0 || exported->androidHardwareBuffer) {
@@ -1448,6 +1853,51 @@ private:
         }
     }
 
+    void notifyExternalBufferRelease(
+            SurfaceState& surface, const ExternalKey& key,
+            ExternalBufferResource& resource,
+            lcl::raster_protocol::ExternalBufferReleaseReason reason) {
+        int releaseFenceFd = -1;
+        if (resource.transport ==
+                lcl::raster_protocol::ExternalBufferTransport::
+                    DmaBufArgb8888 &&
+            surface.gpuContext && surface.gpuRenderer) {
+            releaseFenceFd = surface.gpuContext->createNativeFence();
+            surface.gpuRenderer->discardDmaBufBuffer(key.id);
+        }
+        lcl::raster_protocol::ExternalBufferReleased released{};
+        released.bufferId = key.id;
+        released.contentRevision = key.revision;
+        released.reason = reason;
+        (void)lcl::raster_protocol::sendPacket(
+            resource.clientFd, Opcode::ExternalBufferReleased, released,
+            releaseFenceFd);
+        if (releaseFenceFd >= 0) close(releaseFenceFd);
+    }
+
+    void pruneExternalBuffers(SurfaceState& surface) {
+        std::unordered_set<ExternalKey, ExternalHash> active;
+        for (const auto& [_, node] : surface.retainedNodes) {
+            if ((node.flags &
+                 lcl::raster_protocol::kNodeHasExternalBuffer) != 0) {
+                active.insert({node.externalBufferId,
+                               node.externalBufferRevision});
+            }
+        }
+        for (auto resource = surface.externalBuffers.begin();
+             resource != surface.externalBuffers.end();) {
+            if (active.contains(resource->first)) {
+                ++resource;
+                continue;
+            }
+            notifyExternalBufferRelease(
+                surface, resource->first, resource->second,
+                lcl::raster_protocol::ExternalBufferReleaseReason::
+                    Superseded);
+            resource = surface.externalBuffers.erase(resource);
+        }
+    }
+
     void revokeSurface(const TokenKey& token) {
         const auto found = m_surfaces.find(token);
         if (found == m_surfaces.end()) return;
@@ -1463,6 +1913,12 @@ private:
         };
         removePending(m_systemFrames);
         removePending(m_appFrames);
+        for (auto& [key, resource] : found->second.externalBuffers) {
+            notifyExternalBufferRelease(
+                found->second, key, resource,
+                lcl::raster_protocol::ExternalBufferReleaseReason::
+                    SurfaceRevoked);
+        }
         m_surfaces.erase(found);
     }
 

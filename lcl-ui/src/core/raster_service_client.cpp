@@ -28,6 +28,11 @@ raster_protocol::RetainedNodeState toProtocolNode(
     result.propertyRevision = node.propertyRevision;
     result.boundaryReasons = static_cast<uint32_t>(node.boundaryReasons);
     result.siblingIndex = node.siblingIndex;
+    if (node.externalBufferId != 0 && node.externalBufferRevision != 0) {
+        result.flags |= raster_protocol::kNodeHasExternalBuffer;
+        result.externalBufferId = node.externalBufferId;
+        result.externalBufferRevision = node.externalBufferRevision;
+    }
     result.layoutX = node.layoutBounds.x;
     result.layoutY = node.layoutBounds.y;
     result.layoutWidth = node.layoutBounds.width;
@@ -103,6 +108,10 @@ void RasterServiceClient::configure(
 void RasterServiceClient::disconnect() noexcept {
     if (m_fd >= 0) close(m_fd);
     m_fd = -1;
+    for (auto& release : m_externalBufferReleases) {
+        if (release.releaseFenceFd >= 0) close(release.releaseFenceFd);
+    }
+    m_externalBufferReleases.clear();
 }
 
 bool RasterServiceClient::isConfigured() const noexcept {
@@ -193,6 +202,54 @@ bool RasterServiceClient::uploadImage(
     return sent;
 }
 
+bool RasterServiceClient::uploadExternalBuffer(
+        const ExternalBufferFrame& frame) {
+    constexpr uint32_t kMaxDimension = 16384;
+    if (!connectIfNeeded() || frame.bufferId == 0 ||
+        frame.contentRevision == 0 || frame.width == 0 || frame.height == 0 ||
+        frame.width > kMaxDimension || frame.height > kMaxDimension ||
+        frame.stride < frame.width * sizeof(uint32_t) ||
+        frame.stride % sizeof(uint32_t) != 0 ||
+        frame.stride > kMaxDimension * sizeof(uint32_t) ||
+        frame.format != kExternalBufferFormatArgb8888 ||
+        frame.bufferFd < 0) {
+        return false;
+    }
+    raster_protocol::UploadExternalBuffer upload{};
+    upload.grant = m_grant;
+    upload.bufferId = frame.bufferId;
+    upload.contentRevision = frame.contentRevision;
+    upload.transport = frame.transport ==
+            ExternalBufferTransport::ImmutableShmArgb8888
+        ? raster_protocol::ExternalBufferTransport::ImmutableShmArgb8888
+        : raster_protocol::ExternalBufferTransport::DmaBufArgb8888;
+    upload.width = frame.width;
+    upload.height = frame.height;
+    upload.stride = frame.stride;
+    upload.format = frame.format;
+    upload.modifier = frame.modifier;
+    upload.byteSize = frame.byteSize;
+    if (!raster_protocol::sendPacket(
+            m_fd, raster_protocol::Opcode::UploadExternalBuffer,
+            upload, frame.bufferFd)) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) disconnect();
+        return false;
+    }
+    if (frame.acquireFenceFd < 0) return true;
+
+    raster_protocol::SetExternalBufferFence fence{};
+    fence.grant = m_grant;
+    fence.bufferId = frame.bufferId;
+    fence.contentRevision = frame.contentRevision;
+    if (!raster_protocol::sendPacket(
+            m_fd, raster_protocol::Opcode::SetExternalBufferFence,
+            fence, frame.acquireFenceFd)) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) disconnect();
+        return false;
+    }
+    return true;
+}
+
 bool RasterServiceClient::commitTransaction(
         uint64_t configureSerial, uint64_t frameSerial,
         uint64_t baseFrameSerial, uint64_t geometryGeneration,
@@ -245,11 +302,11 @@ RasterServiceClient::pollDiscards() {
         int receivedFd = -1;
         const auto status = raster_protocol::receivePacket(
             m_fd, header, payload, receivedFd);
-        if (receivedFd >= 0) close(receivedFd);
         if (status == raster_protocol::ReceiveStatus::WouldBlock) break;
         if (status == raster_protocol::ReceiveStatus::Closed ||
             status == raster_protocol::ReceiveStatus::Error) {
             disconnect();
+            if (receivedFd >= 0) close(receivedFd);
             break;
         }
         if (status != raster_protocol::ReceiveStatus::Received) continue;
@@ -257,9 +314,21 @@ RasterServiceClient::pollDiscards() {
                 raster_protocol::FrameDiscarded>(
                 header, payload, raster_protocol::Opcode::FrameDiscarded)) {
             result.push_back(*discarded);
+        } else if (const auto* released = raster_protocol::payloadAs<
+                       raster_protocol::ExternalBufferReleased>(
+                       header, payload,
+                       raster_protocol::Opcode::ExternalBufferReleased)) {
+            m_externalBufferReleases.push_back({*released, receivedFd});
+            receivedFd = -1;
         }
+        if (receivedFd >= 0) close(receivedFd);
     }
     return result;
+}
+
+std::vector<ExternalBufferRelease>
+RasterServiceClient::takeExternalBufferReleases() {
+    return std::exchange(m_externalBufferReleases, {});
 }
 
 } // namespace lcl::ui

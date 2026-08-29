@@ -174,7 +174,7 @@ public:
     void endFrame();
 
     /** Replay logical drawing commands; target DPR is applied only here. */
-    void replayDisplayList(const lcl::graphics::DisplayList& displayList,
+    bool replayDisplayList(const lcl::graphics::DisplayList& displayList,
                            const lcl::graphics::RenderTarget& target,
                            const lcl::graphics::Matrix3& rootTransform = {});
     bool prepareCachedDisplayLayer(uint64_t id,
@@ -298,6 +298,8 @@ public:
         return importTexture(buffer);
     }
     void releaseDmaBufTexture(uint32_t texture);
+    /** Drop an idle imported producer buffer before notifying its owner. */
+    void discardDmaBufBuffer(uint64_t bufferId);
     /** Composite a premultiplied-alpha DMA-BUF texture in logical destination space. */
     void drawDmaBufTextureTransformed(float dstX, float dstY, int srcW, int srcH,
                                       int backingW, int backingH,

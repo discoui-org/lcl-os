@@ -65,6 +65,11 @@ void DisplayListBuilder::drawImage(const RectF& destination, uintptr_t resourceK
         sourceWidth, sourceHeight, stridePixels, opaque, opacity,
         cornerRadius, cornerRoundness, squareTopCorners});
 }
+
+void DisplayListBuilder::drawExternalBuffer(
+        uint64_t nodeId, const RectF& destination) {
+    m_commands.push_back(DrawExternalBufferCommand{nodeId, destination});
+}
 DisplayList DisplayListBuilder::build() const {
     return DisplayList(std::make_shared<const std::vector<DisplayCommand>>(m_commands));
 }

@@ -33,6 +33,7 @@ add_library(lcl-ui STATIC
     src/widgets/text.cpp
     src/widgets/text_field.cpp
     src/widgets/image.cpp
+    src/widgets/external_buffer.cpp
     src/widgets/button.cpp
     src/widgets/backdrop_surface.cpp
     src/widgets/filter_group.cpp

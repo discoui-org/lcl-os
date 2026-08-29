@@ -24,6 +24,7 @@
 #include "include/gpu/ganesh/GrBackendSurface.h"
 #include "include/gpu/ganesh/GrDirectContext.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
+#include "include/gpu/ganesh/SkImageGanesh.h"
 #include "include/gpu/ganesh/gl/GrGLBackendSurface.h"
 #include "include/gpu/ganesh/gl/GrGLDirectContext.h"
 #include "include/gpu/ganesh/gl/GrGLInterface.h"
@@ -205,6 +206,44 @@ struct SkiaDisplayListRenderer::Impl {
             };
         }
         return result;
+    }
+
+    sk_sp<SkImage> externalImage(
+            const lcl::graphics::DrawExternalBufferCommand& command) {
+        if (command.sourceWidth <= 0 || command.sourceHeight <= 0 ||
+            command.resourceKey == 0) {
+            return nullptr;
+        }
+        if (command.sampleKind ==
+                lcl::graphics::ExternalBufferSampleKind::ArgbPixels) {
+            if (command.stridePixels < command.sourceWidth) return nullptr;
+            const SkImageInfo info = SkImageInfo::Make(
+                command.sourceWidth, command.sourceHeight,
+                kBGRA_8888_SkColorType, kPremul_SkAlphaType,
+                SkColorSpace::MakeSRGB());
+            const SkPixmap pixmap(
+                info, reinterpret_cast<const uint32_t*>(command.resourceKey),
+                static_cast<size_t>(command.stridePixels) * sizeof(uint32_t));
+            return SkImages::RasterFromPixmapCopy(pixmap);
+        }
+        if (command.sampleKind !=
+                lcl::graphics::ExternalBufferSampleKind::GlTexture ||
+            !directContext) {
+            return nullptr;
+        }
+        const GrGLTextureInfo textureInfo{
+            GL_TEXTURE_2D,
+            static_cast<GrGLuint>(command.resourceKey),
+            GL_RGBA8,
+        };
+        const auto backendTexture = GrBackendTextures::MakeGL(
+            command.sourceWidth, command.sourceHeight,
+            skgpu::Mipmapped::kNo, textureInfo);
+        if (!backendTexture.isValid()) return nullptr;
+        return SkImages::BorrowTextureFrom(
+            directContext.get(), backendTexture,
+            kBottomLeft_GrSurfaceOrigin, kRGBA_8888_SkColorType,
+            kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
     }
 };
 
@@ -526,6 +565,21 @@ bool SkiaDisplayListRenderer::replay(
                                       SkMipmapMode::kLinear),
                     &paint);
                 canvas->restore();
+            } else if constexpr (std::is_same_v<
+                    T, lcl::graphics::DrawExternalBufferCommand>) {
+                if (op.sampleKind ==
+                        lcl::graphics::ExternalBufferSampleKind::Unresolved) {
+                    return;
+                }
+                auto image = m_impl->externalImage(op);
+                if (!image || op.destination.isEmpty()) {
+                    replaySucceeded = false;
+                    return;
+                }
+                canvas->drawImageRect(
+                    image, toSkRect(op.destination),
+                    SkSamplingOptions(SkFilterMode::kLinear,
+                                      SkMipmapMode::kNone));
             }
         }, command);
     }

@@ -4,6 +4,7 @@
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-graphics/display_list_wire.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
+#include "lcl-ui/widgets/external_buffer.hpp"
 #include <iostream>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -144,6 +145,7 @@ struct WindowApp::PrivateRenderState {
         hasSnapshot = false;
         scrollTransformTransaction = false;
         retainedPresentationTransaction = false;
+        externalBufferTransaction = false;
         invalidatesRetainedTemplate = false;
         retainedPresentationLayers.clear();
     }
@@ -178,6 +180,19 @@ struct WindowApp::PrivateRenderState {
                         nextPresentationLayers.contains(update.node.id) &&
                         isRetainedPresentationUpdate(
                             update.node, *previous);
+                });
+        externalBufferTransaction =
+            !transaction.replacesTree && transaction.creates.empty() &&
+            transaction.removals.empty() && !transaction.updates.empty() &&
+            std::all_of(
+                transaction.updates.begin(), transaction.updates.end(),
+                [&](const auto& update) {
+                    const auto* previous = findRetainedNode(
+                        tree, update.node.id);
+                    return previous && !update.contentChanged &&
+                        update.propertiesChanged &&
+                        !isWithinScrollContent(next, update.node.id) &&
+                        isExternalBufferUpdate(update.node, *previous);
                 });
         invalidatesRetainedTemplate = false;
         if (!transaction.replacesTree) {
@@ -218,6 +233,12 @@ struct WindowApp::PrivateRenderState {
                                 findRetainedNode(tree, update.node.id);
                             return !previous || !isScrollTranslationUpdate(
                                 update.node, *previous);
+                        }
+                        if (const auto* previous =
+                                findRetainedNode(tree, update.node.id);
+                            previous && isExternalBufferUpdate(
+                                update.node, *previous)) {
+                            return false;
                         }
                         return !isWithinScrollContent(next, update.node.id);
                     });
@@ -286,6 +307,10 @@ struct WindowApp::PrivateRenderState {
         return retainedPresentationTransaction;
     }
 
+    bool isExternalBufferOnly() const noexcept {
+        return externalBufferTransaction;
+    }
+
     bool isRetainedPresentationLayer(uint64_t id) const noexcept {
         return retainedPresentationLayers.contains(id);
     }
@@ -336,6 +361,13 @@ private:
         return isScrollViewport(node) || isScrollContent(node);
     }
 
+    static bool isExternalBuffer(
+            const detail::RetainedRenderNode& node) noexcept {
+        return detail::hasBoundaryReason(
+            node.boundaryReasons,
+            detail::RenderBoundaryReason::ExternalBuffer);
+    }
+
     static bool isRetainedPresentationCandidate(
             const detail::RetainedRenderNode& node) noexcept {
         constexpr auto kRoot = detail::RenderBoundaryReason::Root;
@@ -348,6 +380,7 @@ private:
         return presentation &&
             !detail::hasBoundaryReason(node.boundaryReasons, kRoot) &&
             !isScrollBoundary(node) &&
+            !isExternalBuffer(node) &&
             node.layoutBounds.width > 0.0f &&
             node.layoutBounds.height > 0.0f &&
             node.layoutBounds.width <= 2048.0f &&
@@ -404,7 +437,14 @@ private:
                     return isScrollBoundary(descendant) &&
                         descendsFrom(candidate, descendant.id, node.id);
                 });
-            if (!containsScroll) result.insert(node.id);
+            const bool containsExternal = std::any_of(
+                candidate.retainedNodes.begin(),
+                candidate.retainedNodes.end(), [&](const auto& descendant) {
+                    return isExternalBuffer(descendant) &&
+                        (descendant.id == node.id || descendsFrom(
+                            candidate, descendant.id, node.id));
+                });
+            if (!containsScroll && !containsExternal) result.insert(node.id);
         }
         return result;
     }
@@ -472,6 +512,9 @@ private:
             same(previous.presentation.rotationRadians, 0.0f) &&
             same(node.presentation.originX, previous.presentation.originX) &&
             same(node.presentation.originY, previous.presentation.originY) &&
+            node.externalBufferId == previous.externalBufferId &&
+            node.externalBufferRevision ==
+                previous.externalBufferRevision &&
             node.children == previous.children;
     }
 
@@ -494,6 +537,31 @@ private:
             node.children == previous.children;
     }
 
+    static bool isExternalBufferUpdate(
+            const detail::RetainedRenderNode& node,
+            const detail::RetainedRenderNode& previous) noexcept {
+        return isExternalBuffer(node) && isExternalBuffer(previous) &&
+            node.parentId == previous.parentId &&
+            node.siblingIndex == previous.siblingIndex &&
+            node.boundaryReasons == previous.boundaryReasons &&
+            sameRect(node.layoutBounds, previous.layoutBounds) &&
+            sameRect(node.presentationBounds, previous.presentationBounds) &&
+            sameOptionalRect(node.clipBounds, previous.clipBounds) &&
+            node.presentation.opacity == previous.presentation.opacity &&
+            node.presentation.translationX == previous.presentation.translationX &&
+            node.presentation.translationY == previous.presentation.translationY &&
+            node.presentation.scaleX == previous.presentation.scaleX &&
+            node.presentation.scaleY == previous.presentation.scaleY &&
+            node.presentation.rotationRadians ==
+                previous.presentation.rotationRadians &&
+            node.presentation.originX == previous.presentation.originX &&
+            node.presentation.originY == previous.presentation.originY &&
+            node.children == previous.children &&
+            (node.externalBufferId != previous.externalBufferId ||
+             node.externalBufferRevision !=
+                 previous.externalBufferRevision);
+    }
+
     detail::RenderNodeCompiler compiler;
     detail::RenderTreeDiffer differ;
     detail::RenderTree tree;
@@ -501,6 +569,7 @@ private:
     bool hasSnapshot{false};
     bool scrollTransformTransaction{false};
     bool retainedPresentationTransaction{false};
+    bool externalBufferTransaction{false};
     bool invalidatesRetainedTemplate{false};
     std::unordered_set<uint64_t> retainedPresentationLayers;
 };
@@ -617,6 +686,7 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     m_privateRenderState->reset();
     m_scrollTransformFastPathReady = false;
     m_retainedPresentationFastPathReady = false;
+    m_externalBufferFastPathReady = false;
     m_transients.setWindowRoot(m_windowRoot.get());
     m_windowRoot->markLayoutDirty();
     m_windowRoot->invalidatePaint();
@@ -817,6 +887,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     m_ipcConnected = true;
     m_ownsSocketFd = true;
     m_uploadedImageRevisions.clear();
+    m_uploadedExternalBuffers.clear();
     m_backingWidth = m_width;
     m_backingHeight = m_height;
     // Decoration state belongs to the surface contract, not to a later frame.
@@ -927,20 +998,40 @@ void WindowApp::pollIPC() {
         m_retainedRasterFrameSerial = 0;
         m_scrollTransformFastPathReady = false;
         m_retainedPresentationFastPathReady = false;
+        m_externalBufferFastPathReady = false;
         m_frameGateOpen = true;
         m_firstFrame = true;
+    }
+    for (const auto& released :
+         m_rasterClient->takeExternalBufferReleases()) {
+        const auto found = m_uploadedExternalBuffers.find(
+            released.message.bufferId);
+        if (found != m_uploadedExternalBuffers.end() &&
+            found->second.contentRevision ==
+                released.message.contentRevision) {
+            if (found->second.completeRelease) {
+                found->second.completeRelease(released.releaseFenceFd);
+            } else if (released.releaseFenceFd >= 0) {
+                close(released.releaseFenceFd);
+            }
+            m_uploadedExternalBuffers.erase(found);
+        } else if (released.releaseFenceFd >= 0) {
+            close(released.releaseFenceFd);
+        }
     }
     if (rasterWasConnected && !m_rasterClient->isConnected()) {
         // rasterd is supervised independently. Keep compositor IPC and input
         // alive, restore frame credit, then resend the complete retained app
         // frame/resource state when the daemon's socket returns.
         m_uploadedImageRevisions.clear();
+        m_uploadedExternalBuffers.clear();
         m_submittedConfigureSerial = 0;
         m_submittedFrameSerial = 0;
         m_submittedGeometryGeneration = 0;
         m_retainedRasterFrameSerial = 0;
         m_scrollTransformFastPathReady = false;
         m_retainedPresentationFastPathReady = false;
+        m_externalBufferFastPathReady = false;
         m_frameGateOpen = true;
         m_firstFrame = true;
     }
@@ -1039,6 +1130,7 @@ void WindowApp::pollIPC() {
                         m_retainedRasterFrameSerial = 0;
                         m_scrollTransformFastPathReady = false;
                         m_retainedPresentationFastPathReady = false;
+                        m_externalBufferFastPathReady = false;
                         m_frameGateOpen = true;
                         m_firstFrame = true;
                     }
@@ -1080,10 +1172,12 @@ void WindowApp::pollIPC() {
                         (runtimeDirectory / "lcl-raster.sock").string(),
                         rasterGrant);
                     m_uploadedImageRevisions.clear();
+                    m_uploadedExternalBuffers.clear();
                     m_rasterConnectionGeneration = 0;
                     m_retainedRasterFrameSerial = 0;
                     m_scrollTransformFastPathReady = false;
                     m_retainedPresentationFastPathReady = false;
+                    m_externalBufferFastPathReady = false;
                     m_firstFrame = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::FramePresented &&
@@ -1129,6 +1223,7 @@ void WindowApp::pollIPC() {
                     m_retainedRasterFrameSerial = 0;
                     m_scrollTransformFastPathReady = false;
                     m_retainedPresentationFastPathReady = false;
+                    m_externalBufferFastPathReady = false;
                     m_frameGateOpen = true;
                     m_firstFrame = true;
                 }
@@ -1439,6 +1534,7 @@ void WindowApp::setExternalIpcSocket(int socketFd) {
     m_surfaceEnded = false;
     m_ownsSocketFd = false;
     m_uploadedImageRevisions.clear();
+    m_uploadedExternalBuffers.clear();
 }
 
 bool WindowApp::requestWindowAction(lcl::protocol::LCLWindowAction action,
@@ -1511,6 +1607,35 @@ bool WindowApp::uploadImageResource(const graphics::ImageResourceView& resource)
     const bool sent = m_rasterClient->uploadImage(resource);
     if (sent) m_uploadedImageRevisions[resource.id] = resource.contentRevision;
     return sent;
+}
+
+bool WindowApp::uploadExternalBufferResources(const Widget& widget) {
+    if (!widget.isVisible()) return true;
+    if (const auto* external = dynamic_cast<const ExternalBufferView*>(&widget)) {
+        if (const auto* stored = external->storedFrame()) {
+            const auto& descriptor = stored->descriptor;
+            const auto found = m_uploadedExternalBuffers.find(
+                descriptor.bufferId);
+            if (found == m_uploadedExternalBuffers.end() ||
+                found->second.contentRevision != descriptor.contentRevision) {
+                if (!m_rasterClient->uploadExternalBuffer(descriptor)) {
+                    return false;
+                }
+                m_uploadedExternalBuffers[descriptor.bufferId] = {
+                    descriptor.contentRevision,
+                    [release = stored->release](int fenceFd) {
+                        if (release->releaseFenceFd >= 0) {
+                            close(release->releaseFenceFd);
+                        }
+                        release->releaseFenceFd = fenceFd;
+                    }};
+            }
+        }
+    }
+    for (const auto& child : widget.getChildren()) {
+        if (child && !uploadExternalBufferResources(*child)) return false;
+    }
+    return true;
 }
 
 bool WindowApp::requestWindowDrag(float localX, float localY) {
@@ -1782,9 +1907,11 @@ bool WindowApp::renderFrame() {
         if (connectionGeneration != m_rasterConnectionGeneration) {
             // A fresh daemon has no retained scene or uploaded resources.
             m_uploadedImageRevisions.clear();
+            m_uploadedExternalBuffers.clear();
             m_retainedRasterFrameSerial = 0;
             m_scrollTransformFastPathReady = false;
             m_retainedPresentationFastPathReady = false;
+            m_externalBufferFastPathReady = false;
             m_rasterConnectionGeneration = connectionGeneration;
             m_firstFrame = true;
         }
@@ -1879,6 +2006,10 @@ bool WindowApp::renderFrame() {
     const bool retainedPresentationRecovery =
         !m_retainedPresentationFastPathReady &&
         retainedPresentationTransaction;
+    const bool externalBufferTransaction =
+        m_privateRenderState->isExternalBufferOnly();
+    const bool externalBufferOnly =
+        m_externalBufferFastPathReady && externalBufferTransaction;
     if (retainedPresentationRecovery) {
         // A recovered composition template must cover future transform
         // extents, not only the first old/new animation bounds. One complete
@@ -1888,7 +2019,7 @@ bool WindowApp::renderFrame() {
         frameDamage = surfaceBounds;
     }
     const bool propertyOnly =
-        scrollTransformOnly || retainedPresentationOnly;
+        scrollTransformOnly || retainedPresentationOnly || externalBufferOnly;
     m_canvas->beginFrame();
 
     const auto paintStarted = std::chrono::steady_clock::now();
@@ -2061,9 +2192,11 @@ bool WindowApp::renderFrame() {
                 // The patch was recorded against a daemon that disappeared.
                 // Retry as a complete retained-scene replacement.
                 m_uploadedImageRevisions.clear();
+                m_uploadedExternalBuffers.clear();
                 m_retainedRasterFrameSerial = 0;
                 m_scrollTransformFastPathReady = false;
                 m_retainedPresentationFastPathReady = false;
+                m_externalBufferFastPathReady = false;
                 m_rasterConnectionGeneration = connectionGeneration;
                 m_firstFrame = true;
                 return false;
@@ -2094,7 +2227,19 @@ bool WindowApp::renderFrame() {
                         return draw && m_privateRenderState->
                             isRetainedPresentationLayer(draw->id);
                     });
+            const bool frameHasExternalBufferPlaceholder =
+                !propertyOnly && std::any_of(
+                    frame->displayList.commands().begin(),
+                    frame->displayList.commands().end(),
+                    [](const auto& command) {
+                        return std::holds_alternative<
+                            graphics::DrawExternalBufferCommand>(command);
+                    });
             bool resourcesReady = true;
+            if (m_windowRoot &&
+                !uploadExternalBufferResources(*m_windowRoot)) {
+                resourcesReady = false;
+            }
             if (!propertyOnly) {
                 for (const auto& resource : frame->imageResources) {
                     if (!uploadImageResource(resource)) {
@@ -2127,6 +2272,8 @@ bool WindowApp::renderFrame() {
                         // The daemon restarted between resource admission and
                         // frame submission. Retry with a complete resource set.
                         m_uploadedImageRevisions.clear();
+                        m_uploadedExternalBuffers.clear();
+                        m_externalBufferFastPathReady = false;
                         m_firstFrame = true;
                     }
                     m_rasterConnectionGeneration = connectionGeneration;
@@ -2141,6 +2288,8 @@ bool WindowApp::renderFrame() {
                     if (replacesRetainedScene) {
                         m_scrollTransformFastPathReady =
                             m_privateRenderState->hasScrollContent();
+                        m_externalBufferFastPathReady =
+                            frameHasExternalBufferPlaceholder;
                     } else if (scrollTransformTransaction) {
                         // If the previous template was invalidated, this
                         // ordinary DisplayList frame repopulates it. Later
@@ -2163,13 +2312,23 @@ bool WindowApp::renderFrame() {
                             m_retainedPresentationFastPathReady = false;
                         }
                     }
+                    if (!externalBufferOnly &&
+                        frameHasExternalBufferPlaceholder) {
+                        m_externalBufferFastPathReady = true;
+                    } else if (!externalBufferOnly &&
+                               m_privateRenderState->
+                                   invalidatesRetainedCompositionTemplate()) {
+                        m_externalBufferFastPathReady = false;
+                    }
                 }
             }
             if (!frameAttached) {
                 m_uploadedImageRevisions.clear();
+                m_uploadedExternalBuffers.clear();
                 m_retainedRasterFrameSerial = 0;
                 m_scrollTransformFastPathReady = false;
                 m_retainedPresentationFastPathReady = false;
+                m_externalBufferFastPathReady = false;
                 m_rasterClient->disconnect();
                 m_firstFrame = true;
                 std::cerr << "[lcl-ui ERROR] DisplayList commit failed for "

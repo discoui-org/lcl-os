@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -61,10 +62,16 @@ public:
     bool presentsToDisplay() const override { return false; }
     bool present() override { return true; }
     bool readback(uint32_t* destination, uint32_t width, uint32_t height) override;
-    lcl::platform::TextureHandle importTexture(const lcl::platform::INativeBuffer&) override {
+    lcl::platform::TextureHandle importTexture(
+        const lcl::platform::INativeBuffer&) override {
         return lcl::platform::kInvalidTextureHandle;
     }
-    void releaseTexture(lcl::platform::TextureHandle) override {}
+    lcl::platform::TextureHandle importDmaBuf(
+        const lcl::platform::DmaBufDescriptor& descriptor) override;
+    void releaseTexture(lcl::platform::TextureHandle texture) override;
+    lcl::platform::NativeFenceWaitResult waitNativeFence(
+        int fenceFd) override;
+    int createNativeFence() override;
 
     bool hasDmaBufPool() const { return !m_dmaBufs.empty(); }
     bool usesAndroidHardwareBuffer() const {
@@ -128,6 +135,7 @@ private:
     uint32_t m_dmaBufCapacityWidth{0};
     uint32_t m_dmaBufCapacityHeight{0};
     bool m_dmaBufTransportLogged{false};
+    std::unordered_map<uint32_t, EGLImageKHR> m_importedDmaBufImages;
 };
 
 } // namespace lcl::render
