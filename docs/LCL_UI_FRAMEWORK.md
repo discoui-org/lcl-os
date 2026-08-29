@@ -22,7 +22,7 @@
 ## 1. Architecture Overview
 
 `lcl-ui` applications execute in user space as standalone processes. Their
-normative frame boundary is a ready immutable layer. Protocol v26 creates a
+normative frame boundary is a ready immutable layer. Protocol v27 creates a
 surface and returns a producer grant; `WindowApp` submits sealed logical frames
 to central `lcl-rasterd` over `/Runtime/lcl-raster.sock`. Only rasterd publishes
 the resulting layer to `lcl-core` through its private compositor channel.
@@ -50,7 +50,7 @@ rasterization, or DisplayList replay. If an application is late, its last
 committed layer remains visible and compositor-owned motion continues. A new
 surface becomes visible only after its first complete layer commit.
 
-Protocol v26 has no app-facing `CommitDisplayList`, SHM attach, DMA-BUF attach,
+Protocol v27 has no app-facing `CommitDisplayList`, SHM attach, DMA-BUF attach,
 or native-buffer attach message. These are raster-service backend details, not
 `lcl-ui` APIs.
 
@@ -72,7 +72,8 @@ frame restoration after rasterd restart, and presentation-credit pacing.
 - `void setTheme(theme::Theme theme)`: Replaces the window-owned semantic theme and propagates it through the widget tree and hosted popup surfaces.
 - `const theme::Theme& getTheme() const`: Returns the active window theme.
 - `void setAppId(std::string appId)`: Sets the required canonical application identity before connecting.
-- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v26 normal, popup, or attached surface.
+- `bool setResizeConstraints(WindowResizeConstraints constraints)`: Declares an optional logical content-size grid before connecting. Interactive toplevel resize is quantized by the compositor before it configures the content surface and attached WindowGroup participants.
+- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to `lcl-core` IPC and creates a protocol-v27 normal, popup, or attached surface.
 - `registerLocalTransient(...)`: Registers an ordinary absolute-positioned Widget in the single WindowRoot tree with generic lifecycle/dismissal policy.
 - `configurePopupSurface(parentSurfaceId, role, x, y)`: Configures this `WindowApp` as a compositor-level popup that reuses the normal configure and buffer path.
 - `hostSurface(...)`: Owns and ticks an additional generic `WindowApp` surface from the same event loop; it contains no Popover-specific policy.

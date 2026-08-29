@@ -42,12 +42,15 @@ public:
     /** Notify the HomeScreen that its stationary launch icon may be shown. */
     bool publishLaunchIconVisibility(const SurfaceRegistry::SurfaceEntry& entry,
                                      bool visible) const;
+    /** Commit a complete WindowGroup's configured parent geometry. */
+    bool commitAtomicSurfaceGeometry(uint32_t windowId,
+                                     uint64_t generation);
 
 private:
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     using SurfaceEffectRegion = SurfaceRegistry::SurfaceEffectRegion;
     void recomputeSystemReservedZone();
-    void commitClientSurfaceGeometry(SurfaceEntry& entry);
+    bool commitClientSurfaceGeometry(SurfaceEntry& entry);
     bool mapSurface(SurfaceRegistry::Key surfaceKey, SurfaceEntry& entry,
                     pid_t clientPid);
     void grantRasterSurface(SurfaceEntry& entry, uint32_t surfaceId,

@@ -202,22 +202,41 @@ TEST(WindowManagerTest, IntermediateResizeCommitPreservesNewerPointerTarget) {
     ASSERT_TRUE(manager.initialize(1000, 700));
     const uint32_t id = manager.createWindow("Resize", 80, 90, 400, 300);
     auto& window = manager.getWindowsMutable().back();
+    window.pendingX = 60;
     window.pendingWidth = 560;
     window.pendingHeight = 520;
-    window.activeResizeEdge = lcl::render::ResizeEdge::Bottom;
+    window.activeResizeEdge = lcl::render::ResizeEdge::BottomLeft;
     window.anchorBottom = window.y + window.pendingHeight;
+    window.geometryGeneration = 9;
+    window.committedGeometryGeneration = 7;
 
-    manager.commitSurfaceGeometry(id, 560, 420, true);
+    EXPECT_TRUE(manager.commitSurfaceGeometry(
+        id, 550, 420, true, 70, 90, 8));
     const auto* intermediate = findWindow(manager, id);
     ASSERT_NE(intermediate, nullptr);
+    EXPECT_EQ(intermediate->x, 70);
+    EXPECT_EQ(intermediate->pendingX, 60);
+    EXPECT_EQ(intermediate->width, 550);
+    EXPECT_EQ(intermediate->pendingWidth, 560);
     EXPECT_EQ(intermediate->height, 420);
     EXPECT_EQ(intermediate->pendingHeight, 520);
-    EXPECT_EQ(intermediate->activeResizeEdge, lcl::render::ResizeEdge::Bottom);
+    EXPECT_FLOAT_EQ(intermediate->presentationX, 70.0f);
+    EXPECT_FLOAT_EQ(intermediate->presentationWidth, 550.0f);
+    EXPECT_FLOAT_EQ(intermediate->presentationHeight, 420.0f);
+    EXPECT_EQ(intermediate->committedGeometryGeneration, 8u);
+    EXPECT_EQ(intermediate->activeResizeEdge,
+              lcl::render::ResizeEdge::BottomLeft);
 
-    manager.commitSurfaceGeometry(id, 560, 520, false);
+    EXPECT_FALSE(manager.commitSurfaceGeometry(
+        id, 560, 400, true, 80, 90, 7));
+    EXPECT_TRUE(manager.commitSurfaceGeometry(
+        id, 560, 520, false, 60, 90, 9));
     const auto* final = findWindow(manager, id);
     ASSERT_NE(final, nullptr);
+    EXPECT_EQ(final->x, 60);
+    EXPECT_EQ(final->pendingX, 60);
     EXPECT_EQ(final->pendingHeight, 520);
+    EXPECT_EQ(final->committedGeometryGeneration, 9u);
     EXPECT_EQ(final->activeResizeEdge, lcl::render::ResizeEdge::None);
 }
 
@@ -431,4 +450,42 @@ TEST(WindowManagerRegressionTest, SuperRightDragResizesWindow) {
     up.pressed = false;
     manager.processInputEvent(up);
     EXPECT_FALSE(findWindow(manager, id)->isResizing());
+}
+
+TEST(WindowManagerRegressionTest,
+     InteractiveResizeUsesCompositorOwnedContentGrid) {
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1920, 1080));
+    const uint32_t id = manager.createWindow(
+        "Grid constrained", 100, 100, 400, 300);
+    ASSERT_TRUE(manager.setResizeConstraints(
+        id, {16.0f, 16.0f, 8.0f, 16.0f}));
+
+    lcl::core::InputEvent motion{};
+    motion.type = lcl::core::InputEventType::PointerMotion;
+    motion.absoluteX = 450.0;
+    motion.absoluteY = 350.0;
+    manager.processInputEvent(motion);
+
+    lcl::core::InputEvent down{};
+    down.type = lcl::core::InputEventType::PointerButton;
+    down.button = lcl::platform::PointerButton::Right;
+    down.pressed = true;
+    down.superPressed = true;
+    ASSERT_TRUE(manager.processInputEvent(down));
+
+    motion.absoluteX = 515.0;
+    motion.absoluteY = 397.0;
+    ASSERT_TRUE(manager.processInputEvent(motion));
+
+    const auto* resized = findWindow(manager, id);
+    ASSERT_NE(resized, nullptr);
+    EXPECT_FLOAT_EQ(resized->pendingWidth, 464.0f);
+    // SSD frame height = 304 logical content pixels + 32 titlebar pixels.
+    EXPECT_FLOAT_EQ(resized->pendingHeight, 336.0f);
+    EXPECT_FLOAT_EQ(
+        std::fmod(resized->pendingWidth - 16.0f, 8.0f), 0.0f);
+    EXPECT_FLOAT_EQ(
+        std::fmod(resized->pendingHeight - 32.0f - 16.0f, 16.0f),
+        0.0f);
 }

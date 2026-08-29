@@ -15,16 +15,14 @@ bool SurfaceTransactionCoordinator::begin(
             return false;
         }
     }
-    // Replacement is atomic too: validation above cannot mutate state, and
-    // only a complete already-published configure batch reaches this point.
-    // Clear participants that belonged solely to the superseded generation
-    // before installing the new membership set.
-    for (auto& [_, entry] : surfaces) {
-        if (entry.windowId != windowId ||
-            entry.atomicConfigureGeneration == generation) continue;
-        entry.atomicConfigureGeneration = 0;
-        entry.atomicConfigureParticipantCount = 0;
-        entry.atomicConfigureIssued = false;
+    // One WindowGroup may raster only one generation at a time. New pointer
+    // targets stay in WindowManager until this barrier is promoted and
+    // presented; replacing it here would reintroduce raster starvation.
+    for (const auto& [_, entry] : surfaces) {
+        if (entry.windowId == windowId &&
+            entry.atomicConfigureGeneration != 0) {
+            return false;
+        }
     }
     const auto participantCount = static_cast<uint32_t>(participants.size());
     for (const auto key : participants) {
@@ -51,7 +49,7 @@ void SurfaceTransactionCoordinator::cancel(
 }
 
 bool SurfaceTransactionCoordinator::promoteReady(
-        SurfaceRegistry& surfaces) noexcept {
+        SurfaceRegistry& surfaces, const ReadyHandler& readyHandler) {
     struct GroupState {
         uint32_t windowId{0};
         uint64_t generation{0};
@@ -84,6 +82,14 @@ bool SurfaceTransactionCoordinator::promoteReady(
     bool incomplete = false;
     for (const auto& group : groups) {
         if (!group.ready || group.seen != group.expected) {
+            incomplete = true;
+            continue;
+        }
+        // The WindowManager presentation rect is part of the same transaction
+        // as the accepted parent/frame layers. Commit it before removing the
+        // barrier so the renderer can never observe mixed geometry.
+        if (readyHandler &&
+            !readyHandler(group.windowId, group.generation)) {
             incomplete = true;
             continue;
         }

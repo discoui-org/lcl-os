@@ -1,4 +1,3 @@
-#include <cmath>
 #include <iostream>
 #include <memory>
 
@@ -62,6 +61,10 @@ int main() {
                             kSurfaceHeight, "LCL Terminal");
   window.setAppId("org.lcl.terminal");
   window.setInitialBounds(80, 60, kSurfaceWidth, kSurfaceHeight);
+  if (!window.setResizeConstraints({16.0f, 16.0f, 8.0f, 16.0f})) {
+    std::cerr << "[LCL Terminal ERROR] Invalid resize constraints.\n";
+    return 1;
+  }
   window.setDecorationMode(lcl::protocol::LCLDecorationMode::SSD);
   window.setEdgeToEdge(true);
   window.setWindowCornerStyle(kCornerRadius, 2.0f);
@@ -111,22 +114,6 @@ int main() {
   };
   updateTerminalGeometry(kSurfaceWidth, kSurfaceHeight);
   window.setOnResize(updateTerminalGeometry);
-  window.setResizeTransform([](float requestedWidth,
-                               float requestedHeight,
-                               lcl::protocol::LCLConfigureResizeReason reason) {
-    if (reason != lcl::protocol::LCLConfigureResizeReason::Interactive) {
-      return std::pair<float, float>{requestedWidth, requestedHeight};
-    }
-    int contentWidth = static_cast<int>(std::floor(requestedWidth));
-    int contentHeight = static_cast<int>(std::floor(requestedHeight));
-    lcl::apps::TerminalApp::getSnappedDimensions(contentWidth, contentHeight,
-                                                 contentWidth, contentHeight);
-    return std::pair<float, float>{
-        static_cast<float>(contentWidth),
-        static_cast<float>(contentHeight),
-    };
-  });
-
   window.setOnRawKeyEvent([&](const lcl::ui::KeyEvent &event) {
     if (event.type != lcl::ui::KeyEventType::KeyDown ||
         !isTerminalControlKey(event.key, event.modifiers)) {

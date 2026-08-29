@@ -6,6 +6,27 @@
 
 namespace lcl::render {
 
+namespace {
+
+float quantizeResizeExtent(float value, float minimum, float maximum,
+                           float base, float increment) noexcept {
+    value = std::clamp(value, minimum, maximum);
+    if (increment <= 0.0f) {
+        return std::clamp(std::round(value), minimum, maximum);
+    }
+
+    const float firstStep = std::ceil((minimum - base) / increment);
+    const float lastStep = std::floor((maximum - base) / increment);
+    if (lastStep < firstStep) {
+        return std::clamp(std::round(value), minimum, maximum);
+    }
+    const float requestedStep = std::floor((value - base) / increment);
+    const float step = std::clamp(requestedStep, firstStep, lastStep);
+    return std::clamp(base + step * increment, minimum, maximum);
+}
+
+} // namespace
+
 WindowManager::WindowManager() = default;
 WindowManager::~WindowManager() = default;
 
@@ -271,15 +292,30 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                     win.resizeEdge == ResizeEdge::BottomLeft ||
                     win.resizeEdge == ResizeEdge::BottomRight;
 
-                // Interactive window extents are whole logical pixels. DPR is
-                // applied later at the raster/buffer boundary, so a 2x output
-                // advances the physical edge by two pixels without leaking
-                // device-pixel quantization back into WindowManager geometry.
+                // Interactive extents are compositor-owned logical sizes. DPR
+                // is applied later at the raster/buffer boundary. An optional
+                // application grid is resolved here so every WindowGroup
+                // participant receives the same final geometry generation.
                 if (resizesLeft || resizesRight) {
-                    newW = std::clamp(std::round(newW), minW, maxW);
+                    newW = quantizeResizeExtent(
+                        newW, minW, maxW,
+                        win.resizeConstraints.baseWidth,
+                        win.resizeConstraints.widthIncrement);
                 }
                 if (resizesTop || resizesBottom) {
-                    newH = std::clamp(std::round(newH), minH, maxH);
+                    const float titleHeight =
+                        win.decorationMode == DecorationMode::SSD
+                        ? 32.0f : 0.0f;
+                    const float minContentHeight =
+                        std::max(1.0f, minH - titleHeight);
+                    const float maxContentHeight =
+                        std::max(minContentHeight, maxH - titleHeight);
+                    const float contentHeight = quantizeResizeExtent(
+                        std::max(1.0f, newH - titleHeight),
+                        minContentHeight, maxContentHeight,
+                        win.resizeConstraints.baseHeight,
+                        win.resizeConstraints.heightIncrement);
+                    newH = contentHeight + titleHeight;
                 }
                 if (resizesLeft) {
                     newX = win.initialX + win.initialWidth - newW;
@@ -295,9 +331,10 @@ WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event
                     win.pendingY = newY;
                     win.pendingWidth = newW;
                     win.pendingHeight = newH;
-                    // Every coalescible resize target is a distinct atomic
-                    // generation. InputRouter may discard an older in-flight
-                    // raster batch without ever publishing its geometry.
+                    // Every coalescible resize target is a distinct model
+                    // generation. InputRouter keeps at most one raster batch
+                    // in flight and publishes only the newest queued target
+                    // after that batch has been presented.
                     if (++win.geometryGeneration == 0) {
                         win.geometryGeneration = 1;
                     }
@@ -614,13 +651,22 @@ bool WindowManager::commitSurfaceGeometry(uint32_t windowId, float frameW, float
     if (it == m_windows.end()) return false;
 
     Window& win = *it;
-    if (expectedGeneration != 0 && expectedGeneration != win.geometryGeneration) {
-        return false;
+    if (expectedGeneration != 0) {
+        const bool futureGeneration =
+            expectedGeneration > win.geometryGeneration;
+        const bool alreadyCommitted =
+            expectedGeneration <= win.committedGeometryGeneration;
+        const bool obsoleteFinalTarget =
+            expectedGeneration != win.geometryGeneration &&
+            !preservePendingTarget;
+        if (futureGeneration || alreadyCommitted || obsoleteFinalTarget) {
+            return false;
+        }
     }
-    float finalX = win.x;
-    float finalY = win.y;
+    float finalX = expectedGeneration != 0 ? configuredX : win.x;
+    float finalY = expectedGeneration != 0 ? configuredY : win.y;
 
-    if (win.isAtomicTargetTransitioning()) {
+    if (expectedGeneration == 0 && win.isAtomicTargetTransitioning()) {
         finalX = configuredX;
         finalY = configuredY;
     }
@@ -628,7 +674,7 @@ bool WindowManager::commitSurfaceGeometry(uint32_t windowId, float frameW, float
     // Use activeResizeEdge (remains active across client commits until queue is fully drained)
     ResizeEdge edgeToUse = (win.isResizing() ? win.resizeEdge : win.activeResizeEdge);
 
-    if (edgeToUse != ResizeEdge::None) {
+    if (edgeToUse != ResizeEdge::None && expectedGeneration == 0) {
         const float rightAnchor = (win.anchorRight > 0.0f ? win.anchorRight : (win.isResizing() ? win.pendingX + win.pendingWidth : win.x + win.width));
         const float bottomAnchor = (win.anchorBottom > 0.0f ? win.anchorBottom : (win.isResizing() ? win.pendingY + win.pendingHeight : win.y + win.height));
 
@@ -649,15 +695,16 @@ bool WindowManager::commitSurfaceGeometry(uint32_t windowId, float frameW, float
         } else if (win.isResizing()) {
             finalY = win.pendingY;
         }
+    }
 
-        // A commit can acknowledge the only in-flight configure while pointer
-        // motion has already advanced pending geometry. Keep the resize anchor
-        // and newest target until the follow-up configure is committed.
-        if (!win.isResizing() && !preservePendingTarget) {
-            win.activeResizeEdge = ResizeEdge::None;
-            win.anchorRight = 0;
-            win.anchorBottom = 0;
-        }
+    // A commit can acknowledge the only in-flight configure while pointer
+    // motion has already advanced pending geometry. Keep the resize anchor and
+    // newest target until the follow-up configure is committed.
+    if (edgeToUse != ResizeEdge::None &&
+        !win.isResizing() && !preservePendingTarget) {
+        win.activeResizeEdge = ResizeEdge::None;
+        win.anchorRight = 0;
+        win.anchorBottom = 0;
     }
 
     if (win.width != frameW || win.height != frameH || win.x != finalX || win.y != finalY) {
@@ -687,6 +734,9 @@ bool WindowManager::commitSurfaceGeometry(uint32_t windowId, float frameW, float
         win.geometryPhase = GeometryPhase::Idle;
         win.atomicTargetMotionFinished = false;
     }
+    if (expectedGeneration != 0) {
+        win.committedGeometryGeneration = expectedGeneration;
+    }
     return true;
 }
 
@@ -705,6 +755,28 @@ void WindowManager::setDecorationMode(uint32_t windowId, DecorationMode mode) {
             break;
         }
     }
+}
+
+bool WindowManager::setResizeConstraints(
+        uint32_t windowId, ResizeConstraints constraints) {
+    constexpr float kMaxLogicalExtent = 16384.0f;
+    const auto valid = [kMaxLogicalExtent](float value) {
+        return std::isfinite(value) && value >= 0.0f &&
+            value <= kMaxLogicalExtent;
+    };
+    if (!valid(constraints.baseWidth) ||
+        !valid(constraints.baseHeight) ||
+        !valid(constraints.widthIncrement) ||
+        !valid(constraints.heightIncrement)) {
+        return false;
+    }
+    const auto window = std::find_if(
+        m_windows.begin(), m_windows.end(), [windowId](const Window& item) {
+            return item.id == windowId;
+        });
+    if (window == m_windows.end()) return false;
+    window->resizeConstraints = constraints;
+    return true;
 }
 
 void WindowManager::setEdgeToEdge(uint32_t windowId, bool enabled) {

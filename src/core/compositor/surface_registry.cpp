@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -168,29 +169,33 @@ void SurfaceRegistry::interruptGeometryTransaction(SurfaceEntry& entry,
 
 bool SurfaceRegistry::acceptsBufferCommit(const SurfaceEntry& entry,
                                           uint64_t configureSerial) noexcept {
-    // The serial identifies the configure generation. Buffer dimensions are
-    // deliberately not part of freshness validation: clients such as Terminal
-    // may constrain a requested resize to their cell grid and reply with the
-    // closest valid size for that same configure. WindowManager reconciles the
-    // accepted dimensions through commitSurfaceGeometry().
+    // The serial identifies the exact compositor-authored configure. Structural
+    // layer validation separately requires its visible dimensions to match the
+    // configured logical size at the active buffer scale.
     return configureSerial != 0 && configureSerial == entry.pendingConfigureSerial;
 }
 
-float SurfaceRegistry::committedLogicalExtent(uint32_t physicalExtent,
-                                              float requestedLogicalExtent,
-                                              float bufferScale) noexcept {
-    const float scale = std::isfinite(bufferScale) && bufferScale > 0.0f
-        ? bufferScale : 1.0f;
-    if (std::isfinite(requestedLogicalExtent) && requestedLogicalExtent > 0.0f) {
-        const uint32_t requestedPhysical = static_cast<uint32_t>(std::ceil(
-            requestedLogicalExtent * scale));
-        if (physicalExtent == requestedPhysical) {
-            // Preserve the exact fractional logical configure when the client
-            // accepted it verbatim; ceil(logical * scale) is not reversible.
-            return requestedLogicalExtent;
-        }
+bool SurfaceRegistry::matchesConfiguredBufferExtent(
+        const SurfaceEntry& entry, uint32_t physicalWidth,
+        uint32_t physicalHeight) noexcept {
+    if (!std::isfinite(entry.configuredWidth) || entry.configuredWidth <= 0.0f ||
+        !std::isfinite(entry.configuredHeight) || entry.configuredHeight <= 0.0f ||
+        !std::isfinite(entry.bufferScale) || entry.bufferScale <= 0.0f) {
+        return false;
     }
-    return static_cast<float>(physicalExtent) / scale;
+    const double expectedWidthValue = std::ceil(
+        static_cast<double>(entry.configuredWidth) * entry.bufferScale);
+    const double expectedHeightValue = std::ceil(
+        static_cast<double>(entry.configuredHeight) * entry.bufferScale);
+    constexpr double kMaxPhysicalExtent =
+        static_cast<double>(std::numeric_limits<uint32_t>::max());
+    if (expectedWidthValue <= 0.0 || expectedWidthValue > kMaxPhysicalExtent ||
+        expectedHeightValue <= 0.0 || expectedHeightValue > kMaxPhysicalExtent) {
+        return false;
+    }
+    const auto expectedWidth = static_cast<uint32_t>(expectedWidthValue);
+    const auto expectedHeight = static_cast<uint32_t>(expectedHeightValue);
+    return physicalWidth == expectedWidth && physicalHeight == expectedHeight;
 }
 
 bool SurfaceRegistry::hasOutstandingConfigure(const SurfaceEntry& entry) noexcept {

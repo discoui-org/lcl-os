@@ -44,6 +44,10 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     msg.launchOriginCornerRadius = 14.0f;
     msg.launchToken = 73;
     msg.appInstanceId = 91;
+    msg.resizeBaseWidth = 16.0f;
+    msg.resizeBaseHeight = 16.0f;
+    msg.resizeWidthIncrement = 8.0f;
+    msg.resizeHeightIncrement = 16.0f;
     std::strncpy(msg.title, "Test Window Title", sizeof(msg.title) - 1);
     std::strncpy(msg.appId, "org.lcl.test", sizeof(msg.appId) - 1);
 
@@ -81,6 +85,10 @@ TEST(LCLProtocolTest, SendAndReceiveMsgOverSocketPair) {
     EXPECT_FLOAT_EQ(msgRecv->launchOriginCornerRadius, 14.0f);
     EXPECT_EQ(msgRecv->launchToken, 73u);
     EXPECT_EQ(msgRecv->appInstanceId, 91u);
+    EXPECT_FLOAT_EQ(msgRecv->resizeBaseWidth, 16.0f);
+    EXPECT_FLOAT_EQ(msgRecv->resizeBaseHeight, 16.0f);
+    EXPECT_FLOAT_EQ(msgRecv->resizeWidthIncrement, 8.0f);
+    EXPECT_FLOAT_EQ(msgRecv->resizeHeightIncrement, 16.0f);
     EXPECT_STREQ(msgRecv->title, "Test Window Title");
     EXPECT_STREQ(msgRecv->appId, "org.lcl.test");
 
@@ -962,6 +970,31 @@ TEST(LCLProtocolTest, SurfaceCreateRequiresCanonicalAppId) {
     EXPECT_FALSE(encodePacket(header, &request, packet));
 
     std::strncpy(request.appId, "org.lcl.test", sizeof(request.appId) - 1);
+    EXPECT_TRUE(encodePacket(header, &request, packet));
+}
+
+TEST(LCLProtocolTest, SurfaceCreateRejectsInvalidResizeConstraints) {
+    LCLMsgSurfaceCreate request{};
+    request.surfaceId = 7;
+    request.width = 640;
+    request.height = 480;
+    std::strncpy(request.title, "Resize constraints", sizeof(request.title) - 1);
+    std::strncpy(request.appId, "org.lcl.resize-test", sizeof(request.appId) - 1);
+
+    LCLHeader header{};
+    header.opcode = LCLOpcode::SurfaceCreate;
+    header.payloadSize = sizeof(request);
+    std::vector<uint8_t> packet;
+
+    request.resizeWidthIncrement = -1.0f;
+    EXPECT_FALSE(encodePacket(header, &request, packet));
+
+    request.resizeWidthIncrement =
+        std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(encodePacket(header, &request, packet));
+
+    request.resizeWidthIncrement = 8.0f;
+    request.resizeHeightIncrement = 16.0f;
     EXPECT_TRUE(encodePacket(header, &request, packet));
 }
 

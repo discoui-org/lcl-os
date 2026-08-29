@@ -71,8 +71,8 @@ The LCL architecture consists of 5 main decoupled layers:
 * **Session RPC:** `lcl-sessiond` exposes an owner-only `SOCK_SEQPACKET`
   endpoint at `/run/user/1000/lcl-sessiond.sock`. Its explicit little-endian
   requests cover catalog snapshots and launch/process-exit lifecycle; this is
-  distinct from compositor protocol v26 surface IPC.
-* **Secure Unix Domain Socket IPC:** Compositor protocol v26 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Application-facing surface IPC carries lifecycle, configure, input, effect, action, producer-grant and frame-feedback messages; it accepts no client layer descriptor or DisplayList commit. A 128-bit surface grant authorizes the same process on rasterd's owner-only socket. Only rasterd's private socketpair may publish `LayerReady` descriptors to the compositor. Edge-to-edge remains platform-neutral, and neither desktop nor mobile policy may rewrite client alpha. `PopupSurface` and `AttachedSurface` are composed and hit-tested inside their parent WindowGroup rather than entering the normal window stack.
+  distinct from compositor protocol v27 surface IPC.
+* **Secure Unix Domain Socket IPC:** Compositor protocol v27 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Application-facing surface IPC carries lifecycle, configure, input, effect, action, producer-grant and frame-feedback messages; it accepts no client layer descriptor or DisplayList commit. A 128-bit surface grant authorizes the same process on rasterd's owner-only socket. Only rasterd's private socketpair may publish `LayerReady` descriptors to the compositor. Edge-to-edge remains platform-neutral, and neither desktop nor mobile policy may rewrite client alpha. `PopupSurface` and `AttachedSurface` are composed and hit-tested inside their parent WindowGroup rather than entering the normal window stack.
 * **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`. Manifests declare a stable `id`; older bundles receive a deterministic `bundle.<name>` compatibility ID.
 * **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ session client. It sends `LaunchRequest` to sessiond and optionally waits for `ProcessExited`; it never forks or execs applications itself.
 
@@ -104,7 +104,7 @@ optimization:
    committed-layer transaction. Platform differences begin below native-buffer
    import, synchronization, and scanout/present.
 
-Protocol v26 completes this boundary: `CommitDisplayList`, direct SHM/DMA-BUF/
+Protocol v27 completes this boundary: `CommitDisplayList`, direct SHM/DMA-BUF/
 native-buffer attach, and compositor-side application replay are not part of
 the surface ABI. The compositor only imports rasterd layers, retains,
 transforms, composites, and presents them.
@@ -119,9 +119,15 @@ layer and acquire fence is ready, the complete previously presented WindowGroup
 keeps its old geometry, transforms, effects, and content. Readiness promotes
 the new immutable group snapshot in one display transaction/vSync. There is no
 stretch, clip-to-new-geometry, background reveal, snapshot, crossfade, or
-timeout-based partial publish. A newer target discards the obsolete generation;
-pointer release waits for the final complete generation without stalling other
-WindowGroups or compositor-owned animation.
+timeout-based partial publish. At most one WindowGroup generation is rastered
+at a time; newer pointer targets coalesce behind it instead of repeatedly
+cancelling in-flight work. Immediately after that complete generation is
+presented, the newest queued target becomes the next atomic batch. Pointer
+release therefore reaches the final complete generation without raster
+starvation or stalling other WindowGroups and compositor-owned animation.
+The WindowManager keeps committed presentation geometry separate from the
+newest pending model target, so an older in-flight batch can advance the whole
+visible WindowGroup without discarding the coalesced target that follows it.
 
 ---
 
@@ -316,8 +322,8 @@ Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı deği
 
 ## 7. Unix Domain Socket IPC & Disconnect Detection
 
-1. **Secure Domain Socket Protocol:** Compositor IPC v26 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Rasterd uses a separate owner-only public producer socket plus a private compositor socketpair.
-2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v26 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
+1. **Secure Domain Socket Protocol:** Compositor IPC v27 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Rasterd uses a separate owner-only public producer socket plus a private compositor socketpair.
+2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v27 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
 3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits a typed disconnect event upon socket EOF. `ProtocolDispatcher` ilgili pencereyi `WindowManager`dan kaldırır; `SurfaceRegistry` SHM eşlemesini ve memfd'yi tek sahip olarak serbest bırakır.
 
 ---

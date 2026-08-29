@@ -5,7 +5,7 @@ description: Complete technical reference, API contracts, and usage patterns for
 
 # LCL-UI Application Development Framework Guide
 
-`lcl-ui` is the backend-neutral C++20 user-space GUI framework for **LCL Core Linux (LCL OS)**. It creates surfaces over protocol-v26 Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by default). The compositor returns a 128-bit producer grant; the standard DisplayList Canvas sends sealed frame/resource memfds to supervised central `lcl-rasterd`, and only rasterd publishes immutable ready layers to the compositor.
+`lcl-ui` is the backend-neutral C++20 user-space GUI framework for **LCL Core Linux (LCL OS)**. It creates surfaces over protocol-v27 Unix Domain `SOCK_SEQPACKET` IPC (`/Runtime/lcl-compositor.sock` by default). The compositor returns a 128-bit producer grant; the standard DisplayList Canvas sends sealed frame/resource memfds to supervised central `lcl-rasterd`, and only rasterd publishes immutable ready layers to the compositor.
 
 ---
 
@@ -53,7 +53,8 @@ Manages application initialization, window surface creation, raster producer gra
 
 - `WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height, const std::string& title)`: Constructor with logical dimensions and an explicit backend-neutral Canvas.
 - `void setRootWidget(std::unique_ptr<Widget> root)`: Mounts the top-level widget container.
-- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to compositor IPC and registers a v26 surface.
+- `bool setResizeConstraints(WindowResizeConstraints constraints)`: Declares an optional logical content-size grid before connecting. The compositor quantizes interactive toplevel resize targets so the content surface and every attached WindowGroup participant receive the same final geometry generation.
+- `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to compositor IPC and registers a v27 surface.
 - `void runEventLoop()`: Runs the main non-blocking event loop at **144 Hz target frame pacing** (~6.9ms period).
 
 ### `lcl::ui::Widget` ([`widget.hpp`](../../../lcl-ui/include/lcl-ui/widgets/widget.hpp))
@@ -174,4 +175,6 @@ Resize has no public presentation selector. All surfaces use strict
 `AtomicRetained`: an old WindowGroup stays completely unchanged until every
 size-changing parent/frame/popup layer for the newest geometry generation is
 ready. Client code must not implement resize snapshots, stretch, background
-reveal, or crossfade.
+reveal, or crossfade. The compositor keeps at most one atomic generation in
+flight and coalesces newer pointer targets behind it; it does not repeatedly
+cancel raster work that has not finished.

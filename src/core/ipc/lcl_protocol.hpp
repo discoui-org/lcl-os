@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 26;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 27;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 constexpr uint32_t LCL_LAUNCH_ICON_MAX_DIMENSION = 256u;
@@ -222,6 +222,12 @@ struct LCLMsgSurfaceCreate {
     float launchOriginCornerRadius{0.0f};
     uint64_t launchToken{0};
     uint64_t appInstanceId{0};
+    // Interactive toplevel resize increments in logical content pixels.
+    // Zero increments disable quantization on the corresponding axis.
+    float resizeBaseWidth{0.0f};
+    float resizeBaseHeight{0.0f};
+    float resizeWidthIncrement{0.0f};
+    float resizeHeightIncrement{0.0f};
 };
 
 /**

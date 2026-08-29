@@ -412,7 +412,12 @@ void Compositor::renderFrame() {
     // Resolve ready WindowGroup epochs without stalling the output.
     // CompositorRenderer retains only an incomplete group's last complete
     // layer; the rest of the scene and all shell transitions keep presenting.
-    (void)SurfaceTransactionCoordinator::promoteReady(m_surfaces);
+    (void)SurfaceTransactionCoordinator::promoteReady(
+        m_surfaces, [this](uint32_t windowId, uint64_t generation) {
+            return m_protocolDispatcher &&
+                m_protocolDispatcher->commitAtomicSurfaceGeometry(
+                    windowId, generation);
+        });
 
     const bool hasActiveTransitions = m_frameScheduler.advanceTransitions(m_surfaces);
     const auto handoffNow = std::chrono::steady_clock::now();

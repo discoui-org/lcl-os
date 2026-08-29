@@ -102,6 +102,7 @@ private:
     uint32_t m_status{0};
     std::string m_message{"ok"};
 };
+
 } // namespace
 
 bool ProtocolDispatcher::publishLaunchIconVisibility(
@@ -120,8 +121,10 @@ bool ProtocolDispatcher::publishLaunchIconVisibility(
     return protocol::sendMsgWithFd(entry.launchOwnerFd, header, &message);
 }
 
-void ProtocolDispatcher::commitClientSurfaceGeometry(SurfaceEntry& entry) {
-    if (entry.isPopup() || entry.isAttached() || entry.windowId == 0) return;
+bool ProtocolDispatcher::commitClientSurfaceGeometry(SurfaceEntry& entry) {
+    if (entry.isPopup() || entry.isAttached() || entry.windowId == 0) {
+        return false;
+    }
 
     float titleOffset = 0.0f;
     const auto window = std::find_if(
@@ -130,28 +133,39 @@ void ProtocolDispatcher::commitClientSurfaceGeometry(SurfaceEntry& entry) {
         [&entry](const auto& candidate) {
             return candidate.id == entry.windowId;
         });
-    if (window == m_windowManager.getWindows().end()) return;
+    if (window == m_windowManager.getWindows().end()) return false;
     if (window->decorationMode == render::DecorationMode::SSD) {
         titleOffset = 32.0f;
     }
 
-    const float requestedContentW = entry.configuredWidth;
-    const float requestedContentH = entry.configuredHeight;
-    const float committedContentW = SurfaceRegistry::committedLogicalExtent(
-        entry.width, requestedContentW, entry.bufferScale);
-    const float committedContentH = SurfaceRegistry::committedLogicalExtent(
-        entry.height, requestedContentH, entry.bufferScale);
+    const float committedContentW = entry.configuredWidth;
+    const float committedContentH = entry.configuredHeight;
     const float frameHeight = committedContentH + titleOffset;
     const bool preserveNewerTarget =
-        window->pendingWidth != requestedContentW ||
-        window->pendingHeight != requestedContentH + titleOffset;
+        window->pendingX != entry.configuredX ||
+        window->pendingY != entry.configuredY ||
+        window->pendingWidth != committedContentW ||
+        window->pendingHeight != frameHeight;
 
-    entry.configuredWidth = committedContentW;
-    entry.configuredHeight = committedContentH;
-    m_windowManager.commitSurfaceGeometry(
+    return m_windowManager.commitSurfaceGeometry(
         entry.windowId, committedContentW, frameHeight,
         preserveNewerTarget, entry.configuredX, entry.configuredY,
         entry.configuredGeometryGeneration);
+}
+
+bool ProtocolDispatcher::commitAtomicSurfaceGeometry(
+        uint32_t windowId, uint64_t generation) {
+    const auto parent = std::find_if(
+        m_surfaces.begin(), m_surfaces.end(),
+        [windowId, generation](const auto& item) {
+            const auto& entry = item.second;
+            return !entry.isPopup() && !entry.isAttached() &&
+                entry.windowId == windowId &&
+                entry.atomicConfigureGeneration == generation &&
+                entry.configuredGeometryGeneration == generation;
+        });
+    return parent != m_surfaces.end() &&
+        commitClientSurfaceGeometry(parent->second);
 }
 
 bool ProtocolDispatcher::mapSurface(SurfaceRegistry::Key surfaceKey,
@@ -201,6 +215,10 @@ bool ProtocolDispatcher::mapSurface(SurfaceRegistry::Key surfaceKey,
         entry.title, entry.initialX, entry.initialY, entry.initialWidth,
         entry.initialHeight + static_cast<float>(titleOffset), !entry.unfocusable);
     m_windowManager.setDecorationMode(entry.windowId, decorationMode);
+    (void)m_windowManager.setResizeConstraints(
+        entry.windowId,
+        {entry.resizeBaseWidth, entry.resizeBaseHeight,
+         entry.resizeWidthIncrement, entry.resizeHeightIncrement});
     m_windowManager.setEdgeToEdge(entry.windowId, entry.edgeToEdge);
     m_windowManager.setWindowLayer(entry.windowId, entry.layer, entry.unfocusable);
     m_windowManager.setInsetBorderEnabled(entry.windowId, entry.insetBorderEnabled);
@@ -284,6 +302,8 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         ready.transport == raster_protocol::LayerTransport::DmaBuf;
     if (layer.fd < 0 || ready.layerId == 0 ||
         ready.width == 0 || ready.height == 0 ||
+        !SurfaceRegistry::matchesConfiguredBufferExtent(
+            entry, ready.width, ready.height) ||
         ready.backingWidth < ready.width ||
         ready.backingHeight < ready.height ||
         ready.stride < ready.backingWidth * sizeof(uint32_t) ||
@@ -419,7 +439,11 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         return false;
     }
     SurfaceRegistry::queuePresentation(entry, ready.configureSerial);
-    commitClientSurfaceGeometry(entry);
+    // Atomic WindowGroup geometry is committed only after every participant is
+    // ready. Non-atomic initial/focus-only frames may update immediately.
+    if (entry.atomicConfigureGeneration == 0) {
+        (void)commitClientSurfaceGeometry(entry);
+    }
     return true;
 }
 
@@ -1136,6 +1160,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             float launchOriginWidth = 0.0f;
             float launchOriginHeight = 0.0f;
             float launchOriginCornerRadius = 0.0f;
+            float resizeBaseWidth = 0.0f;
+            float resizeBaseHeight = 0.0f;
+            float resizeWidthIncrement = 0.0f;
+            float resizeHeightIncrement = 0.0f;
 
             if (msg.payload.size() == sizeof(lcl::protocol::LCLMsgSurfaceCreate)) {
                 auto* sm = reinterpret_cast<const lcl::protocol::LCLMsgSurfaceCreate*>(msg.payload.data());
@@ -1156,6 +1184,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 launchOriginWidth = sm->launchOriginWidth;
                 launchOriginHeight = sm->launchOriginHeight;
                 launchOriginCornerRadius = sm->launchOriginCornerRadius;
+                resizeBaseWidth = sm->resizeBaseWidth;
+                resizeBaseHeight = sm->resizeBaseHeight;
+                resizeWidthIncrement = sm->resizeWidthIncrement;
+                resizeHeightIncrement = sm->resizeHeightIncrement;
             }
 
             auto kindIt = m_pendingSystemSurfaceKinds.find(msg.clientFd);
@@ -1206,6 +1238,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 entry.initialY = winY;
                 entry.initialWidth = winW;
                 entry.initialHeight = winH;
+                entry.resizeBaseWidth = resizeBaseWidth;
+                entry.resizeBaseHeight = resizeBaseHeight;
+                entry.resizeWidthIncrement = resizeWidthIncrement;
+                entry.resizeHeightIncrement = resizeHeightIncrement;
                 entry.systemSurfaceKind = requestedSystemKind;
                 entry.suppressInitialTransition = systemPolicy.suppressInitialTransition;
                 entry.decorationMode = systemPolicy.isSystemSurface
@@ -1236,7 +1272,18 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 std::cout << "[LCL Compositor] Registered unmapped Surface " << surfId
                           << " from client PID " << msg.pid << " (" << winW << "x" << winH << ")\n";
             } else {
-                m_surfaces[surfaceKey].clientFd = msg.clientFd;
+                auto& entry = m_surfaces[surfaceKey];
+                entry.clientFd = msg.clientFd;
+                entry.resizeBaseWidth = resizeBaseWidth;
+                entry.resizeBaseHeight = resizeBaseHeight;
+                entry.resizeWidthIncrement = resizeWidthIncrement;
+                entry.resizeHeightIncrement = resizeHeightIncrement;
+                if (entry.windowId != 0) {
+                    (void)m_windowManager.setResizeConstraints(
+                        entry.windowId,
+                        {resizeBaseWidth, resizeBaseHeight,
+                         resizeWidthIncrement, resizeHeightIncrement});
+                }
             }
             m_pendingSystemSurfaceKinds.erase(msg.clientFd);
 

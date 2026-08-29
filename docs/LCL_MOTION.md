@@ -62,12 +62,15 @@ adapters over the shared channel engine.
 
 ## Compositor resize ownership
 
-Protocol v26 pairs `ConfigureBounds` with a monotonic `configureSerial` and
+Protocol v27 pairs `ConfigureBounds` with a monotonic `configureSerial` and
 `geometryGeneration`. Resize has one `AtomicRetained` policy: parent and every
 size-changing attached/popup surface raster in parallel through central
 `lcl-rasterd`. The previous complete WindowGroup remains byte-for-byte and
 geometry-for-geometry unchanged until all matching layers are ready, then the
 new snapshot is promoted in one display transaction. There is no stretch,
 snapshot, crossfade, background reveal, timeout partial publish, or
-parent-first acknowledgement barrier. A newer target discards the obsolete
-generation; a slow app does not stall other compositor-owned motion.
+parent-first acknowledgement barrier. One generation rasterizes at a time;
+newer targets coalesce behind it and the newest target is published after the
+complete in-flight group presents. A slow app therefore cannot be trapped in a
+refresh-cadenced cancellation loop and does not stall other compositor-owned
+motion.

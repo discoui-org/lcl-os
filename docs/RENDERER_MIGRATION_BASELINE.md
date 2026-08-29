@@ -6,7 +6,7 @@ production renderer.
 
 This file also records a historical cross-process DisplayList checkpoint. That
 checkpoint is useful for visual comparison, but compositor-side application
-DisplayList replay is no longer the current architecture. Protocol v26 and
+DisplayList replay is no longer the current architecture. Protocol v27 and
 central `lcl-rasterd` now implement the normative boundary from
 `ARCHITECTURE.md`: rasterd creates an immutable ready layer, atomic commit
 publishes it, and the compositor retains and presents it without running client

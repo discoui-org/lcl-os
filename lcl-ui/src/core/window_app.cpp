@@ -415,6 +415,23 @@ void WindowApp::updateCanvasRenderTarget() {
     });
 }
 
+bool WindowApp::setResizeConstraints(WindowResizeConstraints constraints) {
+    constexpr float kMaxLogicalExtent = 16384.0f;
+    const auto valid = [kMaxLogicalExtent](float value) {
+        return std::isfinite(value) && value >= 0.0f &&
+            value <= kMaxLogicalExtent;
+    };
+    if (m_ipcConnected || isPopupSurface() || isAttachedSurface() ||
+        !valid(constraints.baseWidth) ||
+        !valid(constraints.baseHeight) ||
+        !valid(constraints.widthIncrement) ||
+        !valid(constraints.heightIncrement)) {
+        return false;
+    }
+    m_resizeConstraints = constraints;
+    return true;
+}
+
 void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     if (!root) return;
     m_dispatcher.cancelPointerCaptures();
@@ -535,7 +552,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         return false;
     }
     if (!m_canvas || !m_canvas->usesDisplayListTransport()) {
-        std::cerr << "[lcl-ui ERROR] Protocol v26 requires the retained DisplayList canvas\n";
+        std::cerr << "[lcl-ui ERROR] Protocol v27 requires the retained DisplayList canvas\n";
         return false;
     }
     std::string effectiveSocketPath = socketPath;
@@ -626,6 +643,10 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
         surface.y = m_initialY;
         surface.width = m_width;
         surface.height = m_height;
+        surface.resizeBaseWidth = m_resizeConstraints.baseWidth;
+        surface.resizeBaseHeight = m_resizeConstraints.baseHeight;
+        surface.resizeWidthIncrement = m_resizeConstraints.widthIncrement;
+        surface.resizeHeightIncrement = m_resizeConstraints.heightIncrement;
         std::strncpy(surface.title, m_title.c_str(), sizeof(surface.title) - 1);
         std::strncpy(surface.appId, m_appId.c_str(), sizeof(surface.appId) - 1);
         takeLaunchOrigin(surface);
@@ -998,16 +1019,6 @@ void WindowApp::pollIPC() {
     }
 
     if (pendingResize && (latestWidth > 0 && latestHeight > 0)) {
-        if (m_resizeTransform) {
-            const auto [transformedWidth, transformedHeight] =
-                m_resizeTransform(latestWidth, latestHeight, latestResizeReason);
-            latestWidth = transformedWidth;
-            latestHeight = transformedHeight;
-            if (latestWidth == 0 || latestHeight == 0) {
-                pendingResize = false;
-            }
-        }
-
         m_backingWidth = std::max(latestWidth, latestBackingWidth);
         m_backingHeight = std::max(latestHeight, latestBackingHeight);
         m_geometryGeneration = latestGeometryGeneration;

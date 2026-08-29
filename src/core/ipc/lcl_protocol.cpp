@@ -132,6 +132,9 @@ bool validScale(float value) {
     return std::isfinite(value) && value >= 0.5f && value <= 4.0f;
 }
 bool validFloat(float value) { return std::isfinite(value); }
+bool validResizeConstraint(float value) {
+    return validFloat(value) && value >= 0.0f && value <= 16384.0f;
+}
 bool validUnit(float value) {
     return validFloat(value) && value >= 0.0f && value <= 1.0f;
 }
@@ -355,6 +358,10 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
             !validFloat(msg.launchOriginX) || !validFloat(msg.launchOriginY) ||
             !validFloat(msg.launchOriginWidth) || !validFloat(msg.launchOriginHeight) ||
             !validFloat(msg.launchOriginCornerRadius) ||
+            !validResizeConstraint(msg.resizeBaseWidth) ||
+            !validResizeConstraint(msg.resizeBaseHeight) ||
+            !validResizeConstraint(msg.resizeWidthIncrement) ||
+            !validResizeConstraint(msg.resizeHeightIncrement) ||
             msg.launchToken >= kLaunchTokenLimit ||
             (msg.hasLaunchOrigin &&
              (msg.launchOriginWidth <= 0.0f || msg.launchOriginHeight <= 0.0f ||
@@ -375,6 +382,10 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.f32(msg.launchOriginCornerRadius);
         out.u64(msg.launchToken);
         out.u64(msg.appInstanceId);
+        out.f32(msg.resizeBaseWidth);
+        out.f32(msg.resizeBaseHeight);
+        out.f32(msg.resizeWidthIncrement);
+        out.f32(msg.resizeHeightIncrement);
         return true;
     }
     case LCLOpcode::PopupSurfaceCreate: {
@@ -801,7 +812,10 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !in.f32(m.launchOriginX) || !in.f32(m.launchOriginY) ||
             !in.f32(m.launchOriginWidth) || !in.f32(m.launchOriginHeight) ||
             !in.f32(m.launchOriginCornerRadius) ||
-            !in.u64(m.launchToken) || !in.u64(m.appInstanceId))
+            !in.u64(m.launchToken) || !in.u64(m.appInstanceId) ||
+            !in.f32(m.resizeBaseWidth) || !in.f32(m.resizeBaseHeight) ||
+            !in.f32(m.resizeWidthIncrement) ||
+            !in.f32(m.resizeHeightIncrement))
             return false;
         if (m.surfaceId == 0 || !validFloat(m.x) || !validFloat(m.y) ||
             !validFloat(m.width) || m.width <= 0.0f ||
@@ -812,6 +826,10 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !validFloat(m.launchOriginX) || !validFloat(m.launchOriginY) ||
             !validFloat(m.launchOriginWidth) || !validFloat(m.launchOriginHeight) ||
             !validFloat(m.launchOriginCornerRadius) ||
+            !validResizeConstraint(m.resizeBaseWidth) ||
+            !validResizeConstraint(m.resizeBaseHeight) ||
+            !validResizeConstraint(m.resizeWidthIncrement) ||
+            !validResizeConstraint(m.resizeHeightIncrement) ||
             m.launchToken >= kLaunchTokenLimit ||
             (m.hasLaunchOrigin &&
              (m.launchOriginWidth <= 0.0f || m.launchOriginHeight <= 0.0f ||

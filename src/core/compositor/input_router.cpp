@@ -288,9 +288,12 @@ void InputRouter::sendPendingConfigures() {
             });
         const float titleOffset =
             window.decorationMode == render::DecorationMode::SSD ? 32.0f : 0.0f;
-        const float configuredX = window.isAtomicTargetTransitioning()
+        const bool hasPendingGeometryTarget = window.isResizing() ||
+            window.isAtomicTargetTransitioning() ||
+            window.activeResizeEdge != render::ResizeEdge::None;
+        const float configuredX = hasPendingGeometryTarget
             ? window.pendingX : window.x;
-        const float configuredY = window.isAtomicTargetTransitioning()
+        const float configuredY = hasPendingGeometryTarget
             ? window.pendingY : window.y;
         const float logicalContentW = window.pendingWidth > 0.0f
             ? window.pendingWidth : window.width;
@@ -299,7 +302,7 @@ void InputRouter::sendPendingConfigures() {
             (window.pendingHeight > 0.0f
                  ? window.pendingHeight : window.height) - titleOffset);
         const bool livePositionChanged =
-            window.isAtomicTargetTransitioning() && parentSurface != m_surfaces.end() &&
+            hasPendingGeometryTarget && parentSurface != m_surfaces.end() &&
             (configuredX != parentSurface->second.configuredX ||
              configuredY != parentSurface->second.configuredY);
         const bool parentGeometryNeedsConfigure =
@@ -311,46 +314,13 @@ void InputRouter::sendPendingConfigures() {
             window.isAtomicTargetTransitioning() ||
             window.activeResizeEdge != render::ResizeEdge::None;
 
-        // A pending generation retains the complete old WindowGroup. At most
-        // once per output interval, a newer pointer target supersedes the
-        // unfinished batch; it never waits for obsolete raster/presentation.
+        // A pending generation retains the complete old WindowGroup. Keep one
+        // raster batch in flight and coalesce every newer pointer target in
+        // WindowManager. Replacing an unfinished batch every refresh interval
+        // can starve slower parent/frame raster work forever during a drag.
         if (parentSurface != m_surfaces.end() &&
             parentSurface->second.atomicConfigureGeneration != 0) {
-            const uint64_t pendingGeneration =
-                parentSurface->second.atomicConfigureGeneration;
-            if (window.geometryGeneration <= pendingGeneration ||
-                (parentSurface->second.lastConfigureSent.time_since_epoch().count() != 0 &&
-                 now - parentSurface->second.lastConfigureSent <
-                     m_refreshInterval)) {
-                continue;
-            }
-            for (auto& [surfaceKey, entry] : m_surfaces) {
-                if (entry.windowId != window.id ||
-                    entry.atomicConfigureGeneration != pendingGeneration) continue;
-                if (entry.presentationSerial != 0 && entry.clientFd >= 0) {
-                    protocol::LCLHeader discardHeader{};
-                    discardHeader.opcode = protocol::LCLOpcode::FrameDiscarded;
-                    discardHeader.payloadSize = sizeof(
-                        protocol::LCLMsgFrameDiscarded);
-                    protocol::LCLMsgFrameDiscarded discard{};
-                    discard.surfaceId = static_cast<uint32_t>(
-                        surfaceKey & 0xFFFFFFFFu);
-                    discard.configureSerial = entry.presentationSerial;
-                    discard.frameSerial = entry.frameSerial != 0
-                        ? entry.frameSerial : entry.presentationSerial;
-                    discard.geometryGeneration = pendingGeneration;
-                    discard.reason = protocol::LCLFrameDiscardReason::Superseded;
-                    (void)protocol::sendMsgWithFd(
-                        entry.clientFd, discardHeader, &discard);
-                }
-                SurfaceRegistry::completePresentation(entry);
-                entry.pendingConfigureSerial = entry.acceptedConfigureSerial;
-            }
-            // Keep the old barrier installed until every configure in the
-            // replacement batch has been queued. If any participant socket
-            // rejects the batch, CompositorRenderer must continue drawing the
-            // last complete retained group rather than exposing an obsolete
-            // intermediate parent layer.
+            continue;
         }
 
         std::vector<SurfaceRegistry::Key> atomicAttachments;
@@ -406,8 +376,8 @@ void InputRouter::sendPendingConfigures() {
             }
 
             // AtomicRetained permits one in-flight generation per surface.
-            // A newer pointer target supersedes the old generation above; it
-            // never causes presentation geometry to move ahead of its layer.
+            // New pointer targets remain coalesced in WindowManager until the
+            // current group has been presented.
             const bool refreshLimited =
                 entry.lastConfigureSent.time_since_epoch().count() != 0 &&
                 now - entry.lastConfigureSent < m_refreshInterval;
@@ -587,12 +557,12 @@ void InputRouter::sendPendingConfigures() {
             // There is no time-based escape into a torn WindowGroup. A slow
             // participant leaves only this group on its retained layer; erase
             // or disconnect cancels the epoch through SurfaceRegistry.
-            SurfaceTransactionCoordinator::begin(
+            (void)SurfaceTransactionCoordinator::begin(
                 m_surfaces, window.id, window.geometryGeneration,
                 participants);
-            // begin() replaces any older barrier only after this complete
-            // configure batch exists. Surface teardown cancels an abandoned
-            // epoch; publishing a partial group is never an escape path.
+            // begin() refuses to replace an in-flight barrier. This complete
+            // configure batch is therefore the group's only raster generation;
+            // surface teardown cancels an abandoned epoch.
         }
     }
 }

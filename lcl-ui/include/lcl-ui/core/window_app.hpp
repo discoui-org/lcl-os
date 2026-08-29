@@ -29,8 +29,14 @@ using IpcMessageCallback = std::function<void(const lcl::protocol::LCLHeader&, c
 using ResizeCallback = std::function<void(float width, float height)>;
 using FrameCallback = std::function<void()>;
 using HostedSurfaceHandle = uint64_t;
-using ResizeTransform = std::function<std::pair<float, float>(
-    float width, float height, lcl::protocol::LCLConfigureResizeReason reason)>;
+
+/** Compositor-owned interactive resize grid in logical content pixels. */
+struct WindowResizeConstraints {
+    float baseWidth{0.0f};
+    float baseHeight{0.0f};
+    float widthIncrement{0.0f};
+    float heightIncrement{0.0f};
+};
 
 class WindowApp {
 public:
@@ -159,8 +165,8 @@ public:
     void setOnIpcMessage(IpcMessageCallback callback) { m_onIpcMessage = std::move(callback); }
     /** Runs after a logical configure has allocated its new SHM buffer. */
     void setOnResize(ResizeCallback callback) { m_onResize = std::move(callback); }
-    /** Coalesces an incoming logical configure before WindowApp reallocates SHM. */
-    void setResizeTransform(ResizeTransform transform) { m_resizeTransform = std::move(transform); }
+    /** Declare the toplevel's interactive resize grid before connecting. */
+    bool setResizeConstraints(WindowResizeConstraints constraints);
     /** Runs once per WindowApp event-loop tick before damage is rendered. */
     void setOnFrame(FrameCallback callback) { m_onFrame = std::move(callback); }
     void requestQuit() { m_running = false; }
@@ -257,7 +263,7 @@ private:
     IpcMessageCallback m_onIpcMessage{nullptr};
     ResizeCallback m_onResize{nullptr};
     FrameCallback m_onFrame{nullptr};
-    ResizeTransform m_resizeTransform{nullptr};
+    WindowResizeConstraints m_resizeConstraints{};
 
     std::vector<uint32_t> m_pixelBuffer;
     int m_socketFd{-1};

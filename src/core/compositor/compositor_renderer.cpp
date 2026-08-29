@@ -1021,6 +1021,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
         });
         for (const auto& attachedSurface : attachments) {
             const auto* attached = attachedSurface.entry;
+            constexpr render::RasterBufferSampling attachmentSampling =
+                render::RasterBufferSampling::TopLeftAnchoredCropTrailingEdge;
             const graphics::RectF localBounds{
                 attached->attachedX,
                 attached->attachedY,
@@ -1047,7 +1049,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     static_cast<int>(attached->shmDamageWidth),
                     static_cast<int>(attached->shmDamageHeight),
                     opacity, 0.0f, 2.0f, false,
-                    bounds.width, bounds.height);
+                    bounds.width, bounds.height, attachmentSampling);
             } else if (attached->rasterLayerTexture != 0) {
                 raster->drawDmaBufTextureTransformed(
                     bounds.x, bounds.y,
@@ -1057,7 +1059,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     static_cast<int>(attached->backingHeight),
                     attached->rasterLayerTexture, opacity,
                     0.0f, 2.0f, false,
-                    bounds.width, bounds.height);
+                    bounds.width, bounds.height, attachmentSampling);
             }
         }
 

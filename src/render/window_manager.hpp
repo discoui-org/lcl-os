@@ -91,6 +91,14 @@ struct ReservedZone {
     float right{0.0f};
 };
 
+/** Application-declared logical content grid for interactive resizing. */
+struct ResizeConstraints {
+    float baseWidth{0.0f};
+    float baseHeight{0.0f};
+    float widthIncrement{0.0f};
+    float heightIncrement{0.0f};
+};
+
 struct Window {
     uint32_t id{0};
     std::string title;
@@ -109,6 +117,9 @@ struct Window {
     bool presentationInitialized{false};
     GeometryPhase geometryPhase{GeometryPhase::Idle};
     uint64_t geometryGeneration{1};
+    // Newest geometry generation atomically committed for presentation. The
+    // model generation may be newer while pointer targets are coalesced.
+    uint64_t committedGeometryGeneration{0};
     // AtomicRetained resize updates target model geometry. Presentation stays
     // on the last complete WindowGroup until matching raster layers are ready.
     bool atomicTargetMotionFinished{false};
@@ -122,6 +133,7 @@ struct Window {
     DecorationMode decorationMode{DecorationMode::SSD};
     bool edgeToEdge{false};
     protocol::LCLWindowLayer layer{protocol::LCLWindowLayer::Normal};
+    ResizeConstraints resizeConstraints{};
 
     // Drag state
     float dragOffsetX{0.0f};
@@ -267,6 +279,9 @@ public:
      * @brief Set decoration mode (SSD/CSD/None) for a window.
      */
     void setDecorationMode(uint32_t windowId, DecorationMode mode);
+    /** Set the compositor-authoritative interactive content-size grid. */
+    bool setResizeConstraints(uint32_t windowId,
+                              ResizeConstraints constraints);
     /** Extend surface material beneath compositor-owned system insets. */
     void setEdgeToEdge(uint32_t windowId, bool enabled);
 

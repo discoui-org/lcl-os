@@ -89,6 +89,10 @@ public:
         float initialY{0.0f};
         float initialWidth{0.0f};
         float initialHeight{0.0f};
+        float resizeBaseWidth{0.0f};
+        float resizeBaseHeight{0.0f};
+        float resizeWidthIncrement{0.0f};
+        float resizeHeightIncrement{0.0f};
         protocol::LCLSystemSurfaceKind systemSurfaceKind{protocol::LCLSystemSurfaceKind::None};
         protocol::LCLDecorationMode decorationMode{protocol::LCLDecorationMode::SSD};
         bool edgeToEdge{false};
@@ -241,10 +245,10 @@ public:
                                              uint64_t newGeneration) noexcept;
     static bool acceptsBufferCommit(const SurfaceEntry& entry,
                                     uint64_t configureSerial) noexcept;
-    /** Resolve a client-constrained logical extent from its physical commit. */
-    static float committedLogicalExtent(uint32_t physicalExtent,
-                                        float requestedLogicalExtent,
-                                        float bufferScale) noexcept;
+    /** Require a layer to realize the exact compositor-authored configure. */
+    static bool matchesConfiguredBufferExtent(const SurfaceEntry& entry,
+                                              uint32_t physicalWidth,
+                                              uint32_t physicalHeight) noexcept;
     static bool hasOutstandingConfigure(const SurfaceEntry& entry) noexcept;
     static bool hasUnpresentedFrame(const SurfaceEntry& entry) noexcept;
     static void queuePresentation(SurfaceEntry& entry,

@@ -6,7 +6,7 @@ change is explicitly approved before implementation.
 
 The numbered implementation records below are historical checkpoints and keep
 the protocol versions and test totals that were true at each checkpoint. The
-current wire contract is protocol v26. Central `lcl-rasterd` receives sealed
+current wire contract is protocol v27. Central `lcl-rasterd` receives sealed
 logical frames and privately publishes ready immutable layers; app-facing
 DisplayList and native-buffer attach messages have been removed. Do not read an
 older step's version label as a compatibility promise or future direction.
@@ -146,7 +146,7 @@ Step 2 separates build ownership without changing protocol or shell behavior:
 - `lcl-ui` contains widgets, its private layout implementation, event/render-pass logic,
   `WindowApp`, image loading, compositor IPC, and the rasterd producer client.
 - `lcl-display-scale` owns the shared logical-pixel policy.
-- `lcl-raster` owns the Canvas implementation. A connected protocol-v26 client
+- `lcl-raster` owns the Canvas implementation. A connected protocol-v27 client
   uses `makeDisplayListCanvas()` and sends only sealed logical frames/resources
   to central `lcl-rasterd`; it neither attaches a client buffer to the
   compositor nor presents a frame. The current host rasterd backend publishes
