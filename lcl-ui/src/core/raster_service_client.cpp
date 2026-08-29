@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <limits>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -16,6 +17,75 @@
 #endif
 
 namespace lcl::ui {
+namespace {
+
+raster_protocol::RetainedNodeState toProtocolNode(
+        const detail::RetainedRenderNode& node) {
+    raster_protocol::RetainedNodeState result{};
+    result.id = node.id;
+    result.parentId = node.parentId;
+    result.contentRevision = node.contentRevision;
+    result.propertyRevision = node.propertyRevision;
+    result.boundaryReasons = static_cast<uint32_t>(node.boundaryReasons);
+    result.siblingIndex = node.siblingIndex;
+    result.layoutX = node.layoutBounds.x;
+    result.layoutY = node.layoutBounds.y;
+    result.layoutWidth = node.layoutBounds.width;
+    result.layoutHeight = node.layoutBounds.height;
+    result.presentationX = node.presentationBounds.x;
+    result.presentationY = node.presentationBounds.y;
+    result.presentationWidth = node.presentationBounds.width;
+    result.presentationHeight = node.presentationBounds.height;
+    if (node.clipBounds) {
+        result.flags |= raster_protocol::kNodeHasClip;
+        result.clipX = node.clipBounds->x;
+        result.clipY = node.clipBounds->y;
+        result.clipWidth = node.clipBounds->width;
+        result.clipHeight = node.clipBounds->height;
+    }
+    result.opacity = node.presentation.opacity;
+    result.translationX = node.presentation.translationX;
+    result.translationY = node.presentation.translationY;
+    result.scaleX = node.presentation.scaleX;
+    result.scaleY = node.presentation.scaleY;
+    result.rotationRadians = node.presentation.rotationRadians;
+    result.originX = node.presentation.originX;
+    result.originY = node.presentation.originY;
+    return result;
+}
+
+std::vector<raster_protocol::NodeMutation> toProtocolMutations(
+        const detail::RenderTreeTransaction& transaction) {
+    std::vector<raster_protocol::NodeMutation> mutations;
+    mutations.reserve(transaction.creates.size() + transaction.removals.size() +
+                      transaction.updates.size() * 2u);
+    for (const auto& node : transaction.creates) {
+        mutations.push_back({
+            raster_protocol::NodeMutationType::CreateNode, 0,
+            toProtocolNode(node)});
+    }
+    for (const auto& update : transaction.updates) {
+        if (update.contentChanged) {
+            mutations.push_back({
+                raster_protocol::NodeMutationType::UpdateContent, 0,
+                toProtocolNode(update.node)});
+        }
+        if (update.propertiesChanged) {
+            mutations.push_back({
+                raster_protocol::NodeMutationType::SetProperties, 0,
+                toProtocolNode(update.node)});
+        }
+    }
+    for (uint64_t id : transaction.removals) {
+        raster_protocol::RetainedNodeState node{};
+        node.id = id;
+        mutations.push_back({
+            raster_protocol::NodeMutationType::RemoveNode, 0, node});
+    }
+    return mutations;
+}
+
+} // namespace
 
 RasterServiceClient::~RasterServiceClient() {
     disconnect();
@@ -123,37 +193,44 @@ bool RasterServiceClient::uploadImage(
     return sent;
 }
 
-bool RasterServiceClient::submitFrame(
+bool RasterServiceClient::commitTransaction(
         uint64_t configureSerial, uint64_t frameSerial,
         uint64_t baseFrameSerial, uint64_t geometryGeneration,
         float logicalWidth,
         float logicalHeight, float bufferScale,
-        const graphics::RectF& damage, bool replacesScene,
+        const graphics::RectF& damage,
+        const detail::RenderTreeTransaction& renderTreeTransaction,
         const std::vector<uint8_t>& displayList) {
     if (!connectIfNeeded() || configureSerial == 0 || frameSerial == 0 ||
-        displayList.empty() || damage.isEmpty()) return false;
-    const int memfd = createSealedMemfd(
-        "lcl-raster-frame", displayList.data(), displayList.size());
-    if (memfd < 0) return false;
-    raster_protocol::SubmitFrame submit{};
-    submit.grant = m_grant;
-    submit.configureSerial = configureSerial;
-    submit.frameSerial = frameSerial;
-    submit.baseFrameSerial = replacesScene ? 0 : baseFrameSerial;
-    submit.geometryGeneration = geometryGeneration;
-    submit.logicalWidth = logicalWidth;
-    submit.logicalHeight = logicalHeight;
-    submit.bufferScale = bufferScale;
-    submit.damageX = damage.x;
-    submit.damageY = damage.y;
-    submit.damageWidth = damage.width;
-    submit.damageHeight = damage.height;
-    submit.displayListSize = static_cast<uint32_t>(displayList.size());
-    submit.flags = replacesScene
-        ? raster_protocol::kSubmitReplacesScene : 0u;
-    const bool sent = raster_protocol::sendPacket(
-        m_fd, raster_protocol::Opcode::SubmitFrame, submit, memfd);
-    close(memfd);
+        damage.isEmpty()) return false;
+    const auto mutations = toProtocolMutations(renderTreeTransaction);
+    if (mutations.size() > std::numeric_limits<uint32_t>::max()) return false;
+    const int memfd = displayList.empty()
+        ? -1
+        : createSealedMemfd(
+              "lcl-raster-frame", displayList.data(), displayList.size());
+    if (!displayList.empty() && memfd < 0) return false;
+    raster_protocol::CommitTransaction transaction{};
+    transaction.grant = m_grant;
+    transaction.configureSerial = configureSerial;
+    transaction.frameSerial = frameSerial;
+    transaction.baseFrameSerial = renderTreeTransaction.replacesTree
+        ? 0 : baseFrameSerial;
+    transaction.geometryGeneration = geometryGeneration;
+    transaction.logicalWidth = logicalWidth;
+    transaction.logicalHeight = logicalHeight;
+    transaction.bufferScale = bufferScale;
+    transaction.damageX = damage.x;
+    transaction.damageY = damage.y;
+    transaction.damageWidth = damage.width;
+    transaction.damageHeight = damage.height;
+    transaction.displayListSize = static_cast<uint32_t>(displayList.size());
+    transaction.mutationCount = static_cast<uint32_t>(mutations.size());
+    transaction.flags = renderTreeTransaction.replacesTree
+        ? raster_protocol::kTransactionReplacesTree : 0u;
+    const bool sent = raster_protocol::sendCommitTransaction(
+        m_fd, transaction, mutations, memfd);
+    if (memfd >= 0) close(memfd);
     if (!sent && errno != EAGAIN && errno != EWOULDBLOCK) disconnect();
     return sent;
 }

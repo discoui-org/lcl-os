@@ -24,6 +24,14 @@ using lcl::ui::detail::RenderTreeDiffer;
 using lcl::ui::detail::RetainedRenderNodeUpdate;
 using lcl::ui::detail::hasBoundaryReason;
 
+const lcl::ui::detail::RetainedRenderNode* findRetainedNode(
+        const lcl::ui::detail::RenderTree& tree, uint64_t id) {
+    for (const auto& node : tree.retainedNodes) {
+        if (node.id == id) return &node;
+    }
+    return nullptr;
+}
+
 const RetainedRenderNodeUpdate* findUpdate(
         const lcl::ui::detail::RenderTreeTransaction& transaction,
         uint64_t id) {
@@ -147,6 +155,16 @@ TEST(RetainedRenderTreeTest, SeparatesPresentationAndEffectBoundaries) {
     ASSERT_NE(filterGroupNode, nullptr);
     EXPECT_TRUE(hasBoundaryReason(filterGroupNode->boundaryReasons,
                                   RenderBoundaryReason::Effect));
+
+    const auto* retainedPresentation = findRetainedNode(tree, presentationId);
+    const auto* retainedBackdrop = findRetainedNode(tree, backdropId);
+    const auto* retainedFilterGroup = findRetainedNode(tree, filterGroupId);
+    ASSERT_NE(retainedPresentation, nullptr);
+    ASSERT_NE(retainedBackdrop, nullptr);
+    ASSERT_NE(retainedFilterGroup, nullptr);
+    EXPECT_EQ(retainedPresentation->siblingIndex, 0u);
+    EXPECT_EQ(retainedBackdrop->siblingIndex, 1u);
+    EXPECT_EQ(retainedFilterGroup->siblingIndex, 2u);
 }
 
 TEST(RetainedRenderTreeTest, KeepsIdentityStableAcrossContentAndPropertyChanges) {

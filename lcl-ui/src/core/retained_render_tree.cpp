@@ -103,6 +103,7 @@ bool sameOptionalRect(const std::optional<graphics::RectF>& lhs,
 bool sameProperties(const RetainedRenderNode& lhs,
                     const RetainedRenderNode& rhs) noexcept {
     return lhs.parentId == rhs.parentId &&
+           lhs.siblingIndex == rhs.siblingIndex &&
            lhs.boundaryReasons == rhs.boundaryReasons &&
            sameRect(lhs.layoutBounds, rhs.layoutBounds) &&
            sameRect(lhs.presentationBounds, rhs.presentationBounds) &&
@@ -156,11 +157,13 @@ void hashOwnedContent(const RenderNode& candidate,
 
 void buildRetainedNode(const RenderNode& candidate,
                        uint64_t parentId,
+                       uint32_t siblingIndex,
                        const CandidateMap& candidates,
                        std::vector<RetainedRenderNode>& output) {
     RetainedRenderNode retained;
     retained.id = candidate.id;
     retained.parentId = parentId;
+    retained.siblingIndex = siblingIndex;
     retained.boundaryReasons = candidate.boundaryReasons;
     retained.layoutBounds = candidate.layoutBounds;
     retained.presentationBounds = candidate.presentationBounds;
@@ -175,10 +178,13 @@ void buildRetainedNode(const RenderNode& candidate,
 
     const std::vector<uint64_t> retainedChildren = retained.children;
     output.push_back(std::move(retained));
-    for (uint64_t childId : retainedChildren) {
+    for (std::size_t index = 0; index < retainedChildren.size(); ++index) {
+        const uint64_t childId = retainedChildren[index];
         const auto child = candidates.find(childId);
         if (child == candidates.end()) continue;
-        buildRetainedNode(*child->second, candidate.id, candidates, output);
+        buildRetainedNode(
+            *child->second, candidate.id, static_cast<uint32_t>(index),
+            candidates, output);
     }
 }
 
@@ -194,7 +200,7 @@ std::vector<RetainedRenderNode> buildRetainedNodes(const RenderTree& tree) {
     const auto root = candidates.find(tree.rootId);
     if (root != candidates.end() &&
         root->second->disposition == RenderNodeDisposition::Retained) {
-        buildRetainedNode(*root->second, 0, candidates, output);
+        buildRetainedNode(*root->second, 0, 0, candidates, output);
     }
     return output;
 }

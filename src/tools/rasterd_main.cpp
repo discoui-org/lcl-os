@@ -13,6 +13,7 @@
 #include <deque>
 #include <fcntl.h>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <poll.h>
@@ -33,9 +34,11 @@
 namespace {
 
 using lcl::raster_protocol::FrameDiscarded;
+using lcl::raster_protocol::CommitTransaction;
 using lcl::raster_protocol::LayerReady;
+using lcl::raster_protocol::NodeMutation;
 using lcl::raster_protocol::Opcode;
-using lcl::raster_protocol::SubmitFrame;
+using lcl::raster_protocol::RetainedNodeState;
 using lcl::raster_protocol::SurfaceGrant;
 
 struct TokenKey {
@@ -120,6 +123,9 @@ struct LayerSlot {
 
 struct SurfaceState {
     SurfaceGrant grant{};
+    std::unordered_map<uint64_t, RetainedNodeState> retainedNodes;
+    uint64_t retainedRootId{0};
+    std::optional<lcl::graphics::DisplayList> scrollCompositionTemplate;
     std::unordered_map<ImageKey, ImageResource, ImageHash> images;
     std::unordered_map<uint64_t, uint64_t> cachedLayerNamespaces;
     std::array<LayerSlot, 3> slots;
@@ -150,7 +156,8 @@ struct Client {
 
 struct PendingFrame {
     int clientFd{-1};
-    SubmitFrame submit{};
+    CommitTransaction transaction{};
+    std::vector<NodeMutation> mutations;
     int displayListFd{-1};
 };
 
@@ -198,11 +205,13 @@ bool readExact(int fd, void* destination, size_t bytes) {
     return true;
 }
 
-bool replacesRetainedScene(const SubmitFrame& submit) noexcept {
-    return (submit.flags & lcl::raster_protocol::kSubmitReplacesScene) != 0;
+bool replacesRetainedScene(const CommitTransaction& transaction) noexcept {
+    return (transaction.flags &
+            lcl::raster_protocol::kTransactionReplacesTree) != 0;
 }
 
-bool hasValidRetainedFrameMetadata(const SubmitFrame& submit) noexcept {
+bool hasValidRetainedFrameMetadata(
+        const CommitTransaction& submit) noexcept {
     constexpr float kTolerance = 0.001f;
     constexpr float kMaxPixelExtent = 16384.0f;
     const bool finite = std::isfinite(submit.logicalWidth) &&
@@ -222,7 +231,9 @@ bool hasValidRetainedFrameMetadata(const SubmitFrame& submit) noexcept {
             submit.logicalWidth + kTolerance ||
         submit.damageY + submit.damageHeight >
             submit.logicalHeight + kTolerance ||
-        (submit.flags & ~lcl::raster_protocol::kSubmitReplacesScene) != 0) {
+        (submit.flags &
+         ~lcl::raster_protocol::kTransactionReplacesTree) != 0 ||
+        submit.reserved != 0) {
         return false;
     }
     if (!replacesRetainedScene(submit)) return submit.baseFrameSerial != 0;
@@ -234,7 +245,7 @@ bool hasValidRetainedFrameMetadata(const SubmitFrame& submit) noexcept {
             submit.logicalHeight - kTolerance;
 }
 
-bool retainedBaseMatches(const SubmitFrame& submit, uint64_t frameSerial,
+bool retainedBaseMatches(const CommitTransaction& submit, uint64_t frameSerial,
                          uint64_t geometryGeneration, uint32_t width,
                          uint32_t height, float scale) noexcept {
     if (replacesRetainedScene(submit)) return true;
@@ -255,7 +266,7 @@ struct PixelDamage {
     uint32_t height{0};
 };
 
-PixelDamage pixelDamageFor(const SubmitFrame& submit, uint32_t width,
+PixelDamage pixelDamageFor(const CommitTransaction& submit, uint32_t width,
                            uint32_t height) noexcept {
     const uint32_t left = std::min(width, static_cast<uint32_t>(std::floor(
         submit.damageX * submit.bufferScale)));
@@ -267,6 +278,345 @@ PixelDamage pixelDamageFor(const SubmitFrame& submit, uint32_t width,
         (submit.damageY + submit.damageHeight) * submit.bufferScale)));
     return {left, top, right > left ? right - left : 0,
             bottom > top ? bottom - top : 0};
+}
+
+bool validNodeState(const RetainedNodeState& node) noexcept {
+    constexpr uint32_t kBoundaryMask = 0x7fu;
+    const auto finite = [](float value) { return std::isfinite(value); };
+    if (node.id == 0 || node.contentRevision == 0 ||
+        node.boundaryReasons == 0 || node.reserved != 0 ||
+        (node.boundaryReasons & ~kBoundaryMask) != 0 ||
+        (node.flags & ~lcl::raster_protocol::kNodeHasClip) != 0) {
+        return false;
+    }
+    const float values[]{
+        node.layoutX, node.layoutY, node.layoutWidth, node.layoutHeight,
+        node.presentationX, node.presentationY,
+        node.presentationWidth, node.presentationHeight,
+        node.clipX, node.clipY, node.clipWidth, node.clipHeight,
+        node.opacity, node.translationX, node.translationY,
+        node.scaleX, node.scaleY, node.rotationRadians,
+        node.originX, node.originY,
+    };
+    if (!std::all_of(std::begin(values), std::end(values), finite) ||
+        node.layoutWidth < 0.0f || node.layoutHeight < 0.0f ||
+        node.presentationWidth < 0.0f || node.presentationHeight < 0.0f ||
+        node.opacity < 0.0f || node.opacity > 1.0f ||
+        node.scaleX < 0.0f || node.scaleY < 0.0f ||
+        node.originX < 0.0f || node.originX > 1.0f ||
+        node.originY < 0.0f || node.originY > 1.0f) {
+        return false;
+    }
+    return (node.flags & lcl::raster_protocol::kNodeHasClip) == 0 ||
+        (node.clipWidth >= 0.0f && node.clipHeight >= 0.0f);
+}
+
+bool applyNodeMutations(
+        const CommitTransaction& transaction,
+        std::span<const NodeMutation> mutations,
+        std::unordered_map<uint64_t, RetainedNodeState>& nodes,
+        uint64_t& rootId) {
+    constexpr size_t kMaxRetainedNodes = 4096;
+    constexpr size_t kMaxMutations = kMaxRetainedNodes * 2;
+    if (mutations.size() != transaction.mutationCount ||
+        mutations.size() > kMaxMutations) {
+        return false;
+    }
+    if (replacesRetainedScene(transaction)) {
+        nodes.clear();
+        rootId = 0;
+    } else if (nodes.empty() || rootId == 0) {
+        return false;
+    }
+
+    for (const auto& mutation : mutations) {
+        if (mutation.reserved != 0 || mutation.node.id == 0) return false;
+        const uint64_t id = mutation.node.id;
+        switch (mutation.type) {
+            case lcl::raster_protocol::NodeMutationType::CreateNode: {
+                if (!validNodeState(mutation.node) || nodes.contains(id) ||
+                    nodes.size() >= kMaxRetainedNodes) {
+                    return false;
+                }
+                if (mutation.node.parentId == 0) {
+                    if (rootId != 0) return false;
+                    rootId = id;
+                } else if (!nodes.contains(mutation.node.parentId)) {
+                    return false;
+                }
+                nodes.emplace(id, mutation.node);
+                break;
+            }
+            case lcl::raster_protocol::NodeMutationType::UpdateContent: {
+                auto existing = nodes.find(id);
+                if (existing == nodes.end() ||
+                    mutation.node.contentRevision == 0) {
+                    return false;
+                }
+                existing->second.contentRevision =
+                    mutation.node.contentRevision;
+                break;
+            }
+            case lcl::raster_protocol::NodeMutationType::SetProperties: {
+                auto existing = nodes.find(id);
+                if (existing == nodes.end() ||
+                    !validNodeState(mutation.node)) {
+                    return false;
+                }
+                const uint64_t contentRevision =
+                    existing->second.contentRevision;
+                existing->second = mutation.node;
+                existing->second.contentRevision = contentRevision;
+                break;
+            }
+            case lcl::raster_protocol::NodeMutationType::RemoveNode: {
+                const auto existing = nodes.find(id);
+                if (existing == nodes.end()) return false;
+                if (std::any_of(
+                        nodes.begin(), nodes.end(),
+                        [id](const auto& entry) {
+                            return entry.second.parentId == id;
+                        })) {
+                    return false;
+                }
+                if (rootId == id) rootId = 0;
+                nodes.erase(existing);
+                break;
+            }
+            default:
+                return false;
+        }
+    }
+
+    if (nodes.empty() || rootId == 0 || !nodes.contains(rootId)) return false;
+    size_t rootCount = 0;
+    std::unordered_map<uint64_t, std::vector<uint32_t>> childOrders;
+    for (const auto& [id, node] : nodes) {
+        if (node.parentId == 0) {
+            ++rootCount;
+            if (id != rootId || node.siblingIndex != 0 ||
+                (node.boundaryReasons & 1u) == 0) {
+                return false;
+            }
+        } else if (!nodes.contains(node.parentId) ||
+                   (node.boundaryReasons & 1u) != 0) {
+            return false;
+        } else {
+            childOrders[node.parentId].push_back(node.siblingIndex);
+        }
+
+        uint64_t ancestor = id;
+        size_t depth = 0;
+        while (ancestor != rootId) {
+            const auto current = nodes.find(ancestor);
+            if (current == nodes.end() || current->second.parentId == 0 ||
+                ++depth > nodes.size()) {
+                return false;
+            }
+            ancestor = current->second.parentId;
+        }
+    }
+    for (auto& [_, orders] : childOrders) {
+        std::sort(orders.begin(), orders.end());
+        for (size_t index = 0; index < orders.size(); ++index) {
+            if (orders[index] != static_cast<uint32_t>(index)) return false;
+        }
+    }
+    return rootCount == 1;
+}
+
+const RetainedNodeState* findRetainedNode(
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes,
+        uint64_t id) noexcept {
+    const auto found = nodes.find(id);
+    return found == nodes.end() ? nullptr : &found->second;
+}
+
+bool isScrollViewport(const RetainedNodeState& node) noexcept {
+    constexpr uint32_t kScrollViewportReason = 1u << 4u;
+    return (node.boundaryReasons & kScrollViewportReason) != 0;
+}
+
+bool isScrollContent(const RetainedNodeState& node) noexcept {
+    constexpr uint32_t kScrollContentReason = 1u << 5u;
+    return (node.boundaryReasons & kScrollContentReason) != 0;
+}
+
+bool isWithinScrollContent(
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes,
+        uint64_t id) noexcept {
+    const auto* node = findRetainedNode(nodes, id);
+    size_t depth = 0;
+    while (node && depth++ <= nodes.size()) {
+        if (isScrollContent(*node)) return true;
+        if (node->parentId == 0) return false;
+        node = findRetainedNode(nodes, node->parentId);
+    }
+    return false;
+}
+
+bool isScrollTranslationProperties(
+        const NodeMutation& mutation,
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes) noexcept {
+    constexpr uint32_t kScrollContentReason = 1u << 5u;
+    constexpr uint32_t kTransformReason = 1u << 2u;
+    constexpr float kEpsilon = 0.0001f;
+    const auto same = [=](float lhs, float rhs) {
+        return std::fabs(lhs - rhs) <= kEpsilon;
+    };
+    if (mutation.type !=
+            lcl::raster_protocol::NodeMutationType::SetProperties) {
+        return false;
+    }
+    const auto& node = mutation.node;
+    const auto* old = findRetainedNode(nodes, node.id);
+    if (!old) return false;
+    const float translationDeltaX = node.translationX - old->translationX;
+    const float translationDeltaY = node.translationY - old->translationY;
+    return validNodeState(node) &&
+        (node.boundaryReasons & kScrollContentReason) != 0 &&
+        (old->boundaryReasons & kScrollContentReason) != 0 &&
+        ((node.boundaryReasons ^ old->boundaryReasons) &
+        ~kTransformReason) == 0 &&
+        node.parentId == old->parentId &&
+        node.siblingIndex == old->siblingIndex &&
+        node.flags == old->flags &&
+        same(node.layoutX, old->layoutX) &&
+        same(node.layoutY, old->layoutY) &&
+        same(node.layoutWidth, old->layoutWidth) &&
+        same(node.layoutHeight, old->layoutHeight) &&
+        same(node.presentationX - old->presentationX, translationDeltaX) &&
+        same(node.presentationY - old->presentationY, translationDeltaY) &&
+        same(node.presentationWidth, old->presentationWidth) &&
+        same(node.presentationHeight, old->presentationHeight) &&
+        same(node.clipX, old->clipX) &&
+        same(node.clipY, old->clipY) &&
+        same(node.clipWidth, old->clipWidth) &&
+        same(node.clipHeight, old->clipHeight) &&
+        same(node.opacity, 1.0f) && same(old->opacity, 1.0f) &&
+        same(node.scaleX, 1.0f) && same(node.scaleY, 1.0f) &&
+        same(old->scaleX, 1.0f) && same(old->scaleY, 1.0f) &&
+        same(node.rotationRadians, 0.0f) &&
+        same(old->rotationRadians, 0.0f) &&
+        same(node.originX, old->originX) &&
+        same(node.originY, old->originY);
+}
+
+bool isScrollTransformOnly(
+        const CommitTransaction& transaction,
+        std::span<const NodeMutation> mutations,
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes) noexcept {
+    if (replacesRetainedScene(transaction) || mutations.empty()) return false;
+    return std::all_of(
+        mutations.begin(), mutations.end(), [&](const NodeMutation& mutation) {
+            return isScrollTranslationProperties(mutation, nodes);
+        });
+}
+
+std::optional<lcl::graphics::DisplayList> makeScrollCompositionTemplate(
+        const std::vector<lcl::graphics::DisplayCommand>& commands) {
+    auto composition =
+        std::make_shared<std::vector<lcl::graphics::DisplayCommand>>();
+    composition->reserve(commands.size());
+    size_t cachedLayerDepth = 0;
+    bool drawsCachedLayer = false;
+    for (const auto& command : commands) {
+        if (std::holds_alternative<
+                lcl::graphics::BeginCachedLayerCommand>(command)) {
+            ++cachedLayerDepth;
+            continue;
+        }
+        if (std::holds_alternative<
+                lcl::graphics::EndCachedLayerCommand>(command)) {
+            if (cachedLayerDepth == 0) return std::nullopt;
+            --cachedLayerDepth;
+            continue;
+        }
+        if (cachedLayerDepth != 0) continue;
+        if (std::holds_alternative<
+                lcl::graphics::DrawCachedLayerCommand>(command)) {
+            drawsCachedLayer = true;
+        }
+        composition->push_back(command);
+    }
+    if (cachedLayerDepth != 0 || !drawsCachedLayer) return std::nullopt;
+    const auto immutable = std::shared_ptr<
+        const std::vector<lcl::graphics::DisplayCommand>>(composition);
+    return lcl::graphics::DisplayList(immutable);
+}
+
+std::optional<lcl::graphics::DisplayList> patchScrollCompositionTemplate(
+        const SurfaceState& surface,
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes) {
+    constexpr uint32_t kScrollContentReason = 1u << 5u;
+    if (!surface.scrollCompositionTemplate) return std::nullopt;
+
+    std::unordered_map<uint64_t, const RetainedNodeState*> contentByLayer;
+    for (const auto& [_, node] : nodes) {
+        if ((node.boundaryReasons & kScrollContentReason) == 0 ||
+            node.parentId == 0) {
+            continue;
+        }
+        const auto layer = surface.cachedLayerNamespaces.find(node.parentId);
+        if (layer != surface.cachedLayerNamespaces.end()) {
+            contentByLayer.emplace(layer->second, &node);
+        }
+    }
+    if (contentByLayer.empty()) return std::nullopt;
+
+    auto commands = std::make_shared<std::vector<
+        lcl::graphics::DisplayCommand>>(
+            surface.scrollCompositionTemplate->commands());
+    bool patched = false;
+    for (auto& command : *commands) {
+        auto* draw = std::get_if<
+            lcl::graphics::DrawCachedLayerCommand>(&command);
+        if (!draw) continue;
+        const auto content = contentByLayer.find(draw->id);
+        if (content == contentByLayer.end()) continue;
+        const auto& node = *content->second;
+        draw->destination = {
+            node.layoutX + node.translationX,
+            node.layoutY + node.translationY,
+            node.layoutWidth, node.layoutHeight};
+        patched = true;
+    }
+    if (!patched) return std::nullopt;
+    const auto immutable = std::shared_ptr<
+        const std::vector<lcl::graphics::DisplayCommand>>(commands);
+    return lcl::graphics::DisplayList(immutable);
+}
+
+bool invalidatesScrollCompositionTemplate(
+        const SurfaceState& surface,
+        std::span<const NodeMutation> mutations,
+        const std::unordered_map<uint64_t, RetainedNodeState>& nextNodes)
+        noexcept {
+    for (const auto& mutation : mutations) {
+        if (mutation.type ==
+                lcl::raster_protocol::NodeMutationType::RemoveNode) {
+            const auto* existing = findRetainedNode(
+                surface.retainedNodes, mutation.node.id);
+            if (!existing) return true;
+            if (isScrollViewport(*existing) || isScrollContent(*existing) ||
+                !isWithinScrollContent(
+                    surface.retainedNodes, mutation.node.id)) return true;
+            continue;
+        }
+        const auto* next = findRetainedNode(nextNodes, mutation.node.id);
+        if (!next || isScrollViewport(*next)) return true;
+        if (isScrollContent(*next)) {
+            if (mutation.type ==
+                    lcl::raster_protocol::NodeMutationType::CreateNode ||
+                (mutation.type ==
+                     lcl::raster_protocol::NodeMutationType::SetProperties &&
+                 !isScrollTranslationProperties(
+                     mutation, surface.retainedNodes))) return true;
+            continue;
+        }
+        if (!isWithinScrollContent(nextNodes, mutation.node.id)) return true;
+    }
+    return false;
 }
 
 bool setNonBlocking(int fd) {
@@ -458,44 +808,58 @@ private:
             return;
         }
 
-        if (const auto* submit = lcl::raster_protocol::payloadAs<SubmitFrame>(
-                header, payload, Opcode::SubmitFrame)) {
-            auto* surface = authorizedSurface(client, submit->grant);
-            if (!surface || submit->displayListSize == 0 ||
-                !hasValidRetainedFrameMetadata(*submit) ||
-                !isImmutableMemfd(receivedFd, submit->displayListSize)) {
+        CommitTransaction transaction{};
+        std::vector<NodeMutation> mutations;
+        if (lcl::raster_protocol::decodeCommitTransaction(
+                header, payload, transaction, mutations)) {
+            auto* surface = authorizedSurface(client, transaction.grant);
+            const bool hasDisplayList = transaction.displayListSize != 0;
+            const bool validDisplayListDescriptor = hasDisplayList
+                ? isImmutableMemfd(receivedFd, transaction.displayListSize)
+                : receivedFd < 0;
+            const bool validPropertyOnlyCommit = hasDisplayList ||
+                (surface && isScrollTransformOnly(
+                    transaction, mutations, surface->retainedNodes));
+            if (!surface ||
+                !hasValidRetainedFrameMetadata(transaction) ||
+                !validDisplayListDescriptor || !validPropertyOnlyCommit ||
+                (replacesRetainedScene(transaction) && !hasDisplayList)) {
                 if (receivedFd >= 0) close(receivedFd);
-                discard(client.fd, *submit,
+                discard(client.fd, transaction,
                         surface ? lcl::raster_protocol::DiscardReason::InvalidFrame
                                 : lcl::raster_protocol::DiscardReason::InvalidGrant);
                 return;
             }
-            auto& queue = (submit->grant.flags &
+            auto& queue = (transaction.grant.flags &
                            lcl::raster_protocol::kGrantInteractiveSystem) != 0
                 ? m_systemFrames : m_appFrames;
-            auto existing = std::find_if(queue.begin(), queue.end(), [submit](const auto& frame) {
-                return tokenOf(frame.submit.grant) == tokenOf(submit->grant);
+            auto existing = std::find_if(queue.begin(), queue.end(), [&transaction](const auto& frame) {
+                return tokenOf(frame.transaction.grant) ==
+                    tokenOf(transaction.grant);
             });
             if (existing != queue.end()) {
-                if (replacesRetainedScene(*submit)) {
+                if (replacesRetainedScene(transaction)) {
                     // A complete replacement has no dependency on the queued
                     // base and may safely collapse obsolete work.
-                    discard(existing->clientFd, existing->submit,
+                    discard(existing->clientFd, existing->transaction,
                             lcl::raster_protocol::DiscardReason::Superseded);
                     if (existing->displayListFd >= 0) {
                         close(existing->displayListFd);
                     }
-                    *existing = {client.fd, *submit, receivedFd};
+                    *existing = {
+                        client.fd, transaction, std::move(mutations),
+                        receivedFd};
                 } else {
                     // Retained patches are ordered against an exact base.
                     // Never drop the queued predecessor and apply this patch
                     // to a different scene.
-                    discard(client.fd, *submit,
+                    discard(client.fd, transaction,
                             lcl::raster_protocol::DiscardReason::InvalidFrame);
-                    close(receivedFd);
+                    if (receivedFd >= 0) close(receivedFd);
                 }
             } else {
-                queue.push_back({client.fd, *submit, receivedFd});
+                queue.push_back({
+                    client.fd, transaction, std::move(mutations), receivedFd});
             }
             return;
         }
@@ -520,21 +884,39 @@ private:
 
         auto frame = std::move(queue->front());
         queue->pop_front();
-        auto surfaceIt = m_surfaces.find(tokenOf(frame.submit.grant));
+        auto surfaceIt = m_surfaces.find(tokenOf(frame.transaction.grant));
         if (surfaceIt == m_surfaces.end()) {
-            discard(frame.clientFd, frame.submit,
+            discard(frame.clientFd, frame.transaction,
                     lcl::raster_protocol::DiscardReason::SurfaceRevoked);
-            close(frame.displayListFd);
+            if (frame.displayListFd >= 0) close(frame.displayListFd);
             return;
         }
-        if (!rasterFrame(surfaceIt->second, frame.submit, frame.displayListFd)) {
-            discard(frame.clientFd, frame.submit,
-                    lcl::raster_protocol::DiscardReason::RasterFailure);
+        auto nextNodes = surfaceIt->second.retainedNodes;
+        uint64_t nextRootId = surfaceIt->second.retainedRootId;
+        if (!applyNodeMutations(
+                frame.transaction, frame.mutations,
+                nextNodes, nextRootId)) {
+            discard(frame.clientFd, frame.transaction,
+                    lcl::raster_protocol::DiscardReason::InvalidFrame);
+            if (frame.displayListFd >= 0) close(frame.displayListFd);
+            return;
         }
-        close(frame.displayListFd);
+        if (!rasterFrame(
+                surfaceIt->second, frame.transaction,
+                frame.mutations, nextNodes, frame.displayListFd)) {
+            discard(frame.clientFd, frame.transaction,
+                    lcl::raster_protocol::DiscardReason::RasterFailure);
+        } else {
+            // Retained-node state and the immutable raster output become
+            // visible together; a failed replay never advances either base.
+            surfaceIt->second.retainedNodes = std::move(nextNodes);
+            surfaceIt->second.retainedRootId = nextRootId;
+        }
+        if (frame.displayListFd >= 0) close(frame.displayListFd);
     }
 
-    LayerSlot* acquireSlot(SurfaceState& surface, const SubmitFrame& submit) {
+    LayerSlot* acquireSlot(
+            SurfaceState& surface, const CommitTransaction& submit) {
         const uint32_t width = std::max(1u, static_cast<uint32_t>(
             std::ceil(submit.logicalWidth * submit.bufferScale)));
         const uint32_t height = std::max(1u, static_cast<uint32_t>(
@@ -568,8 +950,14 @@ private:
         return nullptr;
     }
 
-    bool rasterFrame(SurfaceState& surface, const SubmitFrame& submit,
+    bool rasterFrame(SurfaceState& surface,
+                     const CommitTransaction& submit,
+                     std::span<const NodeMutation> mutations,
+                     const std::unordered_map<
+                         uint64_t, RetainedNodeState>& nextNodes,
                      int displayListFd) {
+        const bool scrollTransformTransaction = isScrollTransformOnly(
+            submit, mutations, surface.retainedNodes);
         if (!replacesRetainedScene(submit) &&
             !retainedBaseMatches(
                 submit, surface.gpuFrameSerial,
@@ -581,47 +969,88 @@ private:
                 surface.softwareHeight, surface.softwareScale)) {
             return false;
         }
-        std::vector<uint8_t> wireBytes(submit.displayListSize);
-        if (!readExact(displayListFd, wireBytes.data(), wireBytes.size())) {
-            return false;
-        }
-        const auto wire = std::span<const uint8_t>(wireBytes);
-        auto decoded = lcl::graphics::decodeDisplayList(wire, submit.displayListSize);
-        if (!decoded) return false;
-
-        auto commands = std::make_shared<std::vector<lcl::graphics::DisplayCommand>>(
-            decoded.displayList.commands());
-        for (auto& command : *commands) {
-            if (auto* image = std::get_if<lcl::graphics::DrawImageCommand>(&command)) {
-                const auto found = surface.images.find(
-                    {image->resourceId, image->contentRevision});
-                if (found == surface.images.end()) return false;
-                auto& resource = found->second;
-                image->resourceKey = reinterpret_cast<uintptr_t>(resource.pixels.data());
-                image->resourceId = resource.rendererId;
-                image->sourceWidth = static_cast<int>(resource.width);
-                image->sourceHeight = static_cast<int>(resource.height);
-                image->stridePixels = static_cast<int>(resource.stridePixels);
-                image->opaque = resource.opaque;
-            } else if (auto* begin = std::get_if<
-                           lcl::graphics::BeginCachedLayerCommand>(&command)) {
-                auto [found, inserted] = surface.cachedLayerNamespaces.try_emplace(
-                    begin->id, 0);
-                if (inserted) found->second = m_nextCachedLayerId++;
-                begin->id = found->second;
-            } else if (auto* draw = std::get_if<
-                           lcl::graphics::DrawCachedLayerCommand>(&command)) {
-                auto [found, inserted] = surface.cachedLayerNamespaces.try_emplace(
-                    draw->id, 0);
-                if (inserted) found->second = m_nextCachedLayerId++;
-                draw->id = found->second;
+        std::shared_ptr<std::vector<lcl::graphics::DisplayCommand>> commands;
+        std::optional<lcl::graphics::DisplayList> nextCompositionTemplate;
+        if (submit.displayListSize != 0) {
+            std::vector<uint8_t> wireBytes(submit.displayListSize);
+            if (!readExact(
+                    displayListFd, wireBytes.data(), wireBytes.size())) {
+                return false;
             }
+            const auto wire = std::span<const uint8_t>(wireBytes);
+            auto decoded = lcl::graphics::decodeDisplayList(
+                wire, submit.displayListSize);
+            if (!decoded) return false;
+
+            commands = std::make_shared<std::vector<
+                lcl::graphics::DisplayCommand>>(
+                    decoded.displayList.commands());
+            for (auto& command : *commands) {
+                if (auto* image = std::get_if<
+                        lcl::graphics::DrawImageCommand>(&command)) {
+                    const auto found = surface.images.find(
+                        {image->resourceId, image->contentRevision});
+                    if (found == surface.images.end()) return false;
+                    auto& resource = found->second;
+                    image->resourceKey = reinterpret_cast<uintptr_t>(
+                        resource.pixels.data());
+                    image->resourceId = resource.rendererId;
+                    image->sourceWidth = static_cast<int>(resource.width);
+                    image->sourceHeight = static_cast<int>(resource.height);
+                    image->stridePixels =
+                        static_cast<int>(resource.stridePixels);
+                    image->opaque = resource.opaque;
+                } else if (auto* begin = std::get_if<
+                               lcl::graphics::BeginCachedLayerCommand>(
+                                   &command)) {
+                    auto [found, inserted] =
+                        surface.cachedLayerNamespaces.try_emplace(
+                            begin->id, 0);
+                    if (inserted) found->second = m_nextCachedLayerId++;
+                    begin->id = found->second;
+                } else if (auto* draw = std::get_if<
+                               lcl::graphics::DrawCachedLayerCommand>(
+                                   &command)) {
+                    auto [found, inserted] =
+                        surface.cachedLayerNamespaces.try_emplace(
+                            draw->id, 0);
+                    if (inserted) found->second = m_nextCachedLayerId++;
+                    draw->id = found->second;
+                }
+            }
+            nextCompositionTemplate = makeScrollCompositionTemplate(*commands);
+        } else {
+            const auto patched = patchScrollCompositionTemplate(
+                surface, nextNodes);
+            if (!patched) return false;
+            commands = std::make_shared<std::vector<
+                lcl::graphics::DisplayCommand>>(patched->commands());
         }
 
         const auto displayCommands = std::shared_ptr<
             const std::vector<lcl::graphics::DisplayCommand>>(commands);
         const lcl::graphics::DisplayList displayList(displayCommands);
-        if (rasterGpuFrame(surface, submit, displayList)) return true;
+        const bool invalidatesCompositionTemplate =
+            invalidatesScrollCompositionTemplate(
+                surface, mutations, nextNodes);
+        const auto commitCompositionTemplate = [&] {
+            if (replacesRetainedScene(submit)) {
+                surface.scrollCompositionTemplate =
+                    std::move(nextCompositionTemplate);
+            } else if (scrollTransformTransaction &&
+                       nextCompositionTemplate) {
+                // A normal DisplayList scroll frame is the recovery path after
+                // an outer composition change invalidated the old template.
+                surface.scrollCompositionTemplate =
+                    std::move(nextCompositionTemplate);
+            } else if (invalidatesCompositionTemplate) {
+                surface.scrollCompositionTemplate.reset();
+            }
+        };
+        if (rasterGpuFrame(surface, submit, displayList)) {
+            commitCompositionTemplate();
+            return true;
+        }
 
         if (!retainedBaseMatches(
                 submit, surface.softwareFrameSerial,
@@ -693,11 +1122,12 @@ private:
         surface.softwareFrameSerial = submit.frameSerial;
         surface.softwareGeometryGeneration = submit.geometryGeneration;
         surface.softwareScale = submit.bufferScale;
+        commitCompositionTemplate();
         return true;
     }
 
     bool rasterGpuFrame(
-            SurfaceState& surface, const SubmitFrame& submit,
+            SurfaceState& surface, const CommitTransaction& submit,
             const lcl::graphics::DisplayList& displayList) {
 #if defined(__ANDROID__)
         // The Android private channel needs an AHardwareBuffer handle transfer,
@@ -826,7 +1256,7 @@ private:
 #endif
     }
 
-    void discard(int clientFd, const SubmitFrame& submit,
+    void discard(int clientFd, const CommitTransaction& submit,
                  lcl::raster_protocol::DiscardReason reason) {
         FrameDiscarded discarded{};
         discarded.surfaceId = submit.grant.surfaceId;
@@ -871,7 +1301,7 @@ private:
         if (found == m_surfaces.end()) return;
         const auto removePending = [&token](auto& queue) {
             for (auto it = queue.begin(); it != queue.end();) {
-                if (tokenOf(it->submit.grant) == token) {
+                if (tokenOf(it->transaction.grant) == token) {
                     if (it->displayListFd >= 0) close(it->displayListFd);
                     it = queue.erase(it);
                 } else {

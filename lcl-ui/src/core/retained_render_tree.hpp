@@ -74,6 +74,7 @@ struct RenderNode {
 struct RetainedRenderNode {
     uint64_t id{0};
     uint64_t parentId{0};
+    uint32_t siblingIndex{0};
     RenderBoundaryReason boundaryReasons{RenderBoundaryReason::None};
     graphics::RectF layoutBounds{};
     graphics::RectF presentationBounds{};
