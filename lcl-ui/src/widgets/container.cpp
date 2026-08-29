@@ -31,28 +31,32 @@ void Container::styleDidChange() {
 }
 
 void Container::setBackgroundColor(const graphics::Color& color) {
+    if (m_backgroundColor.toARGB() == color.toARGB() &&
+        m_presentationBackgroundColor.toARGB() == color.toARGB()) return;
     m_backgroundColor = color;
     if (m_motionCoordinator) {
         m_motionCoordinator->setColor(*this, AnimatableProperty::BackgroundRed,
             m_presentationBackgroundColor, color,
-            [this](graphics::Color next) { m_presentationBackgroundColor = next; markDirty(); });
-    } else { m_presentationBackgroundColor = color; markDirty(); }
+            [this](graphics::Color next) { m_presentationBackgroundColor = next; invalidatePaint(); });
+    } else { m_presentationBackgroundColor = color; invalidatePaint(); }
 }
 
 void Container::animateBackgroundColor(const graphics::Color& color, const lcl::motion::Motion& motion) {
     m_backgroundColor = color;
-    if (!m_motionCoordinator) { m_presentationBackgroundColor = color; markDirty(); return; }
+    if (!m_motionCoordinator) { m_presentationBackgroundColor = color; invalidatePaint(); return; }
     m_motionCoordinator->setColor(*this, AnimatableProperty::BackgroundRed,
         m_presentationBackgroundColor, color,
-        [this](graphics::Color next) { m_presentationBackgroundColor = next; markDirty(); }, &motion);
+        [this](graphics::Color next) { m_presentationBackgroundColor = next; invalidatePaint(); }, &motion);
 }
 
 void Container::setBorderColor(const graphics::Color& color) {
+    if (m_borderColor.toARGB() == color.toARGB() &&
+        m_presentationBorderColor.toARGB() == color.toARGB()) return;
     m_borderColor = color;
     const auto apply = [this](graphics::Color next) {
         const graphics::RectF previous = getVisiblePresentationPaintBounds();
         m_presentationBorderColor = next;
-        markPaintDirty(previous);
+        invalidatePaintFrom(previous);
     };
     if (m_motionCoordinator) {
         m_motionCoordinator->setColor(*this, AnimatableProperty::BorderRed,
@@ -65,7 +69,7 @@ void Container::animateBorderColor(const graphics::Color& color, const lcl::moti
     const auto apply = [this](graphics::Color next) {
         const graphics::RectF previous = getVisiblePresentationPaintBounds();
         m_presentationBorderColor = next;
-        markPaintDirty(previous);
+        invalidatePaintFrom(previous);
     };
     if (!m_motionCoordinator) { apply(color); return; }
     m_motionCoordinator->setColor(*this, AnimatableProperty::BorderRed,
@@ -73,11 +77,14 @@ void Container::animateBorderColor(const graphics::Color& color, const lcl::moti
 }
 
 void Container::setBorderWidth(float width) {
-    m_borderWidth = std::max(0.0f, width);
+    const float nextWidth = std::max(0.0f, width);
+    if (m_borderWidth == nextWidth &&
+        m_presentationBorderWidth == nextWidth) return;
+    m_borderWidth = nextWidth;
     const auto apply = [this](float next) {
         const graphics::RectF previous = getVisiblePresentationPaintBounds();
         m_presentationBorderWidth = next;
-        markPaintDirty(previous);
+        invalidatePaintFrom(previous);
     };
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::BorderWidth,
         m_presentationBorderWidth, m_borderWidth, apply);
@@ -85,8 +92,11 @@ void Container::setBorderWidth(float width) {
 }
 
 void Container::setBorderRadius(float radius) {
-    m_borderRadius = std::max(0.0f, radius);
-    const auto apply = [this](float next) { m_presentationBorderRadius = next; markDirty(); };
+    const float nextRadius = std::max(0.0f, radius);
+    if (m_borderRadius == nextRadius &&
+        m_presentationBorderRadius == nextRadius) return;
+    m_borderRadius = nextRadius;
+    const auto apply = [this](float next) { m_presentationBorderRadius = next; invalidatePaint(); };
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::BorderRadius,
         m_presentationBorderRadius, m_borderRadius, apply);
     else apply(m_borderRadius);
@@ -124,7 +134,7 @@ void Container::applyPresentationValue(AnimatableProperty property, float value)
         case AnimatableProperty::BorderRadius: m_presentationBorderRadius = std::max(0.0f, value); break;
         default: Widget::applyPresentationValue(property, value); return;
     }
-    markPaintDirty(previous);
+    invalidatePaintFrom(previous);
 }
 
 void Container::commitModelValue(AnimatableProperty property, float value) {

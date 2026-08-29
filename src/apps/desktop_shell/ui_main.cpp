@@ -312,7 +312,7 @@ void updateDockView(
     }
     iconX += kIconSize + kIconGap;
   }
-  view.panel->markDirty();
+  view.panel->invalidatePaint();
 }
 
 } // namespace

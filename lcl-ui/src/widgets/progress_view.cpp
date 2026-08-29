@@ -44,7 +44,7 @@ void ProgressView::setValue(std::optional<float> value) {
             m_value ? kLinearHeight : kCircularSize);
     }
     updatePresentationRegistration();
-    markDirty();
+    invalidatePaint();
 }
 
 void ProgressView::setTotal(float total) {
@@ -52,7 +52,7 @@ void ProgressView::setTotal(float total) {
     if (std::fabs(total - m_total) <= 0.0001f) return;
     m_total = total;
     if (m_value) m_value = std::clamp(*m_value, 0.0f, m_total);
-    markDirty();
+    invalidatePaint();
 }
 
 void ProgressView::setProgressViewStyle(ProgressViewStyle style) {
@@ -62,7 +62,7 @@ void ProgressView::setProgressViewStyle(ProgressViewStyle style) {
         ProgressViewStyle::Circular;
     if (!m_hasWidth) setDefaultWidth(circular ? kCircularSize : kLinearWidth);
     if (!m_hasHeight) setDefaultHeight(circular ? kCircularSize : kLinearHeight);
-    markDirty();
+    invalidatePaint();
 }
 
 ProgressViewStyle ProgressView::resolvedProgressViewStyle() const noexcept {
@@ -92,7 +92,7 @@ void ProgressView::updatePresentationRegistration() {
 void ProgressView::tickIndeterminate(float deltaSec) {
     if (m_value) return;
     m_phase = std::fmod(m_phase + std::max(0.0f, deltaSec) * 0.85f, 1.0f);
-    markPresentationDirty();
+    invalidatePresentation();
 }
 
 const lcl::theme::WidgetStyle* ProgressView::defaultStyle() const noexcept {
@@ -100,7 +100,7 @@ const lcl::theme::WidgetStyle* ProgressView::defaultStyle() const noexcept {
 }
 
 void ProgressView::styleDidChange() {
-    markDirty();
+    invalidatePaint();
 }
 
 void ProgressView::drawLinear(

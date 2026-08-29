@@ -22,8 +22,11 @@ public:
     bool prepare() { return connectIfNeeded(); }
     bool uploadImage(const graphics::ImageResourceView& resource);
     bool submitFrame(uint64_t configureSerial, uint64_t frameSerial,
-                     uint64_t geometryGeneration, float logicalWidth,
+                     uint64_t baseFrameSerial, uint64_t geometryGeneration,
+                     float logicalWidth,
                      float logicalHeight, float bufferScale,
+                     const graphics::RectF& damage,
+                     bool replacesScene,
                      const std::vector<uint8_t>& displayList);
     std::vector<raster_protocol::FrameDiscarded> pollDiscards();
     bool isConfigured() const noexcept;

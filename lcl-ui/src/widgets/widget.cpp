@@ -29,7 +29,10 @@ void Widget::addChild(std::unique_ptr<Widget> child) {
     child->setThemeContext(m_themeContext);
     m_layoutNode->appendChild(*child->m_layoutNode);
     m_children.push_back(std::move(child));
-    markDirty();
+    // Tree membership changes the retained subtree identity, but the new
+    // child has no synchronized geometry yet. syncLayout() will damage its
+    // first real presentation bounds.
+    advancePaintRevision();
 }
 
 void Widget::setRenderPass(RenderPass* pass) {
@@ -69,7 +72,7 @@ void Widget::useStyle(lcl::theme::WidgetStyle style) {
     m_explicitStyle = std::move(style);
     styleDidChange();
     applyDeclarativeInteractionState();
-    markDirty();
+    invalidatePaint();
 }
 
 void Widget::useThemeStyle(lcl::theme::WidgetStyleRole role) {
@@ -77,7 +80,7 @@ void Widget::useThemeStyle(lcl::theme::WidgetStyleRole role) {
     m_themeStyleRole = role;
     styleDidChange();
     applyDeclarativeInteractionState();
-    markDirty();
+    invalidatePaint();
 }
 
 void Widget::clearStyle() {
@@ -86,7 +89,7 @@ void Widget::clearStyle() {
     m_themeStyleRole.reset();
     styleDidChange();
     applyDeclarativeInteractionState();
-    markDirty();
+    invalidatePaint();
 }
 
 const lcl::theme::Theme& Widget::getTheme() const noexcept {
@@ -102,11 +105,12 @@ const lcl::theme::WidgetStyle* Widget::resolvedStyle() const noexcept {
 }
 
 void Widget::setThemeContext(const lcl::theme::ThemeContext* context) {
+    if (m_themeContext == context) return;
     m_themeContext = context;
     styleDidChange();
     applyDeclarativeInteractionState();
     for (auto& child : m_children) child->setThemeContext(context);
-    markDirty();
+    invalidatePaint();
 }
 
 void Widget::setInteractionEnabled(bool enabled) {
@@ -246,46 +250,55 @@ void Widget::removeChild(Widget* child) {
     auto it = std::find_if(m_children.begin(), m_children.end(),
         [child](const std::unique_ptr<Widget>& ptr) { return ptr.get() == child; });
     if (it != m_children.end()) {
+        const graphics::RectF previousBounds =
+            (*it)->getPresentationSubtreePaintBounds();
         m_layoutNode->removeChild(*child->m_layoutNode);
         (*it)->m_parent = nullptr;
         m_children.erase(it);
-        markDirty();
+        if (m_renderPass) m_renderPass->addDirtyRect(previousBounds);
+        advancePaintRevision();
     }
 }
 
-void Widget::markDirty() {
-    ++m_paintRevision;
+void Widget::invalidatePaint() {
     if (m_renderPass) {
         m_renderPass->addDirtyRect(getVisiblePresentationPaintBounds());
     }
-    if (m_parent) m_parent->propagateDescendantPaintRevision();
+    advancePaintRevision();
 }
 
-void Widget::markDirty(const graphics::RectF& damageRect) {
-    ++m_paintRevision;
+void Widget::invalidatePaint(const graphics::RectF& damageRect) {
     if (m_renderPass) {
         m_renderPass->addDirtyRect(
             damageRect.intersection(getVisiblePresentationPaintBounds()));
     }
+    advancePaintRevision();
+}
+
+void Widget::advancePaintRevision() {
+    ++m_paintRevision;
     if (m_parent) m_parent->propagateDescendantPaintRevision();
 }
 
-void Widget::markPresentationDirty() {
-    markPresentationDirty(getPresentationSubtreePaintBounds());
+void Widget::invalidatePresentation() {
+    invalidatePresentation(m_visible ? getPresentationSubtreePaintBounds()
+                                     : graphics::RectF{});
 }
 
-void Widget::markPresentationDirty(const graphics::RectF& previousBounds) {
+void Widget::invalidatePresentation(const graphics::RectF& previousBounds) {
     ++m_presentationRevision;
     if (m_renderPass) {
         m_renderPass->addDirtyRect(previousBounds);
-        m_renderPass->addDirtyRect(getPresentationSubtreePaintBounds());
+        if (m_visible) {
+            m_renderPass->addDirtyRect(getPresentationSubtreePaintBounds());
+        }
     }
     if (m_parent) m_parent->propagateDescendantPresentationRevision();
 }
 
-void Widget::markPaintDirty(const graphics::RectF& previousPaintBounds) {
+void Widget::invalidatePaintFrom(const graphics::RectF& previousPaintBounds) {
     if (m_renderPass) m_renderPass->addDirtyRect(previousPaintBounds);
-    markDirty();
+    invalidatePaint();
 }
 
 void Widget::propagateDescendantPaintRevision() {
@@ -300,11 +313,12 @@ void Widget::propagateDescendantPresentationRevision() {
 
 void Widget::invalidateLayout() {
     markLayoutDirty();
-    markDirty();
 }
 
 void Widget::markLayoutDirty() {
+    if (m_layoutDirty) return;
     m_layoutDirty = true;
+    ++m_layoutRevision;
     if (m_parent) m_parent->markLayoutDirty();
 }
 
@@ -314,8 +328,26 @@ void Widget::clearLayoutDirty() {
 }
 
 void Widget::setParentControlledTranslationY(float value) {
+    if (m_modelTransform.translationY == value &&
+        m_presentation.translationY == value) return;
     m_modelTransform.translationY = value;
     m_presentation.translationY = value;
+}
+
+void Widget::setVisible(bool visible) {
+    if (m_visible == visible) return;
+    const graphics::RectF previousBounds =
+        m_visible ? getPresentationSubtreePaintBounds() : graphics::RectF{};
+    m_visible = visible;
+    invalidatePresentation(previousBounds);
+}
+
+void Widget::setClipsToBounds(bool enabled) {
+    if (m_clipsToBounds == enabled) return;
+    const graphics::RectF previousBounds =
+        m_visible ? getPresentationSubtreePaintBounds() : graphics::RectF{};
+    m_clipsToBounds = enabled;
+    invalidatePresentation(previousBounds);
 }
 
 void Widget::setOpacity(float value) {
@@ -384,7 +416,7 @@ void Widget::setWidth(float value) {
     value = std::max(0.0f, value);
     if (!m_hasWidth) m_presentWidth = m_bounds.width;
     m_hasWidth = true; m_modelWidth = value;
-    const auto apply = [this](float next) { m_presentWidth = next; m_layoutNode->setWidth(next); markDirty(); };
+    const auto apply = [this](float next) { m_presentWidth = next; m_layoutNode->setWidth(next); };
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::Width, m_presentWidth, value, apply, true);
     else apply(value);
 }
@@ -396,7 +428,7 @@ void Widget::setHeight(float value) {
     value = std::max(0.0f, value);
     if (!m_hasHeight) m_presentHeight = m_bounds.height;
     m_hasHeight = true; m_modelHeight = value;
-    const auto apply = [this](float next) { m_presentHeight = next; m_layoutNode->setHeight(next); markDirty(); };
+    const auto apply = [this](float next) { m_presentHeight = next; m_layoutNode->setHeight(next); };
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, AnimatableProperty::Height, m_presentHeight, value, apply, true);
     else apply(value);
 }
@@ -445,7 +477,7 @@ AnimatableProperty positionProperty(int index) { return static_cast<AnimatablePr
 void Widget::setPadding(layout::Edge edge, float value) {
     const auto applyOne = [this, value](int index, layout::Edge layoutEdge) {
         m_modelPadding[index] = value;
-        const auto apply = [this, index, layoutEdge](float next) { m_presentPadding[index] = next; m_layoutNode->setPadding(layoutEdge, next); markDirty(); };
+        const auto apply = [this, index, layoutEdge](float next) { m_presentPadding[index] = next; m_layoutNode->setPadding(layoutEdge, next); };
         if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, paddingProperty(index), m_presentPadding[index], value, apply, true);
         else apply(value);
     };
@@ -470,7 +502,7 @@ void Widget::setMargin(layout::Edge edge, float value) {
 void Widget::setGap(layout::Gutter gutter, float value) {
     const auto applyOne = [this, value](int index, layout::Gutter layoutGutter) {
         m_modelGap[index] = value;
-        const auto apply = [this, index, layoutGutter](float next) { m_presentGap[index] = next; m_layoutNode->setGap(layoutGutter, next); markDirty(); };
+        const auto apply = [this, index, layoutGutter](float next) { m_presentGap[index] = next; m_layoutNode->setGap(layoutGutter, next); };
         const auto property = index == 0 ? AnimatableProperty::GapColumn : AnimatableProperty::GapRow;
         if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, property, m_presentGap[index], value, apply, true);
         else apply(value);
@@ -487,7 +519,7 @@ void Widget::setPosition(layout::Edge edge, float value) {
         return;
     }
     m_modelPosition[index] = value;
-    const auto apply = [this, index, edge](float next) { m_presentPosition[index] = next; m_layoutNode->setPosition(edge, next); markDirty(); };
+    const auto apply = [this, index, edge](float next) { m_presentPosition[index] = next; m_layoutNode->setPosition(edge, next); };
     if (m_motionCoordinator) m_motionCoordinator->setFloat(*this, positionProperty(index), m_presentPosition[index], value, apply, true);
     else apply(value);
 }
@@ -511,6 +543,9 @@ void Widget::calculateLayout() {
 }
 
 void Widget::calculateLayout(float availableWidth, float availableHeight) {
+    // Service the current layout epoch before calculation. A genuine mutation
+    // during measurement or sync starts a new epoch instead of being lost.
+    clearLayoutDirty();
     m_layoutNode->calculateLayout(availableWidth, availableHeight);
 }
 
@@ -531,23 +566,61 @@ float Widget::getPresentationValue(AnimatableProperty property) const {
 }
 
 void Widget::applyPresentationValue(AnimatableProperty property, float value) {
+    float next = value;
+    switch (property) {
+        case AnimatableProperty::Opacity:
+            next = std::clamp(value, 0.0f, 1.0f);
+            if (m_presentation.opacity == next) return;
+            break;
+        case AnimatableProperty::TranslationX:
+            if (m_presentation.translationX == next) return;
+            break;
+        case AnimatableProperty::TranslationY:
+            if (m_presentation.translationY == next) return;
+            break;
+        case AnimatableProperty::ScaleX:
+            if (m_presentation.scaleX == next) return;
+            break;
+        case AnimatableProperty::ScaleY:
+            if (m_presentation.scaleY == next) return;
+            break;
+        case AnimatableProperty::Rotation:
+            if (m_presentation.rotationRadians == next) return;
+            break;
+        case AnimatableProperty::TransformOriginX:
+            next = std::clamp(value, 0.0f, 1.0f);
+            if (m_presentation.originX == next) return;
+            break;
+        case AnimatableProperty::TransformOriginY:
+            next = std::clamp(value, 0.0f, 1.0f);
+            if (m_presentation.originY == next) return;
+            break;
+        case AnimatableProperty::Width:
+            next = value / std::max(0.001f, m_absoluteBounds.width);
+            if (m_presentation.scaleX == next) return;
+            break;
+        case AnimatableProperty::Height:
+            next = value / std::max(0.001f, m_absoluteBounds.height);
+            if (m_presentation.scaleY == next) return;
+            break;
+        default:
+            return;
+    }
     const graphics::RectF previousBounds = getPresentationSubtreePaintBounds();
     switch (property) {
-        case AnimatableProperty::Opacity: m_presentation.opacity = std::clamp(value, 0.0f, 1.0f); break;
-        case AnimatableProperty::TranslationX: m_presentation.translationX = value; break;
-        case AnimatableProperty::TranslationY: m_presentation.translationY = value; break;
-        case AnimatableProperty::ScaleX: m_presentation.scaleX = value; break;
-        case AnimatableProperty::ScaleY: m_presentation.scaleY = value; break;
-        case AnimatableProperty::Rotation: m_presentation.rotationRadians = value; break;
-        case AnimatableProperty::TransformOriginX: m_presentation.originX = std::clamp(value, 0.0f, 1.0f); break;
-        case AnimatableProperty::TransformOriginY: m_presentation.originY = std::clamp(value, 0.0f, 1.0f); break;
-        case AnimatableProperty::Width:
-            m_presentation.scaleX = value / std::max(0.001f, m_absoluteBounds.width); break;
-        case AnimatableProperty::Height:
-            m_presentation.scaleY = value / std::max(0.001f, m_absoluteBounds.height); break;
+        case AnimatableProperty::Opacity: m_presentation.opacity = next; break;
+        case AnimatableProperty::TranslationX: m_presentation.translationX = next; break;
+        case AnimatableProperty::TranslationY: m_presentation.translationY = next; break;
+        case AnimatableProperty::ScaleX: m_presentation.scaleX = next; break;
+        case AnimatableProperty::ScaleY: m_presentation.scaleY = next; break;
+        case AnimatableProperty::Rotation: m_presentation.rotationRadians = next; break;
+        case AnimatableProperty::TransformOriginX: m_presentation.originX = next; break;
+        case AnimatableProperty::TransformOriginY: m_presentation.originY = next; break;
+        case AnimatableProperty::Width: m_presentation.scaleX = next; break;
+        case AnimatableProperty::Height: m_presentation.scaleY = next; break;
         default: break;
     }
-    markPresentationDirty(previousBounds);
+    invalidatePresentation(previousBounds);
 }
 
 void Widget::commitModelValue(AnimatableProperty property, float value) {
@@ -575,23 +648,35 @@ lcl::motion::AnimationHandle Widget::animate(
 }
 
 void Widget::syncLayout(float parentAbsX, float parentAbsY) {
-    m_bounds = graphics::RectF{
+    const graphics::RectF previousBounds =
+        m_visible ? getPresentationSubtreePaintBounds() : graphics::RectF{};
+    const graphics::RectF nextBounds{
         m_layoutNode->layoutX(),
         m_layoutNode->layoutY(),
         m_layoutNode->layoutWidth(),
         m_layoutNode->layoutHeight()
     };
 
-    m_absoluteBounds = graphics::RectF{
-        parentAbsX + m_bounds.x,
-        parentAbsY + m_bounds.y,
-        m_bounds.width,
-        m_bounds.height
+    const graphics::RectF nextAbsoluteBounds{
+        parentAbsX + nextBounds.x,
+        parentAbsY + nextBounds.y,
+        nextBounds.width,
+        nextBounds.height
     };
+    const bool geometryChanged =
+        m_bounds.x != nextBounds.x || m_bounds.y != nextBounds.y ||
+        m_bounds.width != nextBounds.width || m_bounds.height != nextBounds.height ||
+        m_absoluteBounds.x != nextAbsoluteBounds.x ||
+        m_absoluteBounds.y != nextAbsoluteBounds.y ||
+        m_absoluteBounds.width != nextAbsoluteBounds.width ||
+        m_absoluteBounds.height != nextAbsoluteBounds.height;
+    m_bounds = nextBounds;
+    m_absoluteBounds = nextAbsoluteBounds;
 
     for (auto& child : m_children) {
         child->syncLayout(m_absoluteBounds.x, m_absoluteBounds.y);
     }
+    if (geometryChanged) invalidatePresentation(previousBounds);
 }
 
 graphics::RectF Widget::getPresentationBounds() const {
@@ -633,9 +718,11 @@ graphics::RectF Widget::getPresentationPaintBounds() const {
 }
 
 graphics::RectF Widget::getVisiblePresentationPaintBounds() const {
+    if (!m_visible) return {};
     graphics::RectF result = getPresentationPaintBounds();
     for (const Widget* current = this; current && !result.isEmpty();
          current = current->m_parent) {
+        if (!current->m_visible) return {};
         if (!current->m_clipsToBounds) continue;
         const graphics::RectF clip = current->mapPresentationRect(
             current->m_absoluteBounds, current);
@@ -645,6 +732,7 @@ graphics::RectF Widget::getVisiblePresentationPaintBounds() const {
 }
 
 graphics::RectF Widget::getPresentationSubtreePaintBounds() const {
+    if (!m_visible) return {};
     graphics::RectF result = getVisiblePresentationPaintBounds();
     for (const auto& child : m_children) {
         if (!child->m_visible) continue;

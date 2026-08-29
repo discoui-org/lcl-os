@@ -36,7 +36,7 @@ void Slider::setValue(float value) {
     const float next = normalizedAndStepped(value);
     if (std::fabs(next - m_value) <= 0.0001f) return;
     m_value = next;
-    markDirty();
+    invalidatePaint();
     auto callback = m_onChange;
     if (callback) callback(m_value);
 }
@@ -49,7 +49,7 @@ void Slider::setRange(float minimum, float maximum) {
     m_minimum = minimum;
     m_maximum = maximum;
     setValue(m_value);
-    markDirty();
+    invalidatePaint();
 }
 
 void Slider::setStep(float step) {
@@ -68,7 +68,7 @@ void Slider::setEnabled(bool enabled) {
         if (m_dragging) setEditing(false);
     }
     setInteractionEnabled(enabled);
-    markDirty();
+    invalidatePaint();
 }
 
 float Slider::normalizedValue() const noexcept {
@@ -94,7 +94,7 @@ void Slider::setEditing(bool editing) {
 bool Slider::onPointerEnter(const PointerEvent& event) {
     if (!m_enabled) return false;
     if (event.source == PointerSource::Mouse) m_hovered = true;
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -103,7 +103,7 @@ bool Slider::onPointerLeave(const PointerEvent&) {
         m_hovered = false;
         m_pressed = false;
     }
-    markDirty();
+    invalidatePaint();
     return m_enabled;
 }
 
@@ -115,7 +115,7 @@ bool Slider::onPointerDown(const PointerEvent& event) {
     m_pressed = true;
     setEditing(true);
     updateFromPointer(event.x);
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -133,7 +133,7 @@ bool Slider::onPointerUp(const PointerEvent& event) {
     m_hovered = event.source == PointerSource::Mouse &&
         containsPresentationPoint(event.x, event.y);
     setEditing(false);
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -142,7 +142,7 @@ bool Slider::onPointerCancel(const PointerEvent& event) {
     m_pressed = false;
     m_hovered = false;
     setEditing(false);
-    markDirty();
+    invalidatePaint();
     return m_enabled;
 }
 
@@ -173,7 +173,7 @@ bool Slider::onKeyDown(const KeyEvent& event) {
 
 bool Slider::onFocusGained(const FocusEvent&) {
     m_focused = true;
-    markDirty();
+    invalidatePaint();
     return false;
 }
 
@@ -181,7 +181,7 @@ bool Slider::onFocusLost(const FocusEvent&) {
     m_focused = false;
     m_pressed = false;
     setEditing(false);
-    markDirty();
+    invalidatePaint();
     return false;
 }
 
@@ -212,7 +212,7 @@ void Slider::styleDidChange() {
     sync(InteractionState::Pressed, lcl::theme::StyleState::Pressed);
     sync(InteractionState::Focused, lcl::theme::StyleState::Focused);
     sync(InteractionState::Disabled, lcl::theme::StyleState::Disabled);
-    markDirty();
+    invalidatePaint();
 }
 
 void Slider::draw(graphics::Canvas& canvas,

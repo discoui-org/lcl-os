@@ -287,6 +287,10 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         ready.backingWidth < ready.width ||
         ready.backingHeight < ready.height ||
         ready.stride < ready.backingWidth * sizeof(uint32_t) ||
+        ready.damageWidth == 0 || ready.damageHeight == 0 ||
+        ready.damageX > ready.width || ready.damageY > ready.height ||
+        ready.damageWidth > ready.width - ready.damageX ||
+        ready.damageHeight > ready.height - ready.damageY ||
         (!shmLayer && !dmaBufLayer) ||
         (shmLayer && ready.byteSize !=
             static_cast<uint64_t>(ready.stride) * ready.backingHeight) ||

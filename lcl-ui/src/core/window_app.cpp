@@ -153,9 +153,7 @@ WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, floa
         pixelWidth, pixelHeight,
         m_pixelBuffer.empty() ? nullptr : m_pixelBuffer.data());
     updateCanvasRenderTarget();
-    m_motionCoordinator.setCallbacks(
-        [this] { updateLayout(); },
-        [this](const graphics::RectF& rect) { if (!rect.isEmpty()) m_renderPass.addDirtyRect(rect); });
+    m_motionCoordinator.setLayoutCallback([this] { updateLayout(); });
 
     auto defaultRoot = std::make_unique<Container>();
     defaultRoot->setWidth(static_cast<float>(width));
@@ -228,9 +226,9 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     m_rootWidget = contentRoot;
     m_transients.setWindowRoot(m_windowRoot.get());
     m_windowRoot->markLayoutDirty();
-    m_windowRoot->markDirty();
+    m_windowRoot->invalidatePaint();
     // A newly mounted tree has not been through layout/sync yet, so its
-    // absolute bounds are still empty and markDirty() cannot produce damage.
+    // absolute bounds are still empty and invalidatePaint() cannot produce damage.
     // Force one full frame after layout; runtime root replacement must not
     // leave old pixels in the client buffer.
     m_firstFrame = true;
@@ -241,7 +239,7 @@ void WindowApp::setTheme(lcl::theme::Theme theme) {
     if (m_windowRoot) {
         m_windowRoot->setThemeContext(&m_themeContext);
         m_windowRoot->markLayoutDirty();
-        m_windowRoot->markDirty();
+        m_windowRoot->invalidatePaint();
     }
     m_firstFrame = true;
 }
@@ -436,7 +434,7 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     if (!isAttachedSurface() && m_hasRequestedCornerRadius) {
         setWindowCornerStyle(m_requestedCornerRadius, m_requestedCornerRoundness);
     }
-    if (m_windowRoot) m_windowRoot->markDirty();
+    if (m_windowRoot) m_windowRoot->invalidatePaint();
     m_firstFrame = true;
 
     std::cout << "[lcl-ui] Connected to Compositor IPC socket successfully (" << m_title << ").\n";
@@ -453,7 +451,6 @@ void WindowApp::resize(float width, float height) {
     if (m_windowRoot) {
         m_windowRoot->setWidth(static_cast<float>(width));
         m_windowRoot->setHeight(static_cast<float>(height));
-        m_windowRoot->markDirty();
     }
 
     if (m_ipcConnected) {
@@ -486,7 +483,6 @@ void WindowApp::setInitialBounds(float x, float y, float width, float height) {
     if (m_windowRoot) {
         m_windowRoot->setWidth(static_cast<float>(width));
         m_windowRoot->setHeight(static_cast<float>(height));
-        m_windowRoot->markDirty();
     }
 }
 
@@ -531,6 +527,7 @@ void WindowApp::pollIPC() {
         m_submittedConfigureSerial = 0;
         m_submittedFrameSerial = 0;
         m_submittedGeometryGeneration = 0;
+        m_retainedRasterFrameSerial = 0;
         m_frameGateOpen = true;
         m_firstFrame = true;
     }
@@ -542,6 +539,7 @@ void WindowApp::pollIPC() {
         m_submittedConfigureSerial = 0;
         m_submittedFrameSerial = 0;
         m_submittedGeometryGeneration = 0;
+        m_retainedRasterFrameSerial = 0;
         m_frameGateOpen = true;
         m_firstFrame = true;
     }
@@ -637,6 +635,7 @@ void WindowApp::pollIPC() {
                         m_submittedConfigureSerial = 0;
                         m_submittedFrameSerial = 0;
                         m_submittedGeometryGeneration = 0;
+                        m_retainedRasterFrameSerial = 0;
                         m_frameGateOpen = true;
                         m_firstFrame = true;
                     }
@@ -679,6 +678,7 @@ void WindowApp::pollIPC() {
                         rasterGrant);
                     m_uploadedImageRevisions.clear();
                     m_rasterConnectionGeneration = 0;
+                    m_retainedRasterFrameSerial = 0;
                     m_firstFrame = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::FramePresented &&
@@ -691,6 +691,7 @@ void WindowApp::pollIPC() {
                     }
                     m_lastPresentedTimestampNs = presented->timestampNs;
                     m_refreshIntervalNs = presented->refreshIntervalNs;
+                    m_retainedRasterFrameSerial = presented->frameSerial;
                     m_submittedConfigureSerial = 0;
                     m_submittedFrameSerial = 0;
                     m_submittedGeometryGeneration = 0;
@@ -720,6 +721,7 @@ void WindowApp::pollIPC() {
                     m_submittedConfigureSerial = 0;
                     m_submittedFrameSerial = 0;
                     m_submittedGeometryGeneration = 0;
+                    m_retainedRasterFrameSerial = 0;
                     m_frameGateOpen = true;
                     m_firstFrame = true;
                 }
@@ -1308,10 +1310,9 @@ bool WindowApp::sendTextInput(const std::string& text) {
 void WindowApp::updateLayout() {
     if (m_windowRoot) {
         const auto started = std::chrono::steady_clock::now();
-        // Clear the request being serviced before calculation. A widget that
-        // performs a genuine layout mutation from syncLayout() will set it again
-        // and receive another layout pass on the next frame.
-        m_windowRoot->clearLayoutDirty();
+        // calculateLayout() services the current request first. A widget that
+        // performs a genuine layout mutation from measurement or syncLayout()
+        // starts a new epoch and receives another pass on the next frame.
         m_windowRoot->calculateLayout(static_cast<float>(m_width), static_cast<float>(m_height));
         m_windowRoot->syncLayout(0.0f, 0.0f);
         if (m_frameTraceEnabled) {
@@ -1329,25 +1330,39 @@ bool WindowApp::renderFrame() {
     if (m_ipcConnected && m_waitingForInitialConfigure) return false;
     if (m_ipcConnected && !m_frameGateOpen) return false;
 
+    if (m_ipcConnected && m_canvas->usesDisplayListTransport()) {
+        if (!m_rasterClient->prepare()) {
+            m_firstFrame = true;
+            return false;
+        }
+        const uint64_t connectionGeneration =
+            m_rasterClient->connectionGeneration();
+        if (connectionGeneration != m_rasterConnectionGeneration) {
+            // A fresh daemon has no retained scene or uploaded resources.
+            m_uploadedImageRevisions.clear();
+            m_retainedRasterFrameSerial = 0;
+            m_rasterConnectionGeneration = connectionGeneration;
+            m_firstFrame = true;
+        }
+    }
+
     if (m_windowRoot && m_windowRoot->isLayoutDirty()) {
         updateLayout();
-        // Layout can move several siblings without each new bound producing a
-        // paint invalidation. It is intentionally the infrequent full-window
-        // invalidation path; presentation-only motion remains region-scoped.
-        m_renderPass.addDirtyRect(m_windowRoot->getAbsoluteBounds());
     }
+
+    const graphics::RectF surfaceBounds{
+        0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height)};
 
     // A resize can leave old-layout damage queued before layout computes the
     // new child positions. Always include the complete post-layout root extent
     // on the first frame so children moved outside the old damage are painted.
     if (m_firstFrame) {
-        if (m_windowRoot) m_renderPass.addDirtyRect(m_windowRoot->getAbsoluteBounds());
+        m_renderPass.addDirtyRect(surfaceBounds);
     }
     if (!m_renderPass.hasDamage()) return false;
+    const bool replacesRetainedScene = m_firstFrame;
     m_firstFrame = false;
 
-    const graphics::RectF surfaceBounds{0.0f, 0.0f, static_cast<float>(m_width),
-                             static_cast<float>(m_height)};
     // Path coverage can extend one physical pixel past its analytic bounds.
     // Keep widget damage logical and add that backend sampling margin only at
     // the raster boundary, before clear, paint clipping and buffer copy.
@@ -1368,12 +1383,7 @@ bool WindowApp::renderFrame() {
     std::vector<graphics::RectF> damageRects = rasterDamage.getDirtyRects();
     m_renderPass.clear();
     if (damageRects.empty()) return false;
-    if (m_canvas->usesDisplayListTransport()) {
-        // A committed display list is a complete retained surface description.
-        // Re-record the whole logical surface; physical damage remains a
-        // compositor/raster concern and never leaks into the client contract.
-        damageRects.assign(1, surfaceBounds);
-    }
+    const graphics::RectF frameDamage = rasterDamage.getDamageRect();
 
     m_canvas->beginFrame();
 
@@ -1537,24 +1547,30 @@ bool WindowApp::renderFrame() {
             const uint64_t connectionGeneration =
                 m_rasterClient->connectionGeneration();
             if (connectionGeneration != m_rasterConnectionGeneration) {
+                // The patch was recorded against a daemon that disappeared.
+                // Retry as a complete retained-scene replacement.
                 m_uploadedImageRevisions.clear();
+                m_retainedRasterFrameSerial = 0;
                 m_rasterConnectionGeneration = connectionGeneration;
+                m_firstFrame = true;
+                return false;
             }
-            // The compositor may reclaim uploads absent from the retained
-            // frame. Mirror that lifetime locally so an asset that leaves and
-            // later re-enters the scene is uploaded again instead of relying
-            // on stale optimistic admission state.
-            std::erase_if(
-                m_uploadedImageRevisions,
-                [&frame](const auto& uploaded) {
-                    return std::none_of(
-                        frame->imageResources.begin(),
-                        frame->imageResources.end(),
-                        [&uploaded](const auto& active) {
-                            return active.id == uploaded.first &&
-                                active.contentRevision == uploaded.second;
-                        });
-                });
+            // A complete replacement defines the active resource set. A patch
+            // mentions only resources touched by its damage, so it must not
+            // evict upload admission state for unchanged retained content.
+            if (replacesRetainedScene) {
+                std::erase_if(
+                    m_uploadedImageRevisions,
+                    [&frame](const auto& uploaded) {
+                        return std::none_of(
+                            frame->imageResources.begin(),
+                            frame->imageResources.end(),
+                            [&uploaded](const auto& active) {
+                                return active.id == uploaded.first &&
+                                    active.contentRevision == uploaded.second;
+                            });
+                    });
+            }
             bool resourcesReady = true;
             for (const auto& resource : frame->imageResources) {
                 if (!uploadImageResource(resource)) {
@@ -1571,8 +1587,10 @@ bool WindowApp::renderFrame() {
                 const uint64_t frameSerial = m_nextFrameSerial++;
                 if (m_nextFrameSerial == 0) m_nextFrameSerial = 1;
                 if (m_rasterClient->submitFrame(
-                        m_configureSerial, frameSerial, m_geometryGeneration,
-                        m_width, m_height, m_bufferScale, encoded.bytes)) {
+                        m_configureSerial, frameSerial,
+                        m_retainedRasterFrameSerial, m_geometryGeneration,
+                        m_width, m_height, m_bufferScale, frameDamage,
+                        replacesRetainedScene, encoded.bytes)) {
                     m_submittedConfigureSerial = m_configureSerial;
                     m_submittedFrameSerial = frameSerial;
                     m_submittedGeometryGeneration = m_geometryGeneration;
@@ -1592,6 +1610,7 @@ bool WindowApp::renderFrame() {
             }
             if (!frameAttached) {
                 m_uploadedImageRevisions.clear();
+                m_retainedRasterFrameSerial = 0;
                 m_rasterClient->disconnect();
                 m_firstFrame = true;
                 std::cerr << "[lcl-ui ERROR] DisplayList commit failed for "

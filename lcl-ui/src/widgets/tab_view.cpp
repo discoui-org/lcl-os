@@ -29,7 +29,7 @@ void TabView::addTab(Tab tab) {
     m_tabs.push_back(TabState{std::move(tab.title), content, tab.enabled});
     addChild(std::move(tab.content));
     updateContentVisibility();
-    markDirty();
+    invalidatePaint();
 }
 
 void TabView::setSelectedIndex(size_t index) {
@@ -37,7 +37,7 @@ void TabView::setSelectedIndex(size_t index) {
         index == m_selectedIndex) return;
     m_selectedIndex = index;
     updateContentVisibility();
-    markDirty();
+    invalidatePaint();
     auto callback = m_onChange;
     if (callback) callback(index);
 }
@@ -45,7 +45,7 @@ void TabView::setSelectedIndex(size_t index) {
 void TabView::setTabViewStyle(TabViewStyle style) {
     if (m_style == style) return;
     m_style = style;
-    markDirty();
+    invalidatePaint();
 }
 
 void TabView::updateContentVisibility() {
@@ -82,7 +82,7 @@ std::optional<size_t> TabView::tabIndexAt(float x, float y) const noexcept {
 bool TabView::onPointerEnter(const PointerEvent& event) {
     if (event.source == PointerSource::Mouse) {
         m_hoveredIndex = tabIndexAt(event.x, event.y);
-        markDirty();
+        invalidatePaint();
     }
     return m_hoveredIndex.has_value();
 }
@@ -90,7 +90,7 @@ bool TabView::onPointerEnter(const PointerEvent& event) {
 bool TabView::onPointerLeave(const PointerEvent&) {
     m_hoveredIndex.reset();
     m_pressedIndex.reset();
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -99,7 +99,7 @@ bool TabView::onPointerDown(const PointerEvent& event) {
     const auto index = tabIndexAt(event.x, event.y);
     if (!index || !m_tabs[*index].enabled) return false;
     m_pressedIndex = index;
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -107,7 +107,7 @@ bool TabView::onPointerMove(const PointerEvent& event) {
     const auto index = tabIndexAt(event.x, event.y);
     if (index != m_hoveredIndex) {
         m_hoveredIndex = index;
-        markDirty();
+        invalidatePaint();
     }
     return m_pressedIndex.has_value();
 }
@@ -123,7 +123,7 @@ bool TabView::onPointerUp(const PointerEvent& event) {
     m_pressedIndex.reset();
     m_hoveredIndex = event.source == PointerSource::Mouse ? index
                                                           : std::nullopt;
-    markDirty();
+    invalidatePaint();
     if (activate) setSelectedIndex(*index);
     return handled;
 }
@@ -131,7 +131,7 @@ bool TabView::onPointerUp(const PointerEvent& event) {
 bool TabView::onPointerCancel(const PointerEvent&) {
     m_hoveredIndex.reset();
     m_pressedIndex.reset();
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -180,14 +180,14 @@ bool TabView::onKeyDown(const KeyEvent& event) {
 
 bool TabView::onFocusGained(const FocusEvent&) {
     m_focused = true;
-    markDirty();
+    invalidatePaint();
     return false;
 }
 
 bool TabView::onFocusLost(const FocusEvent&) {
     m_focused = false;
     m_pressedIndex.reset();
-    markDirty();
+    invalidatePaint();
     return false;
 }
 
@@ -197,7 +197,7 @@ const lcl::theme::WidgetStyle* TabView::defaultStyle() const noexcept {
 
 void TabView::styleDidChange() {
     updateContentInsets();
-    markDirty();
+    invalidatePaint();
 }
 
 void TabView::draw(graphics::Canvas& canvas,

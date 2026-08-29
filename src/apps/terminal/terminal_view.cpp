@@ -42,7 +42,7 @@ bool TerminalView::updateCursorBlink() {
         // Cursor visibility changes paint only the last caret cell. Terminal
         // output and resize still invalidate the full widget through their
         // existing paths and refresh this cached geometry during draw().
-        markDirty(m_cursorPaintBounds);
+        invalidatePaint(m_cursorPaintBounds);
         return true;
     }
     return false;

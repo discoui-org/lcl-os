@@ -1723,14 +1723,14 @@ TEST(LclUiTest, PopoverPlacesBelowLeftAndAlwaysUsesPopupSurface) {
 
     // Match the runtime failure ordering: the popup is idle while the main
     // WindowApp renders and therefore leaves its own backend current.
-    rootPtr->markDirty();
+    rootPtr->invalidatePaint();
     ASSERT_TRUE(app.renderFrame());
     EXPECT_TRUE(popover.close(popup.handle));
     EXPECT_FALSE(popover.isOpen(popup.handle));
     EXPECT_EQ(app.hostedSurfaceCount(), 0u);
 
     const int mainFramesBeforePostPopupRender = mainCanvas->beginCount;
-    rootPtr->markDirty();
+    rootPtr->invalidatePaint();
     ASSERT_TRUE(app.renderFrame());
     EXPECT_EQ(mainCanvas->beginCount, mainFramesBeforePostPopupRender + 1);
 
@@ -2299,7 +2299,7 @@ TEST(LclUiTest, WindowAppGatesLayoutToLayoutAffectingMutations) {
     EXPECT_FALSE(rootPointer->isLayoutDirty());
     EXPECT_EQ(rootPointer->syncLayoutCount, 1);
 
-    rootPointer->markDirty();
+    rootPointer->invalidatePaint();
     EXPECT_FALSE(rootPointer->isLayoutDirty());
     ASSERT_TRUE(app.renderFrame());
     EXPECT_EQ(rootPointer->syncLayoutCount, 1);
@@ -3444,12 +3444,38 @@ TEST(LclUiTest, ChildPaintInvalidationDoesNotExpandDamageToRootBounds) {
     pass.clear();
 
     const uint64_t rootRevision = root->getPaintRevision();
-    childPtr->markDirty();
+    childPtr->invalidatePaint();
 
     ASSERT_EQ(pass.getDirtyRects().size(), 1u);
     EXPECT_FLOAT_EQ(pass.getDirtyRects().front().width, 30.0f);
     EXPECT_FLOAT_EQ(pass.getDirtyRects().front().height, 20.0f);
     EXPECT_GT(root->getPaintRevision(), rootRevision);
+}
+
+TEST(LclUiTest, RemovingChildDamagesItsOldBoundsWithoutExpandingToRoot) {
+    RenderPass pass;
+    auto root = std::make_unique<Container>();
+    root->setWidth(200.0f);
+    root->setHeight(120.0f);
+    auto child = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* childPtr = child.get();
+    child->setWidth(30.0f);
+    child->setHeight(20.0f);
+    root->addChild(std::move(child));
+    root->calculateLayout(200.0f, 120.0f);
+    root->syncLayout();
+    root->setRenderPass(&pass);
+    pass.clear();
+    const uint64_t layoutRevision = root->getLayoutRevision();
+    const uint64_t paintRevision = root->getPaintRevision();
+
+    root->removeChild(childPtr);
+
+    ASSERT_EQ(pass.getDirtyRects().size(), 1u);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().width, 30.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().height, 20.0f);
+    EXPECT_GT(root->getLayoutRevision(), layoutRevision);
+    EXPECT_GT(root->getPaintRevision(), paintRevision);
 }
 
 TEST(LclUiTest, ExplicitWidgetPaintDamageKeepsTheRequestedSubregion) {
@@ -3463,7 +3489,7 @@ TEST(LclUiTest, ExplicitWidgetPaintDamageKeepsTheRequestedSubregion) {
     pass.clear();
 
     const uint64_t revision = widget->getPaintRevision();
-    widget->markDirty({12.0f, 18.0f, 9.0f, 15.0f});
+    widget->invalidatePaint({12.0f, 18.0f, 9.0f, 15.0f});
 
     ASSERT_EQ(pass.getDirtyRects().size(), 1u);
     EXPECT_FLOAT_EQ(pass.getDirtyRects().front().x, 12.0f);
@@ -3489,7 +3515,7 @@ TEST(LclUiTest, WindowAppRetainedFrameAddsRasterCoverageToChangedWidgetRegion) {
 
     ASSERT_TRUE(app.renderFrame());
     recorded->clearedRects.clear();
-    childPtr->markDirty();
+    childPtr->invalidatePaint();
     ASSERT_TRUE(app.renderFrame());
 
     ASSERT_EQ(recorded->clearedRects.size(), 1u);
@@ -3497,6 +3523,30 @@ TEST(LclUiTest, WindowAppRetainedFrameAddsRasterCoverageToChangedWidgetRegion) {
     EXPECT_FLOAT_EQ(recorded->clearedRects.front().y, 0.0f);
     EXPECT_FLOAT_EQ(recorded->clearedRects.front().width, 31.0f);
     EXPECT_FLOAT_EQ(recorded->clearedRects.front().height, 21.0f);
+}
+
+TEST(LclUiTest, DisplayListTransportRecordsOnlyTheDamagedPatchAfterFirstFrame) {
+    auto canvas = std::make_unique<lcl::render::RasterCanvas>(true);
+    auto* recorded = canvas.get();
+    WindowApp app(std::move(canvas), 200, 120, "Retained DisplayList patch");
+    auto root = std::make_unique<Container>();
+    auto child = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* childPtr = child.get();
+    child->setWidth(30.0f);
+    child->setHeight(20.0f);
+    root->addChild(std::move(child));
+    app.setRootWidget(std::move(root));
+
+    ASSERT_TRUE(app.renderFrame());
+    childPtr->invalidatePaint();
+    ASSERT_TRUE(app.renderFrame());
+
+    const auto& commands = recorded->lastDisplayList().commands();
+    ASSERT_FALSE(commands.empty());
+    const auto* clear = std::get_if<graphics::ClearRectCommand>(&commands.front());
+    ASSERT_NE(clear, nullptr);
+    EXPECT_LT(clear->rect.width, 200.0f);
+    EXPECT_LT(clear->rect.height, 120.0f);
 }
 
 TEST(LclUiTest, RasterRendererClearRectReplacesOnlyRequestedRetainedPixels) {
@@ -3546,6 +3596,38 @@ TEST(LclUiTest, RasterRendererRetainedModeDoesNotClearUnchangedFramePixels) {
     EXPECT_EQ(pixels[0], 0xFF14161Du);
 }
 
+TEST(LclUiTest, RasterRendererAppliesDisplayListPatchOverRetainedScene) {
+    std::vector<uint32_t> pixels(8 * 8, 0u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(8, 8, nullptr, pixels.data()));
+    renderer.setRetainsFrameBacking(true);
+    const graphics::RenderTarget target{{8.0f, 8.0f}, {8, 8}, 1.0f};
+
+    graphics::DisplayListBuilder full;
+    full.clearRect({0.0f, 0.0f, 8.0f, 8.0f}, {0, 0, 0, 0});
+    graphics::Path fullPath;
+    fullPath.addRect({0.0f, 0.0f, 8.0f, 8.0f});
+    full.drawPath(fullPath, graphics::Paint{{255, 0, 0, 255}});
+    renderer.beginFrame();
+    renderer.replayDisplayList(full.build(), target);
+    renderer.endFrame();
+
+    graphics::DisplayListBuilder patch;
+    patch.clearRect({2.0f, 2.0f, 2.0f, 2.0f}, {0, 0, 0, 0});
+    graphics::Path patchPath;
+    patchPath.addRect({2.0f, 2.0f, 2.0f, 2.0f});
+    patch.drawPath(patchPath, graphics::Paint{{0, 0, 255, 255}});
+    renderer.beginFrame();
+    renderer.setFrameDamageRect(
+        lcl::render::RasterRect{2.0f, 2.0f, 2.0f, 2.0f});
+    renderer.replayDisplayList(patch.build(), target);
+    renderer.endFrame();
+
+    EXPECT_EQ(pixels[0], 0xFFFF0000u);
+    EXPECT_EQ(pixels[2 + 2 * 8], 0xFF0000FFu);
+    EXPECT_EQ(pixels[7 + 7 * 8], 0xFFFF0000u);
+}
+
 TEST(LclUiTest, PresentationMotionDoesNotInvalidateAncestorPaintCacheRevision) {
     MotionCoordinator coordinator;
     auto root = std::make_unique<Container>();
@@ -3588,6 +3670,162 @@ TEST(LclUiTest, PresentationTransformDamagesOldAndNewBoundsWithoutPaintInvalidat
     EXPECT_FLOAT_EQ(pass.getDirtyRects()[1].width, 30.0f);
     EXPECT_EQ(widget->getPaintRevision(), paintRevision);
     EXPECT_GT(widget->getPresentationRevision(), 0u);
+}
+
+TEST(LclUiTest, NoOpPresentationSetterDoesNotAdvanceRevisionOrDamage) {
+    RenderPass pass;
+    auto widget = std::make_unique<CountingPaintWidget>();
+    widget->setWidth(30.0f);
+    widget->setHeight(20.0f);
+    widget->calculateLayout(30.0f, 20.0f);
+    widget->syncLayout();
+    widget->setRenderPass(&pass);
+    pass.clear();
+    const uint64_t revision = widget->getPresentationRevision();
+
+    widget->setTranslationX(0.0f);
+
+    EXPECT_EQ(widget->getPresentationRevision(), revision);
+    EXPECT_FALSE(pass.hasDamage());
+}
+
+TEST(LclUiTest, LayoutInvalidationIsIndependentUntilGeometryIsSynchronized) {
+    WindowApp app(std::make_unique<RecordingCanvas>(), 200, 120,
+                  "Independent layout revision");
+    auto root = std::make_unique<Container>();
+    root->setDirection(layout::Direction::Row);
+    auto child = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* childPtr = child.get();
+    child->setWidth(30.0f);
+    child->setHeight(20.0f);
+    root->addChild(std::move(child));
+    app.setRootWidget(std::move(root));
+    ASSERT_TRUE(app.renderFrame());
+
+    const uint64_t layoutRevision = childPtr->getLayoutRevision();
+    const uint64_t paintRevision = childPtr->getPaintRevision();
+    const uint64_t presentationRevision = childPtr->getPresentationRevision();
+    childPtr->setWidth(50.0f);
+
+    EXPECT_GT(childPtr->getLayoutRevision(), layoutRevision);
+    EXPECT_EQ(childPtr->getPaintRevision(), paintRevision);
+    EXPECT_EQ(childPtr->getPresentationRevision(), presentationRevision);
+    EXPECT_TRUE(childPtr->isLayoutDirty());
+
+    app.updateLayout();
+    EXPECT_FALSE(childPtr->isLayoutDirty());
+    EXPECT_EQ(childPtr->getPaintRevision(), paintRevision);
+    EXPECT_GT(childPtr->getPresentationRevision(), presentationRevision);
+}
+
+TEST(LclUiTest, LayoutResolvingToSameGeometryDoesNotCreatePresentationWork) {
+    auto root = std::make_unique<Container>();
+    root->setWidth(200.0f);
+    root->setHeight(120.0f);
+    auto child = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* childPtr = child.get();
+    child->setWidth(30.0f);
+    child->setHeight(20.0f);
+    root->addChild(std::move(child));
+    root->calculateLayout(200.0f, 120.0f);
+    root->syncLayout();
+
+    const uint64_t layoutRevision = childPtr->getLayoutRevision();
+    const uint64_t paintRevision = childPtr->getPaintRevision();
+    const uint64_t presentationRevision = childPtr->getPresentationRevision();
+    childPtr->setHeight(20.0f);
+
+    EXPECT_EQ(childPtr->getLayoutRevision(), layoutRevision);
+    EXPECT_EQ(childPtr->getPaintRevision(), paintRevision);
+    EXPECT_EQ(childPtr->getPresentationRevision(), presentationRevision);
+    EXPECT_FALSE(childPtr->isLayoutDirty());
+}
+
+TEST(LclUiTest, VisibilityAndClippingInvalidatePresentationOnly) {
+    RenderPass pass;
+    auto widget = std::make_unique<CountingPaintWidget>();
+    widget->setWidth(30.0f);
+    widget->setHeight(20.0f);
+    widget->calculateLayout(30.0f, 20.0f);
+    widget->syncLayout();
+    widget->setRenderPass(&pass);
+    pass.clear();
+    const uint64_t paintRevision = widget->getPaintRevision();
+    const uint64_t presentationRevision = widget->getPresentationRevision();
+
+    widget->setVisible(false);
+    ASSERT_EQ(pass.getDirtyRects().size(), 1u);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().width, 30.0f);
+    EXPECT_FLOAT_EQ(pass.getDirtyRects().front().height, 20.0f);
+    pass.clear();
+
+    widget->setVisible(true);
+    ASSERT_EQ(pass.getDirtyRects().size(), 1u);
+    pass.clear();
+    widget->setClipsToBounds(true);
+
+    EXPECT_EQ(widget->getPaintRevision(), paintRevision);
+    EXPECT_GT(widget->getPresentationRevision(), presentationRevision);
+    EXPECT_TRUE(pass.hasDamage());
+}
+
+TEST(LclUiTest, TextContentExplicitlyInvalidatesLayoutAndPaint) {
+    Text text("short");
+    text.calculateLayout();
+    text.syncLayout();
+    const uint64_t layoutRevision = text.getLayoutRevision();
+    const uint64_t paintRevision = text.getPaintRevision();
+    const uint64_t presentationRevision = text.getPresentationRevision();
+
+    text.setText("a longer label");
+
+    EXPECT_GT(text.getLayoutRevision(), layoutRevision);
+    EXPECT_GT(text.getPaintRevision(), paintRevision);
+    EXPECT_EQ(text.getPresentationRevision(), presentationRevision);
+}
+
+TEST(LclUiTest, PaintStyleDoesNotScheduleLayoutOrPresentation) {
+    Text text("label");
+    text.calculateLayout();
+    text.syncLayout();
+    const uint64_t layoutRevision = text.getLayoutRevision();
+    const uint64_t paintRevision = text.getPaintRevision();
+    const uint64_t presentationRevision = text.getPresentationRevision();
+
+    text.setTextColor({12, 34, 56, 255});
+
+    EXPECT_EQ(text.getLayoutRevision(), layoutRevision);
+    EXPECT_GT(text.getPaintRevision(), paintRevision);
+    EXPECT_EQ(text.getPresentationRevision(), presentationRevision);
+}
+
+TEST(LclUiTest, NormalLayoutDamageDoesNotExpandToTheFullWindow) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    WindowApp app(std::move(canvas), 200, 120, "Scoped layout damage");
+    auto root = std::make_unique<Container>();
+    root->setDirection(layout::Direction::Row);
+    auto first = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* firstPtr = first.get();
+    first->setWidth(30.0f);
+    first->setHeight(20.0f);
+    root->addChild(std::move(first));
+    auto second = std::make_unique<CountingPaintWidget>();
+    second->setWidth(30.0f);
+    second->setHeight(20.0f);
+    root->addChild(std::move(second));
+    app.setRootWidget(std::move(root));
+    ASSERT_TRUE(app.renderFrame());
+    recorded->clearedRects.clear();
+
+    firstPtr->setWidth(50.0f);
+    ASSERT_TRUE(app.renderFrame());
+
+    ASSERT_FALSE(recorded->clearedRects.empty());
+    for (const graphics::RectF& rect : recorded->clearedRects) {
+        EXPECT_LT(rect.width, 200.0f);
+        EXPECT_LT(rect.height, 120.0f);
+    }
 }
 
 TEST(LclUiTest, LayoutFlexTreeUsesPublicWidgetApi) {
@@ -3798,7 +4036,7 @@ TEST(LclUiTest, RenderPassPropagatesToExistingDescendants) {
     root->setRenderPass(&pass);
     pass.clear();
 
-    childPtr->markDirty();
+    childPtr->invalidatePaint();
     EXPECT_TRUE(pass.hasDamage());
 }
 
@@ -4441,6 +4679,34 @@ TEST(LclUiTest, ScrollViewSkipsDirtyWorkWhenClampedOffsetDoesNotChange) {
     EXPECT_FALSE(pass.hasDamage());
 }
 
+TEST(LclUiTest, PureScrollChangesOnlyTheScrollViewPresentationRevision) {
+    WindowApp app(std::make_unique<RecordingCanvas>(), 200, 100,
+                  "Scroll revision channels");
+    auto scrollView = std::make_unique<ScrollView>();
+    ScrollView* scrollPtr = scrollView.get();
+    auto content = std::make_unique<Container>();
+    Container* contentPtr = content.get();
+    content->setHeight(300.0f);
+    scrollView->setContent(std::move(content));
+    app.setRootWidget(std::move(scrollView));
+    ASSERT_TRUE(app.renderFrame());
+
+    const uint64_t scrollLayout = scrollPtr->getLayoutRevision();
+    const uint64_t scrollPaint = scrollPtr->getPaintRevision();
+    const uint64_t scrollPresentation = scrollPtr->getPresentationRevision();
+    const uint64_t contentPaint = contentPtr->getPaintRevision();
+    const uint64_t contentPresentation = contentPtr->getPresentationRevision();
+
+    scrollPtr->setScrollY(40.0f);
+
+    EXPECT_EQ(scrollPtr->getLayoutRevision(), scrollLayout);
+    EXPECT_EQ(scrollPtr->getPaintRevision(), scrollPaint);
+    EXPECT_GT(scrollPtr->getPresentationRevision(), scrollPresentation);
+    EXPECT_EQ(contentPtr->getPaintRevision(), contentPaint);
+    EXPECT_EQ(contentPtr->getPresentationRevision(), contentPresentation);
+    EXPECT_FALSE(scrollPtr->isLayoutDirty());
+}
+
 TEST(LclUiTest, ScrollViewCachesContentUntilPaintOrGeometryChanges) {
     RecordingCanvas canvas;
     auto scrollView = std::make_unique<ScrollView>();
@@ -4472,7 +4738,7 @@ TEST(LclUiTest, ScrollViewCachesContentUntilPaintOrGeometryChanges) {
     ASSERT_FALSE(canvas.cachedLayerDestinations.empty());
     EXPECT_FLOAT_EQ(canvas.cachedLayerDestinations.back().y, -40.0f);
 
-    paintedChildPointer->markDirty();
+    paintedChildPointer->invalidatePaint();
     scrollView->draw(canvas, fullDamage);
     EXPECT_EQ(paintedChildPointer->paintCount, 2);
     EXPECT_EQ(canvas.cachedLayerBeginCount, 2);

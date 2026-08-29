@@ -8,22 +8,25 @@ FilterGroup::FilterGroup() = default;
 
 void FilterGroup::setFilters(const std::vector<lcl::protocol::FilterOp>& filters) {
     m_filters = filters;
-    markDirty();
+    invalidatePaint();
 }
 
 void FilterGroup::addFilter(lcl::protocol::FilterType type, float value) {
     m_filters.push_back({type, value});
-    markDirty();
+    invalidatePaint();
 }
 
 void FilterGroup::clearFilters() {
+    if (m_filters.empty()) return;
     m_filters.clear();
-    markDirty();
+    invalidatePaint();
 }
 
 void FilterGroup::setOpacity(float opacity) {
-    m_opacity = std::clamp(opacity, 0.0f, 1.0f);
-    markDirty();
+    const float next = std::clamp(opacity, 0.0f, 1.0f);
+    if (m_opacity == next) return;
+    m_opacity = next;
+    invalidatePaint();
 }
 
 void FilterGroup::collectEffects(std::vector<EffectRegion>& outEffects) const {

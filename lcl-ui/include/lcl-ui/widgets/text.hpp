@@ -35,7 +35,11 @@ public:
     void resetTextColor();
     graphics::Color getTextColor() const { return m_textColor; }
 
-    void setTextAlign(TextAlign align) { m_textAlign = align; markDirty(); }
+    void setTextAlign(TextAlign align) {
+        if (m_textAlign == align) return;
+        m_textAlign = align;
+        invalidatePaint();
+    }
     TextAlign getTextAlign() const { return m_textAlign; }
 
     void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;

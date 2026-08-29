@@ -35,7 +35,7 @@ Toggle::Toggle(std::string label, bool value)
 void Toggle::setLabel(std::string label) {
     if (m_label == label) return;
     m_label = std::move(label);
-    markDirty();
+    invalidatePaint();
 }
 
 void Toggle::setToggleStyle(ToggleStyle style) {
@@ -48,7 +48,7 @@ void Toggle::setToggleStyle(ToggleStyle style) {
                                 : kDefaultWidth);
     }
     retargetThumb();
-    markPaintDirty(previous);
+    invalidatePaintFrom(previous);
 }
 
 void Toggle::setValue(bool value) {
@@ -56,7 +56,7 @@ void Toggle::setValue(bool value) {
 
     m_value = value;
     m_mixed = false;
-    markDirty();
+    invalidatePaint();
     retargetThumb();
 
     // Keep notification last: callbacks may remove or destroy this Toggle.
@@ -67,7 +67,7 @@ void Toggle::setValue(bool value) {
 void Toggle::setMixed(bool mixed) {
     if (m_mixed == mixed) return;
     m_mixed = mixed;
-    markDirty();
+    invalidatePaint();
 }
 
 void Toggle::toggleValue() {
@@ -75,7 +75,7 @@ void Toggle::toggleValue() {
     const bool notify = m_mixed && m_value == next;
     m_mixed = false;
     if (notify) {
-        markDirty();
+        invalidatePaint();
         auto callback = m_onChange;
         if (callback) callback(next);
         return;
@@ -92,14 +92,14 @@ void Toggle::setEnabled(bool enabled) {
         m_pointerArmed = false;
     }
     setInteractionEnabled(enabled);
-    markDirty();
+    invalidatePaint();
 }
 
 bool Toggle::onPointerEnter(const PointerEvent& event) {
     if (!m_enabled) return false;
     if (event.source == PointerSource::Mouse) m_hovered = true;
     Widget::onPointerEnter(event);
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -108,7 +108,7 @@ bool Toggle::onPointerLeave(const PointerEvent& event) {
     m_pressed = false;
     m_pointerArmed = false;
     Widget::onPointerLeave(event);
-    markDirty();
+    invalidatePaint();
     return m_enabled;
 }
 
@@ -119,7 +119,7 @@ bool Toggle::onPointerDown(const PointerEvent& event) {
     m_pressed = true;
     m_pointerArmed = true;
     Widget::onPointerDown(event);
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -142,7 +142,7 @@ bool Toggle::onPointerUp(const PointerEvent& event) {
         Widget::onPointerUp(event);
         m_hovered = true;
     }
-    markDirty();
+    invalidatePaint();
     if (activate) toggleValue();
     return wasArmed;
 }
@@ -152,7 +152,7 @@ bool Toggle::onPointerCancel(const PointerEvent& event) {
     m_pressed = false;
     m_pointerArmed = false;
     Widget::onPointerCancel(event);
-    markDirty();
+    invalidatePaint();
     return m_enabled;
 }
 
@@ -167,7 +167,7 @@ bool Toggle::onKeyDown(const KeyEvent& event) {
 bool Toggle::onFocusGained(const FocusEvent& event) {
     m_focused = true;
     Widget::onFocusGained(event);
-    markDirty();
+    invalidatePaint();
     return false;
 }
 
@@ -176,7 +176,7 @@ bool Toggle::onFocusLost(const FocusEvent& event) {
     m_pressed = false;
     m_pointerArmed = false;
     Widget::onFocusLost(event);
-    markDirty();
+    invalidatePaint();
     return false;
 }
 
@@ -266,14 +266,14 @@ void Toggle::styleDidChange() {
     sync(InteractionState::Pressed, lcl::theme::StyleState::Pressed);
     sync(InteractionState::Focused, lcl::theme::StyleState::Focused);
     sync(InteractionState::Disabled, lcl::theme::StyleState::Disabled);
-    markDirty();
+    invalidatePaint();
 }
 
 void Toggle::setThumbPresentation(float progress) {
     const float clamped = std::clamp(progress, 0.0f, 1.0f);
     if (std::fabs(m_thumbProgress - clamped) < 0.0001f) return;
     m_thumbProgress = clamped;
-    markDirty();
+    invalidatePaint();
 }
 
 void Toggle::retargetThumb() {

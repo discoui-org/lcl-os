@@ -36,7 +36,7 @@ void Picker::setLabel(std::string label) {
     if (m_label == label) return;
     m_label = std::move(label);
     updateDefaultSize();
-    markDirty();
+    invalidatePaint();
 }
 
 void Picker::setOptions(std::vector<PickerOption> options) {
@@ -44,14 +44,14 @@ void Picker::setOptions(std::vector<PickerOption> options) {
     normalizeSelection();
     m_hoveredIndex.reset();
     updateDefaultSize();
-    markDirty();
+    invalidatePaint();
 }
 
 void Picker::setSelectedIndex(size_t index) {
     if (index >= m_options.size() || !m_options[index].enabled ||
         index == m_selectedIndex) return;
     m_selectedIndex = index;
-    markDirty();
+    invalidatePaint();
     auto callback = m_onChange;
     if (callback) callback(index);
 }
@@ -61,7 +61,7 @@ void Picker::setPickerStyle(PickerStyle style) {
     m_style = style;
     m_hoveredIndex.reset();
     updateDefaultSize();
-    markDirty();
+    invalidatePaint();
 }
 
 void Picker::setEnabled(bool enabled) {
@@ -74,7 +74,7 @@ void Picker::setEnabled(bool enabled) {
         m_hoveredIndex.reset();
     }
     setInteractionEnabled(enabled);
-    markDirty();
+    invalidatePaint();
 }
 
 PickerStyle Picker::resolvedPickerStyle() const noexcept {
@@ -109,7 +109,7 @@ bool Picker::onPointerEnter(const PointerEvent& event) {
     if (!m_enabled) return false;
     m_hovered = event.source == PointerSource::Mouse;
     m_hoveredIndex = optionIndexAt(event.x, event.y);
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -119,7 +119,7 @@ bool Picker::onPointerLeave(const PointerEvent&) {
         m_pressed = false;
         m_hoveredIndex.reset();
     }
-    markDirty();
+    invalidatePaint();
     return m_enabled;
 }
 
@@ -130,7 +130,7 @@ bool Picker::onPointerDown(const PointerEvent& event) {
     m_pressed = true;
     m_pointerArmed = true;
     m_hoveredIndex = optionIndexAt(event.x, event.y);
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -139,7 +139,7 @@ bool Picker::onPointerMove(const PointerEvent& event) {
     const auto next = optionIndexAt(event.x, event.y);
     if (next != m_hoveredIndex) {
         m_hoveredIndex = next;
-        markDirty();
+        invalidatePaint();
     }
     return m_pointerArmed;
 }
@@ -156,7 +156,7 @@ bool Picker::onPointerUp(const PointerEvent& event) {
     m_hovered = event.source == PointerSource::Mouse;
     const auto index = optionIndexAt(event.x, event.y);
     m_hoveredIndex = index;
-    markDirty();
+    invalidatePaint();
     if (activate) {
         if (resolvedPickerStyle() == PickerStyle::Menu) showMenu();
         else if (index) setSelectedIndex(*index);
@@ -169,7 +169,7 @@ bool Picker::onPointerCancel(const PointerEvent&) {
     m_pressed = false;
     m_pointerArmed = false;
     m_hoveredIndex.reset();
-    markDirty();
+    invalidatePaint();
     return m_enabled;
 }
 
@@ -226,7 +226,7 @@ bool Picker::onKeyDown(const KeyEvent& event) {
 
 bool Picker::onFocusGained(const FocusEvent&) {
     m_focused = true;
-    markDirty();
+    invalidatePaint();
     return false;
 }
 
@@ -234,7 +234,7 @@ bool Picker::onFocusLost(const FocusEvent&) {
     m_focused = false;
     m_pressed = false;
     m_pointerArmed = false;
-    markDirty();
+    invalidatePaint();
     return false;
 }
 
@@ -274,7 +274,7 @@ const lcl::theme::WidgetStyle* Picker::defaultStyle() const noexcept {
 
 void Picker::styleDidChange() {
     updateDefaultSize();
-    markDirty();
+    invalidatePaint();
 }
 
 void Picker::draw(graphics::Canvas& canvas,

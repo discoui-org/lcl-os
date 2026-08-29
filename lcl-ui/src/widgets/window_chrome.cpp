@@ -36,10 +36,12 @@ graphics::DisplayList WindowChromeSurface::buildChromeDisplayList(
 
 void WindowChromeSurface::setFrameSize(float width, float height) {
     if (width <= 0.0f || height <= 0.0f) return;
+    if (m_titleHeight == height &&
+        getPresentationValue(AnimatableProperty::Width) == width &&
+        getPresentationValue(AnimatableProperty::Height) == height) return;
     m_titleHeight = height;
     setWidth(width);
     setHeight(height);
-    markDirty();
 }
 
 void WindowChromeSurface::syncLayout(float parentAbsX, float parentAbsY) {
@@ -120,10 +122,10 @@ bool WindowChromeSurface::onPointerCancel(const PointerEvent& event) {
 }
 
 void WindowChromeSurface::scheduleChromePresentation() {
-    markDirty();
+    invalidatePaint();
     if (!m_motionCoordinator || !m_chrome.hasActiveAnimations()) return;
     m_motionCoordinator->registerPresentation(*this, [this](float deltaSec) {
-        if (m_chrome.tick(deltaSec)) markDirty();
+        if (m_chrome.tick(deltaSec)) invalidatePaint();
         if (!m_chrome.hasActiveAnimations() && m_motionCoordinator) {
             m_motionCoordinator->unregisterPresentation(getObjectId());
         }

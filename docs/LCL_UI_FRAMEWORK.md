@@ -128,7 +128,9 @@ Base polymorphic class for all UI components.
 - `void addChild(std::unique_ptr<Widget> child)`: Appends a child widget into the hierarchy.
 - `void removeChild(Widget* child)`: Removes a child widget.
 - `const std::vector<std::unique_ptr<Widget>>& getChildren() const`: Returns list of children.
-- `void markDirty()`: Registers dirty damage bounds with `RenderPass` to schedule a frame redraw.
+- `void invalidatePaint()`: Invalidates painted content without scheduling layout or presentation work.
+- `void invalidatePresentation()` (protected): Damages old/new presentation bounds without invalidating paint caches.
+- `uint64_t getLayoutRevision() const`: Observes layout invalidation independently from paint and presentation revisions.
 - `void setVisible(bool visible)`: Controls widget visibility.
 - `virtual void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect)`: Virtual render method called during damage passes through the backend-neutral Canvas contract.
 - `void setInteractionStyle(InteractionState state, InteractionStyle style)`: Defines presentation-only pseudo-state values for custom controls.
@@ -137,6 +139,21 @@ Base polymorphic class for all UI components.
 - `const theme::Theme& getTheme() const`: Returns the inherited window theme.
 - `virtual void setOnClick(std::function<void()> callback)`: Makes any widget clickable without a pointer-event subclass.
 - `void setInteractionEnabled(bool enabled)`: Enables or disables declarative pointer behavior.
+
+Invalidation channels are independent. Layout setters and intrinsic
+measurement changes schedule layout; pixel content and style changes call
+`invalidatePaint()`; transforms, opacity, visibility, clipping, and scroll
+offsets invalidate presentation. A content mutation such as changing measured
+text explicitly schedules both layout and paint. Layout synchronization only
+invalidates presentation when the computed geometry actually changes.
+
+The first raster submission is a complete surface DisplayList. Later
+submissions contain only clipped commands for the accumulated damage regions
+and identify the exact retained raster frame they patch. `lcl-rasterd` keeps
+the authoritative per-surface scene, rejects stale-base patches, and publishes
+a new immutable layer with pixel-space damage. Resize, daemon restart, root
+replacement, or a rejected frame automatically forces a complete replacement.
+The compositor never interprets or replays application DisplayLists.
 
 ### `lcl::ui::MeasuredWidget`
 
@@ -293,7 +310,7 @@ For continuous procedural 2D canvas drawing or custom animations:
 
 1. Inherit from `Widget` and override `draw(graphics::Canvas& canvas, const graphics::RectF& damageRect)`.
 2. Use Canvas primitives such as `drawRect`, `drawRoundedRect`, `drawText`, and `drawBuffer`.
-3. Call `markDirty()` **inside** `draw(...)` to continuously request damage recalculation for the next 144Hz frame.
+3. Call `invalidatePaint()` **inside** `draw(...)` to continuously request painted damage for the next 144Hz frame.
 4. Launch the application using `app.runEventLoop()`.
 
 ```cpp
@@ -315,7 +332,7 @@ public:
                         {56, 189, 248, 255});
 
         // Request next frame for continuous 144Hz animation
-        markDirty();
+        invalidatePaint();
     }
 
 private:

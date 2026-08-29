@@ -86,7 +86,7 @@ void Button::applyStateMotion(ButtonState previous) {
             [this](float value) { applyPresentationValue(AnimatableProperty::Opacity, value); });
         animateBackgroundColor(visual.background, theme.focusTransition);
     }
-    markDirty();
+    invalidatePaint();
 }
 
 const lcl::theme::WidgetStyle* Button::defaultStyle() const noexcept {

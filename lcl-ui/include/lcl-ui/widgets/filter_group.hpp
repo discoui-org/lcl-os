@@ -14,7 +14,11 @@ public:
     void addFilter(lcl::protocol::FilterType type, float value);
     void clearFilters();
 
-    void setBlendMode(EffectBlend mode) { m_blendMode = mode; markDirty(); }
+    void setBlendMode(EffectBlend mode) {
+        if (m_blendMode == mode) return;
+        m_blendMode = mode;
+        invalidatePaint();
+    }
     EffectBlend getBlendMode() const { return m_blendMode; }
 
     void setOpacity(float opacity);

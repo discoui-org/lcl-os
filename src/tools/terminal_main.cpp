@@ -107,7 +107,7 @@ int main() {
     terminalViewPtr->setWidth(static_cast<float>(width));
     terminalViewPtr->setHeight(static_cast<float>(height));
     terminal.resize(static_cast<int>(width), static_cast<int>(height));
-    terminalViewPtr->markDirty();
+    terminalViewPtr->invalidatePaint();
   };
   updateTerminalGeometry(kSurfaceWidth, kSurfaceHeight);
   window.setOnResize(updateTerminalGeometry);
@@ -133,7 +133,7 @@ int main() {
       return false;
     }
     terminal.handleKey(event.key, true, event.modifiers, event.codepoint);
-    terminalViewPtr->markDirty();
+    terminalViewPtr->invalidatePaint();
     return true;
   });
   window.setOnRawTextInputEvent([&](const lcl::ui::TextInputEvent &event) {
@@ -145,7 +145,7 @@ int main() {
     if (firstByte < 32 || firstByte == 127)
       return true;
     terminal.handleText(event.text);
-    terminalViewPtr->markDirty();
+    terminalViewPtr->invalidatePaint();
     return true;
   });
   window.setOnFrame([&] {
@@ -154,7 +154,7 @@ int main() {
     // therefore still invalidates the complete terminal content.
     terminalViewPtr->updateCursorBlink();
     if (outputChanged) {
-      terminalViewPtr->markDirty();
+      terminalViewPtr->invalidatePaint();
     }
     if (!terminal.isAlive()) {
       window.requestQuit();

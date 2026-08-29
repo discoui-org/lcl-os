@@ -40,7 +40,7 @@ void BackdropSurface::setFilters(const std::vector<lcl::protocol::FilterOp>& fil
             static_cast<uint8_t>(std::clamp(std::lround(filter.value * 255.0f), 0l, 255l)),
         };
     }
-    markDirty();
+    invalidatePaint();
 }
 
 void BackdropSurface::addFilter(lcl::protocol::FilterType type, float value,
@@ -62,13 +62,14 @@ void BackdropSurface::addFilter(lcl::protocol::FilterType type, float value,
 
 void BackdropSurface::addFilter(const lcl::protocol::FilterOp& filter) {
     m_filters.push_back(filter);
-    markDirty();
+    invalidatePaint();
 }
 
 void BackdropSurface::clearFilters() {
+    if (m_filters.empty() && m_tint.a == 0) return;
     m_filters.clear();
     m_tint = {0, 0, 0, 0};
-    markDirty();
+    invalidatePaint();
 }
 
 void BackdropSurface::setTint(const graphics::Color& color) {
@@ -88,12 +89,14 @@ void BackdropSurface::setTint(const graphics::Color& color) {
         tint.params[2] = static_cast<float>(color.b);
         m_filters.push_back(tint);
     }
-    markDirty();
+    invalidatePaint();
 }
 
 void BackdropSurface::setOpacity(float opacity) {
-    m_opacity = std::clamp(opacity, 0.0f, 1.0f);
-    markDirty();
+    const float next = std::clamp(opacity, 0.0f, 1.0f);
+    if (m_opacity == next) return;
+    m_opacity = next;
+    invalidatePaint();
 }
 
 void BackdropSurface::setInteractive(bool interactive) {

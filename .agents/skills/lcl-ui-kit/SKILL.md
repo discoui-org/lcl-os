@@ -36,6 +36,14 @@ units. `RasterCanvas` records an immutable display list and rasterd applies
 backend. Do not multiply widget geometry by display scale. The compositor never
 replays application DisplayLists.
 
+After the first complete scene, each frame is a retained DisplayList patch.
+The private raster protocol carries the exact base frame serial and logical
+damage union; rasterd rejects a patch whose base or geometry generation does
+not match its retained per-surface scene. Daemon restart, resize, root
+replacement, and frame rejection resend a complete scene. Applications never
+own this recovery logic and the compositor still receives only immutable ready
+layers.
+
 ---
 
 ## 2. Key Framework Classes
@@ -56,11 +64,17 @@ Base class for all UI elements.
   `setGap`, and `setPosition`) accept only `lcl::ui::layout` types. The
   underlying layout engine is a private implementation detail.
 - `void addChild(std::unique_ptr<Widget> child)`: Appends a child widget.
-- `void markDirty()`: Registers dirty damage bounds with `RenderPass` to trigger a frame redraw.
+- `void invalidatePaint()`: Invalidates painted content without scheduling layout or presentation work.
+- `void invalidatePresentation()` (protected): Invalidates old/new presentation bounds without invalidating paint caches.
+- `uint64_t getLayoutRevision() const`: Observes coalesced layout invalidation independently from paint and presentation revisions.
 - `virtual void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect)`: Backend-neutral render callback. Widgets must not cast the Canvas to a renderer implementation.
 - Intrinsically sized custom leaves derive from `MeasuredWidget`, override
   `measure(const layout::Constraints&)`, and call `invalidateMeasurement()`
   when their content size changes.
+- Layout, paint, and presentation invalidation are independent. Layout setters
+  do not invalidate paint; geometry changes discovered during layout sync
+  invalidate presentation; transforms, opacity, visibility, clipping, and
+  scroll never increment paint-cache revisions.
 - **Event Callbacks:**
   - `virtual bool onPointerEnter(const PointerEvent& event)`
   - `virtual bool onPointerLeave(const PointerEvent& event)`
@@ -135,7 +149,7 @@ For custom 2D Canvas drawing or continuous procedural animations:
 1. Subclass `Widget` and override `draw(graphics::Canvas& canvas, const graphics::RectF& damageRect)`.
 2. Use only Canvas primitives such as `drawRect`, `drawRoundedRect`,
    `drawTopRoundedRect`, `drawText`, and `drawBuffer`.
-3. Call `markDirty()` when another frame is required; do not depend on a fixed
+3. Call `invalidatePaint()` when another painted frame is required; do not depend on a fixed
    refresh rate or cast Canvas to `RasterRenderer`.
 
 ```cpp
@@ -147,7 +161,7 @@ public:
         canvas.drawRoundedRect(
             {60.0f, 60.0f, 80.0f, 80.0f}, 40.0f,
             {255, 100, 50, 255}, {}, 0.0f, 2.0f);
-        markDirty();
+        invalidatePaint();
     }
 };
 ```

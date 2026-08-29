@@ -57,6 +57,46 @@ TEST(RasterProtocolTest, LayerReadyCarriesGenerationAndOnePrivateDescriptor) {
     close(sockets[1]);
 }
 
+TEST(RasterProtocolTest, SubmitFrameCarriesRetainedBaseAndLogicalDamage) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+
+    SubmitFrame sent{};
+    sent.grant = {7, 42, 0, 11, 13};
+    sent.configureSerial = 17;
+    sent.frameSerial = 23;
+    sent.baseFrameSerial = 19;
+    sent.geometryGeneration = 29;
+    sent.logicalWidth = 640.0f;
+    sent.logicalHeight = 480.0f;
+    sent.bufferScale = 1.5f;
+    sent.damageX = 20.0f;
+    sent.damageY = 30.0f;
+    sent.damageWidth = 40.0f;
+    sent.damageHeight = 50.0f;
+    sent.displayListSize = 4096;
+    ASSERT_TRUE(sendPacket(sockets[0], Opcode::SubmitFrame, sent));
+
+    Header header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_EQ(receivePacket(sockets[1], header, payload, receivedFd),
+              ReceiveStatus::Received);
+    const auto* received = payloadAs<SubmitFrame>(
+        header, payload, Opcode::SubmitFrame);
+    ASSERT_NE(received, nullptr);
+    EXPECT_EQ(received->baseFrameSerial, 19u);
+    EXPECT_FLOAT_EQ(received->damageX, 20.0f);
+    EXPECT_FLOAT_EQ(received->damageY, 30.0f);
+    EXPECT_FLOAT_EQ(received->damageWidth, 40.0f);
+    EXPECT_FLOAT_EQ(received->damageHeight, 50.0f);
+    EXPECT_EQ(received->flags, 0u);
+    EXPECT_EQ(receivedFd, -1);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(RasterProtocolTest, RejectsWrongPrivateProtocolVersion) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);

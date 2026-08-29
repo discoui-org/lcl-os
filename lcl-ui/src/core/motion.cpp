@@ -9,9 +9,8 @@
 
 namespace lcl::ui {
 
-void MotionCoordinator::setCallbacks(LayoutCallback layout, DamageCallback damage) {
+void MotionCoordinator::setLayoutCallback(LayoutCallback layout) {
     m_layoutCallback = std::move(layout);
-    m_damageCallback = std::move(damage);
 }
 
 void MotionCoordinator::beginTransaction(const lcl::motion::Motion& motion,
@@ -95,14 +94,9 @@ lcl::motion::AnimationHandle MotionCoordinator::animate(
     const auto lifetime = widget.getLifetimeToken();
     Widget* pointer = &widget;
     return m_timeline.animate(std::move(keyframes), options,
-        [lifetime, pointer, property, damage = m_damageCallback](float value) {
+        [lifetime, pointer, property](float value) {
             if (lifetime.expired()) return;
-            const graphics::RectF before = pointer->getPresentationBounds();
             pointer->applyPresentationValue(property, value);
-            if (damage) {
-                damage(before);
-                damage(pointer->getPresentationBounds());
-            }
         },
         [lifetime, pointer, property] {
             return lifetime.expired() ? 0.0f : pointer->getPresentationValue(property);
@@ -118,17 +112,10 @@ bool MotionCoordinator::tick(float dtSec) {
     for (const auto channel : changed) {
         const auto binding = m_bindings.find(channel);
         if (binding == m_bindings.end() || !binding->second.widget) continue;
-        const graphics::RectF oldBounds = binding->second.widget->getPresentationBounds();
         binding->second.apply(m_engine.sample(channel).value);
         layoutChanged = layoutChanged || binding->second.affectsLayout;
-        if (m_damageCallback) m_damageCallback(oldBounds);
     }
     if (layoutChanged && m_layoutCallback) m_layoutCallback();
-    for (const auto channel : changed) {
-        const auto binding = m_bindings.find(channel);
-        if (binding != m_bindings.end() && binding->second.widget && m_damageCallback)
-            m_damageCallback(binding->second.widget->getPresentationBounds());
-    }
     m_timeline.tick(dtSec);
     tickPresentations(dtSec);
     return hasActiveAnimations();

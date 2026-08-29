@@ -28,12 +28,18 @@ public:
     float getBorderRadius() const { return m_borderRadius; }
 
     // Preserve only upper corner arcs while the lower edge stays flush.
-    void setTopOnlyBorderRadius(bool enabled) { m_topOnlyBorderRadius = enabled; markDirty(); }
+    void setTopOnlyBorderRadius(bool enabled) {
+        if (m_topOnlyBorderRadius == enabled) return;
+        m_topOnlyBorderRadius = enabled;
+        invalidatePaint();
+    }
     bool hasTopOnlyBorderRadius() const { return m_topOnlyBorderRadius; }
 
     void setBorderRoundness(float roundness) {
-        m_borderRoundness = std::clamp(roundness, 2.0f, 8.0f);
-        markDirty();
+        const float next = std::clamp(roundness, 2.0f, 8.0f);
+        if (m_borderRoundness == next) return;
+        m_borderRoundness = next;
+        invalidatePaint();
     }
     float getBorderRoundness() const { return m_borderRoundness; }
 

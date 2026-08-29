@@ -309,6 +309,8 @@ private:
     uint64_t m_submittedConfigureSerial{0};
     uint64_t m_nextFrameSerial{1};
     uint64_t m_submittedFrameSerial{0};
+    // Last raster frame known to be presented and therefore safe to patch.
+    uint64_t m_retainedRasterFrameSerial{0};
     uint64_t m_submittedGeometryGeneration{0};
     uint64_t m_rasterConnectionGeneration{0};
     std::unordered_map<uint64_t, uint64_t> m_uploadedImageRevisions;

@@ -10,16 +10,18 @@ Text::Text(const std::string& content) : m_text(content) {
 }
 
 void Text::setText(const std::string& text) {
+    if (m_text == text) return;
     m_text = text;
     invalidateMeasurement();
-    markDirty();
+    invalidatePaint();
 }
 
 void Text::setFontSize(float size) {
+    if (m_hasExplicitFontSize && m_fontSize == size) return;
     m_hasExplicitFontSize = true;
     m_fontSize = size;
     invalidateMeasurement();
-    markDirty();
+    invalidatePaint();
 }
 
 void Text::resetFontSize() {
@@ -38,13 +40,14 @@ void Text::setFontFamily(graphics::FontFamily family) {
     if (m_fontFamily == family) return;
     m_fontFamily = family;
     invalidateMeasurement();
-    markDirty();
+    invalidatePaint();
 }
 
 void Text::setTextColor(const graphics::Color& color) {
+    if (m_hasExplicitTextColor && m_textColor.toARGB() == color.toARGB()) return;
     m_hasExplicitTextColor = true;
     m_textColor = color;
-    markDirty();
+    invalidatePaint();
 }
 
 void Text::resetTextColor() {
@@ -73,7 +76,7 @@ void Text::styleDidChange() {
             m_textColor = typography.foreground;
         }
     }
-    markDirty();
+    invalidatePaint();
 }
 
 layout::Size Text::measure(const layout::Constraints& constraints) {

@@ -103,7 +103,6 @@ class MotionCoordinator {
 public:
     using ApplyFloat = std::function<void(float)>;
     using LayoutCallback = std::function<void()>;
-    using DamageCallback = std::function<void(const graphics::RectF&)>;
     /**
      * A presentation-only callback owned by an active widget. Unlike a
      * property animation, it controls its own discrete presentation state.
@@ -112,7 +111,7 @@ public:
 
     MotionCoordinator() = default;
 
-    void setCallbacks(LayoutCallback layout, DamageCallback damage);
+    void setLayoutCallback(LayoutCallback layout);
     void setInteractionTheme(InteractionMotionTheme theme) { m_interactionTheme = std::move(theme); }
     const InteractionMotionTheme& interactionTheme() const noexcept { return m_interactionTheme; }
     void beginTransaction(const lcl::motion::Motion& motion,
@@ -169,7 +168,6 @@ private:
     AnimationTransactionOptions m_options{};
     bool m_transactionActive{false};
     LayoutCallback m_layoutCallback;
-    DamageCallback m_damageCallback;
     InteractionMotionTheme m_interactionTheme{};
 };
 

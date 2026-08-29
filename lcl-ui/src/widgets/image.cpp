@@ -22,13 +22,13 @@ bool Image::setSourcePath(const std::string& sourcePath) {
     if (!loaded || !loaded->isValid()) {
         m_sourcePath.clear();
         m_sourceImage.reset();
-        markDirty();
+        invalidatePaint();
         return false;
     }
 
     m_sourcePath = sourcePath;
     m_sourceImage = std::move(loaded);
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -39,7 +39,7 @@ void Image::clearSource() {
 
     m_sourcePath.clear();
     m_sourceImage.reset();
-    markDirty();
+    invalidatePaint();
 }
 
 void Image::setCornerRadius(float radius) {
@@ -48,7 +48,7 @@ void Image::setCornerRadius(float radius) {
         return;
     }
     m_cornerRadius = clamped;
-    markDirty();
+    invalidatePaint();
 }
 
 void Image::setCornerRoundness(float roundness) {
@@ -57,7 +57,7 @@ void Image::setCornerRoundness(float roundness) {
         return;
     }
     m_cornerRoundness = clamped;
-    markDirty();
+    invalidatePaint();
 }
 
 void Image::setOpacity(float opacity) {
@@ -66,7 +66,7 @@ void Image::setOpacity(float opacity) {
         return;
     }
     m_opacity = clamped;
-    markDirty();
+    invalidatePaint();
 }
 
 void Image::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {

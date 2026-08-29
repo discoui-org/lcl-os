@@ -197,11 +197,12 @@ void ScrollView::setScrollY(float offset) {
     const float maxScroll = getMaxScrollY();
     const float clamped = std::clamp(offset, 0.0f, maxScroll);
     if (clamped == m_scrollY) return;
+    const graphics::RectF previousViewport = getVisiblePresentationPaintBounds();
     m_scrollY = clamped;
     if (m_contentWidget) {
         m_contentWidget->setParentControlledTranslationY(-m_scrollY);
     }
-    markDirty();
+    invalidatePresentation(previousViewport);
 }
 
 void ScrollView::clampScrollOffset() {

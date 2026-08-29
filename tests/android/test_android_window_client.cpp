@@ -34,7 +34,7 @@ int main() {
                 220,
                 255,
             });
-            rootView->markDirty();
+            rootView->invalidatePaint();
         }
         if (ticks == 180u) window.requestWindowClose();
     });

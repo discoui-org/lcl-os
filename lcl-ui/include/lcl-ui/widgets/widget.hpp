@@ -74,7 +74,7 @@ public:
     void setScale(float x, float y);
     void setRotation(float radians);
     void setTransformOrigin(float normalizedX, float normalizedY);
-    void setClipsToBounds(bool enabled) { m_clipsToBounds = enabled; markDirty(); }
+    void setClipsToBounds(bool enabled);
     bool clipsToBounds() const noexcept { return m_clipsToBounds; }
 
     void setWidth(float width);
@@ -107,16 +107,17 @@ public:
     void calculateLayout();
     void calculateLayout(float availableWidth, float availableHeight);
 
-    void setVisible(bool visible) { m_visible = visible; markDirty(); }
+    void setVisible(bool visible);
     bool isVisible() const { return m_visible; }
 
     void setFocusable(bool focusable) { m_focusable = focusable; }
     bool isFocusable() const { return m_focusable; }
     /** Marks a traversal boundary without making the widget a focus target. */
     virtual bool isFocusScope() const noexcept { return false; }
-    void markDirty();
+    void invalidatePaint();
     /** Mark one global logical paint region without invalidating the full widget. */
-    void markDirty(const graphics::RectF& damageRect);
+    void invalidatePaint(const graphics::RectF& damageRect);
+    uint64_t getLayoutRevision() const noexcept { return m_layoutRevision; }
     uint64_t getPaintRevision() const noexcept { return m_paintRevision; }
     uint64_t getPresentationRevision() const noexcept {
         return m_presentationRevision;
@@ -185,9 +186,9 @@ public:
 
 protected:
     /** Schedule old/new presentation pixels without invalidating paint caches. */
-    void markPresentationDirty();
+    void invalidatePresentation();
     /** Schedule a previous paint extent before a style change shrinks it. */
-    void markPaintDirty(const graphics::RectF& previousPaintBounds);
+    void invalidatePaintFrom(const graphics::RectF& previousPaintBounds);
     void beginPresentation(graphics::Canvas& canvas) const;
     void endPresentation(graphics::Canvas& canvas) const;
     void drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect);
@@ -261,10 +262,11 @@ private:
         std::function<layout::Size(const layout::Constraints&)> callback);
     void invalidateMeasurement();
     layout::PositionType positionType() const;
-    void markPresentationDirty(const graphics::RectF& previousBounds);
+    void invalidatePresentation(const graphics::RectF& previousBounds);
     graphics::RectF mapPresentationRect(
         const graphics::RectF& rect, const Widget* firstTransform) const;
     void invalidateLayout();
+    void advancePaintRevision();
     void propagateDescendantPaintRevision();
     void propagateDescendantPresentationRevision();
     void markLayoutDirty();
@@ -276,6 +278,7 @@ private:
     static std::atomic<uint64_t> s_nextObjectId;
     uint64_t m_paintRevision{0};
     uint64_t m_presentationRevision{0};
+    uint64_t m_layoutRevision{1};
     bool m_layoutDirty{true};
 };
 

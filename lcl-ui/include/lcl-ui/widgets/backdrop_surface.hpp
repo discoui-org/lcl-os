@@ -23,12 +23,16 @@ public:
     void setEffectBounds(EffectBounds bounds) {
         if (m_effectBounds != bounds) {
             m_effectBounds = bounds;
-            markDirty();
+            invalidatePaint();
         }
     }
     EffectBounds getEffectBounds() const { return m_effectBounds; }
 
-    void setBlendMode(EffectBlend mode) { m_blendMode = mode; markDirty(); }
+    void setBlendMode(EffectBlend mode) {
+        if (m_blendMode == mode) return;
+        m_blendMode = mode;
+        invalidatePaint();
+    }
     EffectBlend getBlendMode() const { return m_blendMode; }
 
     void setOpacity(float opacity);

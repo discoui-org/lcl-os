@@ -25,7 +25,11 @@ public:
     void clearSource();
     bool hasImage() const { return static_cast<bool>(m_sourceImage); }
 
-    void setFit(ImageFit fit) { m_fit = fit; markDirty(); }
+    void setFit(ImageFit fit) {
+        if (m_fit == fit) return;
+        m_fit = fit;
+        invalidatePaint();
+    }
     ImageFit getFit() const { return m_fit; }
 
     void setCornerRadius(float radius);

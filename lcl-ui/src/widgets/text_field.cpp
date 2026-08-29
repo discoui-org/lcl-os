@@ -99,7 +99,7 @@ void TextField::setPlaceholder(const std::string& placeholder) {
     std::string sanitized = sanitizeSingleLine(placeholder);
     if (sanitized == m_placeholder) return;
     m_placeholder = std::move(sanitized);
-    markDirty();
+    invalidatePaint();
 }
 
 void TextField::syncLayout(float parentAbsX, float parentAbsY) {
@@ -162,7 +162,7 @@ bool TextField::onPointerDown(const PointerEvent& event) {
     m_caretIndex = characterIndexForX(std::max(0.0f, contentX));
     ensureCaretVisible();
     resetCaretPresentation();
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -173,7 +173,7 @@ bool TextField::onPointerUp(const PointerEvent& event) {
     m_caretIndex = characterIndexForX(std::max(0.0f, contentX));
     ensureCaretVisible();
     resetCaretPresentation();
-    markDirty();
+    invalidatePaint();
     return true;
 }
 
@@ -246,7 +246,7 @@ bool TextField::onKeyDown(const KeyEvent& event) {
 
     if (caretChanged) {
         ensureCaretVisible();
-        markDirty();
+        invalidatePaint();
     }
     resetCaretPresentation();
     return true;
@@ -272,7 +272,7 @@ bool TextField::onFocusGained(const FocusEvent& event) {
         m_caretPresentation.setActive(true);
         registerCaretPresentation();
         ensureCaretVisible();
-        markDirty();
+        invalidatePaint();
     }
     return false;
 }
@@ -283,7 +283,7 @@ bool TextField::onFocusLost(const FocusEvent& event) {
         m_focused = false;
         m_caretPresentation.setActive(false);
         unregisterCaretPresentation();
-        markDirty();
+        invalidatePaint();
     }
     return false;
 }
@@ -386,7 +386,7 @@ void TextField::styleDidChange() {
         setDefaultHeight(getTheme().metrics.regularControlHeight);
     }
     ensureCaretVisible();
-    markDirty();
+    invalidatePaint();
 }
 
 void TextField::registerCaretPresentation() {
@@ -401,16 +401,16 @@ void TextField::unregisterCaretPresentation() {
 }
 
 void TextField::tickCaretPresentation(float deltaSec) {
-    if (m_caretPresentation.update(deltaSec)) markDirty();
+    if (m_caretPresentation.update(deltaSec)) invalidatePaint();
 }
 
 void TextField::resetCaretPresentation() {
-    if (m_caretPresentation.resetActivity()) markDirty();
+    if (m_caretPresentation.resetActivity()) invalidatePaint();
 }
 
 void TextField::valueChanged() {
     resetCaretPresentation();
-    markDirty();
+    invalidatePaint();
     if (!m_onChange) return;
     ChangeCallback callback = m_onChange;
     const std::string value = m_text;
