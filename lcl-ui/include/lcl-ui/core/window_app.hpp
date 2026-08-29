@@ -225,6 +225,7 @@ private:
     bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
                              uint32_t payloadSize, int passedFd = -1);
     bool uploadImageResource(const graphics::ImageResourceView& resource);
+    void invalidateRetainedWidgetCaches(Widget& widget) noexcept;
     void logFrameTraceIfDue();
     void collectClosedHostedSurfaces();
 
@@ -323,8 +324,9 @@ private:
     uint64_t m_retainedRasterFrameSerial{0};
     uint64_t m_submittedGeometryGeneration{0};
     uint64_t m_rasterConnectionGeneration{0};
-    // A complete rasterd frame installs a composition template whose
-    // ScrollContent cache destinations can be updated without another LDL1.
+    // A complete rasterd frame installs logical ScrollContent templates.
+    // Property-only commits then move/replenish bounded rasterd tiles without
+    // another client DisplayList.
     bool m_scrollTransformFastPathReady{false};
     std::unordered_map<uint64_t, uint64_t> m_uploadedImageRevisions;
     // A launch icon becomes compositor-visible only after the HomeScreen

@@ -3,6 +3,7 @@
 #include "raster_service_client.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-graphics/display_list_wire.hpp"
+#include "lcl-ui/widgets/scroll_view.hpp"
 #include <iostream>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -1652,6 +1653,12 @@ bool WindowApp::renderFrame() {
     if (!m_renderPass.hasDamage()) return false;
     const bool replacesRetainedScene = m_firstFrame;
     m_firstFrame = false;
+    if (replacesRetainedScene && m_windowRoot) {
+        // Rasterd restart, resize, rejection and root replacement all discard
+        // server-owned cached textures. Force cache-aware widgets to publish
+        // their logical source template in the replacement transaction.
+        invalidateRetainedWidgetCaches(*m_windowRoot);
+    }
 
     // Path coverage can extend one physical pixel past its analytic bounds.
     // Keep widget damage logical and add that backend sampling margin only at
@@ -1983,6 +1990,15 @@ bool WindowApp::renderFrame() {
             std::chrono::steady_clock::now() - paintStarted).count();
     }
     return true;
+}
+
+void WindowApp::invalidateRetainedWidgetCaches(Widget& widget) noexcept {
+    if (auto* scroll = dynamic_cast<ScrollView*>(&widget)) {
+        scroll->invalidateRetainedCache();
+    }
+    for (const auto& child : widget.getChildren()) {
+        if (child) invalidateRetainedWidgetCaches(*child);
+    }
 }
 
 void WindowApp::logFrameTraceIfDue() {

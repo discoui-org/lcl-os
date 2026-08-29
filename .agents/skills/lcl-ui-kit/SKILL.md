@@ -44,6 +44,13 @@ replacement, and frame rejection resend a complete scene. Applications never
 own this recovery logic and the compositor still receives only immutable ready
 layers.
 
+`ScrollView` content is retained by rasterd as 384-logical-pixel vertical
+tiles. The viewport and one tile of overscan stay resident. A pure `setScrollY`
+commit changes only the ScrollContent transform; rasterd can materialize an
+entering tile from its retained logical content and patch history without a new
+client DisplayList or image upload. Cache-aware widgets republish their source
+on daemon restart, resize, frame rejection, or other complete-scene replacement.
+
 ---
 
 ## 2. Key Framework Classes

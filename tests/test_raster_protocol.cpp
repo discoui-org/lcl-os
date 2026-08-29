@@ -2,7 +2,9 @@
 
 #include "core/ipc/raster_protocol.hpp"
 #include "render/retained_output_damage.hpp"
+#include "render/retained_scroll_tiles.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -15,6 +17,49 @@ lcl::render::RetainedOutputDamageTracker::Frame outputFrame(
         uint64_t serial, uint64_t base, lcl::render::RasterRect damage,
         bool replacesScene = false) {
     return {serial, base, 7, 100, 200, 2.0f, damage, replacesScene};
+}
+
+lcl::render::RetainedScrollTileCache::NodeMap scrollNodes(
+        float translationY = 0.0f) {
+    lcl::render::RetainedScrollTileCache::NodeMap nodes;
+    RetainedNodeState viewport{};
+    viewport.id = 10;
+    viewport.contentRevision = 1;
+    viewport.boundaryReasons = (1u << 4u);
+    viewport.flags = kNodeHasClip;
+    viewport.layoutWidth = viewport.presentationWidth = 200.0f;
+    viewport.layoutHeight = viewport.presentationHeight = 300.0f;
+    viewport.clipWidth = 200.0f;
+    viewport.clipHeight = 300.0f;
+    nodes.emplace(viewport.id, viewport);
+
+    RetainedNodeState content{};
+    content.id = 11;
+    content.parentId = viewport.id;
+    content.contentRevision = 3;
+    content.boundaryReasons = (1u << 5u) |
+        (translationY == 0.0f ? 0u : (1u << 2u));
+    content.layoutWidth = content.presentationWidth = 200.0f;
+    content.layoutHeight = content.presentationHeight = 2000.0f;
+    content.translationY = translationY;
+    content.presentationY = translationY;
+    nodes.emplace(content.id, content);
+    return nodes;
+}
+
+std::vector<lcl::graphics::DisplayCommand> fullScrollDisplayList() {
+    return {
+        lcl::graphics::SaveCommand{},
+        lcl::graphics::ClipRectCommand{{0.0f, 0.0f, 200.0f, 300.0f}},
+        lcl::graphics::BeginCachedLayerCommand{
+            100, {0.0f, 0.0f, 200.0f, 2000.0f}, std::nullopt},
+        lcl::graphics::ClearRectCommand{
+            {0.0f, 0.0f, 200.0f, 2000.0f}, {10, 20, 30, 255}},
+        lcl::graphics::EndCachedLayerCommand{},
+        lcl::graphics::DrawCachedLayerCommand{
+            100, {0.0f, 0.0f, 200.0f, 2000.0f}, 1.0f},
+        lcl::graphics::RestoreCommand{},
+    };
 }
 
 } // namespace
@@ -198,6 +243,181 @@ TEST(RasterProtocolTest, PropertyOnlyTransactionCarriesNoDisplayListDescriptor) 
 
     close(sockets[0]);
     close(sockets[1]);
+}
+
+TEST(RasterProtocolTest,
+     ScrollTilesCreateOnlyVisibleAndNearContentFromRetainedTemplate) {
+    lcl::render::RetainedScrollTileCache cache;
+    const auto nodes = scrollNodes();
+    const auto submitted = fullScrollDisplayList();
+    uint64_t nextLayerId = 1000;
+    auto prepared = lcl::render::RetainedScrollTileCache::prepare(
+        cache, &submitted, nodes, {{10, 100}},
+        [&] { return nextLayerId++; }, true);
+    ASSERT_TRUE(prepared.has_value());
+    ASSERT_TRUE(prepared->tiled);
+    ASSERT_NE(prepared->next, nullptr);
+    EXPECT_EQ(prepared->next->contentCount(), 1u);
+    EXPECT_EQ(prepared->next->residentTileCount(), 2u);
+    EXPECT_EQ(prepared->createdLayerIds.size(), 2u);
+
+    std::size_t tileBegins = 0;
+    std::size_t tileDraws = 0;
+    for (const auto& command : prepared->displayList.commands()) {
+        if (const auto* begin = std::get_if<
+                lcl::graphics::BeginCachedLayerCommand>(&command)) {
+            ++tileBegins;
+            EXPECT_NE(begin->id, 100u);
+            EXPECT_LE(begin->sourceBounds.height,
+                      lcl::render::RetainedScrollTileCache::
+                          kLogicalTileHeight);
+        } else if (const auto* draw = std::get_if<
+                       lcl::graphics::DrawCachedLayerCommand>(&command)) {
+            ++tileDraws;
+            EXPECT_NE(draw->id, 100u);
+        }
+    }
+    EXPECT_EQ(tileBegins, 2u);
+    EXPECT_EQ(tileDraws, 2u);
+}
+
+TEST(RasterProtocolTest,
+     PropertyOnlyScrollCreatesEnteringTilesAndEvictsDistantTiles) {
+    lcl::render::RetainedScrollTileCache cache;
+    const auto submitted = fullScrollDisplayList();
+    uint64_t nextLayerId = 2000;
+    auto first = lcl::render::RetainedScrollTileCache::prepare(
+        cache, &submitted, scrollNodes(), {{10, 100}},
+        [&] { return nextLayerId++; }, true);
+    ASSERT_TRUE(first.has_value());
+    cache = std::move(*first->next);
+
+    auto moved = lcl::render::RetainedScrollTileCache::prepare(
+        cache, nullptr, scrollNodes(-500.0f), {{10, 100}},
+        [&] { return nextLayerId++; });
+    ASSERT_TRUE(moved.has_value());
+    EXPECT_TRUE(moved->tiled);
+    EXPECT_FALSE(moved->createdLayerIds.empty());
+    EXPECT_TRUE(moved->evictedLayerIds.empty());
+    EXPECT_EQ(moved->next->residentTileCount(), 4u);
+    cache = std::move(*moved->next);
+
+    auto distant = lcl::render::RetainedScrollTileCache::prepare(
+        cache, nullptr, scrollNodes(-1200.0f), {{10, 100}},
+        [&] { return nextLayerId++; });
+    ASSERT_TRUE(distant.has_value());
+    EXPECT_FALSE(distant->createdLayerIds.empty());
+    EXPECT_FALSE(distant->evictedLayerIds.empty());
+    EXPECT_LE(distant->next->residentTileCount(), 4u);
+}
+
+TEST(RasterProtocolTest, ScrollTileReplacementEvictsPreviousResidency) {
+    lcl::render::RetainedScrollTileCache cache;
+    uint64_t nextLayerId = 2500;
+    const auto submitted = fullScrollDisplayList();
+    auto initial = lcl::render::RetainedScrollTileCache::prepare(
+        cache, &submitted, scrollNodes(), {{10, 100}},
+        [&] { return nextLayerId++; }, true);
+    ASSERT_TRUE(initial.has_value());
+    const std::vector<uint64_t> originalLayers = initial->createdLayerIds;
+    ASSERT_FALSE(originalLayers.empty());
+    cache = std::move(*initial->next);
+
+    auto replacementCommands = submitted;
+    for (auto& command : replacementCommands) {
+        if (auto* begin = std::get_if<
+                lcl::graphics::BeginCachedLayerCommand>(&command)) {
+            begin->id = 101;
+        } else if (auto* draw = std::get_if<
+                       lcl::graphics::DrawCachedLayerCommand>(&command)) {
+            draw->id = 101;
+        }
+    }
+    auto replacement = lcl::render::RetainedScrollTileCache::prepare(
+        cache, &replacementCommands, scrollNodes(), {{10, 101}},
+        [&] { return nextLayerId++; }, true);
+    ASSERT_TRUE(replacement.has_value());
+    EXPECT_TRUE(replacement->tiled);
+    for (uint64_t layerId : originalLayers) {
+        EXPECT_TRUE(std::find(
+            replacement->evictedLayerIds.begin(),
+            replacement->evictedLayerIds.end(), layerId) !=
+            replacement->evictedLayerIds.end());
+    }
+}
+
+TEST(RasterProtocolTest,
+     CurrentScrollTemplateSurvivesGeometryInvalidationWithoutPassthrough) {
+    lcl::render::RetainedScrollTileCache cache;
+    uint64_t nextLayerId = 2750;
+    const auto submitted = fullScrollDisplayList();
+    auto initial = lcl::render::RetainedScrollTileCache::prepare(
+        cache, &submitted, scrollNodes(), {{10, 100}},
+        [&] { return nextLayerId++; }, true);
+    ASSERT_TRUE(initial.has_value());
+    cache = std::move(*initial->next);
+
+    auto geometryFrame = lcl::render::RetainedScrollTileCache::prepare(
+        cache, &submitted, scrollNodes(), {{10, 100}},
+        [&] { return nextLayerId++; }, false, false, true);
+    ASSERT_TRUE(geometryFrame.has_value());
+    EXPECT_TRUE(geometryFrame->tiled);
+    for (const auto& command : geometryFrame->displayList.commands()) {
+        if (const auto* begin = std::get_if<
+                lcl::graphics::BeginCachedLayerCommand>(&command)) {
+            EXPECT_NE(begin->id, 100u);
+        } else if (const auto* draw = std::get_if<
+                       lcl::graphics::DrawCachedLayerCommand>(&command)) {
+            EXPECT_NE(draw->id, 100u);
+        }
+    }
+}
+
+TEST(RasterProtocolTest,
+     OffscreenScrollPatchIsReplayedWhenItsTileFirstBecomesVisible) {
+    lcl::render::RetainedScrollTileCache cache;
+    uint64_t nextLayerId = 3000;
+    const auto full = fullScrollDisplayList();
+    auto initial = lcl::render::RetainedScrollTileCache::prepare(
+        cache, &full, scrollNodes(), {{10, 100}},
+        [&] { return nextLayerId++; }, true);
+    ASSERT_TRUE(initial.has_value());
+    cache = std::move(*initial->next);
+
+    const std::vector<lcl::graphics::DisplayCommand> patch{
+        lcl::graphics::SaveCommand{},
+        lcl::graphics::ClipRectCommand{{0.0f, 0.0f, 200.0f, 300.0f}},
+        lcl::graphics::BeginCachedLayerCommand{
+            100, {0.0f, 0.0f, 200.0f, 2000.0f},
+            lcl::graphics::RectF{0.0f, 800.0f, 200.0f, 40.0f}},
+        lcl::graphics::ClearRectCommand{
+            {0.0f, 800.0f, 200.0f, 40.0f}, {200, 40, 20, 255}},
+        lcl::graphics::EndCachedLayerCommand{},
+        lcl::graphics::DrawCachedLayerCommand{
+            100, {0.0f, 0.0f, 200.0f, 2000.0f}, 1.0f},
+        lcl::graphics::RestoreCommand{},
+    };
+    auto patched = lcl::render::RetainedScrollTileCache::prepare(
+        cache, &patch, scrollNodes(), {{10, 100}},
+        [&] { return nextLayerId++; });
+    ASSERT_TRUE(patched.has_value());
+    cache = std::move(*patched->next);
+
+    auto moved = lcl::render::RetainedScrollTileCache::prepare(
+        cache, nullptr, scrollNodes(-700.0f), {{10, 100}},
+        [&] { return nextLayerId++; });
+    ASSERT_TRUE(moved.has_value());
+    bool appliedOffscreenPatch = false;
+    for (const auto& command : moved->displayList.commands()) {
+        const auto* begin = std::get_if<
+            lcl::graphics::BeginCachedLayerCommand>(&command);
+        if (begin && begin->updateBounds &&
+            begin->updateBounds->y == 800.0f) {
+            appliedOffscreenPatch = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(appliedOffscreenPatch);
 }
 
 TEST(RasterProtocolTest, CommitDescriptorMustMatchDisplayListPresence) {

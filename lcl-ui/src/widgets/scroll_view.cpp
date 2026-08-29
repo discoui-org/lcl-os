@@ -64,6 +64,22 @@ ScrollView::ScrollView() {
     setAlignItems(layout::Align::Stretch);
 }
 
+void ScrollView::invalidateRetainedCache() noexcept {
+    m_cacheValid = false;
+    m_cachedSubtreeAnimating = false;
+    m_cachedAnimationBounds.reset();
+    m_cachedContentPaintRevision = 0;
+    m_cachedContentPresentationRevision = 0;
+    m_lastCacheUpdatePassSerial = 0;
+    m_cachedContentX = 0.0f;
+    m_cachedContentY = 0.0f;
+    m_cachedContentWidth = 0.0f;
+    m_cachedContentHeight = 0.0f;
+    m_cachedViewportWidth = 0.0f;
+    m_cachedViewportHeight = 0.0f;
+    m_cachedDeviceScale = 0.0f;
+}
+
 void ScrollView::setContent(std::unique_ptr<Widget> content) {
     m_cacheValid = false;
     m_cachedSubtreeAnimating = false;

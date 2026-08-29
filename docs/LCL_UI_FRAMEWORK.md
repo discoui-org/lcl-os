@@ -156,6 +156,17 @@ a new immutable layer with pixel-space damage. Resize, daemon restart, root
 replacement, or a rejected frame automatically forces a complete replacement.
 The compositor never interprets or replays application DisplayLists.
 
+`ScrollView` is a retained presentation boundary. Changing `scrollY` does not
+run layout or advance a paint revision. The client sends only the content-node
+translation while rasterd keeps the logical content template and a bounded set
+of 384-logical-pixel vertical textures covering the viewport plus one tile of
+overscan. A newly visible tile is generated from that retained template, so a
+pure scroll does not upload a DisplayList, rerasterize text in already-resident
+tiles, recreate one content-sized texture, or re-upload images. Content damage
+updates only intersecting tiles; offscreen patches are applied when their tile
+is first materialized. Complete-scene replacement explicitly republishes the
+cache source and releases obsolete tile namespaces transactionally.
+
 ### `lcl::ui::MeasuredWidget`
 
 Custom leaf widgets with intrinsic content size derive from `MeasuredWidget`

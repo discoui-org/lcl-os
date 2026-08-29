@@ -3,6 +3,7 @@
 #include "render/client_egl_context.hpp"
 #include "render/raster_renderer.hpp"
 #include "render/retained_output_damage.hpp"
+#include "render/retained_scroll_tiles.hpp"
 
 #include <algorithm>
 #include <array>
@@ -125,7 +126,7 @@ struct SurfaceState {
     SurfaceGrant grant{};
     std::unordered_map<uint64_t, RetainedNodeState> retainedNodes;
     uint64_t retainedRootId{0};
-    std::optional<lcl::graphics::DisplayList> scrollCompositionTemplate;
+    lcl::render::RetainedScrollTileCache scrollTiles;
     std::unordered_map<ImageKey, ImageResource, ImageHash> images;
     std::unordered_map<uint64_t, uint64_t> cachedLayerNamespaces;
     std::array<LayerSlot, 3> slots;
@@ -432,29 +433,6 @@ const RetainedNodeState* findRetainedNode(
     return found == nodes.end() ? nullptr : &found->second;
 }
 
-bool isScrollViewport(const RetainedNodeState& node) noexcept {
-    constexpr uint32_t kScrollViewportReason = 1u << 4u;
-    return (node.boundaryReasons & kScrollViewportReason) != 0;
-}
-
-bool isScrollContent(const RetainedNodeState& node) noexcept {
-    constexpr uint32_t kScrollContentReason = 1u << 5u;
-    return (node.boundaryReasons & kScrollContentReason) != 0;
-}
-
-bool isWithinScrollContent(
-        const std::unordered_map<uint64_t, RetainedNodeState>& nodes,
-        uint64_t id) noexcept {
-    const auto* node = findRetainedNode(nodes, id);
-    size_t depth = 0;
-    while (node && depth++ <= nodes.size()) {
-        if (isScrollContent(*node)) return true;
-        if (node->parentId == 0) return false;
-        node = findRetainedNode(nodes, node->parentId);
-    }
-    return false;
-}
-
 bool isScrollTranslationProperties(
         const NodeMutation& mutation,
         const std::unordered_map<uint64_t, RetainedNodeState>& nodes) noexcept {
@@ -513,94 +491,42 @@ bool isScrollTransformOnly(
         });
 }
 
-std::optional<lcl::graphics::DisplayList> makeScrollCompositionTemplate(
-        const std::vector<lcl::graphics::DisplayCommand>& commands) {
-    auto composition =
-        std::make_shared<std::vector<lcl::graphics::DisplayCommand>>();
-    composition->reserve(commands.size());
-    size_t cachedLayerDepth = 0;
-    bool drawsCachedLayer = false;
-    for (const auto& command : commands) {
-        if (std::holds_alternative<
-                lcl::graphics::BeginCachedLayerCommand>(command)) {
-            ++cachedLayerDepth;
-            continue;
-        }
-        if (std::holds_alternative<
-                lcl::graphics::EndCachedLayerCommand>(command)) {
-            if (cachedLayerDepth == 0) return std::nullopt;
-            --cachedLayerDepth;
-            continue;
-        }
-        if (cachedLayerDepth != 0) continue;
-        if (std::holds_alternative<
-                lcl::graphics::DrawCachedLayerCommand>(command)) {
-            drawsCachedLayer = true;
-        }
-        composition->push_back(command);
-    }
-    if (cachedLayerDepth != 0 || !drawsCachedLayer) return std::nullopt;
-    const auto immutable = std::shared_ptr<
-        const std::vector<lcl::graphics::DisplayCommand>>(composition);
-    return lcl::graphics::DisplayList(immutable);
+bool isScrollViewport(const RetainedNodeState& node) noexcept {
+    return (node.boundaryReasons & (1u << 4u)) != 0;
 }
 
-std::optional<lcl::graphics::DisplayList> patchScrollCompositionTemplate(
-        const SurfaceState& surface,
-        const std::unordered_map<uint64_t, RetainedNodeState>& nodes) {
-    constexpr uint32_t kScrollContentReason = 1u << 5u;
-    if (!surface.scrollCompositionTemplate) return std::nullopt;
+bool isScrollContent(const RetainedNodeState& node) noexcept {
+    return (node.boundaryReasons & (1u << 5u)) != 0;
+}
 
-    std::unordered_map<uint64_t, const RetainedNodeState*> contentByLayer;
-    for (const auto& [_, node] : nodes) {
-        if ((node.boundaryReasons & kScrollContentReason) == 0 ||
-            node.parentId == 0) {
-            continue;
-        }
-        const auto layer = surface.cachedLayerNamespaces.find(node.parentId);
-        if (layer != surface.cachedLayerNamespaces.end()) {
-            contentByLayer.emplace(layer->second, &node);
-        }
+bool isWithinScrollContent(
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes,
+        uint64_t id) noexcept {
+    const auto* node = findRetainedNode(nodes, id);
+    size_t depth = 0;
+    while (node && depth++ <= nodes.size()) {
+        if (isScrollContent(*node)) return true;
+        if (node->parentId == 0) return false;
+        node = findRetainedNode(nodes, node->parentId);
     }
-    if (contentByLayer.empty()) return std::nullopt;
-
-    auto commands = std::make_shared<std::vector<
-        lcl::graphics::DisplayCommand>>(
-            surface.scrollCompositionTemplate->commands());
-    bool patched = false;
-    for (auto& command : *commands) {
-        auto* draw = std::get_if<
-            lcl::graphics::DrawCachedLayerCommand>(&command);
-        if (!draw) continue;
-        const auto content = contentByLayer.find(draw->id);
-        if (content == contentByLayer.end()) continue;
-        const auto& node = *content->second;
-        draw->destination = {
-            node.layoutX + node.translationX,
-            node.layoutY + node.translationY,
-            node.layoutWidth, node.layoutHeight};
-        patched = true;
-    }
-    if (!patched) return std::nullopt;
-    const auto immutable = std::shared_ptr<
-        const std::vector<lcl::graphics::DisplayCommand>>(commands);
-    return lcl::graphics::DisplayList(immutable);
+    return false;
 }
 
 bool invalidatesScrollCompositionTemplate(
-        const SurfaceState& surface,
         std::span<const NodeMutation> mutations,
+        const std::unordered_map<uint64_t, RetainedNodeState>& currentNodes,
         const std::unordered_map<uint64_t, RetainedNodeState>& nextNodes)
         noexcept {
     for (const auto& mutation : mutations) {
         if (mutation.type ==
                 lcl::raster_protocol::NodeMutationType::RemoveNode) {
             const auto* existing = findRetainedNode(
-                surface.retainedNodes, mutation.node.id);
-            if (!existing) return true;
-            if (isScrollViewport(*existing) || isScrollContent(*existing) ||
-                !isWithinScrollContent(
-                    surface.retainedNodes, mutation.node.id)) return true;
+                currentNodes, mutation.node.id);
+            if (!existing || isScrollViewport(*existing) ||
+                isScrollContent(*existing) ||
+                !isWithinScrollContent(currentNodes, mutation.node.id)) {
+                return true;
+            }
             continue;
         }
         const auto* next = findRetainedNode(nextNodes, mutation.node.id);
@@ -611,7 +537,9 @@ bool invalidatesScrollCompositionTemplate(
                 (mutation.type ==
                      lcl::raster_protocol::NodeMutationType::SetProperties &&
                  !isScrollTranslationProperties(
-                     mutation, surface.retainedNodes))) return true;
+                     mutation, currentNodes))) {
+                return true;
+            }
             continue;
         }
         if (!isWithinScrollContent(nextNodes, mutation.node.id)) return true;
@@ -956,8 +884,6 @@ private:
                      const std::unordered_map<
                          uint64_t, RetainedNodeState>& nextNodes,
                      int displayListFd) {
-        const bool scrollTransformTransaction = isScrollTransformOnly(
-            submit, mutations, surface.retainedNodes);
         if (!replacesRetainedScene(submit) &&
             !retainedBaseMatches(
                 submit, surface.gpuFrameSerial,
@@ -969,8 +895,30 @@ private:
                 surface.softwareHeight, surface.softwareScale)) {
             return false;
         }
+        auto nextLayerNamespaces = surface.cachedLayerNamespaces;
+        std::vector<uint64_t> genericLayerEvictions;
+        if (replacesRetainedScene(submit)) {
+            genericLayerEvictions.reserve(nextLayerNamespaces.size());
+            for (const auto& [_, layerId] : nextLayerNamespaces) {
+                if (layerId != 0) genericLayerEvictions.push_back(layerId);
+            }
+            nextLayerNamespaces.clear();
+        } else {
+            for (const NodeMutation& mutation : mutations) {
+                if (mutation.type !=
+                    lcl::raster_protocol::NodeMutationType::RemoveNode) {
+                    continue;
+                }
+                const auto layer = nextLayerNamespaces.find(mutation.node.id);
+                if (layer == nextLayerNamespaces.end()) continue;
+                if (layer->second != 0) {
+                    genericLayerEvictions.push_back(layer->second);
+                }
+                nextLayerNamespaces.erase(layer);
+            }
+        }
+        std::vector<uint64_t> createdNamespaceLayers;
         std::shared_ptr<std::vector<lcl::graphics::DisplayCommand>> commands;
-        std::optional<lcl::graphics::DisplayList> nextCompositionTemplate;
         if (submit.displayListSize != 0) {
             std::vector<uint8_t> wireBytes(submit.displayListSize);
             if (!readExact(
@@ -1004,51 +952,64 @@ private:
                                lcl::graphics::BeginCachedLayerCommand>(
                                    &command)) {
                     auto [found, inserted] =
-                        surface.cachedLayerNamespaces.try_emplace(
+                        nextLayerNamespaces.try_emplace(
                             begin->id, 0);
-                    if (inserted) found->second = m_nextCachedLayerId++;
+                    if (inserted) {
+                        found->second = m_nextCachedLayerId++;
+                        createdNamespaceLayers.push_back(found->second);
+                    }
                     begin->id = found->second;
                 } else if (auto* draw = std::get_if<
                                lcl::graphics::DrawCachedLayerCommand>(
                                    &command)) {
                     auto [found, inserted] =
-                        surface.cachedLayerNamespaces.try_emplace(
+                        nextLayerNamespaces.try_emplace(
                             draw->id, 0);
-                    if (inserted) found->second = m_nextCachedLayerId++;
+                    if (inserted) {
+                        found->second = m_nextCachedLayerId++;
+                        createdNamespaceLayers.push_back(found->second);
+                    }
                     draw->id = found->second;
                 }
             }
-            nextCompositionTemplate = makeScrollCompositionTemplate(*commands);
-        } else {
-            const auto patched = patchScrollCompositionTemplate(
-                surface, nextNodes);
-            if (!patched) return false;
-            commands = std::make_shared<std::vector<
-                lcl::graphics::DisplayCommand>>(patched->commands());
         }
 
-        const auto displayCommands = std::shared_ptr<
-            const std::vector<lcl::graphics::DisplayCommand>>(commands);
-        const lcl::graphics::DisplayList displayList(displayCommands);
-        const bool invalidatesCompositionTemplate =
+        const bool scrollTransformTransaction = isScrollTransformOnly(
+            submit, mutations, surface.retainedNodes);
+        const bool invalidatesScrollTemplate =
             invalidatesScrollCompositionTemplate(
-                surface, mutations, nextNodes);
-        const auto commitCompositionTemplate = [&] {
-            if (replacesRetainedScene(submit)) {
-                surface.scrollCompositionTemplate =
-                    std::move(nextCompositionTemplate);
-            } else if (scrollTransformTransaction &&
-                       nextCompositionTemplate) {
-                // A normal DisplayList scroll frame is the recovery path after
-                // an outer composition change invalidated the old template.
-                surface.scrollCompositionTemplate =
-                    std::move(nextCompositionTemplate);
-            } else if (invalidatesCompositionTemplate) {
-                surface.scrollCompositionTemplate.reset();
+                mutations, surface.retainedNodes, nextNodes);
+        auto tiled = lcl::render::RetainedScrollTileCache::prepare(
+            surface.scrollTiles,
+            commands ? commands.get() : nullptr,
+            nextNodes, nextLayerNamespaces,
+            [this] { return m_nextCachedLayerId++; },
+            replacesRetainedScene(submit), scrollTransformTransaction,
+            invalidatesScrollTemplate);
+        if (!tiled) return false;
+        const lcl::graphics::DisplayList& displayList = tiled->displayList;
+        const auto releaseCachedLayers = [&](std::span<const uint64_t> ids) {
+            for (const uint64_t id : ids) {
+                if (surface.gpuRenderer) {
+                    surface.gpuRenderer->releaseCachedDisplayLayer(id);
+                }
+                if (surface.softwareRenderer) {
+                    surface.softwareRenderer->releaseCachedDisplayLayer(id);
+                }
             }
         };
+        const auto commitTiledState = [&] {
+            releaseCachedLayers(tiled->evictedLayerIds);
+            releaseCachedLayers(genericLayerEvictions);
+            surface.scrollTiles = std::move(*tiled->next);
+            surface.cachedLayerNamespaces = std::move(nextLayerNamespaces);
+        };
+        const auto discardPreparedCaches = [&] {
+            releaseCachedLayers(tiled->createdLayerIds);
+            releaseCachedLayers(createdNamespaceLayers);
+        };
         if (rasterGpuFrame(surface, submit, displayList)) {
-            commitCompositionTemplate();
+            commitTiledState();
             return true;
         }
 
@@ -1056,10 +1017,14 @@ private:
                 submit, surface.softwareFrameSerial,
                 surface.softwareGeometryGeneration, surface.softwareWidth,
                 surface.softwareHeight, surface.softwareScale)) {
+            discardPreparedCaches();
             return false;
         }
         LayerSlot* slot = acquireSlot(surface, submit);
-        if (!slot) return false;
+        if (!slot) {
+            discardPreparedCaches();
+            return false;
+        }
         const size_t pixelCount =
             static_cast<size_t>(slot->width) * slot->height;
         const bool recreateSoftwareScene = !surface.softwareRenderer ||
@@ -1074,6 +1039,7 @@ private:
                     surface.softwarePixels.data())) {
                 surface.softwareRenderer.reset();
                 slot->busy = false;
+                discardPreparedCaches();
                 return false;
             }
             surface.softwareRenderer->setRetainsFrameBacking(true);
@@ -1117,12 +1083,13 @@ private:
                 m_compositorFd, Opcode::LayerReady, ready, slot->fd)) {
             slot->busy = false;
             surface.softwareFrameSerial = 0;
+            discardPreparedCaches();
             return false;
         }
         surface.softwareFrameSerial = submit.frameSerial;
         surface.softwareGeometryGeneration = submit.geometryGeneration;
         surface.softwareScale = submit.bufferScale;
-        commitCompositionTemplate();
+        commitTiledState();
         return true;
     }
 

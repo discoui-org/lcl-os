@@ -44,6 +44,9 @@ public:
     bool onScroll(const PointerEvent& event) override;
 
 private:
+    friend class WindowApp;
+
+    void invalidateRetainedCache() noexcept;
     void clampScrollOffset();
     void resetTouchPan() noexcept;
 

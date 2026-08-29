@@ -50,6 +50,19 @@ The LCL architecture consists of 5 main decoupled layers:
   presentation loop. The checked-in host implementation currently exercises
   the memfd/SHM backend; DMA-BUF and AHardwareBuffer allocation/import are the
   remaining platform-backend implementations, not alternate surface protocols.
+  Rasterd retains the accepted node revisions, logical cached-layer bodies,
+  damage patches, image resources, layer namespaces, and the last immutable
+  output base per surface. Cached-layer namespace changes are transactional:
+  failed frames do not advance ownership, while removed/replaced nodes release
+  their raster cache only after a new immutable layer succeeds.
+* **Retained ScrollView tiles:** A ScrollContent cached-layer body is retained
+  once in rasterd and split into 384-logical-pixel vertical tiles. Only tiles
+  intersecting the viewport plus one tile of overscan remain resident. Pure
+  scroll commits carry only the ScrollContent transform; rasterd composes
+  resident tiles and lazily creates an entering tile from its retained logical
+  template without another client DisplayList or image upload. Damage-scoped
+  content patches are retained and applied both to resident tiles and to a tile
+  first created later. Distant and removed tiles are explicitly evicted.
 * **Font & Text Engine:** Skia owns packaged typeface loading, glyph advances,
   ascent/descent/line-height metrics, UTF-8 drawing, and GPU/CPU rasterization.
   Layout and drawing use the same prepared `SkFont`; no second font rasterizer
