@@ -136,3 +136,47 @@ TEST(JsRuntimeTest, GenericContainerSupportsDeclarativeInteractionStylesAndClick
     )JS"));
     js.shutdown();
 }
+
+TEST(JsRuntimeTest, TypedControlsKeepTheirNativeBindingSurface) {
+    JsRuntime js;
+    ASSERT_TRUE(js.initialize());
+
+    EXPECT_TRUE(js.evalCode(R"JS(
+        const card = new LCL.Container();
+        card.setBackgroundColor([20, 24, 32, 255]);
+        card.setBorderColor({r: 40, g: 48, b: 64, a: 255});
+        card.setBorderWidth(1);
+        card.setBorderRadius(12, 3);
+
+        const label = new LCL.Text("initial");
+        label.setText("updated");
+        label.setFontSize(16);
+        label.setTextColor(240, 242, 246, 255);
+        if (label.getText() !== "updated") throw new Error("Text binding lost its value");
+
+        const button = new LCL.Button("Save");
+        button.setLabel("Apply");
+        if (button.getLabel() !== "Apply") throw new Error("Button label binding lost");
+        button.setBackgroundColor(42, 49, 60, 255);
+
+        const surface = new LCL.BackdropSurface();
+        surface.setInteractive(false);
+        surface.setEffectBounds("outer-surface");
+        surface.addFilter("blur", 16);
+        surface.setTint(10, 20, 30, 128);
+
+        const toggle = new LCL.Toggle("Enabled", true);
+        if (!toggle.getValue() || toggle.getLabel() !== "Enabled") throw new Error("Toggle binding lost");
+        const slider = new LCL.Slider(0.25, 0, 1, 0.05);
+        slider.setOnChange(() => {});
+        slider.setOnEditingChanged(() => {});
+        if (Math.abs(slider.getStep() - 0.05) > 0.0001) throw new Error("Slider binding lost");
+        const progress = new LCL.ProgressView(3, 4);
+        if (progress.getValue() !== 3 || progress.getTotal() !== 4) throw new Error("Progress binding lost");
+        const tabs = new LCL.TabView();
+        tabs.setTabViewStyle("tab-bar");
+        tabs.setOnChange(() => {});
+    )JS"));
+
+    js.shutdown();
+}

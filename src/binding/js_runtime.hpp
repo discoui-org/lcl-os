@@ -41,8 +41,6 @@ public:
     static void printException(JSContext* ctx);
 
 private:
-    void registerLclBindings();
-
     JSRuntime* m_rt{nullptr};
     JSContext* m_ctx{nullptr};
     bool m_initialized{false};

@@ -172,6 +172,7 @@ def check_root() -> bool:
     if "uid=0" in direct.stdout:
         ROOT_SHELL_MODE = "adbd"
         log("Root access confirmed through adbd (uid=0).")
+        ensure_permissive_selinux()
         return True
 
     root_attempt = run_adb("root", capture=True, check=False)
@@ -182,6 +183,7 @@ def check_root() -> bool:
     if "uid=0" in direct.stdout:
         ROOT_SHELL_MODE = "adbd"
         log("Root access confirmed after adb root (uid=0).")
+        ensure_permissive_selinux()
         return True
 
     via_su = subprocess.run(
@@ -193,6 +195,7 @@ def check_root() -> bool:
     if "uid=0" in via_su.stdout:
         ROOT_SHELL_MODE = "su"
         log("Root access confirmed through su (uid=0).")
+        ensure_permissive_selinux()
         return True
 
     details = " | ".join(
@@ -205,6 +208,14 @@ def check_root() -> bool:
     err("Root access NOT available. Output: " + details)
     err("  -> This target needs either root adbd or a working su implementation.")
     return False
+
+
+def ensure_permissive_selinux() -> None:
+    """Ensure SELinux is permissive so kernel loop workers and chroot mounts can operate."""
+    status = adb_shell("getenforce", as_root=True)
+    if status.stdout.strip().lower() == "enforcing":
+        adb_shell("setenforce 0", as_root=True)
+        log("SELinux set to Permissive mode for loop-mount and runtime isolation.")
 
 
 def configure_target_for_abi(abi: str) -> None:

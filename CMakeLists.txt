@@ -496,6 +496,12 @@ if(ANDROID)
     add_executable(lcl-js
         src/tools/js_main.cpp
         src/binding/js_runtime.cpp
+        src/binding/js_bindings.cpp
+        src/binding/js_binding_support.cpp
+        src/binding/js_animation_bindings.cpp
+        src/binding/js_widget_bindings.cpp
+        src/binding/js_control_bindings.cpp
+        src/binding/js_window_app_bindings.cpp
     )
     target_include_directories(lcl-js PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -739,6 +745,12 @@ else()
     add_executable(lcl-js
         src/tools/js_main.cpp
         src/binding/js_runtime.cpp
+        src/binding/js_bindings.cpp
+        src/binding/js_binding_support.cpp
+        src/binding/js_animation_bindings.cpp
+        src/binding/js_widget_bindings.cpp
+        src/binding/js_control_bindings.cpp
+        src/binding/js_window_app_bindings.cpp
     )
 
     target_include_directories(lcl-js PRIVATE
@@ -813,6 +825,12 @@ else()
             src/platform/android/android_input_backend.cpp
             src/render/window_manager.cpp
             src/binding/js_runtime.cpp
+            src/binding/js_bindings.cpp
+            src/binding/js_binding_support.cpp
+            src/binding/js_animation_bindings.cpp
+            src/binding/js_widget_bindings.cpp
+            src/binding/js_control_bindings.cpp
+            src/binding/js_window_app_bindings.cpp
         )
 
         add_executable(lcl_ui_boundary_smoke
