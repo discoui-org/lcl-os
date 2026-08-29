@@ -32,6 +32,7 @@ void Widget::addChild(std::unique_ptr<Widget> child) {
     // Tree membership changes the retained subtree identity, but the new
     // child has no synchronized geometry yet. syncLayout() will damage its
     // first real presentation bounds.
+    ++m_localPaintRevision;
     advancePaintRevision();
 }
 
@@ -256,11 +257,13 @@ void Widget::removeChild(Widget* child) {
         (*it)->m_parent = nullptr;
         m_children.erase(it);
         if (m_renderPass) m_renderPass->addDirtyRect(previousBounds);
+        ++m_localPaintRevision;
         advancePaintRevision();
     }
 }
 
 void Widget::invalidatePaint() {
+    ++m_localPaintRevision;
     if (m_renderPass) {
         m_renderPass->addDirtyRect(getVisiblePresentationPaintBounds());
     }
@@ -268,6 +271,7 @@ void Widget::invalidatePaint() {
 }
 
 void Widget::invalidatePaint(const graphics::RectF& damageRect) {
+    ++m_localPaintRevision;
     if (m_renderPass) {
         m_renderPass->addDirtyRect(
             damageRect.intersection(getVisiblePresentationPaintBounds()));
@@ -286,6 +290,7 @@ void Widget::invalidatePresentation() {
 }
 
 void Widget::invalidatePresentation(const graphics::RectF& previousBounds) {
+    ++m_localPresentationRevision;
     ++m_presentationRevision;
     if (m_renderPass) {
         m_renderPass->addDirtyRect(previousBounds);

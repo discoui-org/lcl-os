@@ -27,6 +27,7 @@ void RenderPass::addDirtyRect(const graphics::RectF& rect) {
 
 void RenderPass::clear() {
     m_dirtyRects.clear();
+    m_frameDamageRects.clear();
     m_inPass = false;
 }
 
@@ -41,14 +42,20 @@ graphics::RectF RenderPass::getDamageRect() const {
     return damage;
 }
 
-void RenderPass::begin(graphics::Canvas& canvas) {
+void RenderPass::begin(
+        graphics::Canvas& canvas,
+        const std::vector<graphics::RectF>& frameDamageRects) {
     (void)canvas;
+    m_frameDamageRects = frameDamageRects;
+    ++m_passSerial;
+    if (m_passSerial == 0) ++m_passSerial;
     m_inPass = true;
 }
 
 void RenderPass::end(graphics::Canvas& canvas) {
     (void)canvas;
     m_inPass = false;
+    m_frameDamageRects.clear();
 }
 
 } // namespace lcl::ui

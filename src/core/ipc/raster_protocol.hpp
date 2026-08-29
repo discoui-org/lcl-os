@@ -8,14 +8,14 @@
 namespace lcl::raster_protocol {
 
 inline constexpr uint32_t kMagic = 0x5254434c; // "LCTR"
-inline constexpr uint32_t kVersion = 4;
+inline constexpr uint32_t kVersion = 7;
 inline constexpr uint32_t kMaxPayload = 1024u * 1024u;
 
 enum class Opcode : uint32_t {
     RegisterSurface = 1,
     RevokeSurface = 2,
     UploadImage = 3,
-    SubmitFrame = 4,
+    CommitTransaction = 4,
     LayerReady = 5,
     ReleaseLayer = 6,
     FrameDiscarded = 7,
@@ -58,7 +58,57 @@ struct UploadImage {
     uint64_t byteSize{0};
 };
 
-struct SubmitFrame {
+enum class NodeMutationType : uint32_t {
+    CreateNode = 1,
+    UpdateContent = 2,
+    SetProperties = 3,
+    RemoveNode = 4,
+};
+
+inline constexpr uint32_t kNodeHasClip = 1u << 0;
+
+/**
+ * Backend-neutral retained-node state carried only between lcl-ui and rasterd.
+ * Coordinates remain logical; rasterd applies CommitTransaction::bufferScale.
+ */
+struct RetainedNodeState {
+    uint64_t id{0};
+    uint64_t parentId{0};
+    uint64_t contentRevision{0};
+    uint64_t propertyRevision{0};
+    uint32_t boundaryReasons{0};
+    uint32_t siblingIndex{0};
+    uint32_t flags{0};
+    uint32_t reserved{0};
+    float layoutX{0.0f};
+    float layoutY{0.0f};
+    float layoutWidth{0.0f};
+    float layoutHeight{0.0f};
+    float presentationX{0.0f};
+    float presentationY{0.0f};
+    float presentationWidth{0.0f};
+    float presentationHeight{0.0f};
+    float clipX{0.0f};
+    float clipY{0.0f};
+    float clipWidth{0.0f};
+    float clipHeight{0.0f};
+    float opacity{1.0f};
+    float translationX{0.0f};
+    float translationY{0.0f};
+    float scaleX{1.0f};
+    float scaleY{1.0f};
+    float rotationRadians{0.0f};
+    float originX{0.5f};
+    float originY{0.5f};
+};
+
+struct NodeMutation {
+    NodeMutationType type{NodeMutationType::CreateNode};
+    uint32_t reserved{0};
+    RetainedNodeState node{};
+};
+
+struct CommitTransaction {
     SurfaceGrant grant{};
     uint64_t configureSerial{0};
     uint64_t frameSerial{0};
@@ -72,11 +122,14 @@ struct SubmitFrame {
     float damageY{0.0f};
     float damageWidth{0.0f};
     float damageHeight{0.0f};
+    /** Zero only for a validated retained-property commit; then no fd exists. */
     uint32_t displayListSize{0};
+    uint32_t mutationCount{0};
     uint32_t flags{0};
+    uint32_t reserved{0};
 };
 
-inline constexpr uint32_t kSubmitReplacesScene = 1u << 0;
+inline constexpr uint32_t kTransactionReplacesTree = 1u << 0;
 
 enum class LayerTransport : uint32_t {
     Shm = 0,
@@ -87,6 +140,8 @@ enum class LayerTransport : uint32_t {
 struct LayerReady {
     SurfaceGrant grant{};
     uint64_t layerId{0};
+    /** Stable identity of one reusable producer buffer; zero for SHM layers. */
+    uint64_t bufferId{0};
     uint64_t configureSerial{0};
     uint64_t frameSerial{0};
     uint64_t geometryGeneration{0};
@@ -135,6 +190,14 @@ struct FrameDiscarded {
 
 bool sendPacket(int fd, Opcode opcode, const void* payload,
                 uint32_t payloadSize, int passedFd = -1);
+
+bool sendCommitTransaction(
+    int fd, const CommitTransaction& transaction,
+    std::span<const NodeMutation> mutations, int displayListFd);
+
+bool decodeCommitTransaction(
+    const Header& header, std::span<const uint8_t> payload,
+    CommitTransaction& transaction, std::vector<NodeMutation>& mutations);
 
 template <typename T>
 bool sendPacket(int fd, Opcode opcode, const T& payload, int passedFd = -1) {

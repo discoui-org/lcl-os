@@ -1048,6 +1048,98 @@ bool RasterRenderer::copyFrameRegionToCachedLayer(
     return true;
 }
 
+bool RasterRenderer::copyFrameDamageToCachedLayer(
+        uint32_t framebuffer, uint32_t texture,
+        uint32_t* softwarePixels, uint32_t pixelWidth, uint32_t pixelHeight,
+        const RasterRect& cachedLogicalBounds,
+        const RasterRect& damageLogicalBounds) {
+    if (!m_initialized || pixelWidth == 0 || pixelHeight == 0 ||
+        cachedLogicalBounds.width <= 0.0f ||
+        cachedLogicalBounds.height <= 0.0f ||
+        damageLogicalBounds.width <= 0.0f ||
+        damageLogicalBounds.height <= 0.0f) {
+        return false;
+    }
+
+    const lcl::graphics::RectF cached{
+        cachedLogicalBounds.x, cachedLogicalBounds.y,
+        cachedLogicalBounds.width, cachedLogicalBounds.height};
+    const lcl::graphics::RectF damage{
+        damageLogicalBounds.x, damageLogicalBounds.y,
+        damageLogicalBounds.width, damageLogicalBounds.height};
+    const auto clipped = cached.intersection(damage);
+    if (clipped.isEmpty()) return true;
+
+    const RasterRect source = scaleRect({
+        clipped.x, clipped.y, clipped.width, clipped.height});
+    const int sourceX = std::clamp(
+        static_cast<int>(std::floor(source.x)), 0,
+        static_cast<int>(m_width));
+    const int sourceY = std::clamp(
+        static_cast<int>(std::floor(source.y)), 0,
+        static_cast<int>(m_height));
+    const int sourceRight = std::clamp(
+        static_cast<int>(std::ceil(source.x + source.width)), sourceX,
+        static_cast<int>(m_width));
+    const int sourceBottom = std::clamp(
+        static_cast<int>(std::ceil(source.y + source.height)), sourceY,
+        static_cast<int>(m_height));
+    const int copyWidth = sourceRight - sourceX;
+    const int copyHeight = sourceBottom - sourceY;
+    if (copyWidth <= 0 || copyHeight <= 0) return true;
+
+    const RasterRect cachedDevice = scaleRect(cachedLogicalBounds);
+    const int destinationX = std::clamp(
+        sourceX - static_cast<int>(std::floor(cachedDevice.x)), 0,
+        static_cast<int>(pixelWidth));
+    const int destinationYTop = std::clamp(
+        sourceY - static_cast<int>(std::floor(cachedDevice.y)), 0,
+        static_cast<int>(pixelHeight));
+    const int boundedWidth = std::min(
+        copyWidth, static_cast<int>(pixelWidth) - destinationX);
+    const int boundedHeight = std::min(
+        copyHeight, static_cast<int>(pixelHeight) - destinationYTop);
+    if (boundedWidth <= 0 || boundedHeight <= 0) return true;
+
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType == RasterBackend::OpenGL_EGL) {
+        if (!m_eglBackend || framebuffer == 0 || texture == 0 ||
+            activeSceneFBO() == 0) return false;
+        m_eglBackend->makeCurrent();
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glCopyTexSubImage2D(
+            GL_TEXTURE_2D, 0,
+            destinationX,
+            static_cast<int>(pixelHeight) -
+                (destinationYTop + boundedHeight),
+            sourceX,
+            static_cast<int>(m_height) - (sourceY + boundedHeight),
+            boundedWidth, boundedHeight);
+        glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+        glViewport(0, 0, m_width, m_height);
+        applyScissorState();
+        return true;
+    }
+#else
+    (void)framebuffer;
+    (void)texture;
+#endif
+
+    const uint32_t* sourcePixels = getRasterBuffer();
+    if (!sourcePixels || !softwarePixels) return false;
+    for (int row = 0; row < boundedHeight; ++row) {
+        const auto sourceOffset =
+            static_cast<size_t>(sourceY + row) * m_width + sourceX;
+        const auto destinationOffset =
+            static_cast<size_t>(destinationYTop + row) * pixelWidth +
+            destinationX;
+        std::copy_n(sourcePixels + sourceOffset, boundedWidth,
+                    softwarePixels + destinationOffset);
+    }
+    return true;
+}
+
 void RasterRenderer::drawCachedLayerTexture(uint32_t texture,
                                           const RasterRect& destination,
                                           float opacity) {
@@ -1219,6 +1311,16 @@ void RasterRenderer::shutdown() {
     const bool canDeleteGlResources =
         m_backendType == RasterBackend::OpenGL_EGL && m_eglBackend &&
         m_eglBackend->makeCurrent();
+    if (canDeleteGlResources) {
+        for (const auto& [_, cached] : m_cachedDmaBufTextures) {
+            if (cached.texture != 0) {
+                m_eglBackend->releaseTexture(cached.texture);
+            }
+        }
+    }
+    m_cachedDmaBufTextures.clear();
+    m_cachedDmaBufIdsByTexture.clear();
+    m_dmaBufTextureUseCounter = 0;
     for (const auto& [_, cached] : m_cachedShmTextures) {
         if (canDeleteGlResources && cached.texture > 0) {
             glDeleteTextures(1, &cached.texture);
@@ -1257,6 +1359,7 @@ void RasterRenderer::shutdown() {
     m_glExternalFrameFBO = 0;
     m_glExternalFrameTexture = 0;
     m_glOutputFrameFBO = 0;
+    m_outputFrameDamageRect = std::nullopt;
     if (m_glFBOReady) {
         if (canDeleteGlResources) {
             glDeleteFramebuffers(2, m_glFBO);
@@ -1852,12 +1955,18 @@ void RasterRenderer::setFrameDamageRect(
     applyScissorState();
 }
 
+void RasterRenderer::setOutputFrameDamageRect(
+    const std::optional<RasterRect>& damage) {
+    m_outputFrameDamageRect = damage;
+}
+
 void RasterRenderer::beginFrame() {
     if (!m_initialized) return;
     ++m_shmTextureFrameSerial;
     if (m_shmTextureFrameSerial == 0) m_shmTextureFrameSerial = 1;
     m_clipRect = std::nullopt;
     m_frameDamageRect = std::nullopt;
+    m_outputFrameDamageRect = std::nullopt;
     applyScissorState();
 
 #ifndef LCL_SOFTWARE_ONLY
@@ -1927,22 +2036,50 @@ void RasterRenderer::endFrame() {
                 m_eglBackend->present();
             }
         } else if (m_glOutputFrameFBO != 0 && m_glSceneTexture != 0) {
-            // DMA-BUF slots rotate and cannot retain authoritative content.
-            // Copy the retained scene into the acquired slot before export.
+            // Each rotating DMA-BUF retains its own last complete scene. The
+            // producer supplies the union of patches missed while this slot
+            // was compositor-owned; a missing union requests a full copy.
             glBindFramebuffer(GL_FRAMEBUFFER, m_glOutputFrameFBO);
             glViewport(0, 0, m_width, m_height);
+            int left = 0;
+            int top = 0;
+            int right = static_cast<int>(m_width);
+            int bottom = static_cast<int>(m_height);
+            if (m_outputFrameDamageRect) {
+                const RasterRect deviceDamage = scaleRect(
+                    *m_outputFrameDamageRect);
+                left = std::clamp(
+                    static_cast<int>(std::floor(deviceDamage.x)), 0,
+                    static_cast<int>(m_width));
+                top = std::clamp(
+                    static_cast<int>(std::floor(deviceDamage.y)), 0,
+                    static_cast<int>(m_height));
+                right = std::clamp(
+                    static_cast<int>(std::ceil(
+                        deviceDamage.x + deviceDamage.width)),
+                    0, static_cast<int>(m_width));
+                bottom = std::clamp(
+                    static_cast<int>(std::ceil(
+                        deviceDamage.y + deviceDamage.height)),
+                    0, static_cast<int>(m_height));
+            }
+            if (left >= right || top >= bottom) {
+                left = top = 0;
+                right = static_cast<int>(m_width);
+                bottom = static_cast<int>(m_height);
+            }
             glEnable(GL_SCISSOR_TEST);
-            glScissor(0, 0, static_cast<GLsizei>(m_width),
-                      static_cast<GLsizei>(m_height));
+            glScissor(left, static_cast<int>(m_height) - bottom,
+                      right - left, bottom - top);
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-            glDisable(GL_SCISSOR_TEST);
             const float uMax = static_cast<float>(m_width) /
                 static_cast<float>(std::max(1u, m_glSceneCapacityWidth));
             const float vMax = static_cast<float>(m_height) /
                 static_cast<float>(std::max(1u, m_glSceneCapacityHeight));
             drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height,
                             1.0f, uMax, vMax);
+            glDisable(GL_SCISSOR_TEST);
             glFlush();
         } else if (m_targetPixels) {
             glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
@@ -1979,6 +2116,118 @@ uint32_t RasterRenderer::importDmaBuf(const lcl::platform::DmaBufDescriptor& des
     (void)descriptor;
 #endif
     return 0;
+}
+
+uint32_t RasterRenderer::importDmaBuf(
+        uint64_t bufferId,
+        const lcl::platform::DmaBufDescriptor& descriptor) {
+    if (bufferId == 0) return importDmaBuf(descriptor);
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend) return 0;
+
+    ++m_dmaBufTextureUseCounter;
+    if (m_dmaBufTextureUseCounter == 0) ++m_dmaBufTextureUseCounter;
+    const auto matches = [&descriptor](const CachedDmaBufTexture& cached) {
+        return cached.width == descriptor.width &&
+            cached.height == descriptor.height &&
+            cached.stride == descriptor.stride &&
+            cached.format == descriptor.format &&
+            cached.modifier == descriptor.modifier;
+    };
+
+    auto found = m_cachedDmaBufTextures.find(bufferId);
+    if (found != m_cachedDmaBufTextures.end()) {
+        if (!matches(found->second)) {
+            // A stable identity can never change its storage description while
+            // referenced by a compositor frame. Reject a protocol collision;
+            // an idle stale entry may be replaced safely.
+            if (found->second.references != 0) return 0;
+            const uint32_t staleTexture = found->second.texture;
+            m_cachedDmaBufIdsByTexture.erase(staleTexture);
+            releaseTexture(staleTexture);
+            m_cachedDmaBufTextures.erase(found);
+        } else {
+            ++found->second.references;
+            found->second.lastUse = m_dmaBufTextureUseCounter;
+            trimDmaBufTextureCache(bufferId);
+            return found->second.texture;
+        }
+    }
+
+    const uint32_t texture = importDmaBuf(descriptor);
+    if (texture == 0) return 0;
+    m_cachedDmaBufTextures.emplace(bufferId, CachedDmaBufTexture{
+        texture, descriptor.width, descriptor.height, descriptor.stride,
+        descriptor.format, descriptor.modifier, 1,
+        m_dmaBufTextureUseCounter});
+    m_cachedDmaBufIdsByTexture[texture] = bufferId;
+    trimDmaBufTextureCache(bufferId);
+    return texture;
+#else
+    (void)descriptor;
+    return 0;
+#endif
+}
+
+void RasterRenderer::trimDmaBufTextureCache(uint64_t protectedBufferId) {
+#ifndef LCL_SOFTWARE_ONLY
+    constexpr uint64_t kMaxIdleImportAge = 8;
+    constexpr size_t kMaxCachedImports = 24;
+    const auto evict = [this](auto entry) {
+        const uint32_t texture = entry->second.texture;
+        m_cachedDmaBufIdsByTexture.erase(texture);
+        releaseTexture(texture);
+        m_cachedDmaBufTextures.erase(entry);
+    };
+
+    for (auto entry = m_cachedDmaBufTextures.begin();
+         entry != m_cachedDmaBufTextures.end();) {
+        const bool idle = entry->second.references == 0 &&
+            entry->first != protectedBufferId &&
+            m_dmaBufTextureUseCounter > entry->second.lastUse &&
+            m_dmaBufTextureUseCounter - entry->second.lastUse >
+                kMaxIdleImportAge;
+        if (!idle) {
+            ++entry;
+            continue;
+        }
+        auto stale = entry++;
+        evict(stale);
+    }
+
+    while (m_cachedDmaBufTextures.size() > kMaxCachedImports) {
+        auto oldest = m_cachedDmaBufTextures.end();
+        for (auto entry = m_cachedDmaBufTextures.begin();
+             entry != m_cachedDmaBufTextures.end(); ++entry) {
+            if (entry->second.references != 0 ||
+                entry->first == protectedBufferId) continue;
+            if (oldest == m_cachedDmaBufTextures.end() ||
+                entry->second.lastUse < oldest->second.lastUse) {
+                oldest = entry;
+            }
+        }
+        if (oldest == m_cachedDmaBufTextures.end()) break;
+        evict(oldest);
+    }
+#else
+    (void)protectedBufferId;
+#endif
+}
+
+void RasterRenderer::releaseDmaBufTexture(uint32_t texture) {
+    const auto identity = m_cachedDmaBufIdsByTexture.find(texture);
+    if (identity == m_cachedDmaBufIdsByTexture.end()) {
+        releaseTexture(texture);
+        return;
+    }
+    const auto cached = m_cachedDmaBufTextures.find(identity->second);
+    if (cached == m_cachedDmaBufTextures.end()) {
+        m_cachedDmaBufIdsByTexture.erase(identity);
+        releaseTexture(texture);
+        return;
+    }
+    if (cached->second.references > 0) --cached->second.references;
+    trimDmaBufTextureCache();
 }
 
 void RasterRenderer::releaseTexture(uint32_t texture) {

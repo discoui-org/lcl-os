@@ -42,6 +42,21 @@ graphics::RectF positionedAt(const graphics::RectF& rect,
     };
 }
 
+void addUpdateRegion(std::vector<graphics::RectF>& regions,
+                     const graphics::RectF& candidate) {
+    if (candidate.isEmpty()) return;
+    graphics::RectF merged = candidate;
+    for (auto it = regions.begin(); it != regions.end();) {
+        if (!merged.intersects(*it)) {
+            ++it;
+            continue;
+        }
+        merged = merged.unionWith(*it);
+        it = regions.erase(it);
+    }
+    regions.push_back(merged);
+}
+
 } // namespace
 
 ScrollView::ScrollView() {
@@ -90,14 +105,25 @@ void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRec
         m_cachedContentPaintRevision != contentRevision;
     const bool presentationChanged =
         m_cachedContentPresentationRevision != contentPresentationRevision;
+    const float deviceScale =
+        std::max(0.001f, canvas.renderTarget().deviceScale);
     const bool geometryChanged =
+        m_cachedContentX != contentBounds.x ||
+        m_cachedContentY != contentBounds.y ||
         m_cachedContentWidth != contentBounds.width ||
         m_cachedContentHeight != contentBounds.height ||
         m_cachedViewportWidth != m_absoluteBounds.width ||
-        m_cachedViewportHeight != m_absoluteBounds.height;
+        m_cachedViewportHeight != m_absoluteBounds.height ||
+        std::fabs(m_cachedDeviceScale - deviceScale) > 0.0001f;
     const bool subtreeAnimating = m_contentWidget->hasActiveAnimationInSubtree();
     const bool needsRaster = !m_cacheValid || geometryChanged ||
         paintChanged || presentationChanged;
+    const bool framePassActive = m_renderPass && m_renderPass->isInPass();
+    const uint64_t framePassSerial = framePassActive
+        ? m_renderPass->passSerial()
+        : 0;
+    const bool cacheUpdateProcessedForPass = framePassActive &&
+        m_lastCacheUpdatePassSerial == framePassSerial;
 
     const bool wasSubtreeAnimating = m_cachedSubtreeAnimating;
     const bool animationUpdate = subtreeAnimating ||
@@ -115,45 +141,88 @@ void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRec
     }
     m_cachedSubtreeAnimating = subtreeAnimating;
     m_cachedAnimationBounds = activeCacheBounds;
-    bool deferredOffscreenPresentationUpdate = false;
-    if (m_cacheValid && !geometryChanged && animationUpdate) {
-        const float rasterOutset = 1.0f /
-            std::max(0.001f, canvas.renderTarget().deviceScale);
-        graphics::RectF updateBounds{};
+    if (m_cacheValid && !geometryChanged &&
+        !cacheUpdateProcessedForPass &&
+        (paintChanged || presentationChanged || animationUpdate)) {
+        const float rasterOutset = 1.0f / deviceScale;
+
+        std::vector<graphics::RectF> presentationUpdateRegions;
+        const graphics::RectF visibleContentBounds = getPresentationBounds()
+            .intersection(presentedContentBounds);
+
+        // Paint and non-procedural presentation revisions can arrive as
+        // several independent damage rects in one immutable frame (for
+        // example a Slider plus its value Text). Process the complete pass
+        // before acknowledging the shared content revision, otherwise later
+        // regions would keep stale cache pixels.
+        if (paintChanged || presentationChanged) {
+            if (framePassActive && !m_renderPass->frameDamageRects().empty()) {
+                for (const graphics::RectF& frameDamage :
+                     m_renderPass->frameDamageRects()) {
+                    addUpdateRegion(
+                        presentationUpdateRegions,
+                        frameDamage.intersection(visibleContentBounds));
+                }
+            } else {
+                addUpdateRegion(
+                    presentationUpdateRegions,
+                    damageRect.intersection(visibleContentBounds));
+            }
+        }
+
         if (animationCacheDamage) {
             const graphics::RectF positioned = positionedAt(
                 *animationCacheDamage, presentedContentBounds);
-            updateBounds = graphics::RectF{
+            addUpdateRegion(presentationUpdateRegions, graphics::RectF{
                 positioned.x - rasterOutset,
                 positioned.y - rasterOutset,
                 positioned.width + rasterOutset * 2.0f,
                 positioned.height + rasterOutset * 2.0f,
-            };
+            }.intersection(visibleContentBounds));
         }
-        updateBounds = updateBounds
-            .intersection(getPresentationBounds())
-            .intersection(presentedContentBounds);
-        if (updateBounds.isEmpty() && subtreeAnimating &&
-            presentationChanged && !paintChanged) {
-            // The procedural presentation is outside the viewport. Keep the
-            // stable cached pixels and leave its presentation revision stale;
-            // once it becomes visible, the normal partial-update path catches
-            // up only that widget's bounds.
-            deferredOffscreenPresentationUpdate = true;
-        } else if (!updateBounds.isEmpty() &&
-            canvas.beginCachedLayerUpdate(
-                getObjectId(), presentedContentBounds, updateBounds)) {
-            m_contentWidget->draw(canvas, updateBounds);
-            canvas.endCachedLayer();
-            m_cachedContentPaintRevision = contentRevision;
-            m_cachedContentPresentationRevision = contentPresentationRevision;
-        } else if (!updateBounds.isEmpty()) {
-            // Preserve the old direct-paint fallback for Canvas backends that
-            // do not implement retained partial layer updates.
-            m_cacheValid = false;
-            m_contentWidget->draw(canvas, damageRect);
-            endPresentation(canvas);
-            return;
+
+        if (presentationUpdateRegions.empty()) {
+            // All changes are clipped outside this viewport. Preserve the
+            // stable cache and leave its revisions stale; scrolling the region
+            // into view supplies damage that catches it up without rebuilding
+            // the complete long content layer.
+        } else {
+            bool allUpdatesSucceeded = true;
+            for (const graphics::RectF& presentationUpdateBounds :
+                 presentationUpdateRegions) {
+                const graphics::RectF cacheUpdateBounds = positionedAt(
+                    relativeTo(presentationUpdateBounds,
+                               presentedContentBounds),
+                    contentBounds);
+                if (!canvas.beginCachedLayerUpdate(
+                        getObjectId(), contentBounds, cacheUpdateBounds)) {
+                    allUpdatesSucceeded = false;
+                    break;
+                }
+                // The cache always uses stable unscrolled content coordinates.
+                // Cancel the content widget's parent-controlled scroll
+                // translation only while rasterizing into that cache.
+                canvas.concatTransform(
+                    graphics::Matrix3::translation(0.0f, m_scrollY));
+                m_contentWidget->draw(canvas, presentationUpdateBounds);
+                canvas.endCachedLayer();
+            }
+
+            if (allUpdatesSucceeded) {
+                m_cachedContentPaintRevision = contentRevision;
+                m_cachedContentPresentationRevision =
+                    contentPresentationRevision;
+            } else {
+                // Preserve the old direct-paint fallback for Canvas backends
+                // that do not implement retained partial layer updates.
+                m_cacheValid = false;
+                m_contentWidget->draw(canvas, damageRect);
+                endPresentation(canvas);
+                return;
+            }
+        }
+        if (framePassActive) {
+            m_lastCacheUpdatePassSerial = framePassSerial;
         }
     } else if (subtreeAnimating && !m_cacheValid) {
         m_contentWidget->draw(canvas, damageRect);
@@ -161,21 +230,29 @@ void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRec
         return;
     }
 
-    const bool needsFullRaster = !deferredOffscreenPresentationUpdate &&
-        (!m_cacheValid || geometryChanged || paintChanged || presentationChanged);
+    const bool needsFullRaster = !m_cacheValid || geometryChanged;
     if (needsFullRaster) {
-        if (canvas.beginCachedLayer(getObjectId(), presentedContentBounds)) {
-            // The cached target origin cancels the ScrollView-owned content
-            // translation. Scroll offset is applied only when the texture is drawn.
+        if (canvas.beginCachedLayer(getObjectId(), contentBounds)) {
+            // Cache geometry is stable across scrolling. Cancel the content
+            // presentation translation while populating it; scroll offset is
+            // applied only by drawCachedLayer's destination.
+            canvas.concatTransform(
+                graphics::Matrix3::translation(0.0f, m_scrollY));
             m_contentWidget->draw(canvas, m_contentWidget->getPresentationBounds());
             canvas.endCachedLayer();
             m_cacheValid = true;
             m_cachedContentPaintRevision = contentRevision;
             m_cachedContentPresentationRevision = contentPresentationRevision;
+            m_cachedContentX = contentBounds.x;
+            m_cachedContentY = contentBounds.y;
             m_cachedContentWidth = contentBounds.width;
             m_cachedContentHeight = contentBounds.height;
             m_cachedViewportWidth = m_absoluteBounds.width;
             m_cachedViewportHeight = m_absoluteBounds.height;
+            m_cachedDeviceScale = deviceScale;
+            if (framePassActive) {
+                m_lastCacheUpdatePassSerial = framePassSerial;
+            }
         } else {
             m_cacheValid = false;
         }
@@ -202,6 +279,9 @@ void ScrollView::setScrollY(float offset) {
     if (m_contentWidget) {
         m_contentWidget->setParentControlledTranslationY(-m_scrollY);
     }
+    // Scrolling changes only the retained content-node transform. Keep the
+    // viewport damaged for the current DisplayList path without advancing a
+    // paint revision or invalidating the cached content raster.
     invalidatePresentation(previousViewport);
 }
 

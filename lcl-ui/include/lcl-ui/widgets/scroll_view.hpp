@@ -60,10 +60,14 @@ private:
     std::optional<graphics::RectF> m_cachedAnimationBounds{};
     uint64_t m_cachedContentPaintRevision{0};
     uint64_t m_cachedContentPresentationRevision{0};
+    uint64_t m_lastCacheUpdatePassSerial{0};
+    float m_cachedContentX{0.0f};
+    float m_cachedContentY{0.0f};
     float m_cachedContentWidth{0.0f};
     float m_cachedContentHeight{0.0f};
     float m_cachedViewportWidth{0.0f};
     float m_cachedViewportHeight{0.0f};
+    float m_cachedDeviceScale{0.0f};
 };
 
 } // namespace lcl::ui

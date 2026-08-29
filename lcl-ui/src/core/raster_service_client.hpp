@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/ipc/raster_protocol.hpp"
+#include "core/retained_render_tree.hpp"
 #include "lcl-graphics/canvas.hpp"
 
 #include <cstdint>
@@ -21,13 +22,13 @@ public:
     void disconnect() noexcept;
     bool prepare() { return connectIfNeeded(); }
     bool uploadImage(const graphics::ImageResourceView& resource);
-    bool submitFrame(uint64_t configureSerial, uint64_t frameSerial,
-                     uint64_t baseFrameSerial, uint64_t geometryGeneration,
-                     float logicalWidth,
-                     float logicalHeight, float bufferScale,
-                     const graphics::RectF& damage,
-                     bool replacesScene,
-                     const std::vector<uint8_t>& displayList);
+    bool commitTransaction(
+        uint64_t configureSerial, uint64_t frameSerial,
+        uint64_t baseFrameSerial, uint64_t geometryGeneration,
+        float logicalWidth, float logicalHeight, float bufferScale,
+        const graphics::RectF& damage,
+        const detail::RenderTreeTransaction& renderTreeTransaction,
+        const std::vector<uint8_t>& displayList);
     std::vector<raster_protocol::FrameDiscarded> pollDiscards();
     bool isConfigured() const noexcept;
     bool isConnected() const noexcept { return m_fd >= 0; }

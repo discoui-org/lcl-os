@@ -22,6 +22,7 @@ add_library(lcl-ui STATIC
     src/core/image_loader.cpp
     src/core/motion.cpp
     src/core/render_pass.cpp
+    src/core/retained_render_tree.cpp
     src/core/event_dispatcher.cpp
     src/core/window_app.cpp
     src/core/raster_service_client.cpp

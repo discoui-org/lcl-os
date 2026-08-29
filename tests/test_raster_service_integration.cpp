@@ -4,6 +4,7 @@
 #include "core/ipc/raster_protocol.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
+#include "lcl-ui/widgets/progress_view.hpp"
 #include "render/raster_canvas.hpp"
 
 #include <chrono>
@@ -290,6 +291,9 @@ TEST(RasterServiceIntegrationTest,
     patch->setHeight(10.0f);
     patch->setBackgroundColor({80, 90, 100, 255});
     root->addChild(std::move(patch));
+    auto spinner = std::make_unique<lcl::ui::ProgressView>();
+    auto* spinnerPtr = spinner.get();
+    root->addChild(std::move(spinner));
     app.setRootWidget(std::move(root));
     ASSERT_TRUE(app.connectCompositor(compositor.path()));
     ASSERT_TRUE(compositor.acceptClient());
@@ -331,6 +335,7 @@ TEST(RasterServiceIntegrationTest,
     EXPECT_GE(ready.backingWidth, ready.width);
     EXPECT_GE(ready.backingHeight, ready.height);
     if (ready.transport == raster::LayerTransport::DmaBuf) {
+        EXPECT_NE(ready.bufferId, 0u);
         EXPECT_EQ(ready.format, lcl::platform::kDmaBufFormatArgb8888);
         EXPECT_EQ(ready.byteSize, 0u);
 
@@ -354,6 +359,7 @@ TEST(RasterServiceIntegrationTest,
         }
         ASSERT_GE(layerFd, 0);
         EXPECT_EQ(fallback.transport, raster::LayerTransport::Shm);
+        EXPECT_EQ(fallback.bufferId, 0u);
         EXPECT_EQ(fallback.configureSerial, ready.configureSerial);
         EXPECT_EQ(fallback.geometryGeneration, ready.geometryGeneration);
         EXPECT_EQ(fallback.byteSize,
@@ -362,9 +368,17 @@ TEST(RasterServiceIntegrationTest,
         ready = fallback;
     } else {
         EXPECT_EQ(ready.transport, raster::LayerTransport::Shm);
+        EXPECT_EQ(ready.bufferId, 0u);
         EXPECT_EQ(ready.byteSize,
                   static_cast<uint64_t>(ready.stride) * ready.backingHeight);
     }
+    const uint64_t blockedPresentationRevision =
+        spinnerPtr->getPresentationRevision();
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        (void)app.tick();
+    }
+    EXPECT_EQ(spinnerPtr->getPresentationRevision(),
+              blockedPresentationRevision);
     close(layerFd);
     layerFd = -1;
     ASSERT_TRUE(daemon.releaseLayer(ready.layerId));
@@ -380,6 +394,8 @@ TEST(RasterServiceIntegrationTest,
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_GE(layerFd, 0);
+    EXPECT_GT(spinnerPtr->getPresentationRevision(),
+              blockedPresentationRevision);
     EXPECT_GT(patchReady.frameSerial, ready.frameSerial);
     EXPECT_LT(patchReady.damageWidth, patchReady.width);
     EXPECT_LT(patchReady.damageHeight, patchReady.height);

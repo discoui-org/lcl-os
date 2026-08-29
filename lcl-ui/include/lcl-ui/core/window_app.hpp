@@ -209,6 +209,8 @@ public:
     uint32_t* getPixelBuffer() { return m_pixelBuffer.data(); }
 
 private:
+    struct PrivateRenderState;
+
     void updateCanvasRenderTarget();
     void pollIPC();
     bool requestWindowAction(lcl::protocol::LCLWindowAction action,
@@ -241,6 +243,8 @@ private:
     EventDispatcher m_dispatcher;
     TransientController m_transients{m_dispatcher};
     MotionCoordinator m_motionCoordinator;
+    // Opaque so the internal retained-render model never enters the public API.
+    std::unique_ptr<PrivateRenderState> m_privateRenderState;
     std::unique_ptr<graphics::Canvas> m_canvas;
     // Logical frames are rasterized outside the compositor. This private
     // client owns only the producer grant and the raster-service connection;
@@ -313,6 +317,9 @@ private:
     uint64_t m_retainedRasterFrameSerial{0};
     uint64_t m_submittedGeometryGeneration{0};
     uint64_t m_rasterConnectionGeneration{0};
+    // A complete rasterd frame installs a composition template whose
+    // ScrollContent cache destinations can be updated without another LDL1.
+    bool m_scrollTransformFastPathReady{false};
     std::unordered_map<uint64_t, uint64_t> m_uploadedImageRevisions;
     // A launch icon becomes compositor-visible only after the HomeScreen
     // buffer containing it has been committed on this same ordered socket.
@@ -344,8 +351,14 @@ private:
     uint64_t m_traceResizeApplies{0};
     uint64_t m_traceDamagePixels{0};
     uint64_t m_traceClearedBytes{0};
+    uint64_t m_traceRenderCreates{0};
+    uint64_t m_traceRenderContentUpdates{0};
+    uint64_t m_traceRenderPropertyUpdates{0};
+    uint64_t m_traceRenderRemovals{0};
+    uint64_t m_traceScrollTransformTransactions{0};
     double m_traceLayoutMs{0.0};
     double m_tracePaintMs{0.0};
+    double m_traceRenderTreeMs{0.0};
     double m_traceClearMs{0.0};
     double m_traceDrawMs{0.0};
     double m_traceRasterSubmitMs{0.0};

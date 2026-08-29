@@ -1,4 +1,5 @@
 #include "lcl-ui/core/window_app.hpp"
+#include "core/retained_render_tree.hpp"
 #include "raster_service_client.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-graphics/display_list_wire.hpp"
@@ -134,9 +135,227 @@ void drawLayoutOverlay(const Widget& widget, graphics::Canvas& canvas, uint32_t 
 
 } // namespace
 
+struct WindowApp::PrivateRenderState {
+    void reset() {
+        tree = {};
+        transaction = {};
+        hasSnapshot = false;
+        scrollTransformTransaction = false;
+        invalidatesScrollTemplate = false;
+    }
+
+    void synchronize(const Widget& root, bool forceReplace) {
+        auto next = compiler.compile(root, tree.nodes.size());
+        transaction = differ.diff(
+            hasSnapshot ? &tree : nullptr, next, forceReplace);
+        scrollTransformTransaction =
+            !transaction.replacesTree && transaction.creates.empty() &&
+            transaction.removals.empty() && !transaction.updates.empty() &&
+            std::all_of(
+                transaction.updates.begin(), transaction.updates.end(),
+                [&](const auto& update) {
+                    const auto* previous = findRetainedNode(tree, update.node.id);
+                    return previous && !update.contentChanged &&
+                        update.propertiesChanged &&
+                        isScrollTranslationUpdate(update.node, *previous);
+                });
+        invalidatesScrollTemplate = false;
+        if (!transaction.replacesTree) {
+            invalidatesScrollTemplate = std::any_of(
+                transaction.creates.begin(), transaction.creates.end(),
+                [&](const auto& node) {
+                    return isScrollBoundary(node) ||
+                        !isWithinScrollContent(next, node.id);
+                }) ||
+                std::any_of(
+                    transaction.updates.begin(), transaction.updates.end(),
+                    [&](const auto& update) {
+                        if (isScrollViewport(update.node)) return true;
+                        if (isScrollContent(update.node)) {
+                            if (!update.propertiesChanged) return false;
+                            const auto* previous =
+                                findRetainedNode(tree, update.node.id);
+                            return !previous || !isScrollTranslationUpdate(
+                                update.node, *previous);
+                        }
+                        return !isWithinScrollContent(next, update.node.id);
+                    });
+            if (!invalidatesScrollTemplate) {
+                for (uint64_t removedId : transaction.removals) {
+                    const auto* removed = findRetainedNode(tree, removedId);
+                    if (removed &&
+                        (isScrollBoundary(*removed) ||
+                         !isWithinScrollContent(tree, removedId))) {
+                        invalidatesScrollTemplate = true;
+                        break;
+                    }
+                }
+            }
+        }
+        tree = std::move(next);
+        hasSnapshot = true;
+    }
+
+    std::size_t nodeCount() const noexcept {
+        return tree.nodes.size();
+    }
+
+    std::size_t retainedNodeCount() const noexcept {
+        return tree.retainedNodeCount();
+    }
+
+    std::size_t createdNodeCount() const noexcept {
+        return transaction.creates.size();
+    }
+
+    std::size_t contentUpdateCount() const noexcept {
+        return static_cast<std::size_t>(std::count_if(
+            transaction.updates.begin(), transaction.updates.end(),
+            [](const auto& update) { return update.contentChanged; }));
+    }
+
+    std::size_t propertyUpdateCount() const noexcept {
+        return static_cast<std::size_t>(std::count_if(
+            transaction.updates.begin(), transaction.updates.end(),
+            [](const auto& update) { return update.propertiesChanged; }));
+    }
+
+    std::size_t removedNodeCount() const noexcept {
+        return transaction.removals.size();
+    }
+
+    const detail::RenderTreeTransaction& currentTransaction() const noexcept {
+        return transaction;
+    }
+
+    bool isScrollTransformOnly() const noexcept {
+        return scrollTransformTransaction;
+    }
+
+    bool hasScrollContent() const noexcept {
+        return std::any_of(
+            tree.retainedNodes.begin(), tree.retainedNodes.end(),
+            [](const auto& node) {
+                return detail::hasBoundaryReason(
+                    node.boundaryReasons,
+                    detail::RenderBoundaryReason::ScrollContent);
+            });
+    }
+
+    bool invalidatesScrollCompositionTemplate() const noexcept {
+        return invalidatesScrollTemplate;
+    }
+
+private:
+    static const detail::RetainedRenderNode* findRetainedNode(
+            const detail::RenderTree& candidate, uint64_t id) noexcept {
+        const auto found = std::find_if(
+            candidate.retainedNodes.begin(), candidate.retainedNodes.end(),
+            [id](const auto& node) { return node.id == id; });
+        return found == candidate.retainedNodes.end() ? nullptr : &*found;
+    }
+
+    static bool isScrollViewport(
+            const detail::RetainedRenderNode& node) noexcept {
+        return detail::hasBoundaryReason(
+            node.boundaryReasons,
+            detail::RenderBoundaryReason::ScrollViewport);
+    }
+
+    static bool isScrollContent(
+            const detail::RetainedRenderNode& node) noexcept {
+        return detail::hasBoundaryReason(
+            node.boundaryReasons,
+            detail::RenderBoundaryReason::ScrollContent);
+    }
+
+    static bool isScrollBoundary(
+            const detail::RetainedRenderNode& node) noexcept {
+        return isScrollViewport(node) || isScrollContent(node);
+    }
+
+    static bool isWithinScrollContent(const detail::RenderTree& candidate,
+                                      uint64_t id) noexcept {
+        const auto* node = findRetainedNode(candidate, id);
+        std::size_t depth = 0;
+        while (node && depth++ <= candidate.retainedNodes.size()) {
+            if (isScrollContent(*node)) return true;
+            if (node->parentId == 0) return false;
+            node = findRetainedNode(candidate, node->parentId);
+        }
+        return false;
+    }
+
+    static bool sameRect(const graphics::RectF& lhs,
+                         const graphics::RectF& rhs) noexcept {
+        return lhs.x == rhs.x && lhs.y == rhs.y &&
+            lhs.width == rhs.width && lhs.height == rhs.height;
+    }
+
+    static bool sameOptionalRect(
+            const std::optional<graphics::RectF>& lhs,
+            const std::optional<graphics::RectF>& rhs) noexcept {
+        return lhs.has_value() == rhs.has_value() &&
+            (!lhs || sameRect(*lhs, *rhs));
+    }
+
+    static bool isScrollTranslationUpdate(
+            const detail::RetainedRenderNode& node,
+            const detail::RetainedRenderNode& previous) noexcept {
+        constexpr auto kTransform =
+            detail::RenderBoundaryReason::Transform;
+        constexpr float kEpsilon = 0.0001f;
+        const auto same = [=](float lhs, float rhs) {
+            return std::fabs(lhs - rhs) <= kEpsilon;
+        };
+        const auto reasonsChanged = static_cast<uint32_t>(
+            node.boundaryReasons) ^ static_cast<uint32_t>(
+            previous.boundaryReasons);
+        const float translationDeltaX = node.presentation.translationX -
+            previous.presentation.translationX;
+        const float translationDeltaY = node.presentation.translationY -
+            previous.presentation.translationY;
+        return isScrollContent(node) && isScrollContent(previous) &&
+            (reasonsChanged & ~static_cast<uint32_t>(kTransform)) == 0 &&
+            node.parentId == previous.parentId &&
+            node.siblingIndex == previous.siblingIndex &&
+            sameRect(node.layoutBounds, previous.layoutBounds) &&
+            same(node.presentationBounds.x - previous.presentationBounds.x,
+                 translationDeltaX) &&
+            same(node.presentationBounds.y - previous.presentationBounds.y,
+                 translationDeltaY) &&
+            same(node.presentationBounds.width,
+                 previous.presentationBounds.width) &&
+            same(node.presentationBounds.height,
+                 previous.presentationBounds.height) &&
+            sameOptionalRect(node.clipBounds, previous.clipBounds) &&
+            same(node.presentation.opacity, 1.0f) &&
+            same(previous.presentation.opacity, 1.0f) &&
+            same(node.presentation.scaleX, 1.0f) &&
+            same(node.presentation.scaleY, 1.0f) &&
+            same(previous.presentation.scaleX, 1.0f) &&
+            same(previous.presentation.scaleY, 1.0f) &&
+            same(node.presentation.rotationRadians, 0.0f) &&
+            same(previous.presentation.rotationRadians, 0.0f) &&
+            same(node.presentation.originX, previous.presentation.originX) &&
+            same(node.presentation.originY, previous.presentation.originY) &&
+            node.children == previous.children;
+    }
+
+    detail::RenderNodeCompiler compiler;
+    detail::RenderTreeDiffer differ;
+    detail::RenderTree tree;
+    detail::RenderTreeTransaction transaction;
+    bool hasSnapshot{false};
+    bool scrollTransformTransaction{false};
+    bool invalidatesScrollTemplate{false};
+};
+
 WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height,
                      const std::string& title)
-    : m_width(width), m_height(height), m_title(title), m_canvas(std::move(canvas)),
+    : m_width(width), m_height(height), m_title(title),
+      m_privateRenderState(std::make_unique<PrivateRenderState>()),
+      m_canvas(std::move(canvas)),
       m_rasterClient(std::make_unique<RasterServiceClient>()) {
     setupAppSignalHandlers();
     if (!m_canvas) return;
@@ -224,6 +443,8 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
 
     m_windowRoot = std::move(windowRoot);
     m_rootWidget = contentRoot;
+    m_privateRenderState->reset();
+    m_scrollTransformFastPathReady = false;
     m_transients.setWindowRoot(m_windowRoot.get());
     m_windowRoot->markLayoutDirty();
     m_windowRoot->invalidatePaint();
@@ -528,6 +749,7 @@ void WindowApp::pollIPC() {
         m_submittedFrameSerial = 0;
         m_submittedGeometryGeneration = 0;
         m_retainedRasterFrameSerial = 0;
+        m_scrollTransformFastPathReady = false;
         m_frameGateOpen = true;
         m_firstFrame = true;
     }
@@ -540,6 +762,7 @@ void WindowApp::pollIPC() {
         m_submittedFrameSerial = 0;
         m_submittedGeometryGeneration = 0;
         m_retainedRasterFrameSerial = 0;
+        m_scrollTransformFastPathReady = false;
         m_frameGateOpen = true;
         m_firstFrame = true;
     }
@@ -636,6 +859,7 @@ void WindowApp::pollIPC() {
                         m_submittedFrameSerial = 0;
                         m_submittedGeometryGeneration = 0;
                         m_retainedRasterFrameSerial = 0;
+                        m_scrollTransformFastPathReady = false;
                         m_frameGateOpen = true;
                         m_firstFrame = true;
                     }
@@ -679,6 +903,7 @@ void WindowApp::pollIPC() {
                     m_uploadedImageRevisions.clear();
                     m_rasterConnectionGeneration = 0;
                     m_retainedRasterFrameSerial = 0;
+                    m_scrollTransformFastPathReady = false;
                     m_firstFrame = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::FramePresented &&
@@ -722,6 +947,7 @@ void WindowApp::pollIPC() {
                     m_submittedFrameSerial = 0;
                     m_submittedGeometryGeneration = 0;
                     m_retainedRasterFrameSerial = 0;
+                    m_scrollTransformFastPathReady = false;
                     m_frameGateOpen = true;
                     m_firstFrame = true;
                 }
@@ -875,9 +1101,17 @@ bool WindowApp::tick() {
         m_onFrame();
     }
     const auto now = std::chrono::steady_clock::now();
-    const float dtSec = std::chrono::duration<float>(now - m_lastAnimationTick).count();
-    m_lastAnimationTick = now;
-    advanceAnimations(dtSec);
+    // Procedural presentations advance only when this surface owns a frame
+    // credit. While rasterd/compositor still retain an unpresented frame,
+    // preserve elapsed time but do not churn widget revisions every 2 ms.
+    // The first tick after FramePresented samples the accumulated interval and
+    // produces exactly one newest presentation state.
+    if (!m_ipcConnected || m_frameGateOpen) {
+        const float dtSec = std::chrono::duration<float>(
+            now - m_lastAnimationTick).count();
+        m_lastAnimationTick = now;
+        advanceAnimations(dtSec);
+    }
     bool rendered = renderFrame();
     m_tickingHostedSurfaces = true;
     for (auto& entry : m_hostedSurfaces) {
@@ -912,6 +1146,43 @@ void collectWidgetBounds(Widget* widget, std::unordered_map<uint64_t, graphics::
     if (!widget) return;
     bounds[widget->getObjectId()] = widget->getAbsoluteBounds();
     for (const auto& child : widget->getChildren()) collectWidgetBounds(child.get(), bounds);
+}
+
+void collectVisibleWidgetPaintBounds(
+        Widget* widget,
+        std::unordered_map<uint64_t, graphics::RectF>& bounds) {
+    if (!widget || !widget->isVisible()) return;
+    bounds[widget->getObjectId()] = widget->getVisiblePresentationPaintBounds();
+    for (const auto& child : widget->getChildren()) {
+        collectVisibleWidgetPaintBounds(child.get(), bounds);
+    }
+}
+
+bool layoutPaintBoundsChanged(const graphics::RectF& before,
+                              const graphics::RectF& after) {
+    constexpr float epsilon = 0.001f;
+    return std::fabs(before.x - after.x) > epsilon ||
+        std::fabs(before.y - after.y) > epsilon ||
+        std::fabs(before.width - after.width) > epsilon ||
+        std::fabs(before.height - after.height) > epsilon;
+}
+
+void addChangedLayoutPaintDamage(
+        Widget* widget,
+        const std::unordered_map<uint64_t, graphics::RectF>& oldBounds,
+        RenderPass& renderPass) {
+    if (!widget || !widget->isVisible()) return;
+    const graphics::RectF current = widget->getVisiblePresentationPaintBounds();
+    const auto found = oldBounds.find(widget->getObjectId());
+    if (found == oldBounds.end()) {
+        renderPass.addDirtyRect(current);
+    } else if (layoutPaintBoundsChanged(found->second, current)) {
+        renderPass.addDirtyRect(found->second);
+        renderPass.addDirtyRect(current);
+    }
+    for (const auto& child : widget->getChildren()) {
+        addChangedLayoutPaintDamage(child.get(), oldBounds, renderPass);
+    }
 }
 
 void startMorphs(Widget* widget, const std::unordered_map<uint64_t, graphics::RectF>& oldBounds,
@@ -1341,13 +1612,21 @@ bool WindowApp::renderFrame() {
             // A fresh daemon has no retained scene or uploaded resources.
             m_uploadedImageRevisions.clear();
             m_retainedRasterFrameSerial = 0;
+            m_scrollTransformFastPathReady = false;
             m_rasterConnectionGeneration = connectionGeneration;
             m_firstFrame = true;
         }
     }
 
     if (m_windowRoot && m_windowRoot->isLayoutDirty()) {
+        std::unordered_map<uint64_t, graphics::RectF> oldPaintBounds;
+        collectVisibleWidgetPaintBounds(m_windowRoot.get(), oldPaintBounds);
         updateLayout();
+        // Layout can move several siblings without each new bound producing a
+        // paint invalidation. Damage the exact old/new visible extents instead
+        // of turning a dynamic Text measurement into a full-surface redraw.
+        addChangedLayoutPaintDamage(
+            m_windowRoot.get(), oldPaintBounds, m_renderPass);
     }
 
     const graphics::RectF surfaceBounds{
@@ -1385,6 +1664,34 @@ bool WindowApp::renderFrame() {
     if (damageRects.empty()) return false;
     const graphics::RectF frameDamage = rasterDamage.getDamageRect();
 
+    // Compile the exact post-layout Widget state that this frame will paint.
+    // The snapshot is private and does not alter DisplayList recording or IPC;
+    // the next retained-protocol phase will translate it into transactions.
+    if (m_windowRoot) {
+        if (m_frameTraceEnabled) {
+            const auto renderTreeStarted = std::chrono::steady_clock::now();
+            m_privateRenderState->synchronize(
+                *m_windowRoot, replacesRetainedScene);
+            m_traceRenderCreates +=
+                m_privateRenderState->createdNodeCount();
+            m_traceRenderContentUpdates +=
+                m_privateRenderState->contentUpdateCount();
+            m_traceRenderPropertyUpdates +=
+                m_privateRenderState->propertyUpdateCount();
+            m_traceRenderRemovals +=
+                m_privateRenderState->removedNodeCount();
+            m_traceRenderTreeMs += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - renderTreeStarted).count();
+        } else {
+            m_privateRenderState->synchronize(
+                *m_windowRoot, replacesRetainedScene);
+        }
+    }
+
+    const bool scrollTransformTransaction =
+        m_privateRenderState->isScrollTransformOnly();
+    const bool scrollTransformOnly =
+        m_scrollTransformFastPathReady && scrollTransformTransaction;
     m_canvas->beginFrame();
 
     const auto paintStarted = std::chrono::steady_clock::now();
@@ -1398,138 +1705,145 @@ bool WindowApp::renderFrame() {
     }
 
     const auto clearStarted = paintStarted;
-    for (const graphics::RectF& damage : damageRects) {
-        m_canvas->clearRect(damage, {0, 0, 0, 0});
+    auto drawStarted = clearStarted;
+    if (!scrollTransformOnly) {
+        for (const graphics::RectF& damage : damageRects) {
+            m_canvas->clearRect(damage, {0, 0, 0, 0});
+            if (m_frameTraceEnabled) {
+                m_traceClearedBytes +=
+                    static_cast<uint64_t>(std::ceil(damage.width * m_bufferScale)) *
+                    static_cast<uint64_t>(std::ceil(damage.height * m_bufferScale)) *
+                    sizeof(uint32_t);
+            }
+        }
         if (m_frameTraceEnabled) {
-            m_traceClearedBytes +=
-                static_cast<uint64_t>(std::ceil(damage.width * m_bufferScale)) *
-                static_cast<uint64_t>(std::ceil(damage.height * m_bufferScale)) *
-                sizeof(uint32_t);
+            m_traceClearMs += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - clearStarted).count();
+        }
+
+        drawStarted = std::chrono::steady_clock::now();
+        // Cache-aware widgets need the complete region set for this immutable
+        // frame. The root is still traversed once per clip below, but a ScrollView
+        // must patch every changed descendant region before acknowledging the
+        // content revision seen by those separate traversals.
+        m_renderPass.begin(*m_canvas, damageRects);
+
+        for (const graphics::RectF& damage : damageRects) {
+            m_canvas->saveState();
+            m_canvas->clipRect(damage);
+            if (m_windowRoot && m_windowRoot->isVisible()) {
+                m_windowRoot->draw(*m_canvas, damage);
+            }
+            if (m_layoutOverlayEnabled && m_windowRoot) {
+                drawLayoutOverlay(*m_windowRoot, *m_canvas);
+                m_canvas->drawRoundedRect(damage, 0.0f, {0, 0, 0, 0},
+                                          {239, 68, 68, 255}, 1.0f, 2.0f);
+            }
+            m_canvas->restoreState();
+        }
+
+        std::vector<EffectRegion> uiEffects;
+        if (m_windowRoot) m_windowRoot->collectEffects(uiEffects);
+
+        m_renderPass.end(*m_canvas);
+        if (m_ipcConnected && m_socketFd >= 0) {
+            auto toProtoSource = [](EffectSource source) {
+                return (source == EffectSource::Foreground)
+                    ? lcl::protocol::EffectSourceType::Foreground
+                    : lcl::protocol::EffectSourceType::Backdrop;
+            };
+
+            auto toProtoBlend = [](EffectBlend blend) {
+                switch (blend) {
+                    case EffectBlend::Screen:   return lcl::protocol::EffectBlendMode::Screen;
+                    case EffectBlend::Multiply: return lcl::protocol::EffectBlendMode::Multiply;
+                    case EffectBlend::Overlay:  return lcl::protocol::EffectBlendMode::Overlay;
+                    case EffectBlend::Plus:     return lcl::protocol::EffectBlendMode::Plus;
+                    case EffectBlend::Normal:
+                    default:                    return lcl::protocol::EffectBlendMode::Normal;
+                }
+            };
+            auto toProtoBounds = [](EffectBounds bounds) {
+                return bounds == EffectBounds::OuterSurface
+                    ? lcl::protocol::EffectBoundsPolicy::OuterSurface
+                    : lcl::protocol::EffectBoundsPolicy::Local;
+            };
+
+            std::vector<lcl::protocol::EffectRegion> protoRegions;
+            std::vector<lcl::protocol::FilterOp> flatFilters;
+            protoRegions.reserve(uiEffects.size());
+
+            for (const auto& effect : uiEffects) {
+                if (effect.bounds.isEmpty() || effect.filters.empty()) continue;
+
+                const float x = std::max(0.0f, effect.bounds.x);
+                const float y = std::max(0.0f, effect.bounds.y);
+                if (x >= m_width || y >= m_height) continue;
+                const float w = std::min(std::max(0.0f, effect.bounds.width), m_width - x);
+                const float h = std::min(std::max(0.0f, effect.bounds.height), m_height - y);
+                if (w <= 0.0f || h <= 0.0f) continue;
+
+                lcl::protocol::EffectRegion region{};
+                region.x = x;
+                region.y = y;
+                region.width = w;
+                region.height = h;
+                region.cornerRadius = std::max(0.0f, effect.cornerRadius);
+                region.cornerRoundness = std::clamp(effect.cornerRoundness, 2.0f, 8.0f);
+                region.boundsPolicy = toProtoBounds(effect.boundsPolicy);
+                region.source = toProtoSource(effect.source);
+                region.blendMode = toProtoBlend(effect.blend);
+                region.opacity = std::clamp(effect.opacity, 0.0f, 1.0f);
+                region.filterOffset = static_cast<uint32_t>(flatFilters.size());
+                region.filterCount = static_cast<uint16_t>(std::min<size_t>(effect.filters.size(), 65535));
+
+                for (uint16_t i = 0; i < region.filterCount; ++i) {
+                    auto filter = effect.filters[i];
+                    flatFilters.push_back(filter);
+                }
+                protoRegions.push_back(region);
+            }
+
+            if (!protoRegions.empty()) {
+                lcl::protocol::LCLMsgSetEffectGraphHeader graphMsg{};
+                graphMsg.surfaceId = m_surfaceId;
+                graphMsg.regionCount = static_cast<uint32_t>(protoRegions.size());
+                graphMsg.filterCount = static_cast<uint32_t>(flatFilters.size());
+
+                const size_t payloadSize =
+                    sizeof(graphMsg) +
+                    protoRegions.size() * sizeof(lcl::protocol::EffectRegion) +
+                    flatFilters.size() * sizeof(lcl::protocol::FilterOp);
+
+                std::vector<uint8_t> payload(payloadSize);
+                uint8_t* dst = payload.data();
+                std::memcpy(dst, &graphMsg, sizeof(graphMsg));
+                dst += sizeof(graphMsg);
+                std::memcpy(dst, protoRegions.data(), protoRegions.size() * sizeof(lcl::protocol::EffectRegion));
+                dst += protoRegions.size() * sizeof(lcl::protocol::EffectRegion);
+                if (!flatFilters.empty()) {
+                    std::memcpy(dst, flatFilters.data(), flatFilters.size() * sizeof(lcl::protocol::FilterOp));
+                }
+
+                if (payload != m_lastEffectGraphPayload) {
+                    sendProtocolMessage(lcl::protocol::LCLOpcode::SetEffectGraph,
+                                        payload.data(), static_cast<uint32_t>(payload.size()));
+                    m_lastEffectGraphPayload = std::move(payload);
+                }
+                m_effectGraphActive = true;
+            } else if (m_effectGraphActive) {
+                lcl::protocol::LCLMsgClearEffectGraph clearMsg{};
+                clearMsg.surfaceId = m_surfaceId;
+
+                sendProtocolMessage(lcl::protocol::LCLOpcode::ClearEffectGraph,
+                                    &clearMsg, sizeof(clearMsg));
+                m_effectGraphActive = false;
+                m_lastEffectGraphPayload.clear();
+            }
         }
     }
-    if (m_frameTraceEnabled) {
-        m_traceClearMs += std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - clearStarted).count();
-    }
-
-    const auto drawStarted = std::chrono::steady_clock::now();
-    m_renderPass.begin(*m_canvas);
-
-    for (const graphics::RectF& damage : damageRects) {
-        m_canvas->saveState();
-        m_canvas->clipRect(damage);
-        if (m_windowRoot && m_windowRoot->isVisible()) {
-            m_windowRoot->draw(*m_canvas, damage);
-        }
-        if (m_layoutOverlayEnabled && m_windowRoot) {
-            drawLayoutOverlay(*m_windowRoot, *m_canvas);
-            m_canvas->drawRoundedRect(damage, 0.0f, {0, 0, 0, 0},
-                                      {239, 68, 68, 255}, 1.0f, 2.0f);
-        }
-        m_canvas->restoreState();
-    }
-
-    std::vector<EffectRegion> uiEffects;
-    if (m_windowRoot) m_windowRoot->collectEffects(uiEffects);
-
-    m_renderPass.end(*m_canvas);
     m_canvas->endFrame();
-    if (m_ipcConnected && m_socketFd >= 0) {
-        auto toProtoSource = [](EffectSource source) {
-            return (source == EffectSource::Foreground)
-                ? lcl::protocol::EffectSourceType::Foreground
-                : lcl::protocol::EffectSourceType::Backdrop;
-        };
-
-        auto toProtoBlend = [](EffectBlend blend) {
-            switch (blend) {
-                case EffectBlend::Screen:   return lcl::protocol::EffectBlendMode::Screen;
-                case EffectBlend::Multiply: return lcl::protocol::EffectBlendMode::Multiply;
-                case EffectBlend::Overlay:  return lcl::protocol::EffectBlendMode::Overlay;
-                case EffectBlend::Plus:     return lcl::protocol::EffectBlendMode::Plus;
-                case EffectBlend::Normal:
-                default:                    return lcl::protocol::EffectBlendMode::Normal;
-            }
-        };
-        auto toProtoBounds = [](EffectBounds bounds) {
-            return bounds == EffectBounds::OuterSurface
-                ? lcl::protocol::EffectBoundsPolicy::OuterSurface
-                : lcl::protocol::EffectBoundsPolicy::Local;
-        };
-
-        std::vector<lcl::protocol::EffectRegion> protoRegions;
-        std::vector<lcl::protocol::FilterOp> flatFilters;
-        protoRegions.reserve(uiEffects.size());
-
-        for (const auto& effect : uiEffects) {
-            if (effect.bounds.isEmpty() || effect.filters.empty()) continue;
-
-            const float x = std::max(0.0f, effect.bounds.x);
-            const float y = std::max(0.0f, effect.bounds.y);
-            if (x >= m_width || y >= m_height) continue;
-            const float w = std::min(std::max(0.0f, effect.bounds.width), m_width - x);
-            const float h = std::min(std::max(0.0f, effect.bounds.height), m_height - y);
-            if (w <= 0.0f || h <= 0.0f) continue;
-
-            lcl::protocol::EffectRegion region{};
-            region.x = x;
-            region.y = y;
-            region.width = w;
-            region.height = h;
-            region.cornerRadius = std::max(0.0f, effect.cornerRadius);
-            region.cornerRoundness = std::clamp(effect.cornerRoundness, 2.0f, 8.0f);
-            region.boundsPolicy = toProtoBounds(effect.boundsPolicy);
-            region.source = toProtoSource(effect.source);
-            region.blendMode = toProtoBlend(effect.blend);
-            region.opacity = std::clamp(effect.opacity, 0.0f, 1.0f);
-            region.filterOffset = static_cast<uint32_t>(flatFilters.size());
-            region.filterCount = static_cast<uint16_t>(std::min<size_t>(effect.filters.size(), 65535));
-
-            for (uint16_t i = 0; i < region.filterCount; ++i) {
-                auto filter = effect.filters[i];
-                flatFilters.push_back(filter);
-            }
-            protoRegions.push_back(region);
-        }
-
-        if (!protoRegions.empty()) {
-            lcl::protocol::LCLMsgSetEffectGraphHeader graphMsg{};
-            graphMsg.surfaceId = m_surfaceId;
-            graphMsg.regionCount = static_cast<uint32_t>(protoRegions.size());
-            graphMsg.filterCount = static_cast<uint32_t>(flatFilters.size());
-
-            const size_t payloadSize =
-                sizeof(graphMsg) +
-                protoRegions.size() * sizeof(lcl::protocol::EffectRegion) +
-                flatFilters.size() * sizeof(lcl::protocol::FilterOp);
-
-            std::vector<uint8_t> payload(payloadSize);
-            uint8_t* dst = payload.data();
-            std::memcpy(dst, &graphMsg, sizeof(graphMsg));
-            dst += sizeof(graphMsg);
-            std::memcpy(dst, protoRegions.data(), protoRegions.size() * sizeof(lcl::protocol::EffectRegion));
-            dst += protoRegions.size() * sizeof(lcl::protocol::EffectRegion);
-            if (!flatFilters.empty()) {
-                std::memcpy(dst, flatFilters.data(), flatFilters.size() * sizeof(lcl::protocol::FilterOp));
-            }
-
-            if (payload != m_lastEffectGraphPayload) {
-                sendProtocolMessage(lcl::protocol::LCLOpcode::SetEffectGraph,
-                                    payload.data(), static_cast<uint32_t>(payload.size()));
-                m_lastEffectGraphPayload = std::move(payload);
-            }
-            m_effectGraphActive = true;
-        } else if (m_effectGraphActive) {
-            lcl::protocol::LCLMsgClearEffectGraph clearMsg{};
-            clearMsg.surfaceId = m_surfaceId;
-
-            sendProtocolMessage(lcl::protocol::LCLOpcode::ClearEffectGraph,
-                                &clearMsg, sizeof(clearMsg));
-            m_effectGraphActive = false;
-            m_lastEffectGraphPayload.clear();
-        }
-    }
-    if (m_frameTraceEnabled) {
+    if (m_frameTraceEnabled && !scrollTransformOnly) {
         m_traceDrawMs += std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - drawStarted).count();
     }
@@ -1551,6 +1865,7 @@ bool WindowApp::renderFrame() {
                 // Retry as a complete retained-scene replacement.
                 m_uploadedImageRevisions.clear();
                 m_retainedRasterFrameSerial = 0;
+                m_scrollTransformFastPathReady = false;
                 m_rasterConnectionGeneration = connectionGeneration;
                 m_firstFrame = true;
                 return false;
@@ -1572,25 +1887,28 @@ bool WindowApp::renderFrame() {
                     });
             }
             bool resourcesReady = true;
-            for (const auto& resource : frame->imageResources) {
-                if (!uploadImageResource(resource)) {
-                    resourcesReady = false;
-                    break;
+            if (!scrollTransformOnly) {
+                for (const auto& resource : frame->imageResources) {
+                    if (!uploadImageResource(resource)) {
+                        resourcesReady = false;
+                        break;
+                    }
                 }
             }
 
             constexpr size_t kMaxWireBytes = raster_protocol::kMaxPayload;
-            auto encoded = resourcesReady
+            auto encoded = resourcesReady && !scrollTransformOnly
                 ? graphics::encodeDisplayList(frame->displayList, kMaxWireBytes)
                 : graphics::DisplayListEncodeResult{};
             if (resourcesReady && encoded) {
                 const uint64_t frameSerial = m_nextFrameSerial++;
                 if (m_nextFrameSerial == 0) m_nextFrameSerial = 1;
-                if (m_rasterClient->submitFrame(
+                if (m_rasterClient->commitTransaction(
                         m_configureSerial, frameSerial,
                         m_retainedRasterFrameSerial, m_geometryGeneration,
                         m_width, m_height, m_bufferScale, frameDamage,
-                        replacesRetainedScene, encoded.bytes)) {
+                        m_privateRenderState->currentTransaction(),
+                        encoded.bytes)) {
                     m_submittedConfigureSerial = m_configureSerial;
                     m_submittedFrameSerial = frameSerial;
                     m_submittedGeometryGeneration = m_geometryGeneration;
@@ -1606,11 +1924,27 @@ bool WindowApp::renderFrame() {
                     m_rasterConnectionGeneration = connectionGeneration;
                     m_frameGateOpen = false;
                     frameAttached = true;
+                    if (scrollTransformOnly && m_frameTraceEnabled) {
+                        ++m_traceScrollTransformTransactions;
+                    }
+                    if (replacesRetainedScene) {
+                        m_scrollTransformFastPathReady =
+                            m_privateRenderState->hasScrollContent();
+                    } else if (scrollTransformTransaction) {
+                        // If the previous template was invalidated, this
+                        // ordinary DisplayList frame repopulates it. Later
+                        // touch moves can return to property-only commits.
+                        m_scrollTransformFastPathReady = true;
+                    } else if (m_privateRenderState->
+                                   invalidatesScrollCompositionTemplate()) {
+                        m_scrollTransformFastPathReady = false;
+                    }
                 }
             }
             if (!frameAttached) {
                 m_uploadedImageRevisions.clear();
                 m_retainedRasterFrameSerial = 0;
+                m_scrollTransformFastPathReady = false;
                 m_rasterClient->disconnect();
                 m_firstFrame = true;
                 std::cerr << "[lcl-ui ERROR] DisplayList commit failed for "
@@ -1652,6 +1986,7 @@ void WindowApp::logFrameTraceIfDue() {
               << " layout=" << m_traceLayoutPasses << " (" << average(m_traceLayoutMs, m_traceLayoutPasses) << " ms)"
               << " paint=" << average(m_tracePaintMs, m_traceRenderedFrames) << " ms"
               << " stages=(clear=" << average(m_traceClearMs, m_traceRenderedFrames)
+              << ", tree=" << average(m_traceRenderTreeMs, m_traceRenderedFrames)
               << ", draw=" << average(m_traceDrawMs, m_traceRenderedFrames)
               << ", raster-submit=" << average(m_traceRasterSubmitMs, m_traceRenderedFrames) << " ms)"
               << " damage=" << m_traceDamagePixels << " px"
@@ -1659,7 +1994,17 @@ void WindowApp::logFrameTraceIfDue() {
               << " cfg=" << m_traceConfigureCount << " (interactive=" << m_traceInteractiveConfigureCount
               << ", transition=" << m_traceTransitionConfigureCount << ')'
               << " presented=" << m_tracePresentedFrames
-              << " resize=" << m_traceResizeApplies << '\n';
+              << " resize=" << m_traceResizeApplies
+              << " render-nodes=" << m_privateRenderState->nodeCount()
+              << " (retained=" << m_privateRenderState->retainedNodeCount()
+              << ") render-tx=(create="
+              << m_traceRenderCreates
+              << ", content=" << m_traceRenderContentUpdates
+              << ", props=" << m_traceRenderPropertyUpdates
+              << ", remove=" << m_traceRenderRemovals
+              << ", scroll-xform="
+              << m_traceScrollTransformTransactions
+              << ")\n";
     m_traceLayoutPasses = 0;
     m_traceRenderedFrames = 0;
     m_traceConfigureCount = 0;
@@ -1669,8 +2014,14 @@ void WindowApp::logFrameTraceIfDue() {
     m_traceResizeApplies = 0;
     m_traceDamagePixels = 0;
     m_traceClearedBytes = 0;
+    m_traceRenderCreates = 0;
+    m_traceRenderContentUpdates = 0;
+    m_traceRenderPropertyUpdates = 0;
+    m_traceRenderRemovals = 0;
+    m_traceScrollTransformTransactions = 0;
     m_traceLayoutMs = 0.0;
     m_tracePaintMs = 0.0;
+    m_traceRenderTreeMs = 0.0;
     m_traceClearMs = 0.0;
     m_traceDrawMs = 0.0;
     m_traceRasterSubmitMs = 0.0;

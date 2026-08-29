@@ -92,6 +92,11 @@ void ProgressView::updatePresentationRegistration() {
 void ProgressView::tickIndeterminate(float deltaSec) {
     if (m_value) return;
     m_phase = std::fmod(m_phase + std::max(0.0f, deltaSec) * 0.85f, 1.0f);
+    // Keep time continuous while clipped outside a viewport, but do not
+    // propagate revisions or schedule empty frames. A ScrollView reveal still
+    // sees this registered presentation owner and refreshes its visible cache
+    // directly from the newest phase.
+    if (getVisiblePresentationPaintBounds().isEmpty()) return;
     invalidatePresentation();
 }
 

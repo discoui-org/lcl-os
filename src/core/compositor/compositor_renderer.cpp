@@ -3,6 +3,7 @@
 #include "core/compositor/effect_region_geometry.hpp"
 #include "core/compositor/mobile_launch_backdrop.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
+#include "core/compositor/surface_damage_geometry.hpp"
 #include "lcl-theme/theme.hpp"
 #include "render/window_group_transform.hpp"
 
@@ -19,13 +20,26 @@ void CompositorRenderer::render(render::Renderer& renderer,
                                  const render::WindowManager& windowManager,
                                  const SurfaceRegistry::Snapshot& surfaces,
                                  const std::function<void()>& beforePresent,
-                                 bool allowIncrementalMove,
+                                 bool allowIncrementalDamage,
                                  bool useMobilePresentation) const {
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     // The snapshot contains only const entry pointers, so protocol/input work
     // cannot mutate the surface state while this frame is being composed.
 
     auto* raster = renderer.getRasterRenderer();
+    const uint64_t resourceGeneration = raster->getResourceGeneration();
+    const uint32_t frameWidth = renderer.getWidth();
+    const uint32_t frameHeight = renderer.getHeight();
+    if (m_retainedFrameResourceGeneration != resourceGeneration ||
+        m_retainedFrameWidth != frameWidth ||
+        m_retainedFrameHeight != frameHeight) {
+        m_hasCompleteRetainedFrame = false;
+        m_retainedFrameResourceGeneration = resourceGeneration;
+        m_retainedFrameWidth = frameWidth;
+        m_retainedFrameHeight = frameHeight;
+        m_composedSurfaceFrames.clear();
+        m_retainedBackdropBases.clear();
+    }
     std::unordered_set<uint32_t> liveWindowIds;
     for (const auto& window : windowManager.getWindows()) {
         liveWindowIds.insert(window.id);
@@ -44,36 +58,83 @@ void CompositorRenderer::render(render::Renderer& renderer,
         cached = m_retainedWindowGroups.erase(cached);
     }
 
+    std::unordered_set<SurfaceRegistry::Key> liveSurfaceKeys;
+    for (const auto& surface : surfaces) {
+        if (surface.entry) liveSurfaceKeys.insert(surface.key);
+    }
+    for (auto composed = m_composedSurfaceFrames.begin();
+         composed != m_composedSurfaceFrames.end();) {
+        if (liveSurfaceKeys.contains(composed->first)) {
+            ++composed;
+        } else {
+            composed = m_composedSurfaceFrames.erase(composed);
+        }
+    }
+    for (auto cached = m_retainedBackdropBases.begin();
+         cached != m_retainedBackdropBases.end();) {
+        if (liveSurfaceKeys.contains(cached->first)) {
+            ++cached;
+            continue;
+        }
+        if (cached->second.resourceGeneration == resourceGeneration) {
+            raster->destroyCachedLayerTarget(
+                cached->second.framebuffer, cached->second.texture);
+        }
+        cached = m_retainedBackdropBases.erase(cached);
+    }
+
     std::optional<graphics::RectF> incrementalDamage;
-#if defined(__ANDROID__)
+    std::optional<SurfaceRegistry::Key> incrementalBackdropSurfaceKey;
     const bool hasPendingAtomicConfigure = std::any_of(
         surfaces.begin(), surfaces.end(), [](const auto& surface) {
             return surface.entry &&
                 surface.entry->atomicConfigureGeneration != 0;
         });
-    // Blur and Glass sample pixels outside their own effect bounds. Replaying
-    // only old+new window damage would therefore sample a partly stale retained
-    // scene and leave trails. Until damage dependencies are closed transitively,
-    // render the complete scene whenever a visible surface uses either filter.
-    const bool hasNonLocalSceneEffect = std::any_of(
-        surfaces.begin(), surfaces.end(), [](const auto& surface) {
-            if (!surface.entry || !surface.entry->hasRenderableBuffer()) {
-                return false;
-            }
-            return std::any_of(
-                surface.entry->effectRegions.begin(), surface.entry->effectRegions.end(),
-                [](const auto& effectRegion) {
-                    return std::any_of(
-                        effectRegion.filters.begin(), effectRegion.filters.end(),
-                        [](const auto& filter) {
-                            return filterReadsNeighboringPixels(filter.type);
-                        });
+    // Blur and Glass sample pixels outside their own effect bounds. A normal
+    // incremental replay is therefore unsafe. The one bounded exception is a
+    // client-only update on the same surface: its already-filtered pre-client
+    // backdrop can be restored from an immutable cache before the new layer is
+    // composited over it.
+    std::unordered_set<SurfaceRegistry::Key> nonLocalEffectSurfaces;
+    bool nonLocalEffectsAreBackdropOnly = true;
+    for (const auto& surface : surfaces) {
+        if (!surface.entry || !surface.entry->hasRenderableBuffer() ||
+            surface.entry->pendingDestroy) {
+            continue;
+        }
+        for (const auto& effectRegion : surface.entry->effectRegions) {
+            const bool readsNeighbors = std::any_of(
+                effectRegion.filters.begin(), effectRegion.filters.end(),
+                [](const auto& filter) {
+                    return filterReadsNeighboringPixels(filter.type);
                 });
-        });
+            if (!readsNeighbors) continue;
+            nonLocalEffectSurfaces.insert(surface.key);
+            if (effectRegion.region.source !=
+                protocol::EffectSourceType::Backdrop) {
+                nonLocalEffectsAreBackdropOnly = false;
+            }
+        }
+    }
+    const bool hasNonLocalSceneEffect = !nonLocalEffectSurfaces.empty();
+    for (auto cached = m_retainedBackdropBases.begin();
+         cached != m_retainedBackdropBases.end();) {
+        if (nonLocalEffectSurfaces.contains(cached->first)) {
+            ++cached;
+            continue;
+        }
+        if (cached->second.resourceGeneration == resourceGeneration) {
+            raster->destroyCachedLayerTarget(
+                cached->second.framebuffer, cached->second.texture);
+        }
+        cached = m_retainedBackdropBases.erase(cached);
+    }
 
-    if (allowIncrementalMove && m_hasCompleteRetainedFrame &&
-        !hasPendingAtomicConfigure &&
-        !hasNonLocalSceneEffect) {
+    const bool gpuRetainedScene =
+        raster->getBackendType() == render::RasterBackend::OpenGL_EGL;
+    if (gpuRetainedScene && allowIncrementalDamage &&
+        m_hasCompleteRetainedFrame &&
+        !hasPendingAtomicConfigure) {
         bool hasDirtyWindow = false;
         bool moveOnly = true;
         graphics::RectF mergedDamage{};
@@ -118,7 +179,100 @@ void CompositorRenderer::render(render::Renderer& renderer,
             }
         }
 
-        if (hasDirtyWindow && moveOnly && !mergedDamage.isEmpty()) {
+        bool hasChangedSurface = false;
+        size_t changedSurfaceCount = 0;
+        SurfaceRegistry::Key changedSurfaceKey = 0;
+        bool contentDamageOnly = true;
+        graphics::RectF mergedContentDamage{};
+        const graphics::RectF outputBounds{
+            0.0f, 0.0f,
+            windowManager.getScreenWidth(),
+            windowManager.getScreenHeight(),
+        };
+        for (const auto& surface : surfaces) {
+            const auto* entry = surface.entry;
+            if (!entry || !entry->hasRenderableBuffer() ||
+                entry->pendingDestroy) {
+                continue;
+            }
+            const ComposedSurfaceFrame current{
+                entry->frameSerial,
+                entry->shmContentSerial,
+                entry->rasterLayerId,
+            };
+            const auto previous = m_composedSurfaceFrames.find(surface.key);
+            const bool changed = previous == m_composedSurfaceFrames.end() ||
+                previous->second.frameSerial != current.frameSerial ||
+                previous->second.shmContentSerial != current.shmContentSerial ||
+                previous->second.rasterLayerId != current.rasterLayerId;
+            if (!changed) continue;
+            hasChangedSurface = true;
+            ++changedSurfaceCount;
+            changedSurfaceKey = surface.key;
+
+            // Begin narrowly with regular parent surfaces. Attached and popup
+            // geometry can extend outside the parent content destination and
+            // therefore requires its own dependency closure.
+            if (entry->isAttached() || entry->isPopup() ||
+                entry->atomicConfigureGeneration != 0 ||
+                entry->shmDamageWidth == 0 ||
+                entry->shmDamageHeight == 0 ||
+                entry->launchMorphActive ||
+                (useMobilePresentation &&
+                 entry->systemSurfaceKind !=
+                     protocol::LCLSystemSurfaceKind::None) ||
+                std::fabs(entry->transitionOpacity - 1.0f) > 0.0001f ||
+                std::fabs(entry->transitionScale - 1.0f) > 0.0001f) {
+                contentDamageOnly = false;
+                break;
+            }
+
+            const auto window = std::find_if(
+                windowManager.getWindows().begin(),
+                windowManager.getWindows().end(),
+                [entry](const auto& candidate) {
+                    return candidate.id == entry->windowId;
+                });
+            if (window == windowManager.getWindows().end() ||
+                window->isMinimized) {
+                contentDamageOnly = false;
+                break;
+            }
+
+            const float titleOffset =
+                window->decorationMode == render::DecorationMode::SSD
+                    ? 32.0f : 0.0f;
+            const auto group = render::makeWindowGroupTransform(
+                *window, titleOffset, 1.0f);
+            graphics::RectF destination = group.globalBounds;
+            if (window->decorationMode == render::DecorationMode::SSD) {
+                destination.y += group.titleHeight;
+                destination.height = std::max(
+                    1.0f, destination.height - group.titleHeight);
+            }
+            const float scale = std::max(0.001f, entry->bufferScale);
+            if (std::fabs(destination.width * scale - entry->width) > 1.0f ||
+                std::fabs(destination.height * scale - entry->height) > 1.0f) {
+                // The normal contract is exact geometry. A defensive cropped
+                // presentation cannot safely use normalized damage mapping.
+                contentDamageOnly = false;
+                break;
+            }
+            const auto mapped = mapSurfaceDamageToDestination(
+                entry->width, entry->height,
+                entry->shmDamageX, entry->shmDamageY,
+                entry->shmDamageWidth, entry->shmDamageHeight,
+                destination, outputBounds);
+            if (!mapped) {
+                contentDamageOnly = false;
+                break;
+            }
+            mergedContentDamage = mergedContentDamage.unionWith(*mapped);
+        }
+
+        if (hasDirtyWindow && moveOnly && !hasChangedSurface &&
+            !hasNonLocalSceneEffect &&
+            !mergedDamage.isEmpty()) {
             // Cover antialiased window edges and fractional motion before
             // clipping to the logical output. There are currently no exterior
             // compositor shadows; if one is introduced its radius must be
@@ -130,22 +284,76 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 mergedDamage.width + kEdgeSafety * 2.0f,
                 mergedDamage.height + kEdgeSafety * 2.0f,
             };
-            const graphics::RectF outputBounds{
-                0.0f, 0.0f,
-                windowManager.getScreenWidth(),
-                windowManager.getScreenHeight(),
-            };
             const auto clipped = expanded.intersection(outputBounds);
             if (!clipped.isEmpty()) incrementalDamage = clipped;
+        } else if (!hasDirtyWindow && hasChangedSurface &&
+                   contentDamageOnly && !mergedContentDamage.isEmpty()) {
+            const bool ordinaryDamage = !hasNonLocalSceneEffect;
+            bool cachedBackdropDamage = false;
+            if (!ordinaryDamage &&
+                nonLocalEffectSurfaces.contains(changedSurfaceKey)) {
+                const auto changedSurface = std::find_if(
+                    surfaces.begin(), surfaces.end(),
+                    [changedSurfaceKey](const auto& candidate) {
+                        return candidate.key == changedSurfaceKey;
+                    });
+                const auto cached =
+                    m_retainedBackdropBases.find(changedSurfaceKey);
+                if (changedSurface != surfaces.end() &&
+                    changedSurface->entry &&
+                    cached != m_retainedBackdropBases.end()) {
+                    const auto& entry = *changedSurface->entry;
+                    const auto window = std::find_if(
+                        windowManager.getWindows().begin(),
+                        windowManager.getWindows().end(),
+                        [&entry](const auto& candidate) {
+                            return candidate.id == entry.windowId;
+                        });
+                    if (window != windowManager.getWindows().end()) {
+                        const float titleOffset =
+                            window->decorationMode ==
+                                render::DecorationMode::SSD
+                                ? 32.0f : 0.0f;
+                        const auto group = render::makeWindowGroupTransform(
+                            *window, titleOffset, entry.transitionScale);
+                        const auto expectedBounds =
+                            group.globalBounds.intersection(outputBounds);
+                        const auto& base = cached->second;
+                        const auto same = [](float lhs, float rhs) {
+                            return std::fabs(lhs - rhs) <= 0.0001f;
+                        };
+                        const bool retainedBackdropMatches = base.valid &&
+                            base.resourceGeneration == resourceGeneration &&
+                            base.effectRevision == entry.effectRevision &&
+                            same(base.bounds.x, expectedBounds.x) &&
+                            same(base.bounds.y, expectedBounds.y) &&
+                            same(base.bounds.width, expectedBounds.width) &&
+                            same(base.bounds.height, expectedBounds.height) &&
+                            same(base.windowOpacity, entry.transitionOpacity) &&
+                            same(base.windowScale, entry.transitionScale);
+                        cachedBackdropDamage =
+                            canReuseRetainedBackdropForClientDamage(
+                                changedSurfaceCount,
+                                nonLocalEffectSurfaces.size(),
+                                nonLocalEffectsAreBackdropOnly,
+                                true,
+                                retainedBackdropMatches);
+                    }
+                }
+            }
+            if (ordinaryDamage || cachedBackdropDamage) {
+                incrementalDamage = mergedContentDamage;
+                if (cachedBackdropDamage) {
+                    incrementalBackdropSurfaceKey = changedSurfaceKey;
+                }
+            }
         }
     }
 
-    // The Android scene FBO is the retained source of truth. Other platform
-    // binaries keep their existing full-frame beginFrame behavior.
-    raster->setRetainsFrameBacking(true);
-#else
-    (void)allowIncrementalMove;
-#endif
+    // All GPU platforms retain one authoritative compositor scene. Rotating
+    // output buffers are still populated by RasterRenderer::endFrame; only
+    // scene composition is clipped here.
+    raster->setRetainsFrameBacking(gpuRetainedScene);
 
     // --- Begin LCL raster frame ---
     raster->beginFrame();
@@ -157,6 +365,63 @@ void CompositorRenderer::render(render::Renderer& renderer,
         0.0f, 0.0f,
         windowManager.getScreenWidth(),
         windowManager.getScreenHeight(),
+    };
+    auto drawRetainedBackdropBase = [&](SurfaceRegistry::Key surfaceKey) {
+        const auto cached = m_retainedBackdropBases.find(surfaceKey);
+        if (cached == m_retainedBackdropBases.end() ||
+            !cached->second.valid || cached->second.texture == 0 ||
+            cached->second.resourceGeneration !=
+                raster->getResourceGeneration()) {
+            return false;
+        }
+        raster->drawCachedLayerTexture(
+            cached->second.texture,
+            {cached->second.bounds.x, cached->second.bounds.y,
+             cached->second.bounds.width, cached->second.bounds.height});
+        return true;
+    };
+    auto retainBackdropBase = [&](SurfaceRegistry::Key surfaceKey,
+                                  const graphics::RectF& visualBounds,
+                                  uint64_t effectRevision,
+                                  float windowOpacity,
+                                  float windowScale) {
+        if (!gpuRetainedScene) return;
+        const auto clipped = visualBounds.intersection(outputBounds);
+        if (clipped.isEmpty()) return;
+        const uint32_t pixelWidth = std::max(
+            1u, static_cast<uint32_t>(std::ceil(clipped.width * outputScale)));
+        const uint32_t pixelHeight = std::max(
+            1u, static_cast<uint32_t>(std::ceil(clipped.height * outputScale)));
+        auto& cached = m_retainedBackdropBases[surfaceKey];
+        if (cached.resourceGeneration != raster->getResourceGeneration()) {
+            cached = {};
+            cached.resourceGeneration = raster->getResourceGeneration();
+        }
+        const bool recreate = cached.pixelWidth != pixelWidth ||
+            cached.pixelHeight != pixelHeight || cached.framebuffer == 0 ||
+            cached.texture == 0;
+        if (recreate) {
+            raster->destroyCachedLayerTarget(
+                cached.framebuffer, cached.texture);
+            cached.framebuffer = 0;
+            cached.texture = 0;
+            cached.valid = false;
+            if (!raster->createCachedLayerTarget(
+                    pixelWidth, pixelHeight,
+                    cached.framebuffer, cached.texture)) {
+                return;
+            }
+        }
+        cached.pixelWidth = pixelWidth;
+        cached.pixelHeight = pixelHeight;
+        cached.bounds = clipped;
+        cached.effectRevision = effectRevision;
+        cached.windowOpacity = windowOpacity;
+        cached.windowScale = windowScale;
+        cached.valid = raster->copyFrameRegionToCachedLayer(
+            cached.framebuffer, cached.texture, nullptr,
+            pixelWidth, pixelHeight,
+            {clipped.x, clipped.y, clipped.width, clipped.height});
     };
     auto groupHasPendingAtomicConfigure = [&](uint32_t windowId) {
         return std::any_of(
@@ -212,10 +477,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
             cached = {};
             cached.resourceGeneration = raster->getResourceGeneration();
         }
-        if (cached.pixelWidth != pixelWidth ||
+        const bool boundsChanged =
+            std::fabs(cached.bounds.x - clipped.x) > 0.0001f ||
+            std::fabs(cached.bounds.y - clipped.y) > 0.0001f ||
+            std::fabs(cached.bounds.width - clipped.width) > 0.0001f ||
+            std::fabs(cached.bounds.height - clipped.height) > 0.0001f;
+        const bool recreate = cached.pixelWidth != pixelWidth ||
             cached.pixelHeight != pixelHeight ||
             (gpu && (cached.framebuffer == 0 || cached.texture == 0)) ||
-            (!gpu && (cached.framebuffer != 0 || cached.texture != 0))) {
+            (!gpu && (cached.framebuffer != 0 || cached.texture != 0));
+        if (recreate) {
             raster->destroyCachedLayerTarget(
                 cached.framebuffer, cached.texture);
             cached.framebuffer = 0;
@@ -238,6 +509,19 @@ void CompositorRenderer::render(render::Renderer& renderer,
         } else {
             cached.pixels.resize(
                 static_cast<size_t>(pixelWidth) * pixelHeight);
+        }
+        if (incrementalDamage && cached.valid && !recreate &&
+            !boundsChanged) {
+            if (clipped.intersects(*incrementalDamage)) {
+                cached.valid = raster->copyFrameDamageToCachedLayer(
+                    cached.framebuffer, cached.texture,
+                    cached.pixels.empty() ? nullptr : cached.pixels.data(),
+                    pixelWidth, pixelHeight,
+                    {clipped.x, clipped.y, clipped.width, clipped.height},
+                    {incrementalDamage->x, incrementalDamage->y,
+                     incrementalDamage->width, incrementalDamage->height});
+            }
+            return;
         }
         cached.valid = raster->copyFrameRegionToCachedLayer(
             cached.framebuffer, cached.texture,
@@ -423,8 +707,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
         }
     };
 
-    // 1. Clear either the complete desktop or only the old+new move damage.
-#if defined(__ANDROID__)
+    // 1. Clear either the complete scene or only the merged move/content damage.
     if (incrementalDamage) {
         const render::RasterRect damage{
             incrementalDamage->x, incrementalDamage->y,
@@ -437,9 +720,6 @@ void CompositorRenderer::render(render::Renderer& renderer,
         raster->clear({0, 0, 0, 255});
         m_hasCompleteRetainedFrame = true;
     }
-#else
-    renderer.clear(0xFF000000);
-#endif
 
     // 2. Atomic Z-Stacking Window Group Rendering (Frame + Client Surface per Window in Z-order)
     auto applySurfaceRegionEffects = [&](const render::Window& win,
@@ -575,11 +855,38 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
         const graphics::RectF groupVisualBounds = group.globalBounds;
 
-        // B. Apply effect-graph backdrop regions (new pipeline only)
-        if (matchingSurface && matchingSurface->hasRenderableBuffer() &&
-            !matchingSurface->effectRegions.empty()) {
-            applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Backdrop,
-                                      windowOpacity, group);
+        // B. Apply effect-graph backdrop regions. When only this client's
+        // retained layer changed, restore the already-filtered pre-client base
+        // instead of executing an unchanged full-surface blur again.
+        const bool reusingBackdropBase = matchingSurface &&
+            incrementalBackdropSurfaceKey &&
+            *incrementalBackdropSurfaceKey == matchingSurfaceKey;
+        const bool hasNonLocalBackdrop = matchingSurface && std::any_of(
+            matchingSurface->effectRegions.begin(),
+            matchingSurface->effectRegions.end(), [](const auto& region) {
+                return region.region.source ==
+                        protocol::EffectSourceType::Backdrop &&
+                    std::any_of(
+                        region.filters.begin(), region.filters.end(),
+                        [](const auto& filter) {
+                            return filterReadsNeighboringPixels(filter.type);
+                        });
+            });
+        if (reusingBackdropBase) {
+            (void)drawRetainedBackdropBase(matchingSurfaceKey);
+        } else if (matchingSurface &&
+                   matchingSurface->hasRenderableBuffer() &&
+                   !matchingSurface->effectRegions.empty()) {
+            applySurfaceRegionEffects(
+                win, *matchingSurface,
+                protocol::EffectSourceType::Backdrop,
+                windowOpacity, group);
+            if (!incrementalDamage && hasNonLocalBackdrop) {
+                retainBackdropBase(
+                    matchingSurfaceKey, group.globalBounds,
+                    matchingSurface->effectRevision,
+                    windowOpacity, windowScale);
+            }
         }
 
         if (matchingSurface) {
@@ -863,6 +1170,16 @@ void CompositorRenderer::render(render::Renderer& renderer,
     raster->setClipRect(std::nullopt);
     if (beforePresent) beforePresent();
     renderer.swapBuffers();
+
+    for (const auto& surface : surfaces) {
+        const auto* entry = surface.entry;
+        if (!entry || entry->atomicConfigureGeneration != 0) continue;
+        m_composedSurfaceFrames[surface.key] = {
+            entry->frameSerial,
+            entry->shmContentSerial,
+            entry->rasterLayerId,
+        };
+    }
 }
 
 } // namespace lcl::core

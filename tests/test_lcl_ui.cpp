@@ -100,6 +100,15 @@ public:
         cachedLayerBounds.push_back(bounds);
         return true;
     }
+    bool beginCachedLayerUpdate(CachedLayerId id,
+                                const graphics::RectF& bounds,
+                                const graphics::RectF& updateBounds) override {
+        ++cachedLayerUpdateBeginCount;
+        activeCachedLayer = id;
+        cachedLayerBounds.push_back(bounds);
+        cachedLayerUpdateBounds.push_back(updateBounds);
+        return cachedLayers.contains(id);
+    }
     void endCachedLayer() override {
         ++cachedLayerEndCount;
         cachedLayers.insert(activeCachedLayer);
@@ -195,6 +204,7 @@ public:
     int pathDrawCount{0};
     int targetSetCount{0};
     int cachedLayerBeginCount{0};
+    int cachedLayerUpdateBeginCount{0};
     int cachedLayerEndCount{0};
     int cachedLayerDrawCount{0};
     CachedLayerId activeCachedLayer{0};
@@ -217,6 +227,7 @@ public:
     std::vector<graphics::RectF> textPositions;
     std::vector<graphics::RectF> clips;
     std::vector<graphics::RectF> cachedLayerBounds;
+    std::vector<graphics::RectF> cachedLayerUpdateBounds;
     std::vector<graphics::RectF> cachedLayerDestinations;
     std::vector<float> roundedRadii;
     std::vector<float> borderWidths;
@@ -3549,6 +3560,32 @@ TEST(LclUiTest, DisplayListTransportRecordsOnlyTheDamagedPatchAfterFirstFrame) {
     EXPECT_LT(clear->rect.height, 120.0f);
 }
 
+TEST(LclUiTest, WindowAppLayoutChangeDamagesChangedWidgetsNotFullSurface) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    WindowApp app(std::move(canvas), 200, 120, "Retained layout damage");
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(200.0f);
+    root->setHeight(120.0f);
+    root->setDirection(layout::Direction::Column);
+    root->setAlignItems(layout::Align::FlexStart);
+    auto label = std::make_unique<Text>("i");
+    Text* labelPtr = label.get();
+    root->addChild(std::move(label));
+    app.setRootWidget(std::move(root));
+
+    ASSERT_TRUE(app.renderFrame());
+    recorded->clearedRects.clear();
+    labelPtr->setText("WWWWWWWW");
+    ASSERT_TRUE(app.renderFrame());
+
+    ASSERT_FALSE(recorded->clearedRects.empty());
+    for (const graphics::RectF& cleared : recorded->clearedRects) {
+        EXPECT_LT(cleared.height, 120.0f);
+    }
+}
+
 TEST(LclUiTest, RasterRendererClearRectReplacesOnlyRequestedRetainedPixels) {
     std::vector<uint32_t> pixels(8 * 8, 0xFF123456u);
     lcl::render::RasterRenderer renderer;
@@ -3580,6 +3617,31 @@ TEST(LclUiTest, RasterRendererCopiesACompositedRegionIntoOwnedPixels) {
     EXPECT_EQ(retained[1], 0xFF000007u);
     EXPECT_EQ(retained[2], 0xFF00000Au);
     EXPECT_EQ(retained[3], 0xFF00000Bu);
+}
+
+TEST(LclUiTest, RasterRendererPatchesOnlyDamagedPixelsInOwnedCache) {
+    std::vector<uint32_t> pixels{
+        0xFF000001u, 0xFF000002u, 0xFF000003u, 0xFF000004u,
+        0xFF000005u, 0xFF000006u, 0xFF000007u, 0xFF000008u,
+        0xFF000009u, 0xFF00000Au, 0xFF00000Bu, 0xFF00000Cu,
+        0xFF00000Du, 0xFF00000Eu, 0xFF00000Fu, 0xFF000010u,
+    };
+    std::vector<uint32_t> retained(4, 0u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(4, 4, nullptr, pixels.data()));
+    ASSERT_TRUE(renderer.copyFrameRegionToCachedLayer(
+        0, 0, retained.data(), 2, 2, {1.0f, 1.0f, 2.0f, 2.0f}));
+
+    pixels[2 + 2 * 4] = 0xFFABCDEFu;
+    ASSERT_TRUE(renderer.copyFrameDamageToCachedLayer(
+        0, 0, retained.data(), 2, 2,
+        {1.0f, 1.0f, 2.0f, 2.0f},
+        {2.0f, 2.0f, 1.0f, 1.0f}));
+
+    EXPECT_EQ(retained[0], 0xFF000006u);
+    EXPECT_EQ(retained[1], 0xFF000007u);
+    EXPECT_EQ(retained[2], 0xFF00000Au);
+    EXPECT_EQ(retained[3], 0xFFABCDEFu);
 }
 
 TEST(LclUiTest, RasterRendererRetainedModeDoesNotClearUnchangedFramePixels) {
@@ -4659,12 +4721,18 @@ TEST(LclUiTest, ScrollViewSkipsDirtyWorkWhenClampedOffsetDoesNotChange) {
     scrollView->syncLayout();
     pass.clear();
 
+    const uint64_t paintRevision = scrollView->getPaintRevision();
+    const uint64_t presentationRevision =
+        scrollView->getPresentationRevision();
+
     scrollView->setScrollY(-20.0f);
     EXPECT_FALSE(pass.hasDamage());
 
     scrollView->setScrollY(80.0f);
     EXPECT_TRUE(pass.hasDamage());
     EXPECT_FLOAT_EQ(scrollView->getScrollY(), 80.0f);
+    EXPECT_EQ(scrollView->getPaintRevision(), paintRevision);
+    EXPECT_GT(scrollView->getPresentationRevision(), presentationRevision);
 
     pass.clear();
     scrollView->setScrollY(80.0f);
@@ -4707,7 +4775,7 @@ TEST(LclUiTest, PureScrollChangesOnlyTheScrollViewPresentationRevision) {
     EXPECT_FALSE(scrollPtr->isLayoutDirty());
 }
 
-TEST(LclUiTest, ScrollViewCachesContentUntilPaintOrGeometryChanges) {
+TEST(LclUiTest, ScrollViewPatchesPaintAndRebuildsOnlyForGeometryChanges) {
     RecordingCanvas canvas;
     auto scrollView = std::make_unique<ScrollView>();
     scrollView->setWidth(200.0f);
@@ -4741,24 +4809,190 @@ TEST(LclUiTest, ScrollViewCachesContentUntilPaintOrGeometryChanges) {
     paintedChildPointer->invalidatePaint();
     scrollView->draw(canvas, fullDamage);
     EXPECT_EQ(paintedChildPointer->paintCount, 2);
-    EXPECT_EQ(canvas.cachedLayerBeginCount, 2);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_EQ(canvas.cachedLayerUpdateBeginCount, 1);
 
     paintedChildPointer->setHeight(340.0f);
     scrollView->calculateLayout(200.0f, 100.0f);
     scrollView->syncLayout();
     scrollView->draw(canvas, fullDamage);
     EXPECT_EQ(paintedChildPointer->paintCount, 3);
-    EXPECT_EQ(canvas.cachedLayerBeginCount, 3);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 2);
 
     scrollView->setHeight(120.0f);
     scrollView->calculateLayout(200.0f, 120.0f);
     scrollView->syncLayout();
     scrollView->draw(canvas, fullDamage);
     EXPECT_EQ(paintedChildPointer->paintCount, 4);
-    EXPECT_EQ(canvas.cachedLayerBeginCount, 4);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 3);
     ASSERT_FALSE(canvas.clips.empty());
     EXPECT_FLOAT_EQ(canvas.clips.back().width, 200.0f);
     EXPECT_FLOAT_EQ(canvas.clips.back().height, 120.0f);
+
+    // Cached-layer identity includes its logical source origin. Moving the
+    // ScrollView in a parent layout must rebuild rather than partially patch a
+    // newly allocated empty rasterd cache.
+    scrollView->syncLayout(12.0f, 8.0f);
+    scrollView->draw(canvas, fullDamage);
+    EXPECT_EQ(paintedChildPointer->paintCount, 5);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 4);
+}
+
+TEST(LclUiTest, ScrollViewPatchesEveryPaintRegionInOneRenderPass) {
+    RecordingCanvas canvas;
+    RenderPass pass;
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(120.0f);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    content->setHeight(360.0f);
+
+    auto first = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* firstPtr = first.get();
+    first->setPositionType(layout::PositionType::Absolute);
+    first->setPosition(layout::Edge::Top, 10.0f);
+    first->setWidth(200.0f);
+    first->setHeight(30.0f);
+    content->addChild(std::move(first));
+
+    auto second = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* secondPtr = second.get();
+    second->setPositionType(layout::PositionType::Absolute);
+    second->setPosition(layout::Edge::Top, 70.0f);
+    second->setWidth(200.0f);
+    second->setHeight(30.0f);
+    content->addChild(std::move(second));
+
+    scrollView->setContent(std::move(content));
+    scrollView->calculateLayout(200.0f, 120.0f);
+    scrollView->syncLayout();
+    scrollView->setRenderPass(&pass);
+    pass.clear();
+
+    const graphics::RectF fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
+    scrollView->draw(canvas, fullDamage);
+    ASSERT_EQ(canvas.cachedLayerBeginCount, 1);
+    ASSERT_EQ(firstPtr->paintCount, 1);
+    ASSERT_EQ(secondPtr->paintCount, 1);
+
+    firstPtr->invalidatePaint();
+    secondPtr->invalidatePaint();
+    const std::vector<graphics::RectF> frameDamage = pass.getDirtyRects();
+    ASSERT_EQ(frameDamage.size(), 2u);
+    pass.clear();
+    pass.begin(canvas, frameDamage);
+    for (const graphics::RectF& damage : frameDamage) {
+        scrollView->draw(canvas, damage);
+    }
+    pass.end(canvas);
+
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_EQ(canvas.cachedLayerUpdateBeginCount, 2);
+    EXPECT_EQ(firstPtr->paintCount, 2);
+    EXPECT_EQ(secondPtr->paintCount, 2);
+    ASSERT_EQ(canvas.cachedLayerUpdateBounds.size(), 2u);
+    EXPECT_LT(canvas.cachedLayerUpdateBounds.front().height, 40.0f);
+    EXPECT_LT(canvas.cachedLayerUpdateBounds.back().height, 40.0f);
+}
+
+TEST(LclUiTest, ScrollViewButtonAndSpinnerSharePartialCacheUpdates) {
+    RecordingCanvas canvas;
+    RenderPass pass;
+    MotionCoordinator coordinator;
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(120.0f);
+    scrollView->setRenderPass(&pass);
+    scrollView->setMotionCoordinator(&coordinator);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    content->setHeight(320.0f);
+
+    auto button = std::make_unique<Button>("Press");
+    Button* buttonPtr = button.get();
+    button->setPositionType(layout::PositionType::Absolute);
+    button->setPosition(layout::Edge::Top, 10.0f);
+    button->setWidth(140.0f);
+    button->setHeight(40.0f);
+    content->addChild(std::move(button));
+
+    auto spinner = std::make_unique<ProgressView>();
+    spinner->setPositionType(layout::PositionType::Absolute);
+    spinner->setPosition(layout::Edge::Top, 75.0f);
+    content->addChild(std::move(spinner));
+
+    scrollView->setContent(std::move(content));
+    scrollView->calculateLayout(200.0f, 120.0f);
+    scrollView->syncLayout();
+    pass.clear();
+
+    const graphics::RectF fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
+    scrollView->draw(canvas, fullDamage);
+    ASSERT_EQ(canvas.cachedLayerBeginCount, 1);
+    ASSERT_TRUE(coordinator.hasActiveAnimations());
+
+    pass.clear();
+    ASSERT_TRUE(buttonPtr->onPointerDown(PointerEvent{}));
+    coordinator.tick(1.0f / 60.0f);
+    const std::vector<graphics::RectF> frameDamage = pass.getDirtyRects();
+    ASSERT_FALSE(frameDamage.empty());
+    pass.clear();
+    pass.begin(canvas, frameDamage);
+    for (const graphics::RectF& damage : frameDamage) {
+        scrollView->draw(canvas, damage);
+    }
+    pass.end(canvas);
+
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_GT(canvas.cachedLayerUpdateBeginCount, 0);
+}
+
+TEST(LclUiTest, WindowAppSliderValueAndTextPatchScrollCache) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    WindowApp app(std::move(canvas), 240, 160, "Slider cache damage");
+
+    auto root = std::make_unique<Container>();
+    root->setWidth(240.0f);
+    root->setHeight(160.0f);
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(120.0f);
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    content->setHeight(360.0f);
+
+    auto status = std::make_unique<Text>("Value: 35");
+    Text* statusPtr = status.get();
+    status->setPositionType(layout::PositionType::Absolute);
+    status->setPosition(layout::Edge::Top, 10.0f);
+    content->addChild(std::move(status));
+
+    auto slider = std::make_unique<Slider>(35.0f, 0.0f, 100.0f, 1.0f);
+    Slider* sliderPtr = slider.get();
+    slider->setPositionType(layout::PositionType::Absolute);
+    slider->setPosition(layout::Edge::Top, 50.0f);
+    slider->setWidth(180.0f);
+    slider->setOnChange([statusPtr](float value) {
+        statusPtr->setText(
+            "Value: " + std::to_string(static_cast<int>(value)));
+    });
+    content->addChild(std::move(slider));
+
+    scrollView->setContent(std::move(content));
+    root->addChild(std::move(scrollView));
+    app.setRootWidget(std::move(root));
+
+    ASSERT_TRUE(app.renderFrame());
+    ASSERT_EQ(recorded->cachedLayerBeginCount, 1);
+    sliderPtr->setValue(88.0f);
+    ASSERT_TRUE(app.renderFrame());
+
+    EXPECT_EQ(recorded->cachedLayerBeginCount, 1);
+    EXPECT_GT(recorded->cachedLayerUpdateBeginCount, 0);
 }
 
 TEST(LclUiTest, ScrollViewDoesNotRerasterLongContentEachAnimationTick) {
@@ -4795,12 +5029,14 @@ TEST(LclUiTest, ScrollViewDoesNotRerasterLongContentEachAnimationTick) {
     ASSERT_TRUE(childPtr->hasActiveAnimationInSubtree());
     scrollView->draw(canvas, fullDamage);
     EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_EQ(canvas.cachedLayerUpdateBeginCount, 1);
     EXPECT_GT(childPtr->paintCount, initialPaints);
 
     coordinator.tick(0.2f);
     ASSERT_FALSE(childPtr->hasActiveAnimationInSubtree());
     scrollView->draw(canvas, fullDamage);
-    EXPECT_EQ(canvas.cachedLayerBeginCount, 2);
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_EQ(canvas.cachedLayerUpdateBeginCount, 2);
 }
 
 TEST(LclUiTest, ScrollViewDefersOffscreenProceduralPresentationRaster) {
@@ -4825,13 +5061,42 @@ TEST(LclUiTest, ScrollViewDefersOffscreenProceduralPresentationRaster) {
     const graphics::RectF fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
     scrollView->draw(canvas, fullDamage);
     ASSERT_EQ(canvas.cachedLayerBeginCount, 1);
+    ASSERT_EQ(canvas.cachedLayerBounds.size(), 1u);
+    const graphics::RectF stableCacheSource = canvas.cachedLayerBounds.front();
     ASSERT_TRUE(coordinator.hasActiveAnimations());
 
+    const uint64_t offscreenRevision =
+        scrollView->getContent()->getPresentationRevision();
     coordinator.tick(1.0f / 60.0f);
+    EXPECT_EQ(scrollView->getContent()->getPresentationRevision(),
+              offscreenRevision);
     scrollView->draw(canvas, fullDamage);
 
     EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_EQ(canvas.cachedLayerUpdateBeginCount, 0);
     EXPECT_EQ(canvas.cachedLayerDrawCount, 2);
+
+    // Revealing the spinner must update the existing content cache in its
+    // stable, unscrolled coordinate system. A scroll-shifted source origin
+    // would make rasterd allocate an empty cache and preserve only the spinner
+    // update, causing every other ScrollView element to disappear.
+    scrollView->setScrollY(250.0f);
+    scrollView->draw(canvas, fullDamage);
+
+    EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
+    EXPECT_EQ(canvas.cachedLayerUpdateBeginCount, 1);
+    ASSERT_EQ(canvas.cachedLayerBounds.size(), 2u);
+    const graphics::RectF partialUpdateSource = canvas.cachedLayerBounds.back();
+    EXPECT_FLOAT_EQ(partialUpdateSource.x, stableCacheSource.x);
+    EXPECT_FLOAT_EQ(partialUpdateSource.y, stableCacheSource.y);
+    EXPECT_FLOAT_EQ(partialUpdateSource.width, stableCacheSource.width);
+    EXPECT_FLOAT_EQ(partialUpdateSource.height, stableCacheSource.height);
+    ASSERT_EQ(canvas.cachedLayerUpdateBounds.size(), 1u);
+    EXPECT_GT(canvas.cachedLayerUpdateBounds.front().y,
+              stableCacheSource.y + 200.0f);
+    ASSERT_EQ(canvas.cachedLayerDestinations.size(), 3u);
+    EXPECT_FLOAT_EQ(canvas.cachedLayerDestinations.back().y,
+                    stableCacheSource.y - 250.0f);
 }
 
 TEST(LclUiTest, ScrollViewCachedLayerRespectsViewportClip) {
