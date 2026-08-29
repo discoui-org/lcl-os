@@ -92,7 +92,12 @@ def prepare_source(source: Path) -> None:
         run(["git", "checkout", SKIA_REVISION], cwd=source)
     if shutil.which("git"):
         revision = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=source, text=True
+            [
+                "git", "-c", f"safe.directory={source}",
+                "rev-parse", "HEAD",
+            ],
+            cwd=source,
+            text=True,
         ).strip()
     else:
         head = (source / ".git" / "HEAD").read_text(encoding="utf-8").strip()
