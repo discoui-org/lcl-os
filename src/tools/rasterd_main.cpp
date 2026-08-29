@@ -132,6 +132,7 @@ struct SurfaceState {
     std::unique_ptr<lcl::render::ClientEGLContext> gpuContext;
     std::unique_ptr<lcl::render::RasterRenderer> gpuRenderer;
     std::unordered_map<uint64_t, uint32_t> gpuLayers;
+    std::unordered_map<uint32_t, uint64_t> gpuBufferIds;
     uint64_t gpuFrameSerial{0};
     uint64_t gpuGeometryGeneration{0};
     uint32_t gpuWidth{0};
@@ -761,9 +762,17 @@ private:
         const uint64_t layerId =
             (static_cast<uint64_t>(static_cast<uint32_t>(getpid())) << 32u) |
             m_nextLayerId++;
+        auto [bufferIdentity, inserted] = surface.gpuBufferIds.try_emplace(
+            target->bufferId, 0);
+        if (inserted) {
+            bufferIdentity->second =
+                (static_cast<uint64_t>(static_cast<uint32_t>(getpid())) << 32u) |
+                m_nextBufferId++;
+        }
         LayerReady ready{};
         ready.grant = submit.grant;
         ready.layerId = layerId;
+        ready.bufferId = bufferIdentity->second;
         ready.configureSerial = submit.configureSerial;
         ready.frameSerial = submit.frameSerial;
         ready.geometryGeneration = submit.geometryGeneration;
@@ -866,6 +875,7 @@ private:
     std::deque<PendingFrame> m_appFrames;
     unsigned m_systemBurst{0};
     uint64_t m_nextLayerId{1};
+    uint32_t m_nextBufferId{1};
     uint64_t m_nextImageId{1};
     uint64_t m_nextCachedLayerId{1};
 };

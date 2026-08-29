@@ -294,7 +294,8 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         (!shmLayer && !dmaBufLayer) ||
         (shmLayer && ready.byteSize !=
             static_cast<uint64_t>(ready.stride) * ready.backingHeight) ||
-        (dmaBufLayer && ready.format == 0)) {
+        (shmLayer && ready.bufferId != 0) ||
+        (dmaBufLayer && (ready.format == 0 || ready.bufferId == 0))) {
         (void)LayerFeedbackHandler::discard(
             entry.clientFd, ready,
             protocol::LCLFrameDiscardReason::InvalidFrame);
@@ -344,7 +345,8 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         descriptor.stride = ready.stride;
         descriptor.format = ready.format;
         descriptor.modifier = ready.modifier;
-        texture = m_renderer.getRasterRenderer()->importDmaBuf(descriptor);
+        texture = m_renderer.getRasterRenderer()->importDmaBuf(
+            ready.bufferId, descriptor);
         if (texture == 0) {
             std::cerr << "[LCL Raster] DMA-BUF import rejected for surface "
                       << ready.grant.surfaceId << "; requesting SHM fallback\n";
@@ -1559,6 +1561,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 
                         if (valid) {
                             it->second.effectRegions = std::move(parsed);
+                            ++it->second.effectRevision;
+                            if (it->second.effectRevision == 0) {
+                                ++it->second.effectRevision;
+                            }
                             changed = true;
                         }
                     }
@@ -1576,6 +1582,10 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             auto it = m_surfaces.find(surfaceKey);
             if (it != m_surfaces.end()) {
                 it->second.effectRegions.clear();
+                ++it->second.effectRevision;
+                if (it->second.effectRevision == 0) {
+                    ++it->second.effectRevision;
+                }
                 changed = true;
             }
 

@@ -16,6 +16,7 @@ TEST(RasterProtocolTest, LayerReadyCarriesGenerationAndOnePrivateDescriptor) {
     LayerReady sent{};
     sent.grant = {7, 42, kGrantInteractiveSystem, 11, 13};
     sent.layerId = 99;
+    sent.bufferId = 101;
     sent.configureSerial = 17;
     sent.frameSerial = 19;
     sent.geometryGeneration = 23;
@@ -41,6 +42,7 @@ TEST(RasterProtocolTest, LayerReadyCarriesGenerationAndOnePrivateDescriptor) {
     ASSERT_NE(ready, nullptr);
     EXPECT_EQ(ready->grant.tokenHigh, 11u);
     EXPECT_EQ(ready->grant.tokenLow, 13u);
+    EXPECT_EQ(ready->bufferId, 101u);
     EXPECT_EQ(ready->configureSerial, 17u);
     EXPECT_EQ(ready->frameSerial, 19u);
     EXPECT_EQ(ready->geometryGeneration, 23u);

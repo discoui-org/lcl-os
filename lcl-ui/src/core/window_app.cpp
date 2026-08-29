@@ -879,9 +879,17 @@ bool WindowApp::tick() {
         m_onFrame();
     }
     const auto now = std::chrono::steady_clock::now();
-    const float dtSec = std::chrono::duration<float>(now - m_lastAnimationTick).count();
-    m_lastAnimationTick = now;
-    advanceAnimations(dtSec);
+    // Procedural presentations advance only when this surface owns a frame
+    // credit. While rasterd/compositor still retain an unpresented frame,
+    // preserve elapsed time but do not churn widget revisions every 2 ms.
+    // The first tick after FramePresented samples the accumulated interval and
+    // produces exactly one newest presentation state.
+    if (!m_ipcConnected || m_frameGateOpen) {
+        const float dtSec = std::chrono::duration<float>(
+            now - m_lastAnimationTick).count();
+        m_lastAnimationTick = now;
+        advanceAnimations(dtSec);
+    }
     bool rendered = renderFrame();
     m_tickingHostedSurfaces = true;
     for (auto& entry : m_hostedSurfaces) {
@@ -916,6 +924,43 @@ void collectWidgetBounds(Widget* widget, std::unordered_map<uint64_t, graphics::
     if (!widget) return;
     bounds[widget->getObjectId()] = widget->getAbsoluteBounds();
     for (const auto& child : widget->getChildren()) collectWidgetBounds(child.get(), bounds);
+}
+
+void collectVisibleWidgetPaintBounds(
+        Widget* widget,
+        std::unordered_map<uint64_t, graphics::RectF>& bounds) {
+    if (!widget || !widget->isVisible()) return;
+    bounds[widget->getObjectId()] = widget->getVisiblePresentationPaintBounds();
+    for (const auto& child : widget->getChildren()) {
+        collectVisibleWidgetPaintBounds(child.get(), bounds);
+    }
+}
+
+bool layoutPaintBoundsChanged(const graphics::RectF& before,
+                              const graphics::RectF& after) {
+    constexpr float epsilon = 0.001f;
+    return std::fabs(before.x - after.x) > epsilon ||
+        std::fabs(before.y - after.y) > epsilon ||
+        std::fabs(before.width - after.width) > epsilon ||
+        std::fabs(before.height - after.height) > epsilon;
+}
+
+void addChangedLayoutPaintDamage(
+        Widget* widget,
+        const std::unordered_map<uint64_t, graphics::RectF>& oldBounds,
+        RenderPass& renderPass) {
+    if (!widget || !widget->isVisible()) return;
+    const graphics::RectF current = widget->getVisiblePresentationPaintBounds();
+    const auto found = oldBounds.find(widget->getObjectId());
+    if (found == oldBounds.end()) {
+        renderPass.addDirtyRect(current);
+    } else if (layoutPaintBoundsChanged(found->second, current)) {
+        renderPass.addDirtyRect(found->second);
+        renderPass.addDirtyRect(current);
+    }
+    for (const auto& child : widget->getChildren()) {
+        addChangedLayoutPaintDamage(child.get(), oldBounds, renderPass);
+    }
 }
 
 void startMorphs(Widget* widget, const std::unordered_map<uint64_t, graphics::RectF>& oldBounds,
@@ -1355,11 +1400,14 @@ bool WindowApp::renderFrame() {
         0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height)};
 
     if (m_windowRoot && m_windowRoot->isLayoutDirty()) {
+        std::unordered_map<uint64_t, graphics::RectF> oldPaintBounds;
+        collectVisibleWidgetPaintBounds(m_windowRoot.get(), oldPaintBounds);
         updateLayout();
         // Layout can move several siblings without each new bound producing a
-        // paint invalidation. It is intentionally the infrequent full-window
-        // invalidation path; presentation-only motion remains region-scoped.
-        m_renderPass.addDirtyRect(m_windowRoot->getAbsoluteBounds());
+        // paint invalidation. Damage the exact old/new visible extents instead
+        // of turning a dynamic Text measurement into a full-surface redraw.
+        addChangedLayoutPaintDamage(
+            m_windowRoot.get(), oldPaintBounds, m_renderPass);
     }
 
     // A resize can leave old-layout damage queued before layout computes the
@@ -1422,7 +1470,11 @@ bool WindowApp::renderFrame() {
     }
 
     const auto drawStarted = std::chrono::steady_clock::now();
-    m_renderPass.begin(*m_canvas);
+    // Cache-aware widgets need the complete region set for this immutable
+    // frame. The root is still traversed once per clip below, but a ScrollView
+    // must patch every changed descendant region before acknowledging the
+    // content revision seen by those separate traversals.
+    m_renderPass.begin(*m_canvas, damageRects);
 
     for (const graphics::RectF& damage : damageRects) {
         m_canvas->saveState();

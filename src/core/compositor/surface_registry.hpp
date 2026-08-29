@@ -101,6 +101,9 @@ public:
         std::string appId;
         uint64_t appInstanceId{0};
         std::vector<SurfaceEffectRegion> effectRegions;
+        // Monotonic compositor-local identity for the current effect graph.
+        // Retained backdrop results may be reused only while this is unchanged.
+        uint64_t effectRevision{0};
 
         float configuredX{0.0f};
         float configuredY{0.0f};

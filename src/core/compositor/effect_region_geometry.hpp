@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstddef>
 #include <cmath>
 #include <cstdint>
 
@@ -18,6 +19,19 @@ struct LocalEffectGeometry {
 inline bool filterReadsNeighboringPixels(protocol::FilterType type) noexcept {
     return type == protocol::FilterType::Blur ||
            type == protocol::FilterType::Glass;
+}
+
+inline bool canReuseRetainedBackdropForClientDamage(
+        size_t changedSurfaceCount,
+        size_t nonLocalEffectSurfaceCount,
+        bool nonLocalEffectsAreBackdropOnly,
+        bool changedSurfaceOwnsNonLocalEffect,
+        bool retainedBackdropMatches) noexcept {
+    return changedSurfaceCount == 1 &&
+           nonLocalEffectSurfaceCount == 1 &&
+           nonLocalEffectsAreBackdropOnly &&
+           changedSurfaceOwnsNonLocalEffect &&
+           retainedBackdropMatches;
 }
 
 inline bool effectMatchesLogicalSurfaceBounds(

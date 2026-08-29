@@ -118,6 +118,12 @@ public:
         uint32_t framebuffer, uint32_t texture,
         uint32_t* softwarePixels, uint32_t pixelWidth, uint32_t pixelHeight,
         const RasterRect& logicalBounds);
+    /** Patch a compositor cache from the matching part of the current scene. */
+    bool copyFrameDamageToCachedLayer(
+        uint32_t framebuffer, uint32_t texture,
+        uint32_t* softwarePixels, uint32_t pixelWidth, uint32_t pixelHeight,
+        const RasterRect& cachedLogicalBounds,
+        const RasterRect& damageLogicalBounds);
     void drawCachedLayerTexture(uint32_t texture, const RasterRect& destination,
                                 float opacity = 1.0f);
 
@@ -127,7 +133,7 @@ public:
      */
     void setDeviceScale(float scale);
     float getDeviceScale() const { return m_deviceScale; }
-    /** Client canvases retain scene pixels; compositor frames remain clearing. */
+    /** Preserve the authoritative scene so callers can redraw bounded damage. */
     void setRetainsFrameBacking(bool enabled) { m_retainsFrameBacking = enabled; }
 
     /** Physical framebuffer origin for a logical content subtree. */
@@ -282,13 +288,14 @@ public:
     /** Imports compositor-owned premultiplied native textures without CPU upload. */
     uint32_t importTexture(const lcl::platform::INativeBuffer& buffer);
     uint32_t importDmaBuf(const lcl::platform::DmaBufDescriptor& descriptor);
+    /** Reuse one imported EGLImage/texture for a stable producer buffer. */
+    uint32_t importDmaBuf(uint64_t bufferId,
+                          const lcl::platform::DmaBufDescriptor& descriptor);
     void releaseTexture(uint32_t texture);
     uint32_t importDmaBufTexture(const lcl::platform::INativeBuffer& buffer) {
         return importTexture(buffer);
     }
-    void releaseDmaBufTexture(uint32_t texture) {
-        releaseTexture(texture);
-    }
+    void releaseDmaBufTexture(uint32_t texture);
     /** Composite a premultiplied-alpha DMA-BUF texture in logical destination space. */
     void drawDmaBufTextureTransformed(float dstX, float dstY, int srcW, int srcH,
                                       int backingW, int backingH,
@@ -353,6 +360,17 @@ private:
         uint64_t contentRevision{0};
         uint64_t lastUse{0};
         size_t byteSize{0};
+    };
+
+    struct CachedDmaBufTexture {
+        uint32_t texture{0};
+        uint32_t width{0};
+        uint32_t height{0};
+        uint32_t stride{0};
+        uint32_t format{0};
+        uint64_t modifier{0};
+        uint32_t references{0};
+        uint64_t lastUse{0};
     };
 
     bool initGLShader();
@@ -426,9 +444,14 @@ private:
     std::unordered_map<uint64_t, CachedDisplayLayer> m_cachedDisplayLayers;
     std::unordered_map<uint64_t, CachedShmTexture> m_cachedShmTextures;
     std::unordered_map<uint64_t, CachedImageTexture> m_cachedImageTextures;
+    std::unordered_map<uint64_t, CachedDmaBufTexture> m_cachedDmaBufTextures;
+    std::unordered_map<uint32_t, uint64_t> m_cachedDmaBufIdsByTexture;
     size_t m_cachedImageTextureBytes{0};
     uint64_t m_imageTextureUseCounter{0};
+    uint64_t m_dmaBufTextureUseCounter{0};
     uint64_t m_shmTextureFrameSerial{0};
+
+    void trimDmaBufTextureCache(uint64_t protectedBufferId = 0);
 
     // One backend-neutral DisplayList is replayed by Skia through either a
     // Ganesh/OpenGL surface or a CPU raster surface.

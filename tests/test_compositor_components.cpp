@@ -20,6 +20,7 @@
 #include "core/compositor/mobile_launch_backdrop.hpp"
 #include "core/compositor/popup_surface_geometry.hpp"
 #include "core/compositor/surface_registry.hpp"
+#include "core/compositor/surface_damage_geometry.hpp"
 #include "core/compositor/surface_transaction_coordinator.hpp"
 #include "core/compositor/system_surface_policy.hpp"
 #include "render/window_group_transform.hpp"
@@ -432,6 +433,36 @@ TEST(CompositorRendererTest, CurrentPreviousAndPopupDestinationsUseOneDprRule) {
         EXPECT_FLOAT_EQ(physical.height, logical[3] * scale);
         EXPECT_FLOAT_EQ(physical.cornerRadius, logical[4] * scale);
     }
+}
+
+TEST(CompositorRendererTest, MapsProducerPixelDamageIntoLogicalDestination) {
+    const graphics::RectF destination{10.0f, 20.0f, 672.0f, 1496.0f};
+    const graphics::RectF output{0.0f, 0.0f, 672.0f, 1496.0f};
+    const auto damage = mapSurfaceDamageToDestination(
+        1344, 2992, 600, 1400, 144, 144,
+        destination, output, 2.0f);
+
+    ASSERT_TRUE(damage.has_value());
+    EXPECT_FLOAT_EQ(damage->x, 308.0f);
+    EXPECT_FLOAT_EQ(damage->y, 718.0f);
+    EXPECT_FLOAT_EQ(damage->width, 76.0f);
+    EXPECT_FLOAT_EQ(damage->height, 76.0f);
+}
+
+TEST(CompositorRendererTest, ClipsMappedDamageAndRejectsEmptyDamage) {
+    const graphics::RectF destination{-10.0f, -20.0f, 200.0f, 100.0f};
+    const graphics::RectF output{0.0f, 0.0f, 180.0f, 80.0f};
+    const auto damage = mapSurfaceDamageToDestination(
+        200, 100, 0, 0, 20, 20,
+        destination, output, 2.0f);
+
+    ASSERT_TRUE(damage.has_value());
+    EXPECT_FLOAT_EQ(damage->x, 0.0f);
+    EXPECT_FLOAT_EQ(damage->y, 0.0f);
+    EXPECT_FLOAT_EQ(damage->width, 12.0f);
+    EXPECT_FLOAT_EQ(damage->height, 2.0f);
+    EXPECT_FALSE(mapSurfaceDamageToDestination(
+        200, 100, 0, 0, 0, 20, destination, output).has_value());
 }
 
 TEST(SurfaceRegistryTest, GeometryInterruptionPreservesInFlightSerial) {
@@ -1659,6 +1690,22 @@ TEST(CompositorRendererTest, NonLocalFiltersRequireDamageDependencyClosure) {
     EXPECT_TRUE(filterReadsNeighboringPixels(protocol::FilterType::Glass));
     EXPECT_FALSE(filterReadsNeighboringPixels(protocol::FilterType::Tint));
     EXPECT_FALSE(filterReadsNeighboringPixels(protocol::FilterType::Brightness));
+}
+
+TEST(CompositorRendererTest,
+     ClientDamageReusesOnlyItsSingleMatchingBackdropCache) {
+    EXPECT_TRUE(canReuseRetainedBackdropForClientDamage(
+        1, 1, true, true, true));
+    EXPECT_FALSE(canReuseRetainedBackdropForClientDamage(
+        2, 1, true, true, true));
+    EXPECT_FALSE(canReuseRetainedBackdropForClientDamage(
+        1, 2, true, true, true));
+    EXPECT_FALSE(canReuseRetainedBackdropForClientDamage(
+        1, 1, false, true, true));
+    EXPECT_FALSE(canReuseRetainedBackdropForClientDamage(
+        1, 1, true, false, true));
+    EXPECT_FALSE(canReuseRetainedBackdropForClientDamage(
+        1, 1, true, true, false));
 }
 
 TEST(CompositorRendererTest, DoubleInsetBorderKeepsLogicalStrokeInDisplayList) {

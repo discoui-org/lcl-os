@@ -8,7 +8,7 @@
 namespace lcl::raster_protocol {
 
 inline constexpr uint32_t kMagic = 0x5254434c; // "LCTR"
-inline constexpr uint32_t kVersion = 4;
+inline constexpr uint32_t kVersion = 5;
 inline constexpr uint32_t kMaxPayload = 1024u * 1024u;
 
 enum class Opcode : uint32_t {
@@ -87,6 +87,8 @@ enum class LayerTransport : uint32_t {
 struct LayerReady {
     SurfaceGrant grant{};
     uint64_t layerId{0};
+    /** Stable identity of one reusable producer buffer; zero for SHM layers. */
+    uint64_t bufferId{0};
     uint64_t configureSerial{0};
     uint64_t frameSerial{0};
     uint64_t geometryGeneration{0};
