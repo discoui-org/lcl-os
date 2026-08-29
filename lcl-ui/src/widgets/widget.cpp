@@ -254,6 +254,7 @@ void Widget::removeChild(Widget* child) {
 }
 
 void Widget::markDirty() {
+    ++m_localPaintRevision;
     ++m_paintRevision;
     if (m_renderPass) {
         m_renderPass->addDirtyRect(getVisiblePresentationPaintBounds());
@@ -262,6 +263,7 @@ void Widget::markDirty() {
 }
 
 void Widget::markDirty(const graphics::RectF& damageRect) {
+    ++m_localPaintRevision;
     ++m_paintRevision;
     if (m_renderPass) {
         m_renderPass->addDirtyRect(
@@ -275,6 +277,7 @@ void Widget::markPresentationDirty() {
 }
 
 void Widget::markPresentationDirty(const graphics::RectF& previousBounds) {
+    ++m_localPresentationRevision;
     ++m_presentationRevision;
     if (m_renderPass) {
         m_renderPass->addDirtyRect(previousBounds);

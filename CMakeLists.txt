@@ -793,6 +793,7 @@ else()
             tests/test_window_manager.cpp
             tests/test_display_list_wire.cpp
             tests/test_lcl_ui.cpp
+            tests/test_retained_render_tree.cpp
             tests/test_lcl_ui_events.cpp
             tests/test_js_runtime.cpp
             src/core/ipc/ipc_manager.cpp
@@ -839,6 +840,7 @@ else()
         target_include_directories(lcl_unit_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
             ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/lcl-ui/src
             ${quickjs_SOURCE_DIR}
             ${LIBINPUT_INCLUDE_DIRS}
             ${UDEV_INCLUDE_DIRS}

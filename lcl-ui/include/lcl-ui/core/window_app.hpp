@@ -209,6 +209,8 @@ public:
     uint32_t* getPixelBuffer() { return m_pixelBuffer.data(); }
 
 private:
+    struct PrivateRenderState;
+
     void updateCanvasRenderTarget();
     void pollIPC();
     bool requestWindowAction(lcl::protocol::LCLWindowAction action,
@@ -241,6 +243,8 @@ private:
     EventDispatcher m_dispatcher;
     TransientController m_transients{m_dispatcher};
     MotionCoordinator m_motionCoordinator;
+    // Opaque so the internal retained-render model never enters the public API.
+    std::unique_ptr<PrivateRenderState> m_privateRenderState;
     std::unique_ptr<graphics::Canvas> m_canvas;
     // Logical frames are rasterized outside the compositor. This private
     // client owns only the producer grant and the raster-service connection;
@@ -344,8 +348,13 @@ private:
     uint64_t m_traceResizeApplies{0};
     uint64_t m_traceDamagePixels{0};
     uint64_t m_traceClearedBytes{0};
+    uint64_t m_traceRenderCreates{0};
+    uint64_t m_traceRenderContentUpdates{0};
+    uint64_t m_traceRenderPropertyUpdates{0};
+    uint64_t m_traceRenderRemovals{0};
     double m_traceLayoutMs{0.0};
     double m_tracePaintMs{0.0};
+    double m_traceRenderTreeMs{0.0};
     double m_traceClearMs{0.0};
     double m_traceDrawMs{0.0};
     double m_traceRasterSubmitMs{0.0};

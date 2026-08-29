@@ -278,7 +278,10 @@ void ScrollView::setScrollY(float offset) {
     if (m_contentWidget) {
         m_contentWidget->setParentControlledTranslationY(-m_scrollY);
     }
-    markDirty();
+    // Scrolling changes only the retained content-node transform. Keep the
+    // viewport damaged for the current DisplayList path without advancing a
+    // paint revision or invalidating the cached content raster.
+    markPresentationDirty();
 }
 
 void ScrollView::clampScrollOffset() {

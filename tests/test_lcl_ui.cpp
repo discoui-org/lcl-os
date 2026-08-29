@@ -4483,12 +4483,18 @@ TEST(LclUiTest, ScrollViewSkipsDirtyWorkWhenClampedOffsetDoesNotChange) {
     scrollView->syncLayout();
     pass.clear();
 
+    const uint64_t paintRevision = scrollView->getPaintRevision();
+    const uint64_t presentationRevision =
+        scrollView->getPresentationRevision();
+
     scrollView->setScrollY(-20.0f);
     EXPECT_FALSE(pass.hasDamage());
 
     scrollView->setScrollY(80.0f);
     EXPECT_TRUE(pass.hasDamage());
     EXPECT_FLOAT_EQ(scrollView->getScrollY(), 80.0f);
+    EXPECT_EQ(scrollView->getPaintRevision(), paintRevision);
+    EXPECT_GT(scrollView->getPresentationRevision(), presentationRevision);
 
     pass.clear();
     scrollView->setScrollY(80.0f);

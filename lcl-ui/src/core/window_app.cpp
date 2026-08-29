@@ -1,4 +1,5 @@
 #include "lcl-ui/core/window_app.hpp"
+#include "core/retained_render_tree.hpp"
 #include "raster_service_client.hpp"
 #include "core/ipc/lcl_protocol.hpp"
 #include "lcl-graphics/display_list_wire.hpp"
@@ -134,9 +135,61 @@ void drawLayoutOverlay(const Widget& widget, graphics::Canvas& canvas, uint32_t 
 
 } // namespace
 
+struct WindowApp::PrivateRenderState {
+    void reset() {
+        tree = {};
+        transaction = {};
+        hasSnapshot = false;
+    }
+
+    void synchronize(const Widget& root, bool forceReplace) {
+        auto next = compiler.compile(root, tree.nodes.size());
+        transaction = differ.diff(
+            hasSnapshot ? &tree : nullptr, next, forceReplace);
+        tree = std::move(next);
+        hasSnapshot = true;
+    }
+
+    std::size_t nodeCount() const noexcept {
+        return tree.nodes.size();
+    }
+
+    std::size_t retainedNodeCount() const noexcept {
+        return tree.retainedNodeCount();
+    }
+
+    std::size_t createdNodeCount() const noexcept {
+        return transaction.creates.size();
+    }
+
+    std::size_t contentUpdateCount() const noexcept {
+        return static_cast<std::size_t>(std::count_if(
+            transaction.updates.begin(), transaction.updates.end(),
+            [](const auto& update) { return update.contentChanged; }));
+    }
+
+    std::size_t propertyUpdateCount() const noexcept {
+        return static_cast<std::size_t>(std::count_if(
+            transaction.updates.begin(), transaction.updates.end(),
+            [](const auto& update) { return update.propertiesChanged; }));
+    }
+
+    std::size_t removedNodeCount() const noexcept {
+        return transaction.removals.size();
+    }
+
+    detail::RenderNodeCompiler compiler;
+    detail::RenderTreeDiffer differ;
+    detail::RenderTree tree;
+    detail::RenderTreeTransaction transaction;
+    bool hasSnapshot{false};
+};
+
 WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height,
                      const std::string& title)
-    : m_width(width), m_height(height), m_title(title), m_canvas(std::move(canvas)),
+    : m_width(width), m_height(height), m_title(title),
+      m_privateRenderState(std::make_unique<PrivateRenderState>()),
+      m_canvas(std::move(canvas)),
       m_rasterClient(std::make_unique<RasterServiceClient>()) {
     setupAppSignalHandlers();
     if (!m_canvas) return;
@@ -226,6 +279,7 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
 
     m_windowRoot = std::move(windowRoot);
     m_rootWidget = contentRoot;
+    m_privateRenderState->reset();
     m_transients.setWindowRoot(m_windowRoot.get());
     m_windowRoot->markLayoutDirty();
     m_windowRoot->markDirty();
@@ -1442,6 +1496,30 @@ bool WindowApp::renderFrame() {
     if (damageRects.empty()) return false;
     const graphics::RectF frameDamage = rasterDamage.getDamageRect();
 
+    // Compile the exact post-layout Widget state that this frame will paint.
+    // The snapshot is private and does not alter DisplayList recording or IPC;
+    // the next retained-protocol phase will translate it into transactions.
+    if (m_windowRoot) {
+        if (m_frameTraceEnabled) {
+            const auto renderTreeStarted = std::chrono::steady_clock::now();
+            m_privateRenderState->synchronize(
+                *m_windowRoot, replacesRetainedScene);
+            m_traceRenderCreates +=
+                m_privateRenderState->createdNodeCount();
+            m_traceRenderContentUpdates +=
+                m_privateRenderState->contentUpdateCount();
+            m_traceRenderPropertyUpdates +=
+                m_privateRenderState->propertyUpdateCount();
+            m_traceRenderRemovals +=
+                m_privateRenderState->removedNodeCount();
+            m_traceRenderTreeMs += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - renderTreeStarted).count();
+        } else {
+            m_privateRenderState->synchronize(
+                *m_windowRoot, replacesRetainedScene);
+        }
+    }
+
     m_canvas->beginFrame();
 
     const auto paintStarted = std::chrono::steady_clock::now();
@@ -1713,6 +1791,7 @@ void WindowApp::logFrameTraceIfDue() {
               << " layout=" << m_traceLayoutPasses << " (" << average(m_traceLayoutMs, m_traceLayoutPasses) << " ms)"
               << " paint=" << average(m_tracePaintMs, m_traceRenderedFrames) << " ms"
               << " stages=(clear=" << average(m_traceClearMs, m_traceRenderedFrames)
+              << ", tree=" << average(m_traceRenderTreeMs, m_traceRenderedFrames)
               << ", draw=" << average(m_traceDrawMs, m_traceRenderedFrames)
               << ", raster-submit=" << average(m_traceRasterSubmitMs, m_traceRenderedFrames) << " ms)"
               << " damage=" << m_traceDamagePixels << " px"
@@ -1720,7 +1799,15 @@ void WindowApp::logFrameTraceIfDue() {
               << " cfg=" << m_traceConfigureCount << " (interactive=" << m_traceInteractiveConfigureCount
               << ", transition=" << m_traceTransitionConfigureCount << ')'
               << " presented=" << m_tracePresentedFrames
-              << " resize=" << m_traceResizeApplies << '\n';
+              << " resize=" << m_traceResizeApplies
+              << " render-nodes=" << m_privateRenderState->nodeCount()
+              << " (retained=" << m_privateRenderState->retainedNodeCount()
+              << ") render-tx=(create="
+              << m_traceRenderCreates
+              << ", content=" << m_traceRenderContentUpdates
+              << ", props=" << m_traceRenderPropertyUpdates
+              << ", remove=" << m_traceRenderRemovals
+              << ")\n";
     m_traceLayoutPasses = 0;
     m_traceRenderedFrames = 0;
     m_traceConfigureCount = 0;
@@ -1730,8 +1817,13 @@ void WindowApp::logFrameTraceIfDue() {
     m_traceResizeApplies = 0;
     m_traceDamagePixels = 0;
     m_traceClearedBytes = 0;
+    m_traceRenderCreates = 0;
+    m_traceRenderContentUpdates = 0;
+    m_traceRenderPropertyUpdates = 0;
+    m_traceRenderRemovals = 0;
     m_traceLayoutMs = 0.0;
     m_tracePaintMs = 0.0;
+    m_traceRenderTreeMs = 0.0;
     m_traceClearMs = 0.0;
     m_traceDrawMs = 0.0;
     m_traceRasterSubmitMs = 0.0;

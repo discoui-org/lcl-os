@@ -20,6 +20,7 @@ namespace lcl::ui {
 
 namespace detail {
 class LayoutNode;
+struct RetainedRenderAccess;
 }
 
 class WindowApp;
@@ -257,6 +258,7 @@ private:
     friend class WindowApp;
     friend class ScrollView;
     friend class MeasuredWidget;
+    friend struct detail::RetainedRenderAccess;
     void setMeasureCallback(
         std::function<layout::Size(const layout::Constraints&)> callback);
     void invalidateMeasurement();
@@ -274,6 +276,10 @@ private:
     bool hasDeclarativeInteraction() const;
     void applyDeclarativeInteractionState();
     static std::atomic<uint64_t> s_nextObjectId;
+    // Local counters exclude descendant propagation. The retained compiler
+    // uses them to assign flattened content to its nearest retained owner.
+    uint64_t m_localPaintRevision{0};
+    uint64_t m_localPresentationRevision{0};
     uint64_t m_paintRevision{0};
     uint64_t m_presentationRevision{0};
     bool m_layoutDirty{true};
