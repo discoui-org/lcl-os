@@ -125,11 +125,13 @@ bool RasterServiceClient::uploadImage(
 
 bool RasterServiceClient::submitFrame(
         uint64_t configureSerial, uint64_t frameSerial,
-        uint64_t geometryGeneration, float logicalWidth,
+        uint64_t baseFrameSerial, uint64_t geometryGeneration,
+        float logicalWidth,
         float logicalHeight, float bufferScale,
+        const graphics::RectF& damage, bool replacesScene,
         const std::vector<uint8_t>& displayList) {
     if (!connectIfNeeded() || configureSerial == 0 || frameSerial == 0 ||
-        displayList.empty()) return false;
+        displayList.empty() || damage.isEmpty()) return false;
     const int memfd = createSealedMemfd(
         "lcl-raster-frame", displayList.data(), displayList.size());
     if (memfd < 0) return false;
@@ -137,11 +139,18 @@ bool RasterServiceClient::submitFrame(
     submit.grant = m_grant;
     submit.configureSerial = configureSerial;
     submit.frameSerial = frameSerial;
+    submit.baseFrameSerial = replacesScene ? 0 : baseFrameSerial;
     submit.geometryGeneration = geometryGeneration;
     submit.logicalWidth = logicalWidth;
     submit.logicalHeight = logicalHeight;
     submit.bufferScale = bufferScale;
+    submit.damageX = damage.x;
+    submit.damageY = damage.y;
+    submit.damageWidth = damage.width;
+    submit.damageHeight = damage.height;
     submit.displayListSize = static_cast<uint32_t>(displayList.size());
+    submit.flags = replacesScene
+        ? raster_protocol::kSubmitReplacesScene : 0u;
     const bool sent = raster_protocol::sendPacket(
         m_fd, raster_protocol::Opcode::SubmitFrame, submit, memfd);
     close(memfd);

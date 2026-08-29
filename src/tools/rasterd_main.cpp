@@ -122,9 +122,21 @@ struct SurfaceState {
     std::unordered_map<ImageKey, ImageResource, ImageHash> images;
     std::unordered_map<uint64_t, uint64_t> cachedLayerNamespaces;
     std::array<LayerSlot, 3> slots;
+    std::vector<uint32_t> softwarePixels;
+    std::unique_ptr<lcl::render::RasterRenderer> softwareRenderer;
+    uint64_t softwareFrameSerial{0};
+    uint64_t softwareGeometryGeneration{0};
+    uint32_t softwareWidth{0};
+    uint32_t softwareHeight{0};
+    float softwareScale{0.0f};
     std::unique_ptr<lcl::render::ClientEGLContext> gpuContext;
     std::unique_ptr<lcl::render::RasterRenderer> gpuRenderer;
     std::unordered_map<uint64_t, uint32_t> gpuLayers;
+    uint64_t gpuFrameSerial{0};
+    uint64_t gpuGeometryGeneration{0};
+    uint32_t gpuWidth{0};
+    uint32_t gpuHeight{0};
+    float gpuScale{0.0f};
     bool gpuUnavailable{false};
 };
 
@@ -181,6 +193,77 @@ bool readExact(int fd, void* destination, size_t bytes) {
         offset += static_cast<size_t>(count);
     }
     return true;
+}
+
+bool replacesRetainedScene(const SubmitFrame& submit) noexcept {
+    return (submit.flags & lcl::raster_protocol::kSubmitReplacesScene) != 0;
+}
+
+bool hasValidRetainedFrameMetadata(const SubmitFrame& submit) noexcept {
+    constexpr float kTolerance = 0.001f;
+    constexpr float kMaxPixelExtent = 16384.0f;
+    const bool finite = std::isfinite(submit.logicalWidth) &&
+        std::isfinite(submit.logicalHeight) &&
+        std::isfinite(submit.bufferScale) &&
+        std::isfinite(submit.damageX) && std::isfinite(submit.damageY) &&
+        std::isfinite(submit.damageWidth) &&
+        std::isfinite(submit.damageHeight);
+    if (!finite || submit.logicalWidth <= 0.0f ||
+        submit.logicalHeight <= 0.0f || submit.bufferScale < 0.5f ||
+        submit.bufferScale > 4.0f || submit.damageX < 0.0f ||
+        submit.logicalWidth * submit.bufferScale > kMaxPixelExtent ||
+        submit.logicalHeight * submit.bufferScale > kMaxPixelExtent ||
+        submit.damageY < 0.0f || submit.damageWidth <= 0.0f ||
+        submit.damageHeight <= 0.0f ||
+        submit.damageX + submit.damageWidth >
+            submit.logicalWidth + kTolerance ||
+        submit.damageY + submit.damageHeight >
+            submit.logicalHeight + kTolerance ||
+        (submit.flags & ~lcl::raster_protocol::kSubmitReplacesScene) != 0) {
+        return false;
+    }
+    if (!replacesRetainedScene(submit)) return submit.baseFrameSerial != 0;
+    return submit.baseFrameSerial == 0 &&
+        submit.damageX <= kTolerance && submit.damageY <= kTolerance &&
+        submit.damageX + submit.damageWidth >=
+            submit.logicalWidth - kTolerance &&
+        submit.damageY + submit.damageHeight >=
+            submit.logicalHeight - kTolerance;
+}
+
+bool retainedBaseMatches(const SubmitFrame& submit, uint64_t frameSerial,
+                         uint64_t geometryGeneration, uint32_t width,
+                         uint32_t height, float scale) noexcept {
+    if (replacesRetainedScene(submit)) return true;
+    const uint32_t nextWidth = std::max(1u, static_cast<uint32_t>(
+        std::ceil(submit.logicalWidth * submit.bufferScale)));
+    const uint32_t nextHeight = std::max(1u, static_cast<uint32_t>(
+        std::ceil(submit.logicalHeight * submit.bufferScale)));
+    return frameSerial != 0 && submit.baseFrameSerial == frameSerial &&
+        submit.geometryGeneration == geometryGeneration &&
+        width == nextWidth && height == nextHeight &&
+        std::fabs(scale - submit.bufferScale) <= 0.0001f;
+}
+
+struct PixelDamage {
+    uint32_t x{0};
+    uint32_t y{0};
+    uint32_t width{0};
+    uint32_t height{0};
+};
+
+PixelDamage pixelDamageFor(const SubmitFrame& submit, uint32_t width,
+                           uint32_t height) noexcept {
+    const uint32_t left = std::min(width, static_cast<uint32_t>(std::floor(
+        submit.damageX * submit.bufferScale)));
+    const uint32_t top = std::min(height, static_cast<uint32_t>(std::floor(
+        submit.damageY * submit.bufferScale)));
+    const uint32_t right = std::min(width, static_cast<uint32_t>(std::ceil(
+        (submit.damageX + submit.damageWidth) * submit.bufferScale)));
+    const uint32_t bottom = std::min(height, static_cast<uint32_t>(std::ceil(
+        (submit.damageY + submit.damageHeight) * submit.bufferScale)));
+    return {left, top, right > left ? right - left : 0,
+            bottom > top ? bottom - top : 0};
 }
 
 bool setNonBlocking(int fd) {
@@ -376,6 +459,7 @@ private:
                 header, payload, Opcode::SubmitFrame)) {
             auto* surface = authorizedSurface(client, submit->grant);
             if (!surface || submit->displayListSize == 0 ||
+                !hasValidRetainedFrameMetadata(*submit) ||
                 !isImmutableMemfd(receivedFd, submit->displayListSize)) {
                 if (receivedFd >= 0) close(receivedFd);
                 discard(client.fd, *submit,
@@ -390,10 +474,23 @@ private:
                 return tokenOf(frame.submit.grant) == tokenOf(submit->grant);
             });
             if (existing != queue.end()) {
-                discard(existing->clientFd, existing->submit,
-                        lcl::raster_protocol::DiscardReason::Superseded);
-                if (existing->displayListFd >= 0) close(existing->displayListFd);
-                *existing = {client.fd, *submit, receivedFd};
+                if (replacesRetainedScene(*submit)) {
+                    // A complete replacement has no dependency on the queued
+                    // base and may safely collapse obsolete work.
+                    discard(existing->clientFd, existing->submit,
+                            lcl::raster_protocol::DiscardReason::Superseded);
+                    if (existing->displayListFd >= 0) {
+                        close(existing->displayListFd);
+                    }
+                    *existing = {client.fd, *submit, receivedFd};
+                } else {
+                    // Retained patches are ordered against an exact base.
+                    // Never drop the queued predecessor and apply this patch
+                    // to a different scene.
+                    discard(client.fd, *submit,
+                            lcl::raster_protocol::DiscardReason::InvalidFrame);
+                    close(receivedFd);
+                }
             } else {
                 queue.push_back({client.fd, *submit, receivedFd});
             }
@@ -470,6 +567,17 @@ private:
 
     bool rasterFrame(SurfaceState& surface, const SubmitFrame& submit,
                      int displayListFd) {
+        if (!replacesRetainedScene(submit) &&
+            !retainedBaseMatches(
+                submit, surface.gpuFrameSerial,
+                surface.gpuGeometryGeneration, surface.gpuWidth,
+                surface.gpuHeight, surface.gpuScale) &&
+            !retainedBaseMatches(
+                submit, surface.softwareFrameSerial,
+                surface.softwareGeometryGeneration, surface.softwareWidth,
+                surface.softwareHeight, surface.softwareScale)) {
+            return false;
+        }
         std::vector<uint8_t> wireBytes(submit.displayListSize);
         if (!readExact(displayListFd, wireBytes.data(), wireBytes.size())) {
             return false;
@@ -512,27 +620,50 @@ private:
         const lcl::graphics::DisplayList displayList(displayCommands);
         if (rasterGpuFrame(surface, submit, displayList)) return true;
 
+        if (!retainedBaseMatches(
+                submit, surface.softwareFrameSerial,
+                surface.softwareGeometryGeneration, surface.softwareWidth,
+                surface.softwareHeight, surface.softwareScale)) {
+            return false;
+        }
         LayerSlot* slot = acquireSlot(surface, submit);
         if (!slot) return false;
-        std::fill(slot->pixels, slot->pixels + slot->bytes / sizeof(uint32_t), 0u);
-        if (!m_rendererInitialized) {
-            m_rendererInitialized = m_renderer.initialize(
-                slot->width, slot->height, nullptr, slot->pixels);
-            if (!m_rendererInitialized) {
+        const size_t pixelCount =
+            static_cast<size_t>(slot->width) * slot->height;
+        const bool recreateSoftwareScene = !surface.softwareRenderer ||
+            surface.softwareWidth != slot->width ||
+            surface.softwareHeight != slot->height;
+        if (recreateSoftwareScene) {
+            surface.softwareRenderer =
+                std::make_unique<lcl::render::RasterRenderer>();
+            surface.softwarePixels.assign(pixelCount, 0u);
+            if (!surface.softwareRenderer->initialize(
+                    slot->width, slot->height, nullptr,
+                    surface.softwarePixels.data())) {
+                surface.softwareRenderer.reset();
                 slot->busy = false;
                 return false;
             }
-        } else {
-            m_renderer.setTargetPixels(slot->pixels, slot->width, slot->height);
+            surface.softwareRenderer->setRetainsFrameBacking(true);
+            surface.softwareWidth = slot->width;
+            surface.softwareHeight = slot->height;
         }
-        m_renderer.setDeviceScale(submit.bufferScale);
-        m_renderer.setFrameExtent(slot->width, slot->height);
-        m_renderer.beginFrame();
-        m_renderer.replayDisplayList(
+        auto& renderer = *surface.softwareRenderer;
+        renderer.setDeviceScale(submit.bufferScale);
+        renderer.setFrameExtent(slot->width, slot->height);
+        renderer.beginFrame();
+        renderer.setFrameDamageRect(lcl::render::RasterRect{
+            submit.damageX, submit.damageY,
+            submit.damageWidth, submit.damageHeight});
+        renderer.replayDisplayList(
             displayList,
             {{submit.logicalWidth, submit.logicalHeight},
              {slot->width, slot->height}, submit.bufferScale});
-        m_renderer.endFrame();
+        renderer.endFrame();
+        std::copy(surface.softwarePixels.begin(),
+                  surface.softwarePixels.end(), slot->pixels);
+        const PixelDamage damage = pixelDamageFor(
+            submit, slot->width, slot->height);
         LayerReady ready{};
         ready.grant = submit.grant;
         ready.layerId = slot->layerId;
@@ -544,15 +675,21 @@ private:
         ready.backingWidth = slot->width;
         ready.backingHeight = slot->height;
         ready.stride = slot->width * sizeof(uint32_t);
-        ready.damageWidth = slot->width;
-        ready.damageHeight = slot->height;
+        ready.damageX = damage.x;
+        ready.damageY = damage.y;
+        ready.damageWidth = damage.width;
+        ready.damageHeight = damage.height;
         ready.transport = lcl::raster_protocol::LayerTransport::Shm;
         ready.byteSize = slot->bytes;
         if (!lcl::raster_protocol::sendPacket(
                 m_compositorFd, Opcode::LayerReady, ready, slot->fd)) {
             slot->busy = false;
+            surface.softwareFrameSerial = 0;
             return false;
         }
+        surface.softwareFrameSerial = submit.frameSerial;
+        surface.softwareGeometryGeneration = submit.geometryGeneration;
+        surface.softwareScale = submit.bufferScale;
         return true;
     }
 
@@ -573,6 +710,12 @@ private:
             std::ceil(submit.logicalWidth * submit.bufferScale)));
         const uint32_t height = std::max(1u, static_cast<uint32_t>(
             std::ceil(submit.logicalHeight * submit.bufferScale)));
+        if (!retainedBaseMatches(
+                submit, surface.gpuFrameSerial,
+                surface.gpuGeometryGeneration, surface.gpuWidth,
+                surface.gpuHeight, surface.gpuScale)) {
+            return false;
+        }
         if (!surface.gpuContext) {
             auto context = std::make_unique<lcl::render::ClientEGLContext>();
             if (!context->initialize(width, height) ||
@@ -585,6 +728,7 @@ private:
                 surface.gpuUnavailable = true;
                 return false;
             }
+            renderer->setRetainsFrameBacking(true);
             surface.gpuContext = std::move(context);
             surface.gpuRenderer = std::move(renderer);
         }
@@ -600,6 +744,9 @@ private:
         surface.gpuRenderer->setDeviceScale(submit.bufferScale);
         surface.gpuRenderer->setFrameExtent(width, height);
         surface.gpuRenderer->beginFrame();
+        surface.gpuRenderer->setFrameDamageRect(lcl::render::RasterRect{
+            submit.damageX, submit.damageY,
+            submit.damageWidth, submit.damageHeight});
         surface.gpuRenderer->replayDisplayList(
             displayList,
             {{submit.logicalWidth, submit.logicalHeight},
@@ -625,8 +772,11 @@ private:
         ready.backingWidth = exported->width;
         ready.backingHeight = exported->height;
         ready.stride = exported->stride;
-        ready.damageWidth = width;
-        ready.damageHeight = height;
+        const PixelDamage damage = pixelDamageFor(submit, width, height);
+        ready.damageX = damage.x;
+        ready.damageY = damage.y;
+        ready.damageWidth = damage.width;
+        ready.damageHeight = damage.height;
         ready.transport = lcl::raster_protocol::LayerTransport::DmaBuf;
         ready.format = exported->format;
         ready.modifier = exported->modifier;
@@ -635,9 +785,15 @@ private:
         close(exported->fd);
         if (!sent) {
             surface.gpuContext->releaseDmaBuf(target->bufferId);
+            surface.gpuFrameSerial = 0;
             return false;
         }
         surface.gpuLayers.emplace(layerId, target->bufferId);
+        surface.gpuFrameSerial = submit.frameSerial;
+        surface.gpuGeometryGeneration = submit.geometryGeneration;
+        surface.gpuWidth = width;
+        surface.gpuHeight = height;
+        surface.gpuScale = submit.bufferScale;
         return true;
 #endif
     }
@@ -712,8 +868,6 @@ private:
     uint64_t m_nextLayerId{1};
     uint64_t m_nextImageId{1};
     uint64_t m_nextCachedLayerId{1};
-    lcl::render::RasterRenderer m_renderer;
-    bool m_rendererInitialized{false};
 };
 
 std::optional<int> parseFd(const char* value) {

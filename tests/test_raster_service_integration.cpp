@@ -238,6 +238,20 @@ public:
         return protocol::sendMsgWithFd(m_clientFd, header, &discarded);
     }
 
+    bool present(const raster::LayerReady& ready) const {
+        protocol::LCLHeader header{};
+        header.opcode = protocol::LCLOpcode::FramePresented;
+        header.payloadSize = sizeof(protocol::LCLMsgFramePresented);
+        protocol::LCLMsgFramePresented presented{};
+        presented.surfaceId = ready.grant.surfaceId;
+        presented.configureSerial = ready.configureSerial;
+        presented.frameSerial = ready.frameSerial;
+        presented.geometryGeneration = ready.geometryGeneration;
+        presented.timestampNs = 1;
+        presented.refreshIntervalNs = 16666667;
+        return protocol::sendMsgWithFd(m_clientFd, header, &presented);
+    }
+
     const std::string& path() const noexcept { return m_path; }
 
 private:
@@ -270,6 +284,12 @@ TEST(RasterServiceIntegrationTest,
     });
     auto root = std::make_unique<lcl::ui::Container>();
     root->setBackgroundColor({12, 34, 56, 255});
+    auto patch = std::make_unique<lcl::ui::Container>();
+    auto* patchPtr = patch.get();
+    patch->setWidth(10.0f);
+    patch->setHeight(10.0f);
+    patch->setBackgroundColor({80, 90, 100, 255});
+    root->addChild(std::move(patch));
     app.setRootWidget(std::move(root));
     ASSERT_TRUE(app.connectCompositor(compositor.path()));
     ASSERT_TRUE(compositor.acceptClient());
@@ -304,6 +324,10 @@ TEST(RasterServiceIntegrationTest,
     EXPECT_EQ(ready.geometryGeneration, 1u);
     EXPECT_EQ(ready.width, 80u);
     EXPECT_EQ(ready.height, 60u);
+    EXPECT_EQ(ready.damageX, 0u);
+    EXPECT_EQ(ready.damageY, 0u);
+    EXPECT_EQ(ready.damageWidth, ready.width);
+    EXPECT_EQ(ready.damageHeight, ready.height);
     EXPECT_GE(ready.backingWidth, ready.width);
     EXPECT_GE(ready.backingHeight, ready.height);
     if (ready.transport == raster::LayerTransport::DmaBuf) {
@@ -335,12 +359,32 @@ TEST(RasterServiceIntegrationTest,
         EXPECT_EQ(fallback.byteSize,
                   static_cast<uint64_t>(fallback.stride) *
                       fallback.backingHeight);
+        ready = fallback;
     } else {
         EXPECT_EQ(ready.transport, raster::LayerTransport::Shm);
         EXPECT_EQ(ready.byteSize,
                   static_cast<uint64_t>(ready.stride) * ready.backingHeight);
     }
     close(layerFd);
+    layerFd = -1;
+    ASSERT_TRUE(daemon.releaseLayer(ready.layerId));
+    ASSERT_TRUE(compositor.present(ready));
+
+    patchPtr->setBackgroundColor({180, 40, 70, 255});
+    raster::LayerReady patchReady{};
+    const auto patchDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (layerFd < 0 && std::chrono::steady_clock::now() < patchDeadline) {
+        (void)app.tick();
+        if (daemon.takeLayer(patchReady, layerFd, 20)) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GE(layerFd, 0);
+    EXPECT_GT(patchReady.frameSerial, ready.frameSerial);
+    EXPECT_LT(patchReady.damageWidth, patchReady.width);
+    EXPECT_LT(patchReady.damageHeight, patchReady.height);
+    close(layerFd);
+    ASSERT_TRUE(daemon.releaseLayer(patchReady.layerId));
 }
 
 } // namespace
