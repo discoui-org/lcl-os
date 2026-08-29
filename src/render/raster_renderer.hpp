@@ -151,6 +151,8 @@ public:
     const std::optional<RasterRect>& getFrameDamageRect() const {
         return m_frameDamageRect;
     }
+    /** Limit the retained-scene copy into a rotating external frame buffer. */
+    void setOutputFrameDamageRect(const std::optional<RasterRect>& damage);
 
     /**
      * @brief Clear whole canvas or subregion with specific background color.
@@ -440,6 +442,7 @@ private:
     // Rotating DMA-BUF output is separate from the authoritative retained
     // scene FBO. A completed scene is copied here once per submitted frame.
     uint32_t m_glOutputFrameFBO{0};
+    std::optional<RasterRect> m_outputFrameDamageRect;
     std::vector<CachedLayerTargetState> m_cachedLayerTargetStates;
     std::unordered_map<uint64_t, CachedDisplayLayer> m_cachedDisplayLayers;
     std::unordered_map<uint64_t, CachedShmTexture> m_cachedShmTextures;

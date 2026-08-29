@@ -2,6 +2,7 @@
 #include "lcl-graphics/display_list_wire.hpp"
 #include "render/client_egl_context.hpp"
 #include "render/raster_renderer.hpp"
+#include "render/retained_output_damage.hpp"
 
 #include <algorithm>
 #include <array>
@@ -133,6 +134,7 @@ struct SurfaceState {
     std::unique_ptr<lcl::render::RasterRenderer> gpuRenderer;
     std::unordered_map<uint64_t, uint32_t> gpuLayers;
     std::unordered_map<uint32_t, uint64_t> gpuBufferIds;
+    lcl::render::RetainedOutputDamageTracker gpuOutputDamage;
     uint64_t gpuFrameSerial{0};
     uint64_t gpuGeometryGeneration{0};
     uint32_t gpuWidth{0};
@@ -739,6 +741,19 @@ private:
         }
         const auto target = surface.gpuContext->acquireDmaBufTarget();
         if (!target) return false;
+        const lcl::render::RetainedOutputDamageTracker::Frame outputFrame{
+            submit.frameSerial,
+            submit.baseFrameSerial,
+            submit.geometryGeneration,
+            width,
+            height,
+            submit.bufferScale,
+            {submit.damageX, submit.damageY,
+             submit.damageWidth, submit.damageHeight},
+            replacesRetainedScene(submit),
+        };
+        const auto outputDamage = surface.gpuOutputDamage.copyDamage(
+            target->bufferId, outputFrame);
         surface.gpuRenderer->setExternalFrameTarget(
             target->framebuffer, target->texture,
             target->width, target->height);
@@ -752,11 +767,13 @@ private:
             displayList,
             {{submit.logicalWidth, submit.logicalHeight},
              {width, height}, submit.bufferScale});
+        surface.gpuRenderer->setOutputFrameDamageRect(outputDamage);
         surface.gpuRenderer->endFrame();
         const auto exported = surface.gpuContext->exportCurrentDmaBuf();
         surface.gpuRenderer->clearExternalFrameTarget();
         if (!exported || exported->fd < 0 || exported->androidHardwareBuffer) {
             surface.gpuContext->releaseDmaBuf(target->bufferId);
+            surface.gpuOutputDamage.invalidateBuffer(target->bufferId);
             return false;
         }
         const uint64_t layerId =
@@ -794,9 +811,11 @@ private:
         close(exported->fd);
         if (!sent) {
             surface.gpuContext->releaseDmaBuf(target->bufferId);
+            surface.gpuOutputDamage.reset();
             surface.gpuFrameSerial = 0;
             return false;
         }
+        surface.gpuOutputDamage.commit(target->bufferId, outputFrame);
         surface.gpuLayers.emplace(layerId, target->bufferId);
         surface.gpuFrameSerial = submit.frameSerial;
         surface.gpuGeometryGeneration = submit.geometryGeneration;

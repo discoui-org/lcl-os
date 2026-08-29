@@ -1359,6 +1359,7 @@ void RasterRenderer::shutdown() {
     m_glExternalFrameFBO = 0;
     m_glExternalFrameTexture = 0;
     m_glOutputFrameFBO = 0;
+    m_outputFrameDamageRect = std::nullopt;
     if (m_glFBOReady) {
         if (canDeleteGlResources) {
             glDeleteFramebuffers(2, m_glFBO);
@@ -1954,12 +1955,18 @@ void RasterRenderer::setFrameDamageRect(
     applyScissorState();
 }
 
+void RasterRenderer::setOutputFrameDamageRect(
+    const std::optional<RasterRect>& damage) {
+    m_outputFrameDamageRect = damage;
+}
+
 void RasterRenderer::beginFrame() {
     if (!m_initialized) return;
     ++m_shmTextureFrameSerial;
     if (m_shmTextureFrameSerial == 0) m_shmTextureFrameSerial = 1;
     m_clipRect = std::nullopt;
     m_frameDamageRect = std::nullopt;
+    m_outputFrameDamageRect = std::nullopt;
     applyScissorState();
 
 #ifndef LCL_SOFTWARE_ONLY
@@ -2029,22 +2036,50 @@ void RasterRenderer::endFrame() {
                 m_eglBackend->present();
             }
         } else if (m_glOutputFrameFBO != 0 && m_glSceneTexture != 0) {
-            // DMA-BUF slots rotate and cannot retain authoritative content.
-            // Copy the retained scene into the acquired slot before export.
+            // Each rotating DMA-BUF retains its own last complete scene. The
+            // producer supplies the union of patches missed while this slot
+            // was compositor-owned; a missing union requests a full copy.
             glBindFramebuffer(GL_FRAMEBUFFER, m_glOutputFrameFBO);
             glViewport(0, 0, m_width, m_height);
+            int left = 0;
+            int top = 0;
+            int right = static_cast<int>(m_width);
+            int bottom = static_cast<int>(m_height);
+            if (m_outputFrameDamageRect) {
+                const RasterRect deviceDamage = scaleRect(
+                    *m_outputFrameDamageRect);
+                left = std::clamp(
+                    static_cast<int>(std::floor(deviceDamage.x)), 0,
+                    static_cast<int>(m_width));
+                top = std::clamp(
+                    static_cast<int>(std::floor(deviceDamage.y)), 0,
+                    static_cast<int>(m_height));
+                right = std::clamp(
+                    static_cast<int>(std::ceil(
+                        deviceDamage.x + deviceDamage.width)),
+                    0, static_cast<int>(m_width));
+                bottom = std::clamp(
+                    static_cast<int>(std::ceil(
+                        deviceDamage.y + deviceDamage.height)),
+                    0, static_cast<int>(m_height));
+            }
+            if (left >= right || top >= bottom) {
+                left = top = 0;
+                right = static_cast<int>(m_width);
+                bottom = static_cast<int>(m_height);
+            }
             glEnable(GL_SCISSOR_TEST);
-            glScissor(0, 0, static_cast<GLsizei>(m_width),
-                      static_cast<GLsizei>(m_height));
+            glScissor(left, static_cast<int>(m_height) - bottom,
+                      right - left, bottom - top);
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-            glDisable(GL_SCISSOR_TEST);
             const float uMax = static_cast<float>(m_width) /
                 static_cast<float>(std::max(1u, m_glSceneCapacityWidth));
             const float vMax = static_cast<float>(m_height) /
                 static_cast<float>(std::max(1u, m_glSceneCapacityHeight));
             drawTextureQuad(m_glSceneTexture, 0, 0, m_width, m_height,
                             1.0f, uMax, vMax);
+            glDisable(GL_SCISSOR_TEST);
             glFlush();
         } else if (m_targetPixels) {
             glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());

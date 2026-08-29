@@ -1,11 +1,22 @@
 #include <gtest/gtest.h>
 
 #include "core/ipc/raster_protocol.hpp"
+#include "render/retained_output_damage.hpp"
 
 #include <sys/socket.h>
 #include <unistd.h>
 
 namespace lcl::raster_protocol {
+
+namespace {
+
+lcl::render::RetainedOutputDamageTracker::Frame outputFrame(
+        uint64_t serial, uint64_t base, lcl::render::RasterRect damage,
+        bool replacesScene = false) {
+    return {serial, base, 7, 100, 200, 2.0f, damage, replacesScene};
+}
+
+} // namespace
 
 TEST(RasterProtocolTest, LayerReadyCarriesGenerationAndOnePrivateDescriptor) {
     int sockets[2];
@@ -141,6 +152,45 @@ TEST(RasterProtocolTest, ReleaseLayerCarriesTransportRejectionReason) {
 
     close(sockets[0]);
     close(sockets[1]);
+}
+
+TEST(RasterProtocolTest, RotatingOutputCopiesOnlyDamageMissedByReusedBuffer) {
+    lcl::render::RetainedOutputDamageTracker tracker;
+    const auto first = outputFrame(
+        1, 0, {0.0f, 0.0f, 50.0f, 100.0f}, true);
+    EXPECT_FALSE(tracker.copyDamage(11, first).has_value());
+    tracker.commit(11, first);
+
+    const auto second = outputFrame(
+        2, 1, {4.0f, 10.0f, 8.0f, 12.0f});
+    EXPECT_FALSE(tracker.copyDamage(12, second).has_value());
+    tracker.commit(12, second);
+
+    const auto third = outputFrame(
+        3, 2, {20.0f, 6.0f, 5.0f, 8.0f});
+    const auto copied = tracker.copyDamage(11, third);
+    ASSERT_TRUE(copied.has_value());
+    EXPECT_FLOAT_EQ(copied->x, 4.0f);
+    EXPECT_FLOAT_EQ(copied->y, 6.0f);
+    EXPECT_FLOAT_EQ(copied->width, 21.0f);
+    EXPECT_FLOAT_EQ(copied->height, 16.0f);
+}
+
+TEST(RasterProtocolTest, RotatingOutputFallsBackToFullCopyAcrossReplacement) {
+    lcl::render::RetainedOutputDamageTracker tracker;
+    tracker.commit(21, outputFrame(
+        7, 0, {0.0f, 0.0f, 50.0f, 100.0f}, true));
+
+    // A new producer lifecycle may restart frame serials. The replacement
+    // invalidates every other slot even when its stale serial happens to
+    // equal the new retained base.
+    const auto replacement = outputFrame(
+        7, 0, {0.0f, 0.0f, 50.0f, 100.0f}, true);
+    tracker.commit(22, replacement);
+
+    const auto patch = outputFrame(
+        8, 7, {10.0f, 10.0f, 3.0f, 3.0f});
+    EXPECT_FALSE(tracker.copyDamage(21, patch).has_value());
 }
 
 } // namespace lcl::raster_protocol
