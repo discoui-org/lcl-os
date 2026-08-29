@@ -85,10 +85,10 @@ TEST(MobileLaunchBackdropTest, UsesScaleAndBrightnessWithoutEffectOpacity) {
     EXPECT_FLOAT_EQ(covered.brightness, 0.82f);
 }
 
-TEST(MobileWindowDecorationTest, GesturePillScalesFromWindowWidthAndStaysBottomAnchored) {
+TEST(MobileWindowDecorationTest,
+     GesturePillKeepsStaticLogicalSizeAndStaysBottomAnchored) {
     const auto reference = lcl::mobile::layoutGestureIndicator(
         {10.0f, 20.0f, 393.0f, 852.0f});
-    EXPECT_FLOAT_EQ(reference.scale, 1.0f);
     EXPECT_FLOAT_EQ(reference.bounds.x, 139.5f);
     EXPECT_FLOAT_EQ(reference.bounds.y, 859.0f);
     EXPECT_FLOAT_EQ(reference.bounds.width, 134.0f);
@@ -96,11 +96,10 @@ TEST(MobileWindowDecorationTest, GesturePillScalesFromWindowWidthAndStaysBottomA
 
     const auto doubled = lcl::mobile::layoutGestureIndicator(
         {10.0f, 20.0f, 786.0f, 852.0f});
-    EXPECT_FLOAT_EQ(doubled.scale, 2.0f);
-    EXPECT_FLOAT_EQ(doubled.bounds.x, 269.0f);
-    EXPECT_FLOAT_EQ(doubled.bounds.y, 846.0f);
-    EXPECT_FLOAT_EQ(doubled.bounds.width, 268.0f);
-    EXPECT_FLOAT_EQ(doubled.bounds.height, 10.0f);
+    EXPECT_FLOAT_EQ(doubled.bounds.x, 336.0f);
+    EXPECT_FLOAT_EQ(doubled.bounds.y, 859.0f);
+    EXPECT_FLOAT_EQ(doubled.bounds.width, 134.0f);
+    EXPECT_FLOAT_EQ(doubled.bounds.height, 5.0f);
 }
 
 TEST(MobileWindowDecorationTest, GesturePillIsOneRoundedDecorationPath) {
@@ -533,6 +532,80 @@ TEST(SurfaceRegistryTest, DisconnectOwnershipIsPerSocketEvenWithinOneProcess) {
     EXPECT_TRUE(SurfaceRegistry::isOwnedByClientConnection(menu, 11));
     EXPECT_FALSE(SurfaceRegistry::isOwnedByClientConnection(wallpaper, 11));
     EXPECT_FALSE(SurfaceRegistry::isOwnedByClientConnection(dock, 11));
+}
+
+TEST(InputRouterTest,
+     CommonPointerTrackingWorksWithoutDesktopWindowManagement) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(800, 600));
+    const uint32_t windowId = manager.createWindow(
+        "Mobile Home", 0, 0, 800, 600);
+    manager.setDecorationMode(windowId, render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    const auto surfaceKey = SurfaceRegistry::makeKey(sockets[0], 701, 1);
+    auto& surface = registry[surfaceKey];
+    surface.windowId = windowId;
+    surface.clientFd = sockets[0];
+    surface.hasCommittedBuffer = true;
+    surface.configuredWidth = 800.0f;
+    surface.configuredHeight = 600.0f;
+
+    SceneRegistry scenes;
+    InputRouter router(
+        manager, registry, scenes, 1.0f,
+        true,  // Mobile system gestures.
+        false  // No desktop focus, drag, resize, or chrome policy.
+    );
+
+    InputEvent motion{};
+    motion.type = InputEventType::PointerMotion;
+    motion.source = lcl::platform::PointerSource::Mouse;
+    motion.dx = 1.0;
+    ASSERT_TRUE(router.route(motion));
+    EXPECT_NEAR(manager.getMouseX(), 401.8f, 0.001f);
+    EXPECT_FLOAT_EQ(manager.getMouseY(), 300.0f);
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    const auto* input = reinterpret_cast<const protocol::LCLMsgInputEvent*>(
+        payload.data());
+    EXPECT_EQ(input->source, static_cast<uint8_t>(
+        protocol::LCLPointerSource::Mouse));
+    EXPECT_NEAR(input->x, 401.8f, 0.001f);
+    EXPECT_FLOAT_EQ(input->y, 300.0f);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.source = lcl::platform::PointerSource::Mouse;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    EXPECT_FALSE(router.route(down));
+
+    payload.clear();
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    ASSERT_EQ(payload.size(), sizeof(protocol::LCLMsgInputEvent));
+    input = reinterpret_cast<const protocol::LCLMsgInputEvent*>(
+        payload.data());
+    EXPECT_EQ(input->type, static_cast<uint32_t>(
+        protocol::LCLInputEventType::PointerButton));
+    EXPECT_EQ(input->source, static_cast<uint8_t>(
+        protocol::LCLPointerSource::Mouse));
+    EXPECT_NEAR(input->x, 401.8f, 0.001f);
+    EXPECT_FLOAT_EQ(input->y, 300.0f);
+
+    close(sockets[0]);
+    close(sockets[1]);
 }
 
 TEST(InputRouterTest, PopupOutsideParentBoundsReceivesParentLocalInput) {
@@ -1607,6 +1680,95 @@ TEST(InputRouterTest, MobileBottomEdgeClaimCancelsClientThenTriggersHome) {
 
     InputEvent up = move;
     up.type = InputEventType::PointerButton;
+    up.pressed = false;
+    EXPECT_TRUE(router.route(up));
+    EXPECT_EQ(homeEvents, 1);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(InputRouterTest,
+     RelativeMouseBottomEdgeClaimCancelsClientThenTriggersHome) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sockets), 0);
+
+    lcl::render::WindowManager manager;
+    ASSERT_TRUE(manager.initialize(1000, 700));
+    const uint32_t windowId = manager.createWindow(
+        "Mobile App", 0, 0, 1000, 700);
+    manager.setDecorationMode(windowId, lcl::render::DecorationMode::None);
+
+    SurfaceRegistry registry;
+    const auto surfaceKey = SurfaceRegistry::makeKey(sockets[0], 104, 1);
+    auto& surface = registry[surfaceKey];
+    surface.windowId = windowId;
+    surface.clientFd = sockets[0];
+    surface.hasCommittedBuffer = true;
+    surface.bufferScale = 1.0f;
+    surface.configuredWidth = 1000.0f;
+    surface.configuredHeight = 700.0f;
+
+    SceneRegistry scenes;
+    InputRouter router(manager, registry, scenes, 1.0f, true, false);
+    int homeEvents = 0;
+    router.setSystemGestureHandler([&](SystemGestureDecision decision,
+                                       const SystemGestureProgress&) {
+        if (decision == SystemGestureDecision::Home) ++homeEvents;
+        return true;
+    });
+
+    InputEvent moveToBottom{};
+    moveToBottom.type = InputEventType::PointerMotion;
+    moveToBottom.source = lcl::platform::PointerSource::Mouse;
+    moveToBottom.dy = 100.0;
+    ASSERT_TRUE(router.route(moveToBottom));
+    EXPECT_FLOAT_EQ(manager.getMouseY(), 699.0f);
+
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+
+    InputEvent down{};
+    down.type = InputEventType::PointerButton;
+    down.source = lcl::platform::PointerSource::Mouse;
+    down.button = lcl::platform::PointerButton::Left;
+    down.pressed = true;
+    router.route(down);
+
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    const auto* clientDown =
+        reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(clientDown->type, static_cast<uint32_t>(
+        protocol::LCLInputEventType::PointerButton));
+    EXPECT_EQ(clientDown->source, static_cast<uint8_t>(
+        protocol::LCLPointerSource::Mouse));
+
+    InputEvent swipe{};
+    swipe.type = InputEventType::PointerMotion;
+    swipe.source = lcl::platform::PointerSource::Mouse;
+    swipe.dy = -10.0;
+    EXPECT_TRUE(router.route(swipe));
+
+    ASSERT_TRUE(protocol::recvMsgWithFd(
+        sockets[1], header, payload, receivedFd));
+    ASSERT_EQ(header.opcode, protocol::LCLOpcode::InputEvent);
+    const auto* clientCancel =
+        reinterpret_cast<const protocol::LCLMsgInputEvent*>(payload.data());
+    EXPECT_EQ(clientCancel->type, static_cast<uint32_t>(
+        protocol::LCLInputEventType::PointerCancel));
+    EXPECT_EQ(clientCancel->source, static_cast<uint8_t>(
+        protocol::LCLPointerSource::Mouse));
+
+    InputEvent up{};
+    up.type = InputEventType::PointerButton;
+    up.source = lcl::platform::PointerSource::Mouse;
+    up.button = lcl::platform::PointerButton::Left;
     up.pressed = false;
     EXPECT_TRUE(router.route(up));
     EXPECT_EQ(homeEvents, 1);

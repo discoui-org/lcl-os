@@ -66,6 +66,9 @@ private:
     SystemGestureArena m_systemGestureArena;
     SystemGestureHandler m_systemGestureHandler;
     std::unordered_map<uint32_t, SurfaceRegistry::Key> m_touchTargets;
+    // Client that received the candidate stream's initial press. The arena is
+    // single-pointer, so one source-neutral target is sufficient until claim.
+    SurfaceRegistry::Key m_systemGestureCandidateTarget{0};
     SurfaceRegistry::Key m_activePopupSurface{0};
     SurfaceRegistry::Key m_activeAttachedSurface{0};
     std::chrono::nanoseconds m_refreshInterval{std::chrono::nanoseconds(16666667)};

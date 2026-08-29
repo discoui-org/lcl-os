@@ -252,6 +252,20 @@ public:
      */
     WindowInputResult processInputEvent(const core::InputEvent& ev);
 
+    /**
+     * Apply desktop window-management behavior after shared mouse tracking has
+     * already run in InputRouter. Non-mouse pointer streams retain their
+     * existing absolute-position handling here.
+     */
+    WindowInputResult processWindowManagementEvent(
+        const core::InputEvent& ev);
+
+    /**
+     * Update compositor-owned pointer coordinates without applying desktop
+     * focus, drag, resize, or chrome policy.
+     */
+    bool updatePointerPosition(const core::InputEvent& ev);
+
     /** Resolve the compositor-owned resize border at one global point. */
     ResizeEdge resizeEdgeAt(uint32_t windowId, float x, float y) const noexcept;
 
@@ -364,6 +378,8 @@ public:
     float getMouseY() const { return m_mouseY; }
 
 private:
+    WindowInputResult processWindowManagementEventImpl(
+        const core::InputEvent& ev, bool updatePointer);
     void unfocusAll(); ///< Clear focus + reset header color on all windows
     void focusTopmostVisibleWindow();
     void updateWindowZOrders();

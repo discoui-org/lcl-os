@@ -8,7 +8,6 @@
 namespace lcl::mobile {
 
 struct GestureIndicatorMetrics {
-    float referenceWidth{393.0f};
     float width{134.0f};
     float height{5.0f};
     float bottomInset{8.0f};
@@ -17,28 +16,25 @@ struct GestureIndicatorMetrics {
 
 struct GestureIndicatorLayout {
     lcl::graphics::RectF bounds{};
-    float scale{1.0f};
 };
 
 inline GestureIndicatorLayout layoutGestureIndicator(
         const lcl::graphics::RectF& windowBounds,
         const GestureIndicatorMetrics& metrics = {}) noexcept {
-    const float referenceWidth = std::max(1.0f, metrics.referenceWidth);
-    const float scale = std::max(0.0f, windowBounds.width) / referenceWidth;
     const float width = std::min(
         std::max(0.0f, windowBounds.width),
-        std::max(0.0f, metrics.width * scale));
+        std::max(0.0f, metrics.width));
     const float height = std::min(
         std::max(0.0f, windowBounds.height),
-        std::max(0.0f, metrics.height * scale));
-    const float bottomInset = std::max(0.0f, metrics.bottomInset * scale);
+        std::max(0.0f, metrics.height));
+    const float bottomInset = std::max(0.0f, metrics.bottomInset);
     return {{
         windowBounds.x + (windowBounds.width - width) * 0.5f,
         windowBounds.y + std::max(
             0.0f, windowBounds.height - bottomInset - height),
         width,
         height,
-    }, scale};
+    }};
 }
 
 inline lcl::graphics::DisplayList buildGestureIndicatorDisplayList(

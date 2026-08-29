@@ -9,12 +9,23 @@ SystemGestureDecision SystemGestureArena::process(const InputEvent& event,
                                                   float outputHeight,
                                                   SystemGestureProgress* progress,
                                                   TimePoint now) {
-    if (event.source != lcl::platform::PointerSource::Touch) {
+    const bool pointerStream =
+        event.type == InputEventType::PointerMotion ||
+        event.type == InputEventType::PointerButton ||
+        event.type == InputEventType::PointerCancel;
+    const bool supportedSource =
+        event.source == lcl::platform::PointerSource::Touch ||
+        event.source == lcl::platform::PointerSource::Mouse;
+    if (!pointerStream || !supportedSource) {
         return SystemGestureDecision::PassThrough;
     }
 
-    const bool down = event.type == InputEventType::PointerButton && event.pressed;
-    const bool up = event.type == InputEventType::PointerButton && !event.pressed;
+    const bool primaryButton =
+        event.button == lcl::platform::PointerButton::Left;
+    const bool down = event.type == InputEventType::PointerButton &&
+        event.pressed && primaryButton;
+    const bool up = event.type == InputEventType::PointerButton &&
+        !event.pressed && primaryButton;
     if (m_state == State::Idle) {
         const float edgeTop = std::max(0.0f, outputHeight - m_config.bottomEdgeInset);
         if (!down || !std::isfinite(event.absoluteX) ||
@@ -23,14 +34,19 @@ SystemGestureDecision SystemGestureArena::process(const InputEvent& event,
         }
         m_state = State::Tracking;
         m_pointerId = event.pointerId;
+        m_pointerSource = event.source;
         m_startX = static_cast<float>(event.absoluteX);
         m_startY = static_cast<float>(event.absoluteY);
         recordVelocitySample(m_startX, m_startY, now);
         return SystemGestureDecision::Tracking;
     }
 
-    if (event.pointerId != m_pointerId) {
+    if (event.pointerId != m_pointerId || event.source != m_pointerSource) {
         return SystemGestureDecision::PassThrough;
+    }
+    if (event.type == InputEventType::PointerButton && !primaryButton) {
+        return m_state == State::Claimed ? SystemGestureDecision::Consume
+                                         : SystemGestureDecision::PassThrough;
     }
     const bool motion = event.type == InputEventType::PointerMotion;
     if ((motion || up) && std::isfinite(event.absoluteX) &&
@@ -82,6 +98,7 @@ SystemGestureDecision SystemGestureArena::process(const InputEvent& event,
 void SystemGestureArena::reset() noexcept {
     m_state = State::Idle;
     m_pointerId = 0;
+    m_pointerSource = lcl::platform::PointerSource::Touch;
     m_startX = 0.0f;
     m_startY = 0.0f;
     m_velocitySamples.clear();

@@ -38,7 +38,8 @@ struct SystemGestureConfig {
 
 /**
  * Arbitrates the single-pointer bottom-edge stream reserved by the mobile shell.
- * It recognizes ownership only; rendering and shell policy remain outside it.
+ * Touch and primary-button mouse drags share this recognizer. It recognizes
+ * ownership only; rendering and shell policy remain outside it.
  */
 class SystemGestureArena {
 public:
@@ -74,6 +75,8 @@ private:
     SystemGestureConfig m_config;
     State m_state{State::Idle};
     uint32_t m_pointerId{0};
+    lcl::platform::PointerSource m_pointerSource{
+        lcl::platform::PointerSource::Touch};
     float m_startX{0.0f};
     float m_startY{0.0f};
     std::deque<VelocitySample> m_velocitySamples;

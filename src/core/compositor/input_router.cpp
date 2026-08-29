@@ -38,54 +38,99 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
         event.dy /= outputScale;
     }
 
-    if (m_systemGesturesEnabled) {
-        SystemGestureProgress progress{};
-        const auto gestureTime = event.timestampNs != 0
-            ? SystemGestureArena::TimePoint(
-                std::chrono::nanoseconds(event.timestampNs))
-            : SystemGestureArena::Clock::now();
-        const auto decision = m_systemGestureArena.process(
-            event, m_windowManager.getScreenHeight(), &progress, gestureTime);
-        if (decision == SystemGestureDecision::Claim) {
-            const auto target = m_touchTargets.find(event.pointerId);
-            if (target != m_touchTargets.end()) {
-                InputEvent cancel = event;
-                cancel.type = InputEventType::PointerCancel;
-                cancel.pressed = false;
-                forwardToSurface(cancel, target->second);
-            }
-            return m_systemGestureHandler
-                ? m_systemGestureHandler(decision, progress)
-                : false;
-        }
-        if (decision == SystemGestureDecision::Update) {
-            return m_systemGestureHandler
-                ? m_systemGestureHandler(decision, progress)
-                : false;
-        }
-        if (decision == SystemGestureDecision::Cancel) {
-            m_touchTargets.erase(event.pointerId);
-            return m_systemGestureHandler
-                ? m_systemGestureHandler(decision, progress)
-                : false;
-        }
-        if (decision == SystemGestureDecision::Consume) {
-            if (event.type == InputEventType::PointerCancel) {
-                m_touchTargets.erase(event.pointerId);
-            }
-            return false;
-        }
-        if (decision == SystemGestureDecision::Home) {
-            m_touchTargets.erase(event.pointerId);
-            return m_systemGestureHandler
-                ? m_systemGestureHandler(SystemGestureDecision::Home, progress)
-                : false;
-        }
-    }
     const bool pointerEvent = event.type == InputEventType::PointerMotion ||
         event.type == InputEventType::PointerButton ||
         event.type == InputEventType::PointerCancel ||
         event.type == InputEventType::PointerScroll;
+    // Mouse coordinates are shared compositor state. Update them once before
+    // gesture arbitration or any windowing-policy branch.
+    const bool pointerStateChanged =
+        event.source == lcl::platform::PointerSource::Mouse &&
+        m_windowManager.updatePointerPosition(event);
+
+    // Relative mouse packets do not carry absolute coordinates. Gesture
+    // recognition consumes the same compositor-owned cursor position used by
+    // hit testing while preserving Mouse as the source sent to clients.
+    InputEvent gestureEvent = event;
+    if (pointerEvent &&
+        event.source == lcl::platform::PointerSource::Mouse) {
+        if (!std::isfinite(gestureEvent.absoluteX) ||
+            gestureEvent.absoluteX < 0.0) {
+            gestureEvent.absoluteX = m_windowManager.getMouseX();
+        }
+        if (!std::isfinite(gestureEvent.absoluteY) ||
+            gestureEvent.absoluteY < 0.0) {
+            gestureEvent.absoluteY = m_windowManager.getMouseY();
+        }
+    }
+
+    bool systemGestureStarted = false;
+    auto clearSystemGestureCapture = [&] {
+        m_systemGestureCandidateTarget = 0;
+        m_activePopupSurface = 0;
+        m_activeAttachedSurface = 0;
+        if (gestureEvent.source == lcl::platform::PointerSource::Touch) {
+            m_touchTargets.erase(gestureEvent.pointerId);
+        }
+    };
+    if (m_systemGesturesEnabled) {
+        const bool wasTracking =
+            m_systemGestureArena.isTracking(gestureEvent.pointerId);
+        SystemGestureProgress progress{};
+        const auto gestureTime = gestureEvent.timestampNs != 0
+            ? SystemGestureArena::TimePoint(
+                std::chrono::nanoseconds(gestureEvent.timestampNs))
+            : SystemGestureArena::Clock::now();
+        const auto decision = m_systemGestureArena.process(
+            gestureEvent, m_windowManager.getScreenHeight(), &progress,
+            gestureTime);
+        systemGestureStarted =
+            decision == SystemGestureDecision::Tracking &&
+            gestureEvent.type == InputEventType::PointerButton &&
+            gestureEvent.pressed;
+        if (decision == SystemGestureDecision::Claim) {
+            if (m_systemGestureCandidateTarget != 0) {
+                InputEvent cancel = gestureEvent;
+                cancel.type = InputEventType::PointerCancel;
+                cancel.pressed = false;
+                forwardToSurface(cancel, m_systemGestureCandidateTarget);
+            }
+            clearSystemGestureCapture();
+            const bool handled = m_systemGestureHandler
+                ? m_systemGestureHandler(decision, progress) : false;
+            return pointerStateChanged || handled;
+        }
+        if (decision == SystemGestureDecision::Update) {
+            const bool handled = m_systemGestureHandler
+                ? m_systemGestureHandler(decision, progress) : false;
+            return pointerStateChanged || handled;
+        }
+        if (decision == SystemGestureDecision::Cancel) {
+            clearSystemGestureCapture();
+            const bool handled = m_systemGestureHandler
+                ? m_systemGestureHandler(decision, progress) : false;
+            return pointerStateChanged || handled;
+        }
+        if (decision == SystemGestureDecision::Consume) {
+            if (gestureEvent.type == InputEventType::PointerCancel) {
+                clearSystemGestureCapture();
+            }
+            return pointerStateChanged;
+        }
+        if (decision == SystemGestureDecision::Home) {
+            clearSystemGestureCapture();
+            const bool handled = m_systemGestureHandler
+                ? m_systemGestureHandler(SystemGestureDecision::Home, progress)
+                : false;
+            return pointerStateChanged || handled;
+        }
+        if (decision == SystemGestureDecision::PassThrough && wasTracking &&
+            !m_systemGestureArena.isTracking(gestureEvent.pointerId)) {
+            // The arena relinquished an unclaimed stream. Keep normal touch
+            // capture alive so the application still receives its release.
+            m_systemGestureCandidateTarget = 0;
+        }
+    }
     auto pointerX = [&] {
         return std::isfinite(event.absoluteX) && event.absoluteX >= 0.0
             ? static_cast<float>(event.absoluteX)
@@ -150,7 +195,8 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
     auto result = (visibilityInputBlocked || popupButtonEvent || attachedButtonEvent ||
                    !m_desktopWindowManagementEnabled)
         ? render::WindowInputResult{}
-        : m_windowManager.processInputEvent(event);
+        : m_windowManager.processWindowManagementEvent(event);
+    result.stateChanged = result.stateChanged || pointerStateChanged;
     const bool geometryPressTookPrecedence = attachedTarget != 0 &&
         event.type == InputEventType::PointerButton && event.pressed &&
         result.interaction.isManual();
@@ -217,12 +263,15 @@ bool InputRouter::route(const InputEvent& physicalEvent) {
     const bool touchFinished = touchPointer &&
         ((event.type == InputEventType::PointerButton && !event.pressed) ||
          event.type == InputEventType::PointerCancel);
-    if (touchDown) {
+    if (touchDown || systemGestureStarted) {
         const auto target = popupTarget != 0
             ? popupTarget
             : (attachedTarget != 0 && !geometryPressTookPrecedence
                    ? attachedTarget : focusedSurfaceKey());
-        if (target != 0) m_touchTargets[event.pointerId] = target;
+        if (touchDown && target != 0) {
+            m_touchTargets[event.pointerId] = target;
+        }
+        if (systemGestureStarted) m_systemGestureCandidateTarget = target;
     }
 
     const auto capturedTouch = touchPointer

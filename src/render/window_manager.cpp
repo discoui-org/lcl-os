@@ -154,49 +154,69 @@ ResizeEdge WindowManager::resizeEdgeAt(
         : detectResizeEdge(x, y, *window);
 }
 
-WindowInputResult WindowManager::processInputEvent(const core::InputEvent& event) {
-    bool stateChanged = false;
+bool WindowManager::updatePointerPosition(const core::InputEvent& event) {
+    if (event.type != core::InputEventType::PointerMotion) return false;
+
+    const float oldX = m_mouseX;
+    const float oldY = m_mouseY;
+
+    if (event.absoluteX >= 0.0) {
+        m_subpixelX = event.absoluteX;
+    }
+    if (event.absoluteY >= 0.0) {
+        m_subpixelY = event.absoluteY;
+    }
+
+    if (event.absoluteX < 0.0 && event.absoluteY < 0.0) {
+        // Relative mouse motion: apply subpixel precision + speed sensitivity
+        // scale and acceleration.
+        constexpr double mouseSensitivity = 1.8;
+        double dx = event.dx * mouseSensitivity;
+        double dy = event.dy * mouseSensitivity;
+
+        // Non-linear acceleration for fast flick movements.
+        const double speedSq = dx * dx + dy * dy;
+        if (speedSq > 9.0) {
+            const double factor = 1.0 +
+                std::min(1.5, (speedSq - 9.0) * 0.01);
+            dx *= factor;
+            dy *= factor;
+        }
+
+        m_subpixelX += dx;
+        m_subpixelY += dy;
+    }
+
+    m_subpixelX = std::clamp(
+        m_subpixelX, 0.0, static_cast<double>(m_screenWidth - 1));
+    m_subpixelY = std::clamp(
+        m_subpixelY, 0.0, static_cast<double>(m_screenHeight - 1));
+    m_mouseX = static_cast<float>(m_subpixelX);
+    m_mouseY = static_cast<float>(m_subpixelY);
+
+    const bool changed = m_mouseX != oldX || m_mouseY != oldY ||
+        event.dx != 0.0 || event.dy != 0.0 || event.absoluteX >= 0.0;
+    if (changed) m_mouseDirty = true;
+    return changed;
+}
+
+WindowInputResult WindowManager::processInputEvent(
+        const core::InputEvent& event) {
+    return processWindowManagementEventImpl(event, true);
+}
+
+WindowInputResult WindowManager::processWindowManagementEvent(
+        const core::InputEvent& event) {
+    return processWindowManagementEventImpl(
+        event, event.source != lcl::platform::PointerSource::Mouse);
+}
+
+WindowInputResult WindowManager::processWindowManagementEventImpl(
+        const core::InputEvent& event, bool updatePointer) {
+    bool stateChanged = updatePointer && updatePointerPosition(event);
     GeometryInteraction interaction{};
 
     if (event.type == core::InputEventType::PointerMotion) {
-        const float oldX = m_mouseX;
-        const float oldY = m_mouseY;
-
-        if (event.absoluteX >= 0.0) {
-            m_subpixelX = event.absoluteX;
-        }
-        if (event.absoluteY >= 0.0) {
-            m_subpixelY = event.absoluteY;
-        }
-
-        if (event.absoluteX < 0.0 && event.absoluteY < 0.0) {
-            // Relative mouse motion: apply subpixel precision + speed sensitivity scale & acceleration
-            constexpr double mouseSensitivity = 1.8;
-            double dx = event.dx * mouseSensitivity;
-            double dy = event.dy * mouseSensitivity;
-
-            // Non-linear acceleration for fast flick movements
-            double speedSq = dx * dx + dy * dy;
-            if (speedSq > 9.0) {
-                double factor = 1.0 + std::min(1.5, (speedSq - 9.0) * 0.01);
-                dx *= factor;
-                dy *= factor;
-            }
-
-            m_subpixelX += dx;
-            m_subpixelY += dy;
-        }
-
-        m_subpixelX = std::clamp(m_subpixelX, 0.0, static_cast<double>(m_screenWidth - 1));
-        m_subpixelY = std::clamp(m_subpixelY, 0.0, static_cast<double>(m_screenHeight - 1));
-        m_mouseX = static_cast<float>(m_subpixelX);
-        m_mouseY = static_cast<float>(m_subpixelY);
-
-        if (m_mouseX != oldX || m_mouseY != oldY || event.dx != 0.0 || event.dy != 0.0 || event.absoluteX >= 0.0) {
-            m_mouseDirty = true;
-            stateChanged = true;
-        }
-
         const float topInset = m_reservedZone.top;
         const float bottomInset = m_reservedZone.bottom;
         const float leftInset = m_reservedZone.left;

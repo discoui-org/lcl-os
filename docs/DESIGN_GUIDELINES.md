@@ -58,13 +58,12 @@ Use neutral system tones as defaults with one restrained blue accent family.
 - The gesture pill is a MobileWM-owned attached surface. The compositor knows
   only that it is an adornment child of a WindowGroup; it does not know or draw
   the pill visual.
-- Its reference geometry is a `393`-unit-wide parent with a `134 x 5` pill and
-  an `8`-unit bottom inset.
+- Its geometry is `134 x 5` logical units with an `8`-unit bottom inset on
+  every display. Only clamp it when the parent is smaller than the pill.
 - Treat the pill as content inside a conceptual parent anchored to
   `left: 0`, `right: 0`, and `bottom: 0`.
-- Responsive scaling is driven by the parent width. The resulting geometry
-  preserves left, right, and bottom anchoring; the pill must not scale from its
-  center or drift vertically.
+- Parent size changes only recenter the pill and preserve its bottom anchor;
+  they do not scale the pill.
 
 ## Glass Rules
 

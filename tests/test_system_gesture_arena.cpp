@@ -18,6 +18,20 @@ InputEvent touchEvent(InputEventType type, float x, float y,
     return event;
 }
 
+InputEvent mouseEvent(InputEventType type, float x, float y,
+                      bool pressed = false,
+                      lcl::platform::PointerButton button =
+                          lcl::platform::PointerButton::Left) {
+    InputEvent event{};
+    event.type = type;
+    event.source = lcl::platform::PointerSource::Mouse;
+    event.absoluteX = x;
+    event.absoluteY = y;
+    event.button = button;
+    event.pressed = pressed;
+    return event;
+}
+
 TEST(SystemGestureArenaTest, ClaimsVerticalBottomEdgeSwipeAndEmitsHomeOnRelease) {
     SystemGestureArena arena;
 
@@ -57,6 +71,33 @@ TEST(SystemGestureArenaTest, ReportsClaimedGestureProgressBeforeRelease) {
     EXPECT_FLOAT_EQ(progress.startY, 795.0f);
     EXPECT_FLOAT_EQ(progress.x, 126.0f);
     EXPECT_FLOAT_EQ(progress.y, 750.0f);
+}
+
+TEST(SystemGestureArenaTest, PrimaryMouseDragUsesTheSameBottomEdgeGesture) {
+    SystemGestureArena arena;
+
+    EXPECT_EQ(arena.process(
+                  mouseEvent(InputEventType::PointerButton,
+                             100.0f, 795.0f, true),
+                  800.0f),
+              SystemGestureDecision::Tracking);
+    EXPECT_EQ(arena.process(
+                  mouseEvent(InputEventType::PointerMotion,
+                             102.0f, 770.0f),
+                  800.0f),
+              SystemGestureDecision::Claim);
+    EXPECT_EQ(arena.process(
+                  mouseEvent(InputEventType::PointerButton,
+                             102.0f, 770.0f, false),
+                  800.0f),
+              SystemGestureDecision::Home);
+
+    EXPECT_EQ(arena.process(
+                  mouseEvent(InputEventType::PointerButton,
+                             100.0f, 795.0f, true,
+                             lcl::platform::PointerButton::Right),
+                  800.0f),
+              SystemGestureDecision::PassThrough);
 }
 
 TEST(SystemGestureArenaTest, ReportsRecentFlingVelocityOnRelease) {
