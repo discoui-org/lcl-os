@@ -12,7 +12,7 @@ layout::Size Divider::measure(const layout::Constraints& constraints) {
 void Divider::draw(graphics::Canvas& canvas,
                    const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
-    beginPresentation(canvas);
+    beginPresentation(canvas, damageRect);
     const float width = getTheme().metrics.separatorWidth;
     if (m_absoluteBounds.width >= m_absoluteBounds.height) {
         canvas.drawRect({m_absoluteBounds.x,

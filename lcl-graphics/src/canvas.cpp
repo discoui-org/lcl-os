@@ -34,7 +34,8 @@ void Canvas::drawDisplayList(const DisplayList& displayList) {
             } else if constexpr (std::is_same_v<T, EndCachedLayerCommand>) {
                 endCachedLayer();
             } else if constexpr (std::is_same_v<T, DrawCachedLayerCommand>) {
-                drawCachedLayer(op.id, op.destination, op.opacity);
+                drawCachedLayerTransformed(
+                    op.id, op.destination, op.transform, op.opacity);
             } else if constexpr (std::is_same_v<T, DrawPathCommand>) {
                 drawPath(op.path, op.paint);
             } else if constexpr (std::is_same_v<T, DrawTextCommand>) {

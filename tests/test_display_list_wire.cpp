@@ -26,7 +26,9 @@ TEST(DisplayListWireTest, RoundTripsBackendNeutralCommandsCanonically) {
     builder.beginCachedLayerUpdate(42, {0.0f, 0.0f, 200.0f, 100.0f},
                                    {5.0f, 6.0f, 20.0f, 30.0f});
     builder.endCachedLayer();
-    builder.drawCachedLayer(42, {10.0f, 20.0f, 200.0f, 100.0f}, 0.7f);
+    builder.drawCachedLayerTransformed(
+        42, {10.0f, 20.0f, 200.0f, 100.0f}, 0.7f,
+        {0.9f, 0.1f, -0.1f, 0.9f, 4.0f, 5.0f});
 
     graphics::Path rounded;
     rounded.addRRect({{8.0f, 9.0f, 100.0f, 40.0f}, 7.0f, 8.0f, 3.5f});
@@ -56,6 +58,13 @@ TEST(DisplayListWireTest, RoundTripsBackendNeutralCommandsCanonically) {
 
     const auto& commands = decoded.displayList.commands();
     ASSERT_GE(commands.size(), 2u);
+    const auto* cachedDraw = std::get_if<graphics::DrawCachedLayerCommand>(
+        &commands[commands.size() - 5]);
+    ASSERT_NE(cachedDraw, nullptr);
+    EXPECT_FLOAT_EQ(cachedDraw->transform.a, 0.9f);
+    EXPECT_FLOAT_EQ(cachedDraw->transform.b, 0.1f);
+    EXPECT_FLOAT_EQ(cachedDraw->transform.tx, 4.0f);
+    EXPECT_FLOAT_EQ(cachedDraw->transform.ty, 5.0f);
     const auto* pathCommand = std::get_if<graphics::DrawPathCommand>(
         &commands[commands.size() - 4]);
     ASSERT_NE(pathCommand, nullptr);
@@ -112,7 +121,7 @@ TEST(DisplayListWireTest, RejectsTruncationTrailingBytesAndUnknownVersion) {
               graphics::DisplayListWireError::InvalidData);
 
     std::vector<uint8_t> future = encoded.bytes;
-    future[4] = 3;
+    future[4] = 4;
     future[5] = 0;
     EXPECT_EQ(graphics::decodeDisplayList(future).error,
               graphics::DisplayListWireError::UnsupportedVersion);

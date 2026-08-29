@@ -74,7 +74,7 @@ void Image::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
         return;
     }
 
-    beginPresentation(canvas);
+    beginPresentation(canvas, damageRect);
 
     const float boxX = m_absoluteBounds.x;
     const float boxY = m_absoluteBounds.y;

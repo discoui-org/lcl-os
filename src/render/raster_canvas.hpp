@@ -56,6 +56,10 @@ public:
     void endCachedLayer() override;
     bool drawCachedLayer(CachedLayerId id, const lcl::graphics::RectF& destination,
                          float opacity = 1.0f) override;
+    bool drawCachedLayerTransformed(
+        CachedLayerId id, const lcl::graphics::RectF& destination,
+        const lcl::graphics::Matrix3& transform,
+        float opacity = 1.0f) override;
 
     void clearRect(const lcl::graphics::RectF& rect, lcl::graphics::Color color) override;
     void drawPath(const lcl::graphics::Path& path,

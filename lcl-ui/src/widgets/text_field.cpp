@@ -112,7 +112,7 @@ void TextField::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect
 
     rebuildCaretAdvances(canvas);
     ensureCaretVisible();
-    beginPresentation(canvas);
+    beginPresentation(canvas, damageRect);
 
     const graphics::RectF field = m_absoluteBounds;
     const auto visual = visualStyle();

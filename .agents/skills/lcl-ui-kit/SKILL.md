@@ -51,6 +51,13 @@ entering tile from its retained logical content and patch history without a new
 client DisplayList or image upload. Cache-aware widgets republish their source
 on daemon restart, resize, frame rejection, or other complete-scene replacement.
 
+Small bounded non-scroll subtrees with active transform or opacity are selected
+automatically as retained presentation layers. Their content is recorded once
+at identity and rasterd applies later translation, scale, rotation, and opacity
+while composing the existing texture. This is an internal optimization with no
+public texture or render-node API. Nested candidates collapse to one useful
+boundary and any subtree containing a `ScrollView` stays on the tiled path.
+
 ---
 
 ## 2. Key Framework Classes

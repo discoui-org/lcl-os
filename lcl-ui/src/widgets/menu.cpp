@@ -140,7 +140,7 @@ void MenuItemButton::draw(graphics::Canvas& canvas,
     if (!m_selected || !m_visible ||
         !getPresentationPaintBounds().intersects(damageRect)) return;
 
-    beginPresentation(canvas);
+    beginPresentation(canvas, damageRect);
     const float right = m_absoluteBounds.x + m_absoluteBounds.width - 10.0f;
     const float centerY = m_absoluteBounds.y + m_absoluteBounds.height * 0.5f;
     graphics::Path mark;

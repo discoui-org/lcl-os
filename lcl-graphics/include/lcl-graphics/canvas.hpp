@@ -94,6 +94,15 @@ public:
                                         const RectF&) { return false; }
     virtual void endCachedLayer() {}
     virtual bool drawCachedLayer(CachedLayerId, const RectF&, float = 1.0f) { return false; }
+    virtual bool drawCachedLayerTransformed(
+            CachedLayerId id, const RectF& destination,
+            const Matrix3& transform, float opacity = 1.0f) {
+        saveState();
+        concatTransform(transform);
+        const bool drawn = drawCachedLayer(id, destination, opacity);
+        restoreState();
+        return drawn;
+    }
 
     /** Replay backend-neutral commands through this Canvas' current state. */
     void drawDisplayList(const DisplayList& displayList);

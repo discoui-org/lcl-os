@@ -299,6 +299,17 @@ bool RasterCanvas::drawCachedLayer(CachedLayerId id,
     return true;
 }
 
+bool RasterCanvas::drawCachedLayerTransformed(
+        CachedLayerId id, const lcl::graphics::RectF& destination,
+        const lcl::graphics::Matrix3& transform, float opacity) {
+    if (!m_displayListOnly && !renderer().hasCachedDisplayLayer(id)) {
+        return false;
+    }
+    m_displayListBuilder.drawCachedLayerTransformed(
+        id, destination, opacity, transform);
+    return true;
+}
+
 void RasterCanvas::clearCachedLayers() {
     if (m_displayListOnly) return;
     renderer().clearDisplayListCaches();

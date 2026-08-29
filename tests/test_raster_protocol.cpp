@@ -62,6 +62,48 @@ std::vector<lcl::graphics::DisplayCommand> fullScrollDisplayList() {
     };
 }
 
+lcl::render::RetainedScrollTileCache::NodeMap presentationNodes(
+        float scale = 0.9f, float opacity = 0.8f) {
+    lcl::render::RetainedScrollTileCache::NodeMap nodes;
+    RetainedNodeState root{};
+    root.id = 1;
+    root.boundaryReasons = 1u << 0u;
+    root.layoutWidth = root.presentationWidth = 320.0f;
+    root.layoutHeight = root.presentationHeight = 200.0f;
+    nodes.emplace(root.id, root);
+
+    RetainedNodeState layer{};
+    layer.id = 20;
+    layer.parentId = root.id;
+    layer.contentRevision = 7;
+    layer.boundaryReasons = (1u << 2u) | (1u << 3u);
+    layer.layoutX = 40.0f;
+    layer.layoutY = 30.0f;
+    layer.layoutWidth = layer.presentationWidth = 120.0f;
+    layer.layoutHeight = layer.presentationHeight = 60.0f;
+    layer.scaleX = layer.scaleY = scale;
+    layer.opacity = opacity;
+    layer.originX = layer.originY = 0.5f;
+    nodes.emplace(layer.id, layer);
+    return nodes;
+}
+
+std::vector<lcl::graphics::DisplayCommand>
+fullPresentationDisplayList() {
+    return {
+        lcl::graphics::SaveCommand{},
+        lcl::graphics::BeginCachedLayerCommand{
+            200, {40.0f, 30.0f, 120.0f, 60.0f}, std::nullopt},
+        lcl::graphics::ClearRectCommand{
+            {40.0f, 30.0f, 120.0f, 60.0f}, {90, 120, 180, 255}},
+        lcl::graphics::EndCachedLayerCommand{},
+        lcl::graphics::DrawCachedLayerCommand{
+            200, {40.0f, 30.0f, 120.0f, 60.0f}, 0.8f,
+            {0.9f, 0.0f, 0.0f, 0.9f, 10.0f, 6.0f}},
+        lcl::graphics::RestoreCommand{},
+    };
+}
+
 } // namespace
 
 TEST(RasterProtocolTest, LayerReadyCarriesGenerationAndOnePrivateDescriptor) {
@@ -371,6 +413,49 @@ TEST(RasterProtocolTest,
             EXPECT_NE(draw->id, 100u);
         }
     }
+}
+
+TEST(RasterProtocolTest,
+     RetainedPresentationPropertyCommitReusesExistingCachedLayer) {
+    lcl::render::RetainedScrollTileCache cache;
+    uint64_t nextLayerId = 3500;
+    const auto full = fullPresentationDisplayList();
+    auto initial = lcl::render::RetainedScrollTileCache::prepare(
+        cache, &full, presentationNodes(), {{20, 200}},
+        [&] { return nextLayerId++; }, true);
+    ASSERT_TRUE(initial.has_value());
+    EXPECT_TRUE(initial->retainedComposition);
+    EXPECT_FALSE(initial->tiled);
+    cache = std::move(*initial->next);
+
+    auto property = lcl::render::RetainedScrollTileCache::prepare(
+        cache, nullptr, presentationNodes(0.75f, 0.6f), {{20, 200}},
+        [&] { return nextLayerId++; }, false, true);
+    ASSERT_TRUE(property.has_value());
+    EXPECT_TRUE(property->retainedComposition);
+    EXPECT_TRUE(property->createdLayerIds.empty());
+    EXPECT_TRUE(property->evictedLayerIds.empty());
+
+    std::size_t begins = 0;
+    const lcl::graphics::DrawCachedLayerCommand* retainedDraw = nullptr;
+    for (const auto& command : property->displayList.commands()) {
+        if (std::holds_alternative<
+                lcl::graphics::BeginCachedLayerCommand>(command)) {
+            ++begins;
+        }
+        if (const auto* draw = std::get_if<
+                lcl::graphics::DrawCachedLayerCommand>(&command)) {
+            retainedDraw = draw;
+        }
+    }
+    EXPECT_EQ(begins, 0u);
+    ASSERT_NE(retainedDraw, nullptr);
+    EXPECT_EQ(retainedDraw->id, 200u);
+    EXPECT_FLOAT_EQ(retainedDraw->opacity, 0.6f);
+    EXPECT_FLOAT_EQ(retainedDraw->transform.a, 0.75f);
+    EXPECT_FLOAT_EQ(retainedDraw->transform.d, 0.75f);
+    EXPECT_FLOAT_EQ(retainedDraw->transform.tx, 25.0f);
+    EXPECT_FLOAT_EQ(retainedDraw->transform.ty, 15.0f);
 }
 
 TEST(RasterProtocolTest,

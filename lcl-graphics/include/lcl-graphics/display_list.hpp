@@ -29,6 +29,7 @@ struct DrawCachedLayerCommand {
     uint64_t id{0};
     RectF destination{};
     float opacity{1.0f};
+    Matrix3 transform{};
 };
 struct DrawPathCommand { Path path{}; Paint paint{}; };
 struct DrawTextCommand {
@@ -90,6 +91,9 @@ public:
                                 const RectF& updateBounds);
     void endCachedLayer();
     void drawCachedLayer(uint64_t id, const RectF& destination, float opacity);
+    void drawCachedLayerTransformed(uint64_t id, const RectF& destination,
+                                    float opacity,
+                                    const Matrix3& transform);
     void drawPath(const Path& path, const Paint& paint);
     void drawText(PointF origin, std::string text, Color color,
                   float fontSize,

@@ -10,7 +10,7 @@
 namespace lcl::graphics {
 
 constexpr uint32_t kDisplayListWireMagic = 0x314C444Cu; // "LDL1"
-constexpr uint16_t kDisplayListWireVersion = 2;
+constexpr uint16_t kDisplayListWireVersion = 3;
 constexpr size_t kDefaultDisplayListWireLimit = 1024u * 1024u;
 
 enum class DisplayListWireError : uint8_t {

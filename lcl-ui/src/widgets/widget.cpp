@@ -788,25 +788,128 @@ bool Widget::hasActiveAnimationInSubtree() const {
     return false;
 }
 
-void Widget::beginPresentation(graphics::Canvas& canvas) const {
-    canvas.saveState();
-    const float ox = m_absoluteBounds.x + m_absoluteBounds.width * m_presentation.originX;
-    const float oy = m_absoluteBounds.y + m_absoluteBounds.height * m_presentation.originY;
+graphics::Matrix3 Widget::presentationMatrix() const noexcept {
+    const float ox = m_absoluteBounds.x +
+        m_absoluteBounds.width * m_presentation.originX;
+    const float oy = m_absoluteBounds.y +
+        m_absoluteBounds.height * m_presentation.originY;
     const float cosine = std::cos(m_presentation.rotationRadians);
     const float sine = std::sin(m_presentation.rotationRadians);
-    canvas.concatTransform({
+    return {
         cosine * m_presentation.scaleX,
         sine * m_presentation.scaleX,
         -sine * m_presentation.scaleY,
         cosine * m_presentation.scaleY,
-        ox + m_presentation.translationX - cosine * m_presentation.scaleX * ox + sine * m_presentation.scaleY * oy,
-        oy + m_presentation.translationY - sine * m_presentation.scaleX * ox - cosine * m_presentation.scaleY * oy,
-    });
+        ox + m_presentation.translationX -
+            cosine * m_presentation.scaleX * ox +
+            sine * m_presentation.scaleY * oy,
+        oy + m_presentation.translationY -
+            sine * m_presentation.scaleX * ox -
+            cosine * m_presentation.scaleY * oy,
+    };
+}
+
+void Widget::collectRetainedPresentationBounds(
+        const Widget& root, graphics::RectF& bounds,
+        bool& initialized) const {
+    if (!m_visible) return;
+    graphics::RectF candidate = getUntransformedPaintBounds();
+    for (const Widget* current = this; current && current != &root;
+         current = current->m_parent) {
+        const graphics::Matrix3 transform = current->presentationMatrix();
+        candidate = transform.mapRect(candidate);
+        if (current->m_clipsToBounds) {
+            candidate = candidate.intersection(
+                transform.mapRect(current->m_absoluteBounds));
+        }
+    }
+    if (!candidate.isEmpty()) {
+        bounds = initialized ? bounds.unionWith(candidate) : candidate;
+        initialized = true;
+    }
+    for (const auto& child : m_children) {
+        child->collectRetainedPresentationBounds(root, bounds, initialized);
+    }
+}
+
+graphics::RectF Widget::retainedPresentationSourceBounds() const {
+    graphics::RectF result{};
+    bool initialized = false;
+    collectRetainedPresentationBounds(*this, result, initialized);
+    if (!initialized) return {};
+    if (m_clipsToBounds) {
+        result = result.intersection(m_absoluteBounds);
+    }
+    return result;
+}
+
+void Widget::setRetainedPresentationBoundary(bool enabled) noexcept {
+    if (m_retainedPresentationBoundary == enabled) return;
+    m_retainedPresentationBoundary = enabled;
+    invalidateRetainedPresentationCache();
+}
+
+void Widget::invalidateRetainedPresentationCache() noexcept {
+    m_recordingRetainedPresentationCache = false;
+    m_retainedPresentationCacheValid = false;
+    m_retainedPresentationSourceBounds = {};
+    m_retainedPresentationDeviceScale = 0.0f;
+}
+
+void Widget::beginPresentation(
+        graphics::Canvas& canvas,
+        const graphics::RectF& damageRect) const {
+    canvas.saveState();
+    m_recordingRetainedPresentationCache = false;
+    if (m_retainedPresentationBoundary) {
+        const graphics::RectF source = retainedPresentationSourceBounds();
+        const float deviceScale = std::max(
+            0.001f, canvas.renderTarget().deviceScale);
+        const bool geometryMatches =
+            m_retainedPresentationCacheValid &&
+            m_retainedPresentationSourceBounds.x == source.x &&
+            m_retainedPresentationSourceBounds.y == source.y &&
+            m_retainedPresentationSourceBounds.width == source.width &&
+            m_retainedPresentationSourceBounds.height == source.height &&
+            std::fabs(m_retainedPresentationDeviceScale - deviceScale) <=
+                0.0001f;
+        bool beganCache = false;
+        if (!source.isEmpty() && geometryMatches) {
+            const auto inverse = presentationMatrix().inverted();
+            const graphics::RectF update = inverse
+                ? inverse->mapRect(damageRect).intersection(source)
+                : source;
+            beganCache = !update.isEmpty() &&
+                canvas.beginCachedLayerUpdate(
+                    m_objectId, source, update);
+        } else if (!source.isEmpty()) {
+            beganCache = canvas.beginCachedLayer(m_objectId, source);
+        }
+        if (beganCache) {
+            m_recordingRetainedPresentationCache = true;
+            m_retainedPresentationSourceBounds = source;
+            m_retainedPresentationDeviceScale = deviceScale;
+            if (m_clipsToBounds) canvas.clipRect(m_absoluteBounds);
+            return;
+        }
+        m_retainedPresentationCacheValid = false;
+    }
+
+    canvas.concatTransform(presentationMatrix());
     if (m_clipsToBounds) canvas.clipRect(m_absoluteBounds);
     canvas.beginLayer(m_presentation.opacity);
 }
 
 void Widget::endPresentation(graphics::Canvas& canvas) const {
+    if (m_recordingRetainedPresentationCache) {
+        canvas.endCachedLayer();
+        m_recordingRetainedPresentationCache = false;
+        m_retainedPresentationCacheValid = canvas.drawCachedLayerTransformed(
+            m_objectId, m_retainedPresentationSourceBounds,
+            presentationMatrix(), m_presentation.opacity);
+        canvas.restoreState();
+        return;
+    }
     canvas.endLayer();
     canvas.restoreState();
 }
@@ -821,7 +924,7 @@ void Widget::drawChildren(graphics::Canvas& canvas, const graphics::RectF& damag
 
 void Widget::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible) return;
-    beginPresentation(canvas);
+    beginPresentation(canvas, damageRect);
     drawChildren(canvas, damageRect);
     endPresentation(canvas);
 }

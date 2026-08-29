@@ -280,7 +280,7 @@ void Picker::styleDidChange() {
 void Picker::draw(graphics::Canvas& canvas,
                   const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationPaintBounds().intersects(damageRect)) return;
-    beginPresentation(canvas);
+    beginPresentation(canvas, damageRect);
     const auto visual = lcl::theme::resolveStyle(*resolvedStyle(),
                                                  visualStyleState());
 

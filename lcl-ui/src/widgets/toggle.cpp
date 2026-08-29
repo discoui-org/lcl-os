@@ -292,7 +292,7 @@ void Toggle::retargetThumb() {
 void Toggle::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
 
-    beginPresentation(canvas);
+    beginPresentation(canvas, damageRect);
     const VisualColors colors = visualColors();
     const ToggleStyle style = resolvedToggleStyle();
 

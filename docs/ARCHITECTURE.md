@@ -55,6 +55,14 @@ The LCL architecture consists of 5 main decoupled layers:
   output base per surface. Cached-layer namespace changes are transactional:
   failed frames do not advance ownership, while removed/replaced nodes release
   their raster cache only after a new immutable layer succeeds.
+* **Retained presentation layers:** Small, bounded non-scroll widget subtrees
+  that own transform or opacity presentation state are recorded into an
+  identity-space rasterd cached layer. Their content revision updates only
+  that layer; a pure translation, scale, rotation, or opacity transaction
+  reuses its texture and patches the retained composition matrix without a new
+  client DisplayList or image upload. Nested candidates collapse into the
+  outer useful boundary, candidates containing ScrollView are excluded, and
+  identity/removal/geometry changes retire their namespace transactionally.
 * **Retained ScrollView tiles:** A ScrollContent cached-layer body is retained
   once in rasterd and split into 384-logical-pixel vertical tiles. Only tiles
   intersecting the viewport plus one tile of overscan remain resident. Pure

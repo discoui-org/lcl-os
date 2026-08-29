@@ -55,7 +55,7 @@ void WindowChromeSurface::syncLayout(float parentAbsX, float parentAbsY) {
 void WindowChromeSurface::draw(graphics::Canvas& canvas,
                                const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
-    beginPresentation(canvas);
+    beginPresentation(canvas, damageRect);
     canvas.drawDisplayList(buildChromeDisplayList(m_absoluteBounds));
     endPresentation(canvas);
 }

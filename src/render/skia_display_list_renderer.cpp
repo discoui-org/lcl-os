@@ -477,11 +477,14 @@ bool SkiaDisplayListRenderer::replay(
                 SkPaint paint;
                 paint.setAntiAlias(true);
                 paint.setAlphaf(std::clamp(op.opacity, 0.0f, 1.0f));
+                canvas->save();
+                canvas->concat(toSkMatrix(op.transform));
                 canvas->drawImageRect(
                     image, toSkRect(op.destination),
                     SkSamplingOptions(SkFilterMode::kLinear,
                                       SkMipmapMode::kNone),
                     &paint);
+                canvas->restore();
             } else if constexpr (std::is_same_v<T, lcl::graphics::DrawPathCommand>) {
                 canvas->drawPath(toSkPath(op.path, op.paint.fillRule),
                                  toSkPaint(op.paint));

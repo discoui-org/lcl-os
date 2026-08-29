@@ -411,6 +411,7 @@ DisplayListEncodeResult encodeDisplayList(const DisplayList& displayList,
                 payload.u64(item.id);
                 writeRect(payload, item.destination);
                 payload.f32(item.opacity);
+                writeMatrix(payload, item.transform);
             } else if constexpr (std::is_same_v<T, DrawPathCommand>) {
                 opcode = WireCommand::DrawPath;
                 writePaint(payload, item.paint);
@@ -586,8 +587,13 @@ DisplayListDecodeResult decodeDisplayList(std::span<const uint8_t> bytes,
             RectF destination{};
             valid = readRect(payload, destination);
             const float opacity = payload.f32();
-            valid = valid && payload.ok() && finite(opacity);
-            if (valid) builder.drawCachedLayer(id, destination, opacity);
+            Matrix3 transform{};
+            valid = valid && payload.ok() && finite(opacity) &&
+                readMatrix(payload, transform);
+            if (valid) {
+                builder.drawCachedLayerTransformed(
+                    id, destination, opacity, transform);
+            }
             break;
         }
         case WireCommand::DrawPath: {

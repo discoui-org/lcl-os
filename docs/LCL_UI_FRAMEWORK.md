@@ -156,6 +156,15 @@ a new immutable layer with pixel-space damage. Resize, daemon restart, root
 replacement, or a rejected frame automatically forces a complete replacement.
 The compositor never interprets or replays application DisplayLists.
 
+Small bounded widget subtrees with active transform or opacity presentation
+state become internal retained presentation layers. LCL UI records their
+content once in untransformed logical coordinates; rasterd then applies the
+current translation, scale, rotation, and opacity while composing the cached
+texture. Pure presentation frames carry only retained-node properties. The
+selection is automatic and private: application developers do not create or
+address raster textures, and subtrees containing a ScrollView remain on the
+dedicated tiled path.
+
 `ScrollView` is a retained presentation boundary. Changing `scrollY` does not
 run layout or advance a paint revision. The client sends only the content-node
 translation while rasterd keeps the logical content template and a bounded set

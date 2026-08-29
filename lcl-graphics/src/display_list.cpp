@@ -40,6 +40,12 @@ void DisplayListBuilder::drawCachedLayer(uint64_t id, const RectF& destination,
                                          float opacity) {
     m_commands.emplace_back(DrawCachedLayerCommand{id, destination, opacity});
 }
+void DisplayListBuilder::drawCachedLayerTransformed(
+        uint64_t id, const RectF& destination, float opacity,
+        const Matrix3& transform) {
+    m_commands.emplace_back(
+        DrawCachedLayerCommand{id, destination, opacity, transform});
+}
 void DisplayListBuilder::drawPath(const Path& path, const Paint& paint) {
     m_commands.emplace_back(DrawPathCommand{path, paint});
 }

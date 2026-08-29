@@ -226,6 +226,7 @@ private:
                              uint32_t payloadSize, int passedFd = -1);
     bool uploadImageResource(const graphics::ImageResourceView& resource);
     void invalidateRetainedWidgetCaches(Widget& widget) noexcept;
+    void configureRetainedWidgetCaches(Widget& widget) noexcept;
     void logFrameTraceIfDue();
     void collectClosedHostedSurfaces();
 
@@ -328,6 +329,7 @@ private:
     // Property-only commits then move/replenish bounded rasterd tiles without
     // another client DisplayList.
     bool m_scrollTransformFastPathReady{false};
+    bool m_retainedPresentationFastPathReady{false};
     std::unordered_map<uint64_t, uint64_t> m_uploadedImageRevisions;
     // A launch icon becomes compositor-visible only after the HomeScreen
     // buffer containing it has been committed on this same ordered socket.
@@ -364,6 +366,7 @@ private:
     uint64_t m_traceRenderPropertyUpdates{0};
     uint64_t m_traceRenderRemovals{0};
     uint64_t m_traceScrollTransformTransactions{0};
+    uint64_t m_traceRetainedPresentationTransactions{0};
     double m_traceLayoutMs{0.0};
     double m_tracePaintMs{0.0};
     double m_traceRenderTreeMs{0.0};

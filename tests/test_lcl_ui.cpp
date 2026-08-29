@@ -121,6 +121,12 @@ public:
         cachedLayerDestinations.push_back(destination);
         return true;
     }
+    bool drawCachedLayerTransformed(
+            CachedLayerId id, const graphics::RectF& destination,
+            const graphics::Matrix3& transform, float opacity) override {
+        cachedLayerTransforms.push_back(transform);
+        return drawCachedLayer(id, destination, opacity);
+    }
 
     void clearRect(const graphics::RectF& rect, graphics::Color color) override {
         clearedRects.push_back(rect);
@@ -229,6 +235,7 @@ public:
     std::vector<graphics::RectF> cachedLayerBounds;
     std::vector<graphics::RectF> cachedLayerUpdateBounds;
     std::vector<graphics::RectF> cachedLayerDestinations;
+    std::vector<graphics::Matrix3> cachedLayerTransforms;
     std::vector<float> roundedRadii;
     std::vector<float> borderWidths;
     std::vector<float> roundnesses;
@@ -1138,6 +1145,30 @@ TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     ASSERT_EQ(recorded->rects.size(), 1u);
     EXPECT_EQ(recorded->rects.front().width, 64.0f);
     EXPECT_EQ(recorded->rects.front().height, 48.0f);
+}
+
+TEST(LclUiTest, WindowAppCachesRetainedPresentationBoundaryAtIdentity) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recorded = canvas.get();
+    WindowApp app(
+        std::move(canvas), 120, 80,
+        "Retained presentation boundary");
+
+    auto root = std::make_unique<Container>();
+    root->setBackgroundColor({30, 60, 90, 255});
+    root->setScale(0.9f);
+    app.setRootWidget(std::move(root));
+
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_EQ(recorded->cachedLayerBeginCount, 1);
+    EXPECT_EQ(recorded->cachedLayerEndCount, 1);
+    EXPECT_EQ(recorded->cachedLayerDrawCount, 1);
+    ASSERT_EQ(recorded->cachedLayerTransforms.size(), 1u);
+    EXPECT_FLOAT_EQ(recorded->cachedLayerTransforms.front().a, 0.9f);
+    EXPECT_FLOAT_EQ(recorded->cachedLayerTransforms.front().d, 0.9f);
+    ASSERT_EQ(recorded->cachedLayerBounds.size(), 1u);
+    EXPECT_FLOAT_EQ(recorded->cachedLayerBounds.front().width, 120.0f);
+    EXPECT_FLOAT_EQ(recorded->cachedLayerBounds.front().height, 80.0f);
 }
 
 TEST(LclUiTest, LocalTransientRendersAboveContentInSingleWindowRootLayout) {
@@ -3688,6 +3719,32 @@ TEST(LclUiTest, RasterRendererAppliesDisplayListPatchOverRetainedScene) {
     EXPECT_EQ(pixels[0], 0xFFFF0000u);
     EXPECT_EQ(pixels[2 + 2 * 8], 0xFF0000FFu);
     EXPECT_EQ(pixels[7 + 7 * 8], 0xFFFF0000u);
+}
+
+TEST(LclUiTest, RasterRendererTransformsCachedLayerAtCompositionTime) {
+    std::vector<uint32_t> pixels(8 * 8, 0u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(8, 8, nullptr, pixels.data()));
+    const graphics::RenderTarget target{{8.0f, 8.0f}, {8, 8}, 1.0f};
+
+    graphics::DisplayListBuilder frame;
+    frame.clearRect({0.0f, 0.0f, 8.0f, 8.0f}, {0, 0, 0, 0});
+    frame.beginCachedLayer(91, {0.0f, 0.0f, 2.0f, 2.0f});
+    graphics::Path layerPath;
+    layerPath.addRect({0.0f, 0.0f, 2.0f, 2.0f});
+    frame.drawPath(layerPath, graphics::Paint{{255, 0, 0, 255}});
+    frame.endCachedLayer();
+    frame.drawCachedLayerTransformed(
+        91, {0.0f, 0.0f, 2.0f, 2.0f}, 1.0f,
+        graphics::Matrix3::translation(3.0f, 2.0f));
+
+    renderer.beginFrame();
+    renderer.replayDisplayList(frame.build(), target);
+    renderer.endFrame();
+
+    EXPECT_EQ(pixels[0], 0x00000000u);
+    EXPECT_EQ(pixels[3 + 2 * 8], 0xFFFF0000u);
+    EXPECT_EQ(pixels[4 + 3 * 8], 0xFFFF0000u);
 }
 
 TEST(LclUiTest, PresentationMotionDoesNotInvalidateAncestorPaintCacheRevision) {

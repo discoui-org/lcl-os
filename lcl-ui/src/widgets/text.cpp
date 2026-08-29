@@ -89,7 +89,7 @@ layout::Size Text::measure(const layout::Constraints& constraints) {
 void Text::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationBounds().intersects(damageRect) || m_text.empty()) return;
 
-    beginPresentation(canvas);
+    beginPresentation(canvas, damageRect);
 
     // Keep text alignment in logical coordinates; graphics::Canvas applies the selected
     // backend's logical-to-buffer transform afterwards.

@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <limits>
 #include <filesystem>
+#include <unordered_set>
 
 namespace lcl::ui {
 
@@ -142,11 +143,14 @@ struct WindowApp::PrivateRenderState {
         transaction = {};
         hasSnapshot = false;
         scrollTransformTransaction = false;
-        invalidatesScrollTemplate = false;
+        retainedPresentationTransaction = false;
+        invalidatesRetainedTemplate = false;
+        retainedPresentationLayers.clear();
     }
 
     void synchronize(const Widget& root, bool forceReplace) {
         auto next = compiler.compile(root, tree.nodes.size());
+        auto nextPresentationLayers = selectRetainedPresentationLayers(next);
         transaction = differ.diff(
             hasSnapshot ? &tree : nullptr, next, forceReplace);
         scrollTransformTransaction =
@@ -160,17 +164,53 @@ struct WindowApp::PrivateRenderState {
                         update.propertiesChanged &&
                         isScrollTranslationUpdate(update.node, *previous);
                 });
-        invalidatesScrollTemplate = false;
+        retainedPresentationTransaction =
+            !transaction.replacesTree && transaction.creates.empty() &&
+            transaction.removals.empty() && !transaction.updates.empty() &&
+            std::all_of(
+                transaction.updates.begin(), transaction.updates.end(),
+                [&](const auto& update) {
+                    const auto* previous = findRetainedNode(
+                        tree, update.node.id);
+                    return previous && !update.contentChanged &&
+                        update.propertiesChanged &&
+                        retainedPresentationLayers.contains(update.node.id) &&
+                        nextPresentationLayers.contains(update.node.id) &&
+                        isRetainedPresentationUpdate(
+                            update.node, *previous);
+                });
+        invalidatesRetainedTemplate = false;
         if (!transaction.replacesTree) {
-            invalidatesScrollTemplate = std::any_of(
+            invalidatesRetainedTemplate = std::any_of(
                 transaction.creates.begin(), transaction.creates.end(),
                 [&](const auto& node) {
+                    if (nextPresentationLayers.contains(node.id)) return true;
+                    if (isWithinRetainedPresentation(
+                            next, nextPresentationLayers, node.id)) {
+                        return false;
+                    }
                     return isScrollBoundary(node) ||
                         !isWithinScrollContent(next, node.id);
                 }) ||
                 std::any_of(
                     transaction.updates.begin(), transaction.updates.end(),
                     [&](const auto& update) {
+                        if (isWithinRetainedPresentation(
+                                next, nextPresentationLayers,
+                                update.node.id)) {
+                            if (!nextPresentationLayers.contains(
+                                    update.node.id)) {
+                                return false;
+                            }
+                            if (!update.propertiesChanged) return false;
+                            const auto* previous =
+                                findRetainedNode(tree, update.node.id);
+                            return !previous ||
+                                !retainedPresentationLayers.contains(
+                                    update.node.id) ||
+                                !isRetainedPresentationUpdate(
+                                    update.node, *previous);
+                        }
                         if (isScrollViewport(update.node)) return true;
                         if (isScrollContent(update.node)) {
                             if (!update.propertiesChanged) return false;
@@ -181,19 +221,28 @@ struct WindowApp::PrivateRenderState {
                         }
                         return !isWithinScrollContent(next, update.node.id);
                     });
-            if (!invalidatesScrollTemplate) {
+            if (!invalidatesRetainedTemplate) {
                 for (uint64_t removedId : transaction.removals) {
                     const auto* removed = findRetainedNode(tree, removedId);
+                    if (isWithinRetainedPresentation(
+                            tree, retainedPresentationLayers, removedId)) {
+                        if (retainedPresentationLayers.contains(removedId)) {
+                            invalidatesRetainedTemplate = true;
+                            break;
+                        }
+                        continue;
+                    }
                     if (removed &&
                         (isScrollBoundary(*removed) ||
                          !isWithinScrollContent(tree, removedId))) {
-                        invalidatesScrollTemplate = true;
+                        invalidatesRetainedTemplate = true;
                         break;
                     }
                 }
             }
         }
         tree = std::move(next);
+        retainedPresentationLayers = std::move(nextPresentationLayers);
         hasSnapshot = true;
     }
 
@@ -233,6 +282,18 @@ struct WindowApp::PrivateRenderState {
         return scrollTransformTransaction;
     }
 
+    bool isRetainedPresentationOnly() const noexcept {
+        return retainedPresentationTransaction;
+    }
+
+    bool isRetainedPresentationLayer(uint64_t id) const noexcept {
+        return retainedPresentationLayers.contains(id);
+    }
+
+    bool hasRetainedPresentationLayers() const noexcept {
+        return !retainedPresentationLayers.empty();
+    }
+
     bool hasScrollContent() const noexcept {
         return std::any_of(
             tree.retainedNodes.begin(), tree.retainedNodes.end(),
@@ -243,8 +304,8 @@ struct WindowApp::PrivateRenderState {
             });
     }
 
-    bool invalidatesScrollCompositionTemplate() const noexcept {
-        return invalidatesScrollTemplate;
+    bool invalidatesRetainedCompositionTemplate() const noexcept {
+        return invalidatesRetainedTemplate;
     }
 
 private:
@@ -275,6 +336,24 @@ private:
         return isScrollViewport(node) || isScrollContent(node);
     }
 
+    static bool isRetainedPresentationCandidate(
+            const detail::RetainedRenderNode& node) noexcept {
+        constexpr auto kRoot = detail::RenderBoundaryReason::Root;
+        constexpr auto kTransform = detail::RenderBoundaryReason::Transform;
+        constexpr auto kOpacity = detail::RenderBoundaryReason::Opacity;
+        const bool presentation = detail::hasBoundaryReason(
+                node.boundaryReasons, kTransform) ||
+            detail::hasBoundaryReason(node.boundaryReasons, kOpacity);
+        const float area = node.layoutBounds.width * node.layoutBounds.height;
+        return presentation &&
+            !detail::hasBoundaryReason(node.boundaryReasons, kRoot) &&
+            !isScrollBoundary(node) &&
+            node.layoutBounds.width > 0.0f &&
+            node.layoutBounds.height > 0.0f &&
+            node.layoutBounds.width <= 2048.0f &&
+            node.layoutBounds.height <= 2048.0f && area <= 4194304.0f;
+    }
+
     static bool isWithinScrollContent(const detail::RenderTree& candidate,
                                       uint64_t id) noexcept {
         const auto* node = findRetainedNode(candidate, id);
@@ -285,6 +364,59 @@ private:
             node = findRetainedNode(candidate, node->parentId);
         }
         return false;
+    }
+
+    static bool descendsFrom(
+            const detail::RenderTree& candidate, uint64_t id,
+            uint64_t ancestorId) noexcept {
+        const auto* node = findRetainedNode(candidate, id);
+        std::size_t depth = 0;
+        while (node && depth++ <= candidate.retainedNodes.size()) {
+            if (node->parentId == ancestorId) return true;
+            if (node->parentId == 0) return false;
+            node = findRetainedNode(candidate, node->parentId);
+        }
+        return false;
+    }
+
+    static std::unordered_set<uint64_t> selectRetainedPresentationLayers(
+            const detail::RenderTree& candidate) {
+        std::unordered_set<uint64_t> result;
+        for (const auto& node : candidate.retainedNodes) {
+            if (!isRetainedPresentationCandidate(node) ||
+                isWithinScrollContent(candidate, node.id)) {
+                continue;
+            }
+            bool hasCandidateAncestor = false;
+            for (const auto& ancestor : candidate.retainedNodes) {
+                if (ancestor.id != node.id &&
+                    isRetainedPresentationCandidate(ancestor) &&
+                    descendsFrom(candidate, node.id, ancestor.id)) {
+                    hasCandidateAncestor = true;
+                    break;
+                }
+            }
+            if (hasCandidateAncestor) continue;
+
+            const bool containsScroll = std::any_of(
+                candidate.retainedNodes.begin(),
+                candidate.retainedNodes.end(), [&](const auto& descendant) {
+                    return isScrollBoundary(descendant) &&
+                        descendsFrom(candidate, descendant.id, node.id);
+                });
+            if (!containsScroll) result.insert(node.id);
+        }
+        return result;
+    }
+
+    static bool isWithinRetainedPresentation(
+            const detail::RenderTree& candidate,
+            const std::unordered_set<uint64_t>& layers,
+            uint64_t id) noexcept {
+        return std::any_of(
+            layers.begin(), layers.end(), [&](uint64_t layer) {
+                return layer == id || descendsFrom(candidate, id, layer);
+            });
     }
 
     static bool sameRect(const graphics::RectF& lhs,
@@ -343,13 +475,34 @@ private:
             node.children == previous.children;
     }
 
+    static bool isRetainedPresentationUpdate(
+            const detail::RetainedRenderNode& node,
+            const detail::RetainedRenderNode& previous) noexcept {
+        constexpr auto kTransform = detail::RenderBoundaryReason::Transform;
+        constexpr auto kOpacity = detail::RenderBoundaryReason::Opacity;
+        const auto allowedReasons = static_cast<uint32_t>(kTransform) |
+            static_cast<uint32_t>(kOpacity);
+        const auto reasonsChanged = static_cast<uint32_t>(
+            node.boundaryReasons) ^ static_cast<uint32_t>(
+            previous.boundaryReasons);
+        return !isScrollBoundary(node) && !isScrollBoundary(previous) &&
+            (reasonsChanged & ~allowedReasons) == 0 &&
+            node.parentId == previous.parentId &&
+            node.siblingIndex == previous.siblingIndex &&
+            sameRect(node.layoutBounds, previous.layoutBounds) &&
+            sameOptionalRect(node.clipBounds, previous.clipBounds) &&
+            node.children == previous.children;
+    }
+
     detail::RenderNodeCompiler compiler;
     detail::RenderTreeDiffer differ;
     detail::RenderTree tree;
     detail::RenderTreeTransaction transaction;
     bool hasSnapshot{false};
     bool scrollTransformTransaction{false};
-    bool invalidatesScrollTemplate{false};
+    bool retainedPresentationTransaction{false};
+    bool invalidatesRetainedTemplate{false};
+    std::unordered_set<uint64_t> retainedPresentationLayers;
 };
 
 WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height,
@@ -463,6 +616,7 @@ void WindowApp::setRootWidget(std::unique_ptr<Widget> root) {
     m_rootWidget = contentRoot;
     m_privateRenderState->reset();
     m_scrollTransformFastPathReady = false;
+    m_retainedPresentationFastPathReady = false;
     m_transients.setWindowRoot(m_windowRoot.get());
     m_windowRoot->markLayoutDirty();
     m_windowRoot->invalidatePaint();
@@ -772,6 +926,7 @@ void WindowApp::pollIPC() {
         m_submittedGeometryGeneration = 0;
         m_retainedRasterFrameSerial = 0;
         m_scrollTransformFastPathReady = false;
+        m_retainedPresentationFastPathReady = false;
         m_frameGateOpen = true;
         m_firstFrame = true;
     }
@@ -785,6 +940,7 @@ void WindowApp::pollIPC() {
         m_submittedGeometryGeneration = 0;
         m_retainedRasterFrameSerial = 0;
         m_scrollTransformFastPathReady = false;
+        m_retainedPresentationFastPathReady = false;
         m_frameGateOpen = true;
         m_firstFrame = true;
     }
@@ -882,6 +1038,7 @@ void WindowApp::pollIPC() {
                         m_submittedGeometryGeneration = 0;
                         m_retainedRasterFrameSerial = 0;
                         m_scrollTransformFastPathReady = false;
+                        m_retainedPresentationFastPathReady = false;
                         m_frameGateOpen = true;
                         m_firstFrame = true;
                     }
@@ -926,6 +1083,7 @@ void WindowApp::pollIPC() {
                     m_rasterConnectionGeneration = 0;
                     m_retainedRasterFrameSerial = 0;
                     m_scrollTransformFastPathReady = false;
+                    m_retainedPresentationFastPathReady = false;
                     m_firstFrame = true;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::FramePresented &&
@@ -970,6 +1128,7 @@ void WindowApp::pollIPC() {
                     m_submittedGeometryGeneration = 0;
                     m_retainedRasterFrameSerial = 0;
                     m_scrollTransformFastPathReady = false;
+                    m_retainedPresentationFastPathReady = false;
                     m_frameGateOpen = true;
                     m_firstFrame = true;
                 }
@@ -1625,6 +1784,7 @@ bool WindowApp::renderFrame() {
             m_uploadedImageRevisions.clear();
             m_retainedRasterFrameSerial = 0;
             m_scrollTransformFastPathReady = false;
+            m_retainedPresentationFastPathReady = false;
             m_rasterConnectionGeneration = connectionGeneration;
             m_firstFrame = true;
         }
@@ -1680,7 +1840,7 @@ bool WindowApp::renderFrame() {
     std::vector<graphics::RectF> damageRects = rasterDamage.getDirtyRects();
     m_renderPass.clear();
     if (damageRects.empty()) return false;
-    const graphics::RectF frameDamage = rasterDamage.getDamageRect();
+    graphics::RectF frameDamage = rasterDamage.getDamageRect();
 
     // Compile the exact post-layout Widget state that this frame will paint.
     // The snapshot is private and does not alter DisplayList recording or IPC;
@@ -1704,12 +1864,31 @@ bool WindowApp::renderFrame() {
             m_privateRenderState->synchronize(
                 *m_windowRoot, replacesRetainedScene);
         }
+        configureRetainedWidgetCaches(*m_windowRoot);
     }
 
     const bool scrollTransformTransaction =
         m_privateRenderState->isScrollTransformOnly();
     const bool scrollTransformOnly =
         m_scrollTransformFastPathReady && scrollTransformTransaction;
+    const bool retainedPresentationTransaction =
+        m_privateRenderState->isRetainedPresentationOnly();
+    const bool retainedPresentationOnly =
+        m_retainedPresentationFastPathReady &&
+        retainedPresentationTransaction;
+    const bool retainedPresentationRecovery =
+        !m_retainedPresentationFastPathReady &&
+        retainedPresentationTransaction;
+    if (retainedPresentationRecovery) {
+        // A recovered composition template must cover future transform
+        // extents, not only the first old/new animation bounds. One complete
+        // scene establishes that stable base; subsequent property commits are
+        // DisplayList-free again.
+        damageRects.assign(1, surfaceBounds);
+        frameDamage = surfaceBounds;
+    }
+    const bool propertyOnly =
+        scrollTransformOnly || retainedPresentationOnly;
     m_canvas->beginFrame();
 
     const auto paintStarted = std::chrono::steady_clock::now();
@@ -1724,7 +1903,7 @@ bool WindowApp::renderFrame() {
 
     const auto clearStarted = paintStarted;
     auto drawStarted = clearStarted;
-    if (!scrollTransformOnly) {
+    if (!propertyOnly) {
         for (const graphics::RectF& damage : damageRects) {
             m_canvas->clearRect(damage, {0, 0, 0, 0});
             if (m_frameTraceEnabled) {
@@ -1861,7 +2040,7 @@ bool WindowApp::renderFrame() {
         }
     }
     m_canvas->endFrame();
-    if (m_frameTraceEnabled && !scrollTransformOnly) {
+    if (m_frameTraceEnabled && !propertyOnly) {
         m_traceDrawMs += std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - drawStarted).count();
     }
@@ -1884,6 +2063,7 @@ bool WindowApp::renderFrame() {
                 m_uploadedImageRevisions.clear();
                 m_retainedRasterFrameSerial = 0;
                 m_scrollTransformFastPathReady = false;
+                m_retainedPresentationFastPathReady = false;
                 m_rasterConnectionGeneration = connectionGeneration;
                 m_firstFrame = true;
                 return false;
@@ -1904,8 +2084,18 @@ bool WindowApp::renderFrame() {
                             });
                     });
             }
+            const bool frameHasRetainedPresentationLayer =
+                !propertyOnly && std::any_of(
+                    frame->displayList.commands().begin(),
+                    frame->displayList.commands().end(),
+                    [&](const auto& command) {
+                        const auto* draw = std::get_if<
+                            graphics::DrawCachedLayerCommand>(&command);
+                        return draw && m_privateRenderState->
+                            isRetainedPresentationLayer(draw->id);
+                    });
             bool resourcesReady = true;
-            if (!scrollTransformOnly) {
+            if (!propertyOnly) {
                 for (const auto& resource : frame->imageResources) {
                     if (!uploadImageResource(resource)) {
                         resourcesReady = false;
@@ -1915,7 +2105,7 @@ bool WindowApp::renderFrame() {
             }
 
             constexpr size_t kMaxWireBytes = raster_protocol::kMaxPayload;
-            auto encoded = resourcesReady && !scrollTransformOnly
+            auto encoded = resourcesReady && !propertyOnly
                 ? graphics::encodeDisplayList(frame->displayList, kMaxWireBytes)
                 : graphics::DisplayListEncodeResult{};
             if (resourcesReady && encoded) {
@@ -1945,6 +2135,9 @@ bool WindowApp::renderFrame() {
                     if (scrollTransformOnly && m_frameTraceEnabled) {
                         ++m_traceScrollTransformTransactions;
                     }
+                    if (retainedPresentationOnly && m_frameTraceEnabled) {
+                        ++m_traceRetainedPresentationTransactions;
+                    }
                     if (replacesRetainedScene) {
                         m_scrollTransformFastPathReady =
                             m_privateRenderState->hasScrollContent();
@@ -1954,8 +2147,21 @@ bool WindowApp::renderFrame() {
                         // touch moves can return to property-only commits.
                         m_scrollTransformFastPathReady = true;
                     } else if (m_privateRenderState->
-                                   invalidatesScrollCompositionTemplate()) {
+                                   invalidatesRetainedCompositionTemplate()) {
                         m_scrollTransformFastPathReady = false;
+                    }
+                    if (!retainedPresentationOnly) {
+                        if (!m_privateRenderState->
+                                hasRetainedPresentationLayers()) {
+                            m_retainedPresentationFastPathReady = false;
+                        } else if (replacesRetainedScene ||
+                                   retainedPresentationRecovery) {
+                            m_retainedPresentationFastPathReady =
+                                frameHasRetainedPresentationLayer;
+                        } else if (m_privateRenderState->
+                                       invalidatesRetainedCompositionTemplate()) {
+                            m_retainedPresentationFastPathReady = false;
+                        }
                     }
                 }
             }
@@ -1963,6 +2169,7 @@ bool WindowApp::renderFrame() {
                 m_uploadedImageRevisions.clear();
                 m_retainedRasterFrameSerial = 0;
                 m_scrollTransformFastPathReady = false;
+                m_retainedPresentationFastPathReady = false;
                 m_rasterClient->disconnect();
                 m_firstFrame = true;
                 std::cerr << "[lcl-ui ERROR] DisplayList commit failed for "
@@ -1993,11 +2200,21 @@ bool WindowApp::renderFrame() {
 }
 
 void WindowApp::invalidateRetainedWidgetCaches(Widget& widget) noexcept {
+    widget.invalidateRetainedPresentationCache();
     if (auto* scroll = dynamic_cast<ScrollView*>(&widget)) {
         scroll->invalidateRetainedCache();
     }
     for (const auto& child : widget.getChildren()) {
         if (child) invalidateRetainedWidgetCaches(*child);
+    }
+}
+
+void WindowApp::configureRetainedWidgetCaches(Widget& widget) noexcept {
+    widget.setRetainedPresentationBoundary(
+        m_privateRenderState->isRetainedPresentationLayer(
+            widget.getObjectId()));
+    for (const auto& child : widget.getChildren()) {
+        if (child) configureRetainedWidgetCaches(*child);
     }
 }
 
@@ -2031,6 +2248,8 @@ void WindowApp::logFrameTraceIfDue() {
               << ", remove=" << m_traceRenderRemovals
               << ", scroll-xform="
               << m_traceScrollTransformTransactions
+              << ", retained-xform="
+              << m_traceRetainedPresentationTransactions
               << ")\n";
     m_traceLayoutPasses = 0;
     m_traceRenderedFrames = 0;
@@ -2046,6 +2265,7 @@ void WindowApp::logFrameTraceIfDue() {
     m_traceRenderPropertyUpdates = 0;
     m_traceRenderRemovals = 0;
     m_traceScrollTransformTransactions = 0;
+    m_traceRetainedPresentationTransactions = 0;
     m_traceLayoutMs = 0.0;
     m_tracePaintMs = 0.0;
     m_traceRenderTreeMs = 0.0;

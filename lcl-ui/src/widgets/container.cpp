@@ -165,7 +165,7 @@ void Container::commitModelValue(AnimatableProperty property, float value) {
 void Container::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     if (!m_visible || !getPresentationPaintBounds().intersects(damageRect)) return;
 
-    beginPresentation(canvas);
+    beginPresentation(canvas, damageRect);
 
     const graphics::RectF rect{m_absoluteBounds.x, m_absoluteBounds.y, m_absoluteBounds.width, m_absoluteBounds.height};
     const bool hasBackground = (m_presentationBackgroundColor.a > 0);

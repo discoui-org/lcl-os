@@ -19,12 +19,11 @@
 namespace lcl::render {
 
 /**
- * Rasterd-owned retained cache for ScrollContent nodes.
+ * Rasterd-owned retained composition cache.
  *
- * The client submits the complete cached-layer body once. Rasterd keeps that
- * immutable logical content plus later damage-scoped patches and materializes
- * only the visible and one-tile-nearby raster textures. A property-only scroll
- * commit can therefore create an entering tile without another DisplayList
+ * ScrollContent bodies are split into visible and one-tile-nearby textures.
+ * Small non-scroll presentation boundaries retain one logical cached layer so
+ * transform/opacity-only commits can recompose it without another DisplayList
  * upload from the application.
  */
 class RetainedScrollTileCache final {
@@ -66,11 +65,12 @@ public:
         std::vector<uint64_t> createdLayerIds{};
         std::vector<uint64_t> evictedLayerIds{};
         bool tiled{false};
+        bool retainedComposition{false};
     };
 
     /**
-     * Prepares a transactional tiled replay. `submittedCommands == nullptr`
-     * denotes a retained property-only scroll commit.
+     * Prepares a transactional retained replay. `submittedCommands ==
+     * nullptr` denotes a property-only scroll or presentation commit.
      */
     static std::optional<PreparedFrame> prepare(
         const RetainedScrollTileCache& current,
@@ -90,11 +90,15 @@ public:
 
         const auto contentByLayer = scrollContentByLayer(
             nextNodes, layerNamespaces);
+        const auto presentationByLayer = retainedPresentationByLayer(
+            nextNodes, layerNamespaces);
         prepared.next->removeDeadContent(nextNodes, prepared.evictedLayerIds);
 
+        std::vector<graphics::DisplayCommand> genericLayerUpdates;
         if (submittedCommands) {
             auto composition = prepared.next->ingest(
                 *submittedCommands, nextNodes, contentByLayer,
+                presentationByLayer, genericLayerUpdates,
                 prepared.evictedLayerIds);
             if (composition &&
                 (replaceScene || refreshCompositionTemplate ||
@@ -126,7 +130,11 @@ public:
         auto commands = std::make_shared<std::vector<
             graphics::DisplayCommand>>();
         commands->reserve(
+            genericLayerUpdates.size() +
             prepared.next->m_compositionTemplate->commands().size() + 24);
+        commands->insert(
+            commands->end(), genericLayerUpdates.begin(),
+            genericLayerUpdates.end());
 
         for (const auto& command :
              prepared.next->m_compositionTemplate->commands()) {
@@ -138,6 +146,17 @@ public:
             }
             auto cache = prepared.next->findBySourceLayer(draw->id);
             if (cache == prepared.next->m_content.end()) {
+                const auto presentation = presentationByLayer.find(draw->id);
+                if (presentation != presentationByLayer.end()) {
+                    const auto node = nextNodes.find(presentation->second);
+                    if (node == nextNodes.end()) return std::nullopt;
+                    auto patched = *draw;
+                    patched.transform = presentationMatrix(node->second);
+                    patched.opacity = node->second.opacity;
+                    commands->emplace_back(std::move(patched));
+                    prepared.retainedComposition = true;
+                    continue;
+                }
                 commands->push_back(command);
                 continue;
             }
@@ -154,8 +173,9 @@ public:
                 allocateLayerId, *commands, prepared.createdLayerIds,
                 prepared.evictedLayerIds);
             prepared.tiled = true;
+            prepared.retainedComposition = true;
         }
-        if (!prepared.tiled) {
+        if (!prepared.retainedComposition) {
             if (!submittedCommands) return std::nullopt;
             const auto passthrough = std::make_shared<std::vector<
                 graphics::DisplayCommand>>(*submittedCommands);
@@ -201,6 +221,9 @@ private:
 
     static constexpr uint32_t kScrollViewportReason = 1u << 4u;
     static constexpr uint32_t kScrollContentReason = 1u << 5u;
+    static constexpr uint32_t kRootReason = 1u << 0u;
+    static constexpr uint32_t kTransformReason = 1u << 2u;
+    static constexpr uint32_t kOpacityReason = 1u << 3u;
     static constexpr float kEpsilon = 0.001f;
 
     static bool isScrollViewport(
@@ -211,6 +234,20 @@ private:
     static bool isScrollContent(
             const raster_protocol::RetainedNodeState& node) noexcept {
         return (node.boundaryReasons & kScrollContentReason) != 0;
+    }
+
+    static bool isRetainedPresentationCandidate(
+            const raster_protocol::RetainedNodeState& node) noexcept {
+        const bool presentation =
+            (node.boundaryReasons &
+             (kTransformReason | kOpacityReason)) != 0;
+        const float area = node.layoutWidth * node.layoutHeight;
+        return presentation &&
+            (node.boundaryReasons & kRootReason) == 0 &&
+            !isScrollViewport(node) && !isScrollContent(node) &&
+            node.layoutWidth > 0.0f && node.layoutHeight > 0.0f &&
+            node.layoutWidth <= 2048.0f && node.layoutHeight <= 2048.0f &&
+            area <= 4194304.0f;
     }
 
     static bool contains(const graphics::RectF& outer,
@@ -243,6 +280,91 @@ private:
         return result;
     }
 
+    static bool descendsFrom(const NodeMap& nodes, uint64_t id,
+                             uint64_t ancestorId) noexcept {
+        auto node = nodes.find(id);
+        std::size_t depth = 0;
+        while (node != nodes.end() && depth++ <= nodes.size()) {
+            if (node->second.parentId == ancestorId) return true;
+            if (node->second.parentId == 0) return false;
+            node = nodes.find(node->second.parentId);
+        }
+        return false;
+    }
+
+    static bool isWithinScrollContent(const NodeMap& nodes,
+                                      uint64_t id) noexcept {
+        auto node = nodes.find(id);
+        std::size_t depth = 0;
+        while (node != nodes.end() && depth++ <= nodes.size()) {
+            if (isScrollContent(node->second)) return true;
+            if (node->second.parentId == 0) return false;
+            node = nodes.find(node->second.parentId);
+        }
+        return false;
+    }
+
+    static std::unordered_set<uint64_t> retainedPresentationNodes(
+            const NodeMap& nodes) {
+        std::unordered_set<uint64_t> result;
+        for (const auto& [id, node] : nodes) {
+            if (!isRetainedPresentationCandidate(node) ||
+                isWithinScrollContent(nodes, id)) {
+                continue;
+            }
+            bool hasCandidateAncestor = false;
+            for (const auto& [ancestorId, ancestor] : nodes) {
+                if (ancestorId != id &&
+                    isRetainedPresentationCandidate(ancestor) &&
+                    descendsFrom(nodes, id, ancestorId)) {
+                    hasCandidateAncestor = true;
+                    break;
+                }
+            }
+            if (hasCandidateAncestor) continue;
+            const bool containsScroll = std::any_of(
+                nodes.begin(), nodes.end(), [&](const auto& descendant) {
+                    return (isScrollViewport(descendant.second) ||
+                            isScrollContent(descendant.second)) &&
+                        descendsFrom(nodes, descendant.first, id);
+                });
+            if (!containsScroll) result.insert(id);
+        }
+        return result;
+    }
+
+    static std::unordered_map<uint64_t, uint64_t>
+    retainedPresentationByLayer(
+            const NodeMap& nodes,
+            const LayerNamespaceMap& layerNamespaces) {
+        std::unordered_map<uint64_t, uint64_t> result;
+        for (const uint64_t id : retainedPresentationNodes(nodes)) {
+            const auto layer = layerNamespaces.find(id);
+            if (layer != layerNamespaces.end()) {
+                result.emplace(layer->second, id);
+            }
+        }
+        return result;
+    }
+
+    static graphics::Matrix3 presentationMatrix(
+            const raster_protocol::RetainedNodeState& node) noexcept {
+        const float ox = node.layoutX + node.layoutWidth * node.originX;
+        const float oy = node.layoutY + node.layoutHeight * node.originY;
+        const float cosine = std::cos(node.rotationRadians);
+        const float sine = std::sin(node.rotationRadians);
+        return {
+            cosine * node.scaleX,
+            sine * node.scaleX,
+            -sine * node.scaleY,
+            cosine * node.scaleY,
+            ox + node.translationX - cosine * node.scaleX * ox +
+                sine * node.scaleY * oy,
+            oy + node.translationY - sine * node.scaleX * ox -
+                cosine * node.scaleY * oy,
+        };
+    }
+
     void removeDeadContent(const NodeMap& nodes,
                            std::vector<uint64_t>& evicted) {
         for (auto cache = m_content.begin(); cache != m_content.end();) {
@@ -263,11 +385,14 @@ private:
             const std::vector<graphics::DisplayCommand>& submitted,
             const NodeMap& nodes,
             const std::unordered_map<uint64_t, uint64_t>& contentByLayer,
+            const std::unordered_map<uint64_t, uint64_t>&
+                presentationByLayer,
+            std::vector<graphics::DisplayCommand>& genericLayerUpdates,
             std::vector<uint64_t>& evicted) {
         auto composition = std::make_shared<std::vector<
             graphics::DisplayCommand>>();
         composition->reserve(submitted.size());
-        bool hasScrollDraw = false;
+        bool hasRetainedDraw = false;
 
         for (std::size_t index = 0; index < submitted.size();) {
             const auto* begin = std::get_if<
@@ -275,12 +400,16 @@ private:
             const auto content = begin
                 ? contentByLayer.find(begin->id)
                 : contentByLayer.end();
-            if (!begin || content == contentByLayer.end()) {
+            const bool genericBegin = begin &&
+                presentationByLayer.contains(begin->id);
+            if (!begin ||
+                (content == contentByLayer.end() && !genericBegin)) {
                 if (const auto* draw = std::get_if<
                         graphics::DrawCachedLayerCommand>(
                             &submitted[index]);
-                    draw && contentByLayer.contains(draw->id)) {
-                    hasScrollDraw = true;
+                    draw && (contentByLayer.contains(draw->id) ||
+                             presentationByLayer.contains(draw->id))) {
+                    hasRetainedDraw = true;
                 }
                 composition->push_back(submitted[index]);
                 ++index;
@@ -300,6 +429,14 @@ private:
                 }
             }
             if (depth != 0 || end <= index + 1) return std::nullopt;
+            if (genericBegin) {
+                genericLayerUpdates.insert(
+                    genericLayerUpdates.end(),
+                    submitted.begin() + static_cast<std::ptrdiff_t>(index),
+                    submitted.begin() + static_cast<std::ptrdiff_t>(end));
+                index = end;
+                continue;
+            }
             const auto node = nodes.find(content->second);
             if (node == nodes.end() || node->second.parentId == 0) {
                 return std::nullopt;
@@ -345,7 +482,7 @@ private:
             index = end;
         }
 
-        if (!hasScrollDraw) return std::nullopt;
+        if (!hasRetainedDraw) return std::nullopt;
         const auto immutable = std::shared_ptr<
             const std::vector<graphics::DisplayCommand>>(composition);
         return graphics::DisplayList(immutable);

@@ -190,7 +190,8 @@ protected:
     void invalidatePresentation();
     /** Schedule a previous paint extent before a style change shrinks it. */
     void invalidatePaintFrom(const graphics::RectF& previousPaintBounds);
-    void beginPresentation(graphics::Canvas& canvas) const;
+    void beginPresentation(graphics::Canvas& canvas,
+                           const graphics::RectF& damageRect) const;
     void endPresentation(graphics::Canvas& canvas) const;
     void drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect);
     const lcl::theme::WidgetStyle* resolvedStyle() const noexcept;
@@ -274,6 +275,13 @@ private:
     void markLayoutDirty();
     void clearLayoutDirty();
     void setParentControlledTranslationY(float value);
+    void setRetainedPresentationBoundary(bool enabled) noexcept;
+    void invalidateRetainedPresentationCache() noexcept;
+    graphics::Matrix3 presentationMatrix() const noexcept;
+    graphics::RectF retainedPresentationSourceBounds() const;
+    void collectRetainedPresentationBounds(
+        const Widget& root, graphics::RectF& bounds,
+        bool& initialized) const;
     void setThemeContext(const lcl::theme::ThemeContext* context);
     bool hasDeclarativeInteraction() const;
     void applyDeclarativeInteractionState();
@@ -286,6 +294,11 @@ private:
     uint64_t m_presentationRevision{0};
     uint64_t m_layoutRevision{1};
     bool m_layoutDirty{true};
+    bool m_retainedPresentationBoundary{false};
+    mutable bool m_recordingRetainedPresentationCache{false};
+    mutable bool m_retainedPresentationCacheValid{false};
+    mutable graphics::RectF m_retainedPresentationSourceBounds{};
+    mutable float m_retainedPresentationDeviceScale{0.0f};
 };
 
 } // namespace lcl::ui

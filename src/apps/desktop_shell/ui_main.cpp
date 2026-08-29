@@ -255,7 +255,7 @@ std::unique_ptr<lcl::ui::Container> makeDockView(DockView &view, uint32_t width,
   backdrop->setBorderRadius(26.0f);
   backdrop->setBorderRoundness(2.0f);
   backdrop->addFilter(lcl::protocol::FilterType::Blur, 1.0f);
-  backdrop->addFilter(lcl::protocol::FilterType::Glass, 10.0f, 5.0f, 0.0f);
+  backdrop->addFilter(lcl::protocol::FilterType::Glass, 16.0f, 4.0f, 0.0f);
   panel->addChild(std::move(backdrop));
 
   auto innerBorder = std::make_unique<lcl::ui::Container>();
@@ -408,15 +408,14 @@ int main() {
       surface->setAppId("org.lcl.desktop-wm");
       surface->setInputEnabled(true);
       surface->configureAttachedSurface(
-          scene.windowId, lcl::protocol::LCLAttachedSurfaceRole::Frame,
-          0.0f, 0.0f, frameWidth, kTitleHeight,
-          true, false, true);
+          scene.windowId, lcl::protocol::LCLAttachedSurfaceRole::Frame, 0.0f,
+          0.0f, frameWidth, kTitleHeight, true, false, true);
 
       auto *surfacePtr = surface.get();
       lcl::ui::chrome::WindowChromeStyle style{};
       style.titleBarBackground = scene.edgeToEdge
-          ? lcl::graphics::Color{0, 0, 0, 0}
-          : lcl::graphics::Color{17, 19, 23, 255};
+                                     ? lcl::graphics::Color{0, 0, 0, 0}
+                                     : lcl::graphics::Color{17, 19, 23, 255};
       lcl::ui::chrome::WindowChromeActions actions{};
       actions.close = [surfacePtr] {
         return surfacePtr->requestManagedWindowAction(
@@ -435,24 +434,23 @@ int main() {
             lcl::protocol::LCLWindowAction::BeginDrag, x, y);
       };
       auto titlebar = lcl::ui::chrome::buildWindowTitlebar(
-          frameWidth, kTitleHeight, 20.0f, scene.title, 15.0f,
-          style, actions);
+          frameWidth, kTitleHeight, 20.0f, scene.title, 15.0f, style, actions);
       auto *titlebarPtr = titlebar.get();
       surface->setRootWidget(std::move(titlebar));
       surface->setOnResize(
           [titlebarPtr](uint32_t resizedWidth, uint32_t resizedHeight) {
-            titlebarPtr->setFrameSize(
-                static_cast<float>(resizedWidth),
-                static_cast<float>(resizedHeight));
+            titlebarPtr->setFrameSize(static_cast<float>(resizedWidth),
+                                      static_cast<float>(resizedHeight));
           });
       if (!surface->connectCompositor()) {
         std::cerr << "[DesktopWM] Could not attach frame to window "
                   << scene.windowId << "\n";
         continue;
       }
-      decorations.emplace(scene.sceneId, DesktopDecoration{
-          scene.windowId, scene.width, scene.title, scene.edgeToEdge,
-          std::move(surface)});
+      decorations.emplace(scene.sceneId,
+                          DesktopDecoration{scene.windowId, scene.width,
+                                            scene.title, scene.edgeToEdge,
+                                            std::move(surface)});
     }
   };
 
@@ -484,7 +482,8 @@ int main() {
     // their first real buffer commit, so menu setup cannot leave the shell
     // in a half-created state with no dock.
     menu = std::make_unique<lcl::ui::WindowApp>(
-        lcl::render::makeDisplayListCanvas(), width, kMenuBarHeight, "LCL MenuBar");
+        lcl::render::makeDisplayListCanvas(), width, kMenuBarHeight,
+        "LCL MenuBar");
     menu->setSurfaceId(2);
     menu->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::MenuBar);
     menu->setAppId("org.lcl.desktop-shell");
@@ -497,8 +496,8 @@ int main() {
     });
     menu->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 
-    dock = std::make_unique<lcl::ui::WindowApp>(lcl::render::makeDisplayListCanvas(),
-                                                width, kDockHeight, "LCL Dock");
+    dock = std::make_unique<lcl::ui::WindowApp>(
+        lcl::render::makeDisplayListCanvas(), width, kDockHeight, "LCL Dock");
     dock->setSurfaceId(3);
     dock->setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::Dock);
     dock->setAppId("org.lcl.desktop-shell");

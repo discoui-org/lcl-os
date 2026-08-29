@@ -26,6 +26,7 @@
 #include <sys/syscall.h>
 #include <sys/un.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <unistd.h>
 
 #if defined(__linux__)
@@ -491,6 +492,26 @@ bool isScrollTransformOnly(
         });
 }
 
+bool isRetainedPresentationCandidate(
+        const RetainedNodeState& node) noexcept {
+    constexpr uint32_t kRootReason = 1u << 0u;
+    constexpr uint32_t kTransformReason = 1u << 2u;
+    constexpr uint32_t kOpacityReason = 1u << 3u;
+    constexpr uint32_t kScrollViewportReason = 1u << 4u;
+    constexpr uint32_t kScrollContentReason = 1u << 5u;
+    const bool presentation =
+        (node.boundaryReasons &
+         (kTransformReason | kOpacityReason)) != 0;
+    const float area = node.layoutWidth * node.layoutHeight;
+    return presentation &&
+        (node.boundaryReasons & kRootReason) == 0 &&
+        (node.boundaryReasons &
+         (kScrollViewportReason | kScrollContentReason)) == 0 &&
+        node.layoutWidth > 0.0f && node.layoutHeight > 0.0f &&
+        node.layoutWidth <= 2048.0f && node.layoutHeight <= 2048.0f &&
+        area <= 4194304.0f;
+}
+
 bool isScrollViewport(const RetainedNodeState& node) noexcept {
     return (node.boundaryReasons & (1u << 4u)) != 0;
 }
@@ -512,16 +533,141 @@ bool isWithinScrollContent(
     return false;
 }
 
-bool invalidatesScrollCompositionTemplate(
+bool descendsFrom(
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes,
+        uint64_t id, uint64_t ancestorId) noexcept {
+    const auto* node = findRetainedNode(nodes, id);
+    size_t depth = 0;
+    while (node && depth++ <= nodes.size()) {
+        if (node->parentId == ancestorId) return true;
+        if (node->parentId == 0) return false;
+        node = findRetainedNode(nodes, node->parentId);
+    }
+    return false;
+}
+
+std::unordered_set<uint64_t> retainedPresentationNodeIds(
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes) {
+    std::unordered_set<uint64_t> result;
+    for (const auto& [id, node] : nodes) {
+        if (!isRetainedPresentationCandidate(node) ||
+            isWithinScrollContent(nodes, id)) {
+            continue;
+        }
+        bool hasCandidateAncestor = false;
+        for (const auto& [ancestorId, ancestor] : nodes) {
+            if (ancestorId != id &&
+                isRetainedPresentationCandidate(ancestor) &&
+                descendsFrom(nodes, id, ancestorId)) {
+                hasCandidateAncestor = true;
+                break;
+            }
+        }
+        if (hasCandidateAncestor) continue;
+        const bool containsScroll = std::any_of(
+            nodes.begin(), nodes.end(), [&](const auto& descendant) {
+                return (isScrollViewport(descendant.second) ||
+                        isScrollContent(descendant.second)) &&
+                    descendsFrom(nodes, descendant.first, id);
+            });
+        if (!containsScroll) result.insert(id);
+    }
+    return result;
+}
+
+bool isRetainedPresentationProperties(
+        const NodeMutation& mutation,
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes,
+        const std::unordered_set<uint64_t>& candidates) noexcept {
+    constexpr uint32_t kTransformReason = 1u << 2u;
+    constexpr uint32_t kOpacityReason = 1u << 3u;
+    constexpr float kEpsilon = 0.0001f;
+    const auto same = [=](float lhs, float rhs) {
+        return std::fabs(lhs - rhs) <= kEpsilon;
+    };
+    if (mutation.type !=
+            lcl::raster_protocol::NodeMutationType::SetProperties ||
+        !candidates.contains(mutation.node.id)) {
+        return false;
+    }
+    const auto& node = mutation.node;
+    const auto* old = findRetainedNode(nodes, node.id);
+    if (!old || !validNodeState(node)) return false;
+    const uint32_t allowedReasons = kTransformReason | kOpacityReason;
+    return isRetainedPresentationCandidate(node) &&
+        ((node.boundaryReasons ^ old->boundaryReasons) &
+         ~allowedReasons) == 0 &&
+        node.parentId == old->parentId &&
+        node.siblingIndex == old->siblingIndex &&
+        node.flags == old->flags &&
+        node.contentRevision == old->contentRevision &&
+        same(node.layoutX, old->layoutX) &&
+        same(node.layoutY, old->layoutY) &&
+        same(node.layoutWidth, old->layoutWidth) &&
+        same(node.layoutHeight, old->layoutHeight) &&
+        same(node.clipX, old->clipX) &&
+        same(node.clipY, old->clipY) &&
+        same(node.clipWidth, old->clipWidth) &&
+        same(node.clipHeight, old->clipHeight);
+}
+
+bool isRetainedPresentationOnly(
+        const CommitTransaction& transaction,
+        std::span<const NodeMutation> mutations,
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes) {
+    if (replacesRetainedScene(transaction) || mutations.empty()) return false;
+    const auto candidates = retainedPresentationNodeIds(nodes);
+    return !candidates.empty() && std::all_of(
+        mutations.begin(), mutations.end(), [&](const NodeMutation& mutation) {
+            return isRetainedPresentationProperties(
+                mutation, nodes, candidates);
+        });
+}
+
+bool isRetainedPropertyOnly(
+        const CommitTransaction& transaction,
+        std::span<const NodeMutation> mutations,
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes) {
+    if (replacesRetainedScene(transaction) || mutations.empty()) return false;
+    const auto candidates = retainedPresentationNodeIds(nodes);
+    return std::all_of(
+        mutations.begin(), mutations.end(), [&](const NodeMutation& mutation) {
+            return isScrollTranslationProperties(mutation, nodes) ||
+                isRetainedPresentationProperties(
+                    mutation, nodes, candidates);
+        });
+}
+
+bool invalidatesRetainedCompositionTemplate(
         std::span<const NodeMutation> mutations,
         const std::unordered_map<uint64_t, RetainedNodeState>& currentNodes,
         const std::unordered_map<uint64_t, RetainedNodeState>& nextNodes)
         noexcept {
+    const auto currentPresentation =
+        retainedPresentationNodeIds(currentNodes);
+    const auto nextPresentation = retainedPresentationNodeIds(nextNodes);
+    const auto isWithinPresentation = [](
+            const auto& nodes, const auto& candidates, uint64_t id) {
+        return std::any_of(
+            candidates.begin(), candidates.end(), [&](uint64_t candidate) {
+                return candidate == id ||
+                    descendsFrom(nodes, id, candidate);
+            });
+    };
     for (const auto& mutation : mutations) {
         if (mutation.type ==
                 lcl::raster_protocol::NodeMutationType::RemoveNode) {
             const auto* existing = findRetainedNode(
                 currentNodes, mutation.node.id);
+            if (existing &&
+                isWithinPresentation(
+                    currentNodes, currentPresentation,
+                    mutation.node.id)) {
+                if (currentPresentation.contains(mutation.node.id)) {
+                    return true;
+                }
+                continue;
+            }
             if (!existing || isScrollViewport(*existing) ||
                 isScrollContent(*existing) ||
                 !isWithinScrollContent(currentNodes, mutation.node.id)) {
@@ -531,6 +677,22 @@ bool invalidatesScrollCompositionTemplate(
         }
         const auto* next = findRetainedNode(nextNodes, mutation.node.id);
         if (!next || isScrollViewport(*next)) return true;
+        if (isWithinPresentation(
+                nextNodes, nextPresentation, mutation.node.id)) {
+            if (nextPresentation.contains(mutation.node.id)) {
+                if (mutation.type ==
+                        lcl::raster_protocol::NodeMutationType::CreateNode) {
+                    return true;
+                }
+                if (mutation.type ==
+                        lcl::raster_protocol::NodeMutationType::SetProperties &&
+                    !isRetainedPresentationProperties(
+                        mutation, currentNodes, currentPresentation)) {
+                    return true;
+                }
+            }
+            continue;
+        }
         if (isScrollContent(*next)) {
             if (mutation.type ==
                     lcl::raster_protocol::NodeMutationType::CreateNode ||
@@ -746,7 +908,7 @@ private:
                 ? isImmutableMemfd(receivedFd, transaction.displayListSize)
                 : receivedFd < 0;
             const bool validPropertyOnlyCommit = hasDisplayList ||
-                (surface && isScrollTransformOnly(
+                (surface && isRetainedPropertyOnly(
                     transaction, mutations, surface->retainedNodes));
             if (!surface ||
                 !hasValidRetainedFrameMetadata(transaction) ||
@@ -917,6 +1079,25 @@ private:
                 nextLayerNamespaces.erase(layer);
             }
         }
+        const auto retainedPresentationIds =
+            retainedPresentationNodeIds(nextNodes);
+        for (auto layer = nextLayerNamespaces.begin();
+             layer != nextLayerNamespaces.end();) {
+            const auto node = nextNodes.find(layer->first);
+            const bool activeScrollOwner = node != nextNodes.end() &&
+                isScrollViewport(node->second);
+            const bool activePresentationOwner =
+                retainedPresentationIds.contains(layer->first);
+            if (node != nextNodes.end() &&
+                (activeScrollOwner || activePresentationOwner)) {
+                ++layer;
+                continue;
+            }
+            if (layer->second != 0) {
+                genericLayerEvictions.push_back(layer->second);
+            }
+            layer = nextLayerNamespaces.erase(layer);
+        }
         std::vector<uint64_t> createdNamespaceLayers;
         std::shared_ptr<std::vector<lcl::graphics::DisplayCommand>> commands;
         if (submit.displayListSize != 0) {
@@ -976,16 +1157,20 @@ private:
 
         const bool scrollTransformTransaction = isScrollTransformOnly(
             submit, mutations, surface.retainedNodes);
-        const bool invalidatesScrollTemplate =
-            invalidatesScrollCompositionTemplate(
+        const bool retainedPresentationTransaction =
+            isRetainedPresentationOnly(
+                submit, mutations, surface.retainedNodes);
+        const bool invalidatesRetainedTemplate =
+            invalidatesRetainedCompositionTemplate(
                 mutations, surface.retainedNodes, nextNodes);
         auto tiled = lcl::render::RetainedScrollTileCache::prepare(
             surface.scrollTiles,
             commands ? commands.get() : nullptr,
             nextNodes, nextLayerNamespaces,
             [this] { return m_nextCachedLayerId++; },
-            replacesRetainedScene(submit), scrollTransformTransaction,
-            invalidatesScrollTemplate);
+            replacesRetainedScene(submit),
+            scrollTransformTransaction || retainedPresentationTransaction,
+            invalidatesRetainedTemplate);
         if (!tiled) return false;
         const lcl::graphics::DisplayList& displayList = tiled->displayList;
         const auto releaseCachedLayers = [&](std::span<const uint64_t> ids) {
