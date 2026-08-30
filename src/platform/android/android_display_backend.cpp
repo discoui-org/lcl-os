@@ -133,7 +133,8 @@ static void waitAndClearFenceFds(std::vector<int>& fences) {
 
 class AndroidComposerCallback final : public BnComposerCallback {
 public:
-    explicit AndroidComposerCallback(AndroidDisplayBackend::Impl* impl) : m_impl(impl) {}
+    explicit AndroidComposerCallback(AndroidDisplayBackend::Impl* impl, AndroidDisplayBackend* backend = nullptr)
+        : m_impl(impl), m_backend(backend) {}
 
     ::ndk::ScopedAStatus onHotplug(int64_t in_display, bool in_connected) override {
         if (m_impl) {
@@ -159,10 +160,13 @@ public:
         return ::ndk::ScopedAStatus::ok();
     }
 
-    ::ndk::ScopedAStatus onVsync(int64_t /*in_display*/, int64_t /*in_timestamp*/, int32_t /*in_vsyncPeriodNanos*/) override {
+    ::ndk::ScopedAStatus onVsync(int64_t /*in_display*/, int64_t /*in_timestamp*/, int32_t in_vsyncPeriodNanos) override {
         if (m_impl) {
             std::lock_guard<std::mutex> lock(m_impl->mutex);
             ++m_impl->vsyncSerial;
+            if (in_vsyncPeriodNanos > 0 && m_backend) {
+                m_backend->updateRefreshRateFromVsyncPeriod(in_vsyncPeriodNanos);
+            }
             m_impl->cv.notify_all();
         }
         return ::ndk::ScopedAStatus::ok();
@@ -186,6 +190,7 @@ public:
 
 private:
     AndroidDisplayBackend::Impl* m_impl{nullptr};
+    AndroidDisplayBackend* m_backend{nullptr};
 };
 
 AndroidDisplayBackend::AndroidDisplayBackend()
@@ -285,7 +290,7 @@ bool AndroidDisplayBackend::initializeAidl() {
 
     // 3. Instantiate the generated VINTF-stable callback and register with HAL.
     // BnComposerCallback::createBinder() performs the stability marking.
-    m_impl->callback = ::ndk::SharedRefBase::make<AndroidComposerCallback>(m_impl.get());
+    m_impl->callback = ::ndk::SharedRefBase::make<AndroidComposerCallback>(m_impl.get(), this);
 
     auto regStatus = m_impl->client->registerCallback(m_impl->callback);
     if (!regStatus.isOk()) {
@@ -477,6 +482,22 @@ bool AndroidDisplayBackend::waitForVsyncAidl(std::chrono::nanoseconds timeout) {
     return m_impl->cv.wait_for(lock, timeout, [this, observed] {
         return m_impl->vsyncSerial != observed;
     }) && m_impl->vsyncSerial != observed;
+}
+
+bool AndroidDisplayBackend::hasHardwareVsync() const {
+    if (m_backendKind == BackendKind::HidlComposer) {
+        return m_hidlBackend && m_hidlBackend->isInitialized();
+    }
+    return m_initialized && m_impl && m_impl->vsyncEnabled;
+}
+
+void AndroidDisplayBackend::updateRefreshRateFromVsyncPeriod(int32_t vsyncPeriodNanos) {
+    if (vsyncPeriodNanos <= 0) return;
+    const uint32_t newHz = static_cast<uint32_t>(1000000000 / vsyncPeriodNanos);
+    if (newHz > 0 && newHz != m_activeMode.refreshRateHz) {
+        m_activeMode.refreshRateHz = newHz;
+        m_activeMode.refreshRate = newHz;
+    }
 }
 
 bool AndroidDisplayBackend::prepareBufferForRender(AHardwareBuffer* buffer) {

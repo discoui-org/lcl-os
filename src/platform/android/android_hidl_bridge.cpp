@@ -23,6 +23,7 @@
 #include <android/hardware/graphics/composer/2.2/IComposerClient.h>
 #include <android/hardware/graphics/composer/2.4/IComposer.h>
 #include <android/hardware/graphics/composer/2.4/IComposerClient.h>
+#include <android/hardware/graphics/composer/2.4/IComposerCallback.h>
 #include <android/hardware/graphics/composer/2.1/IComposerCallback.h>
 #include <composer-command-buffer/2.4/ComposerCommandBuffer.h>
 #include <hidl/HidlTransportSupport.h>
@@ -189,7 +190,7 @@ struct AndroidHidlDisplayBackend::Impl {
     sp<composer24::IComposer> composer24;
     sp<composer22::IComposer> composer22;
     sp<composer22::IComposerClient> client;
-    sp<composer21::IComposerCallback> callback;
+    sp<composer24::IComposerCallback> callback;
     composer24::CommandWriterBase writer{1024};
     HidlCommandReader reader;
     std::mutex mutex;
@@ -215,7 +216,7 @@ static void waitAndClearFences(std::vector<int>& fences) {
     fences.clear();
 }
 
-class HidlComposerCallback final : public composer21::IComposerCallback {
+class HidlComposerCallback final : public composer24::IComposerCallback {
 public:
     explicit HidlComposerCallback(AndroidHidlDisplayBackend::Impl* impl) : m_impl(impl) {}
 
@@ -236,6 +237,20 @@ public:
             ++m_impl->vsyncSerial;
             m_impl->cv.notify_all();
         }
+        return {};
+    }
+    Return<void> onVsync_2_4(uint64_t, int64_t, uint32_t) override {
+        if (m_impl) {
+            std::lock_guard<std::mutex> lock(m_impl->mutex);
+            ++m_impl->vsyncSerial;
+            m_impl->cv.notify_all();
+        }
+        return {};
+    }
+    Return<void> onVsyncPeriodTimingChanged(uint64_t, const composer24::VsyncPeriodChangeTimeline&) override {
+        return {};
+    }
+    Return<void> onSeamlessPossible(uint64_t) override {
         return {};
     }
 
@@ -347,12 +362,28 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale,
     }
 
     m_impl->callback = new HidlComposerCallback(m_impl.get());
-    const auto callbackResult = m_impl->client->registerCallback(m_impl->callback);
-    if (!callbackResult.isOk()) {
-        std::cerr << "[AndroidHidlDisplayBackend] registerCallback transaction failed: "
-                  << callbackResult.description() << "\n";
-        shutdown();
-        return false;
+    bool registeredCallback = false;
+    if (m_impl->composerMinorVersion >= 4) {
+        auto castResult = composer24::IComposerClient::castFrom(m_impl->client);
+        if (castResult.isOk()) {
+            sp<composer24::IComposerClient> client24 = castResult;
+            if (client24) {
+                const auto cb24Result = client24->registerCallback_2_4(m_impl->callback);
+                if (cb24Result.isOk()) {
+                    registeredCallback = true;
+                    std::cerr << "[AndroidHidlDisplayBackend] Registered Composer 2.4 VSync callback\n";
+                }
+            }
+        }
+    }
+    if (!registeredCallback) {
+        const auto callbackResult = m_impl->client->registerCallback(m_impl->callback);
+        if (!callbackResult.isOk()) {
+            std::cerr << "[AndroidHidlDisplayBackend] registerCallback transaction failed: "
+                      << callbackResult.description() << "\n";
+            shutdown();
+            return false;
+        }
     }
 
     {
@@ -406,54 +437,96 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale,
         return error;
     };
 
-    if (preferredWidth > 0 && preferredHeight > 0) {
-        composer21::Error configsError = composer21::Error::NO_RESOURCES;
-        hidl_vec<uint32_t> configs;
-        m_impl->client->getDisplayConfigs(
-            m_displayId, [&](composer21::Error error, const hidl_vec<uint32_t>& values) {
-                configsError = error;
-                if (isNone(error)) configs = values;
-            });
-        bool foundPreferred = false;
-        uint32_t preferredConfig = activeConfig;
-        int64_t bestRefreshDistance = std::numeric_limits<int64_t>::max();
-        if (isNone(configsError)) {
-            for (const uint32_t config : configs) {
-                int32_t configWidth = 0;
-                int32_t configHeight = 0;
-                int32_t configVsyncPeriod = 0;
-                if (!isNone(readAttribute(config, composer21::IComposerClient::Attribute::WIDTH,
-                                          &configWidth)) ||
-                    !isNone(readAttribute(config, composer21::IComposerClient::Attribute::HEIGHT,
-                                          &configHeight)) ||
-                    configWidth != static_cast<int32_t>(preferredWidth) ||
-                    configHeight != static_cast<int32_t>(preferredHeight)) {
-                    continue;
-                }
-                (void)readAttribute(config,
-                                    composer21::IComposerClient::Attribute::VSYNC_PERIOD,
-                                    &configVsyncPeriod);
-                const int64_t refreshHz = configVsyncPeriod > 0
-                    ? 1000000000ll / configVsyncPeriod : 0;
-                const int64_t distance = preferredRefreshHz > 0
-                    ? std::llabs(refreshHz - preferredRefreshHz) : 0;
-                if (!foundPreferred || distance < bestRefreshDistance) {
-                    foundPreferred = true;
-                    preferredConfig = config;
-                    bestRefreshDistance = distance;
+    int32_t activeWidth = 0;
+    int32_t activeHeight = 0;
+    (void)readAttribute(activeConfig, composer21::IComposerClient::Attribute::WIDTH, &activeWidth);
+    (void)readAttribute(activeConfig, composer21::IComposerClient::Attribute::HEIGHT, &activeHeight);
+
+    const uint32_t targetWidth = preferredWidth > 0 ? preferredWidth : static_cast<uint32_t>(activeWidth);
+    const uint32_t targetHeight = preferredHeight > 0 ? preferredHeight : static_cast<uint32_t>(activeHeight);
+    const uint32_t targetRefreshHz = preferredRefreshHz > 0 ? preferredRefreshHz : 120;
+
+    composer21::Error configsError = composer21::Error::NO_RESOURCES;
+    hidl_vec<uint32_t> configs;
+    m_impl->client->getDisplayConfigs(
+        m_displayId, [&](composer21::Error error, const hidl_vec<uint32_t>& values) {
+            configsError = error;
+            if (isNone(error)) configs = values;
+        });
+    bool foundPreferred = false;
+    uint32_t preferredConfig = activeConfig;
+    int64_t bestRefreshDistance = std::numeric_limits<int64_t>::max();
+    if (isNone(configsError)) {
+        for (const uint32_t config : configs) {
+            int32_t configWidth = 0;
+            int32_t configHeight = 0;
+            int32_t configVsyncPeriod = 0;
+            if (!isNone(readAttribute(config, composer21::IComposerClient::Attribute::WIDTH,
+                                      &configWidth)) ||
+                !isNone(readAttribute(config, composer21::IComposerClient::Attribute::HEIGHT,
+                                      &configHeight))) {
+                continue;
+            }
+            (void)readAttribute(config,
+                                composer21::IComposerClient::Attribute::VSYNC_PERIOD,
+                                &configVsyncPeriod);
+            const int64_t refreshHz = configVsyncPeriod > 0
+                ? 1000000000ll / configVsyncPeriod : 0;
+            std::cerr << "[AndroidHidlDisplayBackend] Config " << config << ": "
+                      << configWidth << "x" << configHeight << " @ " << refreshHz << " Hz\n";
+            if (configWidth != static_cast<int32_t>(targetWidth) ||
+                configHeight != static_cast<int32_t>(targetHeight)) {
+                continue;
+            }
+            const int64_t distance = targetRefreshHz > 0
+                ? std::llabs(refreshHz - static_cast<int64_t>(targetRefreshHz)) : 0;
+            if (!foundPreferred || distance < bestRefreshDistance) {
+                foundPreferred = true;
+                preferredConfig = config;
+                bestRefreshDistance = distance;
+            }
+        }
+    }
+    if (!foundPreferred) {
+        std::cerr << "[AndroidHidlDisplayBackend] Target mode "
+                  << targetWidth << "x" << targetHeight << " @" << targetRefreshHz
+                  << "Hz is unavailable; using Composer active mode\n";
+    } else {
+        bool switched = false;
+        if (m_impl->composerMinorVersion >= 4) {
+            auto castResult = composer24::IComposerClient::castFrom(m_impl->client);
+            if (castResult.isOk()) {
+                sp<composer24::IComposerClient> client24 = castResult;
+                if (client24) {
+                    composer24::IComposerClient::VsyncPeriodChangeConstraints constraints{};
+                    constraints.seamlessRequired = false;
+                    constraints.desiredTimeNanos = 0;
+                    client24->setActiveConfigWithConstraints(
+                        m_displayId, preferredConfig, constraints,
+                        [&](composer24::Error error,
+                            const composer24::VsyncPeriodChangeTimeline& /*timeline*/) {
+                            if (error == composer24::Error::NONE) {
+                                activeConfig = preferredConfig;
+                                switched = true;
+                                std::cerr << "[AndroidHidlDisplayBackend] Configured display 120Hz mode (config "
+                                          << preferredConfig << ") via setActiveConfigWithConstraints\n";
+                            } else {
+                                std::cerr << "[AndroidHidlDisplayBackend] setActiveConfigWithConstraints status: "
+                                          << composer24::toString(error) << "\n";
+                            }
+                        });
                 }
             }
         }
-        if (!foundPreferred) {
-            std::cerr << "[AndroidHidlDisplayBackend] Gestalt mode "
-                      << preferredWidth << "x" << preferredHeight
-                      << " is unavailable; using Composer active mode\n";
-        } else if (preferredConfig != activeConfig) {
+        if (!switched) {
             const auto setResult = m_impl->client->setActiveConfig(m_displayId, preferredConfig);
             if (setResult.isOk() && isNone(setResult)) {
                 activeConfig = preferredConfig;
+                std::cerr << "[AndroidHidlDisplayBackend] Configured display (config "
+                          << preferredConfig << ") via setActiveConfig\n";
             } else {
-                std::cerr << "[AndroidHidlDisplayBackend] Composer rejected Gestalt mode\n";
+                std::cerr << "[AndroidHidlDisplayBackend] Composer rejected Gestalt mode config "
+                          << preferredConfig << "\n";
             }
         }
     }

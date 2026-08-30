@@ -1184,6 +1184,10 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
         )
         if selected_gestalt_path is not None:
             launch_env += f" LCL_GESTALT_PATH={DEVICE_GESTALT_PATH}"
+        for var in ("LCL_DEBUG_OVERLAY", "LCL_DEBUG", "LCL_LOG_LEVEL", "LCL_SHOW_FPS"):
+            val = os.environ.get(var)
+            if val:
+                launch_env += f" {var}={val}"
         lcl_proc = subprocess.Popen(adb_shell_command(
             f"{launch_env} {DEVICE_BINARY_PATH} 2>&1 | tee {DEVICE_LOG_PATH}",
             as_root=True,

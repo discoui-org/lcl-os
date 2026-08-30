@@ -40,6 +40,9 @@ public:
     bool moveHardwareCursor(int x, int y) override;
     bool isHardwareCursorActive() const override { return false; }
     bool waitForVsync(std::chrono::nanoseconds timeout) override;
+    bool hasHardwareVsync() const override;
+
+    void updateRefreshRateFromVsyncPeriod(int32_t vsyncPeriodNanos);
 
     int64_t displayId() const { return m_displayId; }
     int64_t layerId() const { return m_layerId; }

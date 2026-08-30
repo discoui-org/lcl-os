@@ -279,7 +279,7 @@ void Compositor::run() {
     float targetPeriodMs = 1000.0f / static_cast<float>(refreshHz);
     float headroomMs = std::min(0.5f, targetPeriodMs * 0.08f);
     float targetBudgetMs = targetPeriodMs - headroomMs;
-    const auto targetFrameDuration = m_frameScheduler.frameBudgetForHz(refreshHz);
+    auto targetFrameDuration = m_frameScheduler.frameBudgetForHz(refreshHz);
 
     std::cout << "[LCL Core] Dynamic Frame Pacer Active: " << refreshHz << " Hz "
               << "(Target Period: " << targetPeriodMs << " ms, Headroom: " << headroomMs
@@ -288,6 +288,20 @@ void Compositor::run() {
     m_lastFpsTime = std::chrono::steady_clock::now();
 
     while (m_running.load()) {
+        const auto& currentMode = display.activeMode();
+        if (currentMode.refreshRate > 0 && currentMode.refreshRate != refreshHz) {
+            refreshHz = currentMode.refreshRate;
+            m_refreshIntervalNs = 1000000000ull / refreshHz;
+            targetPeriodMs = 1000.0f / static_cast<float>(refreshHz);
+            headroomMs = std::min(0.5f, targetPeriodMs * 0.08f);
+            targetBudgetMs = targetPeriodMs - headroomMs;
+            targetFrameDuration = m_frameScheduler.frameBudgetForHz(refreshHz);
+            if (m_inputRouter) {
+                m_inputRouter->setRefreshInterval(std::chrono::nanoseconds(m_refreshIntervalNs));
+            }
+            std::cout << "[LCL Core] Dynamic refresh rate switched to " << refreshHz << " Hz\n";
+        }
+
         auto frameStart = std::chrono::high_resolution_clock::now();
 
         processInput();
@@ -304,17 +318,23 @@ void Compositor::run() {
         // compositor loop even when the pointer becomes stationary.
         if (m_inputRouter) m_inputRouter->syncWindowState();
         synchronizeShellState();
-        bool willDraw = m_needsRedraw || m_windowManager.isAnyWindowDirty();
+        bool willDraw = m_needsRedraw || m_windowManager.isAnyWindowDirty() || m_showFpsOverlay;
 
         if (willDraw) {
             // Hardware-backed displays provide the authoritative presentation
             // cadence. Waiting here keeps compositor spring frames from
             // free-running across an active scanout.
-            (void)display.waitForVsync(
+            const bool gotVsync = display.waitForVsync(
                 std::chrono::nanoseconds(m_refreshIntervalNs * 2));
             renderFrame();
 
-            m_frameScheduler.waitForFrame(frameStart, targetFrameDuration);
+            // When hardware vSync cadence governs presentation, the hardware
+            // vertical retrace edge already paced the frame. Avoid sleeping
+            // unconditionally on software timers, which could overshoot the next
+            // scanout and drop framerate.
+            if (!gotVsync) {
+                m_frameScheduler.waitForFrame(frameStart, targetFrameDuration);
+            }
         } else {
             m_frameScheduler.waitIdle();
         }

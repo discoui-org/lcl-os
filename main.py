@@ -69,15 +69,15 @@ def normalize_arch(arch_str: str | None) -> str:
 
 
 def cmd_qemu(args: argparse.Namespace) -> None:
-    if getattr(args, "mobile", False):
+    if getattr(args, "skin", None) or getattr(args, "viewer", False):
         if args.utm:
-            err("--mobile uses the LCL Device Viewer and cannot be combined with --utm.")
+            err("--viewer/--skin uses the LCL Device Viewer and cannot be combined with --utm.")
             sys.exit(2)
         if args.iso or args.uefi or args.usb:
-            err("--mobile Device Viewer does not support --iso, --uefi, or --usb.")
+            err("--viewer/--skin Device Viewer does not support --iso, --uefi, or --usb.")
             sys.exit(2)
         if normalize_arch(args.arch) != "x86_64":
-            err("--mobile Device Viewer currently supports only x86_64.")
+            err("--viewer/--skin Device Viewer currently supports only x86_64.")
             sys.exit(2)
 
         viewer_args = [sys.executable, str(ROOT_DIR / "emulator" / "main.py")]
@@ -455,7 +455,8 @@ def main() -> None:
     p_qemu.add_argument("--gpu", "-g", action="store_true", help="Enable 3D VirGL GPU acceleration")
     p_qemu.add_argument("--retina", action="store_true", help="13\" MacBook Air Retina (2560x1600 @ 2.0x)")
     p_qemu.add_argument("--mobile", action="store_true", help="Portrait mobile display (1179x2556 @ 2.0x)")
-    p_qemu.add_argument("--skin", metavar="PIXEL_SKIN", help="Pixel skin for --mobile Device Viewer (e.g. pixel_8_pro)")
+    p_qemu.add_argument("--viewer", action="store_true", help="Launch in LCL Device Viewer frame")
+    p_qemu.add_argument("--skin", metavar="PIXEL_SKIN", help="Pixel skin for Device Viewer (e.g. pixel_8_pro)")
     p_qemu.add_argument("--gestalt", type=Path, metavar="JSON", help="Use an explicit Gestalt JSON in the guest")
     p_qemu.add_argument("--scale", type=float, metavar="FACTOR", help="UI scale factor (e.g. 1.5, 2.0)")
     p_qemu.add_argument("--width", type=int, metavar="PX", help="Display width in pixels")

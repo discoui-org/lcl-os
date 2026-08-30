@@ -39,6 +39,7 @@ public:
 
     /** Wait for the next hardware display timing edge when the backend exposes it. */
     virtual bool waitForVsync(std::chrono::nanoseconds) { return false; }
+    virtual bool hasHardwareVsync() const { return false; }
 };
 
 } // namespace lcl::platform
