@@ -26,6 +26,7 @@ constexpr std::uint64_t kMaximumBundleBytes = 512ULL * 1024ULL * 1024ULL;
 constexpr std::size_t kMaximumRelativePathBytes = 1024;
 constexpr std::uint32_t kMaximumBundleDirectoryDepth = 32;
 constexpr std::string_view kSignatureEnvelopeName = "Signature.ed25519";
+constexpr std::uint64_t kMaximumSignatureEnvelopeBytes = 64ULL * 1024ULL;
 
 class ScopedFd final {
 public:
@@ -136,9 +137,16 @@ bool isSafeRegularFile(const struct stat& status) {
            static_cast<std::uint64_t>(status.st_size) <= kMaximumBundleFileBytes;
 }
 
+bool isSafeSignatureEnvelope(const struct stat& status) {
+    return isSafeRegularFile(status) &&
+           static_cast<std::uint64_t>(status.st_size) <= kMaximumSignatureEnvelopeBytes;
+}
+
 bool scanDirectory(int directoryDescriptor, std::string_view prefix,
                    std::vector<BundleFileDigest>& files, std::uint64_t& totalBytes,
-                   std::size_t& entryCount, std::uint32_t depth, std::string& error) {
+                   std::size_t& entryCount, std::uint32_t depth,
+                   bool& foundSignatureEnvelope, Sha256Digest& signatureEnvelopeDigest,
+                   std::string& error) {
     if (depth > kMaximumBundleDirectoryDepth) {
         error = "bundle directory nesting exceeds verifier limit";
         return false;
@@ -203,7 +211,8 @@ bool scanDirectory(int directoryDescriptor, std::string_view prefix,
             struct stat openedStatus {};
             if (!child.valid() || fstat(child.get(), &openedStatus) != 0 || !S_ISDIR(openedStatus.st_mode) ||
                 !sameInode(entryStatus, openedStatus) ||
-                !scanDirectory(child.get(), relativePath, files, totalBytes, entryCount, depth + 1, error)) {
+                !scanDirectory(child.get(), relativePath, files, totalBytes, entryCount, depth + 1,
+                               foundSignatureEnvelope, signatureEnvelopeDigest, error)) {
                 if (error.empty()) {
                     error = "bundle directory changed while opening";
                 }
@@ -223,10 +232,17 @@ bool scanDirectory(int directoryDescriptor, std::string_view prefix,
                                       O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
             struct stat openedStatus {};
             if (!signature.valid() || fstat(signature.get(), &openedStatus) != 0 ||
-                !isSafeRegularFile(openedStatus) || !sameInode(entryStatus, openedStatus)) {
+                !isSafeSignatureEnvelope(openedStatus) || !sameInode(entryStatus, openedStatus)) {
                 error = "bundle signature envelope changed while opening";
                 return false;
             }
+            const auto digest = sha256FileDescriptor(signature.get(), kMaximumSignatureEnvelopeBytes);
+            if (!digest) {
+                error = "could not hash bundle signature envelope";
+                return false;
+            }
+            foundSignatureEnvelope = true;
+            signatureEnvelopeDigest = *digest;
             continue;
         }
         const std::uint64_t byteSize = static_cast<std::uint64_t>(entryStatus.st_size);
@@ -289,7 +305,7 @@ bool retainedFileMatchesRecord(const std::shared_ptr<const lcl::core::AppBundleF
 
 } // namespace
 
-Sha256Digest digestBundleRecord(const BundleRecord& record) {
+std::string serializeBundleRecordPayload(const BundleRecord& record) {
     std::string canonical;
     canonical.reserve(128 + record.appId.size() + record.appVersion.size() + record.type.size() +
                       record.runtime.size() + record.requestedPermissions.size() * 32 +
@@ -310,6 +326,20 @@ Sha256Digest digestBundleRecord(const BundleRecord& record) {
         appendU16(canonical, file.mode);
         appendDigest(canonical, file.digest);
     }
+    return canonical;
+}
+
+Sha256Digest digestBundlePayload(const BundleRecord& record) {
+    return sha256(serializeBundleRecordPayload(record));
+}
+
+Sha256Digest digestBundleRecord(const BundleRecord& record) {
+    std::string canonical;
+    canonical.reserve(96);
+    canonical.append("LCL_BUNDLE_RECORD_IDENTITY_V1");
+    appendU32(canonical, record.recordVersion);
+    appendDigest(canonical, record.payloadDigest);
+    appendDigest(canonical, record.signatureEnvelopeDigest);
     return sha256(canonical);
 }
 
@@ -319,7 +349,8 @@ bool validateBundleRecord(const BundleRecord& record, std::string& error) {
         !AppIdentityRegistry::isValidAppId(record.appId) ||
         !hasSafeText(record.appVersion, 128, true) || (record.type != "gui" && record.type != "cli") ||
         !hasSafeText(record.runtime, 128, true) || record.files.empty() ||
-        record.files.size() > kMaximumBundleFiles || isZeroDigest(record.digest)) {
+        record.files.size() > kMaximumBundleFiles || isZeroDigest(record.payloadDigest) ||
+        isZeroDigest(record.digest)) {
         error = "bundle record has invalid core fields";
         return false;
     }
@@ -340,7 +371,8 @@ bool validateBundleRecord(const BundleRecord& record, std::string& error) {
             return false;
         }
     }
-    if (digestBundleRecord(record) != record.digest) {
+    if (digestBundlePayload(record) != record.payloadDigest ||
+        digestBundleRecord(record) != record.digest) {
         error = "bundle record digest does not match canonical contents";
         return false;
     }
@@ -351,6 +383,7 @@ std::optional<BundleRecord> makeBundleRecord(const lcl::core::AppBundleMetadata&
                                              std::string& error) {
     error.clear();
     if (!metadata.valid || !metadata.bundleHandle || !metadata.bundleHandle->valid() ||
+        (metadata.signatureHandle && !metadata.signatureHandle->valid()) ||
         !AppIdentityRegistry::isValidAppId(metadata.appId) ||
         !hasSafeText(metadata.version, 128, true) ||
         (metadata.type != "gui" && metadata.type != "cli") || !hasSafeText(metadata.runtime, 128, true) ||
@@ -382,7 +415,10 @@ std::optional<BundleRecord> makeBundleRecord(const lcl::core::AppBundleMetadata&
 
     std::uint64_t totalBytes = 0;
     std::size_t entryCount = 0;
-    if (!scanDirectory(metadata.bundleHandle->descriptor(), "", record.files, totalBytes, entryCount, 0, error)) {
+    bool foundSignatureEnvelope = false;
+    Sha256Digest scannedSignatureEnvelopeDigest{};
+    if (!scanDirectory(metadata.bundleHandle->descriptor(), "", record.files, totalBytes, entryCount, 0,
+                       foundSignatureEnvelope, scannedSignatureEnvelopeDigest, error)) {
         return std::nullopt;
     }
     std::sort(record.files.begin(), record.files.end(),
@@ -397,6 +433,22 @@ std::optional<BundleRecord> makeBundleRecord(const lcl::core::AppBundleMetadata&
         return std::nullopt;
     }
 
+    const bool parserRetainedSignature = metadata.signatureHandle && metadata.signatureHandle->valid();
+    if (foundSignatureEnvelope != parserRetainedSignature) {
+        error = "signature envelope changed after bundle schema validation";
+        return std::nullopt;
+    }
+    if (foundSignatureEnvelope) {
+        const auto retainedSignatureDigest = sha256FileDescriptor(
+            metadata.signatureHandle->descriptor(), kMaximumSignatureEnvelopeBytes);
+        if (!retainedSignatureDigest || *retainedSignatureDigest != scannedSignatureEnvelopeDigest) {
+            error = "signature envelope changed after bundle schema validation";
+            return std::nullopt;
+        }
+        record.signatureEnvelopeDigest = scannedSignatureEnvelopeDigest;
+    }
+
+    record.payloadDigest = digestBundlePayload(record);
     record.digest = digestBundleRecord(record);
     if (!validateBundleRecord(record, error)) {
         return std::nullopt;

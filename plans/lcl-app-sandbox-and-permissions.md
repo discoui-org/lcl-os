@@ -330,6 +330,11 @@ sözleşmesini kullanmasıdır.
 - [x] İmza doğrulayıcısının sonucunu tüketen fail-closed bundle launch gate'i
   ekle: system image, geçerli signature veya aynı kullanıcıya ait tam hash
   onayı dışında launch'a izin verme.
+- [x] Descriptor-temelli detached signature envelope ayrıştırıcısı ve
+  platformdan bağımsız Ed25519/trusted-publisher doğrulama sözleşmesini ekle;
+  backend veya trust resolver hatasında fail-closed `Unverified` döndür.
+- [ ] Aynı canonical rootfs'te Linux ve Android'de byte-for-byte aynı çalışan,
+  denetlenmiş Ed25519 backend'ini ve root-owned publisher trust store'u bağla.
 - [x] Bundle hash/onay değişimi, manifest rewrite, symlink/hard-link ve
   gevşek approval-store izinleri için host unit testleri ekle.
 - [ ] Sistem uygulamalarını read-only rootfs alanında paketle.

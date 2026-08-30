@@ -27,6 +27,7 @@ protected:
         record_.type = "gui";
         record_.runtime = "org.lcl.native";
         record_.files = {BundleFileDigest{"Manifest.json", 0644, sha256("manifest")}};
+        record_.payloadDigest = digestBundlePayload(record_);
         record_.digest = digestBundleRecord(record_);
     }
 

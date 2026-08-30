@@ -9,13 +9,6 @@
 
 namespace lcl::security {
 
-/** The verifier result that a user decision is bound to. */
-enum class BundlePublisherState : unsigned char {
-    Unverified = 1,
-    SignatureVerified = 2,
-    SystemImageTrusted = 3,
-};
-
 struct BundleApprovalStoreConfig {
     std::string storePath;
     uid_t ownerUid{0};

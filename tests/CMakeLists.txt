@@ -21,6 +21,7 @@ add_executable(lcl_unit_tests
     system/test_app_identity_registry.cpp
     system/test_bundle_record.cpp
     system/test_bundle_launch_gate.cpp
+    system/test_bundle_signature_verifier.cpp
     system/test_sandbox_contract.cpp
     system/test_session_service.cpp
     system/test_ipc_manager.cpp

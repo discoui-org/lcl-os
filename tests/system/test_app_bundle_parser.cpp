@@ -77,6 +77,7 @@ TEST_F(AppBundleParserTest, ParseValidAppBundle) {
     EXPECT_EQ(meta->executablePath, (tempDir / "Terminal.app" / "Executables/Terminal").string());
     ASSERT_TRUE(meta->bundleHandle);
     ASSERT_TRUE(meta->manifestHandle);
+    EXPECT_FALSE(meta->signatureHandle);
     ASSERT_TRUE(meta->iconHandle);
     ASSERT_TRUE(meta->executableHandle);
     EXPECT_TRUE(meta->bundleHandle->valid());

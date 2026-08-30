@@ -22,6 +22,7 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr std::size_t kMaxManifestBytes = 64 * 1024;
+constexpr std::size_t kMaxSignatureEnvelopeBytes = 64 * 1024;
 constexpr int kMaxJsonDepth = 32;
 
 class ScopedFd final {
@@ -553,6 +554,23 @@ ScopedFd openRegularFileAt(int bundleDescriptor, const std::string& relativePath
     return {};
 }
 
+ScopedFd openOptionalSignatureEnvelopeAt(int bundleDescriptor, struct stat& fileStatus,
+                                         bool& wasPresent) {
+    wasPresent = false;
+    const int descriptor = openat(bundleDescriptor, "Signature.ed25519",
+                                  O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (descriptor < 0) {
+        return {};
+    }
+    wasPresent = true;
+    if (!isRegularFileDescriptor(descriptor, fileStatus) || fileStatus.st_size < 0 ||
+        static_cast<std::uintmax_t>(fileStatus.st_size) > kMaxSignatureEnvelopeBytes) {
+        close(descriptor);
+        return {};
+    }
+    return ScopedFd(descriptor);
+}
+
 bool endsWith(std::string_view value, std::string_view suffix) {
     return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
 }
@@ -649,6 +667,17 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
         return std::nullopt;
     }
 
+    struct stat signatureStatus {};
+    bool signatureEnvelopePresent = false;
+    ScopedFd signatureDescriptor =
+        openOptionalSignatureEnvelopeAt(bundleDescriptor.get(), signatureStatus, signatureEnvelopePresent);
+    if (!signatureDescriptor.valid() && signatureEnvelopePresent) {
+        return std::nullopt;
+    }
+    if (!signatureDescriptor.valid() && errno != ENOENT) {
+        return std::nullopt;
+    }
+
     const bool isJavaScript = (fields.runtime && *fields.runtime == "org.lcl.javascript") ||
                               endsWith(*fields.executable, ".js");
     if (!isJavaScript && (executableStatus.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0) {
@@ -674,6 +703,9 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
     metadata.requestedPermissions = std::move(fields.requestedPermissions);
     metadata.bundleHandle = std::make_shared<AppBundleFileHandle>(bundleDescriptor.release());
     metadata.manifestHandle = std::make_shared<AppBundleFileHandle>(manifestDescriptor.release());
+    if (signatureDescriptor.valid()) {
+        metadata.signatureHandle = std::make_shared<AppBundleFileHandle>(signatureDescriptor.release());
+    }
     metadata.iconHandle = std::make_shared<AppBundleFileHandle>(iconDescriptor.release());
     metadata.executableHandle = std::make_shared<AppBundleFileHandle>(executableDescriptor.release());
     metadata.executablePath = (displayBundlePath / *fields.executable).string();

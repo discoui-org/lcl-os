@@ -15,6 +15,13 @@ namespace lcl::security {
 
 inline constexpr std::uint32_t kBundleRecordVersion = 1;
 
+/** Result of bundle provenance verification, independent of its source path. */
+enum class BundlePublisherState : unsigned char {
+    Unverified = 1,
+    SignatureVerified = 2,
+    SystemImageTrusted = 3,
+};
+
 /** A regular file included in the canonical identity of a direct .app bundle. */
 struct BundleFileDigest {
     std::string relativePath;
@@ -38,6 +45,11 @@ struct BundleRecord {
     std::string runtime;
     std::vector<std::string> requestedPermissions;
     std::vector<BundleFileDigest> files;
+    // The signed payload excludes the detached Signature.ed25519 envelope.
+    Sha256Digest payloadDigest{};
+    // Zero means no signature envelope was present. This is included in the
+    // outer record digest so an approval cannot survive an envelope change.
+    Sha256Digest signatureEnvelopeDigest{};
     Sha256Digest digest{};
 };
 
@@ -48,7 +60,13 @@ std::optional<BundleRecord> makeBundleRecord(const lcl::core::AppBundleMetadata&
 /** Validates canonical order, fields and self-consistent digest. */
 bool validateBundleRecord(const BundleRecord& record, std::string& error);
 
-/** Returns the versioned canonical digest used by signatures and Settings approvals. */
+/** Returns the versioned, binary payload an Ed25519 signer verifies. */
+std::string serializeBundleRecordPayload(const BundleRecord& record);
+
+/** Returns the digest of the canonical payload, for record identity checks. */
+Sha256Digest digestBundlePayload(const BundleRecord& record);
+
+/** Returns the outer record digest used by Settings approvals and launch IPC. */
 Sha256Digest digestBundleRecord(const BundleRecord& record);
 
 } // namespace lcl::security

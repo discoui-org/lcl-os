@@ -137,7 +137,9 @@ TEST_F(BundleRecordTest, ExcludesTheDetachedSignatureEnvelopeFromItsPayloadDiges
     const auto signedRecord = makeBundleRecord(*signedMetadata, error);
 
     ASSERT_TRUE(signedRecord.has_value()) << error;
-    EXPECT_EQ(signedRecord->digest, unsignedRecord->digest);
+    EXPECT_EQ(signedRecord->payloadDigest, unsignedRecord->payloadDigest);
+    EXPECT_NE(signedRecord->digest, unsignedRecord->digest);
+    EXPECT_FALSE(isZeroDigest(signedRecord->signatureEnvelopeDigest));
     EXPECT_EQ(signedRecord->files.size(), unsignedRecord->files.size());
 }
 

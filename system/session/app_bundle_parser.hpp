@@ -48,6 +48,9 @@ struct AppBundleMetadata {
     // verification, approval and execution.
     std::shared_ptr<const AppBundleFileHandle> bundleHandle;
     std::shared_ptr<const AppBundleFileHandle> manifestHandle;
+    // Optional detached signature envelope at bundle root. Its descriptor is
+    // retained so verification never reopens a user-controlled pathname.
+    std::shared_ptr<const AppBundleFileHandle> signatureHandle;
     std::shared_ptr<const AppBundleFileHandle> iconHandle;
     std::shared_ptr<const AppBundleFileHandle> executableHandle;
     bool valid{false};
