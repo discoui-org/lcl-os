@@ -1763,14 +1763,22 @@ private:
                 submit.damageWidth, submit.damageHeight},
             replacesRetainedScene(submit),
         };
+        std::optional<lcl::render::RasterRect> rasterOutputDamage;
+#if defined(__ANDROID__)
         const auto outputDamage = surface.gpuOutputDamage.copyDamage(
             target->bufferId, outputFrame);
-        std::optional<lcl::render::RasterRect> rasterOutputDamage;
         if (outputDamage) {
             rasterOutputDamage = {
                 outputDamage->x, outputDamage->y,
                 outputDamage->width, outputDamage->height};
         }
+#else
+        // The desktop GBM path has no release-fence handoff to establish the
+        // exact retained revision in a reused output buffer. The scene FBO is
+        // authoritative, so copy it completely rather than exposing stale
+        // tiles from a prior producer frame. This is one GPU texture copy,
+        // not a full Widget/DisplayList repaint.
+#endif
         surface.gpuRenderer->setExternalFrameTarget(
             target->framebuffer, target->texture,
             target->width, target->height);

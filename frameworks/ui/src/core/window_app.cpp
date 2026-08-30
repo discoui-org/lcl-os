@@ -48,6 +48,11 @@ static void setupAppSignalHandlers() {
 
 namespace {
 
+// Retained presentation layers leave stale pixels when a transform changes.
+// Keep the ordinary old/new damage repaint authoritative until that cache path
+// has a frame-accurate invalidation contract for every presentation update.
+constexpr bool kRetainedPresentationCacheEnabled = false;
+
 float sanitizeBufferScale(float scale) {
     if (!std::isfinite(scale) || scale < 0.5f || scale > 4.0f) {
         return 1.0f;
@@ -420,6 +425,9 @@ private:
 
     static std::unordered_set<uint64_t> selectRetainedPresentationLayers(
             const detail::RenderTree& candidate) {
+        if constexpr (!kRetainedPresentationCacheEnabled) {
+            return {};
+        }
         std::unordered_set<uint64_t> result;
         for (const auto& node : candidate.retainedNodes) {
             if (!isRetainedPresentationCandidate(node) ||

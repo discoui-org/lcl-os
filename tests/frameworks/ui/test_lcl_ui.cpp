@@ -1149,7 +1149,7 @@ TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     EXPECT_EQ(recorded->rects.front().height, 48.0f);
 }
 
-TEST(LclUiTest, WindowAppCachesRetainedPresentationBoundaryAtIdentity) {
+TEST(LclUiTest, WindowAppUsesOrdinaryRepaintForPresentationTransforms) {
     auto canvas = std::make_unique<RecordingCanvas>();
     RecordingCanvas* recorded = canvas.get();
     WindowApp app(
@@ -1162,15 +1162,9 @@ TEST(LclUiTest, WindowAppCachesRetainedPresentationBoundaryAtIdentity) {
     app.setRootWidget(std::move(root));
 
     ASSERT_TRUE(app.renderFrame());
-    EXPECT_EQ(recorded->cachedLayerBeginCount, 1);
-    EXPECT_EQ(recorded->cachedLayerEndCount, 1);
-    EXPECT_EQ(recorded->cachedLayerDrawCount, 1);
-    ASSERT_EQ(recorded->cachedLayerTransforms.size(), 1u);
-    EXPECT_FLOAT_EQ(recorded->cachedLayerTransforms.front().a, 0.9f);
-    EXPECT_FLOAT_EQ(recorded->cachedLayerTransforms.front().d, 0.9f);
-    ASSERT_EQ(recorded->cachedLayerBounds.size(), 1u);
-    EXPECT_FLOAT_EQ(recorded->cachedLayerBounds.front().width, 120.0f);
-    EXPECT_FLOAT_EQ(recorded->cachedLayerBounds.front().height, 80.0f);
+    EXPECT_EQ(recorded->cachedLayerBeginCount, 0);
+    EXPECT_EQ(recorded->cachedLayerEndCount, 0);
+    EXPECT_EQ(recorded->cachedLayerDrawCount, 0);
 }
 
 TEST(LclUiTest, LocalTransientRendersAboveContentInSingleWindowRootLayout) {
