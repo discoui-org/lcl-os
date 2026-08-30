@@ -2189,12 +2189,58 @@ uint32_t RasterRenderer::importDmaBuf(
     m_cachedDmaBufTextures.emplace(bufferId, CachedDmaBufTexture{
         texture, descriptor.width, descriptor.height, descriptor.stride,
         descriptor.format, descriptor.modifier, 1,
-        m_dmaBufTextureUseCounter});
+        m_dmaBufTextureUseCounter, {}});
     m_cachedDmaBufIdsByTexture[texture] = bufferId;
     trimDmaBufTextureCache(bufferId);
     return texture;
 #else
     (void)descriptor;
+    return 0;
+#endif
+}
+
+uint32_t RasterRenderer::importNativeBuffer(
+        uint64_t bufferId,
+        std::shared_ptr<const lcl::platform::INativeBuffer> buffer) {
+    if (bufferId == 0 || !buffer || buffer->width() == 0 ||
+        buffer->height() == 0) {
+        return 0;
+    }
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend) return 0;
+
+    ++m_dmaBufTextureUseCounter;
+    if (m_dmaBufTextureUseCounter == 0) ++m_dmaBufTextureUseCounter;
+    auto found = m_cachedDmaBufTextures.find(bufferId);
+    if (found != m_cachedDmaBufTextures.end()) {
+        const bool matches = found->second.nativeBuffer &&
+            found->second.width == buffer->width() &&
+            found->second.height == buffer->height();
+        if (!matches) {
+            if (found->second.references != 0) return 0;
+            const uint32_t staleTexture = found->second.texture;
+            m_cachedDmaBufIdsByTexture.erase(staleTexture);
+            releaseTexture(staleTexture);
+            m_cachedDmaBufTextures.erase(found);
+        } else {
+            ++found->second.references;
+            found->second.lastUse = m_dmaBufTextureUseCounter;
+            trimDmaBufTextureCache(bufferId);
+            return found->second.texture;
+        }
+    }
+
+    const uint32_t texture = importTexture(*buffer);
+    if (texture == 0) return 0;
+    const uint32_t width = buffer->width();
+    const uint32_t height = buffer->height();
+    m_cachedDmaBufTextures.emplace(bufferId, CachedDmaBufTexture{
+        texture, width, height, 0, 0, 0, 1,
+        m_dmaBufTextureUseCounter, std::move(buffer)});
+    m_cachedDmaBufIdsByTexture[texture] = bufferId;
+    trimDmaBufTextureCache(bufferId);
+    return texture;
+#else
     return 0;
 #endif
 }

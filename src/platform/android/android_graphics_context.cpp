@@ -415,7 +415,9 @@ bool AndroidGraphicsContext::readback(uint32_t* destination, uint32_t width, uin
 
 lcl::platform::TextureHandle AndroidGraphicsContext::importTexture(const lcl::platform::INativeBuffer& buffer) {
     const auto* ahbBuffer = dynamic_cast<const AHardwareNativeBuffer*>(&buffer);
-    if (!ahbBuffer || !ahbBuffer->getHandle()) return lcl::platform::kInvalidTextureHandle;
+    if (!ahbBuffer || !ahbBuffer->getHandle() || !makeCurrent()) {
+        return lcl::platform::kInvalidTextureHandle;
+    }
 
     auto eglGetNativeClientBufferANDROID = reinterpret_cast<pfn_eglGetNativeClientBufferANDROID>(eglGetProcAddress("eglGetNativeClientBufferANDROID"));
     auto eglCreateImageKHR = reinterpret_cast<pfn_eglCreateImageKHR>(eglGetProcAddress("eglCreateImageKHR"));

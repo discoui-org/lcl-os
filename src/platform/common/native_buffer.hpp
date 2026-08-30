@@ -25,6 +25,19 @@ public:
 };
 
 /**
+ * Platform-neutral metadata accompanying an opaque native-buffer handle.
+ * Stride is expressed in pixels, matching Android's AHardwareBuffer contract.
+ */
+struct NativeBufferDescription {
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t layers{0};
+    uint32_t format{0};
+    uint32_t stridePixels{0};
+    uint64_t usage{0};
+};
+
+/**
  * @brief Transport descriptor for DMA-BUF memory sharing across IPC.
  */
 struct DmaBufDescriptor {

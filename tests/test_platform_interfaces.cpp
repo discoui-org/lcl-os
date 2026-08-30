@@ -203,6 +203,8 @@ TEST(PlatformInterfacesTest, PlatformServicesComposition) {
     EXPECT_TRUE(iface.display().initialize());
     EXPECT_TRUE(iface.graphics().isHardwareAccelerated());
     EXPECT_EQ(iface.paths().compositorSocketPath(), "/tmp/mock-compositor.sock");
+    EXPECT_EQ(iface.receiveNativeBuffer(-1).status,
+              NativeBufferReceiveStatus::Unsupported);
 }
 
 #include "platform/desktop/drm_display_backend.hpp"

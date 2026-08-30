@@ -28,6 +28,7 @@
 #include <sys/un.h>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <unistd.h>
 
 #if defined(__linux__)
@@ -886,8 +887,10 @@ int createListener(const std::string& path) {
 
 class RasterService {
 public:
-    RasterService(int compositorFd, std::string socketPath)
-        : m_compositorFd(compositorFd), m_socketPath(std::move(socketPath)) {}
+    RasterService(int compositorFd, int nativeBufferFd, std::string socketPath)
+        : m_compositorFd(compositorFd),
+          m_nativeBufferFd(nativeBufferFd),
+          m_socketPath(std::move(socketPath)) {}
 
     ~RasterService() {
         for (auto& frame : m_systemFrames) if (frame.displayListFd >= 0) close(frame.displayListFd);
@@ -895,11 +898,19 @@ public:
         for (const auto& client : m_clients) if (client.fd >= 0) close(client.fd);
         if (m_listenerFd >= 0) close(m_listenerFd);
         if (m_compositorFd >= 0) close(m_compositorFd);
+        if (m_nativeBufferFd >= 0) close(m_nativeBufferFd);
         unlink(m_socketPath.c_str());
     }
 
     bool initialize() {
         if (m_compositorFd < 0 || !setNonBlocking(m_compositorFd)) return false;
+#if defined(__ANDROID__)
+        // LayerReady is published only after the AHB handle is queued, so the
+        // compositor receives from this trusted sideband only when data is
+        // guaranteed. Keep the NDK handle-transfer socket blocking so one
+        // opaque native-handle transaction completes before publication.
+        if (m_nativeBufferFd < 0) return false;
+#endif
         m_listenerFd = createListener(m_socketPath);
         if (m_listenerFd < 0) return false;
         return lcl::raster_protocol::sendPacket(
@@ -952,11 +963,14 @@ private:
             if (status == lcl::raster_protocol::ReceiveStatus::WouldBlock) break;
             if (status == lcl::raster_protocol::ReceiveStatus::Closed ||
                 status == lcl::raster_protocol::ReceiveStatus::Error) {
+                if (receivedFd >= 0) close(receivedFd);
                 m_running = false;
                 break;
             }
-            if (receivedFd >= 0) close(receivedFd);
-            if (status != lcl::raster_protocol::ReceiveStatus::Received) continue;
+            if (status != lcl::raster_protocol::ReceiveStatus::Received) {
+                if (receivedFd >= 0) close(receivedFd);
+                continue;
+            }
             if (const auto* grant = lcl::raster_protocol::payloadAs<SurfaceGrant>(
                     header, payload, Opcode::RegisterSurface)) {
                 auto& surface = m_surfaces[tokenOf(*grant)];
@@ -967,8 +981,11 @@ private:
             } else if (const auto* release = lcl::raster_protocol::payloadAs<
                            lcl::raster_protocol::ReleaseLayer>(
                            header, payload, Opcode::ReleaseLayer)) {
-                releaseLayer(release->layerId, release->reason);
+                releaseLayer(
+                    release->layerId, release->reason,
+                    std::exchange(receivedFd, -1));
             }
+            if (receivedFd >= 0) close(receivedFd);
         }
     }
 
@@ -1517,6 +1534,14 @@ private:
             return true;
         }
 
+#if defined(__ANDROID__)
+        // Android's canonical retained-layer contract is AHardwareBuffer.
+        // Falling through here would hide a broken GPU/native transport behind
+        // a full-surface CPU copy and make high-refresh behavior unpredictable.
+        discardPreparedCaches();
+        return false;
+#endif
+
         // DMA-BUF frames are never silently omitted from a software output.
         if (requiresGpuExternal) {
             discardPreparedCaches();
@@ -1611,15 +1636,6 @@ private:
     bool rasterGpuFrame(
             SurfaceState& surface, const CommitTransaction& submit,
             const lcl::graphics::DisplayList& displayList) {
-#if defined(__ANDROID__)
-        // The Android private channel needs an AHardwareBuffer handle transfer,
-        // not an fd-only DMA-BUF packet. Keep the validated SHM fallback until
-        // that platform-native transport is installed below this same ABI.
-        (void)surface;
-        (void)submit;
-        (void)displayList;
-        return false;
-#else
         if (surface.gpuUnavailable) return false;
         const uint32_t width = std::max(1u, static_cast<uint32_t>(
             std::ceil(submit.logicalWidth * submit.bufferScale)));
@@ -1765,7 +1781,15 @@ private:
         }
         const auto exported = surface.gpuContext->exportCurrentDmaBuf();
         surface.gpuRenderer->clearExternalFrameTarget();
-        if (!exported || exported->fd < 0 || exported->androidHardwareBuffer) {
+#if defined(__ANDROID__)
+        const bool invalidExport = !exported ||
+            !exported->androidHardwareBuffer || exported->fd >= 0 ||
+            exported->format == 0;
+#else
+        const bool invalidExport = !exported || exported->fd < 0 ||
+            exported->androidHardwareBuffer;
+#endif
+        if (invalidExport) {
             surface.gpuContext->releaseDmaBuf(target->bufferId);
             surface.gpuOutputDamage.invalidateBuffer(target->bufferId);
             return false;
@@ -1797,16 +1821,46 @@ private:
         ready.damageY = damage.y;
         ready.damageWidth = damage.width;
         ready.damageHeight = damage.height;
-        ready.transport = lcl::raster_protocol::LayerTransport::DmaBuf;
+        ready.transport =
+#if defined(__ANDROID__)
+            lcl::raster_protocol::LayerTransport::AndroidHardwareBuffer;
+#else
+            lcl::raster_protocol::LayerTransport::DmaBuf;
+#endif
         ready.format = exported->format;
         ready.modifier = exported->modifier;
-        const bool sent = lcl::raster_protocol::sendPacket(
-            m_compositorFd, Opcode::LayerReady, ready, exported->fd);
-        close(exported->fd);
-        if (!sent) {
+        const int layerDescriptor =
+#if defined(__ANDROID__)
+            exported->acquireFenceFd;
+#else
+            exported->fd;
+#endif
+#if defined(__ANDROID__)
+        // Queue the native handle first so LayerReady is never visible before
+        // its sideband storage. Any failure terminates both private channels,
+        // preventing an orphan handle from being paired with a later frame.
+        if (!surface.gpuContext->sendNativeBufferHandle(
+                m_nativeBufferFd, target->bufferId)) {
+            if (layerDescriptor >= 0) close(layerDescriptor);
             surface.gpuContext->releaseDmaBuf(target->bufferId);
             surface.gpuOutputDamage.reset();
             surface.gpuFrameSerial = 0;
+            m_running = false;
+            return false;
+        }
+#endif
+        const bool sent = lcl::raster_protocol::sendPacket(
+            m_compositorFd, Opcode::LayerReady, ready, layerDescriptor);
+        if (layerDescriptor >= 0) close(layerDescriptor);
+        if (!sent) {
+            std::cerr << "[LCL Rasterd] LayerReady publish failed"
+                      << " (layer=" << layerId << ")\n";
+            surface.gpuContext->releaseDmaBuf(target->bufferId);
+            surface.gpuOutputDamage.reset();
+            surface.gpuFrameSerial = 0;
+#if defined(__ANDROID__)
+            m_running = false;
+#endif
             return false;
         }
         surface.gpuOutputDamage.commit(target->bufferId, outputFrame);
@@ -1817,7 +1871,6 @@ private:
         surface.gpuHeight = height;
         surface.gpuScale = submit.bufferScale;
         return true;
-#endif
     }
 
     void discard(int clientFd, const CommitTransaction& submit,
@@ -1834,30 +1887,35 @@ private:
 
     void releaseLayer(
             uint64_t layerId,
-            lcl::raster_protocol::LayerReleaseReason reason) {
+            lcl::raster_protocol::LayerReleaseReason reason,
+            int releaseFenceFd) {
         for (auto& [_, surface] : m_surfaces) {
             const auto gpu = surface.gpuLayers.find(layerId);
             if (gpu != surface.gpuLayers.end()) {
                 if (surface.gpuContext) {
-                    surface.gpuContext->releaseDmaBuf(gpu->second);
+                    surface.gpuContext->releaseDmaBuf(
+                        gpu->second, releaseFenceFd);
+                    releaseFenceFd = -1;
                 }
                 surface.gpuLayers.erase(gpu);
                 if (reason == lcl::raster_protocol::LayerReleaseReason::RejectedTransport) {
-                    // The compositor could not import this producer's DMA-BUF.
-                    // Keep already-retained GPU layers alive, but publish all
-                    // subsequent frames for this surface through the portable
-                    // SHM transport instead of retrying an unusable transport.
+                    // The compositor could not import this producer's native
+                    // GPU transport. Keep already-retained layers alive and
+                    // stop retrying this unusable path for the surface.
                     surface.gpuUnavailable = true;
                 }
+                if (releaseFenceFd >= 0) close(releaseFenceFd);
                 return;
             }
             for (auto& slot : surface.slots) {
                 if (slot.layerId == layerId) {
                     slot.busy = false;
+                    if (releaseFenceFd >= 0) close(releaseFenceFd);
                     return;
                 }
             }
         }
+        if (releaseFenceFd >= 0) close(releaseFenceFd);
     }
 
     void notifyExternalBufferRelease(
@@ -1930,6 +1988,7 @@ private:
     }
 
     int m_compositorFd{-1};
+    int m_nativeBufferFd{-1};
     std::string m_socketPath;
     int m_listenerFd{-1};
     bool m_running{true};
@@ -1959,16 +2018,20 @@ std::optional<int> parseFd(const char* value) {
 
 int main(int argc, char** argv) {
     int compositorFd = -1;
+    int nativeBufferFd = -1;
     std::string socketPath = "/Runtime/lcl-raster.sock";
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
         if (argument == "--compositor-fd" && index + 1 < argc) {
             compositorFd = parseFd(argv[++index]).value_or(-1);
+        } else if (argument == "--native-buffer-fd" && index + 1 < argc) {
+            nativeBufferFd = parseFd(argv[++index]).value_or(-1);
         } else if (argument == "--socket" && index + 1 < argc) {
             socketPath = argv[++index];
         }
     }
-    RasterService service(compositorFd, std::move(socketPath));
+    RasterService service(
+        compositorFd, nativeBufferFd, std::move(socketPath));
     if (!service.initialize()) {
         std::cerr << "[LCL Rasterd ERROR] initialization failed\n";
         return 1;

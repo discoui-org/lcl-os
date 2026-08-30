@@ -47,9 +47,19 @@ The LCL architecture consists of 5 main decoupled layers:
   produces an immutable DMA-BUF, AHardwareBuffer, or SHM layer through its
   platform backend. `RenderTarget.deviceScale` is applied only at this boundary.
   Application DisplayList replay never runs in the compositor's vSync-critical
-  presentation loop. The checked-in host implementation currently exercises
-  the memfd/SHM backend; DMA-BUF and AHardwareBuffer allocation/import are the
-  remaining platform-backend implementations, not alternate surface protocols.
+  presentation loop. Desktop uses rotating DMA-BUF layers when render-node
+  import is available and retains SHM as its portable fallback. Android uses
+  rotating AHardwareBuffer layers as its canonical path and deliberately does
+  not hide a broken native transport behind a full-surface CPU copy. The AHB
+  handle travels through an ordered private sideband because the public NDK
+  exposes only its Unix-socket handle API; `LayerReady` metadata and acquire
+  fence remain on rasterd's main private channel. The trusted sideband is
+  blocking and the handle is queued first, so `LayerReady` can never expose
+  missing storage or a partially published native-handle transaction. Matching
+  release fences gate producer slot reuse. GPU-only AHardwareBuffer storage is
+  imported as an opaque EGL image; a zero CPU row stride is valid and is not
+  interpreted as byte-addressable backing. None of these
+  platform transports changes the public application surface protocol.
   Rasterd retains the accepted node revisions, logical cached-layer bodies,
   damage patches, image resources, layer namespaces, and the last immutable
   output base per surface. Cached-layer namespace changes are transactional:
@@ -103,7 +113,7 @@ The LCL architecture consists of 5 main decoupled layers:
   endpoint at `/run/user/1000/lcl-sessiond.sock`. Its explicit little-endian
   requests cover catalog snapshots and launch/process-exit lifecycle; this is
   distinct from compositor protocol v27 surface IPC.
-* **Secure Unix Domain Socket IPC:** Compositor protocol v27 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Application-facing surface IPC carries lifecycle, configure, input, effect, action, producer-grant and frame-feedback messages; it accepts no client layer descriptor or DisplayList commit. A 128-bit surface grant authorizes the same process on rasterd's owner-only socket. Only rasterd's private socketpair may publish `LayerReady` descriptors to the compositor. Edge-to-edge remains platform-neutral, and neither desktop nor mobile policy may rewrite client alpha. `PopupSurface` and `AttachedSurface` are composed and hit-tested inside their parent WindowGroup rather than entering the normal window stack.
+* **Secure Unix Domain Socket IPC:** Compositor protocol v27 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Application-facing surface IPC carries lifecycle, configure, input, effect, action, producer-grant and frame-feedback messages; it accepts no client layer descriptor or DisplayList commit. A 128-bit surface grant authorizes the same process on rasterd's owner-only socket. Only rasterd's private channels may publish `LayerReady` storage and synchronization handles to the compositor. Edge-to-edge remains platform-neutral, and neither desktop nor mobile policy may rewrite client alpha. `PopupSurface` and `AttachedSurface` are composed and hit-tested inside their parent WindowGroup rather than entering the normal window stack.
 * **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`. Manifests declare a stable `id`; older bundles receive a deterministic `bundle.<name>` compatibility ID.
 * **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ session client. It sends `LaunchRequest` to sessiond and optionally waits for `ProcessExited`; it never forks or execs applications itself.
 
@@ -300,7 +310,7 @@ window-local input then uses the inverse group transform.
 
 `lcl-os` grafik ve pencere katmanında sorumlulukların ayrıştırılması (Separation of Concerns) kesin kurallarla tanımlanmıştır:
 
-1. **Client Applications (User Space / UI Kits):** Kendi iç düzenini (Flexbox, Grid, Monospace Cell) ve mantıksal `DisplayList` kaydını yönetir. Producer-side raster aşaması bu kaydı compositor presentation döngüsünün dışında hazır, immutable bir layer'a dönüştürür. WM'den gelen `ConfigureBounds` isteklerini mantıksal ölçülerle alır; uygun fiziksel DMA-BUF backing'i oluşturur, desteklenmeyen ortamlarda aynı sözleşmenin `memfd`/SHM fallback'ini kullanır ve tam layer state'ini atomik commit eder. `bufferScale` yalnız buffer tahsisi ve eşleme sınırındadır. İstemci WM veya Compositor'ün ekran koordinatları (\(X, Y\)) hakkında bilgi sahibi değildir.
+1. **Client Applications (User Space / UI Kits):** Kendi iç düzenini (Flexbox, Grid, Monospace Cell) ve mantıksal `DisplayList` kaydını yönetir. Producer-side raster aşaması bu kaydı compositor presentation döngüsünün dışında hazır, immutable bir layer'a dönüştürür. WM'den gelen `ConfigureBounds` isteklerini mantıksal ölçülerle alır; rasterd platform backend'i uygun fiziksel DMA-BUF veya AHardwareBuffer backing'ini oluşturur. Desktop native import bulunmadığında aynı sözleşmenin `memfd`/SHM fallback'ini kullanabilir; Android AHardwareBuffer yolunu zorunlu tutar. `bufferScale` yalnız buffer tahsisi ve eşleme sınırındadır. İstemci WM veya Compositor'ün ekran koordinatları (\(X, Y\)) hakkında bilgi sahibi değildir.
 2. **Window Manager (WM):** Pencere geometrisi, odak yönetimi, sürükleme/boyutlandırma durum makinelerinin (`WM Drag/Resize State`) tek sahibidir. Sürüklenen kenara (`ResizeEdge`) göre sabit kalacak anchor noktasını korur. Client'tan gelen gerçek tampon boyutunu (\(frameW, frameH\)) kabul eder, `commitSurfaceGeometry` metodu üzerinden offset hesabını yapar ve pencerenin nihai dünya koordinatlarını (\(X_{final}, Y_{final}\)) belirler. Uygulamaya özel kod barındıramaz.
 3. **Compositor (Presentation Engine):** Hazır layer'ların import/retention işlemini, z-index harmanlamasını, presentation tree transform/effect'lerini ve vSync eşzamanlamasını üstlenir. Pencere durum makinelerinin veya client çiziminin sahibi değildir; WM'in onayladığı mantıksal geometriyi, ortak `WindowGroupTransform`u ve Client'ın atomik olarak commit ettiği son hazır layer'ı birleştirir. Compositor `lcl-ui`ya veya `lcl-window-chrome`a bağlanmaz ve presentation deadline içinde application DisplayList replay etmez.
 

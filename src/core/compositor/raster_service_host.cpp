@@ -57,7 +57,7 @@ RasterServiceHost::~RasterServiceHost() {
 
 bool RasterServiceHost::initialize(std::string executable,
                                    std::string publicSocketPath) {
-    if (m_childPid > 0 || m_channelFd >= 0) return true;
+    if (m_childPid > 0 || m_channelFd >= 0 || m_nativeBufferFd >= 0) return true;
     m_executable = std::move(executable);
     m_publicSocketPath = std::move(publicSocketPath);
     m_shuttingDown = false;
@@ -70,23 +70,56 @@ bool RasterServiceHost::spawn() {
                    0, channels) != 0) {
         return false;
     }
-
-    constexpr int kChildChannel = 3;
-    posix_spawn_file_actions_t actions{};
-    posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_adddup2(&actions, channels[1], kChildChannel);
-    posix_spawn_file_actions_addclose(&actions, channels[0]);
-    if (channels[1] != kChildChannel) {
-        posix_spawn_file_actions_addclose(&actions, channels[1]);
+    int nativeChannels[2]{-1, -1};
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC,
+                   0, nativeChannels) != 0) {
+        close(channels[0]);
+        close(channels[1]);
+        return false;
     }
 
+    constexpr int kChildChannel = 3;
+    constexpr int kChildNativeChannel = 4;
+    const int childChannelSource = fcntl(
+        channels[1], F_DUPFD_CLOEXEC, 10);
+    const int childNativeSource = fcntl(
+        nativeChannels[1], F_DUPFD_CLOEXEC, 10);
+    close(channels[1]);
+    close(nativeChannels[1]);
+    if (childChannelSource < 0 || childNativeSource < 0) {
+        if (childChannelSource >= 0) close(childChannelSource);
+        if (childNativeSource >= 0) close(childNativeSource);
+        close(channels[0]);
+        close(nativeChannels[0]);
+        return false;
+    }
+    posix_spawn_file_actions_t actions{};
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(
+        &actions, childChannelSource, kChildChannel);
+    posix_spawn_file_actions_adddup2(
+        &actions, childNativeSource, kChildNativeChannel);
+    if (channels[0] != kChildChannel &&
+        channels[0] != kChildNativeChannel) {
+        posix_spawn_file_actions_addclose(&actions, channels[0]);
+    }
+    if (nativeChannels[0] != kChildChannel &&
+        nativeChannels[0] != kChildNativeChannel) {
+        posix_spawn_file_actions_addclose(&actions, nativeChannels[0]);
+    }
+    posix_spawn_file_actions_addclose(&actions, childChannelSource);
+    posix_spawn_file_actions_addclose(&actions, childNativeSource);
+
     const std::string childFd = std::to_string(kChildChannel);
-    std::array<char*, 6> arguments{
+    const std::string childNativeFd = std::to_string(kChildNativeChannel);
+    std::array<char*, 8> arguments{
         const_cast<char*>(m_executable.c_str()),
         const_cast<char*>("--compositor-fd"),
         const_cast<char*>(childFd.c_str()),
         const_cast<char*>("--socket"),
         const_cast<char*>(m_publicSocketPath.c_str()),
+        const_cast<char*>("--native-buffer-fd"),
+        const_cast<char*>(childNativeFd.c_str()),
         nullptr,
     };
     pid_t child = -1;
@@ -94,18 +127,24 @@ bool RasterServiceHost::spawn() {
         &child, m_executable.c_str(), &actions, nullptr,
         arguments.data(), environ);
     posix_spawn_file_actions_destroy(&actions);
-    close(channels[1]);
+    close(childChannelSource);
+    close(childNativeSource);
     if (status != 0) {
         close(channels[0]);
+        close(nativeChannels[0]);
         std::cerr << "[LCL Raster Host] Could not start " << m_executable
                   << ": " << std::strerror(status) << "\n";
         return false;
     }
 
     m_channelFd = channels[0];
-    setNonBlocking(m_channelFd);
+    m_nativeBufferFd = nativeChannels[0];
     m_childPid = child;
     m_ready = false;
+    if (!setNonBlocking(m_channelFd)) {
+        stopChild();
+        return false;
+    }
     std::cout << "[LCL Raster Host] Started raster service pid=" << child << "\n";
     return true;
 }
@@ -113,6 +152,9 @@ bool RasterServiceHost::spawn() {
 void RasterServiceHost::stopChild() noexcept {
     if (m_channelFd >= 0) close(m_channelFd);
     m_channelFd = -1;
+    if (m_nativeBufferFd >= 0) close(m_nativeBufferFd);
+    m_nativeBufferFd = -1;
+    clearPendingNativeLayers();
     m_ready = false;
     if (m_childPid > 0) {
         kill(m_childPid, SIGTERM);
@@ -128,6 +170,13 @@ void RasterServiceHost::stopChild() noexcept {
         }
     }
     m_childPid = -1;
+}
+
+void RasterServiceHost::clearPendingNativeLayers() noexcept {
+    for (auto& pending : m_pendingNativeLayers) {
+        if (pending.layer.fd >= 0) close(pending.layer.fd);
+    }
+    m_pendingNativeLayers.clear();
 }
 
 void RasterServiceHost::shutdown() noexcept {
@@ -148,6 +197,9 @@ void RasterServiceHost::poll() {
         if (result == m_childPid) {
             if (m_channelFd >= 0) close(m_channelFd);
             m_channelFd = -1;
+            if (m_nativeBufferFd >= 0) close(m_nativeBufferFd);
+            m_nativeBufferFd = -1;
+            clearPendingNativeLayers();
             m_childPid = -1;
             m_ready = false;
             const auto delay = std::chrono::milliseconds(
@@ -191,15 +243,87 @@ void RasterServiceHost::poll() {
         if (const auto* ready = raster_protocol::payloadAs<
                 raster_protocol::LayerReady>(
                 header, payload, raster_protocol::Opcode::LayerReady)) {
-            if (receivedFd < 0 || !m_grants.contains(keyOf(ready->grant))) {
+            const bool authorized = m_grants.contains(keyOf(ready->grant));
+            if (ready->transport ==
+                    raster_protocol::LayerTransport::AndroidHardwareBuffer) {
+                constexpr size_t kMaxPendingNativeLayers = 64;
+                if (m_pendingNativeLayers.size() >= kMaxPendingNativeLayers) {
+                    if (receivedFd >= 0) close(receivedFd);
+                    stopChild();
+                    m_nextRestart = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(100);
+                    break;
+                }
+                PendingNativeLayer pending{};
+                pending.layer.metadata = *ready;
+                pending.layer.fd = receivedFd;
+                pending.authorized = authorized;
+                m_pendingNativeLayers.push_back(std::move(pending));
+            } else if (receivedFd < 0 || !authorized) {
                 if (receivedFd >= 0) close(receivedFd);
                 continue;
+            } else {
+                m_readyLayers.push_back({*ready, receivedFd, {}});
             }
-            m_readyLayers.push_back({*ready, receivedFd});
         } else if (receivedFd >= 0) {
             close(receivedFd);
         }
     }
+    if (m_childPid > 0 && !drainNativeLayers()) {
+        stopChild();
+        m_nextRestart = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(100);
+    }
+}
+
+bool RasterServiceHost::drainNativeLayers() {
+    while (!m_pendingNativeLayers.empty()) {
+        auto received = m_platformServices.receiveNativeBuffer(m_nativeBufferFd);
+        if (received.status == platform::NativeBufferReceiveStatus::WouldBlock) {
+            return true;
+        }
+        if (received.status != platform::NativeBufferReceiveStatus::Received ||
+            !received.buffer) {
+            std::cerr << "[LCL Raster Host] Native-buffer channel failed; "
+                         "restarting raster service\n";
+            return false;
+        }
+
+        PendingNativeLayer pending = std::move(m_pendingNativeLayers.front());
+        m_pendingNativeLayers.pop_front();
+        const auto& ready = pending.layer.metadata;
+        const auto& description = received.description;
+        const bool strideFits =
+            description.stridePixels <= UINT32_MAX / sizeof(uint32_t);
+        const bool valid = pending.authorized && ready.layerId != 0 &&
+            ready.bufferId != 0 && description.width == ready.backingWidth &&
+            description.height == ready.backingHeight &&
+            description.layers == 1 && description.format == ready.format &&
+            strideFits &&
+            description.stridePixels * sizeof(uint32_t) == ready.stride;
+        if (!valid) {
+            std::cerr << "[LCL Raster Host] Rejected native layer "
+                      << ready.layerId << " (authorized="
+                      << pending.authorized << ", ready="
+                      << ready.backingWidth << "x" << ready.backingHeight
+                      << " stride=" << ready.stride << " format="
+                      << ready.format << ", received=" << description.width
+                      << "x" << description.height << " layers="
+                      << description.layers << " stridePixels="
+                      << description.stridePixels << " format="
+                      << description.format << ")\n";
+            if (pending.layer.fd >= 0) close(pending.layer.fd);
+            releaseLayer(
+                ready.layerId,
+                pending.authorized
+                    ? raster_protocol::LayerReleaseReason::RejectedFrame
+                    : raster_protocol::LayerReleaseReason::SurfaceRevoked);
+            continue;
+        }
+        pending.layer.nativeBuffer = std::move(received.buffer);
+        m_readyLayers.push_back(std::move(pending.layer));
+    }
+    return true;
 }
 
 std::vector<RasterServiceHost::ReceivedLayer>
@@ -233,13 +357,19 @@ void RasterServiceHost::revokeSurface(
 }
 
 void RasterServiceHost::releaseLayer(
-        uint64_t layerId, raster_protocol::LayerReleaseReason reason) {
-    if (!m_ready || layerId == 0) return;
+        uint64_t layerId, raster_protocol::LayerReleaseReason reason,
+        int releaseFenceFd) {
+    if (!m_ready || layerId == 0) {
+        if (releaseFenceFd >= 0) close(releaseFenceFd);
+        return;
+    }
     raster_protocol::ReleaseLayer release{};
     release.layerId = layerId;
     release.reason = reason;
     (void)raster_protocol::sendPacket(
-        m_channelFd, raster_protocol::Opcode::ReleaseLayer, release);
+        m_channelFd, raster_protocol::Opcode::ReleaseLayer, release,
+        releaseFenceFd);
+    if (releaseFenceFd >= 0) close(releaseFenceFd);
 }
 
 bool RasterServiceHost::sendGrant(

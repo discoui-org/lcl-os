@@ -4,10 +4,24 @@
 #include "platform/common/display_backend.hpp"
 #include "platform/common/graphics_context.hpp"
 #include "platform/common/input_backend.hpp"
+#include "platform/common/native_buffer.hpp"
 #include "platform/common/runtime_paths.hpp"
 #include "platform/common/gestalt.hpp"
 
 namespace lcl::platform {
+
+enum class NativeBufferReceiveStatus {
+    Received,
+    WouldBlock,
+    Unsupported,
+    Error,
+};
+
+struct NativeBufferReceiveResult {
+    NativeBufferReceiveStatus status{NativeBufferReceiveStatus::Unsupported};
+    std::shared_ptr<const INativeBuffer> buffer;
+    NativeBufferDescription description{};
+};
 
 /**
  * @brief Unified platform services container.
@@ -28,6 +42,15 @@ public:
     virtual IInputBackend& input() = 0;
     virtual const IRuntimePaths& paths() const = 0;
     virtual const DeviceGestalt& gestalt() const = 0;
+
+    /**
+     * Receive one platform-native buffer from a private sequenced-packet
+     * channel. Platforms without such a handle transport keep the default.
+     */
+    virtual NativeBufferReceiveResult receiveNativeBuffer(int socketFd) {
+        (void)socketFd;
+        return {};
+    }
 };
 
 } // namespace lcl::platform

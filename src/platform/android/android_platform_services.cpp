@@ -1,5 +1,10 @@
 #include "platform/android/android_platform_services.hpp"
+#include "platform/android/ahardware_native_buffer.hpp"
+
+#include <android/hardware_buffer.h>
+#include <cerrno>
 #include <iostream>
+#include <utility>
 
 namespace lcl::platform::android {
 
@@ -60,6 +65,43 @@ void AndroidPlatformServices::shutdown() {
     m_graphicsContext.shutdown();
 
     m_initialized = false;
+}
+
+lcl::platform::NativeBufferReceiveResult
+AndroidPlatformServices::receiveNativeBuffer(int socketFd) {
+    if (socketFd < 0) {
+        return {lcl::platform::NativeBufferReceiveStatus::Error, {}, {}};
+    }
+    AHardwareBuffer* handle = nullptr;
+    errno = 0;
+    const int result = AHardwareBuffer_recvHandleFromUnixSocket(
+        socketFd, &handle);
+    if (result != 0 || !handle) {
+        if (handle) AHardwareBuffer_release(handle);
+        const int error = result < 0 ? -result : result;
+        if (error == EAGAIN || error == EWOULDBLOCK ||
+            (result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
+            return {lcl::platform::NativeBufferReceiveStatus::WouldBlock,
+                    {}, {}};
+        }
+        std::cerr << "[AndroidPlatformServices] Native-buffer receive failed"
+                  << " (result=" << result << ", errno=" << errno << ")\n";
+        return {lcl::platform::NativeBufferReceiveStatus::Error, {}, {}};
+    }
+
+    AHardwareBuffer_Desc ahbDescription{};
+    AHardwareBuffer_describe(handle, &ahbDescription);
+    lcl::platform::NativeBufferDescription description{};
+    description.width = ahbDescription.width;
+    description.height = ahbDescription.height;
+    description.layers = ahbDescription.layers;
+    description.format = ahbDescription.format;
+    description.stridePixels = ahbDescription.stride;
+    description.usage = ahbDescription.usage;
+    auto buffer = std::make_shared<AHardwareNativeBuffer>(
+        handle, AHardwareNativeBuffer::ReferenceMode::Adopt);
+    return {lcl::platform::NativeBufferReceiveStatus::Received,
+            std::move(buffer), description};
 }
 
 } // namespace lcl::platform::android

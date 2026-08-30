@@ -149,9 +149,10 @@ Step 2 separates build ownership without changing protocol or shell behavior:
 - `lcl-raster` owns the Canvas implementation. A connected protocol-v27 client
   uses `makeDisplayListCanvas()` and sends only sealed logical frames/resources
   to central `lcl-rasterd`; it neither attaches a client buffer to the
-  compositor nor presents a frame. The current host rasterd backend publishes
-  immutable memfd/SHM layers. DMA-BUF and AHardwareBuffer remain platform
-  backend work below this same private raster-service contract.
+  compositor nor presents a frame. Rasterd publishes immutable DMA-BUF layers
+  on desktop (with a portable SHM fallback) and canonical AHardwareBuffer
+  layers on Android. Native allocation, ordered handle transfer, and acquire/
+  release fences stay below the same private raster-service contract.
 - `lcl-render` owns compositor rendering, window management, EGL, DRM, GBM,
   GLES, and presentation.
 - `WindowApp` requires an injected Canvas. Native clients and the JS binding

@@ -26,7 +26,8 @@ bool environmentEnabled(const char* name) {
 // ============================================================
 
 Compositor::Compositor(lcl::platform::IPlatformServices& platformServices)
-    : m_platformServices(platformServices) {}
+    : m_platformServices(platformServices),
+      m_rasterService(platformServices) {}
 
 Compositor::~Compositor() {
     if (!m_initialized) return;
@@ -470,11 +471,16 @@ void Compositor::renderFrame() {
         (void)surfaceKey;
         if (entry.atomicConfigureGeneration != 0) continue;
         for (const auto& release : entry.pendingRasterLayerReleases) {
+            const int releaseFenceFd = release.texture != 0
+                ? m_renderer.createNativeFence() : -1;
             if (release.texture != 0) {
                 m_renderer.getRasterRenderer()->releaseDmaBufTexture(
                     release.texture);
             }
-            m_rasterService.releaseLayer(release.layerId);
+            m_rasterService.releaseLayer(
+                release.layerId,
+                raster_protocol::LayerReleaseReason::Presented,
+                releaseFenceFd);
         }
         entry.pendingRasterLayerReleases.clear();
     }
@@ -532,21 +538,32 @@ void Compositor::renderFrame() {
                 m_rasterService.revokeSurface(found->second.producerGrant);
             }
             if (found->second.rasterLayerId != 0) {
+                const int releaseFenceFd =
+                    found->second.rasterLayerTexture != 0
+                    ? m_renderer.createNativeFence() : -1;
                 if (found->second.rasterLayerTexture != 0) {
                     m_renderer.getRasterRenderer()->releaseDmaBufTexture(
                         found->second.rasterLayerTexture);
                     found->second.rasterLayerTexture = 0;
                 }
-                m_rasterService.releaseLayer(found->second.rasterLayerId);
+                m_rasterService.releaseLayer(
+                    found->second.rasterLayerId,
+                    raster_protocol::LayerReleaseReason::Presented,
+                    releaseFenceFd);
                 found->second.rasterLayerId = 0;
             }
             for (const auto& release :
                  found->second.pendingRasterLayerReleases) {
+                const int releaseFenceFd = release.texture != 0
+                    ? m_renderer.createNativeFence() : -1;
                 if (release.texture != 0) {
                     m_renderer.getRasterRenderer()->releaseDmaBufTexture(
                         release.texture);
                 }
-                m_rasterService.releaseLayer(release.layerId);
+                m_rasterService.releaseLayer(
+                    release.layerId,
+                    raster_protocol::LayerReleaseReason::Presented,
+                    releaseFenceFd);
             }
             found->second.pendingRasterLayerReleases.clear();
             if (found->second.isAttached() &&

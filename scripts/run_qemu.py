@@ -715,8 +715,39 @@ def docker_available() -> bool:
         return False
 
 
+def ensure_binfmt(arch: str) -> None:
+    """Ensures QEMU binfmt handlers are registered on Linux for cross-arch Docker execution."""
+    if host_os() != "linux":
+        return
+    norm_arch = normalize_arch(arch)
+    h_arch = normalize_arch(None)
+    if h_arch == norm_arch:
+        return
+
+    handler_name = "qemu-aarch64" if norm_arch == "aarch64" else "qemu-x86_64"
+    handler_path = Path("/proc/sys/fs/binfmt_misc") / handler_name
+    if handler_path.exists():
+        return
+
+    log(f"Multi-arch binfmt handler for {norm_arch} ({handler_name}) is missing. Registering via tonistiigi/binfmt...")
+    try:
+        subprocess.run(
+            ["docker", "run", "--privileged", "--rm", "tonistiigi/binfmt", "--install", "all"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        log("✓ Registered binfmt handlers successfully.")
+    except Exception as ex:
+        err(f"Warning: Failed to auto-register binfmt handlers: {ex}")
+        err("If cross-platform Docker execution fails with 'exec format error', run:")
+        err("  docker run --privileged --rm tonistiigi/binfmt --install all")
+
+
 def ensure_docker_image(arch: str = "x86_64") -> None:
     """Build/rebuild image when missing or Dockerfile.qemu changed."""
+    ensure_binfmt(arch)
     image_tag = docker_image_name(arch)
     plat = docker_platform(arch)
     log(f"Ensuring Docker image {image_tag} ({plat})...")

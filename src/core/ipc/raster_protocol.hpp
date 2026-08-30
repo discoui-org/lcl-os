@@ -8,7 +8,7 @@
 namespace lcl::raster_protocol {
 
 inline constexpr uint32_t kMagic = 0x5254434c; // "LCTR"
-inline constexpr uint32_t kVersion = 8;
+inline constexpr uint32_t kVersion = 9;
 inline constexpr uint32_t kMaxPayload = 1024u * 1024u;
 
 enum class Opcode : uint32_t {
@@ -182,6 +182,12 @@ enum class LayerTransport : uint32_t {
     AndroidHardwareBuffer = 2,
 };
 
+/**
+ * The packet descriptor is SHM/DMA-BUF storage for those transports. For an
+ * AndroidHardwareBuffer it is the optional acquire fence; the matching AHB
+ * handle is queued in FIFO order on rasterd's private native-buffer channel
+ * before this readiness packet becomes visible.
+ */
 struct LayerReady {
     SurfaceGrant grant{};
     uint64_t layerId{0};
@@ -194,6 +200,11 @@ struct LayerReady {
     uint32_t height{0};
     uint32_t backingWidth{0};
     uint32_t backingHeight{0};
+    /**
+     * Byte stride for byte-addressed SHM/DMA-BUF storage. AndroidHardwareBuffer
+     * is imported as an opaque EGL image and may report zero for GPU-only
+     * allocations, so zero is valid for that transport.
+     */
     uint32_t stride{0};
     uint32_t damageX{0};
     uint32_t damageY{0};
@@ -213,6 +224,7 @@ enum class LayerReleaseReason : uint32_t {
 };
 
 struct ReleaseLayer {
+    /** A Presented release may carry one GPU completion fence descriptor. */
     uint64_t layerId{0};
     LayerReleaseReason reason{LayerReleaseReason::Presented};
 };

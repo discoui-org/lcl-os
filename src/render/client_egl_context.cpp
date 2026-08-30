@@ -529,7 +529,7 @@ std::optional<ClientEGLContext::DmaBufExport> ClientEGLContext::exportCurrentDma
     }
     if (acquireFenceFd < 0) glFinish();
     return DmaBufExport{slot.id, slot.width, slot.height, slot.stride,
-                        lcl::platform::kDmaBufFormatArgb8888,
+                        AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM,
                         ~uint64_t{0}, -1, true, acquireFenceFd};
 #else
     if (m_currentDmaBuf < 0 || static_cast<size_t>(m_currentDmaBuf) >= m_dmaBufs.size()) return std::nullopt;
@@ -552,7 +552,14 @@ bool ClientEGLContext::sendNativeBufferHandle(int socketFd, uint32_t bufferId) {
     if (socketFd < 0) return false;
     for (const auto& slot : m_dmaBufs) {
         if (slot.id == bufferId && slot.ahb) {
-            return AHardwareBuffer_sendHandleToUnixSocket(slot.ahb, socketFd) == 0;
+            const int result = AHardwareBuffer_sendHandleToUnixSocket(
+                slot.ahb, socketFd);
+            if (result != 0) {
+                std::cerr << "[LCL Canvas] AHardwareBuffer handle send failed"
+                          << " (buffer=" << bufferId << ", result="
+                          << result << ", errno=" << errno << ")\n";
+            }
+            return result == 0;
         }
     }
 #else

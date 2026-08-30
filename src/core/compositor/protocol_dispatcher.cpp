@@ -300,22 +300,37 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         ready.transport == raster_protocol::LayerTransport::Shm;
     const bool dmaBufLayer =
         ready.transport == raster_protocol::LayerTransport::DmaBuf;
-    if (layer.fd < 0 || ready.layerId == 0 ||
+    const bool nativeBufferLayer = ready.transport ==
+        raster_protocol::LayerTransport::AndroidHardwareBuffer;
+    const bool byteAddressedLayer = shmLayer || dmaBufLayer;
+    const bool hasTransportStorage = nativeBufferLayer
+        ? static_cast<bool>(layer.nativeBuffer)
+        : layer.fd >= 0;
+    if (!hasTransportStorage || ready.layerId == 0 ||
         ready.width == 0 || ready.height == 0 ||
         !SurfaceRegistry::matchesConfiguredBufferExtent(
             entry, ready.width, ready.height) ||
         ready.backingWidth < ready.width ||
         ready.backingHeight < ready.height ||
-        ready.stride < ready.backingWidth * sizeof(uint32_t) ||
+        ready.backingWidth >
+            std::numeric_limits<uint32_t>::max() / sizeof(uint32_t) ||
+        // A GPU-only AHardwareBuffer is opaque storage. Some valid Android
+        // implementations report no CPU row stride, and texture import does
+        // not consume one. SHM and DMA-BUF remain byte-addressed and retain
+        // the strict row-size validation.
+        (byteAddressedLayer &&
+            ready.stride < ready.backingWidth * sizeof(uint32_t)) ||
         ready.damageWidth == 0 || ready.damageHeight == 0 ||
         ready.damageX > ready.width || ready.damageY > ready.height ||
         ready.damageWidth > ready.width - ready.damageX ||
         ready.damageHeight > ready.height - ready.damageY ||
-        (!shmLayer && !dmaBufLayer) ||
+        (!shmLayer && !dmaBufLayer && !nativeBufferLayer) ||
         (shmLayer && ready.byteSize !=
             static_cast<uint64_t>(ready.stride) * ready.backingHeight) ||
         (shmLayer && ready.bufferId != 0) ||
-        (dmaBufLayer && (ready.format == 0 || ready.bufferId == 0))) {
+        ((dmaBufLayer || nativeBufferLayer) &&
+            (ready.format == 0 || ready.bufferId == 0)) ||
+        (nativeBufferLayer && ready.byteSize != 0)) {
         (void)LayerFeedbackHandler::discard(
             entry.clientFd, ready,
             protocol::LCLFrameDiscardReason::InvalidFrame);
@@ -357,7 +372,7 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
             closeLayer(raster_protocol::LayerReleaseReason::RejectedFrame);
             return false;
         }
-    } else {
+    } else if (dmaBufLayer) {
         platform::DmaBufDescriptor descriptor{};
         descriptor.fd = layer.fd;
         descriptor.width = ready.backingWidth;
@@ -368,8 +383,10 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         texture = m_renderer.getRasterRenderer()->importDmaBuf(
             ready.bufferId, descriptor);
         if (texture == 0) {
-            std::cerr << "[LCL Raster] DMA-BUF import rejected for surface "
-                      << ready.grant.surfaceId << "; requesting SHM fallback\n";
+            std::cerr << "[LCL Raster] Desktop DMA-BUF import rejected for "
+                         "surface "
+                      << ready.grant.surfaceId
+                      << "; requesting desktop SHM fallback\n";
             (void)LayerFeedbackHandler::discard(
                 entry.clientFd, ready,
                 protocol::LCLFrameDiscardReason::InvalidFrame);
@@ -378,6 +395,47 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         }
         close(layer.fd);
         layer.fd = -1;
+    } else {
+        if (layer.fd >= 0) {
+            const auto wait = m_renderer.waitNativeFence(layer.fd);
+            if (wait == platform::NativeFenceWaitResult::Unsupported) {
+                close(layer.fd);
+                layer.fd = -1;
+                std::cerr << "[LCL Raster] Native acquire fence import "
+                             "unsupported for surface "
+                          << ready.grant.surfaceId << "\n";
+                (void)LayerFeedbackHandler::discard(
+                    entry.clientFd, ready,
+                    protocol::LCLFrameDiscardReason::InvalidFrame);
+                closeLayer(
+                    raster_protocol::LayerReleaseReason::RejectedTransport);
+                return false;
+            }
+            // Enqueued and ConsumedFailure transfer descriptor ownership to
+            // the graphics backend.
+            layer.fd = -1;
+            if (wait == platform::NativeFenceWaitResult::ConsumedFailure) {
+                (void)LayerFeedbackHandler::discard(
+                    entry.clientFd, ready,
+                    protocol::LCLFrameDiscardReason::InvalidFrame);
+                closeLayer(
+                    raster_protocol::LayerReleaseReason::RejectedTransport);
+                return false;
+            }
+        }
+        texture = m_renderer.getRasterRenderer()->importNativeBuffer(
+            ready.bufferId, std::move(layer.nativeBuffer));
+        if (texture == 0) {
+            std::cerr << "[LCL Raster] Native-buffer import rejected for "
+                         "surface "
+                      << ready.grant.surfaceId << "\n";
+            (void)LayerFeedbackHandler::discard(
+                entry.clientFd, ready,
+                protocol::LCLFrameDiscardReason::InvalidFrame);
+            closeLayer(
+                raster_protocol::LayerReleaseReason::RejectedTransport);
+            return false;
+        }
     }
 
     if (entry.rasterLayerId != 0) {
@@ -428,11 +486,16 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         entry.stride = 0;
         entry.hasCommittedBuffer = false;
         for (const auto& stale : entry.pendingRasterLayerReleases) {
+            const int releaseFenceFd = stale.texture != 0
+                ? m_renderer.createNativeFence() : -1;
             if (stale.texture != 0) {
                 m_renderer.getRasterRenderer()->releaseDmaBufTexture(
                     stale.texture);
             }
-            m_rasterService.releaseLayer(stale.layerId);
+            m_rasterService.releaseLayer(
+                stale.layerId,
+                raster_protocol::LayerReleaseReason::Presented,
+                releaseFenceFd);
         }
         entry.pendingRasterLayerReleases.clear();
         closeLayer(raster_protocol::LayerReleaseReason::RejectedFrame);

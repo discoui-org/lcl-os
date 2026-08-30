@@ -293,6 +293,10 @@ public:
     /** Reuse one imported EGLImage/texture for a stable producer buffer. */
     uint32_t importDmaBuf(uint64_t bufferId,
                           const lcl::platform::DmaBufDescriptor& descriptor);
+    /** Reuse one imported opaque native buffer for a stable producer slot. */
+    uint32_t importNativeBuffer(
+        uint64_t bufferId,
+        std::shared_ptr<const lcl::platform::INativeBuffer> buffer);
     void releaseTexture(uint32_t texture);
     uint32_t importDmaBufTexture(const lcl::platform::INativeBuffer& buffer) {
         return importTexture(buffer);
@@ -375,6 +379,7 @@ private:
         uint64_t modifier{0};
         uint32_t references{0};
         uint64_t lastUse{0};
+        std::shared_ptr<const lcl::platform::INativeBuffer> nativeBuffer;
     };
 
     bool initGLShader();

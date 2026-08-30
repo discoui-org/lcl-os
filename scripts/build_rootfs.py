@@ -970,6 +970,36 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
     log(f"✓ All required canonical userspace files, {loader_name}, manifests, and /init entrypoint verified successfully.")
 
 
+def ensure_binfmt(arch: str) -> None:
+    """Ensures QEMU binfmt handlers are registered on Linux for cross-arch Docker execution."""
+    if platform.system().lower() != "linux":
+        return
+    norm_arch = normalize_arch(arch)
+    host_arch = normalize_arch(None)
+    if host_arch == norm_arch:
+        return
+
+    handler_name = "qemu-aarch64" if norm_arch == "aarch64" else "qemu-x86_64"
+    handler_path = Path("/proc/sys/fs/binfmt_misc") / handler_name
+    if handler_path.exists():
+        return
+
+    log(f"Multi-arch binfmt handler for {norm_arch} ({handler_name}) is missing. Registering via tonistiigi/binfmt...")
+    try:
+        subprocess.run(
+            ["docker", "run", "--privileged", "--rm", "tonistiigi/binfmt", "--install", "all"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        log("✓ Registered binfmt handlers successfully.")
+    except Exception as ex:
+        err(f"Warning: Failed to auto-register binfmt handlers: {ex}")
+        err("If cross-platform Docker execution fails with 'exec format error', run:")
+        err("  docker run --privileged --rm tonistiigi/binfmt --install all")
+
+
 def run_inside_docker(
     arch: str = "aarch64",
     image_size_mb: int = 1024,
@@ -979,6 +1009,8 @@ def run_inside_docker(
     norm_arch = normalize_arch(arch)
     plat = ARCH_META[norm_arch]["docker_platform"]
     image_tag = f"lcl-os-qemu-builder:{norm_arch}"
+
+    ensure_binfmt(norm_arch)
 
     log(f"Executing rootfs build inside Docker ({norm_arch}, {plat})...")
 
