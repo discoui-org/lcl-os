@@ -71,11 +71,16 @@ TEST_F(AppBundleParserTest, ParseValidAppBundle) {
     EXPECT_EQ(meta->name, "Test Terminal");
     EXPECT_EQ(meta->version, "1.2.0");
     EXPECT_EQ(meta->icon, "Resources/Icon.png");
+    EXPECT_EQ(meta->executable, "Executables/Terminal");
     EXPECT_EQ(meta->type, "gui");
     EXPECT_EQ(meta->runtime, "org.lcl.native");
     EXPECT_EQ(meta->executablePath, (tempDir / "Terminal.app" / "Executables/Terminal").string());
+    ASSERT_TRUE(meta->bundleHandle);
+    ASSERT_TRUE(meta->manifestHandle);
     ASSERT_TRUE(meta->iconHandle);
     ASSERT_TRUE(meta->executableHandle);
+    EXPECT_TRUE(meta->bundleHandle->valid());
+    EXPECT_TRUE(meta->manifestHandle->valid());
     EXPECT_TRUE(meta->iconHandle->valid());
     EXPECT_TRUE(meta->executableHandle->valid());
 }

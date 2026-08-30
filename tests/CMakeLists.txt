@@ -19,6 +19,9 @@ add_executable(lcl_unit_tests
     system/test_app_bundle_parser.cpp
     system/test_app_data_store.cpp
     system/test_app_identity_registry.cpp
+    system/test_bundle_record.cpp
+    system/test_bundle_launch_gate.cpp
+    system/test_sandbox_contract.cpp
     system/test_session_service.cpp
     system/test_ipc_manager.cpp
     system/test_input_manager.cpp

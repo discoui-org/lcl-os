@@ -667,9 +667,13 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
     metadata.name = *fields.name;
     metadata.version = fields.version.value_or("");
     metadata.icon = *fields.icon;
+    metadata.executable = *fields.executable;
+    metadata.manifestContents = std::move(content);
     metadata.type = type;
     metadata.runtime = fields.runtime.value_or("");
     metadata.requestedPermissions = std::move(fields.requestedPermissions);
+    metadata.bundleHandle = std::make_shared<AppBundleFileHandle>(bundleDescriptor.release());
+    metadata.manifestHandle = std::make_shared<AppBundleFileHandle>(manifestDescriptor.release());
     metadata.iconHandle = std::make_shared<AppBundleFileHandle>(iconDescriptor.release());
     metadata.executableHandle = std::make_shared<AppBundleFileHandle>(executableDescriptor.release());
     metadata.executablePath = (displayBundlePath / *fields.executable).string();

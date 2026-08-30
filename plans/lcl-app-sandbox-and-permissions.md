@@ -82,8 +82,11 @@ sözleşmesini kullanmasıdır.
   açılmak istendiğinde descriptor-temelli şema kontrolünü tamamlayıp canonical
   bir `BundleRecord` üretir: app ID, sürüm,
   runtime/type, izin talepleri, manifest sürümü ve bundle içindeki her regular
-  dosyanın relative yolu ile SHA-256 özeti. Dosya listesi lexicographic sırada
-  tutulur; symlink, device ve hard-link kabul edilmez.
+  payload dosyanın relative yolu ile SHA-256 özeti. Detached
+  `Signature.ed25519` zarfı imzaladığı kaydın kendi baytlarını içeremez; bu
+  nedenle kayda dahil edilmez ama ayrıca descriptor üzerinden doğrulanır.
+  Dosya listesi lexicographic sırada tutulur; symlink, device ve hard-link
+  kabul edilmez.
 - Yayıncı bu kaydın sürümlenmiş binary encoding'ini Ed25519 ile imzalar.
   Bundle, `Signature.ed25519`, publisher key ID ve signing key sertifika
   zincirini içerir; imza manifest metninin biçimine değil canonical kayda
@@ -122,7 +125,7 @@ sözleşmesini kullanmasıdır.
 
 ## 3. Ayrıcalıklı sandbox launcher
 
-- [ ] `system/security/` altında platformdan bağımsız `SandboxProfile`,
+- [x] `system/security/` altında platformdan bağımsız `SandboxProfile`,
   `SandboxLaunchRequest` ve `SandboxLaunchResult` sözleşmelerini oluştur.
 - [ ] Küçük, root çalışan `lcl-sandboxd` servisinin sorumluluğunu yalnız
   doğrulanmış app ID çözümü, sandbox kurulumu ve child reaping ile sınırla.
@@ -318,6 +321,17 @@ sözleşmesini kullanmasıdır.
 
 ## 11. Bundle keşfi, güven onayı ve güncelleme
 
+- [x] Descriptor-temelli canonical `BundleRecord` üret: manifest kimliği,
+  runtime/type, istenen izinler ve her regular payload dosyanın yol, mod ve
+  SHA-256 özetini kayda bağla; symlink, device ve hard-link'i reddet.
+- [x] Root-owned atomik `BundleApprovalStore` oluştur; yalnız `kullanıcı +
+  app ID + BundleRecord hash + unverified publisher state` eşleşmesine normal
+  sandbox launch onayı sakla.
+- [x] İmza doğrulayıcısının sonucunu tüketen fail-closed bundle launch gate'i
+  ekle: system image, geçerli signature veya aynı kullanıcıya ait tam hash
+  onayı dışında launch'a izin verme.
+- [x] Bundle hash/onay değişimi, manifest rewrite, symlink/hard-link ve
+  gevşek approval-store izinleri için host unit testleri ekle.
 - [ ] Sistem uygulamalarını read-only rootfs alanında paketle.
 - [ ] Kopyalanan veya doğrudan seçilen `.app` bundle'ı launch öncesi
   descriptor-temelli doğrula; geçerli imzayı veya hash'e bağlı Ayarlar

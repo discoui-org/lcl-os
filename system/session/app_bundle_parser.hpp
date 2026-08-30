@@ -35,10 +35,19 @@ struct AppBundleMetadata {
     std::string executablePath;  // e.g. "/System/Applications/Terminal.app/Executables/Terminal"
     std::string version;         // e.g. "1.0.0"
     std::string icon;            // e.g. "Resources/Icon.png"
+    std::string executable;      // e.g. "Executables/Terminal", bundle-relative
+    // Exact bytes parsed from Manifest.json; retained only in the trusted
+    // catalog so a later verifier can detect an in-place manifest rewrite.
+    std::string manifestContents;
     std::string type;            // "gui" or "cli"
     std::string runtime;         // e.g. "org.lcl.javascript"
     // Declarations only. They grant nothing until a permission broker evaluates them.
     std::vector<std::string> requestedPermissions;
+    // These descriptors pin the exact bundle snapshot that was schema-checked.
+    // Security services use them to reject a bundle changed between cataloging,
+    // verification, approval and execution.
+    std::shared_ptr<const AppBundleFileHandle> bundleHandle;
+    std::shared_ptr<const AppBundleFileHandle> manifestHandle;
     std::shared_ptr<const AppBundleFileHandle> iconHandle;
     std::shared_ptr<const AppBundleFileHandle> executableHandle;
     bool valid{false};
