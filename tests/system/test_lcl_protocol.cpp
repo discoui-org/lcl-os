@@ -454,6 +454,11 @@ TEST(LCLProtocolTest, FramePresentedRoundTripsWithoutFileDescriptor) {
     presented.displaySequence = 19;
     presented.timestampNs = 123456789;
     presented.refreshIntervalNs = 6944444;
+    presented.clientFrameStartNs = 100000000;
+    presented.clientSubmitNs = 105000000;
+    presented.rasterStartNs = 107000000;
+    presented.rasterReadyNs = 111000000;
+    presented.composeStartNs = 115000000;
     LCLHeader header{};
     header.opcode = LCLOpcode::FramePresented;
     header.payloadSize = sizeof(presented);
@@ -469,6 +474,11 @@ TEST(LCLProtocolTest, FramePresentedRoundTripsWithoutFileDescriptor) {
     EXPECT_EQ(decoded->displaySequence, presented.displaySequence);
     EXPECT_EQ(decoded->timestampNs, presented.timestampNs);
     EXPECT_EQ(decoded->refreshIntervalNs, presented.refreshIntervalNs);
+    EXPECT_EQ(decoded->clientFrameStartNs, presented.clientFrameStartNs);
+    EXPECT_EQ(decoded->clientSubmitNs, presented.clientSubmitNs);
+    EXPECT_EQ(decoded->rasterStartNs, presented.rasterStartNs);
+    EXPECT_EQ(decoded->rasterReadyNs, presented.rasterReadyNs);
+    EXPECT_EQ(decoded->composeStartNs, presented.composeStartNs);
 
     const int descriptor = dup(STDIN_FILENO);
     ASSERT_GE(descriptor, 0);

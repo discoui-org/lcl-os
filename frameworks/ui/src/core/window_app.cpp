@@ -59,6 +59,12 @@ uint32_t toBufferPixels(float logical, float scale) {
     return std::max(1u, static_cast<uint32_t>(std::ceil(logical * scale)));
 }
 
+uint64_t monotonicNowNs() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 bool frameTraceEnabled() {
     const char* value = std::getenv("LCL_TRACE_FRAMES");
     return value && value[0] != '\0' && value[0] != '0';
@@ -1195,7 +1201,34 @@ void WindowApp::pollIPC() {
                     m_submittedFrameSerial = 0;
                     m_submittedGeometryGeneration = 0;
                     m_frameGateOpen = true;
-                    if (m_frameTraceEnabled) ++m_tracePresentedFrames;
+                    if (m_frameTraceEnabled) {
+                        ++m_tracePresentedFrames;
+                        const auto appendDuration = [](uint64_t startNs,
+                                                       uint64_t endNs,
+                                                       std::vector<double>& samples) {
+                            if (startNs == 0 || endNs < startNs) return;
+                            samples.push_back(static_cast<double>(endNs - startNs) /
+                                              1'000'000.0);
+                        };
+                        appendDuration(presented->clientFrameStartNs,
+                                       presented->clientSubmitNs,
+                                       m_traceClientBuildSamplesMs);
+                        appendDuration(presented->clientSubmitNs,
+                                       presented->rasterStartNs,
+                                       m_traceRasterQueueSamplesMs);
+                        appendDuration(presented->rasterStartNs,
+                                       presented->rasterReadyNs,
+                                       m_traceRasterSamplesMs);
+                        appendDuration(presented->rasterReadyNs,
+                                       presented->composeStartNs,
+                                       m_traceComposeQueueSamplesMs);
+                        appendDuration(presented->composeStartNs,
+                                       presented->timestampNs,
+                                       m_traceComposeSubmitSamplesMs);
+                        appendDuration(presented->clientFrameStartNs,
+                                       presented->timestampNs,
+                                       m_traceEndToEndSubmitSamplesMs);
+                    }
                     if (m_pendingManagedWindowAction &&
                         presented->frameSerial >=
                             m_pendingManagedActionAfterFrameSerial) {
@@ -1897,6 +1930,9 @@ bool WindowApp::renderFrame() {
     if (m_ipcConnected && m_waitingForInitialConfigure) return false;
     if (m_ipcConnected && !m_frameGateOpen) return false;
 
+    const uint64_t traceFrameStartNs =
+        m_frameTraceEnabled ? monotonicNowNs() : 0;
+
     if (m_ipcConnected && m_canvas->usesDisplayListTransport()) {
         if (!m_rasterClient->prepare()) {
             m_firstFrame = true;
@@ -2285,7 +2321,7 @@ bool WindowApp::renderFrame() {
                         m_retainedRasterFrameSerial, m_geometryGeneration,
                         m_width, m_height, m_bufferScale, frameDamage,
                         m_privateRenderState->currentTransaction(),
-                        encoded.bytes)) {
+                        encoded.bytes, traceFrameStartNs)) {
                     m_submittedConfigureSerial = m_configureSerial;
                     m_submittedFrameSerial = frameSerial;
                     m_submittedGeometryGeneration = m_geometryGeneration;
@@ -2409,6 +2445,12 @@ void WindowApp::logFrameTraceIfDue() {
     const auto average = [](double total, uint64_t count) {
         return count == 0 ? 0.0 : total / static_cast<double>(count);
     };
+    const auto percentile95 = [](std::vector<double>& samples) {
+        if (samples.empty()) return 0.0;
+        std::sort(samples.begin(), samples.end());
+        const size_t index = (samples.size() * 95 + 99) / 100 - 1;
+        return samples[std::min(index, samples.size() - 1)];
+    };
     std::cerr << "[LCL TRACE " << m_title << "] frames=" << m_traceRenderedFrames
               << " layout=" << m_traceLayoutPasses << " (" << average(m_traceLayoutMs, m_traceLayoutPasses) << " ms)"
               << " paint=" << average(m_tracePaintMs, m_traceRenderedFrames) << " ms"
@@ -2433,7 +2475,18 @@ void WindowApp::logFrameTraceIfDue() {
               << m_traceScrollTransformTransactions
               << ", retained-xform="
               << m_traceRetainedPresentationTransactions
-              << ")\n";
+              << ") pipeline-p95=(client="
+              << percentile95(m_traceClientBuildSamplesMs)
+              << ", raster-queue="
+              << percentile95(m_traceRasterQueueSamplesMs)
+              << ", raster=" << percentile95(m_traceRasterSamplesMs)
+              << ", compose-queue="
+              << percentile95(m_traceComposeQueueSamplesMs)
+              << ", compose-submit="
+              << percentile95(m_traceComposeSubmitSamplesMs)
+              << ", end-to-submit="
+              << percentile95(m_traceEndToEndSubmitSamplesMs)
+              << " ms)\n";
     m_traceLayoutPasses = 0;
     m_traceRenderedFrames = 0;
     m_traceConfigureCount = 0;
@@ -2455,6 +2508,12 @@ void WindowApp::logFrameTraceIfDue() {
     m_traceClearMs = 0.0;
     m_traceDrawMs = 0.0;
     m_traceRasterSubmitMs = 0.0;
+    m_traceClientBuildSamplesMs.clear();
+    m_traceRasterQueueSamplesMs.clear();
+    m_traceRasterSamplesMs.clear();
+    m_traceComposeQueueSamplesMs.clear();
+    m_traceComposeSubmitSamplesMs.clear();
+    m_traceEndToEndSubmitSamplesMs.clear();
     m_traceLastLog = now;
 }
 

@@ -183,6 +183,10 @@ TEST(RasterProtocolTest, LayerReadyCarriesGenerationAndOnePrivateDescriptor) {
     sent.format = 0x34325241u;
     sent.modifier = 7;
     sent.byteSize = 640u * 480u * sizeof(uint32_t);
+    sent.clientFrameStartNs = 100000000;
+    sent.clientSubmitNs = 105000000;
+    sent.rasterStartNs = 107000000;
+    sent.rasterReadyNs = 111000000;
     ASSERT_TRUE(sendPacket(sockets[0], Opcode::LayerReady, sent, descriptor));
 
     Header header{};
@@ -203,6 +207,10 @@ TEST(RasterProtocolTest, LayerReadyCarriesGenerationAndOnePrivateDescriptor) {
     EXPECT_EQ(ready->transport, LayerTransport::DmaBuf);
     EXPECT_EQ(ready->format, 0x34325241u);
     EXPECT_EQ(ready->modifier, 7u);
+    EXPECT_EQ(ready->clientFrameStartNs, 100000000u);
+    EXPECT_EQ(ready->clientSubmitNs, 105000000u);
+    EXPECT_EQ(ready->rasterStartNs, 107000000u);
+    EXPECT_EQ(ready->rasterReadyNs, 111000000u);
     EXPECT_GE(receivedFd, 0);
 
     close(receivedFd);
@@ -289,6 +297,8 @@ TEST(RasterProtocolTest, CommitTransactionCarriesMutationsAndLogicalDamage) {
     sent.damageHeight = 50.0f;
     sent.displayListSize = 4096;
     sent.mutationCount = 2;
+    sent.clientFrameStartNs = 100000000;
+    sent.clientSubmitNs = 105000000;
     std::vector<NodeMutation> sentMutations(2);
     sentMutations[0].type = NodeMutationType::CreateNode;
     sentMutations[0].node.id = 71;
@@ -320,6 +330,8 @@ TEST(RasterProtocolTest, CommitTransactionCarriesMutationsAndLogicalDamage) {
     EXPECT_FLOAT_EQ(received.damageWidth, 40.0f);
     EXPECT_FLOAT_EQ(received.damageHeight, 50.0f);
     EXPECT_EQ(received.flags, 0u);
+    EXPECT_EQ(received.clientFrameStartNs, 100000000u);
+    EXPECT_EQ(received.clientSubmitNs, 105000000u);
     ASSERT_EQ(receivedMutations.size(), 2u);
     EXPECT_EQ(receivedMutations[0].type, NodeMutationType::CreateNode);
     EXPECT_EQ(receivedMutations[0].node.id, 71u);

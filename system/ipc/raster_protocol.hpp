@@ -8,7 +8,7 @@
 namespace lcl::raster_protocol {
 
 inline constexpr uint32_t kMagic = 0x5254434c; // "LCTR"
-inline constexpr uint32_t kVersion = 9;
+inline constexpr uint32_t kVersion = 10;
 inline constexpr uint32_t kMaxPayload = 1024u * 1024u;
 
 enum class Opcode : uint32_t {
@@ -172,6 +172,11 @@ struct CommitTransaction {
     uint32_t mutationCount{0};
     uint32_t flags{0};
     uint32_t reserved{0};
+    // Zero unless the client enabled frame tracing. All values use the same
+    // steady-clock epoch, allowing an accepted frame to be correlated through
+    // lcl-ui, rasterd and the compositor without exposing app content.
+    uint64_t clientFrameStartNs{0};
+    uint64_t clientSubmitNs{0};
 };
 
 inline constexpr uint32_t kTransactionReplacesTree = 1u << 0;
@@ -214,6 +219,12 @@ struct LayerReady {
     uint32_t format{0};
     uint64_t modifier{~uint64_t{0}};
     uint64_t byteSize{0};
+    // Trace-only timestamps copied from CommitTransaction and completed by
+    // rasterd immediately before this immutable layer is published.
+    uint64_t clientFrameStartNs{0};
+    uint64_t clientSubmitNs{0};
+    uint64_t rasterStartNs{0};
+    uint64_t rasterReadyNs{0};
 };
 
 enum class LayerReleaseReason : uint32_t {

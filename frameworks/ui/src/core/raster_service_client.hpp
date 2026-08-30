@@ -35,7 +35,8 @@ public:
         float logicalWidth, float logicalHeight, float bufferScale,
         const graphics::RectF& damage,
         const detail::RenderTreeTransaction& renderTreeTransaction,
-        const std::vector<uint8_t>& displayList);
+        const std::vector<uint8_t>& displayList,
+        uint64_t clientFrameStartNs);
     std::vector<raster_protocol::FrameDiscarded> pollDiscards();
     std::vector<ExternalBufferRelease>
         takeExternalBufferReleases();

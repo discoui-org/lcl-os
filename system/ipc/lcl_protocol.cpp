@@ -470,6 +470,11 @@ bool encodePayload(LCLOpcode opcode, const void* payload, size_t size,
         out.u64(msg.displaySequence);
         out.u64(msg.timestampNs);
         out.u64(msg.refreshIntervalNs);
+        out.u64(msg.clientFrameStartNs);
+        out.u64(msg.clientSubmitNs);
+        out.u64(msg.rasterStartNs);
+        out.u64(msg.rasterReadyNs);
+        out.u64(msg.composeStartNs);
         return true;
     }
     case LCLOpcode::FrameDiscarded: {
@@ -911,6 +916,9 @@ bool decodePayload(LCLOpcode opcode, Reader& in,
             !in.u64(m.frameSerial) || !in.u64(m.geometryGeneration) ||
             !in.u64(m.displaySequence) ||
             !in.u64(m.timestampNs) || !in.u64(m.refreshIntervalNs) ||
+            !in.u64(m.clientFrameStartNs) || !in.u64(m.clientSubmitNs) ||
+            !in.u64(m.rasterStartNs) || !in.u64(m.rasterReadyNs) ||
+            !in.u64(m.composeStartNs) ||
             m.surfaceId == 0 || m.configureSerial == 0 || m.frameSerial == 0 ||
             m.displaySequence == 0 || m.timestampNs == 0 ||
             m.refreshIntervalNs == 0)

@@ -381,6 +381,12 @@ private:
     double m_traceClearMs{0.0};
     double m_traceDrawMs{0.0};
     double m_traceRasterSubmitMs{0.0};
+    std::vector<double> m_traceClientBuildSamplesMs;
+    std::vector<double> m_traceRasterQueueSamplesMs;
+    std::vector<double> m_traceRasterSamplesMs;
+    std::vector<double> m_traceComposeQueueSamplesMs;
+    std::vector<double> m_traceComposeSubmitSamplesMs;
+    std::vector<double> m_traceEndToEndSubmitSamplesMs;
     std::chrono::steady_clock::time_point m_traceLastLog{};
 
     lcl::protocol::LCLDecorationMode m_requestedDecorationMode{lcl::protocol::LCLDecorationMode::None};

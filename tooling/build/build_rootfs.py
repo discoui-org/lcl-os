@@ -286,6 +286,8 @@ def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
         PROJECT_ROOT / "apps" / "backdrop_demo" / "Manifest.json",
         PROJECT_ROOT / "apps" / "backdrop_demo" / "Resources" / "Icon.png",
         PROJECT_ROOT / "apps" / "backdrop_demo" / "main.js",
+        PROJECT_ROOT / "apps" / "ui_perf_demo" / "Manifest.json",
+        PROJECT_ROOT / "apps" / "ui_perf_demo" / "main.js",
     )
     for source_input in source_inputs:
         if source_input.is_dir():
@@ -654,6 +656,25 @@ def stage_canonical_rootfs(
     sha_map["BackdropDemo.app"] = get_sha256(
         backdrop_dst / "Executables" / "main.js")
 
+    # UIPerfDemo.app uses the same JavaScript runtime and a shared built-in
+    # icon asset. The executable intentionally remains a source-level workload
+    # so it exercises the normal lcl-ui -> rasterd path on every target.
+    perf_src = PROJECT_ROOT / "apps" / "ui_perf_demo"
+    perf_dst = dest_system_apps / "UIPerfDemo.app"
+    (perf_dst / "Executables").mkdir(parents=True, exist_ok=True)
+    (perf_dst / "Resources").mkdir(parents=True, exist_ok=True)
+    for relative in ("Manifest.json", "main.js"):
+        source = perf_src / relative
+        if not source.is_file():
+            raise RuntimeError(f"Missing UIPerfDemo.app source file: {source}")
+        destination = perf_dst / ("Executables/main.js" if relative == "main.js" else relative)
+        shutil.copy2(source, destination)
+    shutil.copy2(backdrop_src / "Resources" / "Icon.png",
+                 perf_dst / "Resources" / "Icon.png")
+    (perf_dst / "Executables" / "main.js").chmod(0o755)
+    sha_map["UIPerfDemo.app"] = get_sha256(
+        perf_dst / "Executables" / "main.js")
+
     # Validate all app bundles
     validate_app_bundles(staging_dir)
 
@@ -912,6 +933,9 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Applications/BackdropDemo.app/Manifest.json",
         "/System/Applications/BackdropDemo.app/Executables/main.js",
         "/System/Applications/BackdropDemo.app/Resources/Icon.png",
+        "/System/Applications/UIPerfDemo.app/Manifest.json",
+        "/System/Applications/UIPerfDemo.app/Executables/main.js",
+        "/System/Applications/UIPerfDemo.app/Resources/Icon.png",
         "/System/Library/Fonts/inter",
         "/System/Library/Gestalt/default.json",
         "/System/Library/Wallpapers/wallpaper.jpg",
@@ -943,6 +967,13 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
     if (demo_manifest.get("runtime") != "org.lcl.javascript" or
             demo_manifest.get("executable") != "Executables/main.js"):
         raise AssertionError("BackdropDemo.app Manifest in rootfs is invalid")
+
+    perf_cmd = ["debugfs", "-R", "cat /System/Applications/UIPerfDemo.app/Manifest.json", str(ext4_path)]
+    perf_res = subprocess.run(perf_cmd, capture_output=True, text=True, check=True)
+    perf_manifest = json.loads(perf_res.stdout)
+    if (perf_manifest.get("runtime") != "org.lcl.javascript" or
+            perf_manifest.get("executable") != "Executables/main.js"):
+        raise AssertionError("UIPerfDemo.app Manifest in rootfs is invalid")
 
     gestalt_cat = subprocess.run(
         ["debugfs", "-R", "cat /System/Library/Gestalt/default.json", str(ext4_path)],

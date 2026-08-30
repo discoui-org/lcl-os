@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 28;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 29;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 constexpr uint32_t LCL_LAUNCH_ICON_MAX_DIMENSION = 256u;
@@ -341,7 +341,9 @@ struct LCLMsgConfigureBounds {
 };
 
 struct LCLMsgFramePresented {
-    // Sent after the compositor presents the latest accepted buffer commit.
+    // Sent after the compositor returns from submitting the latest accepted
+    // buffer commit to its platform presenter. This is not a physical-display
+    // scanout completion signal.
     // Clients keep at most one frame in flight and coalesce newer damage until
     // this acknowledgement returns the presentation credit.
     uint32_t surfaceId{0};
@@ -353,6 +355,15 @@ struct LCLMsgFramePresented {
     uint64_t displaySequence{0};
     uint64_t timestampNs{0};
     uint64_t refreshIntervalNs{0};
+    // Zero unless the client enabled frame tracing. Every value shares a
+    // monotonic steady-clock epoch. composeStartNs is the start of the output
+    // compose pass that carried this layer; timestampNs is its present-submit
+    // completion time.
+    uint64_t clientFrameStartNs{0};
+    uint64_t clientSubmitNs{0};
+    uint64_t rasterStartNs{0};
+    uint64_t rasterReadyNs{0};
+    uint64_t composeStartNs{0};
 };
 
 enum class LCLFrameDiscardReason : uint32_t {

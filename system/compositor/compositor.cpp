@@ -474,6 +474,9 @@ void Compositor::renderFrame() {
     }
     const auto surfaces = m_surfaces.snapshot();
     const auto composeStart = std::chrono::steady_clock::now();
+    const uint64_t composeStartNs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            composeStart.time_since_epoch()).count());
     m_compositorRenderer.render(
         m_renderer, m_platformServices.display(), m_windowManager, surfaces,
         [this] { renderDiagnosticOverlay(); },
@@ -525,6 +528,12 @@ void Compositor::renderFrame() {
         message.displaySequence = displaySequence;
         message.timestampNs = presentedAtNs;
         message.refreshIntervalNs = m_refreshIntervalNs;
+        message.clientFrameStartNs = entry.clientFrameStartNs;
+        message.clientSubmitNs = entry.clientSubmitNs;
+        message.rasterStartNs = entry.rasterStartNs;
+        message.rasterReadyNs = entry.rasterReadyNs;
+        message.composeStartNs = entry.clientFrameStartNs != 0
+            ? composeStartNs : 0;
         if (protocol::sendMsgWithFd(entry.clientFd, header, &message)) {
             SurfaceRegistry::completePresentation(entry);
         }

@@ -462,6 +462,10 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
     entry.rasterLayerTexture = texture;
     entry.frameSerial = ready.frameSerial;
     entry.layerGeometryGeneration = ready.geometryGeneration;
+    entry.clientFrameStartNs = ready.clientFrameStartNs;
+    entry.clientSubmitNs = ready.clientSubmitNs;
+    entry.rasterStartNs = ready.rasterStartNs;
+    entry.rasterReadyNs = ready.rasterReadyNs;
     entry.acceptedConfigureSerial = ready.configureSerial;
 
     if (entry.isPopup() || entry.isAttached()) {
@@ -480,6 +484,10 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         entry.rasterLayerTexture = 0;
         entry.frameSerial = 0;
         entry.layerGeometryGeneration = 0;
+        entry.clientFrameStartNs = 0;
+        entry.clientSubmitNs = 0;
+        entry.rasterStartNs = 0;
+        entry.rasterReadyNs = 0;
         entry.acceptedConfigureSerial = 0;
         entry.width = entry.height = 0;
         entry.backingWidth = entry.backingHeight = 0;

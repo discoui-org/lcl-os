@@ -1,0 +1,9 @@
+{
+  "id": "org.lcl.ui-perf-demo",
+  "name": "UI Performance Demo",
+  "version": "1.0.0",
+  "runtime": "org.lcl.javascript",
+  "type": "gui",
+  "executable": "Executables/main.js",
+  "icon": "Resources/Icon.png"
+}

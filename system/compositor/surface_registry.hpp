@@ -64,6 +64,11 @@ public:
         uint32_t rasterLayerTexture{0};
         uint64_t frameSerial{0};
         uint64_t layerGeometryGeneration{0};
+        // Trace-only monotonic timestamps carried with the retained layer.
+        uint64_t clientFrameStartNs{0};
+        uint64_t clientSubmitNs{0};
+        uint64_t rasterStartNs{0};
+        uint64_t rasterReadyNs{0};
         std::vector<RasterLayerRelease> pendingRasterLayerReleases;
         int shmFd{-1};
         void* pixels{nullptr};

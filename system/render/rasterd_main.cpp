@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -50,6 +51,12 @@ struct TokenKey {
     uint64_t low{0};
     bool operator==(const TokenKey&) const = default;
 };
+
+uint64_t monotonicNowNs() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
 
 struct TokenHash {
     size_t operator()(const TokenKey& key) const noexcept {
@@ -1336,6 +1343,8 @@ private:
                      const std::unordered_map<
                          uint64_t, RetainedNodeState>& nextNodes,
                      int displayListFd) {
+        const uint64_t rasterStartNs = submit.clientFrameStartNs != 0
+            ? monotonicNowNs() : 0;
         if (!replacesRetainedScene(submit) &&
             !retainedBaseMatches(
                 submit, surface.gpuFrameSerial,
@@ -1529,7 +1538,7 @@ private:
             releaseCachedLayers(tiled->createdLayerIds);
             releaseCachedLayers(createdNamespaceLayers);
         };
-        if (rasterGpuFrame(surface, submit, displayList)) {
+        if (rasterGpuFrame(surface, submit, displayList, rasterStartNs)) {
             commitTiledState();
             return true;
         }
@@ -1619,6 +1628,10 @@ private:
         ready.damageHeight = damage.height;
         ready.transport = lcl::raster_protocol::LayerTransport::Shm;
         ready.byteSize = slot->bytes;
+        ready.clientFrameStartNs = submit.clientFrameStartNs;
+        ready.clientSubmitNs = submit.clientSubmitNs;
+        ready.rasterStartNs = rasterStartNs;
+        ready.rasterReadyNs = rasterStartNs != 0 ? monotonicNowNs() : 0;
         if (!lcl::raster_protocol::sendPacket(
                 m_compositorFd, Opcode::LayerReady, ready, slot->fd)) {
             slot->busy = false;
@@ -1635,7 +1648,8 @@ private:
 
     bool rasterGpuFrame(
             SurfaceState& surface, const CommitTransaction& submit,
-            const lcl::graphics::DisplayList& displayList) {
+            const lcl::graphics::DisplayList& displayList,
+            uint64_t rasterStartNs) {
         if (surface.gpuUnavailable) return false;
         const uint32_t width = std::max(1u, static_cast<uint32_t>(
             std::ceil(submit.logicalWidth * submit.bufferScale)));
@@ -1829,6 +1843,10 @@ private:
 #endif
         ready.format = exported->format;
         ready.modifier = exported->modifier;
+        ready.clientFrameStartNs = submit.clientFrameStartNs;
+        ready.clientSubmitNs = submit.clientSubmitNs;
+        ready.rasterStartNs = rasterStartNs;
+        ready.rasterReadyNs = rasterStartNs != 0 ? monotonicNowNs() : 0;
         const int layerDescriptor =
 #if defined(__ANDROID__)
             exported->acquireFenceFd;

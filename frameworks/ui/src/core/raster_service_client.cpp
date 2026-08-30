@@ -1,5 +1,6 @@
 #include "raster_service_client.hpp"
 
+#include <chrono>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -18,6 +19,12 @@
 
 namespace lcl::ui {
 namespace {
+
+uint64_t monotonicNowNs() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
 
 raster_protocol::RetainedNodeState toProtocolNode(
         const detail::RetainedRenderNode& node) {
@@ -257,7 +264,8 @@ bool RasterServiceClient::commitTransaction(
         float logicalHeight, float bufferScale,
         const graphics::RectF& damage,
         const detail::RenderTreeTransaction& renderTreeTransaction,
-        const std::vector<uint8_t>& displayList) {
+        const std::vector<uint8_t>& displayList,
+        uint64_t clientFrameStartNs) {
     if (!connectIfNeeded() || configureSerial == 0 || frameSerial == 0 ||
         damage.isEmpty()) return false;
     const auto mutations = toProtocolMutations(renderTreeTransaction);
@@ -285,6 +293,10 @@ bool RasterServiceClient::commitTransaction(
     transaction.mutationCount = static_cast<uint32_t>(mutations.size());
     transaction.flags = renderTreeTransaction.replacesTree
         ? raster_protocol::kTransactionReplacesTree : 0u;
+    if (clientFrameStartNs != 0) {
+        transaction.clientFrameStartNs = clientFrameStartNs;
+        transaction.clientSubmitNs = monotonicNowNs();
+    }
     const bool sent = raster_protocol::sendCommitTransaction(
         m_fd, transaction, mutations, memfd);
     if (memfd >= 0) close(memfd);
