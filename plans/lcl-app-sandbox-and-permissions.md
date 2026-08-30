@@ -127,6 +127,9 @@ sözleşmesini kullanmasıdır.
 
 - [x] `system/security/` altında platformdan bağımsız `SandboxProfile`,
   `SandboxLaunchRequest` ve `SandboxLaunchResult` sözleşmelerini oluştur.
+- [x] Protected FD, process group, UID/GID drop, capability clear,
+  `no_new_privs` ve allowlist environment uygulayan; zorunlu kernel aşaması
+  kaydı yoksa fail-closed kalan sandbox child launcher çekirdeğini oluştur.
 - [ ] Küçük, root çalışan `lcl-sandboxd` servisinin sorumluluğunu yalnız
   doğrulanmış app ID çözümü, sandbox kurulumu ve child reaping ile sınırla.
 - [ ] `lcl-sessiond`'yi uygulama yaşam döngüsü otoritesi olarak koru; doğrudan
