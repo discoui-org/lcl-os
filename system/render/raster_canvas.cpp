@@ -319,6 +319,15 @@ void RasterCanvas::clearRect(const lcl::graphics::RectF& rect, lcl::graphics::Co
     m_displayListBuilder.clearRect(rect, color);
 }
 
+void RasterCanvas::applyBackdropEffects(
+        const lcl::graphics::RectF& bounds, float cornerRadius,
+        float cornerRoundness, float opacity,
+        const std::vector<lcl::graphics::EffectOp>& effects) {
+    if (bounds.isEmpty() || effects.empty()) return;
+    m_displayListBuilder.applyBackdropEffects(
+        bounds, cornerRadius, cornerRoundness, opacity, effects);
+}
+
 void RasterCanvas::drawPath(const lcl::graphics::Path& path,
                             const lcl::graphics::Paint& paint) {
     if (path.empty() || paint.color.a == 0 || paint.opacity <= 0.0f) return;

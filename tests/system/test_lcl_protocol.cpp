@@ -634,7 +634,7 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     region.cornerRadius = 14.0f;
     region.cornerRoundness = 3.2f;
     region.boundsPolicy = EffectBoundsPolicy::OuterSurface;
-    region.source = EffectSourceType::Backdrop;
+    region.source = EffectSourceType::SurfaceBackdrop;
     region.blendMode = EffectBlendMode::Normal;
     region.filterCount = static_cast<uint16_t>(filters.size());
     region.filterOffset = 0;
@@ -681,7 +681,7 @@ TEST(LCLProtocolTest, SendAndReceiveSetEffectGraphMsg) {
     EXPECT_FLOAT_EQ(regionRecv->cornerRadius, 14.0f);
     EXPECT_FLOAT_EQ(regionRecv->cornerRoundness, 3.2f);
     EXPECT_EQ(regionRecv->boundsPolicy, EffectBoundsPolicy::OuterSurface);
-    EXPECT_EQ(regionRecv->source, EffectSourceType::Backdrop);
+    EXPECT_EQ(regionRecv->source, EffectSourceType::SurfaceBackdrop);
     EXPECT_EQ(regionRecv->blendMode, EffectBlendMode::Normal);
     EXPECT_EQ(regionRecv->filterCount, 5u);
     EXPECT_EQ(regionRecv->filterOffset, 0u);

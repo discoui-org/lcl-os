@@ -47,6 +47,10 @@ void invokeNumberCallback(const CallbackStoreHandle& handle,
 void invokeTwoNumberCallback(const CallbackStoreHandle& handle,
                              const std::string& key, double first,
                              double second);
+bool invokePointerCallback(const CallbackStoreHandle& handle,
+                           const std::string& key, const char* type,
+                           float x, float y, int button,
+                           uint32_t pointerId);
 
 void addMethod(JSContext* context, JSValue prototype, const char* name,
                JSCFunction* function, int argumentCount);

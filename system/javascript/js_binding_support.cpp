@@ -310,6 +310,34 @@ void invokeTwoNumberCallback(const CallbackStoreHandle& handle,
     for (JSValue argument : arguments) JS_FreeValue(store->context, argument);
 }
 
+bool invokePointerCallback(const CallbackStoreHandle& handle,
+                           const std::string& key, const char* type,
+                           float x, float y, int button,
+                           uint32_t pointerId) {
+    const auto store = asStore(handle);
+    if (!store) return false;
+    const JSValueConst callback = store->get(key);
+    if (!JS_IsFunction(store->context, callback)) return false;
+    std::array<JSValue, 5> arguments{
+        JS_NewString(store->context, type),
+        JS_NewFloat64(store->context, x),
+        JS_NewFloat64(store->context, y),
+        JS_NewInt32(store->context, button),
+        JS_NewUint32(store->context, pointerId),
+    };
+    JSValue result = JS_Call(store->context, callback, JS_UNDEFINED,
+                             static_cast<int>(arguments.size()), arguments.data());
+    bool handled = false;
+    if (JS_IsException(result)) {
+        JsRuntime::printException(store->context);
+    } else {
+        handled = JS_ToBool(store->context, result) != 0;
+    }
+    JS_FreeValue(store->context, result);
+    for (JSValue argument : arguments) JS_FreeValue(store->context, argument);
+    return handled;
+}
+
 void addMethod(JSContext* context, JSValue prototype, const char* name,
                JSCFunction* function, int argumentCount) {
     JS_SetPropertyStr(context, prototype, name,

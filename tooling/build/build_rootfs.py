@@ -283,6 +283,9 @@ def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
         PROJECT_ROOT / "config" / "gestalt" / "default.json",
         PROJECT_ROOT / "apps" / "terminal" / "Manifest.json",
         PROJECT_ROOT / "apps" / "terminal" / "Resources" / "Icon.png",
+        PROJECT_ROOT / "apps" / "backdrop_demo" / "Manifest.json",
+        PROJECT_ROOT / "apps" / "backdrop_demo" / "Resources" / "Icon.png",
+        PROJECT_ROOT / "apps" / "backdrop_demo" / "main.js",
     )
     for source_input in source_inputs:
         if source_input.is_dir():
@@ -636,6 +639,21 @@ def stage_canonical_rootfs(
     sha_map["Terminal.app"] = get_sha256(term_dst / "Executables" / "Terminal")
     copy_ldd_deps(term_dst / "Executables" / "Terminal", dest_system_lib)
 
+    # BackdropDemo.app (QuickJS application bundle)
+    backdrop_src = PROJECT_ROOT / "apps" / "backdrop_demo"
+    backdrop_dst = dest_system_apps / "BackdropDemo.app"
+    (backdrop_dst / "Executables").mkdir(parents=True, exist_ok=True)
+    (backdrop_dst / "Resources").mkdir(parents=True, exist_ok=True)
+    for relative in ("Manifest.json", "Resources/Icon.png", "main.js"):
+        source = backdrop_src / relative
+        if not source.is_file():
+            raise RuntimeError(f"Missing BackdropDemo.app source file: {source}")
+        destination = backdrop_dst / ("Executables/main.js" if relative == "main.js" else relative)
+        shutil.copy2(source, destination)
+    (backdrop_dst / "Executables" / "main.js").chmod(0o755)
+    sha_map["BackdropDemo.app"] = get_sha256(
+        backdrop_dst / "Executables" / "main.js")
+
     # Validate all app bundles
     validate_app_bundles(staging_dir)
 
@@ -891,6 +909,9 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Applications/Terminal.app/Manifest.json",
         "/System/Applications/Terminal.app/Executables/Terminal",
         "/System/Applications/Terminal.app/Resources/Icon.png",
+        "/System/Applications/BackdropDemo.app/Manifest.json",
+        "/System/Applications/BackdropDemo.app/Executables/main.js",
+        "/System/Applications/BackdropDemo.app/Resources/Icon.png",
         "/System/Library/Fonts/inter",
         "/System/Library/Gestalt/default.json",
         "/System/Library/Wallpapers/wallpaper.jpg",
@@ -915,6 +936,13 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
     manifest_json = json.loads(cat_res.stdout)
     if manifest_json.get("executable") != "Executables/Terminal":
         raise AssertionError(f"Terminal.app Manifest in rootfs has invalid executable: {manifest_json.get('executable')}")
+
+    demo_cmd = ["debugfs", "-R", "cat /System/Applications/BackdropDemo.app/Manifest.json", str(ext4_path)]
+    demo_res = subprocess.run(demo_cmd, capture_output=True, text=True, check=True)
+    demo_manifest = json.loads(demo_res.stdout)
+    if (demo_manifest.get("runtime") != "org.lcl.javascript" or
+            demo_manifest.get("executable") != "Executables/main.js"):
+        raise AssertionError("BackdropDemo.app Manifest in rootfs is invalid")
 
     gestalt_cat = subprocess.run(
         ["debugfs", "-R", "cat /System/Library/Gestalt/default.json", str(ext4_path)],

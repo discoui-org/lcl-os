@@ -51,6 +51,8 @@ public:
 
 protected:
     graphics::RectF getUntransformedPaintBounds() const noexcept override;
+    float effectCornerRadius() const noexcept override { return m_borderRadius; }
+    float effectCornerRoundness() const noexcept override { return m_borderRoundness; }
     void styleDidChange() override;
 
 private:

@@ -137,6 +137,31 @@ TEST(JsRuntimeTest, GenericContainerSupportsDeclarativeInteractionStylesAndClick
     js.shutdown();
 }
 
+TEST(JsRuntimeTest, GenericEffectsAndRawPointerCallbacksAreAvailableInJS) {
+    JsRuntime js;
+    ASSERT_TRUE(js.initialize());
+    EXPECT_TRUE(js.evalCode(R"JS(
+        globalThis.effectApp = new LCL.WindowApp(160, 100, "JS effects");
+        globalThis.effectRoot = new LCL.Container();
+        effectRoot.setWidth(160); effectRoot.setHeight(100);
+        effectRoot.setEffect("backdrop", "blur", 12);
+        effectRoot.setEffect("surface-backdrop", "glass", 20, 2, 4);
+        effectRoot.clearEffects("backdrop");
+        globalThis.rawPointerCount = 0;
+        effectApp.setOnRawPointerEvent((type, x, y, button, pointerId) => {
+            if (type === "move" && x === 40 && y === 50 && button === 0 && pointerId === 0) {
+                rawPointerCount++;
+                return true;
+            }
+            return false;
+        });
+        effectApp.setRootWidget(effectRoot);
+        if (!effectApp.sendPointerMove(40, 50)) throw new Error("raw pointer callback did not handle move");
+        if (rawPointerCount !== 1) throw new Error("raw pointer callback count mismatch");
+    )JS"));
+    js.shutdown();
+}
+
 TEST(JsRuntimeTest, TypedControlsKeepTheirNativeBindingSurface) {
     JsRuntime js;
     ASSERT_TRUE(js.initialize());

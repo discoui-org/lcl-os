@@ -32,6 +32,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <string>
@@ -3421,9 +3422,44 @@ TEST(LclUiTest, PassiveBackdropEffectDoesNotRequireAFullWindowRoundedRaster) {
     std::vector<EffectRegion> effects;
     root->collectEffects(effects);
     ASSERT_EQ(effects.size(), 1u);
-    EXPECT_EQ(effects.front().source, EffectSource::Backdrop);
+    EXPECT_EQ(effects.front().source, EffectSource::SurfaceBackdrop);
     EXPECT_EQ(effects.front().cornerRadius, 20.0f);
     EXPECT_FLOAT_EQ(effects.front().cornerRoundness, 3.2f);
+}
+
+TEST(LclUiTest, AnyWidgetRecordsBackdropInDisplayListButSendsOnlySurfaceEffects) {
+    lcl::render::RasterCanvas canvas(true);
+    ASSERT_TRUE(canvas.initialize(160, 80, nullptr));
+
+    Button button("Blurred");
+    button.setWidth(120.0f);
+    button.setHeight(40.0f);
+    button.setBorderRadius(12.0f);
+    button.addEffect(EffectSource::Backdrop,
+                     {lcl::protocol::FilterType::Blur, 10.0f});
+    button.calculateLayout(160.0f, 80.0f);
+    button.syncLayout();
+
+    canvas.beginFrame();
+    button.draw(canvas, {0.0f, 0.0f, 160.0f, 80.0f});
+    canvas.endFrame();
+    const auto frame = canvas.takeDisplayListFrame();
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_TRUE(std::any_of(
+        frame->displayList.commands().begin(), frame->displayList.commands().end(),
+        [](const auto& command) {
+            return std::holds_alternative<graphics::ApplyBackdropEffectsCommand>(command);
+        }));
+
+    std::vector<EffectRegion> effects;
+    button.collectEffects(effects);
+    EXPECT_TRUE(effects.empty());
+
+    button.addEffect(EffectSource::SurfaceBackdrop,
+                     {lcl::protocol::FilterType::Blur, 10.0f});
+    button.collectEffects(effects);
+    ASSERT_EQ(effects.size(), 1u);
+    EXPECT_EQ(effects.front().source, EffectSource::SurfaceBackdrop);
 }
 
 TEST(LclUiTest, RasterCanvasInjectionPreservesRasterOutput) {

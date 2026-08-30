@@ -43,6 +43,10 @@ public:
 
     void draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) override;
 
+protected:
+    float effectCornerRadius() const noexcept override { return m_cornerRadius; }
+    float effectCornerRoundness() const noexcept override { return m_cornerRoundness; }
+
 private:
     std::string m_sourcePath;
     std::shared_ptr<const ImageData> m_sourceImage;

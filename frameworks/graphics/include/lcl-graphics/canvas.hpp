@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "lcl-graphics/display_list.hpp"
+#include "lcl-graphics/effects.hpp"
 #include "lcl-graphics/font.hpp"
 
 namespace lcl::graphics {
@@ -89,6 +90,9 @@ public:
     virtual void beginLayer(float) {}
     virtual void endLayer() {}
     virtual void clearRect(const RectF& rect, Color color) = 0;
+    /** Apply an in-app backdrop chain to pixels already painted below bounds. */
+    virtual void applyBackdropEffects(const RectF&, float, float, float,
+                                      const std::vector<EffectOp>&) {}
     virtual bool beginCachedLayer(CachedLayerId, const RectF&) { return false; }
     virtual bool beginCachedLayerUpdate(CachedLayerId, const RectF&,
                                         const RectF&) { return false; }

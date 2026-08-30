@@ -297,6 +297,36 @@ JSValue setOnFrame(JSContext* ctx, JSValueConst self, int argc, JSValueConst* ar
     return JS_UNDEFINED;
 }
 
+const char* pointerTypeName(lcl::ui::PointerEventType type) {
+    switch (type) {
+        case lcl::ui::PointerEventType::Move: return "move";
+        case lcl::ui::PointerEventType::Down: return "down";
+        case lcl::ui::PointerEventType::Up: return "up";
+        case lcl::ui::PointerEventType::Enter: return "enter";
+        case lcl::ui::PointerEventType::Leave: return "leave";
+        case lcl::ui::PointerEventType::Scroll: return "scroll";
+        case lcl::ui::PointerEventType::Cancel: return "cancel";
+    }
+    return "move";
+}
+
+JSValue setOnRawPointerEvent(JSContext* ctx, JSValueConst self, int argc,
+                             JSValueConst* argv) {
+    auto* target = window(ctx, self); if (!target) return JS_EXCEPTION;
+    if (argc < 1) return JS_ThrowTypeError(ctx,
+        "setOnRawPointerEvent requires a function or null");
+    auto store = detail::setWindowCallback(ctx, self, "window.rawPointer", argv[0]);
+    if (!store && !JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0])) return JS_EXCEPTION;
+    target->setOnRawPointerEvent(JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])
+        ? lcl::ui::RawPointerCallback{}
+        : lcl::ui::RawPointerCallback([store](const lcl::ui::PointerEvent& event) {
+            return detail::invokePointerCallback(
+                store, "window.rawPointer", pointerTypeName(event.type),
+                event.x, event.y, event.button, event.pointerId);
+        }));
+    return JS_UNDEFINED;
+}
+
 JSValue requestQuit(JSContext* ctx, JSValueConst self, int, JSValueConst*) {
     auto* target = window(ctx, self); if (!target) return JS_EXCEPTION;
     target->requestQuit(); return JS_UNDEFINED;
@@ -402,6 +432,7 @@ void registerWindowAppBindings(JSContext* ctx, JSValue proto, JSValue lcl) {
         {"setInitialBounds", initialBounds, 4}, {"setResizeConstraints", resizeConstraints, 1},
         {"setInputEnabled", setInputEnabled, 1}, {"isInputEnabled", getInputEnabled, 0},
         {"setOnResize", setOnResize, 1}, {"setOnFrame", setOnFrame, 1},
+        {"setOnRawPointerEvent", setOnRawPointerEvent, 1},
         {"requestQuit", requestQuit, 0}, {"sendPointerCancel", sendCancel, 2},
         {"sendPointerScroll", sendScroll, 4}, {"sendKeyDown", sendKeyDown, 3},
         {"sendKeyUp", sendKeyUp, 2}, {"sendTextInput", sendText, 1},

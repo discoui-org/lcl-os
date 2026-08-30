@@ -1,8 +1,10 @@
 #include "lcl-graphics/display_list_wire.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <type_traits>
@@ -20,6 +22,7 @@ enum class WireCommand : uint8_t {
     ClipRect,
     ClipPath,
     ClearRect,
+    ApplyBackdropEffects,
     BeginCachedLayer,
     EndCachedLayer,
     DrawCachedLayer,
@@ -31,6 +34,7 @@ enum class WireCommand : uint8_t {
 
 constexpr uint32_t kMaxWireCommands = 65536;
 constexpr uint32_t kMaxPathElements = 65536;
+constexpr uint32_t kMaxBackdropEffects = 16;
 
 class Writer {
 public:
@@ -399,6 +403,35 @@ DisplayListEncodeResult encodeDisplayList(const DisplayList& displayList,
                 opcode = WireCommand::ClearRect;
                 writeRect(payload, item.rect);
                 writeColor(payload, item.color);
+            } else if constexpr (std::is_same_v<T, ApplyBackdropEffectsCommand>) {
+                if (item.bounds.isEmpty() || item.effects.empty() ||
+                    item.effects.size() > kMaxBackdropEffects ||
+                    !finite(item.cornerRadius) ||
+                    !finite(item.cornerRoundness) || !finite(item.opacity)) {
+                    supported = false;
+                    return;
+                }
+                opcode = WireCommand::ApplyBackdropEffects;
+                writeRect(payload, item.bounds);
+                payload.f32(item.cornerRadius);
+                payload.f32(item.cornerRoundness);
+                payload.f32(item.opacity);
+                payload.u8(static_cast<uint8_t>(item.effects.size()));
+                for (const auto& effect : item.effects) {
+                    if (static_cast<uint8_t>(effect.type) >
+                            static_cast<uint8_t>(EffectType::Tint) ||
+                        !finite(effect.value) || !std::all_of(
+                            std::begin(effect.params), std::end(effect.params), finite)) {
+                        supported = false;
+                        return;
+                    }
+                    payload.u8(static_cast<uint8_t>(effect.type));
+                    payload.f32(effect.value);
+                    payload.u8(effect.profile);
+                    payload.u8(effect.reserved0);
+                    payload.u16(effect.reserved1);
+                    for (float parameter : effect.params) payload.f32(parameter);
+                }
             } else if constexpr (std::is_same_v<T, BeginCachedLayerCommand>) {
                 opcode = WireCommand::BeginCachedLayer;
                 payload.u64(item.id);
@@ -572,6 +605,41 @@ DisplayListDecodeResult decodeDisplayList(std::span<const uint8_t> bytes,
             Color color{};
             valid = readRect(payload, rect) && readColor(payload, color);
             if (valid) builder.clearRect(rect, color);
+            break;
+        }
+        case WireCommand::ApplyBackdropEffects: {
+            RectF bounds{};
+            valid = readRect(payload, bounds);
+            const float cornerRadius = payload.f32();
+            const float cornerRoundness = payload.f32();
+            const float opacity = payload.f32();
+            const uint8_t effectCount = payload.u8();
+            valid = valid && payload.ok() && !bounds.isEmpty() &&
+                effectCount > 0 && effectCount <= kMaxBackdropEffects &&
+                finite(cornerRadius) && finite(cornerRoundness) &&
+                finite(opacity);
+            std::vector<EffectOp> effects;
+            effects.reserve(effectCount);
+            for (uint8_t effectIndex = 0; valid && effectIndex < effectCount;
+                 ++effectIndex) {
+                EffectOp effect{};
+                const uint8_t type = payload.u8();
+                effect.type = static_cast<EffectType>(type);
+                effect.value = payload.f32();
+                effect.profile = payload.u8();
+                effect.reserved0 = payload.u8();
+                effect.reserved1 = payload.u16();
+                for (float& parameter : effect.params) parameter = payload.f32();
+                valid = payload.ok() && type <= static_cast<uint8_t>(EffectType::Tint) &&
+                    finite(effect.value) && std::all_of(
+                        std::begin(effect.params), std::end(effect.params), finite);
+                if (valid) effects.push_back(effect);
+            }
+            if (valid) {
+                builder.applyBackdropEffects(bounds, cornerRadius,
+                                             cornerRoundness, opacity,
+                                             std::move(effects));
+            }
             break;
         }
         case WireCommand::BeginCachedLayer: {

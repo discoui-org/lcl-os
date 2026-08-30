@@ -7,6 +7,26 @@
 
 namespace lcl::ui {
 
+namespace {
+
+constexpr size_t effectSourceIndex(EffectSource source) {
+    return static_cast<size_t>(source);
+}
+
+graphics::EffectOp toGraphicsEffect(const Effect& source) {
+    graphics::EffectOp result{};
+    result.type = static_cast<graphics::EffectType>(source.type);
+    result.value = source.value;
+    result.profile = source.profile;
+    result.reserved0 = source.reserved0;
+    result.reserved1 = source.reserved1;
+    std::copy(std::begin(source.params), std::end(source.params),
+              std::begin(result.params));
+    return result;
+}
+
+} // namespace
+
 std::atomic<uint64_t> Widget::s_nextObjectId{1};
 
 Widget::Widget()
@@ -91,6 +111,28 @@ void Widget::clearStyle() {
     styleDidChange();
     applyDeclarativeInteractionState();
     invalidatePaint();
+}
+
+void Widget::addEffect(EffectSource source, const Effect& effect) {
+    m_effects[effectSourceIndex(source)].push_back(effect);
+    invalidatePaint();
+}
+
+void Widget::setEffects(EffectSource source, std::vector<Effect> effects) {
+    auto& destination = m_effects[effectSourceIndex(source)];
+    destination = std::move(effects);
+    invalidatePaint();
+}
+
+void Widget::clearEffects(EffectSource source) {
+    auto& effects = m_effects[effectSourceIndex(source)];
+    if (effects.empty()) return;
+    effects.clear();
+    invalidatePaint();
+}
+
+const std::vector<Effect>& Widget::getEffects(EffectSource source) const {
+    return m_effects[effectSourceIndex(source)];
 }
 
 const lcl::theme::Theme& Widget::getTheme() const noexcept {
@@ -911,6 +953,18 @@ void Widget::beginPresentation(
 
     canvas.concatTransform(presentationMatrix());
     if (m_clipsToBounds) canvas.clipRect(m_absoluteBounds);
+    const auto& backdropEffects = getEffects(EffectSource::Backdrop);
+    if (!backdropEffects.empty()) {
+        std::vector<graphics::EffectOp> encoded;
+        encoded.reserve(backdropEffects.size());
+        for (const auto& effect : backdropEffects) {
+            encoded.push_back(toGraphicsEffect(effect));
+        }
+        canvas.applyBackdropEffects(
+            m_absoluteBounds, effectCornerRadius(), effectCornerRoundness(),
+            m_presentation.opacity,
+            encoded);
+    }
     canvas.beginLayer(m_presentation.opacity);
 }
 
@@ -945,10 +999,24 @@ void Widget::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
 
 void Widget::collectEffects(std::vector<EffectRegion>& outEffects) const {
     if (!m_visible) return;
+    const graphics::RectF abs = getAbsoluteBounds();
+    if (!abs.isEmpty()) {
+        for (const EffectSource source : {EffectSource::Layer,
+                                          EffectSource::SurfaceBackdrop}) {
+            const auto& effects = getEffects(source);
+            if (effects.empty()) continue;
+            EffectRegion region;
+            region.bounds = abs;
+            region.cornerRadius = effectCornerRadius();
+            region.cornerRoundness = effectCornerRoundness();
+            region.source = source;
+            region.filters = effects;
+            outEffects.push_back(std::move(region));
+        }
+    }
     for (const auto& child : m_children) {
         child->collectEffects(outEffects);
     }
-    (void)outEffects;
 }
 
 } // namespace lcl::ui

@@ -111,7 +111,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
             if (!readsNeighbors) continue;
             nonLocalEffectSurfaces.insert(surface.key);
             if (effectRegion.region.source !=
-                protocol::EffectSourceType::Backdrop) {
+                protocol::EffectSourceType::SurfaceBackdrop) {
                 nonLocalEffectsAreBackdropOnly = false;
             }
         }
@@ -877,7 +877,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
             matchingSurface->effectRegions.begin(),
             matchingSurface->effectRegions.end(), [](const auto& region) {
                 return region.region.source ==
-                        protocol::EffectSourceType::Backdrop &&
+                        protocol::EffectSourceType::SurfaceBackdrop &&
                     std::any_of(
                         region.filters.begin(), region.filters.end(),
                         [](const auto& filter) {
@@ -891,7 +891,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
                    !matchingSurface->effectRegions.empty()) {
             applySurfaceRegionEffects(
                 win, *matchingSurface,
-                protocol::EffectSourceType::Backdrop,
+                protocol::EffectSourceType::SurfaceBackdrop,
                 windowOpacity, group);
             if (!incrementalDamage && hasNonLocalBackdrop) {
                 retainBackdropBase(
@@ -985,7 +985,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
             if (matchingSurface->hasRenderableBuffer() &&
                 !matchingSurface->effectRegions.empty()) {
-                applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Foreground,
+                applySurfaceRegionEffects(win, *matchingSurface, protocol::EffectSourceType::Layer,
                                           windowOpacity, group);
             }
 

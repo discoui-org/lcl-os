@@ -176,8 +176,8 @@ bool validProfile(uint8_t value) {
     return value <= static_cast<uint8_t>(GlassProfile::Dense);
 }
 bool validSource(EffectSourceType value) {
-    return value >= EffectSourceType::Backdrop &&
-           value <= EffectSourceType::Foreground;
+    return value >= EffectSourceType::Layer &&
+           value <= EffectSourceType::SurfaceBackdrop;
 }
 bool validBlend(EffectBlendMode value) {
     return value >= EffectBlendMode::Normal && value <= EffectBlendMode::Plus;

@@ -19,8 +19,10 @@
 #include "include/core/SkPaint.h"
 #include "include/core/SkPathBuilder.h"
 #include "include/core/SkPixmap.h"
+#include "include/core/SkRRect.h"
 #include "include/core/SkSamplingOptions.h"
 #include "include/core/SkSurface.h"
+#include "include/effects/SkImageFilters.h"
 #include "include/gpu/ganesh/GrBackendSurface.h"
 #include "include/gpu/ganesh/GrDirectContext.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
@@ -144,6 +146,22 @@ SkPaint toSkPaint(const lcl::graphics::Paint& source) {
             break;
     }
     return paint;
+}
+
+sk_sp<SkImageFilter> makeBackdropFilter(
+        const std::vector<lcl::graphics::EffectOp>& effects,
+        float logicalToDeviceScale) {
+    sk_sp<SkImageFilter> result;
+    for (const auto& effect : effects) {
+        if (effect.type != lcl::graphics::EffectType::Blur) continue;
+        const float radius = std::max(0.0f, effect.value) *
+            std::max(0.001f, logicalToDeviceScale);
+        if (radius <= 0.05f) continue;
+        const float sigma = std::max(0.5f, radius * 0.5f);
+        result = SkImageFilters::Blur(
+            sigma, sigma, SkTileMode::kClamp, std::move(result));
+    }
+    return result;
 }
 
 } // namespace
@@ -414,6 +432,26 @@ bool SkiaDisplayListRenderer::replay(
                 paint.setBlendMode(SkBlendMode::kSrc);
                 paint.setColor4f(toSkColor(op.color));
                 canvas->drawRect(toSkRect(op.rect), paint);
+            } else if constexpr (std::is_same_v<
+                    T, lcl::graphics::ApplyBackdropEffectsCommand>) {
+                const float deviceScale = std::max(
+                    0.001f, canvas->getLocalToDeviceAs3x3().getMaxScale());
+                const auto filter = makeBackdropFilter(op.effects, deviceScale);
+                if (!filter || op.bounds.isEmpty()) return;
+                const SkRect bounds = toSkRect(op.bounds);
+                const float radius = std::clamp(op.cornerRadius, 0.0f,
+                    std::min(op.bounds.width, op.bounds.height) * 0.5f);
+                const SkRRect clip = SkRRect::MakeRectXY(
+                    bounds, radius, radius);
+                SkPaint paint;
+                paint.setAlphaf(std::clamp(op.opacity, 0.0f, 1.0f));
+                canvas->save();
+                canvas->clipRRect(clip, SkClipOp::kIntersect, true);
+                const SkCanvas::SaveLayerRec layer{
+                    &bounds, &paint, filter.get(), 0};
+                canvas->saveLayer(layer);
+                canvas->restore();
+                canvas->restore();
             } else if constexpr (std::is_same_v<T, lcl::graphics::BeginCachedLayerCommand>) {
                 if (cachedLayerReplayState || op.sourceBounds.isEmpty()) {
                     replaySucceeded = false;

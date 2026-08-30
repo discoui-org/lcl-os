@@ -24,6 +24,9 @@ TEST(DisplayListWireTest, RoundTripsBackendNeutralCommandsCanonically) {
         .close();
     builder.clipPath(clipPath, graphics::FillRule::EvenOdd);
     builder.clearRect({0.0f, 0.0f, 20.0f, 10.0f}, {1, 2, 3, 4});
+    builder.applyBackdropEffects(
+        {4.0f, 5.0f, 80.0f, 32.0f}, 12.0f, 2.0f, 1.0f,
+        {{graphics::EffectType::Blur, 8.0f}});
     builder.beginCachedLayerUpdate(42, {0.0f, 0.0f, 200.0f, 100.0f},
                                    {5.0f, 6.0f, 20.0f, 30.0f});
     builder.endCachedLayer();
@@ -162,7 +165,7 @@ TEST(DisplayListWireTest, RejectsTruncationTrailingBytesAndUnknownVersion) {
               graphics::DisplayListWireError::InvalidData);
 
     std::vector<uint8_t> future = encoded.bytes;
-    future[4] = 5;
+    future[4] = 6;
     future[5] = 0;
     EXPECT_EQ(graphics::decodeDisplayList(future).error,
               graphics::DisplayListWireError::UnsupportedVersion);

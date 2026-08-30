@@ -138,6 +138,10 @@ public:
     void useThemeStyle(lcl::theme::WidgetStyleRole role);
     void clearStyle();
     const lcl::theme::Theme& getTheme() const noexcept;
+    void addEffect(EffectSource source, const Effect& effect);
+    void setEffects(EffectSource source, std::vector<Effect> effects);
+    void clearEffects(EffectSource source);
+    const std::vector<Effect>& getEffects(EffectSource source) const;
     void setInteractionEnabled(bool enabled);
     bool isInteractionEnabled() const noexcept { return m_interactionEnabled; }
     virtual void setOnClick(std::function<void()> callback) {
@@ -204,6 +208,9 @@ protected:
     virtual graphics::RectF getUntransformedPaintBounds() const noexcept {
         return m_absoluteBounds;
     }
+    /** Shape used to mask effects. Plain widgets are rectangular. */
+    virtual float effectCornerRadius() const noexcept { return 0.0f; }
+    virtual float effectCornerRoundness() const noexcept { return 2.0f; }
     virtual void styleDidChange() {}
     /** Apply a control-owned default without marking it as an app override. */
     void setDefaultWidth(float width);
@@ -255,6 +262,7 @@ protected:
     bool m_declarativeHovered{false};
     bool m_declarativePressed{false};
     bool m_declarativeFocused{false};
+    std::array<std::vector<Effect>, 3> m_effects;
 
 private:
     friend class WindowApp;

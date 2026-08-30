@@ -86,6 +86,27 @@ std::optional<layout::Gutter> gutter(std::string_view value) {
     return std::nullopt;
 }
 
+std::optional<lcl::ui::EffectSource> effectSource(std::string_view value) {
+    if (value == "layer") return lcl::ui::EffectSource::Layer;
+    if (value == "backdrop") return lcl::ui::EffectSource::Backdrop;
+    if (value == "surface-backdrop" || value == "surfaceBackdrop")
+        return lcl::ui::EffectSource::SurfaceBackdrop;
+    return std::nullopt;
+}
+
+std::optional<lcl::ui::EffectType> effectType(std::string_view value) {
+    using Type = lcl::ui::EffectType;
+    if (value == "blur") return Type::Blur;
+    if (value == "brightness") return Type::Brightness;
+    if (value == "contrast") return Type::Contrast;
+    if (value == "saturation") return Type::Saturation;
+    if (value == "grayscale") return Type::Grayscale;
+    if (value == "invert") return Type::Invert;
+    if (value == "glass") return Type::Glass;
+    if (value == "tint") return Type::Tint;
+    return std::nullopt;
+}
+
 template <typename Setter>
 JSValue numericSetter(JSContext* ctx, JSValueConst thisValue, int argc,
                       JSValueConst* argv, const char* name, Setter setter) {
@@ -510,6 +531,43 @@ JSValue js_set_on_click(JSContext* ctx, JSValueConst self, int argc, JSValueCons
     return JS_UNDEFINED;
 }
 
+JSValue js_set_effect(JSContext* ctx, JSValueConst self, int argc,
+                      JSValueConst* argv) {
+    auto* target = widget(ctx, self); if (!target) return JS_EXCEPTION;
+    const auto sourceName = argc > 0 ? stringValue(ctx, argv[0]) : std::nullopt;
+    const auto typeName = argc > 1 ? stringValue(ctx, argv[1]) : std::nullopt;
+    const auto source = sourceName ? effectSource(*sourceName) : std::nullopt;
+    const auto type = typeName ? effectType(*typeName) : std::nullopt;
+    double value = 0.0, parameter1 = 0.0, parameter2 = 0.0;
+    if (!source || !type || argc < 3 || !numberValue(ctx, argv[2], value) ||
+        (argc > 3 && !numberValue(ctx, argv[3], parameter1)) ||
+        (argc > 4 && !numberValue(ctx, argv[4], parameter2))) {
+        return JS_ThrowTypeError(ctx,
+            "setEffect requires source, type, value, and optional finite parameters");
+    }
+    lcl::ui::Effect effect{};
+    effect.type = *type;
+    effect.value = static_cast<float>(value);
+    if (*type == lcl::ui::EffectType::Glass) {
+        effect.value = 1.0f;
+        effect.params[0] = static_cast<float>(std::max(0.0, value));
+        effect.params[1] = static_cast<float>(std::max(0.0, parameter1));
+        effect.params[2] = static_cast<float>(std::max(0.0, parameter2));
+    }
+    target->setEffects(*source, {effect});
+    return JS_UNDEFINED;
+}
+
+JSValue js_clear_effects(JSContext* ctx, JSValueConst self, int argc,
+                         JSValueConst* argv) {
+    auto* target = widget(ctx, self); if (!target) return JS_EXCEPTION;
+    const auto sourceName = argc > 0 ? stringValue(ctx, argv[0]) : std::nullopt;
+    const auto source = sourceName ? effectSource(*sourceName) : std::nullopt;
+    if (!source) return JS_ThrowRangeError(ctx, "unknown effect source");
+    target->clearEffects(*source);
+    return JS_UNDEFINED;
+}
+
 } // namespace
 
 void registerWidgetExtensions(JSContext* ctx, JSValue prototype) {
@@ -542,6 +600,7 @@ void registerWidgetExtensions(JSContext* ctx, JSValue prototype) {
         {"setInteractionStyle", js_set_interaction_style, 2},
         {"clearInteractionStyle", js_clear_interaction_style, 1},
         {"setInteractionEnabled", js_set_interaction_enabled, 1},
+        {"setEffect", js_set_effect, 5}, {"clearEffects", js_clear_effects, 1},
     };
     for (const auto& [name, function, argc] : methods)
         detail::addMethod(ctx, prototype, name, function, argc);

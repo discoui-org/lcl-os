@@ -8,6 +8,7 @@
 
 #include "lcl-graphics/path.hpp"
 #include "lcl-graphics/font.hpp"
+#include "lcl-graphics/effects.hpp"
 
 namespace lcl::graphics {
 
@@ -19,6 +20,14 @@ struct EndLayerCommand {};
 struct ClipRectCommand { RectF rect{}; };
 struct ClipPathCommand { Path path{}; FillRule fillRule{FillRule::NonZero}; };
 struct ClearRectCommand { RectF rect{}; Color color{}; };
+/** Filter pixels already painted below this command, clipped to the widget mask. */
+struct ApplyBackdropEffectsCommand {
+    RectF bounds{};
+    float cornerRadius{0.0f};
+    float cornerRoundness{2.0f};
+    float opacity{1.0f};
+    std::vector<EffectOp> effects;
+};
 struct BeginCachedLayerCommand {
     uint64_t id{0};
     RectF sourceBounds{};
@@ -78,7 +87,7 @@ struct DrawExternalBufferCommand {
 using DisplayCommand = std::variant<SaveCommand, RestoreCommand, ConcatCommand,
                                     BeginLayerCommand, EndLayerCommand,
                                     ClipRectCommand, ClipPathCommand,
-                                    ClearRectCommand,
+                                    ClearRectCommand, ApplyBackdropEffectsCommand,
                                     BeginCachedLayerCommand, EndCachedLayerCommand,
                                     DrawCachedLayerCommand,
                                     DrawPathCommand, DrawTextCommand,
@@ -108,6 +117,9 @@ public:
     void clipRect(const RectF& rect);
     void clipPath(const Path& path, FillRule fillRule = FillRule::NonZero);
     void clearRect(const RectF& rect, Color color);
+    void applyBackdropEffects(const RectF& bounds, float cornerRadius,
+                              float cornerRoundness, float opacity,
+                              std::vector<EffectOp> effects);
     void beginCachedLayer(uint64_t id, const RectF& sourceBounds);
     void beginCachedLayerUpdate(uint64_t id, const RectF& sourceBounds,
                                 const RectF& updateBounds);

@@ -2090,9 +2090,19 @@ bool WindowApp::renderFrame() {
         m_renderPass.end(*m_canvas);
         if (m_ipcConnected && m_socketFd >= 0) {
             auto toProtoSource = [](EffectSource source) {
-                return (source == EffectSource::Foreground)
-                    ? lcl::protocol::EffectSourceType::Foreground
-                    : lcl::protocol::EffectSourceType::Backdrop;
+                switch (source) {
+                    case EffectSource::Layer:
+                        return lcl::protocol::EffectSourceType::Layer;
+                    case EffectSource::SurfaceBackdrop:
+                        return lcl::protocol::EffectSourceType::SurfaceBackdrop;
+                    case EffectSource::Backdrop:
+                        // In-app backdrops are recorded in the DisplayList and
+                        // must never be evaluated against the desktop scene.
+                        // This fallback is unreachable because Widget excludes
+                        // Backdrop from the compositor effect graph.
+                        return lcl::protocol::EffectSourceType::Layer;
+                }
+                return lcl::protocol::EffectSourceType::Layer;
             };
 
             auto toProtoBlend = [](EffectBlend blend) {

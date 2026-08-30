@@ -1,5 +1,7 @@
 #include "lcl-graphics/display_list.hpp"
 
+#include <utility>
+
 namespace lcl::graphics {
 
 const std::vector<DisplayCommand>& DisplayList::commands() const noexcept {
@@ -24,6 +26,12 @@ void DisplayListBuilder::clipPath(const Path& path, FillRule fillRule) {
 }
 void DisplayListBuilder::clearRect(const RectF& rect, Color color) {
     m_commands.emplace_back(ClearRectCommand{rect, color});
+}
+void DisplayListBuilder::applyBackdropEffects(
+        const RectF& bounds, float cornerRadius, float cornerRoundness,
+        float opacity, std::vector<EffectOp> effects) {
+    m_commands.emplace_back(ApplyBackdropEffectsCommand{
+        bounds, cornerRadius, cornerRoundness, opacity, std::move(effects)});
 }
 void DisplayListBuilder::beginCachedLayer(uint64_t id, const RectF& sourceBounds) {
     m_commands.emplace_back(BeginCachedLayerCommand{id, sourceBounds, std::nullopt});

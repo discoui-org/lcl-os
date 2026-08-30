@@ -62,6 +62,10 @@ public:
         float opacity = 1.0f) override;
 
     void clearRect(const lcl::graphics::RectF& rect, lcl::graphics::Color color) override;
+    void applyBackdropEffects(
+        const lcl::graphics::RectF& bounds, float cornerRadius,
+        float cornerRoundness, float opacity,
+        const std::vector<lcl::graphics::EffectOp>& effects) override;
     void drawPath(const lcl::graphics::Path& path,
                   const lcl::graphics::Paint& paint) override;
     void drawRect(const lcl::graphics::RectF& rect, lcl::graphics::Color color) override;

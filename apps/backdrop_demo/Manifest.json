@@ -1,0 +1,9 @@
+{
+  "id": "org.lcl.backdrop-demo",
+  "name": "Backdrop Demo",
+  "version": "1.0.0",
+  "runtime": "org.lcl.javascript",
+  "type": "gui",
+  "executable": "Executables/main.js",
+  "icon": "Resources/Icon.png"
+}

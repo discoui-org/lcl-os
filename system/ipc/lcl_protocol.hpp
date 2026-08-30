@@ -10,7 +10,7 @@
 namespace lcl::protocol {
 
 constexpr uint32_t LCL_PROTOCOL_MAGIC = 0x4C434C50; // "LCLP"
-constexpr uint32_t LCL_PROTOCOL_VERSION = 27;
+constexpr uint32_t LCL_PROTOCOL_VERSION = 28;
 constexpr uint32_t LCL_PROTOCOL_MAX_PAYLOAD = 1024u * 1024u;
 constexpr uint32_t LCL_PROTOCOL_WIRE_HEADER_SIZE = 24u;
 constexpr uint32_t LCL_LAUNCH_ICON_MAX_DIMENSION = 256u;
@@ -140,8 +140,12 @@ enum class GlassProfile : uint8_t {
 };
 
 enum class EffectSourceType : uint8_t {
-    Backdrop = 0,
-    Foreground = 1
+    /** Filter the application's own presented layer. */
+    Layer = 0,
+    /** Compatibility spelling for the old foreground source. */
+    Foreground = Layer,
+    /** Backdrop from the compositor scene behind an application surface. */
+    SurfaceBackdrop = 1,
 };
 
 enum class EffectBlendMode : uint8_t {
@@ -190,7 +194,7 @@ struct EffectRegion {
     float cornerRadius{0.0f};
     float cornerRoundness{2.0f};
     EffectBoundsPolicy boundsPolicy{EffectBoundsPolicy::Local};
-    EffectSourceType source{EffectSourceType::Backdrop};
+    EffectSourceType source{EffectSourceType::SurfaceBackdrop};
     EffectBlendMode blendMode{EffectBlendMode::Normal};
     uint16_t filterCount{0};
     uint32_t filterOffset{0};

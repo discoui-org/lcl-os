@@ -24,6 +24,10 @@ void Canvas::drawDisplayList(const DisplayList& displayList) {
                 clipPath(op.path, op.fillRule);
             } else if constexpr (std::is_same_v<T, ClearRectCommand>) {
                 clearRect(op.rect, op.color);
+            } else if constexpr (std::is_same_v<T, ApplyBackdropEffectsCommand>) {
+                applyBackdropEffects(op.bounds, op.cornerRadius,
+                                     op.cornerRoundness, op.opacity,
+                                     op.effects);
             } else if constexpr (std::is_same_v<T, BeginCachedLayerCommand>) {
                 if (op.updateBounds) {
                     beginCachedLayerUpdate(op.id, op.sourceBounds,
