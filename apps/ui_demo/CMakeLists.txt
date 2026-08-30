@@ -9,8 +9,8 @@ add_executable(lcl_ui_demo
 )
 
 target_include_directories(lcl_ui_demo PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/lcl-ui/include
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/frameworks/ui/include
 )
 
 target_link_libraries(lcl_ui_demo PRIVATE

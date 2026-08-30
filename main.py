@@ -26,14 +26,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.skia_package import android_skia_cmake_args
+from tooling.build.skia_package import android_skia_cmake_args
+from tooling.paths import (
+    ANDROID_HIDL_ROOT,
+    ANDROID_ZSTD_BINARY,
+    HOST_BUILD_DIR,
+    ISO_IMAGES_DIR,
+    PROJECT_ROOT,
+    android_build_dir,
+)
 
-ROOT_DIR = Path(__file__).resolve().parent
-SCRIPTS_DIR = ROOT_DIR / "scripts"
-BUILD_DIR = ROOT_DIR / "build"
-ANDROID_BUILD_DIR = ROOT_DIR / "build-android-arm64"
-ANDROID_HIDL_ROOT = BUILD_DIR / "android-hidl-v31"
-ANDROID_ZSTD_BINARY = BUILD_DIR / "android-tools-arm64" / "zstd"
+ROOT_DIR = PROJECT_ROOT
+BUILD_TOOL_DIR = ROOT_DIR / "tooling" / "build"
+DEPLOY_TOOL_DIR = ROOT_DIR / "tooling" / "deploy"
+EMULATOR_TOOL_DIR = ROOT_DIR / "tooling" / "emulator"
+ANDROID_BUILD_DIR = android_build_dir("arm64-v8a")
 ANDROID_NATIVE_CLIENT_ARTIFACTS = {
     "lcl-desktop-shell": Path("lcl-desktop-shell"),
     "lcl-mobile-shell": Path("lcl-mobile-shell"),
@@ -80,7 +87,7 @@ def cmd_qemu(args: argparse.Namespace) -> None:
             err("--viewer/--skin Device Viewer currently supports only x86_64.")
             sys.exit(2)
 
-        viewer_args = [sys.executable, str(ROOT_DIR / "emulator" / "main.py")]
+        viewer_args = [sys.executable, str(EMULATOR_TOOL_DIR / "main.py")]
         if args.skin:
             viewer_args.extend(["--skin", args.skin])
         if args.gestalt:
@@ -96,7 +103,7 @@ def cmd_qemu(args: argparse.Namespace) -> None:
         cmd_utm(args)
         return
 
-    run_qemu_py = SCRIPTS_DIR / "run_qemu.py"
+    run_qemu_py = EMULATOR_TOOL_DIR / "run_qemu.py"
     qemu_args = [sys.executable, str(run_qemu_py), "--run"]
 
     arch = normalize_arch(args.arch)
@@ -139,7 +146,7 @@ def cmd_qemu(args: argparse.Namespace) -> None:
 
 
 def cmd_utm(args: argparse.Namespace) -> None:
-    run_utm_py = SCRIPTS_DIR / "run_utm.py"
+    run_utm_py = EMULATOR_TOOL_DIR / "run_utm.py"
     arch = normalize_arch(args.arch)
     utm_args = [sys.executable, str(run_utm_py), "--arch", arch]
     if getattr(args, "rebuild", False):
@@ -151,7 +158,7 @@ def cmd_utm(args: argparse.Namespace) -> None:
 
 def cmd_android_avd(args: argparse.Namespace) -> None:
     """Build and launch the fixed x86_64 Android AVD substrate."""
-    run_avd_py = SCRIPTS_DIR / "run_avd.py"
+    run_avd_py = EMULATOR_TOOL_DIR / "run_avd.py"
     avd_args = [sys.executable, str(run_avd_py), "--arch", "x86_64"]
     if getattr(args, "avd_name", None):
         avd_args.extend(["--avd-name", str(args.avd_name)])
@@ -250,9 +257,9 @@ def build_android_phone_artifacts(
     """Build Android and canonical userspace for the connected target ABI."""
     is_arm64 = abi == "arm64-v8a"
     target_arch = "aarch64" if is_arm64 else "x86_64"
-    android_build_dir = (
-        ROOT_DIR / "build-android-arm64" if is_arm64
-        else ROOT_DIR / "build-android"
+    build_dir = (
+        android_build_dir("arm64-v8a") if is_arm64
+        else android_build_dir("x86_64")
     )
     android_platform = "android-33" if is_arm64 else "android-35"
 
@@ -261,7 +268,7 @@ def build_android_phone_artifacts(
         if not hidl_config.is_file():
             log("Preparing official Android HIDL headers and device libraries...")
             subprocess.check_call(
-                [sys.executable, str(SCRIPTS_DIR / "prepare_android_hidl.py")],
+                [sys.executable, str(BUILD_TOOL_DIR / "prepare_android_hidl.py")],
                 cwd=ROOT_DIR,
             )
 
@@ -271,14 +278,14 @@ def build_android_phone_artifacts(
         log("Building pinned ARM64 zstd deployment helper...")
         subprocess.check_call(
             [
-                sys.executable, str(SCRIPTS_DIR / "prepare_android_zstd.py"),
+                sys.executable, str(BUILD_TOOL_DIR / "prepare_android_zstd.py"),
                 "--ndk", str(ndk), "--output", str(ANDROID_ZSTD_BINARY),
             ],
             cwd=ROOT_DIR,
         )
     log(f"Configuring {abi} Android compositor with NDK: {ndk}")
     configure_args = [
-        "cmake", "-S", str(ROOT_DIR), "-B", str(android_build_dir),
+        "cmake", "-S", str(ROOT_DIR), "-B", str(build_dir),
         f"-DCMAKE_TOOLCHAIN_FILE={ndk / 'build/cmake/android.toolchain.cmake'}",
         f"-DANDROID_ABI={abi}",
         f"-DANDROID_PLATFORM={android_platform}",
@@ -294,7 +301,7 @@ def build_android_phone_artifacts(
     if is_arm64 and use_rootfs and not args.software_clients:
         android_targets.extend(ANDROID_NATIVE_CLIENT_TARGETS)
     build_args = [
-        "cmake", "--build", str(android_build_dir),
+        "cmake", "--build", str(build_dir),
         "--target", *android_targets, "-j", str(jobs),
     ]
     if args.rebuild:
@@ -306,7 +313,7 @@ def build_android_phone_artifacts(
         log(f"Building canonical {target_arch} rootfs...")
         subprocess.check_call(
             [
-                sys.executable, str(SCRIPTS_DIR / "build_rootfs.py"),
+                sys.executable, str(BUILD_TOOL_DIR / "build_rootfs.py"),
                 "--arch", target_arch, "--size", str(args.size),
             ],
             cwd=ROOT_DIR,
@@ -319,7 +326,7 @@ def cmd_android(args: argparse.Namespace) -> None:
         cmd_android_avd(args)
         return
 
-    deploy_args = [sys.executable, str(SCRIPTS_DIR / "deploy_android_device.py")]
+    deploy_args = [sys.executable, str(DEPLOY_TOOL_DIR / "deploy_android_device.py")]
     if args.restore_only:
         run_android_deploy([*deploy_args, "--restore-only"])
         return
@@ -368,25 +375,25 @@ def run_android_deploy(command: list[str]) -> None:
 
 
 def cmd_build(args: argparse.Namespace) -> None:
-    run_qemu_py = SCRIPTS_DIR / "run_qemu.py"
+    run_qemu_py = EMULATOR_TOOL_DIR / "run_qemu.py"
     arch = normalize_arch(args.arch)
     subprocess.check_call([sys.executable, str(run_qemu_py), "--build-only", "--arch", arch])
 
 
 def cmd_package(args: argparse.Namespace) -> None:
-    run_qemu_py = SCRIPTS_DIR / "run_qemu.py"
+    run_qemu_py = EMULATOR_TOOL_DIR / "run_qemu.py"
     arch = normalize_arch(args.arch)
     subprocess.check_call([sys.executable, str(run_qemu_py), "--package-only", "--arch", arch])
 
 
 def cmd_iso(args: argparse.Namespace) -> None:
-    build_iso_py = SCRIPTS_DIR / "build_iso.py"
+    build_iso_py = BUILD_TOOL_DIR / "build_iso.py"
     arch = normalize_arch(args.arch)
     subprocess.check_call([sys.executable, str(build_iso_py), "--arch", arch])
 
 
 def cmd_rootfs(args: argparse.Namespace) -> None:
-    build_rootfs_py = SCRIPTS_DIR / "build_rootfs.py"
+    build_rootfs_py = BUILD_TOOL_DIR / "build_rootfs.py"
     arch = normalize_arch(args.arch)
     rootfs_args = [sys.executable, str(build_rootfs_py), "--arch", arch]
     if getattr(args, "size", None):
@@ -396,10 +403,10 @@ def cmd_rootfs(args: argparse.Namespace) -> None:
 
 def cmd_flash(args: argparse.Namespace) -> None:
     arch = normalize_arch(args.arch)
-    iso_file = BUILD_DIR / f"lcl-os-{arch}.iso"
+    iso_file = ISO_IMAGES_DIR / f"lcl-os-{arch}.iso"
     if not iso_file.is_file():
         log(f"ISO {iso_file} not found. Building ISO first...")
-        build_iso_py = SCRIPTS_DIR / "build_iso.py"
+        build_iso_py = BUILD_TOOL_DIR / "build_iso.py"
         subprocess.check_call([sys.executable, str(build_iso_py), "--arch", arch])
 
     dev = args.dev or os.environ.get("USB_DEV") or "/dev/disk/by-id/usb-SanDisk_Cruzer_Blade_04019222101620123055-0:0"
@@ -420,17 +427,17 @@ def cmd_flash(args: argparse.Namespace) -> None:
 
 
 def cmd_fonts(args: argparse.Namespace) -> None:
-    fetch_fonts_py = SCRIPTS_DIR / "fetch_fonts.py"
+    fetch_fonts_py = BUILD_TOOL_DIR / "fetch_fonts.py"
     subprocess.check_call([sys.executable, str(fetch_fonts_py)])
 
 
 def cmd_clean(args: argparse.Namespace) -> None:
-    run_qemu_py = SCRIPTS_DIR / "run_qemu.py"
+    run_qemu_py = EMULATOR_TOOL_DIR / "run_qemu.py"
     subprocess.check_call([sys.executable, str(run_qemu_py), "--clean"])
 
 
 def cmd_test(args: argparse.Namespace) -> None:
-    build_host = ROOT_DIR / "build_host"
+    build_host = HOST_BUILD_DIR
     if not build_host.is_dir():
         log("Configuring host build directory for tests...")
         subprocess.check_call(["cmake", "-B", str(build_host), "-S", str(ROOT_DIR), "-DCMAKE_BUILD_TYPE=Debug"])
@@ -539,7 +546,7 @@ def main() -> None:
     )
     p_android.add_argument(
         "--gestalt", type=Path, metavar="JSON",
-        help="Override automatic devices/<ADB model>.json selection",
+        help="Override automatic config/devices/<ADB model>.json selection",
     )
 
     # ---- build ----

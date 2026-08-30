@@ -92,7 +92,7 @@ Leo: Sayın Katrina, ...
 
 ### 4. Stage 4C.3 Android Substrate & Canonical Userspace Invariants
 - **Platform Substrate Boundary:** The Android system image contains ONLY platform-specific substrate components (`lcl-core-android`, `lcl.rc`, `lcl-bootstrap.sh`). Zero user applications or desktop daemons exist inside `system.img`.
-- **Exact Canonical RootFS Consumption:** The exact byte-for-byte artifact `build/rootfs/lcl-rootfs-x86_64.ext4` is attached as a secondary block device (`/dev/block/vdf`) and mounted on `/mnt/lcl`.
+- **Exact Canonical RootFS Consumption:** The exact byte-for-byte artifact `out/rootfs/lcl-rootfs-x86_64.ext4` is attached as a secondary block device (`/dev/block/vdf`) and mounted on `/mnt/lcl`.
 - **Idempotent Mounts & Isolated Probing:** Device discovery probes MUST use an isolated temporary mountpoint (`/mnt/lcl-probe`) and unmount after probing. If `/mnt/lcl/System/Core/lcl-sessiond` is already present, bootstrap must reuse the existing mount to prevent `EBUSY` and stacked overlays.
 - **Kernel devpts Propagation:** Standard `mount --bind /dev /mnt/lcl/dev` does not propagate child mounts. Bootstrap MUST explicitly execute `mount --bind /dev/pts /mnt/lcl/dev/pts` so that glibc `posix_openpt()` can allocate pseudo-terminals for `Terminal.app` without `ENODEV` errors.
 - **Shared `/Runtime` tmpfs IPC Bridge:** `/Runtime` tmpfs is bind-mounted to `/mnt/lcl/Runtime`, allowing `lcl-core-android` on the substrate and `lcl-sessiond`/`lcl-desktop-shell`/apps inside the canonical chroot to communicate over identical Unix domain sockets.

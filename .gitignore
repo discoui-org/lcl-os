@@ -1,11 +1,11 @@
 # Build & Compilation outputs
-build/
-build_host/
-build_*/
-build-*/
-bin/
-lib/
-out/
+/build/
+/build_host/
+/build_*/
+/build-*/
+/bin/
+/lib/
+/out/
 
 # IDE and Editor settings
 .vscode/
@@ -35,7 +35,10 @@ install_manifest.txt
 *.exe
 
 # Locally built Android graphics probe executable
+tooling/probes/android_graphics/test_from_binder
+# Legacy local probe output; retained until the user removes old build trees.
 tools/android_graphics_probe/test_from_binder
+tools/android_graphics_probe/build/
 
 # Operating System files
 .DS_Store

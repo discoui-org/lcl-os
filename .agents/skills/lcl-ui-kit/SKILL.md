@@ -62,7 +62,7 @@ boundary and any subtree containing a `ScrollView` stays on the tiled path.
 
 ## 2. Key Framework Classes
 
-### `lcl::ui::WindowApp` ([`window_app.hpp`](../../../lcl-ui/include/lcl-ui/core/window_app.hpp))
+### `lcl::ui::WindowApp` ([`window_app.hpp`](../../../frameworks/ui/include/lcl-ui/core/window_app.hpp))
 Manages application initialization, window surface creation, raster producer grants, IPC event processing, frame restoration after rasterd restart, and presentation pacing.
 
 - `WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, float height, const std::string& title)`: Constructor with logical dimensions and an explicit backend-neutral Canvas.
@@ -71,7 +71,7 @@ Manages application initialization, window surface creation, raster producer gra
 - `bool connectCompositor(const std::string& socketPath = "/Runtime/lcl-compositor.sock")`: Connects to compositor IPC and registers a v27 surface.
 - `void runEventLoop()`: Runs the main non-blocking event loop at **144 Hz target frame pacing** (~6.9ms period).
 
-### `lcl::ui::Widget` ([`widget.hpp`](../../../lcl-ui/include/lcl-ui/widgets/widget.hpp))
+### `lcl::ui::Widget` ([`widget.hpp`](../../../frameworks/ui/include/lcl-ui/widgets/widget.hpp))
 Base class for all UI elements.
 
 - Type-safe layout methods (`setDirection`, `setJustifyContent`,
@@ -115,7 +115,7 @@ Base class for all UI elements.
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/text.hpp"
-#include "render/raster_canvas.hpp"
+#include "system/render/raster_canvas.hpp"
 
 using namespace lcl::ui;
 

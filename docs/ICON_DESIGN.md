@@ -75,7 +75,7 @@ font family before rendering the SVGs.
 Generate the PNG derivatives with:
 
 ```sh
-python3 tools/convert_icons_to_png.py
+python3 tooling/assets/convert_icons_to_png.py
 ```
 
 The converter creates an isolated Fontconfig environment, resolves the local

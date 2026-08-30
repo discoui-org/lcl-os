@@ -19,7 +19,7 @@
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
 #include "lcl-ui/widgets/toggle.hpp"
-#include "render/raster_canvas.hpp"
+#include "system/render/raster_canvas.hpp"
 
 using namespace lcl::ui;
 

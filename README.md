@@ -10,19 +10,32 @@ LCL OS runs directly on bare-metal Linux DRM/KMS and `evdev` (as well as Android
 
 ```text
 lcl-os/
-├── iso_root/                 # Limine bootloader configuration & boot tree
-├── src/                      # Core OS Engine & Compositor
-│   ├── core/                 # DRM/KMS, EGL, Evdev Input, Hotplug, IPC, Session
-│   ├── render/               # Ready-layer production, presentation, WindowManager
-│   └── tools/                # Core System Daemons & Binaries (lcl-core, lcl-terminal, lcl-open)
-├── lcl-ui/                   # Decoupled UI Application Framework (LCL Layout, Widget Tree)
-├── apps/                     # User-Space Desktop Applications (Terminal.app, UIDemo.app, ShaderDemo.app)
-├── docs/                     # Technical Documentation & Guides
-│   ├── ARCHITECTURE.md       # Low-level system & architectural design
-│   ├── LCL_UI_FRAMEWORK.md   # Complete lcl-ui developer API guide
-│   └── DEVELOPER_GUIDE.md    # Build, testing, and contribution instructions
-└── scripts/                  # Unified CLI launcher, ISO Builder, Android Image Builder & Packaging
+├── frameworks/               # Graphics, motion, theme, UI and window chrome libraries
+├── system/                   # Compositor, scene, input, IPC, session, shells and raster service
+├── platforms/                # Common contracts plus Linux and Android substrates
+├── apps/                     # Terminal and native/JavaScript UI demos
+├── tooling/                  # Build, deploy, emulator, generator, probe and asset tools
+├── packaging/iso/            # Limine boot configuration and ISO overlay
+├── config/                   # Gestalt and device profiles
+├── assets/                   # Fonts, icons and source wallpapers
+├── tests/                    # Framework, system, platform, integration and tooling tests
+├── docs/                     # Technical documentation and guides
+└── out/                      # Generated builds, images, caches and tool downloads (ignored)
 ```
+
+Generated artifacts use one canonical layout defined by `tooling/paths.py`:
+
+```text
+out/host
+out/qemu/{x86_64,aarch64}
+out/android/{x86_64,aarch64}
+out/rootfs
+out/images/{android,iso}
+out/{utm,cache,tools,skia,visual-baselines}
+```
+
+Legacy `build*` directories remain ignored local artifacts and are not migrated
+or accepted as validation of this layout.
 
 ---
 
@@ -34,17 +47,17 @@ LCL OS provides a unified CLI driver via `./main.py`:
 ./main.py --help
 ```
 
-### 1. Run the Full Unit Test Suite (167 Tests)
+### 1. Run the Full Unit Test Suite
 ```bash
 ./main.py test
 ```
-*Executes all 167 GoogleTest CTest cases covering IPC protocols, window management, LCL raster rendering, event routing, and JS runtimes in ~1.7s.*
+*Executes the current GoogleTest/CTest suite covering IPC protocols, window management, LCL raster rendering, event routing, and JS runtimes.*
 
 ### 2. Build Core System & Canonical RootFS
 ```bash
 ./main.py build
 ```
-*Compiles C++20 engine binaries, builds application bundles, and produces the canonical userspace image `build/rootfs/lcl-rootfs-x86_64.ext4`.*
+*Compiles C++20 engine binaries, builds application bundles, and produces the canonical userspace image `out/rootfs/lcl-rootfs-x86_64.ext4`.*
 
 ### 3. Run in QEMU Bare-Metal Environment (DRM/KMS + Evdev)
 ```bash
@@ -89,7 +102,7 @@ ADB deployment command:
 ./main.py android --no-build
 ```
 
-The deployer reads `ro.product.cpu.abi`: `x86_64` selects `build-android/` and
+The deployer reads `ro.product.cpu.abi`: `x86_64` selects `out/android/x86_64/` and
 `lcl-rootfs-x86_64.ext4`, while `arm64-v8a` selects the physical-device ARM64
 artifacts. Root may come from an already-root adbd, `adb root`, or `su -c`.
 
@@ -103,9 +116,9 @@ When LCL OS boots, launch applications from the built-in terminal or using the `
   ```bash
   open UIDemo.app
   ```
-- **Launch Procedural Shader Animation Demo:**
+- **Launch the JavaScript UI Demo:**
   ```bash
-  open ShaderDemo.app
+  open UIDemoJS.app
   ```
 - **Launch Additional Terminal Instances:**
   ```bash

@@ -52,8 +52,8 @@ changed for this gate.
 
 | Check | Result |
 | --- | --- |
-| `cmake --build build_host -j2` | Passed |
-| `ctest --test-dir build_host --output-on-failure` | Passed, 377/377 |
+| Host build | Passed in the pre-directory-migration capture; rebuild under `out/host` is required |
+| Unit/integration suite | Passed in the pre-directory-migration capture; no fixed test count is normative |
 | `git diff --check` | Required after every migration change |
 
 The aligned expectations are:

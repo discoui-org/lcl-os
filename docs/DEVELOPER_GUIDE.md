@@ -22,7 +22,7 @@ To build the complete OS kernel tree, compositor daemon, window manager, CLI uti
 ./main.py build
 ```
 
-To build a bootable hybrid ISO (`build/lcl-os.iso`) powered by Limine bootloader:
+To build a bootable hybrid ISO (`out/images/iso/lcl-os.iso`) powered by Limine bootloader:
 ```bash
 make iso
 ```
@@ -58,9 +58,9 @@ make qemu-iso UEFI=1
 
 ## 3. Running Unit Tests & Test Suite
 
-LCL OS features a comprehensive GoogleTest CTest suite (**167 passing test cases**) validating:
+LCL OS features a comprehensive GoogleTest/CTest suite validating:
 - IPC Protocol header magic, opcode serialization, and socket lifecycle
-- App Bundle (`metadata.json`) scanner and parser
+- Strict App Bundle (`Manifest.json` + `Resources/`) scanner and parser
 - Display scaling DPIScale calculations and subpixel antialiasing
 - Unix Domain Socket permission (`0600`) and kernel peer credentials (`SO_PEERCRED`)
 - Dynamic Input Hotplug (`AF_NETLINK` uevent) and Touchpad `EV_ABS` delta math
@@ -75,7 +75,7 @@ Run all unit tests:
 ```
 Or directly inside docker:
 ```bash
-docker run --rm -v $(pwd):/src -w /src lcl-os-qemu-builder:latest ctest --test-dir /src/build --output-on-failure
+docker run --rm -v $(pwd):/src -w /src lcl-os-qemu-builder:latest ctest --test-dir /src/out/host --output-on-failure
 ```
 
 ---
@@ -113,7 +113,7 @@ exported by the generated init process before `lcl-core` and `lcl-sessiond`
 start:
 
 ```bash
-python3 scripts/run_qemu.py --run --trace-frames --debug-layout --debug-overlay
+python3 tooling/emulator/run_qemu.py --run --trace-frames --debug-layout --debug-overlay
 ```
 
 ---
@@ -132,7 +132,7 @@ Create `apps/my_custom_app/` containing `CMakeLists.txt` and `main.cpp`.
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
-#include "render/raster_canvas.hpp"
+#include "system/render/raster_canvas.hpp"
 
 using namespace lcl::ui;
 
@@ -165,8 +165,8 @@ set(CMAKE_CXX_STANDARD 20)
 add_executable(lcl_my_custom_app main.cpp)
 
 target_include_directories(lcl_my_custom_app PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/lcl-ui/include
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/frameworks/ui/include
 )
 
 target_link_libraries(lcl_my_custom_app PRIVATE
@@ -178,8 +178,9 @@ target_link_libraries(lcl_my_custom_app PRIVATE
 
 Add `add_subdirectory(apps/my_custom_app)` to `apps/CMakeLists.txt`.
 
-### Step 4: Register in QEMU Packaging (`scripts/run_qemu.py`)
-Add binary path and `.app` bundle installation in `scripts/run_qemu.py` under `prepare_initramfs()`.
+### Step 4: Register in RootFS Packaging (`tooling/build/build_rootfs.py`)
+Add the binary and strict `Manifest.json` + `Resources/` bundle installation to
+`tooling/build/build_rootfs.py`.
 
 ---
 

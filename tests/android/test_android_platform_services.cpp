@@ -1,4 +1,4 @@
-#include "platform/android/android_platform_services.hpp"
+#include "platforms/android/android_platform_services.hpp"
 #include <android/hardware_buffer.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>

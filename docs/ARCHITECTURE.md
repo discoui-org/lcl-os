@@ -29,13 +29,13 @@ The LCL architecture consists of 5 main decoupled layers:
 ## 2. Layer Details & Subsystems
 
 ### I. Hardware & Input Layer
-* **Location:** `src/core/display/`, `src/core/input/`
+* **Location:** `platforms/linux/`, `platforms/android/`, `system/input/`
 * **Language:** C++20 / C
 * **Display Management (DRM/KMS):** Directly drives GPU framebuffers via Linux DRM/KMS (`/dev/dri/card0`, `/dev/dri/renderD128`) with `virtio_gpu` VirGL hardware acceleration support.
 * **Input Subsystem (`evdev` / `libinput`):** Captures hardware keyboard, mouse, and touch events directly from `/dev/input/event*` nodes and dispatches them to the desktop event queue.
 
 ### II. Rendering & Window Management Layer
-* **Location:** `src/render/`, `src/apps/`
+* **Location:** `system/render/`, `apps/`
 * **Language:** C++20
 * **Logical graphics model (`lcl-graphics`):** Widgets and window chrome emit
   immutable backend-neutral `DisplayList` commands using float logical
@@ -104,7 +104,7 @@ The LCL architecture consists of 5 main decoupled layers:
 * **Terminal Engine (`TerminalApp` & `PTYManager`):** Pseudo-terminal (`/dev/pts/`) controller spawning interactive GNU Bash shells. Features font-agnostic canvas layout, `TIOCSWINSZ` PTY window size synchronization, VT100 write-head overwrite state tracking, and typing-aware 500ms blinking inverted block cursor rendering.
 
 ### III. Session, IPC & Application Bundle Subsystem
-* **Location:** `src/core/session/`, `src/core/ipc/`, `src/tools/`
+* **Location:** `system/session/`, `system/ipc/`, `apps/`
 * **Session Authority (`lcl-sessiond`):** Owns the cached `.app` catalog,
   manifest-backed canonical application IDs, default-profile launch, process
   instance IDs, child reaping, and blocking launch completion. It has no
@@ -114,11 +114,14 @@ The LCL architecture consists of 5 main decoupled layers:
   requests cover catalog snapshots and launch/process-exit lifecycle; this is
   distinct from compositor protocol v27 surface IPC.
 * **Secure Unix Domain Socket IPC:** Compositor protocol v27 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Application-facing surface IPC carries lifecycle, configure, input, effect, action, producer-grant and frame-feedback messages; it accepts no client layer descriptor or DisplayList commit. A 128-bit surface grant authorizes the same process on rasterd's owner-only socket. Only rasterd's private channels may publish `LayerReady` storage and synchronization handles to the compositor. Edge-to-edge remains platform-neutral, and neither desktop nor mobile policy may rewrite client alpha. `PopupSurface` and `AttachedSurface` are composed and hit-tested inside their parent WindowGroup rather than entering the normal window stack.
-* **Native App Bundle Architecture (`.app`):** macOS-style `.app` bundles containing `metadata.json`, `bin/`, and `assets/`. Manifests declare a stable `id`; older bundles receive a deterministic `bundle.<name>` compatibility ID.
+* **Native App Bundle Architecture (`.app`):** strict bundles contain
+  `Manifest.json` and `Resources/`. The manifest must declare canonical `id`,
+  `name`, `executable`, and `Resources/`-scoped `icon` fields. Legacy
+  metadata-only bundles are rejected.
 * **System Launcher (`lcl-open` / `/usr/bin/open`):** Native C++ session client. It sends `LaunchRequest` to sessiond and optionally waits for `ProcessExited`; it never forks or execs applications itself.
 
 ### IV. Storage & Asynchronous File System
-* **Location:** `src/fs/`
+* **Status:** Architectural requirement; no dedicated source subtree currently exists.
 * **Architecture:** Non-blocking asynchronous I/O over Linux Kernel VFS using `io_uring` and POSIX async primitives to prevent main rendering thread stutters.
 
 ### V. Retained Presentation Mission (Normative North Star)
@@ -211,47 +214,31 @@ visible WindowGroup without discarding the coalesced target that follows it.
 
 ```text
 lcl-os/
-├── Makefile                        # make build | qemu | qemu NATIVE=1
-├── CMakeLists.txt                  # Root CMake build configuration (with BUILD_TESTS support)
-├── assets/                         # System fonts and visual assets
-│   └── fonts/                      # TrueType font assets (Inter)
-├── docs/                           # Documentation & Agent prompts
-│   ├── ARCHITECTURE.md             # System architecture specification
-│   ├── AG_NEW_INSTANCE_PROMPT.md   # Katrina instance bootstrapper prompt
-│   └── Leo_NEW_INSTANCE_PROMPT.md # Leo instance bootstrapper prompt
-├── scripts/                        # System build & QEMU launcher
-│   ├── run_qemu.py                 # Cross-platform QEMU launcher (Linux/macOS/Windows)
-│   ├── run_qemu.sh                 # Thin wrapper -> run_qemu.py
-│   ├── Dockerfile.qemu             # linux/amd64 builder image (macOS/Windows)
-│   └── fetch_fonts.sh              # Font asset fetcher
-├── shell/                          # Shell Presentation Layer
-├── tests/                          # CTest & GoogleTest native unit testing suite
-│   ├── test_lcl_protocol.cpp       # IPC binary protocol & header tests
-│   ├── test_app_bundle_parser.cpp  # .app bundle metadata parsing & directory scan
-│   └── test_ipc_manager.cpp        # Unix Domain Socket & SO_PEERCRED authentication
-└── src/                            # Core C++20 Engine & Applications
-    ├── main.cpp                    # Application entry point & compositor loop
-    ├── apps/                       # Native system applications
-    │   ├── sysmon/                 # System Monitor application
-    │   └── terminal/               # LCL Terminal application & VT100 engine
-    ├── core/                       # Core engine subsystems
-    │   ├── display/                # DRM/KMS & OpenGL/Vulkan display backend
-    │   ├── input/                  # evdev & libinput event listeners
-    │   ├── ipc/                    # Secure Unix Domain Socket IPC server
-    │   ├── session/                # App registry, session RPC, lifecycle authority
-    │   └── terminal/               # PTY master/slave manager
-    ├── render/                     # Layer-production raster and presentation primitives
-    ├── fs/                         # io_uring & POSIX async file system
-    └── tools/                      # Native CLI utilities (lcl-open, lcl-sessiond)
+├── Makefile                        # Stable user-facing command entry point
+├── main.py                         # Unified Python CLI entry point
+├── CMakeLists.txt                  # Global dependencies and top-level subdirectories
+├── frameworks/                     # graphics, motion, theme, ui, window_chrome
+├── system/                         # compositor, scene, input, IPC, session, shells, render, JS
+├── platforms/                      # common contracts, Linux and Android substrates
+│   └── android/generated/          # Versioned AIDL and HIDL generated sources
+├── apps/                           # terminal, ui_demo and ui_demo_js
+├── tooling/                        # build, deploy, emulator, generators, probes and assets
+│   └── paths.py                    # Canonical generated-output paths
+├── packaging/iso/                  # Limine configuration and ISO overlay
+├── config/                         # Gestalt and device profiles
+├── assets/                         # fonts, icons and source wallpapers
+├── tests/                          # framework/system/platform/integration/tooling tests
+├── docs/                           # Architecture and developer documentation
+└── out/                            # Ignored builds, images, caches and downloaded tools
 ```
 
 ### Build & QEMU (dev hosts)
 
-**Host-side Fast Unit Testing** (Runs in ~0.03 seconds natively on Linux host without QEMU):
+**Host-side Unit Testing**:
 ```bash
-cmake -B build -DBUILD_TESTS=ON
-cmake --build build --target lcl_unit_tests
-ctest --test-dir build --output-on-failure
+cmake -B out/host -DBUILD_TESTS=ON
+cmake --build out/host --target lcl_unit_tests
+ctest --test-dir out/host --output-on-failure
 ```
 
 **System Integration & Compositor Execution (QEMU Docker Builder)**:
@@ -375,8 +362,8 @@ LCL OS decouples the user-space runtime environment from the underlying platform
 
 ```text
 +-----------------------------------------------------------------------------------------+
-|                  Canonical LCL Userspace (build/rootfs/lcl-rootfs-x86_64.ext4)          |
-|  - Desktop Apps: Terminal.app, UIDemo.app, UIDemoJS.app, ShaderDemo.app                |
+|                   Canonical LCL Userspace (out/rootfs/lcl-rootfs-x86_64.ext4)           |
+|  - Desktop Apps: Terminal.app, UIDemo.app, UIDemoJS.app                                |
 |  - System Daemons: lcl-sessiond, lcl-desktop-shell, lcl-open                           |
 |  - User Home (/Users/Rei), Shell (/System/Tools/bash), Fonts, C/C++ glibc Libraries     |
 +-----------------------------------------------------------------------------------------+

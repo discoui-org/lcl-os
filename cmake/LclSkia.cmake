@@ -19,7 +19,7 @@ function(lcl_import_skia)
         endif()
         if(skia_package_name)
             set(LCL_SKIA_ROOT
-                "${PROJECT_SOURCE_DIR}/out/skia-package/${skia_package_name}")
+                "${CMAKE_SOURCE_DIR}/out/skia/packages/${skia_package_name}")
         endif()
     endif()
     if(NOT LCL_SKIA_ROOT)
@@ -83,6 +83,7 @@ function(lcl_import_skia)
 endfunction()
 
 function(lcl_enable_skia_replay target)
-    target_sources(${target} PRIVATE src/render/skia_display_list_renderer.cpp)
+    target_sources(${target} PRIVATE
+        ${CMAKE_SOURCE_DIR}/system/render/skia_display_list_renderer.cpp)
     target_link_libraries(${target} PUBLIC LCL::Skia ${CMAKE_DL_LIBS})
 endfunction()

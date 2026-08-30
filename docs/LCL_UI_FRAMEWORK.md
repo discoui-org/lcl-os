@@ -59,7 +59,7 @@ or native-buffer attach message. These are raster-service backend details, not
 ## 2. Key Framework Classes
 
 ### `lcl::ui::WindowApp`
-*Header:* [`lcl-ui/include/lcl-ui/core/window_app.hpp`](../lcl-ui/include/lcl-ui/core/window_app.hpp)
+*Header:* [`frameworks/ui/include/lcl-ui/core/window_app.hpp`](../frameworks/ui/include/lcl-ui/core/window_app.hpp)
 
 `WindowApp` is the top-level application container. It handles window surface
 creation, raster producer-grant management, IPC message dispatching, retained
@@ -117,7 +117,7 @@ plain `Container` trees so window traversal can continue past them.
 ---
 
 ### `lcl::ui::Widget`
-*Header:* [`lcl-ui/include/lcl-ui/widgets/widget.hpp`](../lcl-ui/include/lcl-ui/widgets/widget.hpp)
+*Header:* [`frameworks/ui/include/lcl-ui/widgets/widget.hpp`](../frameworks/ui/include/lcl-ui/widgets/widget.hpp)
 
 Base polymorphic class for all UI components.
 
@@ -207,10 +207,10 @@ protected:
 
 ### Built-In Widgets
 
-#### `lcl::ui::Container` ([`container.hpp`](../lcl-ui/include/lcl-ui/widgets/container.hpp))
+#### `lcl::ui::Container` ([`container.hpp`](../frameworks/ui/include/lcl-ui/widgets/container.hpp))
 A layout container supporting background colors, border colors, padding, and corner rounding.
 
-#### `lcl::ui::Button` ([`button.hpp`](../lcl-ui/include/lcl-ui/widgets/button.hpp))
+#### `lcl::ui::Button` ([`button.hpp`](../frameworks/ui/include/lcl-ui/widgets/button.hpp))
 An interactive button component supporting hover/pressed states and click callbacks:
 ```cpp
 auto btn = std::make_unique<Button>("Click Me");
@@ -219,7 +219,7 @@ btn->setOnClick([]() {
 });
 ```
 
-#### `lcl::ui::Text` ([`text.hpp`](../lcl-ui/include/lcl-ui/widgets/text.hpp))
+#### `lcl::ui::Text` ([`text.hpp`](../frameworks/ui/include/lcl-ui/widgets/text.hpp))
 A vector typography label component supporting custom font sizes and text content:
 ```cpp
 auto label = std::make_unique<Text>("Hello LCL OS");
@@ -227,7 +227,7 @@ label->setFontSize(18.0f);
 label->setTextColor(0xFFFFFFFF);
 ```
 
-#### `lcl::ui::ExternalBufferView` ([`external_buffer.hpp`](../lcl-ui/include/lcl-ui/widgets/external_buffer.hpp))
+#### `lcl::ui::ExternalBufferView` ([`external_buffer.hpp`](../frameworks/ui/include/lcl-ui/widgets/external_buffer.hpp))
 
 A retained leaf for rotating immutable SHM or DMA-BUF producer frames. The
 release callback receives ownership of an optional release-fence descriptor;
@@ -257,7 +257,7 @@ separate controls. All of these controls draw logical geometry through
 ---
 
 ### `lcl::graphics::Canvas`
-*Header:* [`lcl-graphics/include/lcl-graphics/canvas.hpp`](../lcl-graphics/include/lcl-graphics/canvas.hpp)
+*Header:* [`frameworks/graphics/include/lcl-graphics/canvas.hpp`](../frameworks/graphics/include/lcl-graphics/canvas.hpp)
 
 The backend-neutral 2D drawing contract available inside `Widget::draw(...)`:
 - `drawRect(rect, color)`
@@ -295,7 +295,7 @@ Create `main.cpp` inside `apps/my_app/`:
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/text.hpp"
-#include "render/raster_canvas.hpp"
+#include "system/render/raster_canvas.hpp"
 
 using namespace lcl::ui;
 

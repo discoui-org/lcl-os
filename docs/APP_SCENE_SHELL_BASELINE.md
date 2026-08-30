@@ -22,10 +22,10 @@ Automated checks captured at this commit:
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Host build | `cmake --build build_host -j2` | Passed; all default targets built |
-| Unit/integration tests | `ctest --test-dir build_host --output-on-failure` | Passed; 58/58 tests, 0.32 s |
+| Host build | Pre-directory-migration capture | Passed; rebuild under `out/host` is required |
+| Unit/integration tests | Pre-directory-migration capture | Passed; no fixed test count is normative |
 | Patch whitespace | `git diff --check` | Passed |
-| QEMU package/smoke | `python3 scripts/run_qemu.py --package-only --native --gpu` | Not runnable in the capture environment because Docker was unavailable |
+| QEMU package/smoke | `python3 tooling/emulator/run_qemu.py --package-only --native --gpu` | Not runnable in the capture environment because Docker was unavailable |
 
 The QEMU row is a required manual gate, not an accepted failure. It must be
 completed on the normal development host before Step 2 begins.
@@ -108,7 +108,7 @@ paths received equivalent revisioned-state coverage:
 Use a fixed display configuration so later measurements are comparable:
 
 ```sh
-python3 scripts/run_qemu.py --run --width 1920 --height 1080 --scale 1 --gpu
+python3 tooling/emulator/run_qemu.py --run --width 1920 --height 1080 --scale 1 --gpu
 ```
 
 Record the compositor refresh rate and renderer backend from the boot log. The
