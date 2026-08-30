@@ -781,6 +781,66 @@ wait
     return sha_map
 
 
+def _is_visible_manifest_text(value: object, maximum_length: int) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= maximum_length
+        and "\x00" not in value
+        and all(ord(character) >= 0x20 and ord(character) != 0x7F for character in value)
+    )
+
+
+def _is_valid_dotted_identifier(value: object, maximum_length: int = 128) -> bool:
+    if not _is_visible_manifest_text(value, maximum_length):
+        return False
+
+    assert isinstance(value, str)
+    labels = value.split(".")
+    if len(labels) < 2:
+        return False
+    for label in labels:
+        if not label or not ("a" <= label[0] <= "z") or label.endswith("-"):
+            return False
+        if any(not ("a" <= character <= "z" or "0" <= character <= "9" or character == "-")
+               for character in label):
+            return False
+    return True
+
+
+def _is_safe_bundle_relative_path(value: object, required_first_component: str) -> bool:
+    if not _is_visible_manifest_text(value, 512):
+        return False
+
+    assert isinstance(value, str)
+    if "\\" in value:
+        return False
+    path = Path(value)
+    return (
+        not path.is_absolute()
+        and bool(path.parts)
+        and path.parts[0] == required_first_component
+        and all(component not in ("", ".", "..") for component in path.parts)
+    )
+
+
+def _resolve_bundle_file(bundle_root: Path, relative_path: str) -> Path | None:
+    try:
+        resolved = (bundle_root / relative_path).resolve(strict=True)
+        resolved.relative_to(bundle_root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return resolved if resolved.is_file() else None
+
+
+def _manifest_object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    manifest: dict[str, object] = {}
+    for key, value in pairs:
+        if key in manifest:
+            raise ValueError(f"duplicate key '{key}'")
+        manifest[key] = value
+    return manifest
+
+
 def validate_app_bundles(staging_dir: Path) -> None:
     """Strictly validates all .app bundles in the canonical application scopes."""
     apps_dirs = [
@@ -798,23 +858,51 @@ def validate_app_bundles(staging_dir: Path) -> None:
         for app_dir in parent.iterdir():
             if not app_dir.is_dir() or not app_dir.name.endswith(".app"):
                 continue
+            if app_dir.is_symlink():
+                raise RuntimeError(f"Bundle {app_dir.name} must not be a symlink")
+
+            try:
+                bundle_root = app_dir.resolve(strict=True)
+            except OSError as ex:
+                raise RuntimeError(f"Could not resolve bundle {app_dir.name}: {ex}")
 
             manifest_file = app_dir / "Manifest.json"
-            if not manifest_file.is_file():
+            if manifest_file.is_symlink() or not manifest_file.is_file():
                 raise RuntimeError(f"Bundle {app_dir.name} in {parent.name} is missing Manifest.json")
 
             resources_dir = app_dir / "Resources"
-            if not resources_dir.is_dir():
+            if resources_dir.is_symlink() or not resources_dir.is_dir():
                 raise RuntimeError(f"Bundle {app_dir.name} is missing Resources directory")
+            try:
+                resources_root = resources_dir.resolve(strict=True)
+                resources_root.relative_to(bundle_root)
+            except (OSError, RuntimeError, ValueError):
+                raise RuntimeError(f"Bundle {app_dir.name} Resources directory escapes its bundle")
+
+            executables_dir = app_dir / "Executables"
+            if not executables_dir.is_dir():
+                raise RuntimeError(f"Bundle {app_dir.name} is missing Executables directory")
+            try:
+                executables_root = executables_dir.resolve(strict=True)
+                executables_root.relative_to(bundle_root)
+            except (OSError, RuntimeError, ValueError):
+                raise RuntimeError(f"Bundle {app_dir.name} Executables directory escapes its bundle")
 
             try:
-                manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+                manifest = json.loads(
+                    manifest_file.read_text(encoding="utf-8"),
+                    object_pairs_hook=_manifest_object_without_duplicate_keys,
+                )
             except Exception as ex:
                 raise RuntimeError(f"Invalid JSON in {manifest_file}: {ex}")
+            if not isinstance(manifest, dict):
+                raise RuntimeError(f"Manifest for {app_dir.name} must be a JSON object")
 
             app_id = manifest.get("id")
-            if not app_id:
-                raise RuntimeError(f"Bundle {app_dir.name} is missing 'id' field in Manifest.json")
+            if not _is_valid_dotted_identifier(app_id):
+                raise RuntimeError(f"Bundle {app_dir.name} has an invalid 'id' field in Manifest.json")
+
+            assert isinstance(app_id, str)
 
             if app_id in seen_app_ids:
                 log(f"  ⚠ Duplicate app ID '{app_id}' found in {parent.name}; keeping higher-priority entry from {seen_app_ids[app_id]}")
@@ -822,36 +910,48 @@ def validate_app_bundles(staging_dir: Path) -> None:
                 seen_app_ids[app_id] = parent.name
 
             app_name = manifest.get("name")
-            if not app_name:
-                raise RuntimeError(f"Bundle {app_dir.name} is missing 'name' field in Manifest.json")
+            if not _is_visible_manifest_text(app_name, 256):
+                raise RuntimeError(f"Bundle {app_dir.name} has an invalid 'name' field in Manifest.json")
 
             icon_rel = manifest.get("icon")
-            if (
-                not isinstance(icon_rel, str)
-                or Path(icon_rel).is_absolute()
-                or not Path(icon_rel).parts
-                or Path(icon_rel).parts[0] != "Resources"
-                or ".." in Path(icon_rel).parts
-            ):
+            if not _is_safe_bundle_relative_path(icon_rel, "Resources"):
                 raise RuntimeError(
                     f"Bundle {app_dir.name} must declare an icon under Resources/"
                 )
-            if not (app_dir / icon_rel).is_file():
-                raise RuntimeError(f"Bundle {app_dir.name} icon not found: {app_dir / icon_rel}")
+            assert isinstance(icon_rel, str)
+            icon_path = _resolve_bundle_file(bundle_root, icon_rel)
+            if icon_path is None or not icon_path.is_relative_to(resources_root):
+                raise RuntimeError(f"Bundle {app_dir.name} icon not found inside Resources/")
 
             exec_ref = manifest.get("executable")
-            if not exec_ref:
-                raise RuntimeError(f"Bundle {app_dir.name} is missing 'executable' field in Manifest.json")
+            if not _is_safe_bundle_relative_path(exec_ref, "Executables"):
+                raise RuntimeError(
+                    f"Bundle {app_dir.name} must declare an executable under Executables/"
+                )
+            assert isinstance(exec_ref, str)
+            target_exec = _resolve_bundle_file(bundle_root, exec_ref)
+            if target_exec is None or not target_exec.is_relative_to(executables_root):
+                raise RuntimeError(f"Bundle {app_dir.name} executable not found inside Executables/")
 
-            if exec_ref.startswith("/"):
-                target_exec = staging_dir / exec_ref.lstrip("/")
-            else:
-                target_exec = app_dir / exec_ref
-
-            if not target_exec.is_file():
-                raise RuntimeError(f"Bundle {app_dir.name} resolved executable not found: {target_exec}")
+            version = manifest.get("version")
+            if version is not None and not _is_visible_manifest_text(version, 128):
+                raise RuntimeError(f"Bundle {app_dir.name} has an invalid optional 'version' field")
 
             runtime = manifest.get("runtime")
+            if runtime is not None and not _is_visible_manifest_text(runtime, 128):
+                raise RuntimeError(f"Bundle {app_dir.name} has an invalid optional 'runtime' field")
+            bundle_type = manifest.get("type", "gui")
+            if bundle_type not in ("gui", "cli"):
+                raise RuntimeError(f"Bundle {app_dir.name} has an invalid 'type' field")
+
+            requested_permissions = manifest.get("requestedPermissions", [])
+            if not isinstance(requested_permissions, list) or any(
+                not _is_valid_dotted_identifier(permission) for permission in requested_permissions
+            ):
+                raise RuntimeError(f"Bundle {app_dir.name} has invalid requestedPermissions")
+            if len(requested_permissions) != len(set(requested_permissions)):
+                raise RuntimeError(f"Bundle {app_dir.name} requests a permission more than once")
+
             if runtime == "org.lcl.javascript" or exec_ref.endswith(".js"):
                 interp = staging_dir / "System" / "Core" / "lcl-js"
                 if not interp.is_file():

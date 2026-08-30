@@ -15,6 +15,8 @@ struct AppBundleMetadata {
     std::string icon;            // e.g. "Resources/Icon.png"
     std::string type;            // "gui" or "cli"
     std::string runtime;         // e.g. "org.lcl.javascript"
+    // Declarations only. They grant nothing until a permission broker evaluates them.
+    std::vector<std::string> requestedPermissions;
     bool valid{false};
 };
 

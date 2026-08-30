@@ -42,18 +42,18 @@ sözleşmesini kullanmasıdır.
 
 ## 1. Bundle ve uygulama kimliği sertleştirmesi
 
-- [ ] `Manifest.json` ayrıştırmasını basit string aramasından gerçek JSON
+- [x] `Manifest.json` ayrıştırmasını basit string aramasından gerçek JSON
   ayrıştırıcısına taşı.
-- [ ] Manifest şemasına `requestedPermissions` dizisini ekle.
-- [ ] Uygulama ID biçimini doğrula ve kurulumda sabit canonical ID olarak sakla.
-- [ ] `executable` alanını bundle kökü altında zorunlu kıl; mutlak yol,
+- [x] Manifest şemasına `requestedPermissions` dizisini ekle.
+- [x] Uygulama ID biçimini doğrula ve kurulumda sabit canonical ID olarak sakla.
+- [x] `executable` alanını bundle kökü altında zorunlu kıl; mutlak yol,
   `..` bileşeni ve bundle dışına çıkan symlink'leri reddet.
 - [ ] Icon, resource ve executable erişimlerinde race/symlink kaçışını önle.
 - [ ] Sistem, kullanıcı ve geliştirme bundle kaynaklarının öncelik ve güven
   kurallarını tanımla.
 - [ ] Üçüncü taraf bundle için imza/doğrulama tasarımını belirle; imza yoksa
   yalnız geliştirici modunda kurulum kararını açıkça tanımla.
-- [ ] Bundle parser ve registry için geçersiz JSON, path traversal, mutlak
+- [x] Bundle parser ve registry için geçersiz JSON, path traversal, mutlak
   executable, duplicate ID ve symlink testleri ekle.
 
 ## 2. Kimlik ve kalıcı uygulama depolaması

@@ -93,6 +93,19 @@ TEST_F(SessionServiceTest, RegistryUsesManifestIdAndFindsBundleAlias) {
     EXPECT_TRUE(registry.find((tempDir / "Example.app").string()).has_value());
 }
 
+TEST_F(SessionServiceTest, RegistryKeepsFirstBundleForDuplicateCanonicalId) {
+    const fs::path first = createBundle("HigherPriority/First.app", "org.lcl.duplicate");
+    createBundle("LowerPriority/Second.app", "org.lcl.duplicate");
+
+    AppRegistry registry({(tempDir / "HigherPriority").string(),
+                          (tempDir / "LowerPriority").string()});
+    registry.refresh();
+
+    ASSERT_EQ(registry.entries().size(), 1u);
+    EXPECT_EQ(registry.entries().front().appId, "org.lcl.duplicate");
+    EXPECT_EQ(registry.entries().front().bundlePath, first.string());
+}
+
 TEST_F(SessionServiceTest, ServiceOwnsLaunchAndExitLifecycle) {
     createBundle("Lifecycle.app", "org.lcl.lifecycle");
     SessionService service({tempDir.string()});
