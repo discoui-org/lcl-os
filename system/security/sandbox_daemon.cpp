@@ -5,6 +5,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <signal.h>
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -137,6 +139,7 @@ bool SandboxDaemon::initialize(std::string& error) {
 }
 
 void SandboxDaemon::shutdown() {
+    childReaper_.terminateAll(SIGTERM);
     for (const int descriptor : clientDescriptors_) {
         close(descriptor);
     }
@@ -167,6 +170,16 @@ void SandboxDaemon::removeVerifiedApplication(const std::string& appId) {
 
 std::size_t SandboxDaemon::registeredApplicationCount() const {
     return authorizer_.size();
+}
+
+bool SandboxDaemon::recordLaunchedChild(const std::string& appId,
+                                        const SandboxLaunchResult& launch,
+                                        std::string& error) {
+    return childReaper_.track(appId, launch, error);
+}
+
+std::size_t SandboxDaemon::runningChildCount() const {
+    return childReaper_.size();
 }
 
 SandboxLaunchResult SandboxDaemon::handleLaunchRequest(const SandboxLaunchRequest& request) const {
@@ -282,6 +295,24 @@ void SandboxDaemon::removeClient(int descriptor) {
     close(descriptor);
 }
 
+void SandboxDaemon::reapChildren() {
+    for (const SandboxChildExit& exited : childReaper_.reap()) {
+        SandboxProcessExited event{};
+        event.instanceId = exited.instanceId;
+        event.exitCode = exited.exitCode;
+        std::vector<std::uint8_t> payload;
+        if (!encodeSandboxProcessExited(event, payload)) {
+            continue;
+        }
+        const auto clients = clientDescriptors_;
+        for (const int descriptor : clients) {
+            if (!sendPacket(descriptor, SandboxOpcode::ProcessExited, 1, payload)) {
+                removeClient(descriptor);
+            }
+        }
+    }
+}
+
 void SandboxDaemon::poll() {
     if (serverDescriptor_ < 0) {
         return;
@@ -294,6 +325,7 @@ void SandboxDaemon::poll() {
             serviceClient(descriptor);
         }
     }
+    reapChildren();
 }
 
 } // namespace lcl::security

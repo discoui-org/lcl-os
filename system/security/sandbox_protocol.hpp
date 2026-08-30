@@ -18,6 +18,7 @@ enum class SandboxOpcode : std::uint32_t {
     LaunchRequest = 1,
     LaunchResult = 2,
     ErrorResponse = 3,
+    ProcessExited = 4,
 };
 
 struct SandboxHeader {
@@ -33,6 +34,12 @@ struct DecodedSandboxPacket {
     std::vector<std::uint8_t> payload;
 };
 
+/** Daemon-owned process lifecycle notification for the session authority. */
+struct SandboxProcessExited {
+    std::uint64_t instanceId{0};
+    std::int32_t exitCode{0};
+};
+
 bool encodeSandboxPacket(const SandboxHeader& header, const std::vector<std::uint8_t>& payload,
                          std::vector<std::uint8_t>& packet);
 bool decodeSandboxPacket(const std::uint8_t* packet, std::size_t packetSize,
@@ -45,6 +52,10 @@ bool encodeSandboxLaunchResult(const SandboxLaunchResult& result,
                                std::vector<std::uint8_t>& payload);
 bool decodeSandboxLaunchResult(const std::vector<std::uint8_t>& payload,
                                SandboxLaunchResult& result);
+bool encodeSandboxProcessExited(const SandboxProcessExited& event,
+                                std::vector<std::uint8_t>& payload);
+bool decodeSandboxProcessExited(const std::vector<std::uint8_t>& payload,
+                                SandboxProcessExited& event);
 /** A bounded diagnostic for an invalid sandbox control-plane packet. */
 bool encodeSandboxError(const std::string& message, std::vector<std::uint8_t>& payload);
 bool decodeSandboxError(const std::vector<std::uint8_t>& payload, std::string& message);

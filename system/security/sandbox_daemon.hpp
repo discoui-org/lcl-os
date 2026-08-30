@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <vector>
 
+#include "system/security/sandbox_child_reaper.hpp"
 #include "system/security/sandbox_launch_authorizer.hpp"
 #include "system/security/sandbox_protocol.hpp"
 
@@ -63,6 +64,11 @@ public:
     void removeVerifiedApplication(const std::string& appId);
     std::size_t registeredApplicationCount() const;
 
+    /** Trusted child-launch path records only a successful daemon-owned child. */
+    bool recordLaunchedChild(const std::string& appId, const SandboxLaunchResult& launch,
+                             std::string& error);
+    std::size_t runningChildCount() const;
+
     /** Handles only an already-decoded narrow request; useful to trusted tests. */
     SandboxLaunchResult handleLaunchRequest(const SandboxLaunchRequest& request) const;
 
@@ -76,9 +82,11 @@ private:
     void serviceClient(int descriptor);
     void removeClient(int descriptor);
     void sendErrorAndClose(int descriptor, std::uint32_t requestId, const std::string& message);
+    void reapChildren();
 
     SandboxDaemonConfig config_;
     SandboxLaunchAuthorizer authorizer_;
+    SandboxChildReaper childReaper_;
     int serverDescriptor_{-1};
     bool ownsSocketPath_{false};
     std::vector<int> clientDescriptors_;

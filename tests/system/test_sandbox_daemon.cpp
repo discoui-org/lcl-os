@@ -2,6 +2,9 @@
 
 #include "system/security/sandbox_daemon.hpp"
 
+#include <sys/wait.h>
+#include <unistd.h>
+
 namespace lcl::security {
 namespace {
 
@@ -47,6 +50,35 @@ TEST(SandboxDaemonTest, DoesNotTurnMalformedRequestsIntoLaunches) {
     EXPECT_EQ(result.instanceId, 12U);
 }
 
+TEST(SandboxChildReaperTest, ReportsOnlyTheDaemonOwnedChildExit) {
+    const pid_t child = fork();
+    ASSERT_GE(child, 0);
+    if (child == 0) {
+        _exit(23);
+    }
+
+    SandboxChildReaper reaper;
+    SandboxLaunchResult launch{};
+    launch.status = SandboxLaunchStatus::Launched;
+    launch.instanceId = 103;
+    launch.pid = static_cast<std::int32_t>(child);
+    launch.processGroupId = static_cast<std::int32_t>(child);
+    std::string error;
+    ASSERT_TRUE(reaper.track("org.lcl.sandbox-daemon", launch, error)) << error;
+
+    std::vector<SandboxChildExit> exited;
+    for (int attempt = 0; attempt < 100 && exited.empty(); ++attempt) {
+        exited = reaper.reap();
+        if (exited.empty()) {
+            usleep(1000);
+        }
+    }
+    ASSERT_EQ(exited.size(), 1U);
+    EXPECT_EQ(exited.front().instanceId, 103U);
+    EXPECT_EQ(exited.front().exitCode, 23);
+    EXPECT_EQ(reaper.size(), 0U);
+}
+
 TEST(SandboxProtocolTest, RoundTripsBoundedErrorDiagnostics) {
     std::vector<std::uint8_t> payload;
     ASSERT_TRUE(encodeSandboxError("sandbox request is invalid", payload));
@@ -54,6 +86,18 @@ TEST(SandboxProtocolTest, RoundTripsBoundedErrorDiagnostics) {
     EXPECT_TRUE(decodeSandboxError(payload, decoded));
     EXPECT_EQ(decoded, "sandbox request is invalid");
     EXPECT_FALSE(encodeSandboxError("", payload));
+}
+
+TEST(SandboxProtocolTest, RoundTripsSandboxProcessExit) {
+    SandboxProcessExited expected{};
+    expected.instanceId = 17;
+    expected.exitCode = 137;
+    std::vector<std::uint8_t> payload;
+    ASSERT_TRUE(encodeSandboxProcessExited(expected, payload));
+    SandboxProcessExited decoded{};
+    ASSERT_TRUE(decodeSandboxProcessExited(payload, decoded));
+    EXPECT_EQ(decoded.instanceId, expected.instanceId);
+    EXPECT_EQ(decoded.exitCode, expected.exitCode);
 }
 
 } // namespace

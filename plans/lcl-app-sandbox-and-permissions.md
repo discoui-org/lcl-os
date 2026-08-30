@@ -130,26 +130,21 @@ sözleşmesini kullanmasıdır.
 - [x] Protected FD, process group, UID/GID drop, capability clear,
   `no_new_privs` ve allowlist environment uygulayan; zorunlu kernel aşaması
   kaydı yoksa fail-closed kalan sandbox child launcher çekirdeğini oluştur.
-- [x] Root-only `lcl-sandboxd` kontrol düzlemi ekle: root-owned socket dizini,
-  ayrı non-root session-service UID/GID'si için `0600` socket ve her bağlantıda
-  `SO_PEERCRED` doğrulaması kullan; IPC üzerinden yalnız bound launch request
-  kabul et ve kernel enforcement hazır değilse doğrudan exec yerine fail-closed
-  sonuç döndür.
 - [ ] Küçük, root çalışan `lcl-sandboxd` servisinin sorumluluğunu yalnız
   doğrulanmış app ID çözümü, sandbox kurulumu ve child reaping ile sınırla.
 - [ ] `lcl-sessiond`'yi uygulama yaşam döngüsü otoritesi olarak koru; doğrudan
   `fork/exec` yerine sandboxd'ye doğrulanmış spawn isteği göndersin.
-- [ ] Sandboxd'nin istemciden keyfî executable yolu, UID, mount yolu veya
+- [x] Sandboxd'nin istemciden keyfî executable yolu, UID, mount yolu veya
   capability maskesi kabul etmesini engelle.
-- [ ] Sessiond ile sandboxd arasındaki IPC'yi owner-only socketpair veya
+- [x] Sessiond ile sandboxd arasındaki IPC'yi owner-only socketpair veya
   doğrulanmış Unix socket üzerinden kur.
-- [ ] Launch request'e app ID, instance ID, güvenilir bundle referansı ve
+- [x] Launch request'e app ID, instance ID, güvenilir bundle referansı ve
   etkin profil digest'ini bağla.
 - [ ] Sandboxd crash/restart durumunda canlı uygulama process group'larının
   nasıl ele alınacağını belirle.
-- [ ] Child başlamadan önce group temizleme, `setresgid`, `setresuid`,
+- [x] Child başlamadan önce group temizleme, `setresgid`, `setresuid`,
   capability drop ve environment temizleme sırasını uygula.
-- [ ] `LD_PRELOAD`, tehlikeli `LD_*`, miras alınmış FD'ler ve shell environment
+- [x] `LD_PRELOAD`, tehlikeli `LD_*`, miras alınmış FD'ler ve shell environment
   değerlerini denylist/allowlist ile temizle.
 - [ ] Sandbox launcher için UID düşmesi, capability sıfırlama ve kötü niyetli
   spawn isteği testleri ekle.

@@ -107,7 +107,7 @@ private:
 };
 
 bool isValidOpcode(SandboxOpcode opcode) {
-    return opcode >= SandboxOpcode::LaunchRequest && opcode <= SandboxOpcode::ErrorResponse;
+    return opcode >= SandboxOpcode::LaunchRequest && opcode <= SandboxOpcode::ProcessExited;
 }
 
 bool isValidLaunchStatus(SandboxLaunchStatus status) {
@@ -222,6 +222,30 @@ bool decodeSandboxLaunchResult(const std::vector<std::uint8_t>& payload,
     result.processGroupId = std::bit_cast<std::int32_t>(rawProcessGroupId);
     std::vector<std::uint8_t> canonical;
     return encodeSandboxLaunchResult(result, canonical);
+}
+
+bool encodeSandboxProcessExited(const SandboxProcessExited& event,
+                                std::vector<std::uint8_t>& payload) {
+    if (event.instanceId == 0) {
+        return false;
+    }
+    Writer writer;
+    writer.u64(event.instanceId);
+    writer.u32(std::bit_cast<std::uint32_t>(event.exitCode));
+    payload = writer.take();
+    return true;
+}
+
+bool decodeSandboxProcessExited(const std::vector<std::uint8_t>& payload,
+                                SandboxProcessExited& event) {
+    Reader reader(payload.data(), payload.size());
+    std::uint32_t exitCode = 0;
+    if (!reader.u64(event.instanceId) || !reader.u32(exitCode) || !reader.done()) {
+        return false;
+    }
+    event.exitCode = std::bit_cast<std::int32_t>(exitCode);
+    std::vector<std::uint8_t> canonical;
+    return encodeSandboxProcessExited(event, canonical);
 }
 
 bool encodeSandboxError(const std::string& message, std::vector<std::uint8_t>& payload) {
