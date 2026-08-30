@@ -1244,6 +1244,7 @@ def launch_qemu(
     no_build: bool = False,
     spice_unix: Path | None = None,
     qmp_unix: Path | None = None,
+    render_node: Path | None = None,
 ) -> None:
     qemu = find_qemu(arch)
     host = detect_host_display()
@@ -1287,6 +1288,8 @@ def launch_qemu(
         width = width_override or int(mobile_display["width"] if source_gestalt else 1179)
         height = height_override or int(mobile_display["height"] if source_gestalt else 2556)
         scale = scale_override or float(mobile_display["scale"] if source_gestalt else 2.0)
+        if source_gestalt is not None:
+            refresh_hz = int(mobile_display["refreshRateHz"])
         host_dpr = scale
         host.logical_width = round(width / scale)
         host.logical_height = round(height / scale)
@@ -1476,19 +1479,23 @@ def launch_qemu(
 
     spice: list[str] = []
     if spice_unix is not None:
-        rendernode = Path("/dev/dri/renderD128")
         if not want_gl:
             err("SPICE Unix display requires --gpu (VirGL/EGL path).")
             sys.exit(1)
-        if not rendernode.exists():
-            err(f"SPICE Unix display requires a render node: {rendernode}")
+        if render_node is None:
+            err("SPICE Unix display requires the viewer EGL render node.")
+            sys.exit(1)
+        render_node = render_node.expanduser().resolve()
+        if not render_node.is_char_device():
+            err(f"SPICE Unix display requires a DRM render node: {render_node}")
             sys.exit(1)
 
         display = ["-display", "none"]
         spice = [
             "-spice",
-            f"unix=on,addr={spice_unix},disable-ticketing=on,gl=on,rendernode={rendernode}",
+            f"unix=on,addr={spice_unix},disable-ticketing=on,gl=on,rendernode={render_node}",
         ]
+        log(f"SPICE render node matched to viewer EGL device: {render_node}")
     elif host_os() == "darwin":
         if native:
             disp = "cocoa,full-screen=on,zoom-to-fit=on"
@@ -1764,6 +1771,11 @@ def main() -> None:
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
+        "--render-node",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--trace-frames",
         action="store_true",
         help="Enable one-second client layout/render/resize trace in the guest",
@@ -1906,6 +1918,7 @@ def main() -> None:
             no_build=args.no_build,
             spice_unix=args.spice_unix,
             qmp_unix=args.qmp_unix,
+            render_node=args.render_node,
         )
     else:
         log(f"Boot environment ({arch}) ready! Kernel: {kernel}")

@@ -357,6 +357,18 @@ void CompositorRenderer::render(render::Renderer& renderer,
 
     // --- Begin LCL raster frame ---
     raster->beginFrame();
+    // The scene backing remains authoritative across presentation. Carry the
+    // same bounded compositor damage to the final platform target so a
+    // rotating output buffer can catch up with only the patches it missed.
+    if (incrementalDamage) {
+        raster->setOutputFrameDamageRect(render::RasterRect{
+            incrementalDamage->x, incrementalDamage->y,
+            incrementalDamage->width, incrementalDamage->height});
+    } else {
+        // A full composition, a transition, or an effect with nonlocal reads
+        // must refresh the entire final target.
+        raster->setOutputFrameDamageRect(std::nullopt);
+    }
 
     constexpr float kWindowCornerRadiusLogical = 20.0f;
 

@@ -2018,11 +2018,39 @@ void RasterRenderer::endFrame() {
 
         if (m_eglBackend->presentsToDisplay()) {
             // Android can blit this retained scene FBO straight into its
-            // rotating AHardwareBuffer scanout. Desktop backends return false
-            // and retain the default-surface presentation path below.
+            // rotating scanout buffers. The presentation backend receives
+            // framebuffer-pixel damage and reconstructs a reused buffer from
+            // its own retained copy of the scene. Desktop backends return
+            // false and retain the default-surface presentation path below.
+            std::optional<lcl::platform::PresentationDamage>
+                presentationDamage;
+            if (m_outputFrameDamageRect) {
+                const RasterRect deviceDamage = scaleRect(
+                    *m_outputFrameDamageRect);
+                const int left = std::clamp(
+                    static_cast<int>(std::floor(deviceDamage.x)), 0,
+                    static_cast<int>(m_width));
+                const int top = std::clamp(
+                    static_cast<int>(std::floor(deviceDamage.y)), 0,
+                    static_cast<int>(m_height));
+                const int right = std::clamp(
+                    static_cast<int>(std::ceil(
+                        deviceDamage.x + deviceDamage.width)), 0,
+                    static_cast<int>(m_width));
+                const int bottom = std::clamp(
+                    static_cast<int>(std::ceil(
+                        deviceDamage.y + deviceDamage.height)), 0,
+                    static_cast<int>(m_height));
+                if (left < right && top < bottom) {
+                    presentationDamage = lcl::platform::PresentationDamage{
+                        static_cast<float>(left), static_cast<float>(top),
+                        static_cast<float>(right - left),
+                        static_cast<float>(bottom - top)};
+                }
+            }
             const bool directPresented = activeSceneFBO() > 0 &&
                 m_eglBackend->presentFramebuffer(
-                    activeSceneFBO(), m_width, m_height);
+                    activeSceneFBO(), m_width, m_height, presentationDamage);
             if (!directPresented) {
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 glViewport(0, 0, m_width, m_height);

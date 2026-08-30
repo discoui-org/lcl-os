@@ -218,6 +218,9 @@ class DeviceViewer(QWidget):
     def release_gl_resources(self) -> None:
         self._display_widget.release_resources()
 
+    def render_node_path(self) -> Path | None:
+        return self._display_widget.render_node_path()
+
     @property
     def input_widget(self) -> QWidget:
         return self._display_widget
@@ -337,6 +340,7 @@ def main() -> int:
     window.show()
 
     runner = QemuRunner(
+        render_node=viewer.render_node_path(),
         build=args.build,
         rebuild=args.rebuild,
         gestalt_path=args.gestalt,
@@ -356,8 +360,11 @@ def main() -> int:
         print(f"LCL Device Viewer: QEMU launch failed: {error}", file=sys.stderr, flush=True)
     else:
         spice_probe.start()
-        spice_timer.start(8)
-        qmp_timer.start(8)
+        # These timers only bridge GLib/QMP readiness into Qt; frame pacing is
+        # owned by the guest and QOpenGLWidget swap. Keep polling comfortably
+        # below a 120 Hz frame budget to avoid an extra full-frame delay.
+        spice_timer.start(2)
+        qmp_timer.start(2)
 
     try:
         return app.exec()

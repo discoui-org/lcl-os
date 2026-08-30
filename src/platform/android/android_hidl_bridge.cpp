@@ -3,9 +3,12 @@
 
 #include <android/hardware_buffer.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <optional>
 #include <thread>
 #include <unistd.h>
 
@@ -548,10 +551,13 @@ void AndroidHidlDisplayBackend::shutdown() {
     m_layerId = 0;
 }
 
-bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd) {
+bool AndroidHidlDisplayBackend::presentBuffer(
+        AHardwareBuffer* buffer, int acquireFenceFd,
+        std::optional<lcl::platform::PresentationDamage> damage) {
 #if !defined(LCL_HAS_ANDROID_HIDL)
     (void)buffer;
     (void)acquireFenceFd;
+    (void)damage;
     return false;
 #else
     if (!m_initialized || !m_impl->client || !m_hasLayer || !buffer) return false;
@@ -563,7 +569,21 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
     const int32_t height = m_activeMode.height;
     const Client::Rect frame{0, 0, width, height};
     const Client::FRect crop{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)};
-    const std::vector<Client::Rect> region{frame};
+    const std::vector<Client::Rect> fullRegion{frame};
+    std::vector<Client::Rect> damageRegion = fullRegion;
+    if (damage && !damage->isEmpty()) {
+        const Client::Rect dirty{
+            std::clamp(static_cast<int32_t>(std::floor(damage->x)), 0, width),
+            std::clamp(static_cast<int32_t>(std::floor(damage->y)), 0, height),
+            std::clamp(static_cast<int32_t>(std::ceil(
+                damage->x + damage->width)), 0, width),
+            std::clamp(static_cast<int32_t>(std::ceil(
+                damage->y + damage->height)), 0, height),
+        };
+        if (dirty.left < dirty.right && dirty.top < dirty.bottom) {
+            damageRegion = {dirty};
+        }
+    }
 
     // Composer buffer handles are cached by slot. Keep each scanout AHB on a
     // stable slot instead of replacing slot 0 with a different handle every frame.
@@ -630,7 +650,7 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
     m_impl->writer.selectLayer(m_layerId);
     m_impl->writer.setLayerBuffer(bufferSlot, handle,
                                   acquireFenceFd >= 0 ? dup(acquireFenceFd) : -1);
-    m_impl->writer.setLayerSurfaceDamage(region);
+    m_impl->writer.setLayerSurfaceDamage(damageRegion);
     m_impl->writer.setLayerBlendMode(Client::BlendMode::NONE);
     m_impl->writer.setLayerCompositionType(Client::Composition::DEVICE);
     m_impl->writer.setLayerDataspace(common12::Dataspace::UNKNOWN);
@@ -638,7 +658,7 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
     m_impl->writer.setLayerPlaneAlpha(1.0f);
     m_impl->writer.setLayerSourceCrop(crop);
     m_impl->writer.setLayerTransform(static_cast<common10::Transform>(0));
-    m_impl->writer.setLayerVisibleRegion(region);
+    m_impl->writer.setLayerVisibleRegion(fullRegion);
     m_impl->writer.setLayerZOrder(0);
     // Composer 2.2+ can present immediately when the established composition
     // remains valid. This collapses the common move-frame path from separate
@@ -678,7 +698,7 @@ bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acqui
         // HAL rejects DEVICE composition, that frame is the required client target.
         m_impl->writer.setClientTarget(bufferSlot, handle,
                                        acquireFenceFd >= 0 ? dup(acquireFenceFd) : -1,
-                                       common12::Dataspace::UNKNOWN, region);
+                                       common12::Dataspace::UNKNOWN, damageRegion);
     }
     m_impl->writer.presentDisplay();
     if (!execute()) return false;
@@ -778,9 +798,18 @@ extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_prepare_buffer(
 }
 
 extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_present(
-    void* instance, AHardwareBuffer* buffer, int acquireFenceFd) {
+    void* instance, AHardwareBuffer* buffer, int acquireFenceFd,
+    int32_t damageX, int32_t damageY, int32_t damageWidth,
+    int32_t damageHeight) {
     auto* backend = static_cast<lcl::platform::android::AndroidHidlDisplayBackend*>(instance);
-    return backend && backend->presentBuffer(buffer, acquireFenceFd) ? 1 : 0;
+    std::optional<lcl::platform::PresentationDamage> damage;
+    if (damageX >= 0 && damageY >= 0 && damageWidth > 0 && damageHeight > 0) {
+        damage = lcl::platform::PresentationDamage{
+            static_cast<float>(damageX), static_cast<float>(damageY),
+            static_cast<float>(damageWidth), static_cast<float>(damageHeight)};
+    }
+    return backend && backend->presentBuffer(buffer, acquireFenceFd, damage)
+        ? 1 : 0;
 }
 
 extern "C" LCL_HIDL_BRIDGE_EXPORT int lcl_android_hidl_wait_vsync(

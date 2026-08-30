@@ -2,10 +2,12 @@
 
 #include "platform/common/display_backend.hpp"
 #include "platform/common/gestalt.hpp"
+#include "platform/common/graphics_context.hpp"
 #include <memory>
 #include <string>
 #include <cstdint>
 #include <chrono>
+#include <optional>
 
 struct AHardwareBuffer;
 
@@ -61,7 +63,9 @@ public:
      * @param acquireFenceFd Optional acquire fence file descriptor (-1 if none).
      * @return true if validate and present succeeded with 0 command errors.
      */
-    bool presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd = -1);
+    bool presentBuffer(
+        AHardwareBuffer* buffer, int acquireFenceFd = -1,
+        std::optional<lcl::platform::PresentationDamage> damage = std::nullopt);
 
 private:
     enum class BackendKind {
@@ -73,7 +77,9 @@ private:
     bool initializeAidl();
     void shutdownAidl();
     bool prepareBufferForRenderAidl(AHardwareBuffer* buffer);
-    bool presentBufferAidl(AHardwareBuffer* buffer, int acquireFenceFd);
+    bool presentBufferAidl(
+        AHardwareBuffer* buffer, int acquireFenceFd,
+        std::optional<lcl::platform::PresentationDamage> damage);
     bool waitForVsyncAidl(std::chrono::nanoseconds timeout);
 
     std::unique_ptr<Impl> m_impl;

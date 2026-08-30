@@ -1,6 +1,8 @@
 #include "platform/android/android_hidl_display_backend.hpp"
 #include "platform/android/android_hidl_bridge.h"
 
+#include <algorithm>
+#include <cmath>
 #include <dlfcn.h>
 #include <limits.h>
 #include <unistd.h>
@@ -17,7 +19,8 @@ struct AndroidHidlDisplayBackend::Impl {
                                LclAndroidHidlDisplayInfo*);
     using Shutdown = void (*)(void*);
     using PrepareBuffer = int (*)(void*, AHardwareBuffer*);
-    using Present = int (*)(void*, AHardwareBuffer*, int);
+    using Present = int (*)(void*, AHardwareBuffer*, int,
+                            int32_t, int32_t, int32_t, int32_t);
     using WaitVsync = int (*)(void*, int64_t);
 
     void* library{nullptr};
@@ -134,9 +137,34 @@ bool AndroidHidlDisplayBackend::prepareBufferForRender(AHardwareBuffer* buffer) 
            m_impl->prepareBuffer(m_impl->instance, buffer) != 0;
 }
 
-bool AndroidHidlDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd) {
+bool AndroidHidlDisplayBackend::presentBuffer(
+        AHardwareBuffer* buffer, int acquireFenceFd,
+        std::optional<lcl::platform::PresentationDamage> damage) {
+    int32_t damageX = -1;
+    int32_t damageY = -1;
+    int32_t damageWidth = -1;
+    int32_t damageHeight = -1;
+    if (damage && !damage->isEmpty()) {
+        const int32_t width = static_cast<int32_t>(m_activeMode.width);
+        const int32_t height = static_cast<int32_t>(m_activeMode.height);
+        const int32_t left = std::clamp(
+            static_cast<int32_t>(std::floor(damage->x)), 0, width);
+        const int32_t top = std::clamp(
+            static_cast<int32_t>(std::floor(damage->y)), 0, height);
+        const int32_t right = std::clamp(static_cast<int32_t>(std::ceil(
+            damage->x + damage->width)), 0, width);
+        const int32_t bottom = std::clamp(static_cast<int32_t>(std::ceil(
+            damage->y + damage->height)), 0, height);
+        if (left < right && top < bottom) {
+            damageX = left;
+            damageY = top;
+            damageWidth = right - left;
+            damageHeight = bottom - top;
+        }
+    }
     return m_initialized && m_impl->instance && m_impl->present &&
-           m_impl->present(m_impl->instance, buffer, acquireFenceFd) != 0;
+           m_impl->present(m_impl->instance, buffer, acquireFenceFd,
+                           damageX, damageY, damageWidth, damageHeight) != 0;
 }
 
 bool AndroidHidlDisplayBackend::waitForVsync(std::chrono::nanoseconds timeout) {

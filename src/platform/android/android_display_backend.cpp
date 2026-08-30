@@ -39,6 +39,7 @@
 #include <chrono>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <limits>
 #include <optional>
@@ -513,14 +514,18 @@ bool AndroidDisplayBackend::prepareBufferForRenderAidl(AHardwareBuffer* buffer) 
     return true;
 }
 
-bool AndroidDisplayBackend::presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd) {
+bool AndroidDisplayBackend::presentBuffer(
+        AHardwareBuffer* buffer, int acquireFenceFd,
+        std::optional<lcl::platform::PresentationDamage> damage) {
     if (m_backendKind == BackendKind::HidlComposer) {
-        return m_hidlBackend->presentBuffer(buffer, acquireFenceFd);
+        return m_hidlBackend->presentBuffer(buffer, acquireFenceFd, damage);
     }
-    return presentBufferAidl(buffer, acquireFenceFd);
+    return presentBufferAidl(buffer, acquireFenceFd, damage);
 }
 
-bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acquireFenceFd) {
+bool AndroidDisplayBackend::presentBufferAidl(
+        AHardwareBuffer* buffer, int acquireFenceFd,
+        std::optional<lcl::platform::PresentationDamage> damage) {
     if (!m_initialized || !m_impl->client || m_layerId < 0 || !buffer) {
         std::cerr << "[AndroidDisplayBackend] presentBuffer invalid state (initialized="
                   << m_initialized << ", layer=" << m_layerId << ", buffer=" << buffer << ")\n";
@@ -587,7 +592,27 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
     df.bottom = h;
     layerCmd.displayFrame = df;
     const std::vector<std::optional<Rect>> fullRegion{df};
-    layerCmd.damage = fullRegion;
+    const std::vector<Rect> fullClientTargetDamage{df};
+    std::vector<std::optional<Rect>> damageRegion = fullRegion;
+    std::vector<Rect> clientTargetDamage = fullClientTargetDamage;
+    if (damage && !damage->isEmpty()) {
+        Rect dirty{};
+        dirty.left = std::clamp(static_cast<int32_t>(std::floor(damage->x)),
+                                0, w);
+        dirty.top = std::clamp(static_cast<int32_t>(std::floor(damage->y)),
+                               0, h);
+        dirty.right = std::clamp(static_cast<int32_t>(std::ceil(
+                                     damage->x + damage->width)),
+                                 0, w);
+        dirty.bottom = std::clamp(static_cast<int32_t>(std::ceil(
+                                      damage->y + damage->height)),
+                                  0, h);
+        if (dirty.left < dirty.right && dirty.top < dirty.bottom) {
+            damageRegion = {dirty};
+            clientTargetDamage = {dirty};
+        }
+    }
+    layerCmd.damage = damageRegion;
     layerCmd.visibleRegion = fullRegion;
 
     FRect sc;
@@ -712,7 +737,7 @@ bool AndroidDisplayBackend::presentBufferAidl(AHardwareBuffer* buffer, int acqui
         target.buffer.fence = ::ndk::ScopedFileDescriptor(
             acquireFenceFd >= 0 ? dup(acquireFenceFd) : -1);
         target.dataspace = Dataspace::UNKNOWN;
-        target.damage = {df};
+        target.damage = clientTargetDamage;
         target.hdrSdrRatio = 1.0f;
         presCmd.clientTarget = std::move(target);
     }

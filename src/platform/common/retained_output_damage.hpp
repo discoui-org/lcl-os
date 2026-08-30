@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render/raster_renderer.hpp"
+#include "platform/common/graphics_context.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -10,12 +10,14 @@
 #include <optional>
 #include <unordered_map>
 
-namespace lcl::render {
+namespace lcl::platform {
 
-// Tracks the scene revision stored in each rotating producer buffer. A reused
-// buffer may have missed one or more retained-scene patches while the
-// compositor owned it; only the union of those patches must be copied from the
-// authoritative scene texture before the buffer is exported again.
+/**
+ * Tracks the scene revision stored in each rotating presentation buffer.
+ * A buffer that returns from a compositor or display backend may have missed
+ * retained-scene patches; only their union must be copied from the current
+ * authoritative scene before that buffer is presented again.
+ */
 class RetainedOutputDamageTracker {
 public:
     struct Frame {
@@ -25,28 +27,26 @@ public:
         uint32_t width{0};
         uint32_t height{0};
         float scale{1.0f};
-        RasterRect damage{};
+        PresentationDamage damage{};
         bool replacesScene{false};
     };
 
     // nullopt means that the complete retained scene must be copied.
-    std::optional<RasterRect> copyDamage(uint32_t bufferId,
-                                         const Frame& frame) const {
+    std::optional<PresentationDamage> copyDamage(
+            uint32_t bufferId, const Frame& frame) const {
         if (bufferId == 0 || frame.replacesScene) return std::nullopt;
 
         const auto stored = m_buffers.find(bufferId);
-        if (stored == m_buffers.end() ||
-            !sameGeometry(stored->second, frame)) {
+        if (stored == m_buffers.end() || !sameGeometry(stored->second, frame)) {
             return std::nullopt;
         }
 
         uint64_t cursor = stored->second.frameSerial;
-        RasterRect merged{};
+        PresentationDamage merged{};
         bool hasDamage = false;
         for (const auto& patch : m_history) {
             if (cursor == frame.baseFrameSerial) break;
-            if (patch.baseFrameSerial != cursor ||
-                !sameGeometry(patch, frame)) {
+            if (patch.baseFrameSerial != cursor || !sameGeometry(patch, frame)) {
                 continue;
             }
             mergeDamage(merged, hasDamage, patch.damage);
@@ -55,7 +55,8 @@ public:
         if (cursor != frame.baseFrameSerial) return std::nullopt;
 
         mergeDamage(merged, hasDamage, frame.damage);
-        return hasDamage ? std::optional<RasterRect>(merged) : std::nullopt;
+        return hasDamage ? std::optional<PresentationDamage>(merged)
+                         : std::nullopt;
     }
 
     void commit(uint32_t bufferId, const Frame& frame) {
@@ -88,9 +89,9 @@ private:
             std::fabs(left.scale - right.scale) <= 0.0001f;
     }
 
-    static void mergeDamage(RasterRect& merged, bool& hasDamage,
-                            const RasterRect& damage) {
-        if (damage.width <= 0.0f || damage.height <= 0.0f) return;
+    static void mergeDamage(PresentationDamage& merged, bool& hasDamage,
+                            const PresentationDamage& damage) {
+        if (damage.isEmpty()) return;
         if (!hasDamage) {
             merged = damage;
             hasDamage = true;
@@ -109,4 +110,4 @@ private:
     std::deque<Frame> m_history;
 };
 
-} // namespace lcl::render
+} // namespace lcl::platform

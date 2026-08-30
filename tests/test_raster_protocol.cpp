@@ -1,12 +1,13 @@
 #include <gtest/gtest.h>
 
 #include "core/ipc/raster_protocol.hpp"
-#include "render/retained_output_damage.hpp"
+#include "platform/common/retained_output_damage.hpp"
 #include "render/retained_scroll_tiles.hpp"
 #include "platform/common/native_buffer.hpp"
 
 #include <algorithm>
 #include <cstring>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -14,8 +15,8 @@ namespace lcl::raster_protocol {
 
 namespace {
 
-lcl::render::RetainedOutputDamageTracker::Frame outputFrame(
-        uint64_t serial, uint64_t base, lcl::render::RasterRect damage,
+lcl::platform::RetainedOutputDamageTracker::Frame outputFrame(
+        uint64_t serial, uint64_t base, lcl::platform::PresentationDamage damage,
         bool replacesScene = false) {
     return {serial, base, 7, 100, 200, 2.0f, damage, replacesScene};
 }
@@ -651,6 +652,26 @@ TEST(RasterProtocolTest, RejectsWrongPrivateProtocolVersion) {
     close(sockets[1]);
 }
 
+TEST(RasterProtocolTest, EmptyNonBlockingReceiveDoesNotAllocateMaximumPayload) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    const int flags = fcntl(sockets[1], F_GETFL, 0);
+    ASSERT_GE(flags, 0);
+    ASSERT_EQ(fcntl(sockets[1], F_SETFL, flags | O_NONBLOCK), 0);
+
+    Header header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    EXPECT_EQ(receivePacket(sockets[1], header, payload, receivedFd),
+              ReceiveStatus::WouldBlock);
+    EXPECT_TRUE(payload.empty());
+    EXPECT_LT(payload.capacity(), kMaxPayload);
+    EXPECT_EQ(receivedFd, -1);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(RasterProtocolTest, ReleaseLayerCarriesTransportRejectionReason) {
     int sockets[2];
     ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
@@ -677,7 +698,7 @@ TEST(RasterProtocolTest, ReleaseLayerCarriesTransportRejectionReason) {
 }
 
 TEST(RasterProtocolTest, RotatingOutputCopiesOnlyDamageMissedByReusedBuffer) {
-    lcl::render::RetainedOutputDamageTracker tracker;
+    lcl::platform::RetainedOutputDamageTracker tracker;
     const auto first = outputFrame(
         1, 0, {0.0f, 0.0f, 50.0f, 100.0f}, true);
     EXPECT_FALSE(tracker.copyDamage(11, first).has_value());
@@ -699,7 +720,7 @@ TEST(RasterProtocolTest, RotatingOutputCopiesOnlyDamageMissedByReusedBuffer) {
 }
 
 TEST(RasterProtocolTest, RotatingOutputFallsBackToFullCopyAcrossReplacement) {
-    lcl::render::RetainedOutputDamageTracker tracker;
+    lcl::platform::RetainedOutputDamageTracker tracker;
     tracker.commit(21, outputFrame(
         7, 0, {0.0f, 0.0f, 50.0f, 100.0f}, true));
 

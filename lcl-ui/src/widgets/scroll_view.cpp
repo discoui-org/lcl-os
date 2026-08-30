@@ -172,9 +172,10 @@ void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRec
         // before acknowledging the shared content revision, otherwise later
         // regions would keep stale cache pixels.
         if (paintChanged || presentationChanged) {
-            if (framePassActive && !m_renderPass->frameDamageRects().empty()) {
+            if (framePassActive &&
+                !m_renderPass->frameRasterDamageRects().empty()) {
                 for (const graphics::RectF& frameDamage :
-                     m_renderPass->frameDamageRects()) {
+                     m_renderPass->frameRasterDamageRects()) {
                     addUpdateRegion(
                         presentationUpdateRegions,
                         frameDamage.intersection(visibleContentBounds));
@@ -298,7 +299,7 @@ void ScrollView::setScrollY(float offset) {
     // Scrolling changes only the retained content-node transform. Keep the
     // viewport damaged for the current DisplayList path without advancing a
     // paint revision or invalidating the cached content raster.
-    invalidatePresentation(previousViewport);
+    invalidatePresentationForCompositing(previousViewport);
 }
 
 void ScrollView::clampScrollOffset() {

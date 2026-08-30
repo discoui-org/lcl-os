@@ -1,10 +1,12 @@
 #pragma once
 
 #include "platform/common/display_backend.hpp"
+#include "platform/common/graphics_context.hpp"
 
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 struct AHardwareBuffer;
 
@@ -22,7 +24,9 @@ public:
                     uint32_t preferredHeight = 0, uint32_t preferredRefreshHz = 0);
     void shutdown();
     bool prepareBufferForRender(AHardwareBuffer* buffer);
-    bool presentBuffer(AHardwareBuffer* buffer, int acquireFenceFd = -1);
+    bool presentBuffer(
+        AHardwareBuffer* buffer, int acquireFenceFd = -1,
+        std::optional<lcl::platform::PresentationDamage> damage = std::nullopt);
     bool waitForVsync(std::chrono::nanoseconds timeout);
 
     bool isInitialized() const { return m_initialized; }

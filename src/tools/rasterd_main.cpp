@@ -2,7 +2,7 @@
 #include "lcl-graphics/display_list_wire.hpp"
 #include "render/client_egl_context.hpp"
 #include "render/raster_renderer.hpp"
-#include "render/retained_output_damage.hpp"
+#include "platform/common/retained_output_damage.hpp"
 #include "render/retained_scroll_tiles.hpp"
 #include "platform/common/native_buffer.hpp"
 
@@ -195,7 +195,7 @@ struct SurfaceState {
     std::unique_ptr<lcl::render::RasterRenderer> gpuRenderer;
     std::unordered_map<uint64_t, uint32_t> gpuLayers;
     std::unordered_map<uint32_t, uint64_t> gpuBufferIds;
-    lcl::render::RetainedOutputDamageTracker gpuOutputDamage;
+    lcl::platform::RetainedOutputDamageTracker gpuOutputDamage;
     uint64_t gpuFrameSerial{0};
     uint64_t gpuGeometryGeneration{0};
     uint32_t gpuWidth{0};
@@ -1721,19 +1721,26 @@ private:
             releaseExternalTextures();
             return false;
         }
-        const lcl::render::RetainedOutputDamageTracker::Frame outputFrame{
+        const lcl::platform::RetainedOutputDamageTracker::Frame outputFrame{
             submit.frameSerial,
             submit.baseFrameSerial,
             submit.geometryGeneration,
             width,
             height,
             submit.bufferScale,
-            {submit.damageX, submit.damageY,
-             submit.damageWidth, submit.damageHeight},
+            lcl::platform::PresentationDamage{
+                submit.damageX, submit.damageY,
+                submit.damageWidth, submit.damageHeight},
             replacesRetainedScene(submit),
         };
         const auto outputDamage = surface.gpuOutputDamage.copyDamage(
             target->bufferId, outputFrame);
+        std::optional<lcl::render::RasterRect> rasterOutputDamage;
+        if (outputDamage) {
+            rasterOutputDamage = {
+                outputDamage->x, outputDamage->y,
+                outputDamage->width, outputDamage->height};
+        }
         surface.gpuRenderer->setExternalFrameTarget(
             target->framebuffer, target->texture,
             target->width, target->height);
@@ -1747,7 +1754,7 @@ private:
             gpuDisplayList,
             {{submit.logicalWidth, submit.logicalHeight},
              {width, height}, submit.bufferScale});
-        surface.gpuRenderer->setOutputFrameDamageRect(outputDamage);
+        surface.gpuRenderer->setOutputFrameDamageRect(rasterOutputDamage);
         surface.gpuRenderer->endFrame();
         releaseExternalTextures();
         if (!replayed) {

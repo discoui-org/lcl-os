@@ -129,8 +129,8 @@ TEST(DisplayListWireTest, RejectsResolvedExternalBufferRuntimeState) {
     external.stridePixels = 8;
     external.sampleKind = graphics::ExternalBufferSampleKind::ArgbPixels;
     commands->emplace_back(external);
-    const graphics::DisplayList displayList(
-        std::shared_ptr<const std::vector<graphics::DisplayCommand>>(commands));
+    const graphics::DisplayList displayList{
+        std::shared_ptr<const std::vector<graphics::DisplayCommand>>(commands)};
     EXPECT_EQ(graphics::encodeDisplayList(displayList).error,
               graphics::DisplayListWireError::UnsupportedCommand);
 }

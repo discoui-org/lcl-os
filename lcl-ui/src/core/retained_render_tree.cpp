@@ -140,12 +140,14 @@ void hashOwnedContent(const RenderNode& candidate,
         hashFloat(hash, candidate.layoutBounds.height);
     } else {
         // Flattened descendants are baked into the owner's DisplayList.
+        // Their layout and local presentation state define those pixels.
+        // presentationBounds/clipBounds are global, so hashing them would
+        // turn a retained owner's translation (notably ScrollContent) into a
+        // false content change for every flattened descendant.
         hashValue(hash, candidate.propertyRevision);
         hashRect(hash, candidate.layoutBounds);
-        hashRect(hash, candidate.presentationBounds);
         hashPresentation(hash, candidate.presentation);
         hashValue(hash, candidate.clipBounds.has_value() ? 1u : 0u);
-        if (candidate.clipBounds) hashRect(hash, *candidate.clipBounds);
     }
 
     hashValue(hash, candidate.children.size());

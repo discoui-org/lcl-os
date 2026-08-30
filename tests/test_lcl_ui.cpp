@@ -17,6 +17,7 @@
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/text_field.hpp"
 #include "lcl-ui/widgets/toggle.hpp"
+#include "lcl-ui/widgets/slider.hpp"
 #include "lcl-ui/widgets/progress_view.hpp"
 #include "render/raster_renderer.hpp"
 #include "render/raster_canvas.hpp"
@@ -5005,6 +5006,58 @@ TEST(LclUiTest, ScrollViewButtonAndSpinnerSharePartialCacheUpdates) {
 
     EXPECT_EQ(canvas.cachedLayerBeginCount, 1);
     EXPECT_GT(canvas.cachedLayerUpdateBeginCount, 0);
+}
+
+TEST(LclUiTest, ScrollAndSpinnerKeepCacheUpdateAtSpinnerBounds) {
+    RecordingCanvas canvas;
+    RenderPass pass;
+    MotionCoordinator coordinator;
+    auto scrollView = std::make_unique<ScrollView>();
+    scrollView->setWidth(200.0f);
+    scrollView->setHeight(120.0f);
+    scrollView->setRenderPass(&pass);
+    scrollView->setMotionCoordinator(&coordinator);
+
+    auto content = std::make_unique<Container>();
+    content->setWidth(200.0f);
+    content->setHeight(320.0f);
+    auto spinner = std::make_unique<ProgressView>();
+    spinner->setPositionType(layout::PositionType::Absolute);
+    spinner->setPosition(layout::Edge::Top, 75.0f);
+    content->addChild(std::move(spinner));
+    scrollView->setContent(std::move(content));
+    scrollView->calculateLayout(200.0f, 120.0f);
+    scrollView->syncLayout();
+    pass.clear();
+
+    const graphics::RectF fullDamage{-1000.0f, -1000.0f, 4000.0f, 4000.0f};
+    scrollView->draw(canvas, fullDamage);
+    ASSERT_EQ(canvas.cachedLayerBeginCount, 1);
+    ASSERT_TRUE(coordinator.hasActiveAnimations());
+
+    pass.clear();
+    coordinator.tick(1.0f / 60.0f);
+    ASSERT_FALSE(pass.getRasterDirtyRects().empty());
+    scrollView->setScrollY(10.0f);
+    const std::vector<graphics::RectF> frameDamage = pass.getDirtyRects();
+    const std::vector<graphics::RectF> frameRasterDamage =
+        pass.getRasterDirtyRects();
+    ASSERT_EQ(frameDamage.size(), 1u);
+    ASSERT_EQ(frameRasterDamage.size(), 1u);
+    EXPECT_GE(frameDamage.front().height, 120.0f);
+    EXPECT_LT(frameRasterDamage.front().height, 30.0f);
+
+    pass.clear();
+    pass.begin(canvas, frameDamage, frameRasterDamage);
+    for (const graphics::RectF& damage : frameDamage) {
+        scrollView->draw(canvas, damage);
+    }
+    pass.end(canvas);
+
+    ASSERT_EQ(canvas.cachedLayerUpdateBeginCount, 1);
+    ASSERT_EQ(canvas.cachedLayerUpdateBounds.size(), 1u);
+    EXPECT_LT(canvas.cachedLayerUpdateBounds.front().width, 40.0f);
+    EXPECT_LT(canvas.cachedLayerUpdateBounds.front().height, 40.0f);
 }
 
 TEST(LclUiTest, WindowAppSliderValueAndTextPatchScrollCache) {

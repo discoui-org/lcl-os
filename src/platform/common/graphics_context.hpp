@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include "platform/common/native_buffer.hpp"
 
 namespace lcl::platform {
@@ -13,6 +14,22 @@ enum class NativeFenceWaitResult {
 
 using TextureHandle = uint32_t;
 constexpr TextureHandle kInvalidTextureHandle = 0;
+
+/**
+ * Changed region in the pixel coordinate space of a framebuffer presented to
+ * the platform.  Coordinates use a top-left origin so every producer can
+ * carry the same damage contract across its final presentation boundary.
+ */
+struct PresentationDamage {
+    float x{0.0f};
+    float y{0.0f};
+    float width{0.0f};
+    float height{0.0f};
+
+    bool isEmpty() const noexcept {
+        return width <= 0.0f || height <= 0.0f;
+    }
+};
 
 /**
  * @brief Platform-agnostic graphics context & presentation contract.
@@ -37,11 +54,13 @@ public:
      * the context's default surface. Backends that cannot import/blit an FBO
      * keep the default false result and use present() instead.
      */
-    virtual bool presentFramebuffer(uint32_t framebuffer,
-                                    uint32_t width, uint32_t height) {
+    virtual bool presentFramebuffer(
+            uint32_t framebuffer, uint32_t width, uint32_t height,
+            std::optional<PresentationDamage> damage = std::nullopt) {
         (void)framebuffer;
         (void)width;
         (void)height;
+        (void)damage;
         return false;
     }
 

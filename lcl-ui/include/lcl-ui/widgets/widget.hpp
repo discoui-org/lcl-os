@@ -266,6 +266,8 @@ private:
     void invalidateMeasurement();
     layout::PositionType positionType() const;
     void invalidatePresentation(const graphics::RectF& previousBounds);
+    void invalidatePresentationForCompositing(
+        const graphics::RectF& previousBounds);
     graphics::RectF mapPresentationRect(
         const graphics::RectF& rect, const Widget* firstTransform) const;
     void invalidateLayout();

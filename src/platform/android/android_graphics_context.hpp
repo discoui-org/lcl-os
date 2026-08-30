@@ -1,12 +1,14 @@
 #pragma once
 
 #include "platform/common/graphics_context.hpp"
+#include "platform/common/retained_output_damage.hpp"
 #include "platform/android/ahardware_native_buffer.hpp"
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
 #include <memory>
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -43,7 +45,9 @@ public:
     bool presentsToDisplay() const override { return true; }
     bool present() override;
     bool presentFramebuffer(uint32_t framebuffer,
-                            uint32_t width, uint32_t height) override;
+                            uint32_t width, uint32_t height,
+                            std::optional<lcl::platform::PresentationDamage>
+                                damage = std::nullopt) override;
 
     bool readback(uint32_t* destination, uint32_t width, uint32_t height) override;
 
@@ -61,6 +65,7 @@ public:
 
 private:
     struct ScanoutSlot {
+        uint32_t bufferId{0};
         AHardwareBuffer* ahb{nullptr};
         EGLImageKHR eglImage{EGL_NO_IMAGE_KHR};
         GLuint texture{0};
@@ -69,8 +74,11 @@ private:
 
     bool setupScanoutBuffers();
     void destroyScanoutBuffers();
+    void resetScanoutDamageHistory();
     bool presentFromFramebuffer(uint32_t framebuffer,
-                                uint32_t width, uint32_t height);
+                                uint32_t width, uint32_t height,
+                                std::optional<lcl::platform::PresentationDamage>
+                                    damage);
 
     EGLDisplay m_eglDisplay{EGL_NO_DISPLAY};
     EGLConfig m_eglConfig{nullptr};
@@ -92,6 +100,10 @@ private:
     static constexpr size_t kScanoutSlotCount = 3;
     std::array<ScanoutSlot, kScanoutSlotCount> m_scanoutSlots{};
     size_t m_currentSlotIndex{0};
+    lcl::platform::RetainedOutputDamageTracker m_scanoutDamage;
+    uint64_t m_nextSceneSerial{1};
+    uint64_t m_lastSceneSerial{0};
+    uint64_t m_scanoutGeometryGeneration{0};
 
     // Imported textures cache
     std::unordered_map<GLuint, EGLImageKHR> m_importedImages;

@@ -43,6 +43,7 @@ class QemuRunner:
     def __init__(
         self,
         *,
+        render_node: Path | None,
         build: bool = False,
         rebuild: bool = False,
         gestalt_path: Path | None = None,
@@ -55,6 +56,7 @@ class QemuRunner:
         self._build = build
         self._rebuild = rebuild
         self._gestalt_path = gestalt_path
+        self._render_node = render_node
 
     @property
     def spice_socket_path(self) -> Path:
@@ -74,6 +76,14 @@ class QemuRunner:
         if missing and not self._build:
             self.stop()
             raise QemuLaunchError("Missing required LCL artifacts: " + ", ".join(missing))
+        if self._render_node is None:
+            self.stop()
+            raise QemuLaunchError(
+                "Could not resolve the DRM render node backing the viewer EGL context"
+            )
+        if not self._render_node.is_char_device():
+            self.stop()
+            raise QemuLaunchError(f"Viewer DRM render node is unavailable: {self._render_node}")
 
         # The directory is private to this runner.  Remove only this exact
         # endpoint in case a previous launch in the same instance left it behind.
@@ -93,6 +103,8 @@ class QemuRunner:
             str(self.qmp_socket_path),
             "--runtime-dir",
             str(self._runtime_dir),
+            "--render-node",
+            str(self._render_node),
         ]
         if self._build:
             if self._rebuild:

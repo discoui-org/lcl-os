@@ -713,6 +713,102 @@ src/apps/terminal/terminal_view.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-terminal.dir/build.make CMakeFiles/lcl-terminal.dir/src/apps/terminal/terminal_view.cpp.s
 .PHONY : src/apps/terminal/terminal_view.cpp.s
 
+src/binding/js_animation_bindings.o: src/binding/js_animation_bindings.cpp.o
+.PHONY : src/binding/js_animation_bindings.o
+
+# target to build an object file
+src/binding/js_animation_bindings.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_animation_bindings.cpp.o
+.PHONY : src/binding/js_animation_bindings.cpp.o
+
+src/binding/js_animation_bindings.i: src/binding/js_animation_bindings.cpp.i
+.PHONY : src/binding/js_animation_bindings.i
+
+# target to preprocess a source file
+src/binding/js_animation_bindings.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_animation_bindings.cpp.i
+.PHONY : src/binding/js_animation_bindings.cpp.i
+
+src/binding/js_animation_bindings.s: src/binding/js_animation_bindings.cpp.s
+.PHONY : src/binding/js_animation_bindings.s
+
+# target to generate assembly for a file
+src/binding/js_animation_bindings.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_animation_bindings.cpp.s
+.PHONY : src/binding/js_animation_bindings.cpp.s
+
+src/binding/js_binding_support.o: src/binding/js_binding_support.cpp.o
+.PHONY : src/binding/js_binding_support.o
+
+# target to build an object file
+src/binding/js_binding_support.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_binding_support.cpp.o
+.PHONY : src/binding/js_binding_support.cpp.o
+
+src/binding/js_binding_support.i: src/binding/js_binding_support.cpp.i
+.PHONY : src/binding/js_binding_support.i
+
+# target to preprocess a source file
+src/binding/js_binding_support.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_binding_support.cpp.i
+.PHONY : src/binding/js_binding_support.cpp.i
+
+src/binding/js_binding_support.s: src/binding/js_binding_support.cpp.s
+.PHONY : src/binding/js_binding_support.s
+
+# target to generate assembly for a file
+src/binding/js_binding_support.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_binding_support.cpp.s
+.PHONY : src/binding/js_binding_support.cpp.s
+
+src/binding/js_bindings.o: src/binding/js_bindings.cpp.o
+.PHONY : src/binding/js_bindings.o
+
+# target to build an object file
+src/binding/js_bindings.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_bindings.cpp.o
+.PHONY : src/binding/js_bindings.cpp.o
+
+src/binding/js_bindings.i: src/binding/js_bindings.cpp.i
+.PHONY : src/binding/js_bindings.i
+
+# target to preprocess a source file
+src/binding/js_bindings.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_bindings.cpp.i
+.PHONY : src/binding/js_bindings.cpp.i
+
+src/binding/js_bindings.s: src/binding/js_bindings.cpp.s
+.PHONY : src/binding/js_bindings.s
+
+# target to generate assembly for a file
+src/binding/js_bindings.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_bindings.cpp.s
+.PHONY : src/binding/js_bindings.cpp.s
+
+src/binding/js_control_bindings.o: src/binding/js_control_bindings.cpp.o
+.PHONY : src/binding/js_control_bindings.o
+
+# target to build an object file
+src/binding/js_control_bindings.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_control_bindings.cpp.o
+.PHONY : src/binding/js_control_bindings.cpp.o
+
+src/binding/js_control_bindings.i: src/binding/js_control_bindings.cpp.i
+.PHONY : src/binding/js_control_bindings.i
+
+# target to preprocess a source file
+src/binding/js_control_bindings.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_control_bindings.cpp.i
+.PHONY : src/binding/js_control_bindings.cpp.i
+
+src/binding/js_control_bindings.s: src/binding/js_control_bindings.cpp.s
+.PHONY : src/binding/js_control_bindings.s
+
+# target to generate assembly for a file
+src/binding/js_control_bindings.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_control_bindings.cpp.s
+.PHONY : src/binding/js_control_bindings.cpp.s
+
 src/binding/js_runtime.o: src/binding/js_runtime.cpp.o
 .PHONY : src/binding/js_runtime.o
 
@@ -736,6 +832,54 @@ src/binding/js_runtime.s: src/binding/js_runtime.cpp.s
 src/binding/js_runtime.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_runtime.cpp.s
 .PHONY : src/binding/js_runtime.cpp.s
+
+src/binding/js_widget_bindings.o: src/binding/js_widget_bindings.cpp.o
+.PHONY : src/binding/js_widget_bindings.o
+
+# target to build an object file
+src/binding/js_widget_bindings.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_widget_bindings.cpp.o
+.PHONY : src/binding/js_widget_bindings.cpp.o
+
+src/binding/js_widget_bindings.i: src/binding/js_widget_bindings.cpp.i
+.PHONY : src/binding/js_widget_bindings.i
+
+# target to preprocess a source file
+src/binding/js_widget_bindings.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_widget_bindings.cpp.i
+.PHONY : src/binding/js_widget_bindings.cpp.i
+
+src/binding/js_widget_bindings.s: src/binding/js_widget_bindings.cpp.s
+.PHONY : src/binding/js_widget_bindings.s
+
+# target to generate assembly for a file
+src/binding/js_widget_bindings.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_widget_bindings.cpp.s
+.PHONY : src/binding/js_widget_bindings.cpp.s
+
+src/binding/js_window_app_bindings.o: src/binding/js_window_app_bindings.cpp.o
+.PHONY : src/binding/js_window_app_bindings.o
+
+# target to build an object file
+src/binding/js_window_app_bindings.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_window_app_bindings.cpp.o
+.PHONY : src/binding/js_window_app_bindings.cpp.o
+
+src/binding/js_window_app_bindings.i: src/binding/js_window_app_bindings.cpp.i
+.PHONY : src/binding/js_window_app_bindings.i
+
+# target to preprocess a source file
+src/binding/js_window_app_bindings.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_window_app_bindings.cpp.i
+.PHONY : src/binding/js_window_app_bindings.cpp.i
+
+src/binding/js_window_app_bindings.s: src/binding/js_window_app_bindings.cpp.s
+.PHONY : src/binding/js_window_app_bindings.s
+
+# target to generate assembly for a file
+src/binding/js_window_app_bindings.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lcl-js.dir/build.make CMakeFiles/lcl-js.dir/src/binding/js_window_app_bindings.cpp.s
+.PHONY : src/binding/js_window_app_bindings.cpp.s
 
 src/core/app/app_bundle_parser.o: src/core/app/app_bundle_parser.cpp.o
 .PHONY : src/core/app/app_bundle_parser.o
@@ -4264,9 +4408,27 @@ help:
 	@echo "... src/apps/terminal/terminal_view.o"
 	@echo "... src/apps/terminal/terminal_view.i"
 	@echo "... src/apps/terminal/terminal_view.s"
+	@echo "... src/binding/js_animation_bindings.o"
+	@echo "... src/binding/js_animation_bindings.i"
+	@echo "... src/binding/js_animation_bindings.s"
+	@echo "... src/binding/js_binding_support.o"
+	@echo "... src/binding/js_binding_support.i"
+	@echo "... src/binding/js_binding_support.s"
+	@echo "... src/binding/js_bindings.o"
+	@echo "... src/binding/js_bindings.i"
+	@echo "... src/binding/js_bindings.s"
+	@echo "... src/binding/js_control_bindings.o"
+	@echo "... src/binding/js_control_bindings.i"
+	@echo "... src/binding/js_control_bindings.s"
 	@echo "... src/binding/js_runtime.o"
 	@echo "... src/binding/js_runtime.i"
 	@echo "... src/binding/js_runtime.s"
+	@echo "... src/binding/js_widget_bindings.o"
+	@echo "... src/binding/js_widget_bindings.i"
+	@echo "... src/binding/js_widget_bindings.s"
+	@echo "... src/binding/js_window_app_bindings.o"
+	@echo "... src/binding/js_window_app_bindings.i"
+	@echo "... src/binding/js_window_app_bindings.s"
 	@echo "... src/core/app/app_bundle_parser.o"
 	@echo "... src/core/app/app_bundle_parser.i"
 	@echo "... src/core/app/app_bundle_parser.s"

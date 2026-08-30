@@ -1,6 +1,8 @@
 #include "platform/android/android_graphics_context.hpp"
 #include "platform/android/android_display_backend.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <vector>
 #include <cstring>
@@ -24,7 +26,18 @@ AndroidGraphicsContext::~AndroidGraphicsContext() {
     shutdown();
 }
 
+void AndroidGraphicsContext::resetScanoutDamageHistory() {
+    m_scanoutDamage.reset();
+    m_nextSceneSerial = 1;
+    m_lastSceneSerial = 0;
+    ++m_scanoutGeometryGeneration;
+    if (m_scanoutGeometryGeneration == 0) {
+        m_scanoutGeometryGeneration = 1;
+    }
+}
+
 bool AndroidGraphicsContext::setupScanoutBuffers() {
+    resetScanoutDamageHistory();
     auto eglGetNativeClientBufferANDROID = reinterpret_cast<pfn_eglGetNativeClientBufferANDROID>(eglGetProcAddress("eglGetNativeClientBufferANDROID"));
     auto eglCreateImageKHR = reinterpret_cast<pfn_eglCreateImageKHR>(eglGetProcAddress("eglCreateImageKHR"));
     auto glEGLImageTargetTexture2DOES = reinterpret_cast<pfn_glEGLImageTargetTexture2DOES>(eglGetProcAddress("glEGLImageTargetTexture2DOES"));
@@ -35,6 +48,7 @@ bool AndroidGraphicsContext::setupScanoutBuffers() {
     }
 
     for (size_t i = 0; i < m_scanoutSlots.size(); ++i) {
+        m_scanoutSlots[i].bufferId = static_cast<uint32_t>(i + 1u);
         AHardwareBuffer_Desc desc = {};
         desc.width = m_width;
         desc.height = m_height;
@@ -102,7 +116,10 @@ void AndroidGraphicsContext::destroyScanoutBuffers() {
             AHardwareBuffer_release(m_scanoutSlots[i].ahb);
             m_scanoutSlots[i].ahb = nullptr;
         }
+        m_scanoutSlots[i].bufferId = 0;
     }
+    m_scanoutDamage.reset();
+    m_lastSceneSerial = 0;
 }
 
 bool AndroidGraphicsContext::initialize(uint32_t width, uint32_t height,
@@ -256,19 +273,25 @@ bool AndroidGraphicsContext::resize(uint32_t width, uint32_t height) {
 }
 
 bool AndroidGraphicsContext::present() {
-    return presentFromFramebuffer(0, m_width, m_height);
+    return presentFromFramebuffer(0, m_width, m_height, std::nullopt);
 }
 
 bool AndroidGraphicsContext::presentFramebuffer(uint32_t framebuffer,
                                                 uint32_t width,
-                                                uint32_t height) {
+                                                uint32_t height,
+                                                std::optional<
+                                                    lcl::platform::PresentationDamage>
+                                                    damage) {
     if (framebuffer == 0) return false;
-    return presentFromFramebuffer(framebuffer, width, height);
+    return presentFromFramebuffer(framebuffer, width, height, damage);
 }
 
 bool AndroidGraphicsContext::presentFromFramebuffer(uint32_t framebuffer,
                                                     uint32_t width,
-                                                    uint32_t height) {
+                                                    uint32_t height,
+                                                    std::optional<
+                                                        lcl::platform::PresentationDamage>
+                                                        damage) {
     if (!m_initialized || width == 0 || height == 0 ||
         width > m_width || height > m_height) return false;
 
@@ -278,7 +301,53 @@ bool AndroidGraphicsContext::presentFromFramebuffer(uint32_t framebuffer,
         return false;
     }
 
-    // 1. Copy the compositor scene FBO directly into the active scanout AHB.
+    const uint64_t sceneSerial = m_nextSceneSerial++;
+    if (m_nextSceneSerial == 0) m_nextSceneSerial = 1;
+    const lcl::platform::PresentationDamage frameDamage = damage.value_or(
+        lcl::platform::PresentationDamage{
+            0.0f, 0.0f, static_cast<float>(width),
+            static_cast<float>(height)});
+    const lcl::platform::RetainedOutputDamageTracker::Frame sceneFrame{
+        sceneSerial,
+        m_lastSceneSerial,
+        m_scanoutGeometryGeneration,
+        width,
+        height,
+        1.0f,
+        frameDamage,
+        !damage.has_value(),
+    };
+    const auto copyDamage = m_scanoutDamage.copyDamage(
+        scanout.bufferId, sceneFrame);
+
+    int left = 0;
+    int top = 0;
+    int right = static_cast<int>(width);
+    int bottom = static_cast<int>(height);
+    if (copyDamage) {
+        left = std::clamp(static_cast<int>(std::floor(copyDamage->x)), 0,
+                          static_cast<int>(width));
+        top = std::clamp(static_cast<int>(std::floor(copyDamage->y)), 0,
+                         static_cast<int>(height));
+        right = std::clamp(static_cast<int>(std::ceil(
+                               copyDamage->x + copyDamage->width)),
+                           0, static_cast<int>(width));
+        bottom = std::clamp(static_cast<int>(std::ceil(
+                                copyDamage->y + copyDamage->height)),
+                            0, static_cast<int>(height));
+        if (left >= right || top >= bottom) {
+            // The retained history did not yield a usable region. Rebuild this
+            // slot from the authoritative scene rather than risking stale
+            // pixels in a buffer that Composer may display.
+            left = top = 0;
+            right = static_cast<int>(width);
+            bottom = static_cast<int>(height);
+        }
+    }
+
+    // 1. Copy the patches this scanout slot missed from the authoritative
+    // compositor scene FBO. Each AHB retains its prior complete scene, so a
+    // reused slot needs the union of all patches since its last presentation.
     // The legacy present() path supplies framebuffer 0 (the PBuffer); modern
     // compositor rendering supplies its retained scene FBO and skips the old
     // scene-texture -> PBuffer full-screen pass.
@@ -286,10 +355,12 @@ bool AndroidGraphicsContext::presentFromFramebuffer(uint32_t framebuffer,
     // Blit with inverted destination Y to map UI top to display top scanline.
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, scanout.fbo);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
-    // The scanout copy is full-frame; scene damage may have left scissoring on.
+    // Scene damage may have left scissoring on. The blit bounds perform the
+    // actual output-damage restriction instead.
     glDisable(GL_SCISSOR_TEST);
-    glBlitFramebuffer(0, 0, width, height,
-                      0, height, width, 0,
+    glBlitFramebuffer(left, static_cast<int>(height) - bottom,
+                      right, static_cast<int>(height) - top,
+                      left, bottom, right, top,
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
     // Export the GPU completion point to Hardware Composer instead of
     // stalling the CPU on glFinish(). HWC waits asynchronously before reading
@@ -316,12 +387,19 @@ bool AndroidGraphicsContext::presentFromFramebuffer(uint32_t framebuffer,
 
     // 2. Present active AHardwareBuffer through the selected Android Composer backend.
     const bool presented = m_displayBackend->presentBuffer(
-        scanout.ahb, acquireFenceFd);
+        scanout.ahb, acquireFenceFd, copyDamage);
     if (acquireFenceFd >= 0) close(acquireFenceFd);
 
     // 3. Flip to next buffer slot.
     if (presented) {
+        m_scanoutDamage.commit(scanout.bufferId, sceneFrame);
+        m_lastSceneSerial = sceneSerial;
         m_currentSlotIndex = (m_currentSlotIndex + 1) % m_scanoutSlots.size();
+    } else {
+        // The scene FBO may already include this frame even though Composer
+        // rejected it. Forget output history so the next accepted present
+        // reconstructs every scanout slot from a known complete scene.
+        resetScanoutDamageHistory();
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return presented;

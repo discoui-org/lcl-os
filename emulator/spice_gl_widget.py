@@ -8,6 +8,7 @@ import os
 import sys
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -32,6 +33,8 @@ EGL_LINUX_DRM_FOURCC_EXT = 0x3271
 EGL_DMA_BUF_PLANE0_FD_EXT = 0x3272
 EGL_DMA_BUF_PLANE0_OFFSET_EXT = 0x3273
 EGL_DMA_BUF_PLANE0_PITCH_EXT = 0x3274
+EGL_DEVICE_EXT = 0x322C
+EGL_DRM_RENDER_NODE_FILE_EXT = 0x3377
 
 GL_TEXTURE_2D = 0x0DE1
 GL_TEXTURE0 = 0x84C0
@@ -164,6 +167,23 @@ class EglDmaBufImporter:
                 ctypes.c_void_p,
                 required=False,
             )
+            stage = "resolve-eglQueryDisplayAttribEXT"
+            self._query_display_attrib = self._resolve(
+                b"eglQueryDisplayAttribEXT",
+                ctypes.c_uint,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.POINTER(ctypes.c_ssize_t),
+                required=False,
+            )
+            stage = "resolve-eglQueryDeviceStringEXT"
+            self._query_device_string = self._resolve(
+                b"eglQueryDeviceStringEXT",
+                ctypes.c_char_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                required=False,
+            )
         except EglImportError:
             raise
         except Exception as error:
@@ -174,6 +194,7 @@ class EglDmaBufImporter:
         self.create_image_resolved = self._create_image is not None
         self.destroy_image_resolved = self._destroy_image is not None
         self.image_target_resolved = self._image_target_texture is not None
+        self.render_node_path = self._current_render_node_path()
 
         self.capabilities_available = (
             self.valid_display
@@ -203,6 +224,10 @@ class EglDmaBufImporter:
         _safe_log(f"  eglCreateImageKHR={self._yes_no(self.create_image_resolved)}")
         _safe_log(f"  eglDestroyImageKHR={self._yes_no(self.destroy_image_resolved)}")
         _safe_log(f"  glEGLImageTargetTexture2DOES={self._yes_no(self.image_target_resolved)}")
+        _safe_log(
+            "  renderNode="
+            f"{self.render_node_path if self.render_node_path is not None else '<unresolved>'}"
+        )
 
         if not self.dma_buf_extension_advertised:
             _safe_log(
@@ -301,6 +326,30 @@ class EglDmaBufImporter:
             return None
         return ctypes.CFUNCTYPE(restype, *argtypes)(address)
 
+    def _current_render_node_path(self) -> Path | None:
+        """Return the DRM render node backing Qt's current EGL display."""
+        if (
+            not self.display
+            or self._query_display_attrib is None
+            or self._query_device_string is None
+        ):
+            return None
+        device = ctypes.c_ssize_t()
+        if not self._query_display_attrib(
+            self.display,
+            EGL_DEVICE_EXT,
+            ctypes.byref(device),
+        ) or not device.value:
+            return None
+        raw_path = self._query_device_string(
+            ctypes.c_void_p(device.value),
+            EGL_DRM_RENDER_NODE_FILE_EXT,
+        )
+        if not raw_path:
+            return None
+        path = Path(os.fsdecode(raw_path)).resolve()
+        return path if path.is_char_device() else None
+
     def create_image(self, scanout: ScanoutMetadata) -> ctypes.c_void_p:
         attributes = (ctypes.c_int * 13)(
             EGL_DMA_BUF_PLANE0_FD_EXT,
@@ -356,12 +405,14 @@ class SpiceGlWidget(QOpenGLWidget):
         self.setAttribute(Qt.WA_NoSystemBackground, False)
         self.setAttribute(Qt.WA_AlwaysStackOnTop)
         self.setAutoFillBackground(False)
-        # We redraw the whole display from the presentation texture each time.
-        # Do not retain a partially composited transparent backing FBO.
-        self.setUpdateBehavior(QOpenGLWidget.NoPartialUpdate)
+        # Preserve Qt's display FBO between paints. The guest already supplies
+        # complete scanout frames, so copying every frame into a second texture
+        # only adds bandwidth and a synchronization point.
+        self.setUpdateBehavior(QOpenGLWidget.PartialUpdate)
 
         self._mask_image = mask
         self._pending_draws: deque[PendingDraw] = deque()
+        self._draws_awaiting_swap: deque[PendingDraw] = deque()
         self._egl_importer: EglDmaBufImporter | None = None
         self._program: QOpenGLShaderProgram | None = None
         self._mask_program: QOpenGLShaderProgram | None = None
@@ -392,8 +443,13 @@ class SpiceGlWidget(QOpenGLWidget):
         self._accepting_draws = True
         self._gpu_rendering_active = False
         self._last_import_signature: tuple[int, int, int, int, bool] | None = None
+        self._has_presented_frame = False
+        self._restore_resize_snapshot = False
+        self.frameSwapped.connect(self._on_frame_swapped)
+        self.aboutToResize.connect(self._preserve_frame_before_resize)
+
     def submit_draw(self, channel: Any, scanout: ScanoutMetadata) -> None:
-        """Queue one SPICE draw; completion happens from paintGL after drawing."""
+        """Queue one SPICE draw; completion follows the Qt frame swap."""
         pending = PendingDraw(channel, scanout)
         if not self._accepting_draws:
             pending.finish()
@@ -404,6 +460,25 @@ class SpiceGlWidget(QOpenGLWidget):
         except Exception:
             # The accepted draw remains queued and owns its duplicated fd.
             pass
+
+    def render_node_path(self) -> Path | None:
+        """Resolve the DRM node used by this widget's EGL context."""
+        if self._egl_importer is not None:
+            return self._egl_importer.render_node_path
+        context = self.context()
+        if context is None or not context.isValid():
+            return None
+        self.makeCurrent()
+        try:
+            if not self._initialize_egl_resources():
+                return None
+            return (
+                self._egl_importer.render_node_path
+                if self._egl_importer is not None
+                else None
+            )
+        finally:
+            self.doneCurrent()
 
     def initializeGL(self) -> None:  # type: ignore[override]
         if not self._initialize_logged:
@@ -436,6 +511,9 @@ class SpiceGlWidget(QOpenGLWidget):
         self._egl_image = None
         self._loaded_scanout = None
         self._importer_initialized_logged = False
+        self._has_presented_frame = False
+        self._restore_resize_snapshot = False
+        self._finish_draws_awaiting_swap()
 
     def _initialize_egl_resources(self) -> bool:
         if self._egl_importer is not None:
@@ -479,6 +557,8 @@ class SpiceGlWidget(QOpenGLWidget):
     def resizeGL(self, width: int, height: int) -> None:  # type: ignore[override]
         self._framebuffer_width = width
         self._framebuffer_height = height
+        self._has_presented_frame = False
+        self._restore_resize_snapshot = self._presentation_texture is not None
         self.context().functions().glViewport(0, 0, width, height)
 
     def paintGL(self) -> None:  # type: ignore[override]
@@ -494,54 +574,69 @@ class SpiceGlWidget(QOpenGLWidget):
             self._paint_egl_state_logged = True
             EglDmaBufImporter.log_current_state("paintGL")
 
+        # A submitted SPICE scanout remains owned by the viewer until Qt has
+        # composed this FBO into the top-level window. Do not render over it
+        # before frameSwapped releases that ownership.
+        if self._draws_awaiting_swap:
+            return
+
         if not self._pending_draws:
-            if self._presentation_texture is not None:
+            if self._restore_resize_snapshot and self._presentation_texture is not None:
                 functions.glClearColor(0.0, 0.0, 0.0, 1.0)
                 functions.glClear(GL_COLOR_BUFFER_BIT)
                 self._draw_texture(self._presentation_texture, False)
-                self._apply_mask()
-                functions.glFinish()
+                self._restore_resize_snapshot = False
+                self._has_presented_frame = True
                 return
-            functions.glClearColor(0.0, 0.0, 0.0, 1.0)
-            functions.glClear(GL_COLOR_BUFFER_BIT)
+            if not self._has_presented_frame:
+                functions.glClearColor(0.0, 0.0, 0.0, 1.0)
+                functions.glClear(GL_COLOR_BUFFER_BIT)
             return
 
         if self._egl_importer is None and self._initialization_error is None:
             self._initialize_egl_resources()
 
-        while self._pending_draws:
-            pending = self._pending_draws.popleft()
-            try:
-                self._ensure_scanout_texture(pending.scanout)
-                # The physical display is opaque; mask.webp removes only its
-                # explicit cutout pixels after the guest quad is drawn.
-                functions.glClearColor(0.0, 0.0, 0.0, 1.0)
-                functions.glClear(GL_COLOR_BUFFER_BIT)
-                if self._draw_scanout(pending.scanout.y0top):
-                    self._capture_presentation_texture()
-                    self._gpu_rendering_active = True
-                    if not self._quad_drawn_logged:
-                        self._quad_drawn_logged = True
-                        _safe_log("LCL Device Viewer: DMA-BUF quad drawn")
-                    if not self._gpu_active_logged:
-                        self._gpu_active_logged = True
-                        _safe_log("LCL Device Viewer: SPICE DMA-BUF GPU rendering active")
+        # Qt may coalesce several update() requests into one paint. Rendering
+        # superseded scanouts would spend GPU time on frames that cannot be
+        # presented, so acknowledge every older draw without sampling it.
+        while len(self._pending_draws) > 1:
+            self._pending_draws.popleft().finish()
+
+        pending = self._pending_draws.popleft()
+        ready_for_swap = False
+        try:
+            self._ensure_scanout_texture(pending.scanout)
+            # The physical display is opaque; mask.webp removes only its
+            # explicit cutout pixels after the guest quad is drawn.
+            functions.glClearColor(0.0, 0.0, 0.0, 1.0)
+            functions.glClear(GL_COLOR_BUFFER_BIT)
+            if self._draw_scanout(pending.scanout.y0top):
                 self._apply_mask()
-                # The channel may recycle its DMA-BUF as soon as gl_draw_done()
-                # returns. Complete this correctness-first frame before giving
-                # that ownership back to spice-gtk.
-                functions.glFinish()
-            except EglImportError as error:
-                self._report_import_error(error, pending.scanout)
+                self._gpu_rendering_active = True
+                self._has_presented_frame = True
+                self._restore_resize_snapshot = False
+                ready_for_swap = True
+                if not self._quad_drawn_logged:
+                    self._quad_drawn_logged = True
+                    _safe_log("LCL Device Viewer: DMA-BUF quad drawn")
+                if not self._gpu_active_logged:
+                    self._gpu_active_logged = True
+                    _safe_log("LCL Device Viewer: SPICE DMA-BUF GPU rendering active")
+        except EglImportError as error:
+            self._report_import_error(error, pending.scanout)
+        except Exception as error:
+            self._report_import_error(EglImportError(str(error)), pending.scanout)
+
+        if ready_for_swap:
+            # Keep the imported EGLImage, texture, duplicated fd, and SPICE
+            # grant alive until Qt has actually presented the FBO.
+            self._draws_awaiting_swap.append(pending)
+        else:
+            try:
+                self._release_scanout_texture()
             except Exception as error:
-                self._report_import_error(EglImportError(str(error)), pending.scanout)
-            finally:
-                try:
-                    self._release_scanout_texture()
-                except Exception as error:
-                    _safe_log(f"LCL Device Viewer: GPU resource cleanup failed: {error}", error=True)
-                finally:
-                    pending.finish()
+                _safe_log(f"LCL Device Viewer: GPU resource cleanup failed: {error}", error=True)
+            pending.finish()
 
     def _log_qt_context(self) -> None:
         context = self.context()
@@ -595,22 +690,30 @@ class SpiceGlWidget(QOpenGLWidget):
         self._accepting_draws = False
         self._finish_pending_draws()
         if not self.context() or not self.context().isValid():
+            self._finish_draws_awaiting_swap()
             return
         self.makeCurrent()
-        self._release_scanout_texture()
-        if self._mask_texture is not None:
-            self._mask_texture.destroy()
-            self._mask_texture = None
-        if self._presentation_texture is not None:
-            self._presentation_texture.destroy()
-            self._presentation_texture = None
-        if self._quad is not None:
-            self._quad.destroy()
-            self._quad = None
-        if self._vao is not None:
-            self._vao.destroy()
-            self._vao = None
-        self.doneCurrent()
+        try:
+            if self._draws_awaiting_swap:
+                # Shutdown is the exceptional path where Qt may never emit a
+                # final frameSwapped. Complete queued sampling before release.
+                self.context().functions().glFinish()
+            self._release_scanout_texture()
+            if self._mask_texture is not None:
+                self._mask_texture.destroy()
+                self._mask_texture = None
+            if self._presentation_texture is not None:
+                self._presentation_texture.destroy()
+                self._presentation_texture = None
+            if self._quad is not None:
+                self._quad.destroy()
+                self._quad = None
+            if self._vao is not None:
+                self._vao.destroy()
+                self._vao = None
+        finally:
+            self.doneCurrent()
+            self._finish_draws_awaiting_swap()
 
     def closeEvent(self, event: Any) -> None:  # type: ignore[override]
         self._accepting_draws = False
@@ -620,6 +723,49 @@ class SpiceGlWidget(QOpenGLWidget):
     def _finish_pending_draws(self) -> None:
         while self._pending_draws:
             self._pending_draws.popleft().finish()
+
+    def _finish_draws_awaiting_swap(self) -> None:
+        while self._draws_awaiting_swap:
+            self._draws_awaiting_swap.popleft().finish()
+
+    def _on_frame_swapped(self) -> None:
+        if self._draws_awaiting_swap:
+            # The preserved Qt FBO no longer depends on the guest scanout.
+            # Return the SPICE grant now; the stale EGL wrapper is discarded
+            # by the next paint while the widget context is already current.
+            self._finish_draws_awaiting_swap()
+        if self._pending_draws and self._accepting_draws:
+            self.update()
+
+    def _preserve_frame_before_resize(self) -> None:
+        """Snapshot the preserved FBO only when Qt is about to replace it."""
+        if not self._has_presented_frame:
+            return
+        context = self.context()
+        if context is None or not context.isValid():
+            return
+        self.makeCurrent()
+        try:
+            self._capture_presentation_texture()
+            if self._draws_awaiting_swap:
+                # The snapshot samples the in-flight guest buffer. This rare
+                # resize path must finish before that SPICE resource is freed.
+                context.functions().glFinish()
+            else:
+                context.functions().glFlush()
+        except EglImportError as error:
+            self._report_import_error(error, None)
+        finally:
+            if self._draws_awaiting_swap:
+                try:
+                    self._release_scanout_texture()
+                except Exception as error:
+                    _safe_log(
+                        f"LCL Device Viewer: GPU resource cleanup failed: {error}",
+                        error=True,
+                    )
+                self._finish_draws_awaiting_swap()
+            self.doneCurrent()
 
     def _initialize_quad(self) -> None:
         self._program = self._make_program(

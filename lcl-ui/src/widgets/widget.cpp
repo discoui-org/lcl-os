@@ -301,6 +301,20 @@ void Widget::invalidatePresentation(const graphics::RectF& previousBounds) {
     if (m_parent) m_parent->propagateDescendantPresentationRevision();
 }
 
+void Widget::invalidatePresentationForCompositing(
+        const graphics::RectF& previousBounds) {
+    ++m_localPresentationRevision;
+    ++m_presentationRevision;
+    if (m_renderPass) {
+        m_renderPass->addCompositingDirtyRect(previousBounds);
+        if (m_visible) {
+            m_renderPass->addCompositingDirtyRect(
+                getPresentationSubtreePaintBounds());
+        }
+    }
+    if (m_parent) m_parent->propagateDescendantPresentationRevision();
+}
+
 void Widget::invalidatePaintFrom(const graphics::RectF& previousPaintBounds) {
     if (m_renderPass) m_renderPass->addDirtyRect(previousPaintBounds);
     invalidatePaint();

@@ -1,5 +1,6 @@
 #include "core/ipc/raster_protocol.hpp"
 
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <limits>
@@ -97,14 +98,20 @@ bool decodeCommitTransaction(
 
 ReceiveStatus receivePacket(int fd, Header& header,
                             std::vector<uint8_t>& payload, int& receivedFd) {
-    payload.assign(kMaxPayload, 0);
+    // receivePacket() is called from non-blocking drain loops, so the common
+    // case is WouldBlock. Allocating and zero-filling kMaxPayload before every
+    // recvmsg made an idle raster service churn through hundreds of MiB/s.
+    // Keep one uninitialised receive slab per polling thread and copy only the
+    // bytes that were actually delivered into the caller-owned payload.
+    thread_local std::array<uint8_t, kMaxPayload> receivePayload{};
+    payload.clear();
     receivedFd = -1;
 
     iovec vectors[2]{};
     vectors[0].iov_base = &header;
     vectors[0].iov_len = sizeof(header);
-    vectors[1].iov_base = payload.data();
-    vectors[1].iov_len = payload.size();
+    vectors[1].iov_base = receivePayload.data();
+    vectors[1].iov_len = receivePayload.size();
 
     alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))]{};
     msghdr message{};
@@ -119,12 +126,10 @@ ReceiveStatus receivePacket(int fd, Header& header,
     } while (received < 0 && errno == EINTR);
 
     if (received < 0) {
-        payload.clear();
         return errno == EAGAIN || errno == EWOULDBLOCK
             ? ReceiveStatus::WouldBlock : ReceiveStatus::Error;
     }
     if (received == 0) {
-        payload.clear();
         return ReceiveStatus::Closed;
     }
 
@@ -145,11 +150,11 @@ ReceiveStatus receivePacket(int fd, Header& header,
     if (!validHeader) {
         if (receivedFd >= 0) close(receivedFd);
         receivedFd = -1;
-        payload.clear();
         return ReceiveStatus::Invalid;
     }
 
-    payload.resize(header.payloadSize);
+    payload.assign(receivePayload.begin(),
+                   receivePayload.begin() + header.payloadSize);
     return ReceiveStatus::Received;
 }
 

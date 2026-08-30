@@ -1964,7 +1964,21 @@ bool WindowApp::renderFrame() {
         const graphics::RectF clipped = expanded.intersection(surfaceBounds);
         if (!clipped.isEmpty()) rasterDamage.addDirtyRect(clipped);
     }
+    RenderPass contentRasterDamage;
+    for (const graphics::RectF& dirty :
+         m_renderPass.getRasterDirtyRects()) {
+        const graphics::RectF expanded{
+            dirty.x - rasterOutset,
+            dirty.y - rasterOutset,
+            dirty.width + rasterOutset * 2.0f,
+            dirty.height + rasterOutset * 2.0f,
+        };
+        const graphics::RectF clipped = expanded.intersection(surfaceBounds);
+        if (!clipped.isEmpty()) contentRasterDamage.addDirtyRect(clipped);
+    }
     std::vector<graphics::RectF> damageRects = rasterDamage.getDirtyRects();
+    std::vector<graphics::RectF> contentDamageRects =
+        contentRasterDamage.getDirtyRects();
     m_renderPass.clear();
     if (damageRects.empty()) return false;
     graphics::RectF frameDamage = rasterDamage.getDamageRect();
@@ -2054,7 +2068,7 @@ bool WindowApp::renderFrame() {
         // frame. The root is still traversed once per clip below, but a ScrollView
         // must patch every changed descendant region before acknowledging the
         // content revision seen by those separate traversals.
-        m_renderPass.begin(*m_canvas, damageRects);
+        m_renderPass.begin(*m_canvas, damageRects, contentDamageRects);
 
         for (const graphics::RectF& damage : damageRects) {
             m_canvas->saveState();
