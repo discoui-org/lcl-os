@@ -4,6 +4,10 @@ target_link_libraries(lcl-sessiond PRIVATE
     lcl-session lcl-platform-common Threads::Threads
 )
 
+add_executable(lcl-sandboxd ${PROJECT_SOURCE_DIR}/system/security/sandbox_daemon_main.cpp)
+target_include_directories(lcl-sandboxd PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(lcl-sandboxd PRIVATE lcl-security Threads::Threads)
+
 add_executable(lcl-shell-launcher ${PROJECT_SOURCE_DIR}/system/shells/launcher_main.cpp)
 target_include_directories(lcl-shell-launcher PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(lcl-shell-launcher PRIVATE lcl-platform-common)
@@ -66,6 +70,7 @@ target_link_libraries(lcl-js PRIVATE lcl-ui lcl-raster qjs Threads::Threads)
 
 foreach(root_runtime_target IN ITEMS
         lcl-sessiond
+        lcl-sandboxd
         lcl-shell-launcher
         lcl-open
         lcl-desktop-shell

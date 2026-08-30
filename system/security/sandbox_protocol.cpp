@@ -224,4 +224,21 @@ bool decodeSandboxLaunchResult(const std::vector<std::uint8_t>& payload,
     return encodeSandboxLaunchResult(result, canonical);
 }
 
+bool encodeSandboxError(const std::string& message, std::vector<std::uint8_t>& payload) {
+    if (message.empty() || message.size() > 1024) {
+        return false;
+    }
+    Writer writer;
+    if (!writer.string(message)) {
+        return false;
+    }
+    payload = writer.take();
+    return payload.size() <= kSandboxMaxPayload;
+}
+
+bool decodeSandboxError(const std::vector<std::uint8_t>& payload, std::string& message) {
+    Reader reader(payload.data(), payload.size());
+    return reader.string(message) && !message.empty() && message.size() <= 1024 && reader.done();
+}
+
 } // namespace lcl::security

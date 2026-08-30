@@ -130,6 +130,11 @@ sözleşmesini kullanmasıdır.
 - [x] Protected FD, process group, UID/GID drop, capability clear,
   `no_new_privs` ve allowlist environment uygulayan; zorunlu kernel aşaması
   kaydı yoksa fail-closed kalan sandbox child launcher çekirdeğini oluştur.
+- [x] Root-only `lcl-sandboxd` kontrol düzlemi ekle: root-owned socket dizini,
+  ayrı non-root session-service UID/GID'si için `0600` socket ve her bağlantıda
+  `SO_PEERCRED` doğrulaması kullan; IPC üzerinden yalnız bound launch request
+  kabul et ve kernel enforcement hazır değilse doğrudan exec yerine fail-closed
+  sonuç döndür.
 - [ ] Küçük, root çalışan `lcl-sandboxd` servisinin sorumluluğunu yalnız
   doğrulanmış app ID çözümü, sandbox kurulumu ve child reaping ile sınırla.
 - [ ] `lcl-sessiond`'yi uygulama yaşam döngüsü otoritesi olarak koru; doğrudan

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "system/security/sandbox_contract.hpp"
@@ -44,5 +45,8 @@ bool encodeSandboxLaunchResult(const SandboxLaunchResult& result,
                                std::vector<std::uint8_t>& payload);
 bool decodeSandboxLaunchResult(const std::vector<std::uint8_t>& payload,
                                SandboxLaunchResult& result);
+/** A bounded diagnostic for an invalid sandbox control-plane packet. */
+bool encodeSandboxError(const std::string& message, std::vector<std::uint8_t>& payload);
+bool decodeSandboxError(const std::vector<std::uint8_t>& payload, std::string& message);
 
 } // namespace lcl::security
