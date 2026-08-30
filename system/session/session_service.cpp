@@ -20,7 +20,8 @@ namespace {
 
 constexpr size_t kReceiveBufferSize = kSessionWireHeaderSize + kSessionMaxPayload;
 
-std::vector<std::string> executableArgs(const core::AppBundleMetadata& app) {
+std::vector<std::string> executableArgs(const core::AppBundleMetadata& app,
+                                        const std::string& executableDescriptorPath) {
     if (app.runtime == "org.lcl.javascript" ||
         (app.executablePath.size() >= 3 &&
          app.executablePath.substr(app.executablePath.size() - 3) == ".js")) {
@@ -29,9 +30,9 @@ std::vector<std::string> executableArgs(const core::AppBundleMetadata& app) {
         if (!std::filesystem::exists(jsRuntime, ec)) {
             jsRuntime = "/usr/bin/lcl-js";
         }
-        return {jsRuntime, app.executablePath};
+        return {jsRuntime, executableDescriptorPath};
     }
-    return {app.executablePath};
+    return {executableDescriptorPath};
 }
 
 std::string resolvedIconPath(const core::AppBundleMetadata& app) {
@@ -139,11 +140,9 @@ LaunchResponse SessionService::launch(const LaunchRequest& request) {
         response.message = "unknown application: " + request.target;
         return response;
     }
-    if (access(app->executablePath.c_str(), X_OK) != 0 &&
-        !(app->executablePath.size() >= 3 &&
-          app->executablePath.substr(app->executablePath.size() - 3) == ".js")) {
+    if (!app->executableHandle || !app->executableHandle->valid()) {
         response.status = 2;
-        response.message = "application executable is unavailable: " + app->executablePath;
+        response.message = "application executable handle is unavailable: " + app->executablePath;
         return response;
     }
 
@@ -163,12 +162,6 @@ LaunchResponse SessionService::launch(const LaunchRequest& request) {
         }
     }
 
-    const auto args = executableArgs(*app);
-    if (args.empty()) {
-        response.status = 3;
-        response.message = "application has no executable";
-        return response;
-    }
     const uint64_t instanceId = m_nextInstanceId++;
     const pid_t child = fork();
     if (child < 0) {
@@ -179,6 +172,20 @@ LaunchResponse SessionService::launch(const LaunchRequest& request) {
     if (child == 0) {
         setsid();
         exportLaunchContext(request, instanceId);
+        const int executableDescriptor = app->executableHandle->descriptor();
+        const int descriptorFlags = fcntl(executableDescriptor, F_GETFD);
+        // The kernel and JavaScript interpreter resolve /proc/self/fd after
+        // exec. Keep this one trusted, read-only descriptor open long enough
+        // for that resolution; it pins the inode verified during catalog scan.
+        if (descriptorFlags < 0 ||
+            fcntl(executableDescriptor, F_SETFD, descriptorFlags & ~FD_CLOEXEC) != 0) {
+            _exit(127);
+        }
+        const auto args = executableArgs(
+            *app, "/proc/self/fd/" + std::to_string(executableDescriptor));
+        if (args.empty()) {
+            _exit(127);
+        }
         std::vector<char*> argv;
         argv.reserve(args.size() + 1);
         for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));

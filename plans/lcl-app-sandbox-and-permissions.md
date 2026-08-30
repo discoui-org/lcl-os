@@ -45,30 +45,79 @@ sözleşmesini kullanmasıdır.
 - [x] `Manifest.json` ayrıştırmasını basit string aramasından gerçek JSON
   ayrıştırıcısına taşı.
 - [x] Manifest şemasına `requestedPermissions` dizisini ekle.
-- [x] Uygulama ID biçimini doğrula ve kurulumda sabit canonical ID olarak sakla.
+- [x] Uygulama ID biçimini doğrula ve bundle kaydında sabit canonical ID olarak sakla.
 - [x] `executable` alanını bundle kökü altında zorunlu kıl; mutlak yol,
   `..` bileşeni ve bundle dışına çıkan symlink'leri reddet.
-- [ ] Icon, resource ve executable erişimlerinde race/symlink kaçışını önle.
-- [ ] Sistem, kullanıcı ve geliştirme bundle kaynaklarının öncelik ve güven
+- [x] Icon, resource ve executable erişimlerinde race/symlink kaçışını önle.
+- [x] Sistem, makine ve kullanıcı bundle kaynaklarının öncelik ve güven
   kurallarını tanımla.
-- [ ] Üçüncü taraf bundle için imza/doğrulama tasarımını belirle; imza yoksa
-  yalnız geliştirici modunda kurulum kararını açıkça tanımla.
+- [x] Üçüncü taraf bundle için imza/doğrulama tasarımını belirle; imza yoksa
+  Ayarlar üzerinden kullanıcı onayı gerektirdiğini açıkça tanımla.
 - [x] Bundle parser ve registry için geçersiz JSON, path traversal, mutlak
   executable, duplicate ID ve symlink testleri ekle.
+
+### Kaynak önceliği ve güven sözleşmesi
+
+1. `/System/Applications` yalnız immutable, OS ile gelen bundle'lardır ve
+   en yüksek önceliğe sahiptir. Üçüncü taraf uygulama bu dizine kurulamaz.
+2. `/Applications` makine-kapsamlı, doğrudan kopyalanabilen `.app`
+   bundle'larıdır; uygulamanın burada bulunması kurulum işlemi sayılmaz ve
+   aynı app ID için sistem bundle'ını override edemez.
+3. `/Users/<user>/Applications` kullanıcı-kapsamlı, doğrudan taşınabilen
+   bundle'lardır. Kullanıcı ayrıca bir dosya seçici ya da `lcl-open` ile bu
+   dizinler dışındaki tekil bir `.app` bundle'ını da doğrudan açabilir.
+4. Bundle kaynak dizini güven vermez: sistem bundle'ı rootfs zinciriyle,
+   diğer bundle ise geçerli imza veya kullanıcının bundle-hash'ine bağlı
+   Ayarlar onayıyla güvenilir olur.
+5. Aynı canonical app ID için katalog sırası `system > machine > user` olur.
+   Aynı scope'ta çakışan iki bundle app-ID ile otomatik başlatılamaz; kullanıcı
+   açık bundle yolunu seçmelidir. Registry rastgele bir bundle seçmez.
+6. Doğrulanamayan bundle ilk launch'ta hiç çalıştırılmaz. Trusted shell,
+   “LCL OS bu uygulamanın yayıncısını doğrulayamadı” durumunu gösterir ve
+   kullanıcıyı Ayarlar > Güvenlik'e yönlendirir.
+
+### Üçüncü taraf bundle imza ve kullanıcı onayı
+
+- `lcl-bundle-verifier`, bundle ilk kataloglandığında veya doğrudan
+  açılmak istendiğinde descriptor-temelli şema kontrolünü tamamlayıp canonical
+  bir `BundleRecord` üretir: app ID, sürüm,
+  runtime/type, izin talepleri, manifest sürümü ve bundle içindeki her regular
+  dosyanın relative yolu ile SHA-256 özeti. Dosya listesi lexicographic sırada
+  tutulur; symlink, device ve hard-link kabul edilmez.
+- Yayıncı bu kaydın sürümlenmiş binary encoding'ini Ed25519 ile imzalar.
+  Bundle, `Signature.ed25519`, publisher key ID ve signing key sertifika
+  zincirini içerir; imza manifest metninin biçimine değil canonical kayda
+  bağlıdır.
+- Geçerli imza bundle bütünlüğünü ve publisher key fingerprint'ini doğrular;
+  bundle doğrudan bulunduğu yerden çalışır. Uygulama dosyaları için zorunlu
+  bir installer, staging alanı veya kopyalama işlemi yoktur.
+- İmza yoksa ya da doğrulanamıyorsa `lcl-sessiond` launch'ı reddeder ve
+  trusted shell'e pending approval kaydı gönderir. Ayarlar yalnız seçilen
+  kullanıcı için `app ID + BundleRecord hash + publisher durumu` bağlı,
+  root-owned bir allow kaydı yazabilir. Kullanıcı yeniden launch ettiğinde
+  bundle normal sandbox profiliyle çalışır.
+- Bundle içeriği, app ID'si veya imza durumu değişirse BundleRecord hash'i
+  değişir; unsigned/onaysız bundle yeniden onay gerektirir. Bu onay izin,
+  elevation veya privileged helper grant'i değildir.
+- Sistem bundle'ları rootfs image/signature zinciriyle güvenilir sayılır;
+  ayrıca per-bundle imza zorunlu değildir. Kullanıcı ve makine scope'larında
+  imzalı bundle doğrudan, unsigned bundle ise yalnız hash'e bağlı kullanıcı
+  onayıyla çalışır.
 
 ## 2. Kimlik ve kalıcı uygulama depolaması
 
 - [ ] LCL'ye ayrılmış UID/GID aralığını tanımla; Android substrate'ında bu
   aralığın Android UID alanıyla çakışmadığını doğrula.
-- [ ] `app-id -> uid/gid` eşlemesini root-owned kalıcı registry'de sakla.
-- [ ] Her kurulumda kalıcı `Data`, `Cache` ve `Preferences` dizinlerini
-  oluştur; `Temporary`yi sandbox başlangıcında tmpfs olarak oluştur.
-- [ ] Uygulama özel dizinlerini ilgili UID/GID sahibi ve `0700` moduyla oluştur.
+- [x] `app-id -> uid/gid` eşlemesini root-owned kalıcı registry'de sakla.
+- [ ] İlk doğrulanmış/izin verilmiş launch'ta kalıcı `Data`, `Cache` ve
+  `Preferences` dizinlerini oluştur; `Temporary`yi sandbox başlangıcında
+  tmpfs olarak oluştur.
+- [x] Uygulama özel dizinlerini ilgili UID/GID sahibi ve `0700` moduyla oluştur.
 - [ ] Rootfs üreticisindeki genel `0755` permission geçişinin uygulama özel
   dizinleri gevşetmesini engelle.
 - [ ] Uygulama kaldırma, veri saklama ve veri silme kararlarını ayrı işlemler
   olarak tasarla.
-- [ ] UID/UID registry ve uygulama dizinleri için bozuk sahiplik/izin onarım
+- [x] UID/UID registry ve uygulama dizinleri için bozuk sahiplik/izin onarım
   testleri ekle.
 
 ## 3. Ayrıcalıklı sandbox launcher
@@ -107,8 +156,8 @@ sözleşmesini kullanmasıdır.
   bağlamından kabul et; arka plan uygulaması kendiliğinden prompt açamasın.
 - [ ] Onay promptunu yalnız trusted shell/system surface üzerinde göster;
   uygulama kullanıcı parolasını, PIN'ini veya admin token'ını görmesin.
-- [ ] Önce dar kapsamlı elevation uygula: kurulum, güncelleme, sistem ayarı
-  veya uygulamanın imzalı privileged helper'ı gibi belirli bir işlem.
+- [ ] Önce dar kapsamlı elevation uygula: sistem ayarı, bundle güven kararını
+  yönetme veya uygulamanın imzalı privileged helper'ı gibi belirli bir işlem.
 - [ ] Kullanıcı açıkça isterse uygulamayı yeniden başlatan geçici
   `elevated-app` oturumu ekle; bu oturumun mount namespace'i ve runtime
   endpoint'leri normal uygulamadan ayrı olsun.
@@ -267,17 +316,23 @@ sözleşmesini kullanmasıdır.
 - [ ] Settings admin API'sinde `SO_PEERCRED`, trusted app identity ve yetki
   kontrol testleri ekle.
 
-## 11. Paketleme, güncelleme ve geliştirici modu
+## 11. Bundle keşfi, güven onayı ve güncelleme
 
 - [ ] Sistem uygulamalarını read-only rootfs alanında paketle.
-- [ ] Kullanıcı uygulama kurulumu için transactional staging, doğrulama,
-  signature kontrolü ve atomik registry güncellemesi uygula.
-- [ ] Geliştirici modunu görünür, kalıcı olmayan ve varsayılan kapalı yap.
-- [ ] Geliştirici modunda sandbox bypass yerine açıkça işaretlenmiş daha geniş
-  bir profil kullan; root çalıştırma vermeyi yasakla.
-- [ ] Uygulama güncellemesinde UID, Data dizini ve grant migration davranışını
-  tanımla.
-- [ ] Rollback ve yarım kalmış kurulum temizliği testlerini ekle.
+- [ ] Kopyalanan veya doğrudan seçilen `.app` bundle'ı launch öncesi
+  descriptor-temelli doğrula; geçerli imzayı veya hash'e bağlı Ayarlar
+  onayını kontrol et ve ilk kabul edilmiş launch'ta UID/Data registry'yi
+  atomik güncelle.
+- [ ] Ayarlar > Güvenlik'te bekleyen doğrulanamayan bundle'ları, app adı,
+  bundle yolu, BundleRecord hash'i ve publisher fingerprint'iyle göster;
+  Allow/Remove Allow eylemlerini root-owned approval store'a bağla.
+- [ ] Onaysız veya imzasız bundle için sandbox bypass verme; kullanıcı onayı
+  yalnız normal sandbox altında launch yetkisi verir, root çalıştırma vermez.
+- [ ] Bundle dosyası değiştiğinde unsigned allow kaydını geçersizleştir;
+  imzalı güncellemede publisher, UID, Data dizini ve permission grant
+  migration davranışını tanımla.
+- [ ] Bundle değişimi, hash approval revoke, imza bozulması ve aynı app ID
+  çakışması testlerini ekle.
 
 ## 12. Doğrulama ve kabul kriterleri
 

@@ -1,10 +1,32 @@
 #pragma once
 
+#include <optional>
+#include <memory>
 #include <string>
 #include <vector>
-#include <optional>
 
 namespace lcl::core {
+
+/**
+ * A read-only descriptor retained by the trusted session catalog.
+ *
+ * It pins a verified inode across a later rename or symlink swap. The handle
+ * is shared by metadata copies and is not exposed through the app protocol.
+ */
+class AppBundleFileHandle final {
+public:
+    explicit AppBundleFileHandle(int descriptor) noexcept;
+    ~AppBundleFileHandle();
+
+    AppBundleFileHandle(const AppBundleFileHandle&) = delete;
+    AppBundleFileHandle& operator=(const AppBundleFileHandle&) = delete;
+
+    int descriptor() const noexcept { return m_descriptor; }
+    bool valid() const noexcept { return m_descriptor >= 0; }
+
+private:
+    int m_descriptor{-1};
+};
 
 struct AppBundleMetadata {
     std::string bundlePath;      // e.g. "/System/Applications/Terminal.app"
@@ -17,6 +39,8 @@ struct AppBundleMetadata {
     std::string runtime;         // e.g. "org.lcl.javascript"
     // Declarations only. They grant nothing until a permission broker evaluates them.
     std::vector<std::string> requestedPermissions;
+    std::shared_ptr<const AppBundleFileHandle> iconHandle;
+    std::shared_ptr<const AppBundleFileHandle> executableHandle;
     bool valid{false};
 };
 

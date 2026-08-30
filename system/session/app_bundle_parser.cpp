@@ -1,12 +1,14 @@
 #include "system/session/app_bundle_parser.hpp"
 
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,6 +23,37 @@ namespace fs = std::filesystem;
 
 constexpr std::size_t kMaxManifestBytes = 64 * 1024;
 constexpr int kMaxJsonDepth = 32;
+
+class ScopedFd final {
+public:
+    explicit ScopedFd(int descriptor = -1) noexcept : descriptor_(descriptor) {}
+    ~ScopedFd() {
+        if (descriptor_ >= 0) {
+            close(descriptor_);
+        }
+    }
+
+    ScopedFd(const ScopedFd&) = delete;
+    ScopedFd& operator=(const ScopedFd&) = delete;
+
+    ScopedFd(ScopedFd&& other) noexcept : descriptor_(std::exchange(other.descriptor_, -1)) {}
+    ScopedFd& operator=(ScopedFd&& other) noexcept {
+        if (this != &other) {
+            if (descriptor_ >= 0) {
+                close(descriptor_);
+            }
+            descriptor_ = std::exchange(other.descriptor_, -1);
+        }
+        return *this;
+    }
+
+    int get() const noexcept { return descriptor_; }
+    bool valid() const noexcept { return descriptor_ >= 0; }
+    int release() noexcept { return std::exchange(descriptor_, -1); }
+
+private:
+    int descriptor_{-1};
+};
 
 struct ManifestFields {
     std::optional<std::string> appId;
@@ -426,7 +459,8 @@ bool isValidDottedIdentifier(const std::string& value, std::size_t maximumLength
 }
 
 bool isSafeBundleRelativePath(const std::string& value, std::string_view requiredFirstComponent) {
-    if (!hasOnlyVisibleText(value, 512) || value.find('\\') != std::string::npos) {
+    if (!hasOnlyVisibleText(value, 512) || value.find('\\') != std::string::npos ||
+        value.find("//") != std::string::npos) {
         return false;
     }
 
@@ -448,84 +482,134 @@ bool isSafeBundleRelativePath(const std::string& value, std::string_view require
     return true;
 }
 
-bool isPathInside(const fs::path& directory, const fs::path& candidate) {
-    auto directoryPart = directory.begin();
-    auto candidatePart = candidate.begin();
-    for (; directoryPart != directory.end() && candidatePart != candidate.end();
-         ++directoryPart, ++candidatePart) {
-        if (*directoryPart != *candidatePart) {
-            return false;
-        }
-    }
-    return directoryPart == directory.end() && candidatePart != candidate.end();
+bool isRegularFileDescriptor(int descriptor, struct stat& status) {
+    return descriptor >= 0 && fstat(descriptor, &status) == 0 && S_ISREG(status.st_mode) &&
+           status.st_nlink == 1;
 }
 
-bool resolveRegularFileInsideBundle(const fs::path& bundleRoot, const std::string& relativePath,
-                                    fs::path& resolvedPath) {
-    std::error_code error;
-    const fs::path candidate = fs::canonical(bundleRoot / relativePath, error);
-    if (error || !isPathInside(bundleRoot, candidate)) {
-        return false;
+ScopedFd openDirectoryAt(int parentDescriptor, const char* name) {
+    const int descriptor = openat(parentDescriptor, name,
+                                  O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (descriptor < 0) {
+        return {};
     }
-    const fs::file_status status = fs::status(candidate, error);
-    if (error || !fs::is_regular_file(status)) {
-        return false;
+    struct stat status {};
+    if (fstat(descriptor, &status) != 0 || !S_ISDIR(status.st_mode)) {
+        close(descriptor);
+        return {};
     }
-    resolvedPath = candidate;
-    return true;
+    return ScopedFd(descriptor);
+}
+
+std::vector<std::string> splitRelativePath(const std::string& path) {
+    std::vector<std::string> components;
+    std::size_t start = 0;
+    while (start < path.size()) {
+        const std::size_t end = path.find('/', start);
+        components.push_back(path.substr(start, end - start));
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return components;
+}
+
+ScopedFd openRegularFileAt(int bundleDescriptor, const std::string& relativePath,
+                           struct stat& fileStatus) {
+    const std::vector<std::string> components = splitRelativePath(relativePath);
+    if (components.empty()) {
+        return {};
+    }
+
+    int parentDescriptor = bundleDescriptor;
+    ScopedFd ownedParent;
+    for (std::size_t index = 0; index < components.size(); ++index) {
+        const bool finalComponent = index + 1 == components.size();
+        const int flags = finalComponent
+            ? O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
+            : O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK;
+        const int descriptor = openat(parentDescriptor, components[index].c_str(), flags);
+        if (descriptor < 0) {
+            return {};
+        }
+
+        if (finalComponent) {
+            if (!isRegularFileDescriptor(descriptor, fileStatus)) {
+                close(descriptor);
+                return {};
+            }
+            return ScopedFd(descriptor);
+        }
+
+        struct stat directoryStatus {};
+        if (fstat(descriptor, &directoryStatus) != 0 || !S_ISDIR(directoryStatus.st_mode)) {
+            close(descriptor);
+            return {};
+        }
+        ownedParent = ScopedFd(descriptor);
+        parentDescriptor = ownedParent.get();
+    }
+    return {};
 }
 
 bool endsWith(std::string_view value, std::string_view suffix) {
     return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
 }
 
-bool readManifest(const fs::path& manifestPath, std::string& content) {
-    std::ifstream file(manifestPath, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
+bool readManifest(int descriptor, std::string& content) {
+    struct stat status {};
+    if (!isRegularFileDescriptor(descriptor, status) || status.st_size < 0 ||
+        static_cast<std::uintmax_t>(status.st_size) > kMaxManifestBytes || lseek(descriptor, 0, SEEK_SET) < 0) {
         return false;
     }
-    const std::streamoff length = file.tellg();
-    if (length < 0 || static_cast<std::uintmax_t>(length) > kMaxManifestBytes) {
+    content.resize(static_cast<std::size_t>(status.st_size));
+    std::size_t offset = 0;
+    while (offset < content.size()) {
+        const ssize_t readCount = read(descriptor, content.data() + offset, content.size() - offset);
+        if (readCount > 0) {
+            offset += static_cast<std::size_t>(readCount);
+            continue;
+        }
+        if (readCount < 0 && errno == EINTR) {
+            continue;
+        }
         return false;
     }
-    content.resize(static_cast<std::size_t>(length));
-    file.seekg(0);
-    return file.read(content.data(), length) || length == 0;
+    return true;
 }
 
 } // namespace
 
 namespace lcl::core {
 
+AppBundleFileHandle::AppBundleFileHandle(int descriptor) noexcept : m_descriptor(descriptor) {}
+
+AppBundleFileHandle::~AppBundleFileHandle() {
+    if (m_descriptor >= 0) {
+        close(m_descriptor);
+    }
+}
+
 std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string& bundlePath) {
-    std::error_code error;
-    const fs::file_status suppliedStatus = fs::symlink_status(bundlePath, error);
-    if (error || fs::is_symlink(suppliedStatus) || !fs::is_directory(suppliedStatus)) {
+    ScopedFd bundleDescriptor(open(bundlePath.c_str(),
+                                   O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
+    struct stat bundleStatus {};
+    if (!bundleDescriptor.valid() || fstat(bundleDescriptor.get(), &bundleStatus) != 0 ||
+        !S_ISDIR(bundleStatus.st_mode)) {
         return std::nullopt;
     }
 
-    const fs::path bundleRoot = fs::canonical(bundlePath, error);
-    if (error || !fs::is_directory(bundleRoot)) {
-        return std::nullopt;
-    }
-
-    const fs::path manifestPath = bundleRoot / "Manifest.json";
-    const fs::file_status manifestStatus = fs::symlink_status(manifestPath, error);
-    if (error || fs::is_symlink(manifestStatus) || !fs::is_regular_file(manifestStatus)) {
-        return std::nullopt;
-    }
-
-    const fs::path resourcesPath = fs::canonical(bundleRoot / "Resources", error);
-    if (error || !isPathInside(bundleRoot, resourcesPath) || !fs::is_directory(resourcesPath)) {
-        return std::nullopt;
-    }
-    const fs::path executablesPath = fs::canonical(bundleRoot / "Executables", error);
-    if (error || !isPathInside(bundleRoot, executablesPath) || !fs::is_directory(executablesPath)) {
-        return std::nullopt;
-    }
-
+    ScopedFd manifestDescriptor(openat(bundleDescriptor.get(), "Manifest.json",
+                                       O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
     std::string content;
-    if (!readManifest(manifestPath, content)) {
+    if (!readManifest(manifestDescriptor.get(), content)) {
+        return std::nullopt;
+    }
+
+    ScopedFd resourcesDescriptor = openDirectoryAt(bundleDescriptor.get(), "Resources");
+    ScopedFd executablesDescriptor = openDirectoryAt(bundleDescriptor.get(), "Executables");
+    if (!resourcesDescriptor.valid() || !executablesDescriptor.valid()) {
         return std::nullopt;
     }
 
@@ -556,23 +640,29 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
         }
     }
 
-    fs::path iconPath;
-    fs::path executablePath;
-    if (!resolveRegularFileInsideBundle(bundleRoot, *fields.icon, iconPath) ||
-        !resolveRegularFileInsideBundle(bundleRoot, *fields.executable, executablePath) ||
-        !isPathInside(resourcesPath, iconPath) || !isPathInside(executablesPath, executablePath)) {
+    struct stat iconStatus {};
+    struct stat executableStatus {};
+    ScopedFd iconDescriptor = openRegularFileAt(bundleDescriptor.get(), *fields.icon, iconStatus);
+    ScopedFd executableDescriptor =
+        openRegularFileAt(bundleDescriptor.get(), *fields.executable, executableStatus);
+    if (!iconDescriptor.valid() || !executableDescriptor.valid()) {
         return std::nullopt;
     }
 
     const bool isJavaScript = (fields.runtime && *fields.runtime == "org.lcl.javascript") ||
-                              endsWith(executablePath.string(), ".js");
-    const int requiredAccess = isJavaScript ? R_OK : X_OK;
-    if (access(executablePath.c_str(), requiredAccess) != 0) {
+                              endsWith(*fields.executable, ".js");
+    if (!isJavaScript && (executableStatus.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0) {
+        return std::nullopt;
+    }
+
+    std::error_code error;
+    const fs::path displayBundlePath = fs::absolute(bundlePath, error).lexically_normal();
+    if (error) {
         return std::nullopt;
     }
 
     AppBundleMetadata metadata{};
-    metadata.bundlePath = bundleRoot.string();
+    metadata.bundlePath = displayBundlePath.string();
     metadata.appId = *fields.appId;
     metadata.name = *fields.name;
     metadata.version = fields.version.value_or("");
@@ -580,7 +670,9 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
     metadata.type = type;
     metadata.runtime = fields.runtime.value_or("");
     metadata.requestedPermissions = std::move(fields.requestedPermissions);
-    metadata.executablePath = executablePath.string();
+    metadata.iconHandle = std::make_shared<AppBundleFileHandle>(iconDescriptor.release());
+    metadata.executableHandle = std::make_shared<AppBundleFileHandle>(executableDescriptor.release());
+    metadata.executablePath = (displayBundlePath / *fields.executable).string();
     metadata.valid = true;
     return metadata;
 }

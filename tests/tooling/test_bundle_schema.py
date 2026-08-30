@@ -63,6 +63,44 @@ class StrictBundleSchemaTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "executable under Executables"):
                 validate_app_bundles(staging)
 
+    def test_rejects_symlinked_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            staging = Path(directory)
+            bundle = self.create_bundle(staging, "Symlinked", {
+                "id": "org.lcl.symlinked",
+                "name": "Symlinked",
+                "executable": "Executables/Symlinked",
+                "icon": "Resources/Icon.png",
+            })
+            external_executable = staging / "outside-program"
+            external_executable.write_bytes(b"binary")
+            external_executable.chmod(0o755)
+            executable = bundle / "Executables" / "Symlinked"
+            executable.unlink()
+            executable.symlink_to(external_executable)
+
+            with self.assertRaisesRegex(RuntimeError, "executable not found inside Executables"):
+                validate_app_bundles(staging)
+
+    def test_rejects_hard_linked_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            staging = Path(directory)
+            bundle = self.create_bundle(staging, "HardLinked", {
+                "id": "org.lcl.hard-linked",
+                "name": "Hard Linked",
+                "executable": "Executables/HardLinked",
+                "icon": "Resources/Icon.png",
+            })
+            external_executable = staging / "outside-program"
+            external_executable.write_bytes(b"binary")
+            external_executable.chmod(0o755)
+            executable = bundle / "Executables" / "HardLinked"
+            executable.unlink()
+            executable.hardlink_to(external_executable)
+
+            with self.assertRaisesRegex(RuntimeError, "executable not found inside Executables"):
+                validate_app_bundles(staging)
+
     def test_rejects_invalid_permissions_and_duplicate_json_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             staging = Path(directory)

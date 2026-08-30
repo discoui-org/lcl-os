@@ -74,6 +74,10 @@ TEST_F(AppBundleParserTest, ParseValidAppBundle) {
     EXPECT_EQ(meta->type, "gui");
     EXPECT_EQ(meta->runtime, "org.lcl.native");
     EXPECT_EQ(meta->executablePath, (tempDir / "Terminal.app" / "Executables/Terminal").string());
+    ASSERT_TRUE(meta->iconHandle);
+    ASSERT_TRUE(meta->executableHandle);
+    EXPECT_TRUE(meta->iconHandle->valid());
+    EXPECT_TRUE(meta->executableHandle->valid());
 }
 
 TEST_F(AppBundleParserTest, ParsesRequestedPermissionsAsDeclarations) {
@@ -154,6 +158,21 @@ TEST_F(AppBundleParserTest, RejectsExecutableSymlinkEscapingBundle) {
         R"({"id":"org.lcl.escaping-symlink","name":"Escaping","icon":"Resources/Icon.png","executable":"Executables/app"})" );
     fs::create_directories(bundle / "Executables");
     fs::create_symlink(externalExecutable, bundle / "Executables" / "app");
+
+    EXPECT_FALSE(AppBundleParser::parseBundle(bundle.string()).has_value());
+}
+
+TEST_F(AppBundleParserTest, RejectsHardLinkedExecutable) {
+    const fs::path bundle = createMockBundle(
+        "HardLinked.app",
+        R"({"id":"org.lcl.hard-linked","name":"Hard Linked","icon":"Resources/Icon.png","executable":"Executables/app"})" );
+    const fs::path externalExecutable = tempDir / "outside-program";
+    std::ofstream externalFile(externalExecutable);
+    externalFile << "#!/bin/sh\nexit 0\n";
+    externalFile.close();
+    chmod(externalExecutable.c_str(), 0755);
+    fs::create_directories(bundle / "Executables");
+    fs::create_hard_link(externalExecutable, bundle / "Executables" / "app");
 
     EXPECT_FALSE(AppBundleParser::parseBundle(bundle.string()).has_value());
 }

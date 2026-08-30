@@ -125,6 +125,29 @@ TEST_F(SessionServiceTest, ServiceOwnsLaunchAndExitLifecycle) {
     EXPECT_EQ(instance.appId, "org.lcl.lifecycle");
 }
 
+TEST_F(SessionServiceTest, ServiceLaunchesTheVerifiedExecutableInode) {
+    const fs::path bundle = createBundle("Pinned.app", "org.lcl.pinned",
+                                         "#!/bin/sh\nexit 23\n");
+    SessionService service({tempDir.string()});
+    service.refreshCatalog();
+
+    const fs::path executable = bundle / "Executables" / "test-app";
+    const fs::path verifiedExecutable = executable.string() + ".verified";
+    fs::rename(executable, verifiedExecutable);
+    std::ofstream replacement(executable);
+    replacement << "#!/bin/sh\nexit 99\n";
+    replacement.close();
+    chmod(executable.c_str(), 0755);
+
+    const LaunchResponse launch = service.launch({"org.lcl.pinned", false});
+    ASSERT_EQ(launch.status, 0u) << launch.message;
+    for (int index = 0; index < 100 && service.instances().at(launch.instanceId).running; ++index) {
+        service.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    EXPECT_EQ(service.instances().at(launch.instanceId).exitCode, 23);
+}
+
 TEST_F(SessionServiceTest, SingleInstanceLaunchReusesRunningProcess) {
     createBundle("Singleton.app", "org.lcl.singleton",
                  "#!/bin/sh\nsleep 1\nexit 0\n");

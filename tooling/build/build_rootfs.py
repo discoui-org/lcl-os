@@ -812,7 +812,7 @@ def _is_safe_bundle_relative_path(value: object, required_first_component: str) 
         return False
 
     assert isinstance(value, str)
-    if "\\" in value:
+    if "\\" in value or "//" in value:
         return False
     path = Path(value)
     return (
@@ -825,11 +825,18 @@ def _is_safe_bundle_relative_path(value: object, required_first_component: str) 
 
 def _resolve_bundle_file(bundle_root: Path, relative_path: str) -> Path | None:
     try:
-        resolved = (bundle_root / relative_path).resolve(strict=True)
+        candidate = bundle_root
+        for component in Path(relative_path).parts:
+            candidate /= component
+            if candidate.is_symlink():
+                return None
+        resolved = candidate.resolve(strict=True)
         resolved.relative_to(bundle_root)
     except (OSError, RuntimeError, ValueError):
         return None
-    return resolved if resolved.is_file() else None
+    if not resolved.is_file() or resolved.stat().st_nlink != 1:
+        return None
+    return resolved
 
 
 def _manifest_object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -880,7 +887,7 @@ def validate_app_bundles(staging_dir: Path) -> None:
                 raise RuntimeError(f"Bundle {app_dir.name} Resources directory escapes its bundle")
 
             executables_dir = app_dir / "Executables"
-            if not executables_dir.is_dir():
+            if executables_dir.is_symlink() or not executables_dir.is_dir():
                 raise RuntimeError(f"Bundle {app_dir.name} is missing Executables directory")
             try:
                 executables_root = executables_dir.resolve(strict=True)

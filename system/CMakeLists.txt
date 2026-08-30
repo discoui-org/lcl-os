@@ -21,6 +21,12 @@ target_link_libraries(lcl-font-metrics PUBLIC lcl-graphics LCL::Skia)
 add_library(lcl-session-protocol STATIC session/session_protocol.cpp)
 target_include_directories(lcl-session-protocol PUBLIC ${PROJECT_SOURCE_DIR})
 
+add_library(lcl-security STATIC
+    security/app_data_store.cpp
+    security/app_identity_registry.cpp
+)
+target_include_directories(lcl-security PUBLIC ${PROJECT_SOURCE_DIR})
+
 add_library(lcl-session STATIC
     session/app_bundle_parser.cpp
     session/app_registry.cpp

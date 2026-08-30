@@ -17,6 +17,8 @@ add_executable(lcl_unit_tests
     system/test_raster_protocol.cpp
     integration/test_raster_service_integration.cpp
     system/test_app_bundle_parser.cpp
+    system/test_app_data_store.cpp
+    system/test_app_identity_registry.cpp
     system/test_session_service.cpp
     system/test_ipc_manager.cpp
     system/test_input_manager.cpp
@@ -84,7 +86,7 @@ target_include_directories(lcl_unit_tests PRIVATE
     ${UDEV_INCLUDE_DIRS}
 )
 target_link_libraries(lcl_unit_tests PRIVATE
-    gtest_main gtest Threads::Threads lcl-ui lcl-window-chrome lcl-raster
+    gtest_main gtest Threads::Threads lcl-ui lcl-window-chrome lcl-raster lcl-security
     lcl-platform-desktop lcl-protocol lcl-raster-protocol lcl-session qjs
     ${LIBINPUT_LIBRARIES} ${UDEV_LIBRARIES}
 )
