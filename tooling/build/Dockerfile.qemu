@@ -36,6 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sed \
     gawk \
     procps \
+    ncurses-base \
+    ncurses-bin \
     ca-certificates \
     curl \
     && apt-get install -y linux-image-generic linux-firmware \

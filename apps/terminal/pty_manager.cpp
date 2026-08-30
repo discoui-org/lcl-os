@@ -199,6 +199,22 @@ std::string PTYManager::getWorkingDirectory() const {
     return "/home/user";
 }
 
+bool PTYManager::pollChildExit() {
+    if (m_childPid <= 0) return true;
+
+    int status = 0;
+    const pid_t result = waitpid(m_childPid, &status, WNOHANG);
+    if (result == m_childPid || (result < 0 && errno == ECHILD)) {
+        m_childPid = -1;
+        return true;
+    }
+    return false;
+}
+
+bool PTYManager::isAlive() {
+    return m_childPid > 0 && !pollChildExit();
+}
+
 void PTYManager::shutdown() {
     if (m_childPid > 0) {
         std::cout << "[LCL PTY] Terminating shell process group PGID: " << m_childPid << "...\n";

@@ -58,7 +58,7 @@ public:
     int getCursorColumn() const { return m_writePos; }
     bool shouldDrawSolidCursor() const;
 
-    bool isAlive() const { return m_initialized && m_ptyManager.isAlive(); }
+    bool isAlive() { return m_initialized && m_ptyManager.isAlive(); }
 
 private:
     int m_windowId{-1};

@@ -50,10 +50,19 @@ public:
      */
     std::string getWorkingDirectory() const;
 
-    bool isAlive() const {
-        if (m_childPid <= 0) return false;
-        return kill(m_childPid, 0) == 0;
-    }
+    /**
+     * @brief Reap an exited shell without blocking the UI event loop.
+     * @return True when the child has exited or was already reaped.
+     */
+    bool pollChildExit();
+
+    /**
+     * @brief Return whether the shell is still running.
+     *
+     * This also reaps an exited child so a zombie cannot keep the terminal
+     * window alive after the user runs `exit`.
+     */
+    bool isAlive();
 
 private:
     int m_masterFd{-1};

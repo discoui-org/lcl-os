@@ -306,6 +306,10 @@ def rootfs_fingerprint_path(arch: str) -> Path:
     return QEMU_CACHE_DIR / f"rootfs-{normalize_arch(arch)}.sha256"
 
 
+def docker_image_fingerprint_path(arch: str) -> Path:
+    return QEMU_CACHE_DIR / f"docker-image-{normalize_arch(arch)}.stamp"
+
+
 def stage_canonical_rootfs(
     staging_dir: Path,
     arch: str = "x86_64",
@@ -464,6 +468,22 @@ def stage_canonical_rootfs(
             shutil.copy2(u_src, u_dst)
             u_dst.chmod(0o755)
             copy_ldd_deps(u_dst, dest_system_lib)
+
+    # The copied ncurses clear binary consults the terminfo database using the
+    # TERM value established for every Terminal.app PTY.  Keep the matching
+    # entry in the canonical rootfs rather than shipping a clear binary whose
+    # terminal contract cannot be fulfilled.
+    terminfo_name = "xterm-256color"
+    terminfo_source = next((
+        root / terminfo_name[0] / terminfo_name
+        for root in (Path("/usr/share/terminfo"), Path("/lib/terminfo"), Path("/etc/terminfo"))
+        if (root / terminfo_name[0] / terminfo_name).is_file()
+    ), None)
+    if terminfo_source is None:
+        raise RuntimeError(f"Required terminfo entry '{terminfo_name}' was not found.")
+    terminfo_destination = staging_dir / "usr" / "share" / "terminfo" / terminfo_name[0]
+    terminfo_destination.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(terminfo_source, terminfo_destination / terminfo_name)
 
     # Fallback clear script
     if not (dest_system_tools / "clear").is_file():
@@ -878,6 +898,7 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Library/Input/libinput",
         "/Users/Rei/.bashrc",
         "/Users/Rei/Library/Containers/org.lcl.terminal/Data",
+        "/usr/share/terminfo/x/xterm-256color",
         "/etc/profile",
         "/init",
     ]
@@ -956,13 +977,35 @@ def run_inside_docker(
 
     log(f"Executing rootfs build inside Docker ({norm_arch}, {plat})...")
 
-    # Build image if missing
-    inspect = subprocess.run(["docker", "image", "inspect", image_tag], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if inspect.returncode != 0:
-        log(f"Building Docker image {image_tag} ({plat})...")
+    image_fingerprint_path = docker_image_fingerprint_path(norm_arch)
+    dockerfile_fingerprint = get_sha256(DOCKERFILE)
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", image_tag],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    needs_image_build = inspect.returncode != 0
+    if not needs_image_build:
+        try:
+            needs_image_build = (
+                not image_fingerprint_path.is_file() or
+                image_fingerprint_path.read_text(encoding="utf-8").strip() != dockerfile_fingerprint
+            )
+        except OSError:
+            needs_image_build = True
+
+    if needs_image_build:
+        log(f"Building Docker image {image_tag} ({plat}); Dockerfile changed or image is missing...")
         subprocess.run([
             "docker", "build", "--platform", plat, "-t", image_tag, "-f", str(DOCKERFILE), str(SCRIPT_DIR)
         ], check=True)
+        try:
+            image_fingerprint_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_fingerprint = image_fingerprint_path.with_suffix(".stamp.tmp")
+            temporary_fingerprint.write_text(dockerfile_fingerprint + "\n", encoding="utf-8")
+            temporary_fingerprint.replace(image_fingerprint_path)
+        except OSError as ex:
+            log(f"[WARN] Could not persist Dockerfile fingerprint: {ex}")
 
     image_id = subprocess.check_output(
         ["docker", "image", "inspect", "--format", "{{.Id}}", image_tag],
