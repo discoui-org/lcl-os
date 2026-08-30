@@ -221,7 +221,7 @@ lcl-os/
 ├── system/                         # compositor, scene, input, IPC, session, shells, render, JS
 ├── platforms/                      # common contracts, Linux and Android substrates
 │   └── android/generated/          # Versioned AIDL and HIDL generated sources
-├── apps/                           # terminal, ui_demo and ui_demo_js
+├── apps/                           # built-in applications
 ├── tooling/                        # build, deploy, emulator, generators, probes and assets
 │   └── paths.py                    # Canonical generated-output paths
 ├── packaging/iso/                  # Limine configuration and ISO overlay
@@ -363,7 +363,7 @@ LCL OS decouples the user-space runtime environment from the underlying platform
 ```text
 +-----------------------------------------------------------------------------------------+
 |                   Canonical LCL Userspace (out/rootfs/lcl-rootfs-x86_64.ext4)           |
-|  - Desktop Apps: Terminal.app, UIDemo.app, UIDemoJS.app                                |
+|  - Desktop Apps: Terminal.app                                                          |
 |  - System Daemons: lcl-sessiond, lcl-desktop-shell, lcl-open                           |
 |  - User Home (/Users/Rei), Shell (/System/Tools/bash), Fonts, C/C++ glibc Libraries     |
 +-----------------------------------------------------------------------------------------+

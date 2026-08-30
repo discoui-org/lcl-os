@@ -1,7 +1,0 @@
-{
-  "id": "org.lcl.uidemo",
-  "name": "LCL UI Demo",
-  "version": "1.0.0",
-  "executable": "Executables/UIDemo",
-  "icon": "Resources/Icon.png"
-}

@@ -45,7 +45,6 @@ ANDROID_NATIVE_CLIENT_ARTIFACTS = {
     "lcl-desktop-shell": Path("lcl-desktop-shell"),
     "lcl-mobile-shell": Path("lcl-mobile-shell"),
     "lcl-terminal": Path("lcl-terminal"),
-    "lcl_ui_demo": Path("apps/ui_demo/lcl_ui_demo"),
     "lcl-js": Path("lcl-js"),
 }
 ANDROID_NATIVE_CLIENT_TARGETS = tuple(ANDROID_NATIVE_CLIENT_ARTIFACTS)

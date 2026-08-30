@@ -13,7 +13,7 @@ lcl-os/
 ├── frameworks/               # Graphics, motion, theme, UI and window chrome libraries
 ├── system/                   # Compositor, scene, input, IPC, session, shells and raster service
 ├── platforms/                # Common contracts plus Linux and Android substrates
-├── apps/                     # Terminal and native/JavaScript UI demos
+├── apps/                     # Built-in applications
 ├── tooling/                  # Build, deploy, emulator, generator, probe and asset tools
 ├── packaging/iso/            # Limine boot configuration and ISO overlay
 ├── config/                   # Gestalt and device profiles
@@ -110,17 +110,9 @@ artifacts. Root may come from an already-root adbd, `adb root`, or `su -c`.
 
 ## Running Applications Inside LCL OS
 
-When LCL OS boots, launch applications from the built-in terminal or using the `open` command:
+When LCL OS boots, launch additional Terminal instances using the `open` command:
 
-- **Launch Interactive Flexbox UI Demo:**
-  ```bash
-  open UIDemo.app
-  ```
-- **Launch the JavaScript UI Demo:**
-  ```bash
-  open UIDemoJS.app
-  ```
-- **Launch Additional Terminal Instances:**
+- **Launch an Additional Terminal Instance:**
   ```bash
   open Terminal.app
   ```

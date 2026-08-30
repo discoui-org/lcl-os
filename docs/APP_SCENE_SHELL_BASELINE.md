@@ -122,8 +122,9 @@ Verify in this order:
    order with no visible blink or shell-induced pause.
 4. Resize the Terminal continuously for at least five seconds; glass,
    translucency, titlebar, and text must remain stable.
-5. Open UI Demo, switch focus between it and Terminal, then close UI Demo; the
-   focused titlebar and Dock indicator must follow the active application.
+5. Open a second Terminal, switch focus between both windows, then close the
+   second one; the focused titlebar must follow the active window and the Dock
+   must keep a single running Terminal entry.
 6. Close Terminal and confirm that its surface is removed without leaving a
    placeholder or stale Dock entry.
 
@@ -265,7 +266,7 @@ a typed, revision-aware client without changing Dock/menu visual treatment:
   manifest-relative icon once before publishing catalog data; shell UI never
   rescans `.app` bundles.
 - `WindowApp` sends a declared canonical app ID in `SurfaceCreate`; Terminal
-  and native UI Demo now use their manifest IDs. PID/executable inference stays
+  now uses its manifest ID. PID/executable inference stays
   only as compatibility for clients not yet migrated to declaration.
 
 ## Step 7 implementation record

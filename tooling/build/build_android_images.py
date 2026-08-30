@@ -9,7 +9,7 @@ The Android system image contains ONLY platform-specific substrate components:
 - lcl-core-android (Android composition server)
 - lcl.rc and lcl-bootstrap.sh init scripts
 
-All canonical userspace applications (Terminal.app, UIDemo.app, UIDemoJS.app),
+All canonical userspace applications (currently Terminal.app),
 daemons, both Gestalt-selectable shells, Bash, fonts, and user home (/Users/Rei)
 reside exclusively in the shared, byte-for-byte canonical rootfs:
     out/rootfs/lcl-rootfs-x86_64.ext4

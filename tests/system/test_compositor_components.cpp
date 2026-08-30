@@ -2486,7 +2486,7 @@ TEST(SceneStateTest, RegistryReflectsWindowLifecycleAndFocusWithoutOwningWindowM
     const auto terminalScene = scenes.mapClientSurface(
         SurfaceRegistry::makeKey(7, 101, 1), 101, terminalWindow, "terminal", "Terminal");
     const auto demoScene = scenes.mapClientSurface(
-        SurfaceRegistry::makeKey(8, 102, 1), 102, demoWindow, "ui-demo", "Demo");
+        SurfaceRegistry::makeKey(8, 102, 1), 102, demoWindow, "auxiliary", "Demo");
     scenes.reconcileWindowState(windowManager);
 
     ASSERT_EQ(scenes.snapshot().size(), 2u);

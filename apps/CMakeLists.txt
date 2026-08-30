@@ -76,6 +76,3 @@ foreach(root_runtime_target IN ITEMS
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     )
 endforeach()
-
-add_subdirectory(ui_demo)
-add_subdirectory(ui_demo_js)

@@ -13,7 +13,7 @@ Canonical Root Namespace:
     /Library/                   # Machine-wide mutable resources & config
     /Runtime/                   # Boot & session runtime state (/Runtime/Sessions/Rei, /Runtime/Temporary)
     /System/                    # Immutable OS content (Applications, Core, Tools, Library)
-        /System/Applications/   # Built-in .app bundles (Terminal.app, UIDemo.app, UIDemoJS.app)
+        /System/Applications/   # Built-in .app bundles (Terminal.app)
         /System/Core/           # LCL daemons/tools and both Gestalt-selectable shells
         /System/Tools/          # Core utilities & Bash (/System/Tools/bash, coreutils)
         /System/Library/        # Fonts, Wallpapers, Libraries (Mesa drivers, glibc, etc.)
@@ -64,7 +64,6 @@ CANONICAL_TARGETS = (
     "lcl-open",
     "lcl-core",
     "lcl-js",
-    "lcl_ui_demo",
 )
 
 ARCH_META: dict[str, dict] = {
@@ -188,7 +187,6 @@ def find_built_binary(name: str, arch: str | None = None) -> Path | None:
     for root in roots:
         for cand in [
             root / name,
-            root / "apps" / "ui_demo" / name,
             root / "apps" / name / name,
         ]:
             if not cand.is_file():
@@ -285,11 +283,6 @@ def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
         PROJECT_ROOT / "config" / "gestalt" / "default.json",
         PROJECT_ROOT / "apps" / "terminal" / "Manifest.json",
         PROJECT_ROOT / "apps" / "terminal" / "Resources" / "Icon.png",
-        PROJECT_ROOT / "apps" / "ui_demo" / "Manifest.json",
-        PROJECT_ROOT / "apps" / "ui_demo" / "Resources" / "Icon.png",
-        PROJECT_ROOT / "apps" / "ui_demo_js" / "Manifest.json",
-        PROJECT_ROOT / "apps" / "ui_demo_js" / "Resources" / "Icon.png",
-        PROJECT_ROOT / "apps" / "ui_demo_js" / "main.js",
     )
     for source_input in source_inputs:
         if source_input.is_dir():
@@ -349,14 +342,6 @@ def stage_canonical_rootfs(
         "Users/Rei/Library/Containers/org.lcl.terminal/Cache",
         "Users/Rei/Library/Containers/org.lcl.terminal/Preferences",
         "Users/Rei/Library/Containers/org.lcl.terminal/Temporary",
-        "Users/Rei/Library/Containers/org.lcl.uidemo/Data",
-        "Users/Rei/Library/Containers/org.lcl.uidemo/Cache",
-        "Users/Rei/Library/Containers/org.lcl.uidemo/Preferences",
-        "Users/Rei/Library/Containers/org.lcl.uidemo/Temporary",
-        "Users/Rei/Library/Containers/org.lcl.uidemo-js/Data",
-        "Users/Rei/Library/Containers/org.lcl.uidemo-js/Cache",
-        "Users/Rei/Library/Containers/org.lcl.uidemo-js/Preferences",
-        "Users/Rei/Library/Containers/org.lcl.uidemo-js/Temporary",
         "Users/Rei/Movies",
         "Users/Rei/Music",
         "Users/Rei/Pictures",
@@ -612,7 +597,7 @@ def stage_canonical_rootfs(
     shutil.copy2(gestalt_src, dest_system_gestalt / "default.json")
 
     # 11. Built-in App Bundles ABI v1 (/System/Applications/)
-    # (A) Terminal.app
+    # Terminal.app
     term_dst = dest_system_apps / "Terminal.app"
     term_dst.mkdir(parents=True, exist_ok=True)
     (term_dst / "Executables").mkdir(parents=True, exist_ok=True)
@@ -630,42 +615,6 @@ def stage_canonical_rootfs(
     (term_dst / "Executables" / "Terminal").chmod(0o755)
     sha_map["Terminal.app"] = get_sha256(term_dst / "Executables" / "Terminal")
     copy_ldd_deps(term_dst / "Executables" / "Terminal", dest_system_lib)
-
-    # (B) UIDemo.app
-    uidemo_dst = dest_system_apps / "UIDemo.app"
-    uidemo_dst.mkdir(parents=True, exist_ok=True)
-    (uidemo_dst / "Executables").mkdir(parents=True, exist_ok=True)
-    (uidemo_dst / "Resources").mkdir(parents=True, exist_ok=True)
-
-    uidemo_manifest = PROJECT_ROOT / "apps" / "ui_demo" / "Manifest.json"
-    uidemo_icon = PROJECT_ROOT / "apps" / "ui_demo" / "Resources" / "Icon.png"
-    if not uidemo_manifest.is_file() or not uidemo_icon.is_file():
-        raise RuntimeError(f"Missing UIDemo.app source files in {PROJECT_ROOT / 'apps' / 'ui_demo'}")
-    shutil.copy2(uidemo_manifest, uidemo_dst / "Manifest.json")
-    shutil.copy2(uidemo_icon, uidemo_dst / "Resources" / "Icon.png")
-
-    uidemo_bin = binaries["lcl_ui_demo"]
-    shutil.copy2(uidemo_bin, uidemo_dst / "Executables" / "UIDemo")
-    (uidemo_dst / "Executables" / "UIDemo").chmod(0o755)
-    sha_map["UIDemo.app"] = get_sha256(uidemo_dst / "Executables" / "UIDemo")
-    copy_ldd_deps(uidemo_dst / "Executables" / "UIDemo", dest_system_lib)
-
-    # (C) UIDemoJS.app
-    uidemojs_dst = dest_system_apps / "UIDemoJS.app"
-    uidemojs_dst.mkdir(parents=True, exist_ok=True)
-    (uidemojs_dst / "Executables").mkdir(parents=True, exist_ok=True)
-    (uidemojs_dst / "Resources").mkdir(parents=True, exist_ok=True)
-
-    uidemojs_manifest = PROJECT_ROOT / "apps" / "ui_demo_js" / "Manifest.json"
-    uidemojs_icon = PROJECT_ROOT / "apps" / "ui_demo_js" / "Resources" / "Icon.png"
-    uidemojs_main = PROJECT_ROOT / "apps" / "ui_demo_js" / "main.js"
-    if not uidemojs_manifest.is_file() or not uidemojs_icon.is_file() or not uidemojs_main.is_file():
-        raise RuntimeError(f"Missing UIDemoJS.app source files in {PROJECT_ROOT / 'apps' / 'ui_demo_js'}")
-    shutil.copy2(uidemojs_manifest, uidemojs_dst / "Manifest.json")
-    shutil.copy2(uidemojs_icon, uidemojs_dst / "Resources" / "Icon.png")
-    shutil.copy2(uidemojs_main, uidemojs_dst / "Executables" / "Main.js")
-    (uidemojs_dst / "Executables" / "Main.js").chmod(0o755)
-    sha_map["UIDemoJS.app"] = get_sha256(uidemojs_dst / "Executables" / "Main.js")
 
     # Validate all app bundles
     validate_app_bundles(staging_dir)
@@ -922,10 +871,6 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Applications/Terminal.app/Manifest.json",
         "/System/Applications/Terminal.app/Executables/Terminal",
         "/System/Applications/Terminal.app/Resources/Icon.png",
-        "/System/Applications/UIDemo.app/Manifest.json",
-        "/System/Applications/UIDemo.app/Executables/UIDemo",
-        "/System/Applications/UIDemoJS.app/Manifest.json",
-        "/System/Applications/UIDemoJS.app/Executables/Main.js",
         "/System/Library/Fonts/inter",
         "/System/Library/Gestalt/default.json",
         "/System/Library/Wallpapers/wallpaper.jpg",
@@ -957,20 +902,6 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
     gestalt_json = json.loads(gestalt_cat.stdout)
     if gestalt_json.get("version") != 1 or not isinstance(gestalt_json.get("display"), dict):
         raise AssertionError("Default Gestalt in rootfs has an invalid schema")
-
-    # Check UIDemo.app Manifest content
-    cat_cmd = ["debugfs", "-R", "cat /System/Applications/UIDemo.app/Manifest.json", str(ext4_path)]
-    cat_res = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
-    manifest_json = json.loads(cat_res.stdout)
-    if manifest_json.get("executable") != "Executables/UIDemo":
-        raise AssertionError(f"UIDemo.app Manifest in rootfs has invalid executable: {manifest_json.get('executable')}")
-
-    # Check UIDemoJS.app Manifest content
-    cat_cmd = ["debugfs", "-R", "cat /System/Applications/UIDemoJS.app/Manifest.json", str(ext4_path)]
-    cat_res = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
-    manifest_json = json.loads(cat_res.stdout)
-    if manifest_json.get("executable") != "Executables/Main.js" or manifest_json.get("runtime") != "org.lcl.javascript":
-        raise AssertionError(f"UIDemoJS.app Manifest in rootfs has invalid metadata: {manifest_json}")
 
     # Check /init shebang
     init_cat = subprocess.run(["debugfs", "-R", "cat /init", str(ext4_path)], capture_output=True, text=True, check=True)

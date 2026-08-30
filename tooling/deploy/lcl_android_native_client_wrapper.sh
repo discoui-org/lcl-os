@@ -14,9 +14,6 @@ case "$0" in
     */Terminal)
         exec /AndroidClients/lcl-terminal "$@"
         ;;
-    */UIDemo)
-        exec /AndroidClients/lcl_ui_demo "$@"
-        ;;
     */lcl-js)
         exec /AndroidClients/lcl-js "$@"
         ;;

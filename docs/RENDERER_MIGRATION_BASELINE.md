@@ -40,7 +40,7 @@ contract or let a late client stall compositor-owned motion.
 - Physical display: `1344x2992`, 60 Hz
 - Logical scale: `4.0`
 
-The visual manifests also record exact compositor, mobile-shell, and UI Demo
+The visual manifests also record exact compositor, mobile-shell, and Terminal
 artifact hashes. A source commit alone is insufficient evidence when
 `--no-build` can deploy older artifacts.
 
@@ -73,9 +73,8 @@ LCL owns Composer directly during the session.
 
 | Scene label | Observed baseline |
 | --- | --- |
-| `step-01-avd-mobile-home-before-skia` | Wallpaper and three application icons render. Application labels are absent. |
+| `step-01-avd-mobile-home-before-skia` | Wallpaper and application icons render. Application labels are absent. |
 | `step-01-avd-terminal-before-skia` | Full-screen dark Terminal surface and gesture pill render. Terminal text is entirely absent. |
-| `step-01-avd-ui-demo-before-skia` | Control geometry, fills, borders, clipping, and gesture pill render. Every text label is absent. |
 
 These missing-text results are recorded defects, not approved golden output.
 The Skia text step must intentionally change them while preserving unaffected
@@ -85,8 +84,8 @@ geometry and color.
 
 The fixed QEMU/DRM baseline is still pending because no QEMU session was
 started for this capture. Before Skia raster implementation begins, record the
-same Terminal and UI Demo scenes on QEMU, where text is currently reported to
-render. This is necessary to distinguish intentional Android text repair from
+the same Terminal scene on QEMU, where text is currently reported to render.
+This is necessary to distinguish intentional Android text repair from
 cross-platform typography or layout regressions.
 
 Interactive lag is also a known defect, but a still image cannot quantify it.

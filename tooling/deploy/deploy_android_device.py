@@ -75,7 +75,6 @@ NATIVE_CLIENT_ARTIFACTS = {
     "lcl-desktop-shell": Path("lcl-desktop-shell"),
     "lcl-mobile-shell": Path("lcl-mobile-shell"),
     "lcl-terminal": Path("lcl-terminal"),
-    "lcl_ui_demo": Path("apps/ui_demo/lcl_ui_demo"),
     "lcl-js": Path("lcl-js"),
 }
 NATIVE_CLIENT_BINARIES = tuple(NATIVE_CLIENT_ARTIFACTS)
@@ -366,7 +365,7 @@ def stop_rootfs_session() -> None:
     """Stop canonical userspace processes before unmounting its rootfs."""
     process_names = (
         "lcl-desktop-shell", "lcl-mobile-shell", "lcl-sessiond", "lcl-terminal", "lcl-open",
-        "lcl-js", "lcl_ui_demo",
+        "lcl-js",
     )
     def active_pids() -> list[str]:
         pids = rootfs_process_ids()
@@ -890,7 +889,6 @@ def mount_rootfs(native_clients: bool = False) -> None:
             f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-mobile-shell",
             f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-js",
             f"{DEVICE_ROOTFS_MOUNT}/System/Applications/Terminal.app/Executables/Terminal",
-            f"{DEVICE_ROOTFS_MOUNT}/System/Applications/UIDemo.app/Executables/UIDemo",
         )
         for target in wrapper_targets:
             result = adb_shell(
