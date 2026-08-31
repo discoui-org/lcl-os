@@ -17,8 +17,16 @@ class SandboxChildLauncherTest : public ::testing::Test {
 protected:
     fs::path executablePath_;
     int executableDescriptor_{-1};
+    int appBundleDescriptor_{-1};
+    int systemDescriptor_{-1};
+    int dataDescriptor_{-1};
+    int cacheDescriptor_{-1};
+    int preferencesDescriptor_{-1};
 
     void SetUp() override {
+        if (getuid() != 0 && getuid() != getgid()) {
+            GTEST_SKIP() << "test identity requires a matching UID/GID";
+        }
         const fs::path directory = fs::temp_directory_path() /
                                    ("lcl_sandbox_child_" + std::to_string(getpid()));
         fs::create_directories(directory);
@@ -27,12 +35,29 @@ protected:
         executable << "#!/bin/sh\nexit 0\n";
         executable.close();
         chmod(executablePath_.c_str(), 0700);
+        const uid_t appUid = getuid() == 0 ? 61000 : getuid();
+        const gid_t appGid = getgid() == 0 ? 61000 : getgid();
+        for (const char* name : {"Data", "Cache", "Preferences"}) {
+            const fs::path storage = directory / name;
+            fs::create_directories(storage);
+            ASSERT_EQ(chown(storage.c_str(), appUid, appGid), 0);
+            ASSERT_EQ(chmod(storage.c_str(), 0700), 0);
+        }
         executableDescriptor_ = open(executablePath_.c_str(), O_RDONLY | O_CLOEXEC);
+        appBundleDescriptor_ = open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        systemDescriptor_ = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        dataDescriptor_ = open((directory / "Data").c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        cacheDescriptor_ = open((directory / "Cache").c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        preferencesDescriptor_ = open((directory / "Preferences").c_str(),
+                                      O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     }
 
     void TearDown() override {
-        if (executableDescriptor_ >= 0) {
-            close(executableDescriptor_);
+        for (const int descriptor : {executableDescriptor_, appBundleDescriptor_, systemDescriptor_,
+                                     dataDescriptor_, cacheDescriptor_, preferencesDescriptor_}) {
+            if (descriptor >= 0) {
+                close(descriptor);
+            }
         }
         fs::remove_all(executablePath_.parent_path());
     }
@@ -61,6 +86,13 @@ protected:
             .landlockInstalled = true,
             .directDeviceAccessDenied = true,
         };
+        spec.filesystemSources = {
+            .appBundleDescriptor = appBundleDescriptor_,
+            .systemDescriptor = systemDescriptor_,
+            .dataDescriptor = dataDescriptor_,
+            .cacheDescriptor = cacheDescriptor_,
+            .preferencesDescriptor = preferencesDescriptor_,
+        };
         spec.executableDescriptor = executableDescriptor_;
         spec.arguments = {"--safe"};
         return spec;
@@ -69,6 +101,8 @@ protected:
 
 TEST_F(SandboxChildLauncherTest, AcceptsOnlyProtectedFullyEnforcedLaunchMaterial) {
     ASSERT_GE(executableDescriptor_, 0);
+    ASSERT_GE(appBundleDescriptor_, 0);
+    ASSERT_GE(systemDescriptor_, 0);
     SandboxChildLaunchSpec spec = validSpec();
     std::string error;
     EXPECT_TRUE(validateSandboxChildLaunchSpec(spec, error)) << error;
@@ -87,6 +121,10 @@ TEST_F(SandboxChildLauncherTest, RejectsUnsafeArgumentsAndNonExecutableDescripto
 
     spec = validSpec();
     chmod(executablePath_.c_str(), 0600);
+    EXPECT_FALSE(validateSandboxChildLaunchSpec(spec, error));
+
+    spec = validSpec();
+    spec.filesystemSources.dataDescriptor = -1;
     EXPECT_FALSE(validateSandboxChildLaunchSpec(spec, error));
 }
 

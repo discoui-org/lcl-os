@@ -1,6 +1,7 @@
 #pragma once
 
 #include "system/security/sandbox_contract.hpp"
+#include "system/security/sandbox_filesystem_sources.hpp"
 
 #include <string>
 #include <vector>
@@ -30,6 +31,7 @@ struct SandboxChildLaunchSpec {
     SandboxLaunchPlan plan;
     AppIdentity identity;
     SandboxKernelEnforcement kernelEnforcement;
+    SandboxFilesystemSources filesystemSources;
     int executableDescriptor{-1};
     /** Required only for JavaScript apps; this is a trusted lcl-js descriptor. */
     int runtimeDescriptor{-1};

@@ -1,4 +1,5 @@
 #include "system/ipc/ipc_manager.hpp"
+#include "system/security/desktop_user.hpp"
 #include <iostream>
 #include <fcntl.h>
 #include <unistd.h>
@@ -52,8 +53,16 @@ bool IPCManager::initialize(const std::string& socketPath) {
         return false;
     }
 
-    // Set strict owner-only file permissions (0600) for IPC security
-    chmod(m_socketPath.c_str(), 0600);
+    // The root compositor creates this endpoint, but only the unprivileged
+    // desktop session owns the 0600 client-facing socket.
+    std::string ownershipError;
+    if (!lcl::security::assignDesktopUserOwnership(m_socketPath, 0600, ownershipError)) {
+        std::cerr << "[LCL IPC ERROR] " << ownershipError << "\n";
+        close(m_serverFd);
+        m_serverFd = -1;
+        unlink(m_socketPath.c_str());
+        return false;
+    }
 
     if (listen(m_serverFd, 16) < 0) {
         std::cerr << "[LCL IPC ERROR] listen failed: " << std::strerror(errno) << "\n";

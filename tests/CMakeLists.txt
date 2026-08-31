@@ -22,9 +22,12 @@ add_executable(lcl_unit_tests
     system/test_bundle_record.cpp
     system/test_bundle_launch_gate.cpp
     system/test_bundle_signature_verifier.cpp
+    system/test_desktop_user.cpp
     system/test_sandbox_contract.cpp
     system/test_sandbox_child_launcher.cpp
     system/test_sandbox_daemon.cpp
+    system/test_sandbox_filesystem_sources.cpp
+    system/test_sandbox_platform_probe.cpp
     system/test_session_service.cpp
     system/test_ipc_manager.cpp
     system/test_input_manager.cpp

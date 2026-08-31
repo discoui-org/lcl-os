@@ -28,11 +28,14 @@ add_library(lcl-security STATIC
     security/bundle_launch_gate.cpp
     security/bundle_record.cpp
     security/bundle_signature_verifier.cpp
+    security/desktop_user.cpp
     security/sandbox_child_launcher.cpp
     security/sandbox_child_reaper.cpp
     security/sandbox_contract.cpp
     security/sandbox_daemon.cpp
+    security/sandbox_filesystem_sources.cpp
     security/sandbox_launch_authorizer.cpp
+    security/sandbox_platform_probe.cpp
     security/sandbox_protocol.cpp
     security/sha256.cpp
 )
@@ -45,7 +48,7 @@ add_library(lcl-session STATIC
     session/session_client.cpp
 )
 target_include_directories(lcl-session PUBLIC ${PROJECT_SOURCE_DIR})
-target_link_libraries(lcl-session PUBLIC lcl-session-protocol Threads::Threads)
+target_link_libraries(lcl-session PUBLIC lcl-security lcl-session-protocol Threads::Threads)
 
 add_library(lcl-shell-state STATIC
     shells/state/shell_state_client.cpp
@@ -121,7 +124,7 @@ else()
         ${EGL_INCLUDE_DIRS} ${GLES2_INCLUDE_DIRS}
     )
     target_link_libraries(lcl-rasterd PRIVATE
-        lcl-render lcl-raster-protocol lcl-graphics ${DRM_LIBRARIES}
+        lcl-render lcl-raster-protocol lcl-graphics lcl-security ${DRM_LIBRARIES}
         ${GBM_LIBRARIES} ${EGL_LIBRARIES} ${GLES2_LIBRARIES} Threads::Threads
     )
     target_compile_options(lcl-rasterd PRIVATE

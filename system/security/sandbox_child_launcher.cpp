@@ -204,6 +204,9 @@ bool validateSandboxChildLaunchSpec(const SandboxChildLaunchSpec& spec, std::str
         }
         return false;
     }
+    if (!validateSandboxFilesystemSources(spec.filesystemSources, spec.identity, error)) {
+        return false;
+    }
     if (spec.plan.profile.runtime == SandboxRuntime::JavaScript &&
         (!isRegularDescriptor(spec.runtimeDescriptor, true) || spec.runtimeDescriptor < kRuntimeDescriptor)) {
         error = "sandbox JavaScript runtime descriptor is unavailable";

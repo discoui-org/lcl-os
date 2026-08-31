@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "platforms/common/gestalt.hpp"
+#include "system/security/desktop_user.hpp"
 
 namespace {
 
@@ -36,6 +37,12 @@ const char* nameFor(lcl::platform::ShellKind shell) {
 } // namespace
 
 int main() {
+    std::string identityError;
+    if (!lcl::security::dropToDesktopUser(identityError)) {
+        std::cerr << "[LCL Shell Launcher] " << identityError << "\n";
+        return 1;
+    }
+
     const auto gestalt = lcl::platform::loadGestalt(defaultGestaltPath());
     if (!gestalt.ok()) {
         std::cerr << "[LCL Shell Launcher] " << gestalt.error << "\n";

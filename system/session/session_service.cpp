@@ -1,5 +1,7 @@
 #include "system/session/session_service.hpp"
 
+#include "system/security/desktop_user.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -8,9 +10,11 @@
 #include <filesystem>
 #include <fcntl.h>
 #include <iostream>
+#include <limits>
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -33,6 +37,34 @@ std::vector<std::string> executableArgs(const core::AppBundleMetadata& app,
         return {jsRuntime, executableDescriptorPath};
     }
     return {executableDescriptorPath};
+}
+
+constexpr int kAppExecutableDescriptor = 3;
+
+bool pinAndIsolateExecutableDescriptor(int descriptor) {
+    if (descriptor < 0) {
+        return false;
+    }
+    if (descriptor != kAppExecutableDescriptor &&
+        dup3(descriptor, kAppExecutableDescriptor, 0) < 0) {
+        return false;
+    }
+    const int flags = fcntl(kAppExecutableDescriptor, F_GETFD);
+    if (flags < 0 ||
+        fcntl(kAppExecutableDescriptor, F_SETFD, flags & ~FD_CLOEXEC) != 0) {
+        return false;
+    }
+
+    struct rlimit limit {};
+    if (getrlimit(RLIMIT_NOFILE, &limit) != 0 || limit.rlim_cur == RLIM_INFINITY ||
+        limit.rlim_cur > static_cast<rlim_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    for (int inherited = kAppExecutableDescriptor + 1;
+         inherited < static_cast<int>(limit.rlim_cur); ++inherited) {
+        close(inherited);
+    }
+    return true;
 }
 
 std::string resolvedIconPath(const core::AppBundleMetadata& app) {
@@ -77,7 +109,16 @@ bool SessionService::initialize(const std::string& socketPath) {
                       << ": " << error.message() << "\n";
             return false;
         }
-        chmod(parent.c_str(), 0700);
+        // Runtime endpoint names must remain traversable by the desktop user:
+        // the sockets themselves are the authorization boundary (0600 and
+        // owned by that user).  A root-only 0700 /Runtime would make an
+        // otherwise authorized terminal fail before it can reach either
+        // lcl-sessiond or the compositor socket.
+        if (chmod(parent.c_str(), 0711) != 0) {
+            std::cerr << "[LCL Session ERROR] Could not secure runtime directory " << parent
+                      << ": " << std::strerror(errno) << "\n";
+            return false;
+        }
     }
     unlink(socketPath.c_str());
     m_serverFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
@@ -101,7 +142,14 @@ bool SessionService::initialize(const std::string& socketPath) {
         errno = error;
         return false;
     }
-    chmod(socketPath.c_str(), 0600);
+    std::string ownershipError;
+    if (!lcl::security::assignDesktopUserOwnership(socketPath, 0600, ownershipError)) {
+        close(m_serverFd);
+        m_serverFd = -1;
+        unlink(socketPath.c_str());
+        std::cerr << "[LCL Session ERROR] " << ownershipError << "\n";
+        return false;
+    }
     refreshCatalog();
     std::cout << "[LCL Session] Session authority active on " << socketPath << "\n";
     return true;
@@ -172,17 +220,18 @@ LaunchResponse SessionService::launch(const LaunchRequest& request) {
     if (child == 0) {
         setsid();
         exportLaunchContext(request, instanceId);
-        const int executableDescriptor = app->executableHandle->descriptor();
-        const int descriptorFlags = fcntl(executableDescriptor, F_GETFD);
-        // The kernel and JavaScript interpreter resolve /proc/self/fd after
-        // exec. Keep this one trusted, read-only descriptor open long enough
-        // for that resolution; it pins the inode verified during catalog scan.
-        if (descriptorFlags < 0 ||
-            fcntl(executableDescriptor, F_SETFD, descriptorFlags & ~FD_CLOEXEC) != 0) {
+        std::string identityError;
+        if (!lcl::security::dropToDesktopUser(identityError)) {
+            _exit(127);
+        }
+        // Keep only the pinned executable descriptor after the privilege drop.
+        // In particular, a desktop app must not inherit sessiond's root-owned
+        // listener sockets, catalog descriptors or approval-store handles.
+        if (!pinAndIsolateExecutableDescriptor(app->executableHandle->descriptor())) {
             _exit(127);
         }
         const auto args = executableArgs(
-            *app, "/proc/self/fd/" + std::to_string(executableDescriptor));
+            *app, "/proc/self/fd/" + std::to_string(kAppExecutableDescriptor));
         if (args.empty()) {
             _exit(127);
         }

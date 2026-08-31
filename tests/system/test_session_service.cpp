@@ -196,3 +196,13 @@ TEST_F(SessionServiceTest, ClientUsesSessiondForLaunchAndWait) {
     server.join();
     service.shutdown();
 }
+
+TEST_F(SessionServiceTest, RuntimeDirectoryAllowsSocketTraversalWithoutListing) {
+    SessionService service({tempDir.string()});
+    const std::string socketPath = (tempDir / "sessiond.sock").string();
+    ASSERT_TRUE(service.initialize(socketPath));
+
+    struct stat status {};
+    ASSERT_EQ(stat(tempDir.c_str(), &status), 0);
+    EXPECT_EQ(status.st_mode & 0777, 0711);
+}

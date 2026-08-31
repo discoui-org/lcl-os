@@ -6,6 +6,7 @@
 #include <string>
 #include <thread>
 
+#include "system/security/desktop_user.hpp"
 #include "system/session/session_service.hpp"
 #include "platforms/common/gestalt.hpp"
 
@@ -31,6 +32,12 @@ int main() {
     const auto gestalt = lcl::platform::loadGestalt(defaultGestaltPath());
     if (!gestalt.ok()) {
         std::cerr << "[LCL Session ERROR] " << gestalt.error << "\n";
+        return 1;
+    }
+
+    std::string provisioningError;
+    if (!lcl::security::provisionDesktopUserHome(provisioningError)) {
+        std::cerr << "[LCL Session ERROR] " << provisioningError << "\n";
         return 1;
     }
 
