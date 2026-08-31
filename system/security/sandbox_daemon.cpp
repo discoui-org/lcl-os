@@ -48,7 +48,8 @@ SandboxLaunchResult rejectedLaunch(const SandboxLaunchRequest& request, SandboxL
 
 } // namespace
 
-SandboxDaemon::SandboxDaemon(SandboxDaemonConfig config) : config_(std::move(config)) {}
+SandboxDaemon::SandboxDaemon(SandboxDaemonConfig config)
+    : authorizer_(config.permissionStore), config_(std::move(config)) {}
 
 SandboxDaemon::~SandboxDaemon() { shutdown(); }
 
@@ -95,7 +96,8 @@ bool SandboxDaemon::initialize(std::string& error) {
     }
     const SandboxPlatformCapabilities capabilities = probeSandboxPlatformCapabilities();
     if (!capabilities.supportsMandatoryThirdPartyProfile()) {
-        error = "mandatory third-party sandbox kernel profile is unavailable";
+        error = "mandatory third-party sandbox kernel profile is unavailable:\n" +
+                formatSandboxPlatformCapabilities(capabilities);
         return false;
     }
     // Resource accounting is a mandatory third-party boundary.  Prepare the

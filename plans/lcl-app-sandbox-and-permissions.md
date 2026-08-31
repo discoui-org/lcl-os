@@ -273,22 +273,22 @@ sözleşmesini kullanmasıdır.
 
 ## 8. İzin veritabanı ve policy değerlendirme
 
-- [ ] Root-owned, atomic güncellenen `PermissionStore` tasarla.
-- [ ] İzin kararını app ID, bundle signing identity/hash, kullanıcı ve izin
+- [x] Root-owned, atomic güncellenen `PermissionStore` tasarla.
+- [x] İzin kararını app ID, bundle signing identity/hash, kullanıcı ve izin
   sürümü ile bağla.
-- [ ] Varsayılanı deny olarak ayarla.
+- [x] Varsayılanı deny olarak ayarla.
 - [ ] İlk sistem uygulamaları için read-only, imzaya bağlı statik profiller
   oluştur.
-- [ ] `network.client`, `files.user-selected`, `files.documents.read`,
+- [x] `network.client`, `files.user-selected`, `files.documents.read`,
   `files.documents.write`, `clipboard.read`, `camera`, `microphone` ve
   `notifications` izinlerinin anlamlarını belirle.
-- [ ] `admin.elevation` iznini "elevation isteyebilir" olarak tanımla; her
+- [x] `admin.elevation` iznini "elevation isteyebilir" olarak tanımla; her
   gerçek elevation için ayrıca görünür kullanıcı onayı gerektir.
-- [ ] İzinlerin launch-time mı, broker-time mı değerlendirileceğini tek tek
+- [x] İzinlerin launch-time mı, broker-time mı değerlendirileceğini tek tek
   belirle.
-- [ ] Grant/revoke ve bundle güncellemesi sonrası eski grant'in geçersizleşme
+- [x] Grant/revoke ve bundle güncellemesi sonrası eski grant'in geçersizleşme
   kurallarını tanımla.
-- [ ] PermissionStore için bozuk kayıt, downgrade, bundle değişimi ve
+- [x] PermissionStore için bozuk kayıt, downgrade, bundle değişimi ve
   yetkisiz yazma testleri ekle.
 
 ## 9. Portal ve güvenilir shell promptları
@@ -366,6 +366,12 @@ sözleşmesini kullanmasıdır.
   capability seti, private `/Data` ve `/Temporary` yazımı, DRM/input aygıtı
   ve session socket erişiminin reddi, `/System` yazma reddi ile ağ erişiminin
   engellendiğini doğruladı.
+
+- [x] **Android kullanıcı-gözlemi (2026-08-31, fail-closed):** Doğrudan
+  deployment AVD'sinde probe, mount/network namespace, `no_new_privs` ve
+  seccomp'u destekledi; ancak PID/IPC namespace `EINVAL`, Landlock `ENOSYS`
+  ve cgroup v2 yoktu. Bu nedenle `lcl-sandboxd` üçüncü taraf profilini
+  başlatmayı doğru biçimde reddetti. Bu, Android enforcing acceptance değildir.
 
 - [ ] Her uygulama için UID/GID, capability, namespace inode'ları, cgroup
   yolu ve etkin profil digest'ini yalnız admin diagnostic aracıyla raporla.

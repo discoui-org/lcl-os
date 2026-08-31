@@ -22,6 +22,8 @@ add_executable(lcl_unit_tests
     system/test_bundle_record.cpp
     system/test_bundle_launch_gate.cpp
     system/test_bundle_signature_verifier.cpp
+    system/test_permission_policy.cpp
+    system/test_permission_store.cpp
     system/test_session_user.cpp
     system/test_sandbox_contract.cpp
     system/test_sandbox_child_launcher.cpp

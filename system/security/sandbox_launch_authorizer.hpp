@@ -19,7 +19,7 @@ namespace lcl::security {
  */
 class SandboxLaunchAuthorizer final {
 public:
-    SandboxLaunchAuthorizer() = default;
+    explicit SandboxLaunchAuthorizer(PermissionStoreConfig permissionStoreConfig = {});
 
     SandboxLaunchAuthorizer(const SandboxLaunchAuthorizer&) = delete;
     SandboxLaunchAuthorizer& operator=(const SandboxLaunchAuthorizer&) = delete;
@@ -39,6 +39,8 @@ private:
     };
 
     mutable std::mutex mutex_;
+    mutable std::mutex permissionStoreMutex_;
+    mutable PermissionStore permissionStore_;
     std::map<std::string, RegisteredApplication> applications_;
 };
 

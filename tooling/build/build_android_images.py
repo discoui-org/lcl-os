@@ -427,6 +427,31 @@ export HOME=/Users/Rei
 export USER=Rei
 export TERM=xterm-256color
 
+rm -f /Runtime/lcl-sandboxd.sock
+SANDBOXD_PID=""
+if [ -x /System/Core/lcl-sandboxd ]; then
+    echo "[LCL SESSION] Starting lcl-sandboxd..."
+    /System/Core/lcl-sandboxd --session-uid 0 --session-gid 0 > /Runtime/lcl-sandboxd.log 2>&1 &
+    SANDBOXD_PID=$!
+    for ((i=0; i<100; i++)); do
+        if [ -S "/Runtime/lcl-sandboxd.sock" ]; then
+            break
+        fi
+        if ! kill -0 $SANDBOXD_PID 2>/dev/null; then
+            SANDBOXD_PID=""
+            break
+        fi
+        sleep 0.05
+    done
+fi
+if [ ! -S "/Runtime/lcl-sandboxd.sock" ]; then
+    if [ -n "$SANDBOXD_PID" ]; then
+        kill -TERM $SANDBOXD_PID 2>/dev/null || true
+        wait $SANDBOXD_PID 2>/dev/null || true
+    fi
+    echo "[LCL SESSION] lcl-sandboxd is unavailable; third-party launches remain disabled"
+fi
+
 echo "[LCL SESSION] Starting sessiond..."
 /System/Core/lcl-sessiond > /Runtime/lcl-sessiond.log 2>&1 &
 SESSIOND_PID=$!

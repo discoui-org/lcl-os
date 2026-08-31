@@ -1,5 +1,7 @@
 #include "system/session/app_bundle_parser.hpp"
 
+#include "system/security/permission_policy.hpp"
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -653,7 +655,9 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
 
     std::unordered_set<std::string> permissions;
     for (const std::string& permission : fields.requestedPermissions) {
-        if (!isValidDottedIdentifier(permission, 128) || !permissions.insert(permission).second) {
+        if (!isValidDottedIdentifier(permission, 128) ||
+            !lcl::security::isKnownPermission(permission) ||
+            !permissions.insert(permission).second) {
             return std::nullopt;
         }
     }

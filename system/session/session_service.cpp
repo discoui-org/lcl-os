@@ -116,11 +116,20 @@ sandboxRuntimeForApp(const core::AppBundleMetadata &app, std::string &error) {
   return std::nullopt;
 }
 
+bool isSystemImageApplication(const core::AppBundleMetadata &app) {
+  const std::filesystem::path bundlePath(app.bundlePath);
+  return bundlePath.is_absolute() &&
+         bundlePath.parent_path() == std::filesystem::path("/System/Applications") &&
+         bundlePath.extension() == ".app";
+}
+
 } // namespace
 
 SessionService::SessionService(std::vector<std::string> appSearchPaths,
-                               std::string sandboxSocketPath)
+                               std::string sandboxSocketPath,
+                               lcl::security::PermissionStoreConfig permissionStoreConfig)
     : m_registry(std::move(appSearchPaths)),
+      m_permissionStore(std::move(permissionStoreConfig)),
       m_sandboxSocketPath(std::move(sandboxSocketPath)) {}
 
 SessionService::~SessionService() { shutdown(); }
@@ -347,11 +356,22 @@ SessionService::launchSandboxed(const core::AppBundleMetadata &app,
     response.message = "lcl-sandboxd launch rejected: " + error;
     return response;
   }
-  // PermissionStore is intentionally not bypassed here.  Until its broker
-  // exists, the only effective grant set is empty, so a manifest can ask
-  // for permissions but cannot obtain them from sessiond.
+  std::vector<std::string> grantedPermissions;
+  if (isSystemImageApplication(app)) {
+    const lcl::security::PermissionSubject subject =
+        lcl::security::makeSystemImagePermissionSubject(
+            lcl::security::kSessionUserUid, app.appId, record->digest);
+    grantedPermissions = m_permissionStore.grantedPermissions(
+        subject, app.requestedPermissions, error);
+    if (!error.empty()) {
+      response.status = 3;
+      response.message = "lcl-sandboxd launch rejected because permission policy is unavailable: " +
+                         error;
+      return response;
+    }
+  }
   const auto profile = lcl::security::makeThirdPartySandboxProfile(
-      *runtime, app.requestedPermissions, {}, error);
+      *runtime, app.requestedPermissions, grantedPermissions, error);
   if (!profile) {
     response.status = 3;
     response.message =

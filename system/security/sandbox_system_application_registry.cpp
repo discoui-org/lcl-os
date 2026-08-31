@@ -159,6 +159,8 @@ bool registerOneSystemApplication(
   application.runtime = runtime;
   application.requestedPermissions = metadata.requestedPermissions;
   application.bundleRecordDigest = record->digest;
+  application.permissionSubject = makeSystemImagePermissionSubject(
+      kSessionUserUid, application.appId, application.bundleRecordDigest);
   SandboxLaunchMaterialInput material{};
   material.application = application;
   material.filesystemSources = {

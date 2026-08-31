@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "system/security/app_identity_registry.hpp"
+#include "system/security/permission_store.hpp"
 #include "system/security/sha256.hpp"
 
 namespace lcl::security {
@@ -62,6 +63,8 @@ struct VerifiedApplication {
     SandboxRuntime runtime{SandboxRuntime::Native};
     std::vector<std::string> requestedPermissions;
     Sha256Digest bundleRecordDigest{};
+    /** Present only when rootfs policy owns the live permission decisions. */
+    std::optional<PermissionSubject> permissionSubject;
 };
 
 /**

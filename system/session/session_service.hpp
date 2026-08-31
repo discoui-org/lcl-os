@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "system/security/sandbox_client.hpp"
+#include "system/security/permission_store.hpp"
 #include "system/session/app_registry.hpp"
 #include "system/session/session_protocol.hpp"
 
@@ -35,7 +36,8 @@ public:
            (std::getenv("HOME")
                 ? std::string(std::getenv("HOME")) + "/Applications"
                 : "/Users/Rei/Applications")},
-      std::string sandboxSocketPath = lcl::security::kSandboxSocket);
+      std::string sandboxSocketPath = lcl::security::kSandboxSocket,
+      lcl::security::PermissionStoreConfig permissionStoreConfig = {});
   ~SessionService();
 
   SessionService(const SessionService &) = delete;
@@ -70,6 +72,7 @@ private:
 
   AppRegistry m_registry;
   lcl::security::SandboxClient m_sandboxClient;
+  lcl::security::PermissionStore m_permissionStore;
   std::string m_sandboxSocketPath;
   std::string m_socketPath;
   int m_serverFd{-1};

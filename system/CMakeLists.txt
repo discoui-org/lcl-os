@@ -28,6 +28,8 @@ add_library(lcl-security STATIC
     security/bundle_launch_gate.cpp
     security/bundle_record.cpp
     security/bundle_signature_verifier.cpp
+    security/permission_policy.cpp
+    security/permission_store.cpp
     security/session_user.cpp
     security/sandbox_client.cpp
     security/sandbox_cgroup.cpp

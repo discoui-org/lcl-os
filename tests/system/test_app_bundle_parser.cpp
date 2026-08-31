@@ -192,9 +192,14 @@ TEST_F(AppBundleParserTest, RejectsInvalidOrDuplicateRequestedPermissions) {
         "DuplicatePermission.app",
         R"({"id":"org.lcl.duplicate-permission","name":"Duplicate Permission","icon":"Resources/Icon.png","executable":"Executables/app","requestedPermissions":["network.client","network.client"]})" );
     createExecutable(duplicateBundle, "Executables/app");
+    const fs::path unknownBundle = createMockBundle(
+        "UnknownPermission.app",
+        R"({"id":"org.lcl.unknown-permission","name":"Unknown Permission","icon":"Resources/Icon.png","executable":"Executables/app","requestedPermissions":["network.server"]})" );
+    createExecutable(unknownBundle, "Executables/app");
 
     EXPECT_FALSE(AppBundleParser::parseBundle(invalidBundle.string()).has_value());
     EXPECT_FALSE(AppBundleParser::parseBundle(duplicateBundle.string()).has_value());
+    EXPECT_FALSE(AppBundleParser::parseBundle(unknownBundle.string()).has_value());
 }
 
 TEST_F(AppBundleParserTest, ScanDirectoryWithMultipleBundles) {

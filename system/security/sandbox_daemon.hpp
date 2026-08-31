@@ -28,6 +28,7 @@ struct SandboxDaemonConfig {
     gid_t sessionGid{0};
     uid_t ownerUid{0};
     gid_t ownerGid{0};
+    PermissionStoreConfig permissionStore{};
 };
 
 /**
@@ -88,8 +89,8 @@ private:
     void sendErrorAndClose(int descriptor, std::uint32_t requestId, const std::string& message);
     void reapChildren();
 
-    SandboxDaemonConfig config_;
     SandboxLaunchAuthorizer authorizer_;
+    SandboxDaemonConfig config_;
     SandboxLaunchMaterialRegistry materialRegistry_;
     // The daemon owns the only cgroup v2 allocator.  It is initialized before
     // the launch socket becomes reachable, so no request can observe a daemon

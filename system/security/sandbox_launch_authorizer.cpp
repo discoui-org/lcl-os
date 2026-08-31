@@ -4,11 +4,28 @@
 
 namespace lcl::security {
 
+SandboxLaunchAuthorizer::SandboxLaunchAuthorizer(PermissionStoreConfig permissionStoreConfig)
+    : permissionStore_(std::move(permissionStoreConfig)) {}
+
 bool SandboxLaunchAuthorizer::registerVerifiedApplication(
     const VerifiedApplication& application,
     const std::vector<std::string>& grantedPermissions,
     std::string& error) {
     error.clear();
+    if (application.permissionSubject) {
+        if (!validatePermissionSubject(*application.permissionSubject, error) ||
+            application.permissionSubject->appId != application.appId ||
+            application.permissionSubject->bundleRecordDigest != application.bundleRecordDigest) {
+            if (error.empty()) {
+                error = "verified application permission subject does not match its bundle record";
+            }
+            return false;
+        }
+        std::lock_guard permissionStoreLock(permissionStoreMutex_);
+        if (!permissionStore_.load(error)) {
+            return false;
+        }
+    }
     // Plan construction performs all identity, digest and grant-subset checks.
     const auto probe = makeThirdPartySandboxLaunchPlan(application, grantedPermissions, 1, error);
     if (!probe) {
@@ -44,8 +61,18 @@ std::optional<SandboxLaunchPlan> SandboxLaunchAuthorizer::authorize(
         error = "sandbox launch request bundle digest does not match the verified record";
         return std::nullopt;
     }
+    std::vector<std::string> grantedPermissions = application.grantedPermissions;
+    if (application.application.permissionSubject) {
+        std::lock_guard permissionStoreLock(permissionStoreMutex_);
+        grantedPermissions = permissionStore_.grantedPermissions(
+            *application.application.permissionSubject,
+            application.application.requestedPermissions, error);
+        if (!error.empty()) {
+            return std::nullopt;
+        }
+    }
     const auto plan = makeThirdPartySandboxLaunchPlan(application.application,
-                                                      application.grantedPermissions,
+                                                      grantedPermissions,
                                                       request.instanceId, error);
     if (!plan) {
         return std::nullopt;

@@ -1,7 +1,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <string>
+#include <sys/stat.h>
+#include <system_error>
+#include <unistd.h>
 #include <vector>
 
 #include "system/security/sandbox_contract.hpp"
@@ -13,6 +18,8 @@
 using namespace lcl::security;
 
 namespace {
+
+namespace fs = std::filesystem;
 
 VerifiedApplication validApplication() {
     VerifiedApplication application{};
@@ -205,4 +212,47 @@ TEST(SandboxLaunchAuthorizerTest, RejectsUnregisteredAndMismatchedRequests) {
     wrongProfile.profileDigest = sha256("different profile");
     EXPECT_FALSE(authorizer.authorize(wrongProfile, error).has_value());
     EXPECT_EQ(error, "sandbox launch request profile digest does not match the verified policy");
+}
+
+TEST(SandboxLaunchAuthorizerTest,
+     RechecksLivePermissionDecisionAndRejectsAStaleWidenedProfile) {
+    const fs::path directory = fs::temp_directory_path() /
+        ("lcl-authorizer-permissions-" + std::to_string(getpid()) + "-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    ASSERT_TRUE(fs::create_directories(directory));
+    const PermissionStoreConfig config{
+        .storePath = (directory / "permissions.v1").string(),
+        .ownerUid = getuid(),
+        .ownerGid = getgid(),
+    };
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() {
+            std::error_code ignored;
+            fs::remove_all(path, ignored);
+        }
+    } cleanup{directory};
+
+    VerifiedApplication application = validApplication();
+    application.permissionSubject = makeSystemImagePermissionSubject(
+        1000, application.appId, application.bundleRecordDigest);
+    PermissionStore writer(config);
+    std::string error;
+    ASSERT_TRUE(writer.setDecision(*application.permissionSubject, "network.client", true, error))
+        << error;
+
+    SandboxLaunchAuthorizer authorizer(config);
+    ASSERT_TRUE(authorizer.registerVerifiedApplication(application, {}, error)) << error;
+    const auto networkedPlan = makeThirdPartySandboxLaunchPlan(
+        application, {"network.client"}, 81, error);
+    ASSERT_TRUE(networkedPlan.has_value()) << error;
+    ASSERT_TRUE(authorizer.authorize(networkedPlan->request, error).has_value()) << error;
+
+    ASSERT_TRUE(writer.revoke(*application.permissionSubject, "network.client", error)) << error;
+    EXPECT_FALSE(authorizer.authorize(networkedPlan->request, error).has_value());
+    EXPECT_EQ(error, "sandbox launch request profile digest does not match the verified policy");
+
+    const auto defaultDenyPlan = makeThirdPartySandboxLaunchPlan(application, {}, 81, error);
+    ASSERT_TRUE(defaultDenyPlan.has_value()) << error;
+    ASSERT_TRUE(authorizer.authorize(defaultDenyPlan->request, error).has_value()) << error;
 }
