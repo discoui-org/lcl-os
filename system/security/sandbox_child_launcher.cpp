@@ -54,14 +54,18 @@ bool isRegularDescriptor(int descriptor, bool requireExecutable) {
 
 bool hasRequiredKernelEnforcement(const SandboxChildLaunchSpec& spec) {
     const SandboxProfile& profile = spec.plan.profile;
+    const SandboxPlatformHardening& hardening = spec.hardening;
     const SandboxKernelEnforcement& enforcement = spec.kernelEnforcement;
-    return (!profile.privateMountNamespace || enforcement.mountNamespaceReady) &&
-           (!profile.privatePidNamespace || enforcement.pidNamespaceReady) &&
-           (!profile.privateIpcNamespace || enforcement.ipcNamespaceReady) &&
-           (!profile.privateNetworkNamespace || enforcement.networkNamespaceReady) &&
+    return (!hardening.privateMountNamespace || enforcement.mountNamespaceReady) &&
+           (!hardening.privatePidNamespace || enforcement.pidNamespaceReady) &&
+           (!hardening.privateIpcNamespace || enforcement.ipcNamespaceReady) &&
+           (!hardening.privateNetworkNamespace || enforcement.networkNamespaceReady) &&
+           (!profile.noNewPrivileges || enforcement.noNewPrivilegesInstalled) &&
            (!profile.requireSeccomp || enforcement.seccompInstalled) &&
-           (!profile.requireLandlock || enforcement.landlockInstalled) &&
-           (!profile.denyDirectDeviceAccess || enforcement.directDeviceAccessDenied);
+           (!hardening.requireLandlock || enforcement.landlockInstalled) &&
+           (!profile.denyDirectDeviceAccess || enforcement.directDeviceAccessDenied) &&
+           (!hardening.requirePortableResourceLimits ||
+            enforcement.portableResourceLimitsInstalled);
 }
 
 bool duplicateDescriptor(int source, int target, bool closeOnExec) {
@@ -82,6 +86,29 @@ bool clearCapabilities() {
     header.pid = 0;
     std::array<__user_cap_data_struct, 2> data{};
     return syscall(SYS_capset, &header, data.data()) == 0;
+}
+
+bool applyPortableResourceLimits(const SandboxResourceLimits& limits) {
+    const rlim_t maximumAddressSpace =
+        static_cast<rlim_t>(limits.memoryMaxMiB) * 1024U * 1024U;
+    struct rlimit addressSpaceLimit {
+        .rlim_cur = maximumAddressSpace,
+        .rlim_max = maximumAddressSpace,
+    };
+    if (setrlimit(RLIMIT_AS, &addressSpaceLimit) != 0) {
+        return false;
+    }
+#ifdef RLIMIT_NPROC
+    const rlim_t maximumProcesses = static_cast<rlim_t>(limits.pidsMax);
+    struct rlimit processLimit {
+        .rlim_cur = maximumProcesses,
+        .rlim_max = maximumProcesses,
+    };
+    if (setrlimit(RLIMIT_NPROC, &processLimit) != 0) {
+        return false;
+    }
+#endif
+    return true;
 }
 
 bool closeInheritedDescriptors() {
@@ -115,10 +142,12 @@ bool clearAndSetEnvironment(const SandboxChildLaunchSpec& spec) {
         return setenv(name, value.c_str(), 1) == 0;
     };
     const std::string instanceId = std::to_string(spec.plan.request.instanceId);
+    const std::string pidNamespace = spec.hardening.privatePidNamespace ? "1" : "0";
     return set("HOME", "/Data") && set("TMPDIR", "/Temporary") &&
            set("PATH", "/System/Core") && set("USER", spec.identity.appId) &&
            set("LOGNAME", spec.identity.appId) && set("LCL_APP_ID", spec.identity.appId) &&
-           set("LCL_APP_INSTANCE_ID", instanceId);
+           set("LCL_APP_INSTANCE_ID", instanceId) &&
+           set("LCL_SANDBOX_PID_NAMESPACE", pidNamespace);
 }
 
 bool replaceStandardStreams() {
@@ -175,7 +204,8 @@ void closeLandlockDescriptors(SandboxLandlockRules& rules) {
 [[noreturn]] void execSandboxChild(SandboxChildLaunchSpec spec, SandboxLandlockRules landlockRules) {
     std::string error;
     const pid_t expectedParent = getppid();
-    if (prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0 || setgroups(0, nullptr) != 0 ||
+    if (!applyPortableResourceLimits(spec.hardening.resourceLimits) ||
+        prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0 || setgroups(0, nullptr) != 0 ||
         setresgid(spec.identity.gid, spec.identity.gid, spec.identity.gid) != 0 ||
         setresuid(spec.identity.uid, spec.identity.uid, spec.identity.uid) != 0 ||
         prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != expectedParent ||
@@ -183,6 +213,8 @@ void closeLandlockDescriptors(SandboxLandlockRules& rules) {
         prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 || !clearAndSetEnvironment(spec)) {
         childExit(ChildFailureStage::Setup, "could not apply sandbox child credentials or environment");
     }
+    spec.kernelEnforcement.portableResourceLimitsInstalled = true;
+    spec.kernelEnforcement.noNewPrivilegesInstalled = true;
     // /dev/null is a minimal filesystem object prepared by sandboxd.  Bind
     // stdio before Landlock so the setup path itself never depends on a
     // capability it is about to remove.
@@ -191,11 +223,11 @@ void closeLandlockDescriptors(SandboxLandlockRules& rules) {
                   std::string("could not redirect sandbox standard streams: ") +
                       std::strerror(errno));
     }
-    if (!installSandboxLandlockRules(landlockRules, error)) {
+    if (spec.hardening.requireLandlock && !installSandboxLandlockRules(landlockRules, error)) {
         childExit(ChildFailureStage::Setup, "could not install sandbox Landlock rules: " + error);
     }
     closeLandlockDescriptors(landlockRules);
-    spec.kernelEnforcement.landlockInstalled = true;
+    spec.kernelEnforcement.landlockInstalled = spec.hardening.requireLandlock;
     if (!installSandboxBaselineSeccomp(spec.plan.profile.runtime, error)) {
         childExit(ChildFailureStage::Setup, "could not install sandbox seccomp rules: " + error);
     }
@@ -266,12 +298,14 @@ bool validateSandboxChildLaunchSpec(const SandboxChildLaunchSpec& spec, std::str
     error.clear();
     if (!validateSandboxLaunchRequest(spec.plan.request, error) ||
         !validateSandboxProfile(spec.plan.profile, error) ||
+        !validateSandboxPlatformHardening(spec.hardening, error) ||
         spec.plan.request.appId != spec.identity.appId || spec.identity.uid == 0 || spec.identity.gid == 0 ||
         spec.identity.uid != spec.identity.gid || !isRegularDescriptor(spec.executableDescriptor,
                                                                         spec.plan.profile.runtime == SandboxRuntime::Native) ||
         !isSafeSandboxBundleRelativePath(spec.executableBundlePath) ||
         spec.executableDescriptor < kProgramDescriptor ||
         spec.arguments.size() > kMaximumArgumentCount ||
+        (spec.hardening.requireCgroupResourceAccounting != spec.cgroup.has_value()) ||
         (spec.cgroup.has_value() &&
          (!spec.cgroup->manager || spec.cgroup->cgroup.instanceId != spec.plan.request.instanceId))) {
         if (error.empty()) {
@@ -311,7 +345,8 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
         result.message = "sandbox child launcher requires root sandboxd";
         return result;
     }
-    if (!spec.cgroup.has_value() || !spec.cgroup->manager) {
+    if (spec.hardening.requireCgroupResourceAccounting &&
+        (!spec.cgroup.has_value() || !spec.cgroup->manager)) {
         result.status = SandboxLaunchStatus::SetupFailed;
         result.message = "sandbox child launcher requires a daemon-owned cgroup allocation";
         return result;
@@ -324,7 +359,7 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
         return result;
     }
     int setupGate[2] = {-1, -1};
-    if (pipe2(setupGate, O_CLOEXEC) != 0) {
+    if (spec.hardening.requireCgroupResourceAccounting && pipe2(setupGate, O_CLOEXEC) != 0) {
         const int savedErrno = errno;
         close(failurePipe[0]);
         close(failurePipe[1]);
@@ -336,8 +371,8 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
     if (child < 0) {
         close(failurePipe[0]);
         close(failurePipe[1]);
-        close(setupGate[0]);
-        close(setupGate[1]);
+        if (setupGate[0] >= 0) close(setupGate[0]);
+        if (setupGate[1] >= 0) close(setupGate[1]);
         result.status = SandboxLaunchStatus::SetupFailed;
         result.message = std::string("could not fork sandbox child: ") + std::strerror(errno);
         return result;
@@ -345,7 +380,7 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
     if (child == 0) {
         const pid_t expectedDaemon = getppid();
         close(failurePipe[0]);
-        close(setupGate[1]);
+        if (setupGate[1] >= 0) close(setupGate[1]);
         if (!duplicateDescriptor(failurePipe[1], kFailureDescriptor, true)) {
             _exit(127);
         }
@@ -360,36 +395,39 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
         if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != expectedDaemon) {
             childExit(ChildFailureStage::Setup, "sandboxd parent process disappeared during launch");
         }
-        if (!waitForSetupGate(setupGate[0])) {
+        if (spec.hardening.requireCgroupResourceAccounting && !waitForSetupGate(setupGate[0])) {
             close(setupGate[0]);
             childExit(ChildFailureStage::Setup, "sandbox cgroup placement gate was not released");
         }
-        close(setupGate[0]);
+        if (setupGate[0] >= 0) close(setupGate[0]);
         if (setpgid(0, 0) != 0) {
             childExit(ChildFailureStage::Setup, "could not create app process group");
         }
 
         SandboxKernelEnforcement enforcement{};
-        if (!beginSandboxNamespaces(spec.plan.profile, enforcement, error)) {
+        if (!beginSandboxNamespaces(spec.hardening, enforcement, error)) {
             childExit(ChildFailureStage::Setup, error);
         }
-        const pid_t innerChild = fork();
-        if (innerChild < 0) {
-            childExit(ChildFailureStage::Setup,
-                      std::string("could not fork PID-namespace init child: ") + std::strerror(errno));
-        }
-        if (innerChild > 0) {
-            close(kFailureDescriptor);
-            waitForInnerSandboxChildAndExit(innerChild);
+        if (spec.hardening.privatePidNamespace) {
+            const pid_t innerChild = fork();
+            if (innerChild < 0) {
+                childExit(ChildFailureStage::Setup,
+                          std::string("could not fork PID-namespace init child: ") + std::strerror(errno));
+            }
+            if (innerChild > 0) {
+                close(kFailureDescriptor);
+                waitForInnerSandboxChildAndExit(innerChild);
+            }
         }
 
-        if (!finalizeSandboxPidNamespace(spec.plan.profile, enforcement, error)) {
+        if (!finalizeSandboxPidNamespace(spec.hardening, enforcement, error)) {
             childExit(ChildFailureStage::Setup, error);
         }
         SandboxLandlockRules landlockRules{};
         if (!enterSandboxFilesystemNamespace(spec.filesystemSources, spec.identity,
                                              spec.executableDescriptor,
                                              spec.plan.profile.runtime == SandboxRuntime::Native,
+                                             spec.hardening.privatePidNamespace,
                                              landlockRules, error)) {
             childExit(ChildFailureStage::Setup, error);
         }
@@ -408,8 +446,9 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
     }
 
     close(failurePipe[1]);
-    close(setupGate[0]);
-    if (!spec.cgroup->manager->moveProcess(spec.cgroup->cgroup, child, error)) {
+    if (setupGate[0] >= 0) close(setupGate[0]);
+    if (spec.hardening.requireCgroupResourceAccounting &&
+        !spec.cgroup->manager->moveProcess(spec.cgroup->cgroup, child, error)) {
         close(setupGate[1]);
         kill(child, SIGKILL);
         while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
@@ -422,7 +461,8 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
         return result;
     }
     const char gateToken = 'G';
-    if (write(setupGate[1], &gateToken, sizeof(gateToken)) != static_cast<ssize_t>(sizeof(gateToken))) {
+    if (spec.hardening.requireCgroupResourceAccounting &&
+        write(setupGate[1], &gateToken, sizeof(gateToken)) != static_cast<ssize_t>(sizeof(gateToken))) {
         const int savedErrno = errno;
         close(setupGate[1]);
         kill(child, SIGKILL);
@@ -436,7 +476,7 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
                          std::strerror(savedErrno);
         return result;
     }
-    close(setupGate[1]);
+    if (setupGate[1] >= 0) close(setupGate[1]);
     std::array<char, kFailureMessageBytes> failure{};
     ssize_t count = -1;
     do {
@@ -456,8 +496,10 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
         kill(child, SIGKILL);
         while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
         }
-        std::string cleanupError;
-        spec.cgroup->manager->removeInstance(spec.cgroup->cgroup, cleanupError);
+        if (spec.hardening.requireCgroupResourceAccounting) {
+            std::string cleanupError;
+            spec.cgroup->manager->removeInstance(spec.cgroup->cgroup, cleanupError);
+        }
         result.status = SandboxLaunchStatus::SetupFailed;
         result.message = std::string("could not read sandbox child status: ") + std::strerror(readError);
         return result;
@@ -466,8 +508,10 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
     int waitStatus = 0;
     while (waitpid(child, &waitStatus, 0) < 0 && errno == EINTR) {
     }
-    std::string cleanupError;
-    spec.cgroup->manager->removeInstance(spec.cgroup->cgroup, cleanupError);
+    if (spec.hardening.requireCgroupResourceAccounting) {
+        std::string cleanupError;
+        spec.cgroup->manager->removeInstance(spec.cgroup->cgroup, cleanupError);
+    }
     result.status = failure[0] == static_cast<char>(ChildFailureStage::Execution)
         ? SandboxLaunchStatus::ExecutionFailed
         : SandboxLaunchStatus::SetupFailed;

@@ -11,7 +11,7 @@
 
 namespace lcl::security {
 
-inline constexpr std::uint32_t kSandboxContractVersion = 1;
+inline constexpr std::uint32_t kSandboxContractVersion = 2;
 
 enum class SandboxRuntime : std::uint8_t {
     Native = 1,
@@ -27,31 +27,62 @@ enum class SandboxLaunchStatus : std::uint32_t {
 };
 
 /**
- * Immutable kernel-enforcement intent. The platform sandboxd translates this
- * ABI into namespaces, credentials, seccomp, Landlock and cgroup calls.
+ * Immutable, platform-independent LCL capability contract.
+ *
+ * This is the only profile which crosses the sessiond -> sandboxd protocol
+ * boundary.  It deliberately says nothing about Linux-specific mechanisms
+ * such as a PID namespace, Landlock, or cgroup v2.  Those mechanisms are
+ * sandboxd implementation details below the common LCL userspace ABI.
+ *
+ * `network.client` remains a broker permission: it must never mean that an
+ * app receives the host network namespace or a direct network capability.
  */
 struct SandboxProfile {
     std::uint32_t contractVersion{kSandboxContractVersion};
     std::string profileId;
     SandboxRuntime runtime{SandboxRuntime::Native};
+    bool noNewPrivileges{true};
+    bool requireSeccomp{true};
+    /** The app receives a private mounted filesystem view, never the host root. */
+    bool privateFilesystemView{true};
+    /** The app receives no host network interfaces or routes. */
+    bool isolatedNetworkView{true};
+    bool denyDirectDeviceAccess{true};
+    /** Only declared and currently granted LCL capabilities. */
+    std::vector<std::string> effectivePermissions;
+};
+
+/**
+ * Daemon-owned resource limits.  They are not part of the application ABI or
+ * its capability digest: Linux may use cgroup v2 while Android applies the
+ * portable rlimit subset before dropping the app UID.
+ */
+struct SandboxResourceLimits {
+    std::uint32_t memoryMaxMiB{512};
+    std::uint32_t pidsMax{64};
+    /** cgroup v2 cpu.weight when the platform provides it. */
+    std::uint32_t cpuWeight{100};
+};
+
+/**
+ * Platform-local enforcement selected by root sandboxd after capability
+ * negotiation.  This object is never serialized in a launch request.
+ */
+struct SandboxPlatformHardening {
     bool privateMountNamespace{true};
     bool privatePidNamespace{true};
     bool privateIpcNamespace{true};
     bool privateNetworkNamespace{true};
-    bool noNewPrivileges{true};
-    bool requireSeccomp{true};
     bool requireLandlock{true};
-    bool denyDirectDeviceAccess{true};
-    bool allowNetworkClient{false};
-    std::uint32_t memoryMaxMiB{512};
-    std::uint32_t pidsMax{64};
-    /** cgroup v2 cpu.weight; Linux permits values in the inclusive 1..10000 range. */
-    std::uint32_t cpuWeight{100};
-    std::vector<std::string> effectivePermissions;
+    bool requireCgroupResourceAccounting{true};
+    bool requirePortableResourceLimits{true};
+    SandboxResourceLimits resourceLimits{};
 };
 
 Sha256Digest digestSandboxProfile(const SandboxProfile& profile);
 bool validateSandboxProfile(const SandboxProfile& profile, std::string& error);
+bool validateSandboxPlatformHardening(const SandboxPlatformHardening& hardening,
+                                      std::string& error);
 
 /**
  * Internal output of the verifier + identity registry. It is not IPC input:

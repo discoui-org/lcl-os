@@ -220,6 +220,48 @@ SandboxPlatformCapabilities probeSandboxPlatformCapabilities() {
     return capabilities;
 }
 
+std::optional<SandboxPlatformHardening> makeSandboxPlatformHardening(
+    const SandboxPlatformCapabilities& capabilities, SandboxPlatformMode mode, std::string& error) {
+    error.clear();
+    switch (mode) {
+        case SandboxPlatformMode::LinuxFull: {
+            if (!capabilities.supportsMandatoryThirdPartyProfile()) {
+                error = "Linux full sandbox hardening requires namespaces, no_new_privs, seccomp, "
+                        "Landlock ABI 3+, and cgroup v2 memory/pids/cpu controllers";
+                return std::nullopt;
+            }
+            SandboxPlatformHardening hardening{};
+            if (!validateSandboxPlatformHardening(hardening, error)) {
+                return std::nullopt;
+            }
+            return hardening;
+        }
+        case SandboxPlatformMode::AndroidCapability: {
+            // Android's stock kernels commonly prohibit PID/IPC namespaces in
+            // this rootfs-chroot deployment and do not expose Landlock/cgroup
+            // v2 there. Keep the LCL capability ABI intact with mechanisms
+            // available to the app process itself. SELinux remains a future,
+            // image-level defence-in-depth layer; it is not faked here.
+            if (!capabilities.supportsCommonCapabilityProfile()) {
+                error = "Android common capability sandbox requires mount and network namespaces, "
+                        "no_new_privs, and seccomp";
+                return std::nullopt;
+            }
+            SandboxPlatformHardening hardening{};
+            hardening.privatePidNamespace = false;
+            hardening.privateIpcNamespace = false;
+            hardening.requireLandlock = false;
+            hardening.requireCgroupResourceAccounting = false;
+            if (!validateSandboxPlatformHardening(hardening, error)) {
+                return std::nullopt;
+            }
+            return hardening;
+        }
+    }
+    error = "sandbox platform mode is unknown";
+    return std::nullopt;
+}
+
 std::string formatSandboxPlatformCapabilities(const SandboxPlatformCapabilities& capabilities) {
     std::ostringstream output;
     output << "sandbox kernel capability report\n"
@@ -255,7 +297,9 @@ std::string formatSandboxPlatformCapabilities(const SandboxPlatformCapabilities&
            << "  cgroup cpu controller: "
            << availability(capabilities.cgroupCpuController,
                            "not available in cgroup.controllers") << '\n'
-           << "  third-party profile: "
+           << "  common capability profile: "
+           << (capabilities.supportsCommonCapabilityProfile() ? "supported" : "NOT supported")
+           << '\n' << "  Linux full hardening profile: "
            << (capabilities.supportsMandatoryThirdPartyProfile() ? "supported" : "NOT supported")
            << '\n';
     return output.str();

@@ -127,6 +127,14 @@ sözleşmesini kullanmasıdır.
 
 - [x] `system/security/` altında platformdan bağımsız `SandboxProfile`,
   `SandboxLaunchRequest` ve `SandboxLaunchResult` sözleşmelerini oluştur.
+- [ ] Capability contract v2'de uygulama izinleri/private filesystem-private
+  network görünümü ile Linux'a özgü PID/IPC namespace, Landlock ve cgroup
+  sertleştirmesini ayır; launch digest'inin yalnız ortak LCL capability
+  profilini bağladığını Linux ve Android build/testleriyle doğrula. Aynı
+  canonical binary için platform seçimini compile-time makroyla değil,
+  root-owned bootstrap'ın açık `--platform linux-full` veya
+  `--platform android-capability` girdisiyle yap; Linux modunda fallback'i
+  yasakla.
 - [x] Protected FD, process group, UID/GID drop, capability clear,
   `no_new_privs` ve allowlist environment uygulayan; zorunlu kernel aşaması
   kaydı yoksa fail-closed kalan sandbox child launcher çekirdeğini oluştur.
@@ -240,11 +248,21 @@ sözleşmesini kullanmasıdır.
   gereksinimini belgeleyin.
 - [ ] cgroup v2 ile her instance için `memory.max`, `pids.max`, CPU ağırlığı ve
   gerekirse IO sınırları uygula.
+- [x] cgroup v2 bulunmayan Android capability baseline'ında en az adres alanı
+  ve süreç sayısı için taşınabilir `rlimit` sınırlarını child UID düşmeden önce
+  uygula; bunun cgroup CPU adaleti yerine geçmediğini açıkça raporla.
+  **Kanıt (2026-08-31, Android kullanıcı-gözlemi):** sandbox probe
+  `RLIMIT_AS=512 MiB` ve `RLIMIT_NPROC=64` kontrolüyle `0` döndü.
 - [ ] Yasak syscall, fork bomb, network-deny, cihaz erişimi ve memory limiti
   negatif testleri ekle.
 
 ## 7. Android substrate enforcement
 
+- [ ] AOSP/SELinux image build'i gelene kadar yalnız ortak capability
+  baseline'ını uygula: private mount ve network namespace, app UID/GID,
+  capability clear, `no_new_privs`, seccomp ve taşınabilir kaynak limitleri.
+  PID/IPC namespace, Landlock ve cgroup v2 yoksa bu baseline bunları taklit
+  etmeyecek; Linux tam sertleştirmesi ise zayıflatılmayacak.
 - [ ] Mevcut global `setenforce 0` geliştirme yolunu production başlangıç
   akışından çıkar.
 - [ ] Android init policy'sinde `lcl_bootstrap`, `lcl_core_android`,
@@ -367,11 +385,22 @@ sözleşmesini kullanmasıdır.
   ve session socket erişiminin reddi, `/System` yazma reddi ile ağ erişiminin
   engellendiğini doğruladı.
 
-- [x] **Android kullanıcı-gözlemi (2026-08-31, fail-closed):** Doğrudan
-  deployment AVD'sinde probe, mount/network namespace, `no_new_privs` ve
-  seccomp'u destekledi; ancak PID/IPC namespace `EINVAL`, Landlock `ENOSYS`
-  ve cgroup v2 yoktu. Bu nedenle `lcl-sandboxd` üçüncü taraf profilini
-  başlatmayı doğru biçimde reddetti. Bu, Android enforcing acceptance değildir.
+- [x] **Android kullanıcı-gözlemi (2026-08-31, eski fail-closed referansı):**
+  Doğrudan deployment AVD'sinde probe, mount/network namespace,
+  `no_new_privs` ve seccomp'u destekledi; ancak PID/IPC namespace `EINVAL`,
+  Landlock `ENOSYS` ve cgroup v2 yoktu. Contract v1 bu mekanizmaları tek bir
+  profile bağladığı için `lcl-sandboxd` üçüncü taraf launch'ı reddetti.
+- [x] **Android common-capability smoke (2026-08-31, kullanıcı-gözlemi):**
+  Contract v2 Android root-owned `--platform android-capability` ile
+  `lcl-sandboxd.sock` oluşturdu. `open -w org.lcl.sandbox-probe` instance
+  başlattı ve `0` döndü; probe Android'de PID namespace beklemeyerek app
+  UID/GID drop, boş capability seti, `no_new_privs`, private Data/Temporary,
+  aygıt/session socket reddi, read-only System, loopback reddi ve
+  `RLIMIT_AS=512 MiB`/`RLIMIT_NPROC=64` değerlerini doğruladı. Bu,
+  SELinux-enforcing kabulü değildir.
+- [ ] **Android common-capability genişletilmiş acceptance:** Private
+  mount/network namespace inode'larını admin diagnostic ile doğrudan doğrula;
+  sandboxed pencerenin compositor/rasterd akışını ayrıca doğrula.
 
 - [ ] Her uygulama için UID/GID, capability, namespace inode'ları, cgroup
   yolu ve etkin profil digest'ini yalnız admin diagnostic aracıyla raporla.

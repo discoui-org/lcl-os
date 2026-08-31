@@ -431,7 +431,8 @@ rm -f /Runtime/lcl-sandboxd.sock
 SANDBOXD_PID=""
 if [ -x /System/Core/lcl-sandboxd ]; then
     echo "[LCL SESSION] Starting lcl-sandboxd..."
-    /System/Core/lcl-sandboxd --session-uid 0 --session-gid 0 > /Runtime/lcl-sandboxd.log 2>&1 &
+    /System/Core/lcl-sandboxd --session-uid 0 --session-gid 0 \\
+        --platform android-capability > /Runtime/lcl-sandboxd.log 2>&1 &
     SANDBOXD_PID=$!
     for ((i=0; i<100; i++)); do
         if [ -S "/Runtime/lcl-sandboxd.sock" ]; then

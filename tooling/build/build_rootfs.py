@@ -798,7 +798,7 @@ fi
 # lcl-sessiond, not for the interactive Terminal or normal application UIDs.
 if [ -x /System/Core/lcl-sandboxd ]; then
     echo "[init] Starting lcl-sandboxd..."
-    /System/Core/lcl-sandboxd --session-uid 0 --session-gid 0 \
+    /System/Core/lcl-sandboxd --session-uid 0 --session-gid 0 --platform linux-full \
         2>&1 | tee /var/log/lcl_sandboxd.log &
     sleep 0.1
 fi

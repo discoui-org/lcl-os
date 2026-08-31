@@ -16,10 +16,10 @@ struct SandboxCgroup {
 };
 
 /**
- * Applies resource limits from a verified SandboxLaunchPlan to cgroup v2.
- * No application-controlled path or limit enters this API. The future
- * sandboxd launch path creates an instance cgroup, moves its child into it
- * before exec, and removes it only after the reaper observed process exit.
+ * Applies daemon-owned platform resource limits to cgroup v2. No
+ * application-controlled path or limit enters this API. The sandboxd launch
+ * path creates an instance cgroup, moves its child into it before exec, and
+ * removes it only after the reaper observed process exit.
  */
 class SandboxCgroupManager final {
 public:
@@ -30,6 +30,7 @@ public:
 
     bool initialize(std::string& error);
     std::optional<SandboxCgroup> createInstance(const SandboxLaunchPlan& plan,
+                                                 const SandboxPlatformHardening& hardening,
                                                  std::string& error);
     bool moveProcess(const SandboxCgroup& cgroup, pid_t processId, std::string& error) const;
     bool removeInstance(const SandboxCgroup& cgroup, std::string& error) const;

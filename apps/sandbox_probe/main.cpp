@@ -3,12 +3,15 @@
 #include <linux/capability.h>
 #include <netinet/in.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
 #include <array>
 #include <cerrno>
+#include <cstdlib>
+#include <cstring>
 #include <cstdint>
 
 namespace {
@@ -79,13 +82,41 @@ bool cannotReachLoopback() {
   return blocked;
 }
 
+bool pidNamespaceMatchesTrustedSandboxMode() {
+  const char *const selected = std::getenv("LCL_SANDBOX_PID_NAMESPACE");
+  if (selected == nullptr) {
+    return false;
+  }
+  if (std::strcmp(selected, "1") == 0) {
+    return getpid() == 1;
+  }
+  if (std::strcmp(selected, "0") == 0) {
+    return getpid() != 1;
+  }
+  return false;
+}
+
+bool hasExpectedPortableResourceLimits() {
+  constexpr rlim_t kExpectedAddressSpace = 512U * 1024U * 1024U;
+  constexpr rlim_t kExpectedProcessCount = 64U;
+  rlimit addressSpace{};
+  rlimit processCount{};
+  return getrlimit(RLIMIT_AS, &addressSpace) == 0 &&
+         addressSpace.rlim_cur == kExpectedAddressSpace &&
+         addressSpace.rlim_max == kExpectedAddressSpace &&
+         getrlimit(RLIMIT_NPROC, &processCount) == 0 &&
+         processCount.rlim_cur == kExpectedProcessCount &&
+         processCount.rlim_max == kExpectedProcessCount;
+}
+
 } // namespace
 
 int main() {
   // Each nonzero result identifies the first failed boundary to a terminal
   // caller of `open -w org.lcl.sandbox-probe`; the process emits no data
   // outside its private namespace.
-  if (geteuid() == 0 || getegid() == 0 || getpid() != 1)
+  if (geteuid() == 0 || getegid() == 0 ||
+      !pidNamespaceMatchesTrustedSandboxMode())
     return 10;
   if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1)
     return 11;
@@ -104,5 +135,7 @@ int main() {
     return 17;
   if (!cannotReachLoopback())
     return 18;
+  if (!hasExpectedPortableResourceLimits())
+    return 19;
   return 0;
 }

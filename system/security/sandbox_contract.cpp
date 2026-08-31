@@ -12,9 +12,6 @@
 namespace lcl::security {
 namespace {
 
-constexpr std::uint32_t kDefaultMemoryMaxMiB = 512;
-constexpr std::uint32_t kDefaultPidsMax = 64;
-constexpr std::uint32_t kDefaultCpuWeight = 100;
 constexpr std::uint32_t kMinimumCpuWeight = 1;
 constexpr std::uint32_t kMaximumCpuWeight = 10000;
 
@@ -58,9 +55,9 @@ bool normalizePermissions(const std::vector<std::string>& input, std::vector<std
 bool isProfileIdForRuntime(const std::string& profileId, SandboxRuntime runtime) {
     switch (runtime) {
         case SandboxRuntime::Native:
-            return profileId == "lcl.third-party.native.v1";
+            return profileId == "lcl.app-capability.native.v1";
         case SandboxRuntime::JavaScript:
-            return profileId == "lcl.third-party.javascript.v1";
+            return profileId == "lcl.app-capability.javascript.v1";
     }
     return false;
 }
@@ -74,16 +71,9 @@ bool validateSandboxProfile(const SandboxProfile& profile, std::string& error) {
         error = "sandbox profile has an unknown ABI or profile ID";
         return false;
     }
-    if (!profile.privateMountNamespace || !profile.privatePidNamespace ||
-        !profile.privateIpcNamespace || !profile.privateNetworkNamespace ||
-        !profile.noNewPrivileges || !profile.requireSeccomp || !profile.requireLandlock ||
-        !profile.denyDirectDeviceAccess || profile.memoryMaxMiB == 0 || profile.pidsMax == 0 ||
-        profile.cpuWeight < kMinimumCpuWeight || profile.cpuWeight > kMaximumCpuWeight) {
-        error = "third-party sandbox profile weakens a mandatory security boundary";
-        return false;
-    }
-    if (profile.allowNetworkClient && !profile.privateNetworkNamespace) {
-        error = "network-capable profile must keep an isolated network namespace";
+    if (!profile.noNewPrivileges || !profile.requireSeccomp || !profile.privateFilesystemView ||
+        !profile.isolatedNetworkView || !profile.denyDirectDeviceAccess) {
+        error = "common app capability profile weakens a mandatory security boundary";
         return false;
     }
 
@@ -95,8 +85,18 @@ bool validateSandboxProfile(const SandboxProfile& profile, std::string& error) {
         }
         return false;
     }
-    if (profile.allowNetworkClient != containsPermission(profile.effectivePermissions, "network.client")) {
-        error = "network profile does not match effective permissions";
+    return true;
+}
+
+bool validateSandboxPlatformHardening(const SandboxPlatformHardening& hardening,
+                                      std::string& error) {
+    error.clear();
+    if (!hardening.privateMountNamespace || !hardening.privateNetworkNamespace ||
+        !hardening.requirePortableResourceLimits ||
+        hardening.resourceLimits.memoryMaxMiB == 0 || hardening.resourceLimits.pidsMax == 0 ||
+        hardening.resourceLimits.cpuWeight < kMinimumCpuWeight ||
+        hardening.resourceLimits.cpuWeight > kMaximumCpuWeight) {
+        error = "sandbox platform hardening weakens a mandatory enforcement boundary";
         return false;
     }
     return true;
@@ -104,23 +104,16 @@ bool validateSandboxProfile(const SandboxProfile& profile, std::string& error) {
 
 Sha256Digest digestSandboxProfile(const SandboxProfile& profile) {
     std::string canonical;
-    canonical.reserve(128 + profile.profileId.size() + profile.effectivePermissions.size() * 32);
-    canonical.append("LCL_SANDBOX_PROFILE_V1", 22);
+    canonical.reserve(112 + profile.profileId.size() + profile.effectivePermissions.size() * 32);
+    canonical.append("LCL_APP_CAPABILITY_PROFILE_V1");
     appendU32(canonical, profile.contractVersion);
     appendString(canonical, profile.profileId);
     canonical.push_back(static_cast<char>(profile.runtime));
-    appendBoolean(canonical, profile.privateMountNamespace);
-    appendBoolean(canonical, profile.privatePidNamespace);
-    appendBoolean(canonical, profile.privateIpcNamespace);
-    appendBoolean(canonical, profile.privateNetworkNamespace);
     appendBoolean(canonical, profile.noNewPrivileges);
     appendBoolean(canonical, profile.requireSeccomp);
-    appendBoolean(canonical, profile.requireLandlock);
+    appendBoolean(canonical, profile.privateFilesystemView);
+    appendBoolean(canonical, profile.isolatedNetworkView);
     appendBoolean(canonical, profile.denyDirectDeviceAccess);
-    appendBoolean(canonical, profile.allowNetworkClient);
-    appendU32(canonical, profile.memoryMaxMiB);
-    appendU32(canonical, profile.pidsMax);
-    appendU32(canonical, profile.cpuWeight);
     appendU32(canonical, static_cast<std::uint32_t>(profile.effectivePermissions.size()));
     for (const std::string& permission : profile.effectivePermissions) {
         appendString(canonical, permission);
@@ -190,20 +183,15 @@ std::optional<SandboxProfile> makeThirdPartySandboxProfile(
     profile.runtime = runtime;
     switch (runtime) {
         case SandboxRuntime::Native:
-            profile.profileId = "lcl.third-party.native.v1";
+            profile.profileId = "lcl.app-capability.native.v1";
             break;
         case SandboxRuntime::JavaScript:
-            profile.profileId = "lcl.third-party.javascript.v1";
+            profile.profileId = "lcl.app-capability.javascript.v1";
             break;
         default:
             error = "sandbox profile has an unsupported runtime";
             return std::nullopt;
     }
-    profile.privateNetworkNamespace = true;
-    profile.allowNetworkClient = containsPermission(granted, "network.client");
-    profile.memoryMaxMiB = kDefaultMemoryMaxMiB;
-    profile.pidsMax = kDefaultPidsMax;
-    profile.cpuWeight = kDefaultCpuWeight;
     profile.effectivePermissions = std::move(granted);
     if (!validateSandboxProfile(profile, error)) {
         return std::nullopt;

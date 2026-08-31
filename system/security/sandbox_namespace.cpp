@@ -13,12 +13,12 @@
 
 namespace lcl::security {
 
-bool beginSandboxNamespaces(const SandboxProfile& profile,
+bool beginSandboxNamespaces(const SandboxPlatformHardening& hardening,
                             SandboxKernelEnforcement& enforcement,
                             std::string& error) {
     error.clear();
     enforcement = {};
-    if (!validateSandboxProfile(profile, error)) {
+    if (!validateSandboxPlatformHardening(hardening, error)) {
         return false;
     }
     if (geteuid() != 0) {
@@ -27,36 +27,38 @@ bool beginSandboxNamespaces(const SandboxProfile& profile,
     }
 
     int flags = 0;
-    if (profile.privateIpcNamespace) {
+    if (hardening.privateIpcNamespace) {
         flags |= CLONE_NEWIPC;
     }
-    if (profile.privateNetworkNamespace) {
+    if (hardening.privateNetworkNamespace) {
         flags |= CLONE_NEWNET;
     }
-    if (profile.privatePidNamespace) {
+    if (hardening.privatePidNamespace) {
         flags |= CLONE_NEWPID;
     }
-    if (flags == 0 || unshare(flags) != 0) {
+    if (flags != 0 && unshare(flags) != 0) {
         error = std::string("could not create sandbox IPC, network, and PID namespaces: ") +
                 std::strerror(errno);
         return false;
     }
-    enforcement.ipcNamespaceReady = profile.privateIpcNamespace;
-    enforcement.networkNamespaceReady = profile.privateNetworkNamespace;
+    enforcement.ipcNamespaceReady = hardening.privateIpcNamespace;
+    enforcement.networkNamespaceReady = hardening.privateNetworkNamespace;
     // The caller is still in the parent PID namespace at this point.  Mark it
     // ready only after the inner fork confirms it became PID 1.
     return true;
 }
 
-bool finalizeSandboxPidNamespace(const SandboxProfile& profile,
+bool finalizeSandboxPidNamespace(const SandboxPlatformHardening& hardening,
                                  SandboxKernelEnforcement& enforcement,
                                  std::string& error) {
     error.clear();
-    if (!validateSandboxProfile(profile, error)) {
+    if (!validateSandboxPlatformHardening(hardening, error)) {
         return false;
     }
-    if (!profile.privatePidNamespace || !enforcement.ipcNamespaceReady ||
-        !enforcement.networkNamespaceReady || getpid() != 1) {
+    if (!hardening.privatePidNamespace) {
+        return true;
+    }
+    if (!enforcement.ipcNamespaceReady || !enforcement.networkNamespaceReady || getpid() != 1) {
         error = "sandbox child did not become the isolated PID-namespace init process";
         return false;
     }

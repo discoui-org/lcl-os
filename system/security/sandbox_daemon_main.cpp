@@ -28,9 +28,22 @@ bool parseId(std::string_view value, unsigned long& parsed) {
            parsed <= std::numeric_limits<unsigned int>::max();
 }
 
+bool parsePlatformMode(std::string_view value, lcl::security::SandboxPlatformMode& mode) {
+    if (value == "linux-full") {
+        mode = lcl::security::SandboxPlatformMode::LinuxFull;
+        return true;
+    }
+    if (value == "android-capability") {
+        mode = lcl::security::SandboxPlatformMode::AndroidCapability;
+        return true;
+    }
+    return false;
+}
+
 void usage() {
     std::cerr << "usage: lcl-sandboxd --session-uid <uid> --session-gid <gid>"
-                 " [--socket <absolute-path>]\n";
+                 " [--socket <absolute-path>]"
+                 " [--platform linux-full|android-capability]\n";
 }
 
 } // namespace
@@ -46,11 +59,19 @@ int main(int argc, char** argv) {
     bool gotGid = false;
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument(argv[index]);
-        if ((argument == "--session-uid" || argument == "--session-gid" || argument == "--socket") &&
+        if ((argument == "--session-uid" || argument == "--session-gid" || argument == "--socket" ||
+             argument == "--platform") &&
             index + 1 < argc) {
             const std::string_view value(argv[++index]);
             if (argument == "--socket") {
                 config.socketPath = value;
+                continue;
+            }
+            if (argument == "--platform") {
+                if (!parsePlatformMode(value, config.platformMode)) {
+                    usage();
+                    return 2;
+                }
                 continue;
             }
             unsigned long parsed = 0;

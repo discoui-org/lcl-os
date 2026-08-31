@@ -44,19 +44,12 @@ TEST(SandboxContractTest, BuildsDefaultDenyPlanFromVerifiedInputs) {
         validApplication(), {"network.client", "files.user-selected"}, 41, error);
 
     ASSERT_TRUE(plan.has_value()) << error;
-    EXPECT_EQ(plan->profile.profileId, "lcl.third-party.native.v1");
-    EXPECT_TRUE(plan->profile.privateMountNamespace);
-    EXPECT_TRUE(plan->profile.privatePidNamespace);
-    EXPECT_TRUE(plan->profile.privateIpcNamespace);
-    EXPECT_TRUE(plan->profile.privateNetworkNamespace);
+    EXPECT_EQ(plan->profile.profileId, "lcl.app-capability.native.v1");
     EXPECT_TRUE(plan->profile.noNewPrivileges);
     EXPECT_TRUE(plan->profile.requireSeccomp);
-    EXPECT_TRUE(plan->profile.requireLandlock);
+    EXPECT_TRUE(plan->profile.privateFilesystemView);
+    EXPECT_TRUE(plan->profile.isolatedNetworkView);
     EXPECT_TRUE(plan->profile.denyDirectDeviceAccess);
-    EXPECT_TRUE(plan->profile.allowNetworkClient);
-    EXPECT_EQ(plan->profile.memoryMaxMiB, 512u);
-    EXPECT_EQ(plan->profile.pidsMax, 64u);
-    EXPECT_EQ(plan->profile.cpuWeight, 100u);
     EXPECT_EQ(plan->profile.effectivePermissions,
               std::vector<std::string>({"files.user-selected", "network.client"}));
     EXPECT_EQ(plan->request.appId, "org.example.notes");
@@ -93,9 +86,8 @@ TEST(SandboxContractTest, BuildsAnIdentityFreeProfileForTheSessionLaunchRequest)
         SandboxRuntime::JavaScript, {"files.user-selected", "network.client"},
         {"network.client"}, error);
     ASSERT_TRUE(profile.has_value()) << error;
-    EXPECT_EQ(profile->profileId, "lcl.third-party.javascript.v1");
-    EXPECT_TRUE(profile->privateNetworkNamespace);
-    EXPECT_TRUE(profile->allowNetworkClient);
+    EXPECT_EQ(profile->profileId, "lcl.app-capability.javascript.v1");
+    EXPECT_TRUE(profile->isolatedNetworkView);
     EXPECT_EQ(profile->effectivePermissions, std::vector<std::string>({"network.client"}));
 
     EXPECT_FALSE(makeThirdPartySandboxProfile(static_cast<SandboxRuntime>(99), {}, {}, error));
@@ -111,20 +103,20 @@ TEST(SandboxContractTest, RejectsMalformedRequestAndWeakenedProfile) {
     EXPECT_FALSE(validateSandboxLaunchRequest(request, error));
 
     SandboxProfile profile{};
-    profile.profileId = "lcl.third-party.native.v1";
-    profile.privatePidNamespace = false;
+    profile.profileId = "lcl.app-capability.native.v1";
+    profile.privateFilesystemView = false;
     EXPECT_FALSE(validateSandboxProfile(profile, error));
-    EXPECT_EQ(error, "third-party sandbox profile weakens a mandatory security boundary");
+    EXPECT_EQ(error, "common app capability profile weakens a mandatory security boundary");
 
-    profile.privatePidNamespace = true;
-    profile.privateNetworkNamespace = false;
+    profile.privateFilesystemView = true;
+    profile.isolatedNetworkView = false;
     EXPECT_FALSE(validateSandboxProfile(profile, error));
-    EXPECT_EQ(error, "third-party sandbox profile weakens a mandatory security boundary");
+    EXPECT_EQ(error, "common app capability profile weakens a mandatory security boundary");
 
-    profile.privateNetworkNamespace = true;
-    profile.cpuWeight = 10001;
-    EXPECT_FALSE(validateSandboxProfile(profile, error));
-    EXPECT_EQ(error, "third-party sandbox profile weakens a mandatory security boundary");
+    SandboxPlatformHardening hardening{};
+    hardening.resourceLimits.cpuWeight = 10001;
+    EXPECT_FALSE(validateSandboxPlatformHardening(hardening, error));
+    EXPECT_EQ(error, "sandbox platform hardening weakens a mandatory enforcement boundary");
 }
 
 TEST(SandboxCgroupTest, RefusesToCreateAnInstanceBeforeRootSetup) {
@@ -133,7 +125,7 @@ TEST(SandboxCgroupTest, RefusesToCreateAnInstanceBeforeRootSetup) {
     ASSERT_TRUE(plan.has_value()) << error;
 
     SandboxCgroupManager manager;
-    EXPECT_FALSE(manager.createInstance(*plan, error).has_value());
+    EXPECT_FALSE(manager.createInstance(*plan, SandboxPlatformHardening{}, error).has_value());
     EXPECT_EQ(error, "sandbox cgroup received an unverified launch plan");
 }
 

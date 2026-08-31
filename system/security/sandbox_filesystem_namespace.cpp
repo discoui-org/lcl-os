@@ -249,6 +249,7 @@ bool enterSandboxFilesystemNamespace(const SandboxFilesystemSources& sources,
                                     const AppIdentity& identity,
                                     int executableDescriptor,
                                     bool executableMayRun,
+                                    bool requirePidNamespaceInit,
                                     SandboxLandlockRules& landlockRules,
                                     std::string& error) {
     error.clear();
@@ -264,8 +265,8 @@ bool enterSandboxFilesystemNamespace(const SandboxFilesystemSources& sources,
         error = "sandbox executable descriptor is not a verified regular file";
         return false;
     }
-    if (geteuid() != 0 || getpid() != 1) {
-        error = "sandbox filesystem setup requires the root PID-namespace init child";
+    if (geteuid() != 0 || (requirePidNamespaceInit && getpid() != 1)) {
+        error = "sandbox filesystem setup requires root and, when selected, the PID-namespace init child";
         return false;
     }
     // A file descriptor opened before unshare(CLONE_NEWNS) keeps a reference

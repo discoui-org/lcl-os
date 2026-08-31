@@ -37,10 +37,11 @@ rm -f /Runtime/lcl-sessiond.sock /Runtime/lcl-sandboxd.sock
 # sandboxd is a separate root-owned authority.  Its 0600 control socket is
 # exclusively for the root session daemon; third-party applications never
 # receive this endpoint.  On an Android kernel that cannot enforce the
-# mandatory Linux profile, sandboxd fails closed.  That disables third-party
-# launches but must not prevent the trusted shell/session from starting.
+# mandatory Linux profile, the trusted Android bootstrap selects the common
+# Android capability baseline. This must never be selected by app IPC.
 if [ -x /System/Core/lcl-sandboxd ]; then
-    /System/Core/lcl-sandboxd --session-uid 0 --session-gid 0 > /Runtime/lcl-sandboxd.log 2>&1 &
+    /System/Core/lcl-sandboxd --session-uid 0 --session-gid 0 \
+        --platform android-capability > /Runtime/lcl-sandboxd.log 2>&1 &
     SANDBOXD_PID=$!
 
     for ((i=0; i<100; i++)); do

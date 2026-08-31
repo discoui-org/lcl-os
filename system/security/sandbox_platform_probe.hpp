@@ -1,9 +1,22 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
+#include "system/security/sandbox_contract.hpp"
+
 namespace lcl::security {
+
+/**
+ * Root-owned launch context for the canonical same-binary userspace. This is
+ * selected by the trusted substrate bootstrap, never inferred from the app
+ * request or its requested permissions.
+ */
+enum class SandboxPlatformMode : std::uint8_t {
+    LinuxFull = 1,
+    AndroidCapability = 2,
+};
 
 /**
  * Runtime availability of the kernel mechanisms required by the third-party
@@ -39,9 +52,23 @@ struct SandboxPlatformCapabilities {
                cgroupV2 && cgroupMemoryController && cgroupPidsController &&
                cgroupCpuController;
     }
+
+    /**
+     * Minimum mechanisms needed to preserve the common LCL capability ABI:
+     * a private mounted filesystem view, no host network view, no_new_privs,
+     * and a seccomp privilege boundary. Linux can then add the fuller profile
+     * above; Android can use this baseline when its stock kernel omits PID,
+     * IPC, Landlock, or cgroup-v2 support inside the direct-deploy chroot.
+     */
+    bool supportsCommonCapabilityProfile() const noexcept {
+        return mountNamespace && networkNamespace && noNewPrivileges && seccompFilter;
+    }
 };
 
 SandboxPlatformCapabilities probeSandboxPlatformCapabilities();
+/** Selects non-IPC platform hardening after probing the running kernel. */
+std::optional<SandboxPlatformHardening> makeSandboxPlatformHardening(
+    const SandboxPlatformCapabilities& capabilities, SandboxPlatformMode mode, std::string& error);
 std::string formatSandboxPlatformCapabilities(const SandboxPlatformCapabilities& capabilities);
 
 } // namespace lcl::security

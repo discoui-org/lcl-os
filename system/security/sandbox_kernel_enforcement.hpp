@@ -11,9 +11,11 @@ struct SandboxKernelEnforcement {
     bool pidNamespaceReady{false};
     bool ipcNamespaceReady{false};
     bool networkNamespaceReady{false};
+    bool noNewPrivilegesInstalled{false};
     bool seccompInstalled{false};
     bool landlockInstalled{false};
     bool directDeviceAccessDenied{false};
+    bool portableResourceLimitsInstalled{false};
 };
 
 } // namespace lcl::security

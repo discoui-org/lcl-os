@@ -9,6 +9,7 @@
 #include "system/security/sandbox_cgroup.hpp"
 #include "system/security/sandbox_launch_authorizer.hpp"
 #include "system/security/sandbox_launch_material.hpp"
+#include "system/security/sandbox_platform_probe.hpp"
 #include "system/security/sandbox_protocol.hpp"
 
 namespace lcl::security {
@@ -28,6 +29,7 @@ struct SandboxDaemonConfig {
     gid_t sessionGid{0};
     uid_t ownerUid{0};
     gid_t ownerGid{0};
+    SandboxPlatformMode platformMode{SandboxPlatformMode::LinuxFull};
     PermissionStoreConfig permissionStore{};
 };
 
@@ -94,8 +96,11 @@ private:
     SandboxLaunchMaterialRegistry materialRegistry_;
     // The daemon owns the only cgroup v2 allocator.  It is initialized before
     // the launch socket becomes reachable, so no request can observe a daemon
-    // that would fall back to unconstrained process creation.
+    // that would fall back to unconstrained process creation on Linux.
     SandboxCgroupManager cgroupManager_;
+    /** Selected locally after probing the actual kernel; never protocol input. */
+    SandboxPlatformHardening hardening_{};
+    bool hardeningReady_{false};
     SandboxChildReaper childReaper_;
     int serverDescriptor_{-1};
     bool ownsSocketPath_{false};

@@ -77,6 +77,10 @@ protected:
 
         SandboxChildLaunchSpec spec{};
         spec.plan = plan.value_or(SandboxLaunchPlan{});
+        spec.hardening.privatePidNamespace = false;
+        spec.hardening.privateIpcNamespace = false;
+        spec.hardening.requireLandlock = false;
+        spec.hardening.requireCgroupResourceAccounting = false;
         spec.identity = application.identity;
         spec.filesystemSources = {
             .appBundleDescriptor = appBundleDescriptor_,
@@ -168,10 +172,13 @@ TEST_F(SandboxChildLauncherTest, RetainsOnlyPolicyBoundVerifiedLaunchMaterial) {
     EXPECT_NE(error.find("unsafe"), std::string::npos);
 
     SandboxCgroupManager manager;
+    SandboxPlatformHardening linuxHardening{};
     SandboxChildLaunchSpec rebuilt{};
     const SandboxCgroup cgroup{.instanceId = protectedSpec.plan.request.instanceId,
                                 .path = "/sys/fs/cgroup/lcl/apps/instance-42"};
-    ASSERT_TRUE(registry.makeChildLaunchSpec(protectedSpec.plan, manager, cgroup, rebuilt, error))
+    const SandboxCgroupBinding cgroupBinding{.manager = &manager, .cgroup = cgroup};
+    ASSERT_TRUE(registry.makeChildLaunchSpec(protectedSpec.plan, linuxHardening, cgroupBinding,
+                                             rebuilt, error))
         << error;
     ASSERT_TRUE(rebuilt.cgroup.has_value());
     EXPECT_EQ(rebuilt.cgroup->manager, &manager);
@@ -182,7 +189,8 @@ TEST_F(SandboxChildLauncherTest, RetainsOnlyPolicyBoundVerifiedLaunchMaterial) {
     SandboxLaunchPlan changedPlan = protectedSpec.plan;
     changedPlan.request.bundleRecordDigest = sha256("different-bundle-record");
     EXPECT_FALSE(registry.hasMaterialFor(changedPlan));
-    EXPECT_FALSE(registry.makeChildLaunchSpec(changedPlan, manager, cgroup, rebuilt, error));
+    EXPECT_FALSE(registry.makeChildLaunchSpec(changedPlan, linuxHardening, cgroupBinding,
+                                              rebuilt, error));
     EXPECT_NE(error.find("unavailable"), std::string::npos);
 }
 

@@ -27,6 +27,8 @@ struct SandboxCgroupBinding {
  */
 struct SandboxChildLaunchSpec {
     SandboxLaunchPlan plan;
+    /** sandboxd-selected, non-IPC platform enforcement details. */
+    SandboxPlatformHardening hardening;
     AppIdentity identity;
     std::optional<SandboxCgroupBinding> cgroup;
     /** Reset and populated by the launcher itself before application exec. */

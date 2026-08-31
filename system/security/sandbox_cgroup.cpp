@@ -209,10 +209,12 @@ bool SandboxCgroupManager::isSafeInstancePath(const SandboxCgroup& cgroup) const
     return cgroup.instanceId != 0 && cgroup.path == prefix + std::to_string(cgroup.instanceId);
 }
 
-std::optional<SandboxCgroup> SandboxCgroupManager::createInstance(const SandboxLaunchPlan& plan,
-                                                                    std::string& error) {
+std::optional<SandboxCgroup> SandboxCgroupManager::createInstance(
+    const SandboxLaunchPlan& plan, const SandboxPlatformHardening& hardening, std::string& error) {
     error.clear();
     if (!initialized_ || !validateSandboxProfile(plan.profile, error) ||
+        !validateSandboxPlatformHardening(hardening, error) ||
+        !hardening.requireCgroupResourceAccounting ||
         !validateSandboxLaunchRequest(plan.request, error) ||
         plan.request.profileDigest != digestSandboxProfile(plan.profile)) {
         if (error.empty()) error = "sandbox cgroup received an unverified launch plan";
@@ -227,9 +229,9 @@ std::optional<SandboxCgroup> SandboxCgroupManager::createInstance(const SandboxL
     }
     if (!ensureRootOwnedDirectory(cgroup.path, error) ||
         !writeControlFile(cgroup.path + "/memory.max",
-                          std::to_string(static_cast<std::uint64_t>(plan.profile.memoryMaxMiB) * 1024U * 1024U), error) ||
-        !writeControlFile(cgroup.path + "/pids.max", std::to_string(plan.profile.pidsMax), error) ||
-        !writeControlFile(cgroup.path + "/cpu.weight", std::to_string(plan.profile.cpuWeight), error)) {
+                          std::to_string(static_cast<std::uint64_t>(hardening.resourceLimits.memoryMaxMiB) * 1024U * 1024U), error) ||
+        !writeControlFile(cgroup.path + "/pids.max", std::to_string(hardening.resourceLimits.pidsMax), error) ||
+        !writeControlFile(cgroup.path + "/cpu.weight", std::to_string(hardening.resourceLimits.cpuWeight), error)) {
         rmdir(cgroup.path.c_str());
         return std::nullopt;
     }

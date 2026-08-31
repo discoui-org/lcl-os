@@ -95,17 +95,21 @@ bool SandboxDaemon::initialize(std::string& error) {
         return false;
     }
     const SandboxPlatformCapabilities capabilities = probeSandboxPlatformCapabilities();
-    if (!capabilities.supportsMandatoryThirdPartyProfile()) {
-        error = "mandatory third-party sandbox kernel profile is unavailable:\n" +
+    const auto hardening = makeSandboxPlatformHardening(capabilities, config_.platformMode, error);
+    if (!hardening) {
+        error = "mandatory common app capability profile is unavailable: " + error + "\n" +
                 formatSandboxPlatformCapabilities(capabilities);
         return false;
     }
-    // Resource accounting is a mandatory third-party boundary.  Prepare the
-    // root-owned cgroup hierarchy before publishing the socket; if the host
-    // cannot provide all required controllers, sandboxd remains unavailable.
-    if (!cgroupManager_.initialize(error)) {
+    // Linux uses cgroup v2 for accounting before the socket becomes reachable.
+    // Android keeps the same capability profile but uses the portable rlimit
+    // subset inside the child because the direct-deploy chroot cannot own its
+    // host task profiles.
+    if (hardening->requireCgroupResourceAccounting && !cgroupManager_.initialize(error)) {
         return false;
     }
+    hardening_ = *hardening;
+    hardeningReady_ = true;
 
     struct stat existing {};
     if (lstat(config_.socketPath.c_str(), &existing) == 0) {
@@ -173,6 +177,7 @@ void SandboxDaemon::shutdown() {
         }
     }
     ownsSocketPath_ = false;
+    hardeningReady_ = false;
 }
 
 bool SandboxDaemon::registerVerifiedApplication(const VerifiedApplication& application,
@@ -217,6 +222,10 @@ SandboxLaunchResult SandboxDaemon::handleLaunchRequest(const SandboxLaunchReques
     if (!validateSandboxLaunchRequest(request, error)) {
         return rejectedLaunch(request, SandboxLaunchStatus::InvalidRequest, std::move(error));
     }
+    if (!hardeningReady_) {
+        return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
+                              "sandboxd platform hardening is not initialized");
+    }
     const auto plan = authorizer_.authorize(request, error);
     if (!plan) {
         return rejectedLaunch(request, SandboxLaunchStatus::PolicyRejected, std::move(error));
@@ -229,28 +238,52 @@ SandboxLaunchResult SandboxDaemon::handleLaunchRequest(const SandboxLaunchReques
                               "verified sandbox launch material is unavailable for this request");
     }
 
-    const auto cgroup = cgroupManager_.createInstance(*plan, error);
-    if (!cgroup) {
-        return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
-                              "could not create mandatory sandbox cgroup: " + error);
+    std::optional<SandboxCgroup> cgroup;
+    std::optional<SandboxCgroupBinding> cgroupBinding;
+    if (hardening_.requireCgroupResourceAccounting) {
+        cgroup = cgroupManager_.createInstance(*plan, hardening_, error);
+        if (!cgroup) {
+            return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
+                                  "could not create mandatory sandbox cgroup: " + error);
+        }
+        cgroupBinding = SandboxCgroupBinding{.manager = &cgroupManager_, .cgroup = *cgroup};
     }
     SandboxChildLaunchSpec spec{};
-    if (!materialRegistry_.makeChildLaunchSpec(*plan, cgroupManager_, *cgroup, spec, error)) {
-        std::string cleanupError;
-        cgroupManager_.removeInstance(*cgroup, cleanupError);
+    if (!materialRegistry_.makeChildLaunchSpec(*plan, hardening_, std::move(cgroupBinding), spec,
+                                               error)) {
+        if (cgroup) {
+            std::string cleanupError;
+            cgroupManager_.removeInstance(*cgroup, cleanupError);
+        }
         return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed, std::move(error));
     }
     SandboxLaunchResult launch = spawnSandboxChild(spec);
     if (launch.status != SandboxLaunchStatus::Launched) {
+        if (cgroup) {
+            // Child-side setup normally removes this itself.  Repeating the
+            // root-owned removal is harmless when it already disappeared and
+            // closes the early-failure path before any child was created.
+            std::string cleanupError;
+            cgroupManager_.removeInstance(*cgroup, cleanupError);
+        }
         return launch;
     }
-    if (!recordLaunchedChild(plan->request.appId, launch, *cgroup, error)) {
+    if (cgroup) {
+        if (!recordLaunchedChild(plan->request.appId, launch, *cgroup, error)) {
+            kill(-launch.processGroupId, SIGKILL);
+            kill(launch.pid, SIGKILL);
+            while (waitpid(launch.pid, nullptr, 0) < 0 && errno == EINTR) {
+            }
+            std::string cleanupError;
+            cgroupManager_.removeInstance(*cgroup, cleanupError);
+            return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
+                                  "could not track sandbox child ownership: " + error);
+        }
+    } else if (!recordLaunchedChild(plan->request.appId, launch, error)) {
         kill(-launch.processGroupId, SIGKILL);
         kill(launch.pid, SIGKILL);
         while (waitpid(launch.pid, nullptr, 0) < 0 && errno == EINTR) {
         }
-        std::string cleanupError;
-        cgroupManager_.removeInstance(*cgroup, cleanupError);
         return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
                               "could not track sandbox child ownership: " + error);
     }

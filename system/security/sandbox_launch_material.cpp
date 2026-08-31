@@ -206,15 +206,19 @@ bool SandboxLaunchMaterialRegistry::hasMaterialFor(const SandboxLaunchPlan& plan
 }
 
 bool SandboxLaunchMaterialRegistry::makeChildLaunchSpec(const SandboxLaunchPlan& plan,
-                                                         const SandboxCgroupManager& cgroupManager,
-                                                         const SandboxCgroup& cgroup,
+                                                         const SandboxPlatformHardening& hardening,
+                                                         std::optional<SandboxCgroupBinding> cgroup,
                                                          SandboxChildLaunchSpec& spec,
                                                          std::string& error) const {
     error.clear();
     spec = {};
     if (!validateSandboxProfile(plan.profile, error) || !validateSandboxLaunchRequest(plan.request, error) ||
+        !validateSandboxPlatformHardening(hardening, error) ||
         plan.request.profileDigest != digestSandboxProfile(plan.profile) ||
-        cgroup.instanceId != plan.request.instanceId || cgroup.path.empty()) {
+        (hardening.requireCgroupResourceAccounting != cgroup.has_value()) ||
+        (cgroup.has_value() &&
+         (!cgroup->manager || cgroup->cgroup.instanceId != plan.request.instanceId ||
+          cgroup->cgroup.path.empty()))) {
         if (error.empty()) {
             error = "sandbox launch plan or cgroup binding is invalid";
         }
@@ -241,8 +245,9 @@ bool SandboxLaunchMaterialRegistry::makeChildLaunchSpec(const SandboxLaunchPlan&
     }
 
     spec.plan = plan;
+    spec.hardening = hardening;
     spec.identity = material.application.identity;
-    spec.cgroup = SandboxCgroupBinding{.manager = &cgroupManager, .cgroup = cgroup};
+    spec.cgroup = std::move(cgroup);
     spec.filesystemSources = material.filesystemSources;
     spec.executableBundlePath = material.executableBundlePath;
     spec.executableDescriptor = material.executableDescriptor;

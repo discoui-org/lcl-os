@@ -48,8 +48,8 @@ public:
 
     /** Rebuilds protected child launch data for an already-authorized plan. */
     bool makeChildLaunchSpec(const SandboxLaunchPlan& plan,
-                             const SandboxCgroupManager& cgroupManager,
-                             const SandboxCgroup& cgroup,
+                             const SandboxPlatformHardening& hardening,
+                             std::optional<SandboxCgroupBinding> cgroup,
                              SandboxChildLaunchSpec& spec,
                              std::string& error) const;
 
