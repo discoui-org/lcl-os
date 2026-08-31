@@ -327,21 +327,11 @@ sözleşmesini kullanmasıdır.
 - [ ] Portalın FD aktarımı, revoke davranışı ve uygulama kapanışı testlerini
   ekle.
 
-## 10. Ayarlar uygulaması
+## 10. Settings kullanıcı-arayüzü bağımlılığı
 
-- [ ] Ayarlar uygulamasını sandbox mekanizmasının ilk bağımlılığı yapma.
-- [ ] Trusted system Settings profili oluştur; root yerine sınırlı admin IPC
-  capability'si kullan.
-- [ ] Uygulama başına etkin izinleri, izin kaynağını ve son karar zamanını
-  listeleyen ekranı tasarla.
-- [ ] Grant/revoke kontrollerini PermissionStore admin API'sine bağla.
-- [ ] Yeniden başlatma gerektiren izin değişikliklerini açıkça göster.
-- [ ] Uygulama elevation geçmişini, aktif elevated oturumları ve revoke
-  kontrolünü göster.
-- [ ] Uygulama verisini silme, izinleri sıfırlama ve uygulamayı kaldırma
-  eylemlerini birbirinden ayır.
-- [ ] Settings admin API'sinde `SO_PEERCRED`, trusted app identity ve yetki
-  kontrol testleri ekle.
+- [ ] Settings uygulaması, adaptif navigation widget'ları ve sınırlı admin
+  capability zincirini [ayrı Settings planına](lcl-settings-app-and-adaptive-ui.md)
+  göre tamamla; Settings'i sandbox mekanizmasının ilk bağımlılığı yapma.
 
 ## 11. Bundle keşfi, güven onayı ve güncelleme
 
