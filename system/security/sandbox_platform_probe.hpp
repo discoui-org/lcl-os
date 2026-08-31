@@ -20,6 +20,9 @@ struct SandboxPlatformCapabilities {
     bool seccompFilter{false};
     std::uint32_t landlockAbi{0};
     bool cgroupV2{false};
+    bool cgroupMemoryController{false};
+    bool cgroupPidsController{false};
+    bool cgroupCpuController{false};
     std::string mountNamespaceError;
     std::string pidNamespaceError;
     std::string ipcNamespaceError;
@@ -33,7 +36,8 @@ struct SandboxPlatformCapabilities {
     bool supportsMandatoryThirdPartyProfile() const noexcept {
         return mountNamespace && pidNamespace && ipcNamespace && networkNamespace &&
                namespaceCombination && noNewPrivileges && seccompFilter && landlockAbi != 0 &&
-               cgroupV2;
+               cgroupV2 && cgroupMemoryController && cgroupPidsController &&
+               cgroupCpuController;
     }
 };
 

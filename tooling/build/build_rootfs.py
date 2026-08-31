@@ -695,6 +695,11 @@ export TERM=xterm-256color
 mkdir -p /proc /sys /dev /Runtime /Runtime/Temporary /Runtime/Sessions/Rei /var/log /var/tmp
 mount -t proc proc /proc -o nosuid,noexec,nodev 2>/dev/null || true
 mount -t sysfs sysfs /sys -o nosuid,noexec,nodev 2>/dev/null || true
+# A unified cgroup hierarchy is required before sandboxd can apply per-app
+# memory, process-count and CPU limits. Keep booting when the kernel omits it;
+# the native probe below will then report third-party sandboxing as unavailable.
+mkdir -p /sys/fs/cgroup
+mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev -o nosuid 2>/dev/null || true
 mkdir -p /dev/pts /dev/shm /dev/input
 mount -t devpts devpts /dev/pts -o mode=0620,ptmxmode=0666 2>/dev/null || mount -t devpts devpts /dev/pts 2>/dev/null || true
@@ -745,6 +750,16 @@ echo "DRM devices detected:"
 ls -la /dev/dri/ 2>/dev/null || echo "  (none)"
 echo "Input devices detected:"
 ls /dev/input/ 2>/dev/null || echo "  (none yet)"
+
+# Probe as root before launching unprivileged session processes. The probe
+# performs each namespace/seccomp check in its own short-lived child and
+# writes the same report to the serial log and the persistent boot log.
+if [ -x /System/Core/lcl-sandbox-probe ]; then
+    echo "Sandbox kernel capabilities:"
+    /System/Core/lcl-sandbox-probe 2>&1 | tee /var/log/lcl_sandbox_probe.log
+else
+    echo "[init] lcl-sandbox-probe is unavailable" | tee /var/log/lcl_sandbox_probe.log
+fi
 
 # Start Compositor Display Server
 /System/Core/lcl-core 2>&1 | tee /var/log/lcl_compositor.log &

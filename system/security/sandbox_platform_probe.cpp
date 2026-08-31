@@ -110,6 +110,46 @@ std::string availability(bool available, const std::string& error) {
     return available ? "available" : "unavailable (" + error + ')';
 }
 
+bool cgroupControllerIsAvailable(const std::string& controllers, const char* required) {
+    std::istringstream values(controllers);
+    std::string controller;
+    while (values >> controller) {
+        if (controller == required) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool readCgroupControllers(std::string& controllers, std::string& error) {
+    controllers.clear();
+    error.clear();
+    const int descriptor = open("/sys/fs/cgroup/cgroup.controllers", O_RDONLY | O_CLOEXEC);
+    if (descriptor < 0) {
+        error = std::strerror(errno);
+        return false;
+    }
+    std::array<char, 256> buffer{};
+    while (true) {
+        const ssize_t count = read(descriptor, buffer.data(), buffer.size());
+        if (count > 0) {
+            controllers.append(buffer.data(), static_cast<std::size_t>(count));
+            continue;
+        }
+        if (count == 0) {
+            close(descriptor);
+            return true;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        const int savedErrno = errno;
+        close(descriptor);
+        error = std::strerror(savedErrno);
+        return false;
+    }
+}
+
 } // namespace
 
 SandboxPlatformCapabilities probeSandboxPlatformCapabilities() {
@@ -162,6 +202,15 @@ SandboxPlatformCapabilities probeSandboxPlatformCapabilities() {
     if (statfs("/sys/fs/cgroup", &cgroupStatus) == 0) {
         if (static_cast<unsigned long>(cgroupStatus.f_type) == CGROUP2_SUPER_MAGIC) {
             capabilities.cgroupV2 = true;
+            std::string controllers;
+            if (readCgroupControllers(controllers, capabilities.cgroupError)) {
+                capabilities.cgroupMemoryController =
+                    cgroupControllerIsAvailable(controllers, "memory");
+                capabilities.cgroupPidsController =
+                    cgroupControllerIsAvailable(controllers, "pids");
+                capabilities.cgroupCpuController =
+                    cgroupControllerIsAvailable(controllers, "cpu");
+            }
         } else {
             capabilities.cgroupError = "cgroup v2 is not mounted";
         }
@@ -197,6 +246,15 @@ std::string formatSandboxPlatformCapabilities(const SandboxPlatformCapabilities&
     }
     output << '\n' << "  cgroup v2: "
            << availability(capabilities.cgroupV2, capabilities.cgroupError) << '\n'
+           << "  cgroup memory controller: "
+           << availability(capabilities.cgroupMemoryController,
+                           "not available in cgroup.controllers") << '\n'
+           << "  cgroup pids controller: "
+           << availability(capabilities.cgroupPidsController,
+                           "not available in cgroup.controllers") << '\n'
+           << "  cgroup cpu controller: "
+           << availability(capabilities.cgroupCpuController,
+                           "not available in cgroup.controllers") << '\n'
            << "  third-party profile: "
            << (capabilities.supportsMandatoryThirdPartyProfile() ? "supported" : "NOT supported")
            << '\n';

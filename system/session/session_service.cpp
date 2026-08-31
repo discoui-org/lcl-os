@@ -188,6 +188,17 @@ LaunchResponse SessionService::launch(const LaunchRequest& request) {
         response.message = "unknown application: " + request.target;
         return response;
     }
+    // Direct exec is retained only for the canonical interactive Terminal.
+    // Every other .app must wait for the root-owned sandboxd path to create
+    // its distinct UID, private filesystem and kernel policy.  In particular,
+    // never use the temporary session-user credential drop as a third-party
+    // application sandbox fallback.
+    if (!lcl::security::isTrustedUserShellBundle(app->appId, app->bundlePath)) {
+        response.status = 3;
+        response.appId = app->appId;
+        response.message = "application requires the protected lcl-sandboxd launch path";
+        return response;
+    }
     if (!app->executableHandle || !app->executableHandle->valid()) {
         response.status = 2;
         response.message = "application executable handle is unavailable: " + app->executablePath;

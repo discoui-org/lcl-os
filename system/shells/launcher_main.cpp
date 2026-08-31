@@ -37,15 +37,18 @@ const char* nameFor(lcl::platform::ShellKind shell) {
 } // namespace
 
 int main() {
-    std::string identityError;
-    if (!lcl::security::dropToSessionUser(identityError)) {
-        std::cerr << "[LCL Shell Launcher] " << identityError << "\n";
-        return 1;
-    }
-
+    // QEMU fw_cfg attributes are kernel-owned and may be readable only by
+    // root. Select the immutable shell policy before credential drop; the
+    // selected shell itself is still always executed as the session user.
     const auto gestalt = lcl::platform::loadGestalt(defaultGestaltPath());
     if (!gestalt.ok()) {
         std::cerr << "[LCL Shell Launcher] " << gestalt.error << "\n";
+        return 1;
+    }
+
+    std::string identityError;
+    if (!lcl::security::dropToSessionUser(identityError)) {
+        std::cerr << "[LCL Shell Launcher] " << identityError << "\n";
         return 1;
     }
 

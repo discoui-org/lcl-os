@@ -15,11 +15,15 @@ TEST(SandboxPlatformProbeTest, FormatsEveryMandatoryBoundary) {
     capabilities.seccompFilter = true;
     capabilities.landlockAbi = 6;
     capabilities.cgroupV2 = true;
+    capabilities.cgroupMemoryController = true;
+    capabilities.cgroupPidsController = true;
+    capabilities.cgroupCpuController = true;
     EXPECT_TRUE(capabilities.supportsMandatoryThirdPartyProfile());
 
     const std::string report = formatSandboxPlatformCapabilities(capabilities);
     EXPECT_NE(report.find("mount namespace"), std::string::npos);
     EXPECT_NE(report.find("Landlock ABI: 6"), std::string::npos);
+    EXPECT_NE(report.find("cgroup memory controller: available"), std::string::npos);
     EXPECT_NE(report.find("third-party profile: supported"), std::string::npos);
 }
 

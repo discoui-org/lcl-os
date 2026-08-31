@@ -106,70 +106,20 @@ TEST_F(SessionServiceTest, RegistryKeepsFirstBundleForDuplicateCanonicalId) {
     EXPECT_EQ(registry.entries().front().bundlePath, first.string());
 }
 
-TEST_F(SessionServiceTest, ServiceOwnsLaunchAndExitLifecycle) {
+TEST_F(SessionServiceTest, ServiceRejectsThirdPartyDirectLaunchUntilSandboxdEnforcesIt) {
     createBundle("Lifecycle.app", "org.lcl.lifecycle");
     SessionService service({tempDir.string()});
     service.refreshCatalog();
     const LaunchResponse launch = service.launch({"org.lcl.lifecycle", false});
-    ASSERT_EQ(launch.status, 0u) << launch.message;
-    ASSERT_GT(launch.instanceId, 0u);
-    ASSERT_GT(launch.pid, 0);
-
-    for (int i = 0; i < 100 && service.instances().at(launch.instanceId).running; ++i) {
-        service.poll();
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
-    const auto& instance = service.instances().at(launch.instanceId);
-    EXPECT_FALSE(instance.running);
-    EXPECT_EQ(instance.exitCode, 23);
-    EXPECT_EQ(instance.appId, "org.lcl.lifecycle");
+    EXPECT_EQ(launch.status, 3u);
+    EXPECT_EQ(launch.appId, "org.lcl.lifecycle");
+    EXPECT_EQ(launch.instanceId, 0u);
+    EXPECT_EQ(launch.pid, 0);
+    EXPECT_NE(launch.message.find("lcl-sandboxd"), std::string::npos);
+    EXPECT_TRUE(service.instances().empty());
 }
 
-TEST_F(SessionServiceTest, ServiceLaunchesTheVerifiedExecutableInode) {
-    const fs::path bundle = createBundle("Pinned.app", "org.lcl.pinned",
-                                         "#!/bin/sh\nexit 23\n");
-    SessionService service({tempDir.string()});
-    service.refreshCatalog();
-
-    const fs::path executable = bundle / "Executables" / "test-app";
-    const fs::path verifiedExecutable = executable.string() + ".verified";
-    fs::rename(executable, verifiedExecutable);
-    std::ofstream replacement(executable);
-    replacement << "#!/bin/sh\nexit 99\n";
-    replacement.close();
-    chmod(executable.c_str(), 0755);
-
-    const LaunchResponse launch = service.launch({"org.lcl.pinned", false});
-    ASSERT_EQ(launch.status, 0u) << launch.message;
-    for (int index = 0; index < 100 && service.instances().at(launch.instanceId).running; ++index) {
-        service.poll();
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
-    EXPECT_EQ(service.instances().at(launch.instanceId).exitCode, 23);
-}
-
-TEST_F(SessionServiceTest, SingleInstanceLaunchReusesRunningProcess) {
-    createBundle("Singleton.app", "org.lcl.singleton",
-                 "#!/bin/sh\nsleep 1\nexit 0\n");
-    SessionService service({tempDir.string()});
-    service.refreshCatalog();
-
-    LaunchRequest request;
-    request.target = "org.lcl.singleton";
-    request.singleInstance = true;
-    const LaunchResponse first = service.launch(request);
-    ASSERT_EQ(first.status, 0u) << first.message;
-    EXPECT_FALSE(first.reused);
-
-    const LaunchResponse second = service.launch(request);
-    ASSERT_EQ(second.status, 0u) << second.message;
-    EXPECT_TRUE(second.reused);
-    EXPECT_EQ(second.instanceId, first.instanceId);
-    EXPECT_EQ(second.pid, first.pid);
-    EXPECT_EQ(service.instances().size(), 1u);
-}
-
-TEST_F(SessionServiceTest, ClientUsesSessiondForLaunchAndWait) {
+TEST_F(SessionServiceTest, ClientReceivesThirdPartyLaunchRefusalFromSessiond) {
     createBundle("Rpc.app", "org.lcl.rpc", "#!/bin/sh\nsleep 0.02\nexit 9\n");
     SessionService service({tempDir.string()});
     const std::string socketPath = (tempDir / "sessiond.sock").string();
@@ -187,10 +137,15 @@ TEST_F(SessionServiceTest, ClientUsesSessiondForLaunchAndWait) {
     ASSERT_TRUE(client.connect(socketPath));
     LaunchResponse response;
     std::string error;
-    ASSERT_TRUE(client.launch({"org.lcl.rpc", true}, response, error)) << error;
-    ProcessExited exited;
-    ASSERT_TRUE(client.waitForExit(response.instanceId, exited, error)) << error;
-    EXPECT_EQ(exited.exitCode, 9);
+    const bool received = client.launch({"org.lcl.rpc", true}, response, error);
+    EXPECT_TRUE(received) << error;
+    if (received) {
+        EXPECT_EQ(response.status, 3u);
+        EXPECT_EQ(response.appId, "org.lcl.rpc");
+        EXPECT_EQ(response.instanceId, 0u);
+        EXPECT_EQ(response.pid, 0);
+        EXPECT_NE(response.message.find("lcl-sandboxd"), std::string::npos);
+    }
 
     serving = false;
     server.join();
