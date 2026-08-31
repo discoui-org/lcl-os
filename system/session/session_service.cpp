@@ -1,6 +1,7 @@
 #include "system/session/session_service.hpp"
 
 #include "system/security/bundle_record.hpp"
+#include "system/security/bundle_launch_gate.hpp"
 #include "system/security/session_user.hpp"
 
 #include <algorithm>
@@ -109,6 +110,9 @@ sandboxRuntimeForApp(const core::AppBundleMetadata &app, std::string &error) {
     return executableIsJavaScript ? lcl::security::SandboxRuntime::JavaScript
                                   : lcl::security::SandboxRuntime::Native;
   }
+  if (app.runtime == "org.lcl.native") {
+    return lcl::security::SandboxRuntime::Native;
+  }
   if (app.runtime == "org.lcl.javascript") {
     return lcl::security::SandboxRuntime::JavaScript;
   }
@@ -123,13 +127,45 @@ bool isSystemImageApplication(const core::AppBundleMetadata &app) {
          bundlePath.extension() == ".app";
 }
 
+lcl::security::BundleSourceScope bundleSourceScope(
+    const core::AppBundleMetadata &app) {
+  const std::filesystem::path bundlePath(app.bundlePath);
+  if (isSystemImageApplication(app)) {
+    return lcl::security::BundleSourceScope::System;
+  }
+  if (bundlePath.parent_path() == std::filesystem::path("/Applications")) {
+    return lcl::security::BundleSourceScope::Machine;
+  }
+  if (bundlePath.parent_path() ==
+      std::filesystem::path(lcl::security::kSessionUserHome) / "Applications") {
+    return lcl::security::BundleSourceScope::User;
+  }
+  return lcl::security::BundleSourceScope::Direct;
+}
+
+lcl::security::PermissionSubject makeUnverifiedBundlePermissionSubject(
+    const lcl::core::AppBundleMetadata &app,
+    const lcl::security::Sha256Digest &bundleRecordDigest) {
+  return {
+      .userUid = lcl::security::kSessionUserUid,
+      .appId = app.appId,
+      .bundleRecordDigest = bundleRecordDigest,
+      .publisherIdentity = "unverified",
+      .permissionVersion = lcl::security::kPermissionDecisionVersion,
+  };
+}
+
 } // namespace
 
 SessionService::SessionService(std::vector<std::string> appSearchPaths,
                                std::string sandboxSocketPath,
-                               lcl::security::PermissionStoreConfig permissionStoreConfig)
+                               lcl::security::PermissionStoreConfig permissionStoreConfig,
+                               lcl::security::BundleApprovalStoreConfig bundleApprovalStoreConfig,
+                               lcl::security::BundleSnapshotStoreConfig bundleSnapshotStoreConfig)
     : m_registry(std::move(appSearchPaths)),
       m_permissionStore(std::move(permissionStoreConfig)),
+      m_bundleApprovals(std::move(bundleApprovalStoreConfig)),
+      m_bundleSnapshots(std::move(bundleSnapshotStoreConfig)),
       m_sandboxSocketPath(std::move(sandboxSocketPath)) {}
 
 SessionService::~SessionService() { shutdown(); }
@@ -230,7 +266,13 @@ void SessionService::refreshCatalog() {
 
 LaunchResponse SessionService::launch(const LaunchRequest &request) {
   LaunchResponse response{};
-  const auto app = m_registry.find(request.target);
+  auto app = m_registry.find(request.target);
+  if (!app && std::filesystem::path(request.target).is_absolute() &&
+      std::filesystem::path(request.target).extension() == ".app") {
+    // Direct Finder/open selection still enters the exact same descriptor,
+    // approval and snapshot chain. It is not a direct exec escape hatch.
+    app = core::AppBundleParser::parseBundle(request.target);
+  }
   if (!app || !app->valid) {
     response.status = 1;
     response.message = "unknown application: " + request.target;
@@ -356,19 +398,73 @@ SessionService::launchSandboxed(const core::AppBundleMetadata &app,
     response.message = "lcl-sandboxd launch rejected: " + error;
     return response;
   }
-  std::vector<std::string> grantedPermissions;
+  core::AppBundleMetadata protectedBundle = app;
+  lcl::security::PermissionSubject permissionSubject{};
   if (isSystemImageApplication(app)) {
-    const lcl::security::PermissionSubject subject =
-        lcl::security::makeSystemImagePermissionSubject(
-            lcl::security::kSessionUserUid, app.appId, record->digest);
-    grantedPermissions = m_permissionStore.grantedPermissions(
-        subject, app.requestedPermissions, error);
-    if (!error.empty()) {
+    permissionSubject = lcl::security::makeSystemImagePermissionSubject(
+        lcl::security::kSessionUserUid, app.appId, record->digest);
+  } else {
+    // An Ed25519 backend and publisher trust store are not installed yet, so
+    // an external bundle is deliberately treated as unverified. The launch
+    // gate permits it only after Settings writes an exact-record approval.
+    lcl::security::BundleLaunchGate gate(m_bundleApprovals);
+    const lcl::security::BundleLaunchAssessment assessment = gate.assess(
+        lcl::security::kSessionUserUid, bundleSourceScope(app), *record,
+        lcl::security::BundlePublisherState::Unverified);
+    if (!assessment.allowed()) {
       response.status = 3;
-      response.message = "lcl-sandboxd launch rejected because permission policy is unavailable: " +
+      response.message =
+          "lcl-sandboxd launch rejected because bundle is not accepted: " +
+          assessment.reason;
+      return response;
+    }
+    if (!m_bundleSnapshots.stage(app, *record, protectedBundle, error)) {
+      response.status = 3;
+      response.message = "lcl-sandboxd launch rejected because protected bundle staging failed: " +
                          error;
       return response;
     }
+    if (!protectedBundle.bundleHandle || !protectedBundle.bundleHandle->valid() ||
+        !protectedBundle.executableHandle || !protectedBundle.executableHandle->valid()) {
+      response.status = 3;
+      response.message = "lcl-sandboxd launch rejected because protected bundle descriptors are unavailable";
+      return response;
+    }
+    if (!m_sandboxClient.connected() &&
+        !m_sandboxClient.connect(m_sandboxSocketPath, error)) {
+      response.status = 3;
+      response.message = "lcl-sandboxd is unavailable: " + error;
+      return response;
+    }
+    permissionSubject = makeUnverifiedBundlePermissionSubject(app, record->digest);
+    const lcl::security::SandboxApplicationRegistration registration{
+        .userUid = permissionSubject.userUid,
+        .appId = app.appId,
+        .runtime = *runtime,
+        .requestedPermissions = app.requestedPermissions,
+        .bundleRecordDigest = record->digest,
+        .publisherIdentity = permissionSubject.publisherIdentity,
+        .executableBundlePath = protectedBundle.executable,
+    };
+    if (!m_sandboxClient.registerExternalApplication(
+            registration,
+            {protectedBundle.bundleHandle->descriptor(),
+             protectedBundle.executableHandle->descriptor()},
+            error)) {
+      response.status = 3;
+      response.message = "lcl-sandboxd launch rejected because protected bundle registration failed: " +
+                         error;
+      return response;
+    }
+  }
+  const std::vector<std::string> grantedPermissions =
+      m_permissionStore.grantedPermissions(permissionSubject,
+                                           app.requestedPermissions, error);
+  if (!error.empty()) {
+    response.status = 3;
+    response.message = "lcl-sandboxd launch rejected because permission policy is unavailable: " +
+                       error;
+    return response;
   }
   const auto profile = lcl::security::makeThirdPartySandboxProfile(
       *runtime, app.requestedPermissions, grantedPermissions, error);

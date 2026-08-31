@@ -1,10 +1,12 @@
 #include "system/security/sandbox_contract.hpp"
 
 #include "system/security/permission_policy.hpp"
+#include "system/security/sandbox_filesystem_sources.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -127,6 +129,40 @@ bool validateSandboxLaunchRequest(const SandboxLaunchRequest& request, std::stri
         !AppIdentityRegistry::isValidAppId(request.appId) || request.instanceId == 0 ||
         isZeroDigest(request.bundleRecordDigest) || isZeroDigest(request.profileDigest)) {
         error = "sandbox launch request is incomplete or invalid";
+        return false;
+    }
+    return true;
+}
+
+bool validateSandboxApplicationRegistration(const SandboxApplicationRegistration& registration,
+                                            std::string& error) {
+    error.clear();
+    if (registration.contractVersion != kSandboxContractVersion || registration.userUid == 0 ||
+        static_cast<std::uintmax_t>(registration.userUid) >
+            std::numeric_limits<std::uint32_t>::max() ||
+        !AppIdentityRegistry::isValidAppId(registration.appId) ||
+        registration.requestedPermissions.size() > 64 ||
+        isZeroDigest(registration.bundleRecordDigest) ||
+        !isSafeSandboxBundleRelativePath(registration.executableBundlePath)) {
+        error = "sandbox application registration has invalid immutable identity fields";
+        return false;
+    }
+    PermissionSubject subject{
+        .userUid = registration.userUid,
+        .appId = registration.appId,
+        .bundleRecordDigest = registration.bundleRecordDigest,
+        .publisherIdentity = registration.publisherIdentity,
+        .permissionVersion = kPermissionDecisionVersion,
+    };
+    if (!validatePermissionSubject(subject, error)) {
+        return false;
+    }
+    const auto profile = makeThirdPartySandboxProfile(registration.runtime,
+                                                       registration.requestedPermissions, {}, error);
+    if (!profile) {
+        if (error.empty()) {
+            error = "sandbox application registration has an invalid capability declaration";
+        }
         return false;
     }
     return true;

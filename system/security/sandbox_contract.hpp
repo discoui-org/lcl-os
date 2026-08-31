@@ -124,7 +124,29 @@ struct SandboxLaunchPlan {
     SandboxLaunchRequest request;
 };
 
+/**
+ * A root-sessiond assertion about an immutable external-bundle snapshot.
+ *
+ * The descriptor pair travels only over sandboxd's root-authority socket.
+ * `userUid` is the canonical interactive-session user selected by root
+ * sessiond; it is never the executable app UID.  This message has no
+ * app-selected UID/GID, mount path, environment, argument or capability-grant
+ * field: sandboxd resolves all execution authority from its protected state.
+ */
+struct SandboxApplicationRegistration {
+    std::uint32_t contractVersion{kSandboxContractVersion};
+    uid_t userUid{0};
+    std::string appId;
+    SandboxRuntime runtime{SandboxRuntime::Native};
+    std::vector<std::string> requestedPermissions;
+    Sha256Digest bundleRecordDigest{};
+    std::string publisherIdentity;
+    std::string executableBundlePath;
+};
+
 bool validateSandboxLaunchRequest(const SandboxLaunchRequest& request, std::string& error);
+bool validateSandboxApplicationRegistration(const SandboxApplicationRegistration& registration,
+                                            std::string& error);
 
 /** Builds a policy profile without exposing app identity or execution material. */
 std::optional<SandboxProfile> makeThirdPartySandboxProfile(

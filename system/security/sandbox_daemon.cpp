@@ -3,6 +3,7 @@
 
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -49,7 +50,8 @@ SandboxLaunchResult rejectedLaunch(const SandboxLaunchRequest& request, SandboxL
 } // namespace
 
 SandboxDaemon::SandboxDaemon(SandboxDaemonConfig config)
-    : authorizer_(config.permissionStore), config_(std::move(config)) {}
+    : authorizer_(config.permissionStore), externalApplications_(config.externalApplications),
+      config_(std::move(config)) {}
 
 SandboxDaemon::~SandboxDaemon() { shutdown(); }
 
@@ -191,9 +193,20 @@ bool SandboxDaemon::registerVerifiedLaunchMaterial(const SandboxLaunchMaterialIn
     return materialRegistry_.registerMaterial(input, error);
 }
 
+bool SandboxDaemon::registerExternalApplication(
+    const SandboxApplicationRegistration& registration, int appBundleDescriptor,
+    int executableDescriptor, std::string& error) {
+    return externalApplications_.registerSnapshot(*this, registration, appBundleDescriptor,
+                                                  executableDescriptor, error);
+}
+
 void SandboxDaemon::removeVerifiedApplication(const std::string& appId) {
     authorizer_.remove(appId);
     materialRegistry_.remove(appId);
+}
+
+bool SandboxDaemon::hasRegisteredApplication(const std::string& appId) const {
+    return authorizer_.contains(appId);
 }
 
 std::size_t SandboxDaemon::registeredApplicationCount() const {
@@ -340,12 +353,57 @@ void SandboxDaemon::sendErrorAndClose(int descriptor, std::uint32_t requestId,
 void SandboxDaemon::serviceClient(int descriptor) {
     std::array<std::uint8_t, kReceiveBufferSize> bytes{};
     while (true) {
-        const ssize_t count = recv(descriptor, bytes.data(), bytes.size(), MSG_DONTWAIT | MSG_TRUNC);
+        std::array<char, CMSG_SPACE(sizeof(int) * 2)> control{};
+        iovec vector{.iov_base = bytes.data(), .iov_len = bytes.size()};
+        msghdr message{};
+        message.msg_iov = &vector;
+        message.msg_iovlen = 1;
+        message.msg_control = control.data();
+        message.msg_controllen = control.size();
+        const ssize_t count = recvmsg(descriptor, &message,
+                                      MSG_DONTWAIT | MSG_TRUNC | MSG_CMSG_CLOEXEC);
+        std::array<int, 2> receivedDescriptors{-1, -1};
+        std::size_t receivedDescriptorCount = 0;
+        bool invalidDescriptorTransfer = (message.msg_flags & MSG_CTRUNC) != 0;
+        for (cmsghdr* controlMessage = CMSG_FIRSTHDR(&message); controlMessage;
+             controlMessage = CMSG_NXTHDR(&message, controlMessage)) {
+            const bool rightsMessage = controlMessage->cmsg_level == SOL_SOCKET &&
+                                       controlMessage->cmsg_type == SCM_RIGHTS &&
+                                       controlMessage->cmsg_len >= CMSG_LEN(0);
+            const std::size_t descriptorBytes = rightsMessage
+                ? controlMessage->cmsg_len - CMSG_LEN(0)
+                : 0;
+            if (!rightsMessage || descriptorBytes % sizeof(int) != 0 ||
+                descriptorBytes != sizeof(int) * receivedDescriptors.size() ||
+                receivedDescriptorCount != 0) {
+                invalidDescriptorTransfer = true;
+                if (rightsMessage && descriptorBytes % sizeof(int) == 0) {
+                    const int* unexpected =
+                        reinterpret_cast<const int*>(CMSG_DATA(controlMessage));
+                    for (std::size_t index = 0; index < descriptorBytes / sizeof(int); ++index) {
+                        close(unexpected[index]);
+                    }
+                }
+                continue;
+            }
+            std::memcpy(receivedDescriptors.data(), CMSG_DATA(controlMessage),
+                        sizeof(int) * receivedDescriptors.size());
+            receivedDescriptorCount = receivedDescriptors.size();
+        }
+        const auto closeReceivedDescriptors = [&] {
+            for (const int received : receivedDescriptors) {
+                if (received >= 0) {
+                    close(received);
+                }
+            }
+        };
         if (count == 0) {
+            closeReceivedDescriptors();
             removeClient(descriptor);
             return;
         }
         if (count < 0) {
+            closeReceivedDescriptors();
             if (errno == EINTR) {
                 continue;
             }
@@ -356,22 +414,55 @@ void SandboxDaemon::serviceClient(int descriptor) {
             return;
         }
         if (static_cast<std::size_t>(count) > bytes.size()) {
+            closeReceivedDescriptors();
             sendErrorAndClose(descriptor, 1, "sandbox packet exceeds the protocol limit");
             return;
         }
 
         DecodedSandboxPacket packet{};
-        if (!decodeSandboxPacket(bytes.data(), static_cast<std::size_t>(count), packet) ||
-            packet.header.opcode != SandboxOpcode::LaunchRequest) {
+        if (invalidDescriptorTransfer ||
+            !decodeSandboxPacket(bytes.data(), static_cast<std::size_t>(count), packet)) {
             const std::uint32_t requestId = packet.header.requestId == 0 ? 1 : packet.header.requestId;
-            sendErrorAndClose(descriptor, requestId, "sandbox opcode or packet is not accepted");
+            closeReceivedDescriptors();
+            sendErrorAndClose(descriptor, requestId, "sandbox packet or descriptor transfer is invalid");
+            return;
+        }
+        if (packet.header.opcode == SandboxOpcode::RegisterApplication) {
+            SandboxApplicationRegistration registration{};
+            std::string registrationError;
+            const bool registered = receivedDescriptorCount == receivedDescriptors.size() &&
+                                    decodeSandboxApplicationRegistration(packet.payload, registration) &&
+                                    registerExternalApplication(registration, receivedDescriptors[0],
+                                                                receivedDescriptors[1], registrationError);
+            closeReceivedDescriptors();
+            SandboxRegistrationResult result{
+                .registered = registered,
+                .message = registered ? "registered" :
+                    (registrationError.empty() ? "sandbox application registration was rejected"
+                                               : registrationError),
+            };
+            std::vector<std::uint8_t> payload;
+            if (!encodeSandboxRegistrationResult(result, payload) ||
+                !sendPacket(descriptor, SandboxOpcode::RegistrationResult,
+                            packet.header.requestId, payload)) {
+                removeClient(descriptor);
+                return;
+            }
+            continue;
+        }
+        if (packet.header.opcode != SandboxOpcode::LaunchRequest || receivedDescriptorCount != 0) {
+            closeReceivedDescriptors();
+            sendErrorAndClose(descriptor, packet.header.requestId,
+                              "sandbox opcode or descriptor transfer is not accepted");
             return;
         }
         SandboxLaunchRequest request{};
         if (!decodeSandboxLaunchRequest(packet.payload, request)) {
+            closeReceivedDescriptors();
             sendErrorAndClose(descriptor, packet.header.requestId, "sandbox launch request is invalid");
             return;
         }
+        closeReceivedDescriptors();
         const SandboxLaunchResult result = handleLaunchRequest(request);
         std::vector<std::uint8_t> payload;
         if (!encodeSandboxLaunchResult(result, payload) ||

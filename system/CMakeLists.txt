@@ -27,6 +27,7 @@ add_library(lcl-security STATIC
     security/bundle_approval_store.cpp
     security/bundle_launch_gate.cpp
     security/bundle_record.cpp
+    security/bundle_snapshot_store.cpp
     security/bundle_signature_verifier.cpp
     security/permission_policy.cpp
     security/permission_store.cpp
@@ -37,6 +38,7 @@ add_library(lcl-security STATIC
     security/sandbox_child_reaper.cpp
     security/sandbox_contract.cpp
     security/sandbox_daemon.cpp
+    security/sandbox_external_application_registry.cpp
     security/sandbox_filesystem_namespace.cpp
     security/sandbox_filesystem_sources.cpp
     security/sandbox_landlock.cpp

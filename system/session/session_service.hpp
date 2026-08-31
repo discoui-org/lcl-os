@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "system/security/sandbox_client.hpp"
+#include "system/security/bundle_approval_store.hpp"
+#include "system/security/bundle_snapshot_store.hpp"
 #include "system/security/permission_store.hpp"
 #include "system/session/app_registry.hpp"
 #include "system/session/session_protocol.hpp"
@@ -37,7 +39,13 @@ public:
                 ? std::string(std::getenv("HOME")) + "/Applications"
                 : "/Users/Rei/Applications")},
       std::string sandboxSocketPath = lcl::security::kSandboxSocket,
-      lcl::security::PermissionStoreConfig permissionStoreConfig = {});
+      lcl::security::PermissionStoreConfig permissionStoreConfig = {},
+      lcl::security::BundleApprovalStoreConfig bundleApprovalStoreConfig = {
+          .storePath = "/var/lib/lcl-security/bundle-approvals.v1",
+          .ownerUid = 0,
+          .ownerGid = 0,
+      },
+      lcl::security::BundleSnapshotStoreConfig bundleSnapshotStoreConfig = {});
   ~SessionService();
 
   SessionService(const SessionService &) = delete;
@@ -73,6 +81,8 @@ private:
   AppRegistry m_registry;
   lcl::security::SandboxClient m_sandboxClient;
   lcl::security::PermissionStore m_permissionStore;
+  lcl::security::BundleApprovalStore m_bundleApprovals;
+  lcl::security::BundleSnapshotStore m_bundleSnapshots;
   std::string m_sandboxSocketPath;
   std::string m_socketPath;
   int m_serverFd{-1};

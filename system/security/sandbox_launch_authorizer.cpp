@@ -89,6 +89,11 @@ void SandboxLaunchAuthorizer::remove(const std::string& appId) {
     applications_.erase(appId);
 }
 
+bool SandboxLaunchAuthorizer::contains(const std::string& appId) const {
+    std::lock_guard lock(mutex_);
+    return applications_.contains(appId);
+}
+
 std::size_t SandboxLaunchAuthorizer::size() const {
     std::lock_guard lock(mutex_);
     return applications_.size();

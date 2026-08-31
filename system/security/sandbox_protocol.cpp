@@ -107,7 +107,7 @@ private:
 };
 
 bool isValidOpcode(SandboxOpcode opcode) {
-    return opcode >= SandboxOpcode::LaunchRequest && opcode <= SandboxOpcode::ProcessExited;
+    return opcode >= SandboxOpcode::LaunchRequest && opcode <= SandboxOpcode::RegistrationResult;
 }
 
 bool isValidLaunchStatus(SandboxLaunchStatus status) {
@@ -185,6 +185,88 @@ bool decodeSandboxLaunchRequest(const std::vector<std::uint8_t>& payload,
     }
     std::string error;
     return validateSandboxLaunchRequest(request, error);
+}
+
+bool encodeSandboxApplicationRegistration(const SandboxApplicationRegistration& registration,
+                                          std::vector<std::uint8_t>& payload) {
+    std::string error;
+    if (!validateSandboxApplicationRegistration(registration, error) ||
+        registration.requestedPermissions.size() > 64) {
+        return false;
+    }
+    Writer writer;
+    writer.u32(registration.contractVersion);
+    writer.u32(static_cast<std::uint32_t>(registration.userUid));
+    writer.u8(static_cast<std::uint8_t>(registration.runtime));
+    if (!writer.string(registration.appId) ||
+        !writer.string(registration.publisherIdentity) ||
+        !writer.string(registration.executableBundlePath)) {
+        return false;
+    }
+    writer.digest(registration.bundleRecordDigest);
+    writer.u32(static_cast<std::uint32_t>(registration.requestedPermissions.size()));
+    for (const std::string& permission : registration.requestedPermissions) {
+        if (!writer.string(permission)) {
+            return false;
+        }
+    }
+    payload = writer.take();
+    return payload.size() <= kSandboxMaxPayload;
+}
+
+bool decodeSandboxApplicationRegistration(const std::vector<std::uint8_t>& payload,
+                                          SandboxApplicationRegistration& registration) {
+    Reader reader(payload.data(), payload.size());
+    std::uint32_t rawUserUid = 0;
+    std::uint8_t rawRuntime = 0;
+    std::uint32_t permissionCount = 0;
+    registration = {};
+    if (!reader.u32(registration.contractVersion) || !reader.u32(rawUserUid) ||
+        !reader.u8(rawRuntime) || !reader.string(registration.appId) ||
+        !reader.string(registration.publisherIdentity) ||
+        !reader.string(registration.executableBundlePath) ||
+        !reader.digest(registration.bundleRecordDigest) || !reader.u32(permissionCount) ||
+        permissionCount > 64) {
+        return false;
+    }
+    registration.userUid = static_cast<uid_t>(rawUserUid);
+    registration.runtime = static_cast<SandboxRuntime>(rawRuntime);
+    registration.requestedPermissions.reserve(permissionCount);
+    for (std::uint32_t index = 0; index < permissionCount; ++index) {
+        std::string permission;
+        if (!reader.string(permission)) {
+            return false;
+        }
+        registration.requestedPermissions.push_back(std::move(permission));
+    }
+    std::string error;
+    return reader.done() && validateSandboxApplicationRegistration(registration, error);
+}
+
+bool encodeSandboxRegistrationResult(const SandboxRegistrationResult& result,
+                                     std::vector<std::uint8_t>& payload) {
+    if (result.message.empty() || result.message.size() > 1024) {
+        return false;
+    }
+    Writer writer;
+    writer.u8(result.registered ? 1 : 0);
+    if (!writer.string(result.message)) {
+        return false;
+    }
+    payload = writer.take();
+    return payload.size() <= kSandboxMaxPayload;
+}
+
+bool decodeSandboxRegistrationResult(const std::vector<std::uint8_t>& payload,
+                                     SandboxRegistrationResult& result) {
+    Reader reader(payload.data(), payload.size());
+    std::uint8_t registered = 0;
+    if (!reader.u8(registered) || registered > 1 || !reader.string(result.message) ||
+        result.message.empty() || result.message.size() > 1024 || !reader.done()) {
+        return false;
+    }
+    result.registered = registered == 1;
+    return true;
 }
 
 bool encodeSandboxLaunchResult(const SandboxLaunchResult& result,

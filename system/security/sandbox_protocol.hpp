@@ -12,7 +12,7 @@ namespace lcl::security {
 /** Root-owned sessiond ↔ sandboxd control endpoint. */
 inline constexpr const char* kSandboxSocket = "/Runtime/lcl-sandboxd.sock";
 inline constexpr std::uint32_t kSandboxProtocolMagic = 0x4C435342; // "LCSB"
-inline constexpr std::uint32_t kSandboxProtocolVersion = 1;
+inline constexpr std::uint32_t kSandboxProtocolVersion = 2;
 inline constexpr std::uint32_t kSandboxWireHeaderSize = 20;
 inline constexpr std::uint32_t kSandboxMaxPayload = 8u * 1024u;
 
@@ -21,6 +21,8 @@ enum class SandboxOpcode : std::uint32_t {
     LaunchResult = 2,
     ErrorResponse = 3,
     ProcessExited = 4,
+    RegisterApplication = 5,
+    RegistrationResult = 6,
 };
 
 struct SandboxHeader {
@@ -42,6 +44,11 @@ struct SandboxProcessExited {
     std::int32_t exitCode{0};
 };
 
+struct SandboxRegistrationResult {
+    bool registered{false};
+    std::string message;
+};
+
 bool encodeSandboxPacket(const SandboxHeader& header, const std::vector<std::uint8_t>& payload,
                          std::vector<std::uint8_t>& packet);
 bool decodeSandboxPacket(const std::uint8_t* packet, std::size_t packetSize,
@@ -54,6 +61,14 @@ bool encodeSandboxLaunchResult(const SandboxLaunchResult& result,
                                std::vector<std::uint8_t>& payload);
 bool decodeSandboxLaunchResult(const std::vector<std::uint8_t>& payload,
                                SandboxLaunchResult& result);
+bool encodeSandboxApplicationRegistration(const SandboxApplicationRegistration& registration,
+                                          std::vector<std::uint8_t>& payload);
+bool decodeSandboxApplicationRegistration(const std::vector<std::uint8_t>& payload,
+                                          SandboxApplicationRegistration& registration);
+bool encodeSandboxRegistrationResult(const SandboxRegistrationResult& result,
+                                     std::vector<std::uint8_t>& payload);
+bool decodeSandboxRegistrationResult(const std::vector<std::uint8_t>& payload,
+                                     SandboxRegistrationResult& result);
 bool encodeSandboxProcessExited(const SandboxProcessExited& event,
                                 std::vector<std::uint8_t>& payload);
 bool decodeSandboxProcessExited(const std::vector<std::uint8_t>& payload,

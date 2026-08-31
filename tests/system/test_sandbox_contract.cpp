@@ -168,6 +168,38 @@ TEST(SandboxProtocolTest, RejectsTruncatedOrMalformedLaunchData) {
     EXPECT_FALSE(encodeSandboxLaunchResult(launched, payload));
 }
 
+TEST(SandboxProtocolTest, RoundTripsOnlyImmutableExternalRegistrationFields) {
+    SandboxApplicationRegistration registration{};
+    registration.userUid = 1000;
+    registration.appId = "org.example.external";
+    registration.runtime = SandboxRuntime::Native;
+    registration.requestedPermissions = {"network.client"};
+    registration.bundleRecordDigest = sha256("approved external bundle");
+    registration.publisherIdentity = "unverified";
+    registration.executableBundlePath = "Executables/app";
+
+    std::vector<std::uint8_t> payload;
+    ASSERT_TRUE(encodeSandboxApplicationRegistration(registration, payload));
+    SandboxHeader header{};
+    header.opcode = SandboxOpcode::RegisterApplication;
+    header.requestId = 91;
+    header.payloadSize = static_cast<std::uint32_t>(payload.size());
+    std::vector<std::uint8_t> packet;
+    ASSERT_TRUE(encodeSandboxPacket(header, payload, packet));
+
+    DecodedSandboxPacket decoded{};
+    ASSERT_TRUE(decodeSandboxPacket(packet.data(), packet.size(), decoded));
+    SandboxApplicationRegistration received{};
+    ASSERT_TRUE(decodeSandboxApplicationRegistration(decoded.payload, received));
+    EXPECT_EQ(received.userUid, 1000u);
+    EXPECT_EQ(received.appId, registration.appId);
+    EXPECT_EQ(received.bundleRecordDigest, registration.bundleRecordDigest);
+    EXPECT_EQ(received.publisherIdentity, "unverified");
+    EXPECT_EQ(received.executableBundlePath, "Executables/app");
+    EXPECT_EQ(received.requestedPermissions,
+              std::vector<std::string>({"network.client"}));
+}
+
 TEST(SandboxLaunchAuthorizerTest, RebuildsThePlanFromItsProtectedRecord) {
     SandboxLaunchAuthorizer authorizer;
     std::string error;

@@ -91,9 +91,12 @@ sözleşmesini kullanmasıdır.
   Bundle, `Signature.ed25519`, publisher key ID ve signing key sertifika
   zincirini içerir; imza manifest metninin biçimine değil canonical kayda
   bağlıdır.
-- Geçerli imza bundle bütünlüğünü ve publisher key fingerprint'ini doğrular;
-  bundle doğrudan bulunduğu yerden çalışır. Uygulama dosyaları için zorunlu
-  bir installer, staging alanı veya kopyalama işlemi yoktur.
+- Geçerli imza bundle bütünlüğünü ve publisher key fingerprint'ini doğrular.
+  Uygulama dosyaları için kullanıcıya görünen bir installer veya taşınmış
+  kaynak bundle zorunlu değildir; ancak onay/doğrulama ile çalıştırma arasını
+  değiştirmemek için sandboxd'nin kullandığı sürüm, exact BundleRecord ile
+  eşleşen root-owned immutable snapshot olur. Kullanıcının özgün `.app`
+  bundle'ı bulunduğu yerde kalır.
 - İmza yoksa ya da doğrulanamıyorsa `lcl-sessiond` launch'ı reddeder ve
   trusted shell'e pending approval kaydı gönderir. Ayarlar yalnız seçilen
   kullanıcı için `app ID + BundleRecord hash + publisher durumu` bağlı,

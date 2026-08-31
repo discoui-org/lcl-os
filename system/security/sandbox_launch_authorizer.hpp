@@ -29,6 +29,8 @@ public:
                                      std::string& error);
     std::optional<SandboxLaunchPlan> authorize(const SandboxLaunchRequest& request,
                                                std::string& error) const;
+    /** True only when protected registration material already owns this app ID. */
+    bool contains(const std::string& appId) const;
     void remove(const std::string& appId);
     std::size_t size() const;
 

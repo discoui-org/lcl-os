@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <string>
@@ -27,12 +28,19 @@ public:
 
     bool launch(const SandboxLaunchRequest& request, SandboxLaunchResult& result,
                 std::string& error);
+    /** Sends exactly the immutable /App snapshot root and executable descriptors. */
+    bool registerExternalApplication(const SandboxApplicationRegistration& registration,
+                                     std::array<int, 2> descriptors,
+                                     std::string& error);
     /** Returns a queued or newly received process-exit event, if any. */
     bool pollExit(SandboxProcessExited& event, std::string& error);
 
 private:
     bool sendPacket(SandboxOpcode opcode, const std::vector<std::uint8_t>& payload,
                     std::uint32_t& requestId, std::string& error);
+    bool sendPacketWithDescriptors(SandboxOpcode opcode, const std::vector<std::uint8_t>& payload,
+                                   const std::array<int, 2>& descriptors,
+                                   std::uint32_t& requestId, std::string& error);
     bool receivePacket(DecodedSandboxPacket& packet, int flags, std::string& error);
 
     int descriptor_{-1};

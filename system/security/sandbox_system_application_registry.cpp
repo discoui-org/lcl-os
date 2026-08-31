@@ -80,6 +80,9 @@ SandboxRuntime runtimeForBundle(const lcl::core::AppBundleMetadata &metadata,
     return executableIsJavaScript ? SandboxRuntime::JavaScript
                                   : SandboxRuntime::Native;
   }
+  if (metadata.runtime == "org.lcl.native") {
+    return SandboxRuntime::Native;
+  }
   if (metadata.runtime == "org.lcl.javascript") {
     return SandboxRuntime::JavaScript;
   }

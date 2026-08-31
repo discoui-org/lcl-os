@@ -11,11 +11,13 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <sys/un.h>
 #include <thread>
 #include <unistd.h>
 
 #include "system/security/bundle_record.hpp"
+#include "system/security/bundle_approval_store.hpp"
 #include "system/security/sandbox_contract.hpp"
 #include "system/security/sandbox_protocol.hpp"
 #include "system/session/app_bundle_parser.hpp"
@@ -52,6 +54,35 @@ bool sendSandboxPacket(int descriptor, lcl::security::SandboxOpcode opcode,
              static_cast<ssize_t>(packet.size());
 }
 
+bool receiveSandboxPacketWithDescriptors(
+    int descriptor, lcl::security::DecodedSandboxPacket &packet,
+    std::array<int, 2> &receivedDescriptors) {
+  std::array<std::uint8_t, lcl::security::kSandboxWireHeaderSize +
+                               lcl::security::kSandboxMaxPayload>
+      bytes{};
+  std::array<char, CMSG_SPACE(sizeof(int) * 2)> control{};
+  iovec vector{.iov_base = bytes.data(), .iov_len = bytes.size()};
+  msghdr message{};
+  message.msg_iov = &vector;
+  message.msg_iovlen = 1;
+  message.msg_control = control.data();
+  message.msg_controllen = control.size();
+  const ssize_t count = recvmsg(descriptor, &message, 0);
+  cmsghdr *descriptorMessage = CMSG_FIRSTHDR(&message);
+  if (count <= 0 || (message.msg_flags & MSG_CTRUNC) != 0 ||
+      !descriptorMessage || descriptorMessage->cmsg_level != SOL_SOCKET ||
+      descriptorMessage->cmsg_type != SCM_RIGHTS ||
+      descriptorMessage->cmsg_len != CMSG_LEN(sizeof(int) * 2) ||
+      CMSG_NXTHDR(&message, descriptorMessage) != nullptr ||
+      !lcl::security::decodeSandboxPacket(
+          bytes.data(), static_cast<std::size_t>(count), packet)) {
+    return false;
+  }
+  std::memcpy(receivedDescriptors.data(), CMSG_DATA(descriptorMessage),
+              sizeof(int) * receivedDescriptors.size());
+  return true;
+}
+
 } // namespace
 
 class SessionServiceTest : public ::testing::Test {
@@ -65,6 +96,7 @@ protected:
          std::to_string(
              std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directories(tempDir);
+    chmod(tempDir.c_str(), 0700);
   }
   void TearDown() override { fs::remove_all(tempDir); }
 
@@ -78,8 +110,11 @@ protected:
     manifest << "{\"id\":\"" << appId
              << "\",\"name\":\"Test App\",\"version\":\"1.0\","
                 "\"executable\":\"Executables/test-app\",\"icon\":\"Resources/"
-                "Icon.png\",\"type\":\"gui\"}";
+                "Icon.png\",\"runtime\":\"org.lcl.native\",\"type\":\"gui\"}";
     manifest.close();
+    std::ofstream icon(bundle / "Resources" / "Icon.png");
+    icon << "icon";
+    icon.close();
     std::ofstream executable(bundle / "Executables" / "test-app");
     executable << executableBody;
     executable.close();
@@ -200,6 +235,26 @@ TEST_F(SessionServiceTest,
   const auto expectedBundleDigest = record->digest;
   const auto expectedProfileDigest =
       lcl::security::digestSandboxProfile(*profile);
+  const lcl::security::PermissionStoreConfig permissionStoreConfig{
+      .storePath = (tempDir / "permissions.v1").string(),
+      .ownerUid = getuid(),
+      .ownerGid = getgid(),
+  };
+  const lcl::security::BundleApprovalStoreConfig approvalStoreConfig{
+      .storePath = (tempDir / "bundle-approvals.v1").string(),
+      .ownerUid = getuid(),
+      .ownerGid = getgid(),
+  };
+  const lcl::security::BundleSnapshotStoreConfig snapshotStoreConfig{
+      .snapshotsRoot = (tempDir / "bundle-snapshots").string(),
+      .ownerUid = getuid(),
+      .ownerGid = getgid(),
+  };
+  lcl::security::BundleApprovalStore approvals(approvalStoreConfig);
+  ASSERT_TRUE(approvals.approve(1000, *record,
+                                lcl::security::BundlePublisherState::Unverified,
+                                recordError))
+      << recordError;
   std::thread daemon([&] {
     int client = -1;
     while (!stop.load()) {
@@ -220,12 +275,52 @@ TEST_F(SessionServiceTest,
       return;
     }
 
+    lcl::security::DecodedSandboxPacket packet{};
+    std::array<int, 2> receivedDescriptors{-1, -1};
+    if (!receiveSandboxPacketWithDescriptors(client, packet,
+                                             receivedDescriptors)) {
+      daemonError = "sessiond did not send the immutable bundle snapshot descriptors";
+      close(client);
+      return;
+    }
+    lcl::security::SandboxApplicationRegistration registration{};
+    struct stat bundleStatus{};
+    struct stat executableStatus{};
+    const bool validRegistration =
+        packet.header.opcode == lcl::security::SandboxOpcode::RegisterApplication &&
+        lcl::security::decodeSandboxApplicationRegistration(packet.payload, registration) &&
+        registration.appId == "org.lcl.sandboxed" &&
+        registration.bundleRecordDigest == expectedBundleDigest &&
+        registration.executableBundlePath == "Executables/test-app" &&
+        registration.publisherIdentity == "unverified" &&
+        fstat(receivedDescriptors[0], &bundleStatus) == 0 &&
+        S_ISDIR(bundleStatus.st_mode) && fstat(receivedDescriptors[1], &executableStatus) == 0 &&
+        S_ISREG(executableStatus.st_mode);
+    close(receivedDescriptors[0]);
+    close(receivedDescriptors[1]);
+    if (!validRegistration) {
+      daemonError = "sessiond sent an invalid external bundle registration";
+      close(client);
+      return;
+    }
+    std::vector<std::uint8_t> payload;
+    const lcl::security::SandboxRegistrationResult registered{
+        .registered = true,
+        .message = "registered",
+    };
+    if (!lcl::security::encodeSandboxRegistrationResult(registered, payload) ||
+        !sendSandboxPacket(client,
+                           lcl::security::SandboxOpcode::RegistrationResult,
+                           packet.header.requestId, payload)) {
+      daemonError = "could not acknowledge protected bundle registration";
+      close(client);
+      return;
+    }
+
     std::array<std::uint8_t, lcl::security::kSandboxWireHeaderSize +
                                  lcl::security::kSandboxMaxPayload>
         packetBytes{};
-    const ssize_t count =
-        recv(client, packetBytes.data(), packetBytes.size(), 0);
-    lcl::security::DecodedSandboxPacket packet{};
+    const ssize_t count = recv(client, packetBytes.data(), packetBytes.size(), 0);
     lcl::security::SandboxLaunchRequest request{};
     if (count <= 0 ||
         !lcl::security::decodeSandboxPacket(
@@ -249,7 +344,7 @@ TEST_F(SessionServiceTest,
     result.pid = std::numeric_limits<std::int32_t>::max();
     result.processGroupId = result.pid;
     result.message = "launched";
-    std::vector<std::uint8_t> payload;
+    payload.clear();
     if (!lcl::security::encodeSandboxLaunchResult(result, payload) ||
         !sendSandboxPacket(client, lcl::security::SandboxOpcode::LaunchResult,
                            packet.header.requestId, payload)) {
@@ -281,9 +376,11 @@ TEST_F(SessionServiceTest,
     close(client);
   });
 
-  SessionService service({tempDir.string()}, sandboxSocketPath);
+  SessionService service({}, sandboxSocketPath,
+                         permissionStoreConfig, approvalStoreConfig,
+                         snapshotStoreConfig);
   service.refreshCatalog();
-  const LaunchResponse launch = service.launch({"org.lcl.sandboxed", false});
+  const LaunchResponse launch = service.launch({bundle.string(), false});
   EXPECT_EQ(launch.status, 0u) << launch.message;
   EXPECT_EQ(launch.appId, "org.lcl.sandboxed");
   EXPECT_EQ(launch.instanceId, 1u);

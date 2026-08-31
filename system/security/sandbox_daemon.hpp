@@ -7,6 +7,7 @@
 
 #include "system/security/sandbox_child_reaper.hpp"
 #include "system/security/sandbox_cgroup.hpp"
+#include "system/security/sandbox_external_application_registry.hpp"
 #include "system/security/sandbox_launch_authorizer.hpp"
 #include "system/security/sandbox_launch_material.hpp"
 #include "system/security/sandbox_platform_probe.hpp"
@@ -31,16 +32,20 @@ struct SandboxDaemonConfig {
     gid_t ownerGid{0};
     SandboxPlatformMode platformMode{SandboxPlatformMode::LinuxFull};
     PermissionStoreConfig permissionStore{};
+    SandboxExternalApplicationRegistryConfig externalApplications{};
 };
 
 /**
  * Small root sandbox control plane.
  *
- * Registration is an in-process, trusted verifier/registry operation only;
- * there is intentionally no wire opcode that can add an app, executable path,
- * UID/GID, mount, environment or capability request. A session client can
- * submit only SandboxLaunchRequest, which is reconstructed from the protected
- * verified record by SandboxLaunchAuthorizer.
+ * System-image registration is an in-process verifier/registry operation.
+ * The only registration wire operation is restricted by SO_PEERCRED to the
+ * root session authority and accepts exactly one root-owned immutable bundle
+ * snapshot plus its executable descriptor. It cannot carry an app-selected
+ * UID/GID, mount, environment, capability grant, argument or runtime path.
+ * A normal application can submit neither registration nor anything beyond a
+ * narrow SandboxLaunchRequest, which sandboxd reconstructs from protected
+ * verified material.
  *
  * An authorized request launches only after sandboxd has a verifier-retained
  * descriptor snapshot for that exact bundle record.  The daemon creates the
@@ -66,7 +71,12 @@ public:
                                      const std::vector<std::string>& grantedPermissions,
                                      std::string& error);
     bool registerVerifiedLaunchMaterial(const SandboxLaunchMaterialInput& input, std::string& error);
+    /** Root-sessiond-only snapshot registration path; normal apps never reach it. */
+    bool registerExternalApplication(const SandboxApplicationRegistration& registration,
+                                     int appBundleDescriptor, int executableDescriptor,
+                                     std::string& error);
     void removeVerifiedApplication(const std::string& appId);
+    bool hasRegisteredApplication(const std::string& appId) const;
     std::size_t registeredApplicationCount() const;
 
     /** Trusted child-launch path records only a successful daemon-owned child. */
@@ -92,6 +102,7 @@ private:
     void reapChildren();
 
     SandboxLaunchAuthorizer authorizer_;
+    SandboxExternalApplicationRegistry externalApplications_;
     SandboxDaemonConfig config_;
     SandboxLaunchMaterialRegistry materialRegistry_;
     // The daemon owns the only cgroup v2 allocator.  It is initialized before
