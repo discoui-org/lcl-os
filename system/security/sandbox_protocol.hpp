@@ -9,6 +9,8 @@
 
 namespace lcl::security {
 
+/** Root-owned sessiond ↔ sandboxd control endpoint. */
+inline constexpr const char* kSandboxSocket = "/Runtime/lcl-sandboxd.sock";
 inline constexpr std::uint32_t kSandboxProtocolMagic = 0x4C435342; // "LCSB"
 inline constexpr std::uint32_t kSandboxProtocolVersion = 1;
 inline constexpr std::uint32_t kSandboxWireHeaderSize = 20;

@@ -3,10 +3,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "system/security/sandbox_cgroup.hpp"
 #include "system/security/sandbox_contract.hpp"
 
 namespace lcl::security {
@@ -17,6 +19,7 @@ struct SandboxChildExit {
     std::int32_t pid{0};
     std::int32_t processGroupId{0};
     std::int32_t exitCode{0};
+    std::optional<SandboxCgroup> cgroup;
 };
 
 /**
@@ -36,6 +39,8 @@ public:
     SandboxChildReaper& operator=(const SandboxChildReaper&) = delete;
 
     bool track(const std::string& appId, const SandboxLaunchResult& launch, std::string& error);
+    bool track(const std::string& appId, const SandboxLaunchResult& launch,
+               const SandboxCgroup& cgroup, std::string& error);
     std::vector<SandboxChildExit> reap();
     void terminateAll(int signalNumber);
     std::size_t size() const;
@@ -46,6 +51,7 @@ private:
         std::string appId;
         std::int32_t pid{0};
         std::int32_t processGroupId{0};
+        std::optional<SandboxCgroup> cgroup;
     };
 
     mutable std::mutex mutex_;

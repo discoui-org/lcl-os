@@ -358,6 +358,15 @@ sözleşmesini kullanmasıdır.
 
 ## 12. Doğrulama ve kabul kriterleri
 
+### Kanıt kaydı
+
+- [x] **QEMU kullanıcı-gözlemi (2026-08-31):** `open -w
+  org.lcl.sandbox-probe` üçüncü taraf native profile ile başlatıldı ve `0`
+  döndü. Probe; root olmayan UID/GID, PID namespace init, `no_new_privs`, boş
+  capability seti, private `/Data` ve `/Temporary` yazımı, DRM/input aygıtı
+  ve session socket erişiminin reddi, `/System` yazma reddi ile ağ erişiminin
+  engellendiğini doğruladı.
+
 - [ ] Her uygulama için UID/GID, capability, namespace inode'ları, cgroup
   yolu ve etkin profil digest'ini yalnız admin diagnostic aracıyla raporla.
 - [ ] Host unit testleri: manifest, permission store, profile çözümü,

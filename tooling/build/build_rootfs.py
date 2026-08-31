@@ -62,6 +62,7 @@ CANONICAL_TARGETS = (
     "lcl-sessiond",
     "lcl-sandboxd",
     "lcl-sandbox-probe",
+    "lcl-sandbox-smoke",
     "lcl-rasterd",
     "lcl-open",
     "lcl-core",
@@ -285,6 +286,7 @@ def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
         PROJECT_ROOT / "config" / "gestalt" / "default.json",
         PROJECT_ROOT / "apps" / "terminal" / "Manifest.json",
         PROJECT_ROOT / "apps" / "terminal" / "Resources" / "Icon.png",
+        PROJECT_ROOT / "apps" / "sandbox_probe" / "Manifest.json",
     )
     for source_input in source_inputs:
         if source_input.is_dir():
@@ -359,6 +361,7 @@ def stage_canonical_rootfs(
         "dev",
         "etc",
         "var/log",
+        "var/lib/lcl-security",
         "usr/share",
     ]
     for sub in canonical_dirs:
@@ -640,6 +643,25 @@ def stage_canonical_rootfs(
     sha_map["Terminal.app"] = get_sha256(term_dst / "Executables" / "Terminal")
     copy_ldd_deps(term_dst / "Executables" / "Terminal", dest_system_lib)
 
+    # Sandbox Probe.app is a non-GUI acceptance helper.  Unlike Terminal it
+    # deliberately follows the ordinary third-party sandbox profile, so a
+    # QEMU run can validate UID, namespaces, Landlock, cgroup setup and the
+    # no-new-privileges boundary without exposing a compositor endpoint yet.
+    smoke_dst = dest_system_apps / "Sandbox Probe.app"
+    smoke_dst.mkdir(parents=True, exist_ok=True)
+    (smoke_dst / "Executables").mkdir(parents=True, exist_ok=True)
+    (smoke_dst / "Resources").mkdir(parents=True, exist_ok=True)
+    smoke_manifest = PROJECT_ROOT / "apps" / "sandbox_probe" / "Manifest.json"
+    if not smoke_manifest.is_file() or not term_icon.is_file():
+        raise RuntimeError("Missing Sandbox Probe.app source files")
+    shutil.copy2(smoke_manifest, smoke_dst / "Manifest.json")
+    shutil.copy2(term_icon, smoke_dst / "Resources" / "Icon.png")
+    smoke_bin = binaries["lcl-sandbox-smoke"]
+    shutil.copy2(smoke_bin, smoke_dst / "Executables" / "SandboxProbe")
+    (smoke_dst / "Executables" / "SandboxProbe").chmod(0o755)
+    sha_map["Sandbox Probe.app"] = get_sha256(smoke_dst / "Executables" / "SandboxProbe")
+    copy_ldd_deps(smoke_dst / "Executables" / "SandboxProbe", dest_system_lib)
+
     # Validate all app bundles
     validate_app_bundles(staging_dir)
 
@@ -772,6 +794,15 @@ if [ -x /System/Core/lcl-sessiond ]; then
     sleep 0.1
 fi
 
+# sandboxd is a separate root-owned process.  Its owner-only socket is for
+# lcl-sessiond, not for the interactive Terminal or normal application UIDs.
+if [ -x /System/Core/lcl-sandboxd ]; then
+    echo "[init] Starting lcl-sandboxd..."
+    /System/Core/lcl-sandboxd --session-uid 0 --session-gid 0 \
+        2>&1 | tee /var/log/lcl_sandboxd.log &
+    sleep 0.1
+fi
+
 # Start the one shell selected by the canonical Gestalt profile.
 if [ -x /System/Core/lcl-shell-launcher ]; then
     echo "[init] Starting Gestalt-selected LCL shell..."
@@ -796,6 +827,46 @@ wait
                     p.chmod(0o755)
                 else:
                     p.chmod(0o644)
+
+    # The generic tree pass above intentionally makes OS content readable, but
+    # session-owned content must never inherit that policy.  Boot provisioning
+    # assigns these paths to the session UID; staging keeps them root-owned
+    # until then, yet already private so an interrupted first boot cannot
+    # expose profile or app-container contents.
+    private_session_directories = [
+        staging_dir / "Users" / "Rei",
+        staging_dir / "Users" / "Rei" / "Applications",
+        staging_dir / "Users" / "Rei" / "Desktop",
+        staging_dir / "Users" / "Rei" / "Documents",
+        staging_dir / "Users" / "Rei" / "Downloads",
+        staging_dir / "Users" / "Rei" / "Library",
+        staging_dir / "Users" / "Rei" / "Library" / "Containers",
+        staging_dir / "Users" / "Rei" / "Library" / "Containers" / "org.lcl.terminal",
+        staging_dir / "Users" / "Rei" / "Library" / "Containers" / "org.lcl.terminal" / "Data",
+        staging_dir / "Users" / "Rei" / "Library" / "Containers" / "org.lcl.terminal" / "Cache",
+        staging_dir / "Users" / "Rei" / "Library" / "Containers" / "org.lcl.terminal" / "Preferences",
+        staging_dir / "Users" / "Rei" / "Library" / "Containers" / "org.lcl.terminal" / "Temporary",
+        staging_dir / "Users" / "Rei" / "Movies",
+        staging_dir / "Users" / "Rei" / "Music",
+        staging_dir / "Users" / "Rei" / "Pictures",
+    ]
+    for directory in private_session_directories:
+        if directory.is_symlink() or not directory.is_dir():
+            raise RuntimeError(f"Canonical private session path is unsafe: {directory}")
+        directory.chmod(0o700)
+    # This is deliberately not session-owned storage.  sandboxd needs a
+    # root-controlled parent in which it can create app-UID-owned containers;
+    # the session user gets traversal only for its trusted Terminal container.
+    (staging_dir / "Users" / "Rei" / "Library" / "Containers").chmod(0o711)
+    security_state = staging_dir / "var" / "lib" / "lcl-security"
+    if security_state.is_symlink() or not security_state.is_dir():
+        raise RuntimeError(f"Canonical security state path is unsafe: {security_state}")
+    security_state.chmod(0o700)
+    for private_file in (staging_dir / "Users" / "Rei" / ".bashrc",
+                         staging_dir / "Users" / "Rei" / ".profile"):
+        if private_file.is_symlink() or not private_file.is_file():
+            raise RuntimeError(f"Canonical private session file is unsafe: {private_file}")
+        private_file.chmod(0o600)
 
     return sha_map
 
@@ -1020,6 +1091,9 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Applications/Terminal.app/Manifest.json",
         "/System/Applications/Terminal.app/Executables/Terminal",
         "/System/Applications/Terminal.app/Resources/Icon.png",
+        "/System/Applications/Sandbox Probe.app/Manifest.json",
+        "/System/Applications/Sandbox Probe.app/Executables/SandboxProbe",
+        "/System/Applications/Sandbox Probe.app/Resources/Icon.png",
         "/System/Library/Fonts/inter",
         "/System/Library/Gestalt/default.json",
         "/System/Library/Wallpapers/wallpaper.jpg",
@@ -1033,10 +1107,52 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
     ]
 
     for req in required_files:
-        cmd = ["debugfs", "-R", f"stat {req}", str(ext4_path)]
+        # debugfs tokenizes its -R command independently of subprocess.  App
+        # bundle names may contain spaces (for example, Sandbox Probe.app), so
+        # quote the filesystem path for debugfs rather than letting it split
+        # the path into multiple command arguments.
+        debugfs_path = req.replace("\\", "\\\\").replace('"', '\\"')
+        cmd = ["debugfs", "-R", f'stat "{debugfs_path}"', str(ext4_path)]
         res = subprocess.run(cmd, capture_output=True, text=True)
         if "Inode:" not in res.stdout or res.returncode != 0:
             raise AssertionError(f"Required canonical file '{req}' missing from rootfs image {ext4_path}")
+
+    # Do not let the generic tree-wide 0755 normalization regress the private
+    # session and app-container boundary.  These files start root-owned in the
+    # image and are assigned to the session/app identity by the privileged
+    # provisioner at boot, but their mode must already be private in the image.
+    private_modes = {
+        "/Users/Rei": 0o700,
+        "/Users/Rei/.bashrc": 0o600,
+        "/Users/Rei/.profile": 0o600,
+        "/Users/Rei/Library/Containers": 0o711,
+        "/var/lib/lcl-security": 0o700,
+        "/Users/Rei/Library/Containers/org.lcl.terminal": 0o700,
+        "/Users/Rei/Library/Containers/org.lcl.terminal/Data": 0o700,
+        "/Users/Rei/Library/Containers/org.lcl.terminal/Cache": 0o700,
+        "/Users/Rei/Library/Containers/org.lcl.terminal/Preferences": 0o700,
+        "/Users/Rei/Library/Containers/org.lcl.terminal/Temporary": 0o700,
+    }
+    for path, expected_mode in private_modes.items():
+        stat_result = subprocess.run(
+            ["debugfs", "-R", f'stat "{path}"', str(ext4_path)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        mode_line = next((line for line in stat_result.stdout.splitlines()
+                          if "Mode:" in line), "")
+        mode_text = mode_line.partition("Mode:")[2].lstrip()
+        if not mode_text:
+            raise AssertionError(f"Could not read mode for private rootfs path '{path}'")
+        try:
+            actual_mode = int(mode_text.split()[0], 8) & 0o777
+        except ValueError as error:
+            raise AssertionError(f"Could not parse mode for private rootfs path '{path}'") from error
+        if actual_mode != expected_mode:
+            raise AssertionError(
+                f"Private rootfs path '{path}' has mode {actual_mode:04o}; expected {expected_mode:04o}"
+            )
 
     # Check Terminal.app Manifest content
     cat_cmd = ["debugfs", "-R", "cat /System/Applications/Terminal.app/Manifest.json", str(ext4_path)]

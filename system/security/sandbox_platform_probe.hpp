@@ -35,7 +35,7 @@ struct SandboxPlatformCapabilities {
 
     bool supportsMandatoryThirdPartyProfile() const noexcept {
         return mountNamespace && pidNamespace && ipcNamespace && networkNamespace &&
-               namespaceCombination && noNewPrivileges && seccompFilter && landlockAbi != 0 &&
+               namespaceCombination && noNewPrivileges && seccompFilter && landlockAbi >= 3 &&
                cgroupV2 && cgroupMemoryController && cgroupPidsController &&
                cgroupCpuController;
     }

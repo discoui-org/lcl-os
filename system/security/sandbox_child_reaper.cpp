@@ -23,6 +23,11 @@ std::int32_t exitCodeFromStatus(int status) {
 
 bool SandboxChildReaper::track(const std::string& appId, const SandboxLaunchResult& launch,
                                std::string& error) {
+    return track(appId, launch, SandboxCgroup{}, error);
+}
+
+bool SandboxChildReaper::track(const std::string& appId, const SandboxLaunchResult& launch,
+                               const SandboxCgroup& cgroup, std::string& error) {
     error.clear();
     if (!AppIdentityRegistry::isValidAppId(appId) || launch.status != SandboxLaunchStatus::Launched ||
         launch.instanceId == 0 || launch.pid <= 0 || launch.processGroupId <= 0 ||
@@ -41,6 +46,13 @@ bool SandboxChildReaper::track(const std::string& appId, const SandboxLaunchResu
     child.appId = appId;
     child.pid = launch.pid;
     child.processGroupId = launch.processGroupId;
+    if (cgroup.instanceId != 0 || !cgroup.path.empty()) {
+        if (cgroup.instanceId != launch.instanceId || cgroup.path.empty()) {
+            error = "sandbox child reaper received invalid cgroup ownership";
+            return false;
+        }
+        child.cgroup = cgroup;
+    }
     instanceByPid_.emplace(child.pid, child.instanceId);
     byInstance_.emplace(child.instanceId, std::move(child));
     return true;
@@ -82,7 +94,8 @@ std::vector<SandboxChildExit> SandboxChildReaper::reap() {
         // waiter. Surface it as a failed instance rather than silently losing
         // lifecycle authority.
         exited.push_back({finished.instanceId, finished.appId, finished.pid,
-                          finished.processGroupId, result == -1 ? 1 : exitCodeFromStatus(status)});
+                          finished.processGroupId, result == -1 ? 1 : exitCodeFromStatus(status),
+                          finished.cgroup});
     }
     return exited;
 }

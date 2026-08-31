@@ -29,4 +29,7 @@ struct SandboxFilesystemSources {
 bool validateSandboxFilesystemSources(const SandboxFilesystemSources& sources,
                                      const AppIdentity& identity, std::string& error);
 
+/** Validates an executable path relative to the protected app-bundle root. */
+bool isSafeSandboxBundleRelativePath(const std::string& path) noexcept;
+
 } // namespace lcl::security

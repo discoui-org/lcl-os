@@ -1,8 +1,10 @@
 #include "system/security/sandbox_daemon.hpp"
+#include "system/security/sandbox_platform_probe.hpp"
 
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <signal.h>
@@ -57,9 +59,11 @@ bool SandboxDaemon::validateConfig(std::string& error) const {
         error = "sandboxd socket path is not a safe Unix socket path";
         return false;
     }
-    if (config_.ownerUid != 0 || config_.ownerGid != 0 || config_.sessionUid == 0 ||
-        config_.sessionGid == 0) {
-        error = "sandboxd requires root ownership and a dedicated non-root session identity";
+    const bool rootSessionAuthority = config_.sessionUid == 0 && config_.sessionGid == 0;
+    const bool dedicatedUnprivilegedAuthority = config_.sessionUid != 0 && config_.sessionGid != 0;
+    if (config_.ownerUid != 0 || config_.ownerGid != 0 ||
+        (!rootSessionAuthority && !dedicatedUnprivilegedAuthority)) {
+        error = "sandboxd requires root ownership and one complete launch-authority identity";
         return false;
     }
     return true;
@@ -87,6 +91,17 @@ bool SandboxDaemon::initialize(std::string& error) {
         return false;
     }
     if (!validateConfig(error) || !validateSocketParent(error)) {
+        return false;
+    }
+    const SandboxPlatformCapabilities capabilities = probeSandboxPlatformCapabilities();
+    if (!capabilities.supportsMandatoryThirdPartyProfile()) {
+        error = "mandatory third-party sandbox kernel profile is unavailable";
+        return false;
+    }
+    // Resource accounting is a mandatory third-party boundary.  Prepare the
+    // root-owned cgroup hierarchy before publishing the socket; if the host
+    // cannot provide all required controllers, sandboxd remains unavailable.
+    if (!cgroupManager_.initialize(error)) {
         return false;
     }
 
@@ -164,8 +179,14 @@ bool SandboxDaemon::registerVerifiedApplication(const VerifiedApplication& appli
     return authorizer_.registerVerifiedApplication(application, grantedPermissions, error);
 }
 
+bool SandboxDaemon::registerVerifiedLaunchMaterial(const SandboxLaunchMaterialInput& input,
+                                                   std::string& error) {
+    return materialRegistry_.registerMaterial(input, error);
+}
+
 void SandboxDaemon::removeVerifiedApplication(const std::string& appId) {
     authorizer_.remove(appId);
+    materialRegistry_.remove(appId);
 }
 
 std::size_t SandboxDaemon::registeredApplicationCount() const {
@@ -178,11 +199,18 @@ bool SandboxDaemon::recordLaunchedChild(const std::string& appId,
     return childReaper_.track(appId, launch, error);
 }
 
+bool SandboxDaemon::recordLaunchedChild(const std::string& appId,
+                                        const SandboxLaunchResult& launch,
+                                        const SandboxCgroup& cgroup,
+                                        std::string& error) {
+    return childReaper_.track(appId, launch, cgroup, error);
+}
+
 std::size_t SandboxDaemon::runningChildCount() const {
     return childReaper_.size();
 }
 
-SandboxLaunchResult SandboxDaemon::handleLaunchRequest(const SandboxLaunchRequest& request) const {
+SandboxLaunchResult SandboxDaemon::handleLaunchRequest(const SandboxLaunchRequest& request) {
     std::string error;
     if (!validateSandboxLaunchRequest(request, error)) {
         return rejectedLaunch(request, SandboxLaunchStatus::InvalidRequest, std::move(error));
@@ -191,11 +219,40 @@ SandboxLaunchResult SandboxDaemon::handleLaunchRequest(const SandboxLaunchReques
     if (!plan) {
         return rejectedLaunch(request, SandboxLaunchStatus::PolicyRejected, std::move(error));
     }
+    // Material must exist before resource allocation.  In particular, a stale
+    // session request cannot leave an empty instance cgroup behind or turn
+    // filesystem verification into a side effect of attacker-controlled IPC.
+    if (!materialRegistry_.hasMaterialFor(*plan)) {
+        return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
+                              "verified sandbox launch material is unavailable for this request");
+    }
 
-    // No direct exec fallback is permitted. A later child-side kernel setup
-    // stage must produce the protected proof consumed by spawnSandboxChild().
-    return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
-                          "sandbox kernel enforcement stages are not available");
+    const auto cgroup = cgroupManager_.createInstance(*plan, error);
+    if (!cgroup) {
+        return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
+                              "could not create mandatory sandbox cgroup: " + error);
+    }
+    SandboxChildLaunchSpec spec{};
+    if (!materialRegistry_.makeChildLaunchSpec(*plan, cgroupManager_, *cgroup, spec, error)) {
+        std::string cleanupError;
+        cgroupManager_.removeInstance(*cgroup, cleanupError);
+        return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed, std::move(error));
+    }
+    SandboxLaunchResult launch = spawnSandboxChild(spec);
+    if (launch.status != SandboxLaunchStatus::Launched) {
+        return launch;
+    }
+    if (!recordLaunchedChild(plan->request.appId, launch, *cgroup, error)) {
+        kill(-launch.processGroupId, SIGKILL);
+        kill(launch.pid, SIGKILL);
+        while (waitpid(launch.pid, nullptr, 0) < 0 && errno == EINTR) {
+        }
+        std::string cleanupError;
+        cgroupManager_.removeInstance(*cgroup, cleanupError);
+        return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
+                              "could not track sandbox child ownership: " + error);
+    }
+    return launch;
 }
 
 bool SandboxDaemon::peerIsAuthorized(int descriptor) const {
@@ -297,6 +354,13 @@ void SandboxDaemon::removeClient(int descriptor) {
 
 void SandboxDaemon::reapChildren() {
     for (const SandboxChildExit& exited : childReaper_.reap()) {
+        if (exited.cgroup.has_value()) {
+            std::string cleanupError;
+            // The process has been reaped before its cgroup is removed.  A
+            // cleanup failure cannot revive the app or change the exit event;
+            // startup will still fail closed if the hierarchy is unsafe.
+            cgroupManager_.removeInstance(*exited.cgroup, cleanupError);
+        }
         SandboxProcessExited event{};
         event.instanceId = exited.instanceId;
         event.exitCode = exited.exitCode;

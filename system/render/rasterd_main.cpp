@@ -5,9 +5,7 @@
 #include "platforms/common/retained_output_damage.hpp"
 #include "system/render/retained_scroll_tiles.hpp"
 #include "platforms/common/native_buffer.hpp"
-#if !defined(__ANDROID__)
 #include "system/security/session_user.hpp"
-#endif
 
 #include <algorithm>
 #include <array>
@@ -891,7 +889,6 @@ int createListener(const std::string& path) {
         unlink(path.c_str());
         return -1;
     }
-#if !defined(__ANDROID__)
     std::string ownershipError;
     if (!lcl::security::assignSessionUserOwnership(path, 0600, ownershipError)) {
         std::cerr << "[LCL Rasterd ERROR] " << ownershipError << "\n";
@@ -899,13 +896,6 @@ int createListener(const std::string& path) {
         unlink(path.c_str());
         return -1;
     }
-#else
-    if (chmod(path.c_str(), 0600) != 0) {
-        close(fd);
-        unlink(path.c_str());
-        return -1;
-    }
-#endif
     if (listen(fd, 32) != 0) {
         close(fd);
         unlink(path.c_str());

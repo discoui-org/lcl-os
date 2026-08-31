@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "system/security/sandbox_contract.hpp"
+#include "system/security/sandbox_cgroup.hpp"
 #include "system/security/sandbox_launch_authorizer.hpp"
 #include "system/security/sandbox_protocol.hpp"
 #include "system/security/sha256.hpp"
@@ -48,6 +49,7 @@ TEST(SandboxContractTest, BuildsDefaultDenyPlanFromVerifiedInputs) {
     EXPECT_TRUE(plan->profile.allowNetworkClient);
     EXPECT_EQ(plan->profile.memoryMaxMiB, 512u);
     EXPECT_EQ(plan->profile.pidsMax, 64u);
+    EXPECT_EQ(plan->profile.cpuWeight, 100u);
     EXPECT_EQ(plan->profile.effectivePermissions,
               std::vector<std::string>({"files.user-selected", "network.client"}));
     EXPECT_EQ(plan->request.appId, "org.example.notes");
@@ -78,6 +80,21 @@ TEST(SandboxContractTest, CanonicalizesPermissionsBeforeDigestingProfile) {
     EXPECT_EQ(first->request.profileDigest, second->request.profileDigest);
 }
 
+TEST(SandboxContractTest, BuildsAnIdentityFreeProfileForTheSessionLaunchRequest) {
+    std::string error;
+    const auto profile = makeThirdPartySandboxProfile(
+        SandboxRuntime::JavaScript, {"files.user-selected", "network.client"},
+        {"network.client"}, error);
+    ASSERT_TRUE(profile.has_value()) << error;
+    EXPECT_EQ(profile->profileId, "lcl.third-party.javascript.v1");
+    EXPECT_TRUE(profile->privateNetworkNamespace);
+    EXPECT_TRUE(profile->allowNetworkClient);
+    EXPECT_EQ(profile->effectivePermissions, std::vector<std::string>({"network.client"}));
+
+    EXPECT_FALSE(makeThirdPartySandboxProfile(static_cast<SandboxRuntime>(99), {}, {}, error));
+    EXPECT_EQ(error, "sandbox profile has an unsupported runtime");
+}
+
 TEST(SandboxContractTest, RejectsMalformedRequestAndWeakenedProfile) {
     std::string error;
     SandboxLaunchRequest request{};
@@ -91,6 +108,26 @@ TEST(SandboxContractTest, RejectsMalformedRequestAndWeakenedProfile) {
     profile.privatePidNamespace = false;
     EXPECT_FALSE(validateSandboxProfile(profile, error));
     EXPECT_EQ(error, "third-party sandbox profile weakens a mandatory security boundary");
+
+    profile.privatePidNamespace = true;
+    profile.privateNetworkNamespace = false;
+    EXPECT_FALSE(validateSandboxProfile(profile, error));
+    EXPECT_EQ(error, "third-party sandbox profile weakens a mandatory security boundary");
+
+    profile.privateNetworkNamespace = true;
+    profile.cpuWeight = 10001;
+    EXPECT_FALSE(validateSandboxProfile(profile, error));
+    EXPECT_EQ(error, "third-party sandbox profile weakens a mandatory security boundary");
+}
+
+TEST(SandboxCgroupTest, RefusesToCreateAnInstanceBeforeRootSetup) {
+    std::string error;
+    const auto plan = makeThirdPartySandboxLaunchPlan(validApplication(), {}, 81, error);
+    ASSERT_TRUE(plan.has_value()) << error;
+
+    SandboxCgroupManager manager;
+    EXPECT_FALSE(manager.createInstance(*plan, error).has_value());
+    EXPECT_EQ(error, "sandbox cgroup received an unverified launch plan");
 }
 
 TEST(SandboxProtocolTest, RoundTripsOnlyTheBoundLaunchFields) {

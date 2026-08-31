@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "system/security/sandbox_daemon.hpp"
+#include "system/security/sandbox_system_application_registry.hpp"
 
 namespace {
 
@@ -81,6 +82,11 @@ int main(int argc, char** argv) {
     lcl::security::SandboxDaemon daemon(std::move(config));
     std::string error;
     if (!daemon.initialize(error)) {
+        std::cerr << "[LCL Sandbox ERROR] " << error << "\n";
+        return 1;
+    }
+    lcl::security::SandboxSystemApplicationRegistry systemApplications;
+    if (!systemApplications.registerSystemApplications(daemon, error)) {
         std::cerr << "[LCL Sandbox ERROR] " << error << "\n";
         return 1;
     }

@@ -44,6 +44,8 @@ struct SandboxProfile {
     bool allowNetworkClient{false};
     std::uint32_t memoryMaxMiB{512};
     std::uint32_t pidsMax{64};
+    /** cgroup v2 cpu.weight; Linux permits values in the inclusive 1..10000 range. */
+    std::uint32_t cpuWeight{100};
     std::vector<std::string> effectivePermissions;
 };
 
@@ -89,6 +91,13 @@ struct SandboxLaunchPlan {
 };
 
 bool validateSandboxLaunchRequest(const SandboxLaunchRequest& request, std::string& error);
+
+/** Builds a policy profile without exposing app identity or execution material. */
+std::optional<SandboxProfile> makeThirdPartySandboxProfile(
+    SandboxRuntime runtime,
+    const std::vector<std::string>& requestedPermissions,
+    const std::vector<std::string>& grantedPermissions,
+    std::string& error);
 
 /** Builds a default-deny third-party profile from verified, trusted inputs. */
 std::optional<SandboxLaunchPlan> makeThirdPartySandboxLaunchPlan(

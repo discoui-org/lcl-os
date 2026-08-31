@@ -325,6 +325,14 @@ public:
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
     RasterBackend getBackendType() const { return m_backendType; }
+    /** True only for an initialized, audited hardware GL backend. */
+    bool isHardwareAccelerated() const {
+        return m_initialized &&
+               m_backendType == RasterBackend::OpenGL_EGL &&
+               m_eglBackend &&
+               m_eglBackend->isInitialized() &&
+               m_eglBackend->isHardwareAccelerated();
+    }
     uint64_t getResourceGeneration() const { return m_resourceGeneration; }
     uint32_t* getRasterBuffer() { return m_targetPixels ? m_targetPixels : m_rasterPixels.data(); }
 

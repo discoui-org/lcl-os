@@ -6,21 +6,21 @@
 #include <vector>
 
 #include "system/security/sandbox_child_reaper.hpp"
+#include "system/security/sandbox_cgroup.hpp"
 #include "system/security/sandbox_launch_authorizer.hpp"
+#include "system/security/sandbox_launch_material.hpp"
 #include "system/security/sandbox_protocol.hpp"
 
 namespace lcl::security {
 
-inline constexpr const char* kSandboxSocket = "/Runtime/lcl-sandboxd.sock";
-
 /**
  * Root-owned sandboxd endpoint configuration.
  *
- * The permitted peer must be a dedicated, unprivileged session-service
- * identity. It deliberately cannot be UID 0 or the interactive session user:
- * otherwise any process sharing that identity could request application
- * launch. The socket is chowned 0600 to that identity and every accepted
- * connection is checked again with SO_PEERCRED.
+ * The permitted peer is either the root-owned session authority used by the
+ * current canonical boot chain or a future dedicated non-interactive service
+ * identity. The interactive session UID is never an accepted peer. The
+ * socket is chowned 0600 to that authority and every connection is checked
+ * again with SO_PEERCRED.
  */
 struct SandboxDaemonConfig {
     std::string socketPath{kSandboxSocket};
@@ -39,10 +39,11 @@ struct SandboxDaemonConfig {
  * submit only SandboxLaunchRequest, which is reconstructed from the protected
  * verified record by SandboxLaunchAuthorizer.
  *
- * This initial service deliberately does not launch before a child-side kernel
- * setup implementation (namespaces, seccomp, Landlock and device policy) is
- * installed. Therefore an otherwise authorized request returns SetupFailed
- * rather than falling back to sessiond's old direct exec path.
+ * An authorized request launches only after sandboxd has a verifier-retained
+ * descriptor snapshot for that exact bundle record.  The daemon creates the
+ * mandatory cgroup, then applies namespaces, private mounts, Landlock,
+ * credential drop and seccomp in its child path.  It never falls back to
+ * sessiond's historical direct exec path.
  */
 class SandboxDaemon final {
 public:
@@ -61,16 +62,19 @@ public:
     bool registerVerifiedApplication(const VerifiedApplication& application,
                                      const std::vector<std::string>& grantedPermissions,
                                      std::string& error);
+    bool registerVerifiedLaunchMaterial(const SandboxLaunchMaterialInput& input, std::string& error);
     void removeVerifiedApplication(const std::string& appId);
     std::size_t registeredApplicationCount() const;
 
     /** Trusted child-launch path records only a successful daemon-owned child. */
     bool recordLaunchedChild(const std::string& appId, const SandboxLaunchResult& launch,
                              std::string& error);
+    bool recordLaunchedChild(const std::string& appId, const SandboxLaunchResult& launch,
+                             const SandboxCgroup& cgroup, std::string& error);
     std::size_t runningChildCount() const;
 
     /** Handles only an already-decoded narrow request; useful to trusted tests. */
-    SandboxLaunchResult handleLaunchRequest(const SandboxLaunchRequest& request) const;
+    SandboxLaunchResult handleLaunchRequest(const SandboxLaunchRequest& request);
 
 private:
     bool validateConfig(std::string& error) const;
@@ -86,6 +90,11 @@ private:
 
     SandboxDaemonConfig config_;
     SandboxLaunchAuthorizer authorizer_;
+    SandboxLaunchMaterialRegistry materialRegistry_;
+    // The daemon owns the only cgroup v2 allocator.  It is initialized before
+    // the launch socket becomes reachable, so no request can observe a daemon
+    // that would fall back to unconstrained process creation.
+    SandboxCgroupManager cgroupManager_;
     SandboxChildReaper childReaper_;
     int serverDescriptor_{-1};
     bool ownsSocketPath_{false};

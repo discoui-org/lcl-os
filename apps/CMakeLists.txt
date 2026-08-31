@@ -6,7 +6,7 @@ target_link_libraries(lcl-sessiond PRIVATE
 
 add_executable(lcl-sandboxd ${PROJECT_SOURCE_DIR}/system/security/sandbox_daemon_main.cpp)
 target_include_directories(lcl-sandboxd PRIVATE ${PROJECT_SOURCE_DIR})
-target_link_libraries(lcl-sandboxd PRIVATE lcl-security Threads::Threads)
+target_link_libraries(lcl-sandboxd PRIVATE lcl-security lcl-session Threads::Threads)
 
 add_executable(lcl-sandbox-probe ${PROJECT_SOURCE_DIR}/system/security/sandbox_platform_probe_main.cpp)
 target_include_directories(lcl-sandbox-probe PRIVATE ${PROJECT_SOURCE_DIR})
@@ -55,6 +55,15 @@ target_link_libraries(lcl-terminal PRIVATE
     lcl-ui lcl-raster lcl-protocol Threads::Threads
 )
 
+# A non-GUI system bundle used only to prove the end-to-end third-party
+# sandbox boundary on QEMU.  It has no privileged IPC, compositor, or device
+# dependency and reports its narrow checks through its exit status.
+add_executable(lcl-sandbox-smoke
+    sandbox_probe/main.cpp
+)
+target_include_directories(lcl-sandbox-smoke PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(lcl-sandbox-smoke PRIVATE Threads::Threads)
+
 add_executable(lcl-js
     ${PROJECT_SOURCE_DIR}/system/javascript/main.cpp
     ${PROJECT_SOURCE_DIR}/system/javascript/js_runtime.cpp
@@ -81,6 +90,7 @@ foreach(root_runtime_target IN ITEMS
         lcl-desktop-shell
         lcl-mobile-shell
         lcl-terminal
+        lcl-sandbox-smoke
         lcl-js)
     set_target_properties(${root_runtime_target} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}

@@ -21,6 +21,13 @@ inline bool filterReadsNeighboringPixels(protocol::FilterType type) noexcept {
            type == protocol::FilterType::Glass;
 }
 
+inline bool shouldExecuteEffectSource(
+        protocol::EffectSourceType source,
+        bool hardwareAccelerated) noexcept {
+    return source != protocol::EffectSourceType::SurfaceBackdrop ||
+           hardwareAccelerated;
+}
+
 inline bool canReuseRetainedBackdropForClientDamage(
         size_t changedSurfaceCount,
         size_t nonLocalEffectSurfaceCount,

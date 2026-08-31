@@ -2029,6 +2029,19 @@ TEST(CompositorRendererTest, NonLocalFiltersRequireDamageDependencyClosure) {
 }
 
 TEST(CompositorRendererTest,
+     SurfaceBackdropEffectsRequireHardwareAcceleration) {
+    EXPECT_FALSE(shouldExecuteEffectSource(
+        protocol::EffectSourceType::SurfaceBackdrop, false));
+    EXPECT_TRUE(shouldExecuteEffectSource(
+        protocol::EffectSourceType::SurfaceBackdrop, true));
+
+    // Layer effects do not sample the compositor-owned surface backdrop and
+    // retain their existing software behavior.
+    EXPECT_TRUE(shouldExecuteEffectSource(
+        protocol::EffectSourceType::Layer, false));
+}
+
+TEST(CompositorRendererTest,
      ClientDamageReusesOnlyItsSingleMatchingBackdropCache) {
     EXPECT_TRUE(canReuseRetainedBackdropForClientDamage(
         1, 1, true, true, true));

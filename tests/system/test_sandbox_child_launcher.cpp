@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "system/security/sandbox_child_launcher.hpp"
+#include "system/security/sandbox_launch_material.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -77,15 +78,6 @@ protected:
         SandboxChildLaunchSpec spec{};
         spec.plan = plan.value_or(SandboxLaunchPlan{});
         spec.identity = application.identity;
-        spec.kernelEnforcement = {
-            .mountNamespaceReady = true,
-            .pidNamespaceReady = true,
-            .ipcNamespaceReady = true,
-            .networkNamespaceReady = true,
-            .seccompInstalled = true,
-            .landlockInstalled = true,
-            .directDeviceAccessDenied = true,
-        };
         spec.filesystemSources = {
             .appBundleDescriptor = appBundleDescriptor_,
             .systemDescriptor = systemDescriptor_,
@@ -93,13 +85,14 @@ protected:
             .cacheDescriptor = cacheDescriptor_,
             .preferencesDescriptor = preferencesDescriptor_,
         };
+        spec.executableBundlePath = "app";
         spec.executableDescriptor = executableDescriptor_;
         spec.arguments = {"--safe"};
         return spec;
     }
 };
 
-TEST_F(SandboxChildLauncherTest, AcceptsOnlyProtectedFullyEnforcedLaunchMaterial) {
+TEST_F(SandboxChildLauncherTest, AcceptsProtectedLaunchMaterialBeforeRuntimeKernelSetup) {
     ASSERT_GE(executableDescriptor_, 0);
     ASSERT_GE(appBundleDescriptor_, 0);
     ASSERT_GE(systemDescriptor_, 0);
@@ -107,7 +100,10 @@ TEST_F(SandboxChildLauncherTest, AcceptsOnlyProtectedFullyEnforcedLaunchMaterial
     std::string error;
     EXPECT_TRUE(validateSandboxChildLaunchSpec(spec, error)) << error;
 
-    spec.kernelEnforcement.seccompInstalled = false;
+    spec.cgroup = SandboxCgroupBinding{
+        .manager = nullptr,
+        .cgroup = {.instanceId = spec.plan.request.instanceId, .path = "/unsafe/cgroup"},
+    };
     EXPECT_FALSE(validateSandboxChildLaunchSpec(spec, error));
     EXPECT_NE(error.find("unsafe"), std::string::npos);
 }
@@ -126,6 +122,10 @@ TEST_F(SandboxChildLauncherTest, RejectsUnsafeArgumentsAndNonExecutableDescripto
     spec = validSpec();
     spec.filesystemSources.dataDescriptor = -1;
     EXPECT_FALSE(validateSandboxChildLaunchSpec(spec, error));
+
+    spec = validSpec();
+    spec.executableBundlePath = "../outside";
+    EXPECT_FALSE(validateSandboxChildLaunchSpec(spec, error));
 }
 
 TEST_F(SandboxChildLauncherTest, RefusesToSpawnWhenTheCallerIsNotRoot) {
@@ -136,6 +136,54 @@ TEST_F(SandboxChildLauncherTest, RefusesToSpawnWhenTheCallerIsNotRoot) {
     const SandboxLaunchResult result = spawnSandboxChild(validSpec());
     EXPECT_EQ(result.status, SandboxLaunchStatus::SetupFailed);
     EXPECT_NE(result.message.find("requires root"), std::string::npos);
+}
+
+TEST_F(SandboxChildLauncherTest, RetainsOnlyPolicyBoundVerifiedLaunchMaterial) {
+    ASSERT_GE(executableDescriptor_, 0);
+    SandboxChildLaunchSpec protectedSpec = validSpec();
+    ASSERT_TRUE(protectedSpec.plan.request.instanceId != 0);
+
+    VerifiedApplication application{};
+    application.appId = protectedSpec.identity.appId;
+    application.identity = protectedSpec.identity;
+    application.runtime = protectedSpec.plan.profile.runtime;
+    application.bundleRecordDigest = protectedSpec.plan.request.bundleRecordDigest;
+    SandboxLaunchMaterialInput input{
+        .application = application,
+        .filesystemSources = protectedSpec.filesystemSources,
+        .executableBundlePath = protectedSpec.executableBundlePath,
+        .executableDescriptor = protectedSpec.executableDescriptor,
+        .arguments = protectedSpec.arguments,
+    };
+
+    SandboxLaunchMaterialRegistry registry;
+    std::string error;
+    ASSERT_TRUE(registry.registerMaterial(input, error)) << error;
+    EXPECT_TRUE(registry.hasMaterialFor(protectedSpec.plan));
+
+    SandboxLaunchMaterialInput mismatchedPath = input;
+    mismatchedPath.executableBundlePath = "Data";
+    SandboxLaunchMaterialRegistry mismatchRegistry;
+    EXPECT_FALSE(mismatchRegistry.registerMaterial(mismatchedPath, error));
+    EXPECT_NE(error.find("unsafe"), std::string::npos);
+
+    SandboxCgroupManager manager;
+    SandboxChildLaunchSpec rebuilt{};
+    const SandboxCgroup cgroup{.instanceId = protectedSpec.plan.request.instanceId,
+                                .path = "/sys/fs/cgroup/lcl/apps/instance-42"};
+    ASSERT_TRUE(registry.makeChildLaunchSpec(protectedSpec.plan, manager, cgroup, rebuilt, error))
+        << error;
+    ASSERT_TRUE(rebuilt.cgroup.has_value());
+    EXPECT_EQ(rebuilt.cgroup->manager, &manager);
+    EXPECT_EQ(rebuilt.cgroup->cgroup.path, cgroup.path);
+    EXPECT_NE(rebuilt.executableDescriptor, protectedSpec.executableDescriptor);
+    EXPECT_TRUE(validateSandboxChildLaunchSpec(rebuilt, error)) << error;
+
+    SandboxLaunchPlan changedPlan = protectedSpec.plan;
+    changedPlan.request.bundleRecordDigest = sha256("different-bundle-record");
+    EXPECT_FALSE(registry.hasMaterialFor(changedPlan));
+    EXPECT_FALSE(registry.makeChildLaunchSpec(changedPlan, manager, cgroup, rebuilt, error));
+    EXPECT_NE(error.find("unavailable"), std::string::npos);
 }
 
 } // namespace

@@ -36,7 +36,7 @@ TEST(SandboxDaemonTest, AcceptsOnlyPreviouslyVerifiedApplicationRecords) {
     result = daemon.handleLaunchRequest(plan->request);
     EXPECT_EQ(result.status, SandboxLaunchStatus::SetupFailed);
     EXPECT_EQ(result.instanceId, 101U);
-    EXPECT_NE(result.message.find("kernel enforcement"), std::string::npos);
+    EXPECT_NE(result.message.find("material"), std::string::npos);
 }
 
 TEST(SandboxDaemonTest, DoesNotTurnMalformedRequestsIntoLaunches) {
@@ -63,8 +63,10 @@ TEST(SandboxChildReaperTest, ReportsOnlyTheDaemonOwnedChildExit) {
     launch.instanceId = 103;
     launch.pid = static_cast<std::int32_t>(child);
     launch.processGroupId = static_cast<std::int32_t>(child);
+    const SandboxCgroup cgroup{.instanceId = 103,
+                                .path = "/sys/fs/cgroup/lcl/apps/instance-103"};
     std::string error;
-    ASSERT_TRUE(reaper.track("org.lcl.sandbox-daemon", launch, error)) << error;
+    ASSERT_TRUE(reaper.track("org.lcl.sandbox-daemon", launch, cgroup, error)) << error;
 
     std::vector<SandboxChildExit> exited;
     for (int attempt = 0; attempt < 100 && exited.empty(); ++attempt) {
@@ -76,6 +78,8 @@ TEST(SandboxChildReaperTest, ReportsOnlyTheDaemonOwnedChildExit) {
     ASSERT_EQ(exited.size(), 1U);
     EXPECT_EQ(exited.front().instanceId, 103U);
     EXPECT_EQ(exited.front().exitCode, 23);
+    ASSERT_TRUE(exited.front().cgroup.has_value());
+    EXPECT_EQ(exited.front().cgroup->path, cgroup.path);
     EXPECT_EQ(reaper.size(), 0U);
 }
 

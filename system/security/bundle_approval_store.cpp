@@ -186,11 +186,11 @@ ScopedFd openStoreLock(const BundleApprovalStoreConfig& config, int lockOperatio
         status.st_uid != config.ownerUid || status.st_gid != config.ownerGid ||
         (status.st_mode & 0077) != 0 || status.st_nlink != 1) {
         error = "bundle approval lock has unsafe ownership, mode, link count, or type";
-        return {};
+        return ScopedFd{};
     }
     if (flock(lock.get(), lockOperation) != 0) {
         error = "could not acquire bundle approval lock";
-        return {};
+        return ScopedFd{};
     }
     return lock;
 }

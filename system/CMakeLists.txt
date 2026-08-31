@@ -29,14 +29,22 @@ add_library(lcl-security STATIC
     security/bundle_record.cpp
     security/bundle_signature_verifier.cpp
     security/session_user.cpp
+    security/sandbox_client.cpp
+    security/sandbox_cgroup.cpp
     security/sandbox_child_launcher.cpp
     security/sandbox_child_reaper.cpp
     security/sandbox_contract.cpp
     security/sandbox_daemon.cpp
+    security/sandbox_filesystem_namespace.cpp
     security/sandbox_filesystem_sources.cpp
+    security/sandbox_landlock.cpp
     security/sandbox_launch_authorizer.cpp
+    security/sandbox_launch_material.cpp
+    security/sandbox_namespace.cpp
     security/sandbox_platform_probe.cpp
     security/sandbox_protocol.cpp
+    security/sandbox_seccomp.cpp
+    security/sandbox_system_application_registry.cpp
     security/sha256.cpp
 )
 target_include_directories(lcl-security PUBLIC ${PROJECT_SOURCE_DIR})
@@ -109,7 +117,7 @@ if(ANDROID)
         render/client_egl_context.cpp
     )
     target_link_libraries(lcl-rasterd-android PRIVATE
-        lcl-render lcl-raster-protocol lcl-graphics EGL GLESv3 android Threads::Threads
+        lcl-render lcl-raster-protocol lcl-graphics lcl-security EGL GLESv3 android Threads::Threads
     )
     set_target_properties(lcl-rasterd-android PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}

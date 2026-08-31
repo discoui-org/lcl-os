@@ -12,6 +12,9 @@ namespace {
 
 constexpr std::uint32_t kDefaultMemoryMaxMiB = 512;
 constexpr std::uint32_t kDefaultPidsMax = 64;
+constexpr std::uint32_t kDefaultCpuWeight = 100;
+constexpr std::uint32_t kMinimumCpuWeight = 1;
+constexpr std::uint32_t kMaximumCpuWeight = 10000;
 
 void appendU32(std::string& output, std::uint32_t value) {
     for (int index = 3; index >= 0; --index) {
@@ -69,9 +72,10 @@ bool validateSandboxProfile(const SandboxProfile& profile, std::string& error) {
         return false;
     }
     if (!profile.privateMountNamespace || !profile.privatePidNamespace ||
-        !profile.privateIpcNamespace || !profile.noNewPrivileges || !profile.requireSeccomp ||
-        !profile.requireLandlock || !profile.denyDirectDeviceAccess || profile.memoryMaxMiB == 0 ||
-        profile.pidsMax == 0) {
+        !profile.privateIpcNamespace || !profile.privateNetworkNamespace ||
+        !profile.noNewPrivileges || !profile.requireSeccomp || !profile.requireLandlock ||
+        !profile.denyDirectDeviceAccess || profile.memoryMaxMiB == 0 || profile.pidsMax == 0 ||
+        profile.cpuWeight < kMinimumCpuWeight || profile.cpuWeight > kMaximumCpuWeight) {
         error = "third-party sandbox profile weakens a mandatory security boundary";
         return false;
     }
@@ -113,6 +117,7 @@ Sha256Digest digestSandboxProfile(const SandboxProfile& profile) {
     appendBoolean(canonical, profile.allowNetworkClient);
     appendU32(canonical, profile.memoryMaxMiB);
     appendU32(canonical, profile.pidsMax);
+    appendU32(canonical, profile.cpuWeight);
     appendU32(canonical, static_cast<std::uint32_t>(profile.effectivePermissions.size()));
     for (const std::string& permission : profile.effectivePermissions) {
         appendString(canonical, permission);
@@ -132,10 +137,8 @@ bool validateSandboxLaunchRequest(const SandboxLaunchRequest& request, std::stri
 }
 
 std::optional<SandboxLaunchPlan> makeThirdPartySandboxLaunchPlan(
-    const VerifiedApplication& application,
-    const std::vector<std::string>& grantedPermissions,
-    std::uint64_t instanceId,
-    std::string& error) {
+    const VerifiedApplication& application, const std::vector<std::string>& grantedPermissions,
+    std::uint64_t instanceId, std::string& error) {
     error.clear();
     if (!AppIdentityRegistry::isValidAppId(application.appId) ||
         application.identity.appId != application.appId || application.identity.uid == 0 ||
@@ -145,9 +148,31 @@ std::optional<SandboxLaunchPlan> makeThirdPartySandboxLaunchPlan(
         return std::nullopt;
     }
 
+    const auto profile = makeThirdPartySandboxProfile(application.runtime,
+                                                      application.requestedPermissions,
+                                                      grantedPermissions, error);
+    if (!profile) {
+        return std::nullopt;
+    }
+
+    SandboxLaunchRequest request{};
+    request.appId = application.appId;
+    request.instanceId = instanceId;
+    request.bundleRecordDigest = application.bundleRecordDigest;
+    request.profileDigest = digestSandboxProfile(*profile);
+    if (!validateSandboxLaunchRequest(request, error)) {
+        return std::nullopt;
+    }
+    return SandboxLaunchPlan{*profile, std::move(request)};
+}
+
+std::optional<SandboxProfile> makeThirdPartySandboxProfile(
+    SandboxRuntime runtime, const std::vector<std::string>& requestedPermissions,
+    const std::vector<std::string>& grantedPermissions, std::string& error) {
+    error.clear();
     std::vector<std::string> requested;
     std::vector<std::string> granted;
-    if (!normalizePermissions(application.requestedPermissions, requested, error) ||
+    if (!normalizePermissions(requestedPermissions, requested, error) ||
         !normalizePermissions(grantedPermissions, granted, error)) {
         return std::nullopt;
     }
@@ -159,28 +184,28 @@ std::optional<SandboxLaunchPlan> makeThirdPartySandboxLaunchPlan(
     }
 
     SandboxProfile profile{};
-    profile.runtime = application.runtime;
-    profile.profileId = application.runtime == SandboxRuntime::JavaScript
-        ? "lcl.third-party.javascript.v1"
-        : "lcl.third-party.native.v1";
+    profile.runtime = runtime;
+    switch (runtime) {
+        case SandboxRuntime::Native:
+            profile.profileId = "lcl.third-party.native.v1";
+            break;
+        case SandboxRuntime::JavaScript:
+            profile.profileId = "lcl.third-party.javascript.v1";
+            break;
+        default:
+            error = "sandbox profile has an unsupported runtime";
+            return std::nullopt;
+    }
     profile.privateNetworkNamespace = true;
     profile.allowNetworkClient = containsPermission(granted, "network.client");
     profile.memoryMaxMiB = kDefaultMemoryMaxMiB;
     profile.pidsMax = kDefaultPidsMax;
+    profile.cpuWeight = kDefaultCpuWeight;
     profile.effectivePermissions = std::move(granted);
     if (!validateSandboxProfile(profile, error)) {
         return std::nullopt;
     }
-
-    SandboxLaunchRequest request{};
-    request.appId = application.appId;
-    request.instanceId = instanceId;
-    request.bundleRecordDigest = application.bundleRecordDigest;
-    request.profileDigest = digestSandboxProfile(profile);
-    if (!validateSandboxLaunchRequest(request, error)) {
-        return std::nullopt;
-    }
-    return SandboxLaunchPlan{std::move(profile), std::move(request)};
+    return profile;
 }
 
 } // namespace lcl::security

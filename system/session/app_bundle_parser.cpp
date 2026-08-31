@@ -492,12 +492,12 @@ ScopedFd openDirectoryAt(int parentDescriptor, const char* name) {
     const int descriptor = openat(parentDescriptor, name,
                                   O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (descriptor < 0) {
-        return {};
+        return ScopedFd{};
     }
     struct stat status {};
     if (fstat(descriptor, &status) != 0 || !S_ISDIR(status.st_mode)) {
         close(descriptor);
-        return {};
+        return ScopedFd{};
     }
     return ScopedFd(descriptor);
 }
@@ -520,7 +520,7 @@ ScopedFd openRegularFileAt(int bundleDescriptor, const std::string& relativePath
                            struct stat& fileStatus) {
     const std::vector<std::string> components = splitRelativePath(relativePath);
     if (components.empty()) {
-        return {};
+        return ScopedFd{};
     }
 
     int parentDescriptor = bundleDescriptor;
@@ -532,13 +532,13 @@ ScopedFd openRegularFileAt(int bundleDescriptor, const std::string& relativePath
             : O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK;
         const int descriptor = openat(parentDescriptor, components[index].c_str(), flags);
         if (descriptor < 0) {
-            return {};
+            return ScopedFd{};
         }
 
         if (finalComponent) {
             if (!isRegularFileDescriptor(descriptor, fileStatus)) {
                 close(descriptor);
-                return {};
+                return ScopedFd{};
             }
             return ScopedFd(descriptor);
         }
@@ -546,12 +546,12 @@ ScopedFd openRegularFileAt(int bundleDescriptor, const std::string& relativePath
         struct stat directoryStatus {};
         if (fstat(descriptor, &directoryStatus) != 0 || !S_ISDIR(directoryStatus.st_mode)) {
             close(descriptor);
-            return {};
+            return ScopedFd{};
         }
         ownedParent = ScopedFd(descriptor);
         parentDescriptor = ownedParent.get();
     }
-    return {};
+    return ScopedFd{};
 }
 
 ScopedFd openOptionalSignatureEnvelopeAt(int bundleDescriptor, struct stat& fileStatus,
@@ -560,13 +560,13 @@ ScopedFd openOptionalSignatureEnvelopeAt(int bundleDescriptor, struct stat& file
     const int descriptor = openat(bundleDescriptor, "Signature.ed25519",
                                   O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (descriptor < 0) {
-        return {};
+        return ScopedFd{};
     }
     wasPresent = true;
     if (!isRegularFileDescriptor(descriptor, fileStatus) || fileStatus.st_size < 0 ||
         static_cast<std::uintmax_t>(fileStatus.st_size) > kMaxSignatureEnvelopeBytes) {
         close(descriptor);
-        return {};
+        return ScopedFd{};
     }
     return ScopedFd(descriptor);
 }

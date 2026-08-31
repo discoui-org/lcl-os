@@ -1,25 +1,23 @@
 #pragma once
 
 #include "system/security/sandbox_contract.hpp"
+#include "system/security/sandbox_cgroup.hpp"
 #include "system/security/sandbox_filesystem_sources.hpp"
+#include "system/security/sandbox_kernel_enforcement.hpp"
 
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace lcl::security {
 
 /**
- * Protected sandboxd-side evidence that mandatory kernel stages completed in
- * this child immediately before credential drop. It is never IPC input.
+ * A daemon-owned cgroup allocation.  The non-owning manager reference stays
+ * valid for the lifetime of sandboxd and is never supplied by launch IPC.
  */
-struct SandboxKernelEnforcement {
-    bool mountNamespaceReady{false};
-    bool pidNamespaceReady{false};
-    bool ipcNamespaceReady{false};
-    bool networkNamespaceReady{false};
-    bool seccompInstalled{false};
-    bool landlockInstalled{false};
-    bool directDeviceAccessDenied{false};
+struct SandboxCgroupBinding {
+    const SandboxCgroupManager* manager{nullptr};
+    SandboxCgroup cgroup;
 };
 
 /**
@@ -30,8 +28,12 @@ struct SandboxKernelEnforcement {
 struct SandboxChildLaunchSpec {
     SandboxLaunchPlan plan;
     AppIdentity identity;
+    std::optional<SandboxCgroupBinding> cgroup;
+    /** Reset and populated by the launcher itself before application exec. */
     SandboxKernelEnforcement kernelEnforcement;
     SandboxFilesystemSources filesystemSources;
+    /** Verified, bundle-relative location that must resolve to executableDescriptor. */
+    std::string executableBundlePath;
     int executableDescriptor{-1};
     /** Required only for JavaScript apps; this is a trusted lcl-js descriptor. */
     int runtimeDescriptor{-1};
@@ -41,10 +43,9 @@ struct SandboxChildLaunchSpec {
 bool validateSandboxChildLaunchSpec(const SandboxChildLaunchSpec& spec, std::string& error);
 
 /**
- * Forks one app process group and applies the credential/environment boundary
- * before exec. Namespace, mounts, seccomp, Landlock and cgroup placement are
- * intentionally installed by the surrounding sandboxd stages, before this
- * function's child reaches exec.
+ * Forks one daemon-owned app process group and applies cgroup placement,
+ * namespaces, private mounts, Landlock, credential drop, seccomp and the
+ * environment boundary before exec.  It never falls back to direct exec.
  */
 SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec);
 

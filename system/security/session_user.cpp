@@ -77,20 +77,49 @@ bool ensureSessionDirectoryAt(int parentDescriptor, const char* name, ScopedFd& 
     return true;
 }
 
-bool secureOptionalBashrc(int homeDescriptor, std::string& error) {
-    ScopedFd bashrc(openat(homeDescriptor, ".bashrc", O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
-    if (!bashrc.valid()) {
+/**
+ * The per-user Containers root is an authority boundary, not user storage:
+ * sandboxd creates and repairs every child app container below it.  The
+ * interactive session user may traverse it to reach its trusted Terminal
+ * container, but cannot list, create, rename, or replace another app's root.
+ */
+bool ensureRootContainerDirectoryAt(int parentDescriptor, ScopedFd& directory, std::string& error) {
+    constexpr const char* kContainersName = "Containers";
+    if (mkdirat(parentDescriptor, kContainersName, 0711) != 0 && errno != EEXIST) {
+        error = std::string("could not create app containers root: ") + std::strerror(errno);
+        return false;
+    }
+    ScopedFd opened(openat(parentDescriptor, kContainersName,
+                           O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
+    struct stat status {};
+    if (!opened.valid() || fstat(opened.get(), &status) != 0 || !S_ISDIR(status.st_mode) ||
+        S_ISLNK(status.st_mode)) {
+        error = "app containers root is not a safe directory";
+        return false;
+    }
+    if (fchown(opened.get(), 0, 0) != 0 || fchmod(opened.get(), 0711) != 0) {
+        error = std::string("could not secure app containers root: ") + std::strerror(errno);
+        return false;
+    }
+    directory = std::move(opened);
+    return true;
+}
+
+bool secureOptionalSessionProfile(int homeDescriptor, const char* fileName, std::string& error) {
+    ScopedFd profile(openat(homeDescriptor, fileName, O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+    if (!profile.valid()) {
         if (errno == ENOENT) {
             return true;
         }
-        error = std::string("could not open session .bashrc safely: ") + std::strerror(errno);
+        error = std::string("could not open session ") + fileName + " safely: " +
+                std::strerror(errno);
         return false;
     }
     struct stat status {};
-    if (fstat(bashrc.get(), &status) != 0 || !S_ISREG(status.st_mode) || status.st_nlink != 1 ||
-        fchown(bashrc.get(), kSessionUserUid, kSessionUserGid) != 0 ||
-        fchmod(bashrc.get(), 0600) != 0) {
-        error = "session .bashrc is not a safe private regular file";
+    if (fstat(profile.get(), &status) != 0 || !S_ISREG(status.st_mode) || status.st_nlink != 1 ||
+        fchown(profile.get(), kSessionUserUid, kSessionUserGid) != 0 ||
+        fchmod(profile.get(), 0600) != 0) {
+        error = std::string("session ") + fileName + " is not a safe private regular file";
         return false;
     }
     return true;
@@ -183,13 +212,14 @@ bool provisionSessionUserHome(std::string& error) {
         !ensureSessionDirectoryAt(home.get(), "Documents", documents, error) ||
         !ensureSessionDirectoryAt(home.get(), "Downloads", downloads, error) ||
         !ensureSessionDirectoryAt(home.get(), "Library", library, error) ||
-        !ensureSessionDirectoryAt(library.get(), "Containers", containers, error) ||
+        !ensureRootContainerDirectoryAt(library.get(), containers, error) ||
         !ensureSessionDirectoryAt(containers.get(), "org.lcl.terminal", terminalContainer, error) ||
         !ensureSessionDirectoryAt(terminalContainer.get(), "Data", data, error) ||
         !ensureSessionDirectoryAt(terminalContainer.get(), "Cache", cache, error) ||
         !ensureSessionDirectoryAt(terminalContainer.get(), "Preferences", preferences, error) ||
         !ensureSessionDirectoryAt(terminalContainer.get(), "Temporary", temporary, error) ||
-        !secureOptionalBashrc(home.get(), error)) {
+        !secureOptionalSessionProfile(home.get(), ".bashrc", error) ||
+        !secureOptionalSessionProfile(home.get(), ".profile", error)) {
         return false;
     }
     return true;

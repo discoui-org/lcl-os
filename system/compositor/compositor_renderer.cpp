@@ -27,6 +27,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
     // cannot mutate the surface state while this frame is being composed.
 
     auto* raster = renderer.getRasterRenderer();
+    const bool hardwareAccelerated = raster->isHardwareAccelerated();
     const uint64_t resourceGeneration = raster->getResourceGeneration();
     const uint32_t frameWidth = renderer.getWidth();
     const uint32_t frameHeight = renderer.getHeight();
@@ -103,6 +104,10 @@ void CompositorRenderer::render(render::Renderer& renderer,
             continue;
         }
         for (const auto& effectRegion : surface.entry->effectRegions) {
+            if (!shouldExecuteEffectSource(
+                    effectRegion.region.source, hardwareAccelerated)) {
+                continue;
+            }
             const bool readsNeighbors = std::any_of(
                 effectRegion.filters.begin(), effectRegion.filters.end(),
                 [](const auto& filter) {
@@ -739,6 +744,12 @@ void CompositorRenderer::render(render::Renderer& renderer,
                                          protocol::EffectSourceType sourceType,
                                          float windowOpacity,
         const render::WindowGroupTransform& group) {
+        // SurfaceBackdrop samples compositor-owned scene pixels and is an
+        // explicitly hardware-only contract. Silently ignore the complete
+        // chain on software raster and software-emulated GL backends.
+        if (!shouldExecuteEffectSource(sourceType, hardwareAccelerated)) {
+            return;
+        }
         const float titleOffset = (win.decorationMode == render::DecorationMode::SSD)
             ? 32.0f
             : 0.0f;
@@ -873,7 +884,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
         const bool reusingBackdropBase = matchingSurface &&
             incrementalBackdropSurfaceKey &&
             *incrementalBackdropSurfaceKey == matchingSurfaceKey;
-        const bool hasNonLocalBackdrop = matchingSurface && std::any_of(
+        const bool hasNonLocalBackdrop = hardwareAccelerated &&
+            matchingSurface && std::any_of(
             matchingSurface->effectRegions.begin(),
             matchingSurface->effectRegions.end(), [](const auto& region) {
                 return region.region.source ==

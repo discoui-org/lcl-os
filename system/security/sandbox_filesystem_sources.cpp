@@ -25,6 +25,34 @@ bool isPrivateAppDirectory(int descriptor, const AppIdentity& identity) {
 
 } // namespace
 
+bool isSafeSandboxBundleRelativePath(const std::string& path) noexcept {
+    if (path.empty() || path.size() > 1024 || path.front() == '/' ||
+        path.find('\\') != std::string::npos || path.find('\0') != std::string::npos) {
+        return false;
+    }
+    std::size_t start = 0;
+    while (start < path.size()) {
+        const std::size_t end = path.find('/', start);
+        const std::size_t componentSize = (end == std::string::npos ? path.size() : end) - start;
+        if (componentSize == 0 ||
+            (componentSize == 1 && path[start] == '.') ||
+            (componentSize == 2 && path[start] == '.' && path[start + 1] == '.')) {
+            return false;
+        }
+        for (std::size_t index = start; index < start + componentSize; ++index) {
+            const unsigned char character = static_cast<unsigned char>(path[index]);
+            if (character < 0x20 || character == 0x7F) {
+                return false;
+            }
+        }
+        if (end == std::string::npos) {
+            return true;
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
 bool validateSandboxFilesystemSources(const SandboxFilesystemSources& sources,
                                      const AppIdentity& identity, std::string& error) {
     error.clear();
