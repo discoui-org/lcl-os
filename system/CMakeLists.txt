@@ -24,11 +24,13 @@ target_include_directories(lcl-session-protocol PUBLIC ${PROJECT_SOURCE_DIR})
 add_library(lcl-security STATIC
     security/app_data_store.cpp
     security/app_identity_registry.cpp
+    security/bundle_approval_authority.cpp
     security/bundle_approval_store.cpp
     security/bundle_launch_gate.cpp
     security/bundle_record.cpp
     security/bundle_snapshot_store.cpp
     security/bundle_signature_verifier.cpp
+    security/pending_bundle_approval_store.cpp
     security/permission_policy.cpp
     security/permission_store.cpp
     security/session_user.cpp

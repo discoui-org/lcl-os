@@ -9,6 +9,7 @@
 #include "system/security/sandbox_client.hpp"
 #include "system/security/bundle_approval_store.hpp"
 #include "system/security/bundle_snapshot_store.hpp"
+#include "system/security/pending_bundle_approval_store.hpp"
 #include "system/security/permission_store.hpp"
 #include "system/session/app_registry.hpp"
 #include "system/session/session_protocol.hpp"
@@ -45,7 +46,9 @@ public:
           .ownerUid = 0,
           .ownerGid = 0,
       },
-      lcl::security::BundleSnapshotStoreConfig bundleSnapshotStoreConfig = {});
+      lcl::security::BundleSnapshotStoreConfig bundleSnapshotStoreConfig = {},
+      lcl::security::PendingBundleApprovalStoreConfig
+          pendingBundleApprovalStoreConfig = {});
   ~SessionService();
 
   SessionService(const SessionService &) = delete;
@@ -83,6 +86,7 @@ private:
   lcl::security::PermissionStore m_permissionStore;
   lcl::security::BundleApprovalStore m_bundleApprovals;
   lcl::security::BundleSnapshotStore m_bundleSnapshots;
+  lcl::security::PendingBundleApprovalStore m_pendingBundleApprovals;
   std::string m_sandboxSocketPath;
   std::string m_socketPath;
   int m_serverFd{-1};

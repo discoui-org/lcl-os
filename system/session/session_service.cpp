@@ -127,6 +127,13 @@ bool isSystemImageApplication(const core::AppBundleMetadata &app) {
          bundlePath.extension() == ".app";
 }
 
+bool conflictsWithSystemImageApplication(const AppRegistry &registry,
+                                         const core::AppBundleMetadata &app) {
+  const auto systemApplication = registry.find(app.appId);
+  return systemApplication && isSystemImageApplication(*systemApplication) &&
+         !isSystemImageApplication(app);
+}
+
 lcl::security::BundleSourceScope bundleSourceScope(
     const core::AppBundleMetadata &app) {
   const std::filesystem::path bundlePath(app.bundlePath);
@@ -161,11 +168,14 @@ SessionService::SessionService(std::vector<std::string> appSearchPaths,
                                std::string sandboxSocketPath,
                                lcl::security::PermissionStoreConfig permissionStoreConfig,
                                lcl::security::BundleApprovalStoreConfig bundleApprovalStoreConfig,
-                               lcl::security::BundleSnapshotStoreConfig bundleSnapshotStoreConfig)
+                               lcl::security::BundleSnapshotStoreConfig bundleSnapshotStoreConfig,
+                               lcl::security::PendingBundleApprovalStoreConfig
+                                   pendingBundleApprovalStoreConfig)
     : m_registry(std::move(appSearchPaths)),
       m_permissionStore(std::move(permissionStoreConfig)),
       m_bundleApprovals(std::move(bundleApprovalStoreConfig)),
       m_bundleSnapshots(std::move(bundleSnapshotStoreConfig)),
+      m_pendingBundleApprovals(std::move(pendingBundleApprovalStoreConfig)),
       m_sandboxSocketPath(std::move(sandboxSocketPath)) {}
 
 SessionService::~SessionService() { shutdown(); }
@@ -276,6 +286,12 @@ LaunchResponse SessionService::launch(const LaunchRequest &request) {
   if (!app || !app->valid) {
     response.status = 1;
     response.message = "unknown application: " + request.target;
+    return response;
+  }
+  if (conflictsWithSystemImageApplication(m_registry, *app)) {
+    response.status = 3;
+    response.appId = app->appId;
+    response.message = "external bundle cannot use a system application ID";
     return response;
   }
   if (request.singleInstance) {
@@ -413,6 +429,18 @@ SessionService::launchSandboxed(const core::AppBundleMetadata &app,
         lcl::security::BundlePublisherState::Unverified);
     if (!assessment.allowed()) {
       response.status = 3;
+      if (assessment.decision ==
+          lcl::security::BundleLaunchDecision::NeedsUserApproval) {
+        if (!m_pendingBundleApprovals.record(
+                lcl::security::kSessionUserUid, *record,
+                lcl::security::BundlePublisherState::Unverified,
+                bundleSourceScope(app), app.bundlePath, app.name, error)) {
+          response.message =
+              "lcl-sandboxd launch rejected because the pending bundle approval could not be saved: " +
+              error;
+          return response;
+        }
+      }
       response.message =
           "lcl-sandboxd launch rejected because bundle is not accepted: " +
           assessment.reason;

@@ -91,7 +91,7 @@ ScopedFd openExecutable(const std::string& path, std::string& error) {
         !S_ISREG(status.st_mode) || status.st_nlink != 1 ||
         (status.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0) {
         error = std::string("could not open protected JavaScript runtime '") + path + "'";
-        return {};
+        return ScopedFd{};
     }
     return descriptor;
 }

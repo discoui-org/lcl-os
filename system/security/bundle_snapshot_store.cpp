@@ -122,13 +122,13 @@ ScopedFd openSourceFile(int bundleDescriptor, std::string_view relativePath,
     std::vector<std::string_view> components;
     if (!splitRelativePath(relativePath, components)) {
         error = "bundle snapshot received an unsafe relative file path";
-        return {};
+        return ScopedFd{};
     }
     ScopedFd current(fcntl(bundleDescriptor, F_DUPFD_CLOEXEC, 8));
     if (!current.valid()) {
         error = std::string("could not duplicate verified bundle descriptor: ") +
                 std::strerror(errno);
-        return {};
+        return ScopedFd{};
     }
     for (std::size_t index = 0; index < components.size(); ++index) {
         const bool finalComponent = index + 1 == components.size();
@@ -139,7 +139,7 @@ ScopedFd openSourceFile(int bundleDescriptor, std::string_view relativePath,
         if (!opened.valid()) {
             error = std::string("could not reopen verified bundle payload: ") +
                     std::strerror(errno);
-            return {};
+            return ScopedFd{};
         }
         current = std::move(opened);
     }
@@ -154,14 +154,14 @@ ScopedFd ensureDestinationParent(int snapshotDescriptor,
     if (!current.valid()) {
         error = std::string("could not duplicate bundle snapshot descriptor: ") +
                 std::strerror(errno);
-        return {};
+        return ScopedFd{};
     }
     for (std::size_t index = 0; index + 1 < components.size(); ++index) {
         const std::string name(components[index]);
         if (mkdirat(current.get(), name.c_str(), 0755) != 0 && errno != EEXIST) {
             error = std::string("could not create bundle snapshot directory: ") +
                     std::strerror(errno);
-            return {};
+            return ScopedFd{};
         }
         ScopedFd opened(openat(current.get(), name.c_str(),
                                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
@@ -170,7 +170,7 @@ ScopedFd ensureDestinationParent(int snapshotDescriptor,
             !isRootControlledDirectory(status, config.ownerUid, config.ownerGid) ||
             fchmod(opened.get(), 0755) != 0) {
             error = "bundle snapshot directory is not protected";
-            return {};
+            return ScopedFd{};
         }
         current = std::move(opened);
     }

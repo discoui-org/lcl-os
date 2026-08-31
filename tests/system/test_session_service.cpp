@@ -199,6 +199,50 @@ TEST_F(SessionServiceTest,
 }
 
 TEST_F(SessionServiceTest,
+       ServiceQueuesAnExactPendingApprovalForAnUnverifiedExternalBundle) {
+  const fs::path bundle = createBundle("Pending.app", "org.lcl.pending");
+  const lcl::security::PermissionStoreConfig permissionStoreConfig{
+      .storePath = (tempDir / "permissions.v1").string(),
+      .ownerUid = getuid(),
+      .ownerGid = getgid(),
+  };
+  const lcl::security::BundleApprovalStoreConfig approvalStoreConfig{
+      .storePath = (tempDir / "bundle-approvals.v1").string(),
+      .ownerUid = getuid(),
+      .ownerGid = getgid(),
+  };
+  const lcl::security::BundleSnapshotStoreConfig snapshotStoreConfig{
+      .snapshotsRoot = (tempDir / "bundle-snapshots").string(),
+      .ownerUid = getuid(),
+      .ownerGid = getgid(),
+  };
+  const lcl::security::PendingBundleApprovalStoreConfig pendingStoreConfig{
+      .storePath = (tempDir / "pending-bundle-approvals.v1").string(),
+      .ownerUid = getuid(),
+      .ownerGid = getgid(),
+  };
+  SessionService service({tempDir.string()}, (tempDir / "sandboxd.sock").string(),
+                         permissionStoreConfig, approvalStoreConfig, snapshotStoreConfig,
+                         pendingStoreConfig);
+  service.refreshCatalog();
+
+  const LaunchResponse launch = service.launch({bundle.string(), false});
+  EXPECT_EQ(launch.status, 3u);
+  EXPECT_NE(launch.message.find("yayıncısını doğrulayamadı"), std::string::npos);
+
+  lcl::security::PendingBundleApprovalStore pending(pendingStoreConfig);
+  std::string error;
+  const auto requests = pending.pendingFor(1000, error);
+  ASSERT_TRUE(error.empty()) << error;
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_EQ(requests.front().appId, "org.lcl.pending");
+  EXPECT_EQ(requests.front().bundlePath, bundle.string());
+  EXPECT_EQ(requests.front().displayName, "Test App");
+  EXPECT_EQ(requests.front().sourceScope,
+            lcl::security::BundleSourceScope::Direct);
+}
+
+TEST_F(SessionServiceTest,
        DelegatesThirdPartyLaunchAndExitLifecycleToSandboxd) {
   const fs::path bundle = createBundle("Sandboxed.app", "org.lcl.sandboxed");
   const auto metadata =
