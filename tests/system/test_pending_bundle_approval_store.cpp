@@ -121,7 +121,8 @@ TEST_F(PendingBundleApprovalStoreTest,
     changedRecord.appVersion = "2.0";
     changedRecord.payloadDigest = digestBundlePayload(changedRecord);
     changedRecord.digest = digestBundleRecord(changedRecord);
-    EXPECT_FALSE(authority.approvePending(1000, changedRecord, error));
+    EXPECT_FALSE(authority.approvePending(1000, changedRecord.appId,
+                                          changedRecord.digest, error));
     EXPECT_NE(error.find("not pending"), std::string::npos);
 
     error.clear();
@@ -131,7 +132,7 @@ TEST_F(PendingBundleApprovalStoreTest,
                                "/Users/Rei/Downloads/Example.app", "Example", error))
         << error;
 
-    ASSERT_TRUE(authority.approvePending(1000, record_, error)) << error;
+    ASSERT_TRUE(authority.approvePending(1000, record_.appId, record_.digest, error)) << error;
     EXPECT_TRUE(authority.pendingFor(1000, error).empty());
     EXPECT_TRUE(error.empty()) << error;
 
@@ -142,7 +143,7 @@ TEST_F(PendingBundleApprovalStoreTest,
     });
     EXPECT_TRUE(approvals.isApproved(1000, record_, BundlePublisherState::Unverified, error))
         << error;
-    EXPECT_TRUE(authority.revoke(1000, record_, error)) << error;
+    EXPECT_TRUE(authority.revoke(1000, record_.appId, record_.digest, error)) << error;
     EXPECT_FALSE(approvals.isApproved(1000, record_, BundlePublisherState::Unverified, error));
     EXPECT_TRUE(error.empty()) << error;
 }

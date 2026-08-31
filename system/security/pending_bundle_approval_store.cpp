@@ -465,10 +465,24 @@ bool PendingBundleApprovalStore::remove(uid_t userUid, const BundleRecord& recor
                                         BundlePublisherState publisherState, std::string& error) {
     error.clear();
     if (userUid == 0 || publisherState != BundlePublisherState::Unverified ||
-        !validateBundleRecord(record, error) || !validateConfig(error) ||
-        !validateStoreParent(error)) {
+        !validateBundleRecord(record, error)) {
         if (error.empty()) {
             error = "only an unverified bundle approval request may be removed";
+        }
+        return false;
+    }
+    return removeExactUnverified(userUid, record.appId, record.digest, error);
+}
+
+bool PendingBundleApprovalStore::removeExactUnverified(
+    uid_t userUid, const std::string& appId, const Sha256Digest& bundleRecordDigest,
+    std::string& error) {
+    error.clear();
+    if (userUid == 0 || !AppIdentityRegistry::isValidAppId(appId) ||
+        isZeroDigest(bundleRecordDigest) || !validateConfig(error) ||
+        !validateStoreParent(error)) {
+        if (error.empty()) {
+            error = "an exact unverified pending bundle identity is required";
         }
         return false;
     }
@@ -476,10 +490,10 @@ bool PendingBundleApprovalStore::remove(uid_t userUid, const BundleRecord& recor
     if (!lock.valid() || !loadUnlocked(error)) {
         return false;
     }
-    const auto hasIdentity = [userUid, &record, publisherState](const auto& value) {
-        return value.userUid == userUid && value.appId == record.appId &&
-               value.bundleRecordDigest == record.digest &&
-               value.publisherState == publisherState;
+    const auto hasIdentity = [userUid, &appId, &bundleRecordDigest](const auto& value) {
+        return value.userUid == userUid && value.appId == appId &&
+               value.bundleRecordDigest == bundleRecordDigest &&
+               value.publisherState == BundlePublisherState::Unverified;
     };
     const auto newEnd = std::remove_if(pending_.begin(), pending_.end(), hasIdentity);
     if (newEnd == pending_.end()) {

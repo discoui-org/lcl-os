@@ -21,18 +21,20 @@ export LD_LIBRARY_PATH=/System/Library/Libraries
 
 SESSIOND_PID=""
 SANDBOXD_PID=""
+SECURITYD_PID=""
 SHELL_PID=""
 
 cleanup() {
     if [ -n "$SHELL_PID" ]; then kill -TERM "$SHELL_PID" 2>/dev/null || true; fi
     if [ -n "$SESSIOND_PID" ]; then kill -TERM "$SESSIOND_PID" 2>/dev/null || true; fi
     if [ -n "$SANDBOXD_PID" ]; then kill -TERM "$SANDBOXD_PID" 2>/dev/null || true; fi
+    if [ -n "$SECURITYD_PID" ]; then kill -TERM "$SECURITYD_PID" 2>/dev/null || true; fi
     wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
 echo "[LCL SESSION] Starting canonical rootfs userspace..."
-rm -f /Runtime/lcl-sessiond.sock /Runtime/lcl-sandboxd.sock
+rm -f /Runtime/lcl-sessiond.sock /Runtime/lcl-sandboxd.sock /Runtime/lcl-securityd.sock
 
 # sandboxd is a separate root-owned authority.  Its 0600 control socket is
 # exclusively for the root session daemon; third-party applications never
@@ -66,6 +68,32 @@ if ! /System/Tools/grep -F /Runtime/lcl-sandboxd.sock /proc/net/unix |
     fi
     echo "[LCL SESSION] lcl-sandboxd is unavailable; third-party launches remain disabled" >&2
     echo "[LCL SESSION] see /Runtime/lcl-sandboxd.log for the fail-closed reason" >&2
+fi
+
+# securityd exposes only pending unsigned-bundle decisions to the trusted
+# session user. Normal sandbox UIDs cannot open its 0600 endpoint.
+if [ -x /System/Core/lcl-securityd ]; then
+    /System/Core/lcl-securityd --session-uid 1000 --session-gid 1000 \
+        > /Runtime/lcl-securityd.log 2>&1 &
+    SECURITYD_PID=$!
+    for ((i=0; i<100; i++)); do
+        if [ -S "/Runtime/lcl-securityd.sock" ]; then
+            break
+        fi
+        if ! kill -0 "$SECURITYD_PID" 2>/dev/null; then
+            SECURITYD_PID=""
+            break
+        fi
+        sleep 0.05
+    done
+fi
+if [ ! -S "/Runtime/lcl-securityd.sock" ]; then
+    if [ -n "$SECURITYD_PID" ]; then
+        kill -TERM "$SECURITYD_PID" 2>/dev/null || true
+        wait "$SECURITYD_PID" 2>/dev/null || true
+        SECURITYD_PID=""
+    fi
+    echo "[LCL SESSION] lcl-securityd is unavailable; new unsigned-bundle approvals are disabled" >&2
 fi
 
 /System/Core/lcl-sessiond > /Runtime/lcl-sessiond.log 2>&1 &

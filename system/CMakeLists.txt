@@ -51,6 +51,9 @@ add_library(lcl-security STATIC
     security/sandbox_protocol.cpp
     security/sandbox_seccomp.cpp
     security/sandbox_system_application_registry.cpp
+    security/security_admin_client.cpp
+    security/security_admin_daemon.cpp
+    security/security_admin_protocol.cpp
     security/sha256.cpp
 )
 target_include_directories(lcl-security PUBLIC ${PROJECT_SOURCE_DIR})

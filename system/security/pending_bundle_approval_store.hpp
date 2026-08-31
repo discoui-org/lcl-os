@@ -8,6 +8,8 @@
 
 namespace lcl::security {
 
+class BundleApprovalAuthority;
+
 /** Root-owned record that a trusted Settings broker may present to one user. */
 struct PendingBundleApproval {
     uid_t userUid{0};
@@ -50,6 +52,12 @@ public:
     std::vector<PendingBundleApproval> pendingFor(uid_t userUid, std::string& error);
 
 private:
+    friend class BundleApprovalAuthority;
+
+    /** Removes a queue entry only after its identity has been authenticated. */
+    bool removeExactUnverified(uid_t userUid, const std::string& appId,
+                               const Sha256Digest& bundleRecordDigest,
+                               std::string& error);
     bool validateConfig(std::string& error) const;
     bool validateStoreParent(std::string& error) const;
     bool loadUnlocked(std::string& error);

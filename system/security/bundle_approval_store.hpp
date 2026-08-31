@@ -9,6 +9,8 @@
 
 namespace lcl::security {
 
+class BundleApprovalAuthority;
+
 struct BundleApprovalStoreConfig {
     std::string storePath;
     uid_t ownerUid{0};
@@ -46,6 +48,16 @@ public:
     std::size_t size() const noexcept { return approvals_.size(); }
 
 private:
+    friend class BundleApprovalAuthority;
+
+    /** Called only after BundleApprovalAuthority authenticates a pending record. */
+    bool approveExactUnverified(uid_t userUid, const std::string& appId,
+                                 const Sha256Digest& bundleRecordDigest,
+                                 std::string& error);
+    /** Called only by the trusted approval authority. */
+    bool revokeExactUnverified(uid_t userUid, const std::string& appId,
+                                const Sha256Digest& bundleRecordDigest,
+                                std::string& error);
     bool validateConfig(std::string& error) const;
     bool validateStoreParent(std::string& error) const;
     bool loadUnlocked(std::string& error);

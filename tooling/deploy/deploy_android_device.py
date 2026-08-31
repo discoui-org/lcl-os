@@ -364,8 +364,8 @@ def rootfs_process_ids() -> list[str]:
 def stop_rootfs_session() -> None:
     """Stop canonical userspace processes before unmounting its rootfs."""
     process_names = (
-        "lcl-desktop-shell", "lcl-mobile-shell", "lcl-sessiond", "lcl-terminal", "lcl-open",
-        "lcl-js",
+        "lcl-desktop-shell", "lcl-mobile-shell", "lcl-sessiond", "lcl-sandboxd",
+        "lcl-securityd", "lcl-terminal", "lcl-open", "lcl-js",
     )
     def active_pids() -> list[str]:
         pids = rootfs_process_ids()
@@ -937,8 +937,8 @@ def push_rootfs_session_launcher() -> None:
 def prepare_runtime_for_launch() -> None:
     """Stop an existing LCL session, then clear its private runtime sockets."""
     process_names = (
-        "lcl-core-android", "lcl-sessiond", "lcl-desktop-shell",
-        "lcl-mobile-shell", "lcl-terminal",
+        "lcl-core-android", "lcl-sessiond", "lcl-sandboxd", "lcl-securityd",
+        "lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal",
     )
 
     def active_processes() -> list[str]:

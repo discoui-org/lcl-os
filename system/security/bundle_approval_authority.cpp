@@ -1,5 +1,7 @@
 #include "system/security/bundle_approval_authority.hpp"
 
+#include "system/security/app_identity_registry.hpp"
+
 #include <algorithm>
 #include <utility>
 
@@ -15,8 +17,18 @@ std::vector<PendingBundleApproval> BundleApprovalAuthority::pendingFor(
 
 bool BundleApprovalAuthority::approvePending(uid_t userUid, const BundleRecord& record,
                                               std::string& error) {
+    if (!validateBundleRecord(record, error)) {
+        return false;
+    }
+    return approvePending(userUid, record.appId, record.digest, error);
+}
+
+bool BundleApprovalAuthority::approvePending(uid_t userUid, const std::string& appId,
+                                              const Sha256Digest& bundleRecordDigest,
+                                              std::string& error) {
     error.clear();
-    if (userUid == 0 || !validateBundleRecord(record, error)) {
+    if (userUid == 0 || !AppIdentityRegistry::isValidAppId(appId) ||
+        isZeroDigest(bundleRecordDigest)) {
         if (error.empty()) {
             error = "bundle approval requires a non-root user";
         }
@@ -27,18 +39,18 @@ bool BundleApprovalAuthority::approvePending(uid_t userUid, const BundleRecord& 
         return false;
     }
     const bool requested = std::any_of(
-        pending.begin(), pending.end(), [&record](const PendingBundleApproval& request) {
-            return request.appId == record.appId && request.bundleRecordDigest == record.digest &&
+        pending.begin(), pending.end(), [&appId, &bundleRecordDigest](const PendingBundleApproval& request) {
+            return request.appId == appId && request.bundleRecordDigest == bundleRecordDigest &&
                    request.publisherState == BundlePublisherState::Unverified;
         });
     if (!requested) {
         error = "bundle approval refused because this exact bundle is not pending";
         return false;
     }
-    if (!approvals_.approve(userUid, record, BundlePublisherState::Unverified, error)) {
+    if (!approvals_.approveExactUnverified(userUid, appId, bundleRecordDigest, error)) {
         return false;
     }
-    if (!pending_.remove(userUid, record, BundlePublisherState::Unverified, error)) {
+    if (!pending_.removeExactUnverified(userUid, appId, bundleRecordDigest, error)) {
         // The durable allow record is intentionally not rolled back: a retry
         // is idempotent and repairs the stale presentation record without
         // ever widening the exact-record approval.
@@ -51,7 +63,16 @@ bool BundleApprovalAuthority::approvePending(uid_t userUid, const BundleRecord& 
 
 bool BundleApprovalAuthority::revoke(uid_t userUid, const BundleRecord& record,
                                       std::string& error) {
-    return approvals_.revoke(userUid, record, BundlePublisherState::Unverified, error);
+    if (!validateBundleRecord(record, error)) {
+        return false;
+    }
+    return revoke(userUid, record.appId, record.digest, error);
+}
+
+bool BundleApprovalAuthority::revoke(uid_t userUid, const std::string& appId,
+                                      const Sha256Digest& bundleRecordDigest,
+                                      std::string& error) {
+    return approvals_.revokeExactUnverified(userUid, appId, bundleRecordDigest, error);
 }
 
 } // namespace lcl::security

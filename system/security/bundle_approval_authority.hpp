@@ -33,7 +33,12 @@ public:
     BundleApprovalAuthority& operator=(const BundleApprovalAuthority&) = delete;
 
     std::vector<PendingBundleApproval> pendingFor(uid_t userUid, std::string& error);
+    /** Authorizes only an identity already present in the pending queue. */
+    bool approvePending(uid_t userUid, const std::string& appId,
+                        const Sha256Digest& bundleRecordDigest, std::string& error);
     bool approvePending(uid_t userUid, const BundleRecord& record, std::string& error);
+    bool revoke(uid_t userUid, const std::string& appId,
+                const Sha256Digest& bundleRecordDigest, std::string& error);
     bool revoke(uid_t userUid, const BundleRecord& record, std::string& error);
 
 private:

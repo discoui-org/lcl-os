@@ -61,6 +61,7 @@ CANONICAL_TARGETS = (
     "lcl-terminal",
     "lcl-sessiond",
     "lcl-sandboxd",
+    "lcl-securityd",
     "lcl-sandbox-probe",
     "lcl-sandbox-smoke",
     "lcl-rasterd",
@@ -430,6 +431,7 @@ def stage_canonical_rootfs(
         "lcl-shell-launcher": dest_system_core / "lcl-shell-launcher",
         "lcl-sessiond": dest_system_core / "lcl-sessiond",
         "lcl-sandboxd": dest_system_core / "lcl-sandboxd",
+        "lcl-securityd": dest_system_core / "lcl-securityd",
         "lcl-sandbox-probe": dest_system_core / "lcl-sandbox-probe",
         "lcl-rasterd": dest_system_core / "lcl-rasterd",
         "lcl-open": dest_system_core / "lcl-open",
@@ -787,6 +789,15 @@ fi
 /System/Core/lcl-core 2>&1 | tee /var/log/lcl_compositor.log &
 sleep 0.2
 
+# securityd owns only the session user's unsigned-bundle allow/revoke
+# decisions. It is deliberately separate from sandboxd's launch authority.
+if [ -x /System/Core/lcl-securityd ]; then
+    echo "[init] Starting lcl-securityd..."
+    /System/Core/lcl-securityd --session-uid 1000 --session-gid 1000 \
+        2>&1 | tee /var/log/lcl_securityd.log &
+    sleep 0.1
+fi
+
 # Start LCL Session Daemon (sole application launch authority)
 if [ -x /System/Core/lcl-sessiond ]; then
     echo "[init] Starting lcl-sessiond..."
@@ -1082,6 +1093,7 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Core/lcl-shell-launcher",
         "/System/Core/lcl-sessiond",
         "/System/Core/lcl-sandboxd",
+        "/System/Core/lcl-securityd",
         "/System/Core/lcl-sandbox-probe",
         "/System/Core/lcl-open",
         "/System/Core/lcl-js",

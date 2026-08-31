@@ -331,9 +331,24 @@ bool BundleApprovalStore::approve(uid_t userUid, const BundleRecord& record,
                                   BundlePublisherState publisherState, std::string& error) {
     error.clear();
     if (userUid == 0 || publisherState != BundlePublisherState::Unverified ||
-        !validateBundleRecord(record, error) || !validateConfig(error) || !validateStoreParent(error)) {
+        !validateBundleRecord(record, error)) {
         if (error.empty()) {
             error = "only an unverified bundle may receive a user approval";
+        }
+        return false;
+    }
+    return approveExactUnverified(userUid, record.appId, record.digest, error);
+}
+
+bool BundleApprovalStore::approveExactUnverified(uid_t userUid, const std::string& appId,
+                                                  const Sha256Digest& bundleRecordDigest,
+                                                  std::string& error) {
+    error.clear();
+    if (userUid == 0 || !AppIdentityRegistry::isValidAppId(appId) ||
+        isZeroDigest(bundleRecordDigest) || !validateConfig(error) ||
+        !validateStoreParent(error)) {
+        if (error.empty()) {
+            error = "an exact unverified bundle approval identity is required";
         }
         return false;
     }
@@ -341,7 +356,8 @@ bool BundleApprovalStore::approve(uid_t userUid, const BundleRecord& record,
     if (!lock.valid() || !loadUnlocked(error)) {
         return false;
     }
-    const BundleApproval approval{userUid, record.appId, record.digest, publisherState};
+    const BundleApproval approval{userUid, appId, bundleRecordDigest,
+                                  BundlePublisherState::Unverified};
     if (std::any_of(approvals_.begin(), approvals_.end(),
                     [&approval](const BundleApproval& existing) { return sameApproval(existing, approval); })) {
         return true;
@@ -358,9 +374,24 @@ bool BundleApprovalStore::revoke(uid_t userUid, const BundleRecord& record,
                                  BundlePublisherState publisherState, std::string& error) {
     error.clear();
     if (userUid == 0 || publisherState != BundlePublisherState::Unverified ||
-        !validateBundleRecord(record, error) || !validateConfig(error) || !validateStoreParent(error)) {
+        !validateBundleRecord(record, error)) {
         if (error.empty()) {
             error = "only an unverified bundle can have a user approval revoked";
+        }
+        return false;
+    }
+    return revokeExactUnverified(userUid, record.appId, record.digest, error);
+}
+
+bool BundleApprovalStore::revokeExactUnverified(uid_t userUid, const std::string& appId,
+                                                 const Sha256Digest& bundleRecordDigest,
+                                                 std::string& error) {
+    error.clear();
+    if (userUid == 0 || !AppIdentityRegistry::isValidAppId(appId) ||
+        isZeroDigest(bundleRecordDigest) || !validateConfig(error) ||
+        !validateStoreParent(error)) {
+        if (error.empty()) {
+            error = "an exact unverified bundle approval identity is required";
         }
         return false;
     }
@@ -368,7 +399,8 @@ bool BundleApprovalStore::revoke(uid_t userUid, const BundleRecord& record,
     if (!lock.valid() || !loadUnlocked(error)) {
         return false;
     }
-    const BundleApproval expected{userUid, record.appId, record.digest, publisherState};
+    const BundleApproval expected{userUid, appId, bundleRecordDigest,
+                                  BundlePublisherState::Unverified};
     const auto newEnd = std::remove_if(
         approvals_.begin(), approvals_.end(),
         [&expected](const BundleApproval& approval) { return sameApproval(approval, expected); });

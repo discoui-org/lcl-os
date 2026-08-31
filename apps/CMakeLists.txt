@@ -8,6 +8,10 @@ add_executable(lcl-sandboxd ${PROJECT_SOURCE_DIR}/system/security/sandbox_daemon
 target_include_directories(lcl-sandboxd PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(lcl-sandboxd PRIVATE lcl-security lcl-session Threads::Threads)
 
+add_executable(lcl-securityd ${PROJECT_SOURCE_DIR}/system/security/security_admin_daemon_main.cpp)
+target_include_directories(lcl-securityd PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(lcl-securityd PRIVATE lcl-security Threads::Threads)
+
 add_executable(lcl-sandbox-probe ${PROJECT_SOURCE_DIR}/system/security/sandbox_platform_probe_main.cpp)
 target_include_directories(lcl-sandbox-probe PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(lcl-sandbox-probe PRIVATE lcl-security)
@@ -84,6 +88,7 @@ target_link_libraries(lcl-js PRIVATE lcl-ui lcl-raster qjs Threads::Threads)
 foreach(root_runtime_target IN ITEMS
         lcl-sessiond
         lcl-sandboxd
+        lcl-securityd
         lcl-sandbox-probe
         lcl-shell-launcher
         lcl-open

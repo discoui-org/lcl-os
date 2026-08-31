@@ -22,6 +22,7 @@ add_executable(lcl_unit_tests
     system/test_bundle_record.cpp
     system/test_bundle_snapshot_store.cpp
     system/test_pending_bundle_approval_store.cpp
+    system/test_security_admin_protocol.cpp
     system/test_bundle_launch_gate.cpp
     system/test_bundle_signature_verifier.cpp
     system/test_permission_policy.cpp
