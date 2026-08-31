@@ -82,7 +82,7 @@ TEST_F(BundleLaunchGateTest, OnlySystemScopeMayUseSystemImageTrust) {
     EXPECT_EQ(machine.decision, BundleLaunchDecision::Reject);
 }
 
-TEST_F(BundleLaunchGateTest, RejectsRootDesktopUserAndInvalidRecords) {
+TEST_F(BundleLaunchGateTest, RejectsRootSessionUserAndInvalidRecords) {
     BundleApprovalStore approvals(approvalStoreConfig());
     BundleLaunchGate gate(approvals);
 

@@ -1,5 +1,5 @@
 #include "system/ipc/ipc_manager.hpp"
-#include "system/security/desktop_user.hpp"
+#include "system/security/session_user.hpp"
 #include <iostream>
 #include <fcntl.h>
 #include <unistd.h>
@@ -56,7 +56,7 @@ bool IPCManager::initialize(const std::string& socketPath) {
     // The root compositor creates this endpoint, but only the unprivileged
     // desktop session owns the 0600 client-facing socket.
     std::string ownershipError;
-    if (!lcl::security::assignDesktopUserOwnership(m_socketPath, 0600, ownershipError)) {
+    if (!lcl::security::assignSessionUserOwnership(m_socketPath, 0600, ownershipError)) {
         std::cerr << "[LCL IPC ERROR] " << ownershipError << "\n";
         close(m_serverFd);
         m_serverFd = -1;

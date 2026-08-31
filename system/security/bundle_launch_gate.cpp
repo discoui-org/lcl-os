@@ -10,7 +10,7 @@ BundleLaunchAssessment BundleLaunchGate::assess(uid_t desktopUser, BundleSourceS
         return {BundleLaunchDecision::Reject, "bundle record is invalid: " + error};
     }
     if (desktopUser == 0) {
-        return {BundleLaunchDecision::Reject, "desktop user must not be root"};
+        return {BundleLaunchDecision::Reject, "session user must not be root"};
     }
 
     if (sourceScope == BundleSourceScope::System) {

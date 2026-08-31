@@ -1,6 +1,6 @@
 #include "system/session/session_service.hpp"
 
-#include "system/security/desktop_user.hpp"
+#include "system/security/session_user.hpp"
 
 #include <algorithm>
 #include <array>
@@ -109,10 +109,10 @@ bool SessionService::initialize(const std::string& socketPath) {
                       << ": " << error.message() << "\n";
             return false;
         }
-        // Runtime endpoint names must remain traversable by the desktop user:
+        // Runtime endpoint names must remain traversable by the session user:
         // the sockets themselves are the authorization boundary (0600 and
         // owned by that user).  A root-only 0700 /Runtime would make an
-        // otherwise authorized terminal fail before it can reach either
+        // otherwise authorized session client fail before it can reach either
         // lcl-sessiond or the compositor socket.
         if (chmod(parent.c_str(), 0711) != 0) {
             std::cerr << "[LCL Session ERROR] Could not secure runtime directory " << parent
@@ -143,7 +143,7 @@ bool SessionService::initialize(const std::string& socketPath) {
         return false;
     }
     std::string ownershipError;
-    if (!lcl::security::assignDesktopUserOwnership(socketPath, 0600, ownershipError)) {
+    if (!lcl::security::assignSessionUserOwnership(socketPath, 0600, ownershipError)) {
         close(m_serverFd);
         m_serverFd = -1;
         unlink(socketPath.c_str());
@@ -219,9 +219,15 @@ LaunchResponse SessionService::launch(const LaunchRequest& request) {
     }
     if (child == 0) {
         setsid();
+        if (lcl::security::isTrustedUserShellBundle(app->appId, app->bundlePath)) {
+            std::string profileError;
+            if (!lcl::security::prepareTrustedUserShellEnvironment(instanceId, profileError)) {
+                _exit(127);
+            }
+        }
         exportLaunchContext(request, instanceId);
         std::string identityError;
-        if (!lcl::security::dropToDesktopUser(identityError)) {
+        if (!lcl::security::dropToSessionUser(identityError)) {
             _exit(127);
         }
         // Keep only the pinned executable descriptor after the privilege drop.

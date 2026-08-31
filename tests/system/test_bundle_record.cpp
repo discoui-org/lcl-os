@@ -152,19 +152,19 @@ TEST_F(BundleRecordTest, ApprovalIsPerUserExactBundleDigestAndUnverifiedState) {
     ASSERT_TRUE(record.has_value()) << error;
 
     BundleApprovalStore approvals(approvalConfig());
-    constexpr uid_t kDesktopUser = 1000;
-    EXPECT_FALSE(approvals.isApproved(kDesktopUser, *record, BundlePublisherState::Unverified, error));
+    constexpr uid_t kSessionUser = 1000;
+    EXPECT_FALSE(approvals.isApproved(kSessionUser, *record, BundlePublisherState::Unverified, error));
     EXPECT_TRUE(error.empty());
-    EXPECT_TRUE(approvals.approve(kDesktopUser, *record, BundlePublisherState::Unverified, error)) << error;
-    EXPECT_TRUE(approvals.isApproved(kDesktopUser, *record, BundlePublisherState::Unverified, error)) << error;
-    EXPECT_TRUE(approvals.revoke(kDesktopUser, *record, BundlePublisherState::Unverified, error)) << error;
-    EXPECT_FALSE(approvals.isApproved(kDesktopUser, *record, BundlePublisherState::Unverified, error));
+    EXPECT_TRUE(approvals.approve(kSessionUser, *record, BundlePublisherState::Unverified, error)) << error;
+    EXPECT_TRUE(approvals.isApproved(kSessionUser, *record, BundlePublisherState::Unverified, error)) << error;
+    EXPECT_TRUE(approvals.revoke(kSessionUser, *record, BundlePublisherState::Unverified, error)) << error;
+    EXPECT_FALSE(approvals.isApproved(kSessionUser, *record, BundlePublisherState::Unverified, error));
     EXPECT_TRUE(error.empty());
-    EXPECT_TRUE(approvals.approve(kDesktopUser, *record, BundlePublisherState::Unverified, error)) << error;
-    EXPECT_FALSE(approvals.isApproved(kDesktopUser + 1, *record,
+    EXPECT_TRUE(approvals.approve(kSessionUser, *record, BundlePublisherState::Unverified, error)) << error;
+    EXPECT_FALSE(approvals.isApproved(kSessionUser + 1, *record,
                                       BundlePublisherState::Unverified, error));
     EXPECT_TRUE(error.empty());
-    EXPECT_FALSE(approvals.approve(kDesktopUser, *record,
+    EXPECT_FALSE(approvals.approve(kSessionUser, *record,
                                    BundlePublisherState::SignatureVerified, error));
 
     std::ofstream icon(bundle / "Resources" / "Icon.png", std::ios::trunc);
@@ -174,7 +174,7 @@ TEST_F(BundleRecordTest, ApprovalIsPerUserExactBundleDigestAndUnverifiedState) {
     ASSERT_TRUE(changedMetadata.has_value());
     const auto changedRecord = makeBundleRecord(*changedMetadata, error);
     ASSERT_TRUE(changedRecord.has_value()) << error;
-    EXPECT_FALSE(approvals.isApproved(kDesktopUser, *changedRecord,
+    EXPECT_FALSE(approvals.isApproved(kSessionUser, *changedRecord,
                                       BundlePublisherState::Unverified, error));
     EXPECT_TRUE(error.empty());
 }

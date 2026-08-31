@@ -37,7 +37,7 @@ sözleşmesini kullanmasıdır.
   sınırını genişletemez.
 - [ ] Uygulama izinleri başka uygulamanın verisini ya da sistem aygıtlarını
   doğrudan görünür kılmaz; erişim portal/broker üzerinden sağlanır.
-- [ ] Terminal, kullanıcıya kabuk verdiği için üçüncü taraf uygulama profili
+- [x] Terminal, kullanıcıya kabuk verdiği için üçüncü taraf uygulama profili
   değildir; ayrı bir trusted-user-shell profiliyle çalışır ve root olmaz.
 
 ## 1. Bundle ve uygulama kimliği sertleştirmesi

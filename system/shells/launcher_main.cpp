@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 #include "platforms/common/gestalt.hpp"
-#include "system/security/desktop_user.hpp"
+#include "system/security/session_user.hpp"
 
 namespace {
 
@@ -38,7 +38,7 @@ const char* nameFor(lcl::platform::ShellKind shell) {
 
 int main() {
     std::string identityError;
-    if (!lcl::security::dropToDesktopUser(identityError)) {
+    if (!lcl::security::dropToSessionUser(identityError)) {
         std::cerr << "[LCL Shell Launcher] " << identityError << "\n";
         return 1;
     }

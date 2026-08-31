@@ -6,7 +6,7 @@
 #include <string>
 #include <thread>
 
-#include "system/security/desktop_user.hpp"
+#include "system/security/session_user.hpp"
 #include "system/session/session_service.hpp"
 #include "platforms/common/gestalt.hpp"
 
@@ -36,7 +36,7 @@ int main() {
     }
 
     std::string provisioningError;
-    if (!lcl::security::provisionDesktopUserHome(provisioningError)) {
+    if (!lcl::security::provisionSessionUserHome(provisioningError)) {
         std::cerr << "[LCL Session ERROR] " << provisioningError << "\n";
         return 1;
     }

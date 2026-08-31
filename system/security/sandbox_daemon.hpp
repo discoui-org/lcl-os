@@ -17,7 +17,7 @@ inline constexpr const char* kSandboxSocket = "/Runtime/lcl-sandboxd.sock";
  * Root-owned sandboxd endpoint configuration.
  *
  * The permitted peer must be a dedicated, unprivileged session-service
- * identity. It deliberately cannot be UID 0 or the interactive desktop user:
+ * identity. It deliberately cannot be UID 0 or the interactive session user:
  * otherwise any process sharing that identity could request application
  * launch. The socket is chowned 0600 to that identity and every accepted
  * connection is checked again with SO_PEERCRED.

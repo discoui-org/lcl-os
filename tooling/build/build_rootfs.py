@@ -461,7 +461,7 @@ def stage_canonical_rootfs(
 
     # Essential tools
     util_names = [
-        "mount", "mkdir", "sleep", "ls", "cat", "uname", "grep",
+        "mount", "mkdir", "sleep", "ls", "cat", "id", "uname", "grep",
         "printf", "dmesg", "tee", "find", "cp", "mv", "rm", "chmod",
         "chown", "touch", "wc", "head", "tail", "clear"
     ]
@@ -1000,6 +1000,7 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Core/lcl-open",
         "/System/Core/lcl-js",
         "/System/Tools/bash",
+        "/System/Tools/id",
         f"/System/Library/Libraries/{loader_name}",
         "/System/Applications/Terminal.app/Manifest.json",
         "/System/Applications/Terminal.app/Executables/Terminal",
