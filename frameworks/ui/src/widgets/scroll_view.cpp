@@ -99,7 +99,7 @@ void ScrollView::setContent(std::unique_ptr<Widget> content) {
 }
 
 void ScrollView::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
-    if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
+    if (!m_visible || isCollapsed() || !getPresentationBounds().intersects(damageRect)) return;
 
     beginPresentation(canvas, damageRect);
     if (!m_contentWidget) {

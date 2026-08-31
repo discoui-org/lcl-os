@@ -9,7 +9,7 @@
 
 namespace lcl::security {
 
-/** Root-owned Settings/Terminal user-decision endpoint; never an app endpoint. */
+/** Root-owned sessiond endpoint; only a connected FD reaches Settings. */
 inline constexpr const char* kSecurityAdminSocket = "/Runtime/lcl-securityd.sock";
 inline constexpr std::uint32_t kSecurityAdminProtocolMagic = 0x4C435343; // "LCSC"
 inline constexpr std::uint32_t kSecurityAdminProtocolVersion = 1;

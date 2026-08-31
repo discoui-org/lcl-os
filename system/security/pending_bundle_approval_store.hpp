@@ -10,7 +10,7 @@ namespace lcl::security {
 
 class BundleApprovalAuthority;
 
-/** Root-owned record that a trusted Settings broker may present to one user. */
+/** Root-owned record that capability-bearing canonical Settings may present to one user. */
 struct PendingBundleApproval {
     uid_t userUid{0};
     std::string appId;

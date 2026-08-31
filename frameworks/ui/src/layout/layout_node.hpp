@@ -45,6 +45,8 @@ public:
     void setMargin(layout::Edge edge, float value);
     void setGap(layout::Gutter gutter, float value);
     void setPosition(layout::Edge edge, float value);
+    /** Removes this node from layout without exposing Yoga to callers. */
+    void setCollapsed(bool collapsed);
 
     void appendChild(LayoutNode& child);
     void removeChild(LayoutNode& child);

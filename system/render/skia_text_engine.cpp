@@ -16,16 +16,20 @@ struct TypefaceCache {
     sk_sp<SkFontMgr> manager{SkFontMgr_New_Custom_Empty()};
     sk_sp<SkTypeface> interfaceTypeface;
     sk_sp<SkTypeface> monospaceTypeface;
+    sk_sp<SkTypeface> iconsTypeface;
 
     sk_sp<SkTypeface> typeface(lcl::graphics::FontFamily family) {
-        auto& cached = family == lcl::graphics::FontFamily::Monospace
-            ? monospaceTypeface
-            : interfaceTypeface;
-        if (cached) return cached;
+        sk_sp<SkTypeface>* cached = &interfaceTypeface;
+        if (family == lcl::graphics::FontFamily::Monospace) {
+            cached = &monospaceTypeface;
+        } else if (family == lcl::graphics::FontFamily::Icons) {
+            cached = &iconsTypeface;
+        }
+        if (*cached) return *cached;
         const auto path = text_metrics::resolveFontPath(family);
         if (!path || !manager) return nullptr;
-        cached = manager->makeFromFile(path->c_str());
-        return cached;
+        *cached = manager->makeFromFile(path->c_str());
+        return *cached;
     }
 };
 

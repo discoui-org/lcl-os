@@ -198,6 +198,18 @@ TEST_F(SessionServiceTest,
   EXPECT_TRUE(service.instances().empty());
 }
 
+TEST_F(SessionServiceTest, ServiceRejectsExternalSettingsIdentityBeforeSandboxing) {
+  const fs::path bundle = createBundle("CopiedSettings.app", "org.lcl.settings");
+  SessionService service({tempDir.string()});
+  service.refreshCatalog();
+
+  const LaunchResponse launch = service.launch({bundle.string(), false});
+  EXPECT_EQ(launch.status, 3u);
+  EXPECT_EQ(launch.appId, "org.lcl.settings");
+  EXPECT_NE(launch.message.find("Settings application ID"), std::string::npos);
+  EXPECT_TRUE(service.instances().empty());
+}
+
 TEST_F(SessionServiceTest,
        ServiceQueuesAnExactPendingApprovalForAnUnverifiedExternalBundle) {
   const fs::path bundle = createBundle("Pending.app", "org.lcl.pending");

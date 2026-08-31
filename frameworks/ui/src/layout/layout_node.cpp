@@ -166,6 +166,11 @@ void LayoutNode::setPadding(layout::Edge edge, float value) { m_impl->mutate([&]
 void LayoutNode::setMargin(layout::Edge edge, float value) { m_impl->mutate([&] { YGNodeStyleSetMargin(m_impl->node, toYoga(edge), value); }); }
 void LayoutNode::setGap(layout::Gutter gutter, float value) { m_impl->mutate([&] { YGNodeStyleSetGap(m_impl->node, toYoga(gutter), value); }); }
 void LayoutNode::setPosition(layout::Edge edge, float value) { m_impl->mutate([&] { YGNodeStyleSetPosition(m_impl->node, toYoga(edge), value); }); }
+void LayoutNode::setCollapsed(bool collapsed) {
+    m_impl->mutate([&] {
+        YGNodeStyleSetDisplay(m_impl->node, collapsed ? YGDisplayNone : YGDisplayFlex);
+    });
+}
 
 void LayoutNode::appendChild(LayoutNode& child) {
     YGNodeInsertChild(m_impl->node, child.m_impl->node, YGNodeGetChildCount(m_impl->node));

@@ -11,7 +11,7 @@ layout::Size Divider::measure(const layout::Constraints& constraints) {
 
 void Divider::draw(graphics::Canvas& canvas,
                    const graphics::RectF& damageRect) {
-    if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
+    if (!m_visible || isCollapsed() || !getPresentationBounds().intersects(damageRect)) return;
     beginPresentation(canvas, damageRect);
     const float width = getTheme().metrics.separatorWidth;
     if (m_absoluteBounds.width >= m_absoluteBounds.height) {
@@ -19,12 +19,12 @@ void Divider::draw(graphics::Canvas& canvas,
                          m_absoluteBounds.y +
                              (m_absoluteBounds.height - width) * 0.5f,
                          m_absoluteBounds.width, width},
-                        getTheme().colors.separator);
+                        m_color.value_or(getTheme().colors.separator));
     } else {
         canvas.drawRect({m_absoluteBounds.x +
                              (m_absoluteBounds.width - width) * 0.5f,
                          m_absoluteBounds.y, width, m_absoluteBounds.height},
-                        getTheme().colors.separator);
+                        m_color.value_or(getTheme().colors.separator));
     }
     endPresentation(canvas);
 }

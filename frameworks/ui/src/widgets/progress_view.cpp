@@ -182,7 +182,7 @@ void ProgressView::drawCircular(
 
 void ProgressView::draw(graphics::Canvas& canvas,
                         const graphics::RectF& damageRect) {
-    if (!m_visible || !getPresentationPaintBounds().intersects(damageRect)) return;
+    if (!m_visible || isCollapsed() || !getPresentationPaintBounds().intersects(damageRect)) return;
     updatePresentationRegistration();
     beginPresentation(canvas, damageRect);
     const auto visual = lcl::theme::resolveStyle(

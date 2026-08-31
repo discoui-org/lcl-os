@@ -155,6 +155,10 @@ bool isTrustedUserShellBundle(std::string_view appId, std::string_view bundlePat
     return appId == kTrustedUserShellAppId && bundlePath == kTrustedUserShellBundlePath;
 }
 
+bool isSystemSettingsBundle(std::string_view appId, std::string_view bundlePath) noexcept {
+    return appId == kSystemSettingsAppId && bundlePath == kSystemSettingsBundlePath;
+}
+
 bool prepareTrustedUserShellEnvironment(uint64_t instanceId, std::string& error) {
     error.clear();
     if (clearenv() != 0) {
@@ -174,6 +178,27 @@ bool prepareTrustedUserShellEnvironment(uint64_t instanceId, std::string& error)
         !setEnvironmentVariable("LCL_APP_ID", kTrustedUserShellAppId, error) ||
         !setEnvironmentVariable("LCL_APP_INSTANCE_ID", std::to_string(instanceId), error) ||
         !setEnvironmentVariable("LCL_LAUNCH_PROFILE", kTrustedUserShellProfileId, error)) {
+        return false;
+    }
+    umask(0077);
+    return true;
+}
+
+bool prepareSystemSettingsEnvironment(uint64_t instanceId, std::string& error) {
+    error.clear();
+    if (clearenv() != 0) {
+        error = std::string("could not clear inherited process environment: ") +
+                std::strerror(errno);
+        return false;
+    }
+    if (!setEnvironmentVariable("HOME", kSessionUserHome, error) ||
+        !setEnvironmentVariable("USER", kSessionUserName, error) ||
+        !setEnvironmentVariable("LOGNAME", kSessionUserName, error) ||
+        !setEnvironmentVariable("PATH", "/System/Core", error) ||
+        !setEnvironmentVariable("LCL_APP_ID", kSystemSettingsAppId, error) ||
+        !setEnvironmentVariable("LCL_APP_INSTANCE_ID", std::to_string(instanceId), error) ||
+        !setEnvironmentVariable("LCL_LAUNCH_PROFILE", kSystemSettingsProfileId, error) ||
+        !setEnvironmentVariable("LCL_SECURITY_ADMIN_FD", "4", error)) {
         return false;
     }
     umask(0077);

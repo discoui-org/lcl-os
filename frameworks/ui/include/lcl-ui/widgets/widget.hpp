@@ -27,6 +27,12 @@ class WindowApp;
 class ScrollView;
 class MeasuredWidget;
 
+/** A widget may be hidden visually or removed from its parent's layout. */
+enum class LayoutVisibility {
+    Visible,
+    Collapsed,
+};
+
 class Widget {
 public:
     Widget();
@@ -110,6 +116,16 @@ public:
 
     void setVisible(bool visible);
     bool isVisible() const { return m_visible; }
+    /**
+     * Controls layout participation. Collapsed widgets receive no layout
+     * space and are skipped for drawing and event dispatch. `setVisible()`
+     * remains paint-only and deliberately preserves layout space.
+     */
+    void setLayoutVisibility(LayoutVisibility visibility);
+    LayoutVisibility layoutVisibility() const noexcept { return m_layoutVisibility; }
+    bool isCollapsed() const noexcept {
+        return m_layoutVisibility == LayoutVisibility::Collapsed;
+    }
 
     void setFocusable(bool focusable) { m_focusable = focusable; }
     bool isFocusable() const { return m_focusable; }
@@ -228,6 +244,7 @@ protected:
     graphics::RectF m_bounds{0.0f, 0.0f, 0.0f, 0.0f};
     graphics::RectF m_absoluteBounds{0.0f, 0.0f, 0.0f, 0.0f};
     bool m_visible{true};
+    LayoutVisibility m_layoutVisibility{LayoutVisibility::Visible};
     bool m_focusable{false};
     bool m_clipsToBounds{false};
     RenderPass* m_renderPass{nullptr};

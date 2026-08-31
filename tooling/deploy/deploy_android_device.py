@@ -75,6 +75,7 @@ NATIVE_CLIENT_ARTIFACTS = {
     "lcl-desktop-shell": Path("lcl-desktop-shell"),
     "lcl-mobile-shell": Path("lcl-mobile-shell"),
     "lcl-terminal": Path("lcl-terminal"),
+    "lcl-settings": Path("lcl-settings"),
     "lcl-js": Path("lcl-js"),
 }
 NATIVE_CLIENT_BINARIES = tuple(NATIVE_CLIENT_ARTIFACTS)
@@ -84,6 +85,9 @@ ANDROID_NATIVE_LD_LIBRARY_PATH = (
 )
 ROOT_SHELL_MODE: str | None = None
 RUNTIME_FONTS = {
+    "CupertinoIcons.ttf": (
+        ROOT_DIR / "assets" / "fonts" / "cupertino-icons" / "CupertinoIcons.ttf"
+    ),
     "Inter-Regular.otf": ROOT_DIR / "assets" / "fonts" / "inter" / "Inter-Regular.otf",
     "JetBrainsMono-Regular.ttf": (
         ROOT_DIR / "assets" / "fonts" / "jetbrains-mono" / "JetBrainsMono-Regular.ttf"
@@ -365,7 +369,7 @@ def stop_rootfs_session() -> None:
     """Stop canonical userspace processes before unmounting its rootfs."""
     process_names = (
         "lcl-desktop-shell", "lcl-mobile-shell", "lcl-sessiond", "lcl-sandboxd",
-        "lcl-securityd", "lcl-terminal", "lcl-open", "lcl-js",
+        "lcl-securityd", "lcl-terminal", "lcl-settings", "lcl-open", "lcl-js",
     )
     def active_pids() -> list[str]:
         pids = rootfs_process_ids()
@@ -889,6 +893,7 @@ def mount_rootfs(native_clients: bool = False) -> None:
             f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-mobile-shell",
             f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-js",
             f"{DEVICE_ROOTFS_MOUNT}/System/Applications/Terminal.app/Executables/Terminal",
+            f"{DEVICE_ROOTFS_MOUNT}/System/Applications/Settings.app/Executables/Settings",
         )
         for target in wrapper_targets:
             result = adb_shell(
@@ -938,7 +943,7 @@ def prepare_runtime_for_launch() -> None:
     """Stop an existing LCL session, then clear its private runtime sockets."""
     process_names = (
         "lcl-core-android", "lcl-sessiond", "lcl-sandboxd", "lcl-securityd",
-        "lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal",
+        "lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal", "lcl-settings",
     )
 
     def active_processes() -> list[str]:

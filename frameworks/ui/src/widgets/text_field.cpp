@@ -108,7 +108,7 @@ void TextField::syncLayout(float parentAbsX, float parentAbsY) {
 }
 
 void TextField::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
-    if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
+    if (!m_visible || isCollapsed() || !getPresentationBounds().intersects(damageRect)) return;
 
     rebuildCaretAdvances(canvas);
     ensureCaretVisible();

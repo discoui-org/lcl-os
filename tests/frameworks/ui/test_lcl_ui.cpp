@@ -8,6 +8,9 @@
 #include "lcl-ui/widgets/measured_widget.hpp"
 #include "lcl-ui/widgets/widget.hpp"
 #include "lcl-ui/widgets/container.hpp"
+#include "lcl-ui/widgets/icon.hpp"
+#include "lcl-ui/widgets/navigation_split_view.hpp"
+#include "lcl-ui/widgets/navigation_stack.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/menu.hpp"
@@ -35,6 +38,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -1149,7 +1153,7 @@ TEST(LclUiTest, WindowAppAcceptsInjectedCanvas) {
     EXPECT_EQ(recorded->rects.front().height, 48.0f);
 }
 
-TEST(LclUiTest, WindowAppUsesOrdinaryRepaintForPresentationTransforms) {
+TEST(LclUiTest, WindowAppCachesEligiblePresentationTransforms) {
     auto canvas = std::make_unique<RecordingCanvas>();
     RecordingCanvas* recorded = canvas.get();
     WindowApp app(
@@ -1157,14 +1161,22 @@ TEST(LclUiTest, WindowAppUsesOrdinaryRepaintForPresentationTransforms) {
         "Retained presentation boundary");
 
     auto root = std::make_unique<Container>();
+    Container* rootPointer = root.get();
     root->setBackgroundColor({30, 60, 90, 255});
     root->setScale(0.9f);
     app.setRootWidget(std::move(root));
 
     ASSERT_TRUE(app.renderFrame());
-    EXPECT_EQ(recorded->cachedLayerBeginCount, 0);
-    EXPECT_EQ(recorded->cachedLayerEndCount, 0);
-    EXPECT_EQ(recorded->cachedLayerDrawCount, 0);
+    EXPECT_EQ(recorded->cachedLayerBeginCount, 1);
+    EXPECT_EQ(recorded->cachedLayerEndCount, 1);
+    EXPECT_EQ(recorded->cachedLayerDrawCount, 1);
+
+    rootPointer->setTranslationX(12.0f);
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_EQ(recorded->cachedLayerBeginCount, 1);
+    EXPECT_EQ(recorded->cachedLayerUpdateBeginCount, 1);
+    EXPECT_EQ(recorded->cachedLayerEndCount, 2);
+    EXPECT_EQ(recorded->cachedLayerDrawCount, 2);
 }
 
 TEST(LclUiTest, LocalTransientRendersAboveContentInSingleWindowRootLayout) {
@@ -2611,6 +2623,263 @@ TEST(LclUiTest, ExplicitKeyframesArePresentationOnlyUntilCommittedAndSurviveClea
     EXPECT_NO_THROW(app.advanceAnimations(0.1f));
 }
 
+TEST(LclUiTest, IconUsesThePackagedSymbolFontFamily) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    RecordingCanvas* recording = canvas.get();
+    WindowApp app(std::move(canvas), 80, 80, "Icon");
+    auto icon = std::make_unique<Icon>(icons::Shield);
+    icon->setWidth(32.0f);
+    icon->setHeight(32.0f);
+    icon->setIconSize(22.0f);
+    app.setRootWidget(std::move(icon));
+
+    ASSERT_TRUE(app.renderFrame());
+    ASSERT_FALSE(recording->fontFamilies.empty());
+    EXPECT_EQ(recording->fontFamilies.back(), graphics::FontFamily::Icons);
+}
+
+TEST(LclUiTest, NavigationStackKeepsChromeAndOutgoingPageThroughPopAnimation) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 360, 640, "Navigation");
+    const auto settleNavigation = [&](NavigationStack& navigation) {
+        for (int frame = 0; frame < 180 && navigation.isTransitioning(); ++frame) {
+            app.advanceAnimations(1.0f / 120.0f);
+        }
+    };
+    auto navigation = std::make_unique<NavigationStack>();
+    NavigationStack* stack = navigation.get();
+    navigation->setWidth(360.0f);
+    navigation->setHeight(640.0f);
+
+    bool detailDestroyed = false;
+    auto rootPage = std::make_unique<Container>();
+    Container* rootPagePointer = rootPage.get();
+    ASSERT_TRUE(navigation->setRootPage({
+        .route = NavigationRoute("root"),
+        .title = "Settings",
+        .content = std::move(rootPage),
+    }));
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.renderFrame());
+    NavigationBar* persistentBar = &stack->navigationBar();
+
+    auto detailPage = std::make_unique<Container>();
+    detailPage->setDestructionCallback([&] { detailDestroyed = true; });
+    ASSERT_TRUE(stack->push({
+        .route = NavigationRoute("security"),
+        .title = "Security",
+        .content = std::move(detailPage),
+    }));
+    EXPECT_EQ(&stack->navigationBar(), persistentBar);
+    EXPECT_EQ(stack->navigationBar().title(), "Security");
+    EXPECT_EQ(stack->navigationBar().backTitle(), "Settings");
+    EXPECT_TRUE(stack->navigationBar().canGoBack());
+    EXPECT_TRUE(stack->isTransitioning());
+
+    settleNavigation(*stack);
+    EXPECT_FALSE(stack->isTransitioning());
+    EXPECT_FALSE(detailDestroyed);
+    EXPECT_TRUE(rootPagePointer->isVisible());
+    EXPECT_FALSE(rootPagePointer->isInteractionEnabled());
+
+    ASSERT_TRUE(stack->pop());
+    EXPECT_EQ(stack->pageCount(), 1u);
+    EXPECT_EQ(stack->navigationBar().title(), "Settings");
+    EXPECT_FALSE(stack->navigationBar().canGoBack());
+    EXPECT_FALSE(detailDestroyed);
+    EXPECT_TRUE(rootPagePointer->isVisible());
+    EXPECT_TRUE(rootPagePointer->isInteractionEnabled());
+    settleNavigation(*stack);
+    EXPECT_TRUE(detailDestroyed);
+    EXPECT_FALSE(stack->isTransitioning());
+    EXPECT_EQ(&stack->navigationBar(), persistentBar);
+}
+
+TEST(LclUiTest, NavigationStackRapidRouteChangeFinishesPreviousTransitionSafely) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 360, 640, "Navigation interrupt");
+    auto navigation = std::make_unique<NavigationStack>();
+    NavigationStack* stack = navigation.get();
+    navigation->setWidth(360.0f);
+    navigation->setHeight(640.0f);
+    ASSERT_TRUE(navigation->setRootPage({
+        .route = NavigationRoute("root"),
+        .title = "Settings",
+        .content = std::make_unique<Container>(),
+    }));
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.renderFrame());
+
+    ASSERT_TRUE(stack->push({
+        .route = NavigationRoute("security"),
+        .title = "Security",
+        .content = std::make_unique<Container>(),
+    }));
+    ASSERT_TRUE(stack->pop());
+    for (int frame = 0; frame < 180 && stack->isTransitioning(); ++frame) {
+        app.advanceAnimations(1.0f / 120.0f);
+    }
+    ASSERT_NE(stack->currentRoute(), nullptr);
+    EXPECT_EQ(stack->currentRoute()->value, "root");
+    EXPECT_EQ(stack->pageCount(), 1u);
+    EXPECT_FALSE(stack->isTransitioning());
+}
+
+TEST(LclUiTest, NavigationStackEdgeSwipeTracksFingerAndCommitsPop) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 360, 640, "Navigation edge swipe");
+    auto navigation = std::make_unique<NavigationStack>();
+    NavigationStack* stack = navigation.get();
+    navigation->setWidth(360.0f);
+    navigation->setHeight(640.0f);
+    auto rootPage = std::make_unique<Container>();
+    Container* rootPointer = rootPage.get();
+    ASSERT_TRUE(navigation->setRootPage({
+        .route = NavigationRoute("root"),
+        .title = "Settings",
+        .content = std::move(rootPage),
+    }));
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.renderFrame());
+
+    auto detailPage = std::make_unique<Container>();
+    Container* detailPointer = detailPage.get();
+    ASSERT_TRUE(stack->push({
+        .route = NavigationRoute("security"),
+        .title = "Security",
+        .content = std::move(detailPage),
+    }));
+    for (int frame = 0; frame < 180 && stack->isTransitioning(); ++frame) {
+        app.advanceAnimations(1.0f / 120.0f);
+    }
+    ASSERT_FALSE(stack->isTransitioning());
+
+    app.sendPointerDown(4.0f, 100.0f, 0, PointerSource::Touch, 91);
+    ASSERT_TRUE(app.sendPointerMove(
+        150.0f, 103.0f, PointerSource::Touch, 91));
+    EXPECT_GT(detailPointer->getPresentationState().translationX, 100.0f);
+    EXPECT_LT(rootPointer->getPresentationState().translationX, 0.0f);
+    EXPECT_EQ(stack->pageCount(), 2u);
+    app.sendPointerUp(150.0f, 103.0f, 0, PointerSource::Touch, 91);
+    EXPECT_EQ(stack->pageCount(), 1u);
+    ASSERT_NE(stack->currentRoute(), nullptr);
+    EXPECT_EQ(stack->currentRoute()->value, "root");
+    for (int frame = 0; frame < 180 && stack->isTransitioning(); ++frame) {
+        app.advanceAnimations(1.0f / 120.0f);
+    }
+    EXPECT_FALSE(stack->isTransitioning());
+    EXPECT_TRUE(rootPointer->isInteractionEnabled());
+}
+
+TEST(LclUiTest, NavigationStackEdgeSwipeBelowThresholdSpringsBack) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 360, 640, "Navigation edge cancel");
+    auto navigation = std::make_unique<NavigationStack>();
+    NavigationStack* stack = navigation.get();
+    navigation->setWidth(360.0f);
+    navigation->setHeight(640.0f);
+    ASSERT_TRUE(navigation->setRootPage({
+        .route = NavigationRoute("root"),
+        .title = "Settings",
+        .content = std::make_unique<Container>(),
+    }));
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.renderFrame());
+    auto detailPage = std::make_unique<Container>();
+    Container* detailPointer = detailPage.get();
+    ASSERT_TRUE(stack->push({
+        .route = NavigationRoute("security"),
+        .title = "Security",
+        .content = std::move(detailPage),
+    }));
+    for (int frame = 0; frame < 180 && stack->isTransitioning(); ++frame) {
+        app.advanceAnimations(1.0f / 120.0f);
+    }
+
+    app.sendPointerDown(4.0f, 100.0f, 0, PointerSource::Touch, 92);
+    ASSERT_TRUE(app.sendPointerMove(
+        70.0f, 101.0f, PointerSource::Touch, 92));
+    app.sendPointerUp(70.0f, 101.0f, 0, PointerSource::Touch, 92);
+    EXPECT_EQ(stack->pageCount(), 2u);
+    for (int frame = 0; frame < 180 && stack->isTransitioning(); ++frame) {
+        app.advanceAnimations(1.0f / 120.0f);
+    }
+    EXPECT_FALSE(stack->isTransitioning());
+    ASSERT_NE(stack->currentRoute(), nullptr);
+    EXPECT_EQ(stack->currentRoute()->value, "security");
+    EXPECT_NEAR(detailPointer->getPresentationState().translationX, 0.0f, 0.01f);
+    EXPECT_TRUE(detailPointer->isInteractionEnabled());
+}
+
+TEST(LclUiTest, NavigationSplitViewPreservesItsPanesAcrossSizeClassChanges) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 900, 640, "Adaptive navigation");
+    auto navigation = std::make_unique<NavigationSplitView>();
+    NavigationSplitView* split = navigation.get();
+    navigation->setWidth(900.0f);
+    navigation->setHeight(640.0f);
+
+    bool sidebarDestroyed = false;
+    auto sidebar = std::make_unique<Container>();
+    Container* sidebarPointer = sidebar.get();
+    sidebar->setDestructionCallback([&] { sidebarDestroyed = true; });
+    split->setSidebar(std::move(sidebar));
+    ASSERT_TRUE(split->detailNavigation().setRootPage({
+        .route = NavigationRoute("general"),
+        .title = "General",
+        .content = std::make_unique<Container>(),
+    }));
+    NavigationStack* detailPointer = &split->detailNavigation();
+    split->setSizeClass(LayoutSizeClass::Expanded);
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.renderFrame());
+
+    EXPECT_FALSE(sidebarDestroyed);
+    EXPECT_EQ(&split->detailNavigation(), detailPointer);
+    EXPECT_EQ(sidebarPointer->getParent()->getParent()->getParent(), split);
+    EXPECT_NEAR(detailPointer->getBounds().x, 292.0f, 0.01f);
+    EXPECT_EQ(detailPointer->pageCount(), 1u);
+
+    split->setSizeClass(LayoutSizeClass::Compact);
+    ASSERT_TRUE(app.renderFrame());
+    EXPECT_FALSE(sidebarDestroyed);
+    EXPECT_EQ(&split->detailNavigation(), detailPointer);
+    EXPECT_EQ(sidebarPointer->getParent()->getParent()->getParent(), split);
+    EXPECT_NEAR(detailPointer->getBounds().x, 0.0f, 0.01f);
+    EXPECT_EQ(detailPointer->pageCount(), 1u);
+}
+
+TEST(LclUiTest, NavigationSplitViewMouseEdgeSwipeReturnsToPrimary) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 360, 640, "Adaptive navigation edge swipe");
+    auto navigation = std::make_unique<NavigationSplitView>();
+    NavigationSplitView* split = navigation.get();
+    navigation->setWidth(360.0f);
+    navigation->setHeight(640.0f);
+    split->setSidebar(std::make_unique<Container>());
+    ASSERT_TRUE(split->setDetailPage({
+        .route = NavigationRoute("general"),
+        .title = "General",
+        .content = std::make_unique<Container>(),
+    }, PageTransition::None));
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.renderFrame());
+    ASSERT_TRUE(split->isDetailPresented());
+
+    app.sendPointerDown(4.0f, 100.0f, 0, PointerSource::Mouse, 41);
+    ASSERT_TRUE(app.sendPointerMove(
+        150.0f, 102.0f, PointerSource::Mouse, 41));
+    EXPECT_GT(split->detailNavigation().getPresentationState().translationX,
+              100.0f);
+    app.sendPointerUp(150.0f, 102.0f, 0, PointerSource::Mouse, 41);
+    EXPECT_FALSE(split->isDetailPresented());
+    for (int frame = 0; frame < 180 && split->isTransitioning(); ++frame) {
+        app.advanceAnimations(1.0f / 120.0f);
+    }
+    EXPECT_FALSE(split->isTransitioning());
+    EXPECT_FALSE(split->isDetailPresented());
+}
+
 TEST(LclUiTest, ToggleDefaultsProgrammaticValueAndNotificationsAreDeterministic) {
     Toggle toggle;
     EXPECT_FALSE(toggle.value());
@@ -3917,6 +4186,89 @@ TEST(LclUiTest, VisibilityAndClippingInvalidatePresentationOnly) {
     EXPECT_EQ(widget->getPaintRevision(), paintRevision);
     EXPECT_GT(widget->getPresentationRevision(), presentationRevision);
     EXPECT_TRUE(pass.hasDamage());
+}
+
+TEST(LclUiTest, CollapsedWidgetLeavesLayoutWhileHiddenWidgetKeepsItsSpace) {
+    auto root = std::make_unique<Container>();
+    root->setWidth(200.0f);
+    root->setHeight(40.0f);
+    root->setDirection(layout::Direction::Row);
+
+    auto first = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* firstPtr = first.get();
+    first->setWidth(80.0f);
+    first->setHeight(40.0f);
+    root->addChild(std::move(first));
+
+    auto second = std::make_unique<CountingPaintWidget>();
+    CountingPaintWidget* secondPtr = second.get();
+    second->setWidth(40.0f);
+    second->setHeight(40.0f);
+    root->addChild(std::move(second));
+
+    root->calculateLayout(200.0f, 40.0f);
+    root->syncLayout();
+    EXPECT_FLOAT_EQ(secondPtr->getAbsoluteBounds().x, 80.0f);
+
+    // The established visibility API hides paint only, so it still reserves
+    // the first item's 80 logical pixels.
+    firstPtr->setVisible(false);
+    root->calculateLayout(200.0f, 40.0f);
+    root->syncLayout();
+    EXPECT_FLOAT_EQ(secondPtr->getAbsoluteBounds().x, 80.0f);
+
+    firstPtr->setLayoutVisibility(LayoutVisibility::Collapsed);
+    root->calculateLayout(200.0f, 40.0f);
+    root->syncLayout();
+    EXPECT_TRUE(firstPtr->isCollapsed());
+    EXPECT_TRUE(firstPtr->getVisiblePresentationPaintBounds().isEmpty());
+    EXPECT_FLOAT_EQ(firstPtr->getBounds().width, 0.0f);
+    EXPECT_FLOAT_EQ(secondPtr->getAbsoluteBounds().x, 0.0f);
+
+    firstPtr->setVisible(true);
+    firstPtr->setLayoutVisibility(LayoutVisibility::Visible);
+    root->calculateLayout(200.0f, 40.0f);
+    root->syncLayout();
+    EXPECT_FALSE(firstPtr->isCollapsed());
+    EXPECT_FLOAT_EQ(secondPtr->getAbsoluteBounds().x, 80.0f);
+}
+
+TEST(LclUiTest, LayoutEnvironmentTracksSafeAreaAndWidthDerivedSizeClass) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 760.0f, 600.0f, "Layout environment");
+    app.setLayoutSizeClassPolicy({.minimumSidebarWidth = 280.0f,
+                                  .minimumDetailWidth = 480.0f});
+
+    const LayoutEnvironment initial = app.getLayoutEnvironment();
+    EXPECT_FLOAT_EQ(initial.availableWidth, 760.0f);
+    EXPECT_FLOAT_EQ(initial.availableHeight, 600.0f);
+    EXPECT_EQ(initial.sizeClass, LayoutSizeClass::Expanded);
+
+    std::vector<LayoutEnvironment> changes;
+    app.setOnLayoutEnvironmentChanged(
+        [&](const LayoutEnvironment& environment) { changes.push_back(environment); });
+
+    app.setSafeAreaInsets({.top = 24.0f, .right = 16.0f, .bottom = 20.0f, .left = 8.0f});
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_FLOAT_EQ(changes.back().availableWidth, 736.0f);
+    EXPECT_FLOAT_EQ(changes.back().availableHeight, 556.0f);
+    EXPECT_EQ(changes.back().sizeClass, LayoutSizeClass::Compact);
+
+    app.resize(784.0f, 600.0f);
+    ASSERT_EQ(changes.size(), 2u);
+    EXPECT_FLOAT_EQ(changes.back().availableWidth, 760.0f);
+    EXPECT_EQ(changes.back().sizeClass, LayoutSizeClass::Expanded);
+
+    // Negative and non-finite inset values cannot manufacture extra space.
+    app.setSafeAreaInsets({.top = -1.0f,
+                           .right = std::numeric_limits<float>::infinity(),
+                           .bottom = 0.0f,
+                           .left = -4.0f});
+    ASSERT_EQ(changes.size(), 3u);
+    EXPECT_FLOAT_EQ(changes.back().safeArea.top, 0.0f);
+    EXPECT_FLOAT_EQ(changes.back().safeArea.right, 0.0f);
+    EXPECT_FLOAT_EQ(changes.back().availableWidth, 784.0f);
+    EXPECT_EQ(changes.back().sizeClass, LayoutSizeClass::Expanded);
 }
 
 TEST(LclUiTest, TextContentExplicitlyInvalidatesLayoutAndPaint) {

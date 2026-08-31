@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "system/security/session_user.hpp"
+#include "system/security/security_admin_client.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -26,6 +27,13 @@ TEST(SessionUserTest, TrustedUserShellProfileIsBoundToTheSystemTerminalBundle) {
     EXPECT_FALSE(isTrustedUserShellBundle("com.example.terminal", kTrustedUserShellBundlePath));
 }
 
+TEST(SessionUserTest, SystemSettingsProfileIsBoundToTheCanonicalBundle) {
+    EXPECT_TRUE(isSystemSettingsBundle(kSystemSettingsAppId, kSystemSettingsBundlePath));
+    EXPECT_FALSE(isSystemSettingsBundle(kSystemSettingsAppId,
+                                        "/Users/Rei/Applications/Settings.app"));
+    EXPECT_FALSE(isSystemSettingsBundle("org.lcl.settings-copy", kSystemSettingsBundlePath));
+}
+
 TEST(SessionUserTest, TrustedUserShellEnvironmentIsMinimalAndCanonical) {
     const pid_t child = fork();
     ASSERT_GE(child, 0);
@@ -42,6 +50,50 @@ TEST(SessionUserTest, TrustedUserShellEnvironmentIsMinimalAndCanonical) {
                 "42" ||
             std::string(getenv("LCL_LAUNCH_PROFILE") ? getenv("LCL_LAUNCH_PROFILE") : "") !=
                 kTrustedUserShellProfileId) {
+            _exit(1);
+        }
+        _exit(0);
+    }
+    int status = 0;
+    ASSERT_EQ(waitpid(child, &status, 0), child);
+    ASSERT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(SessionUserTest, SystemSettingsEnvironmentCarriesOnlyTheFixedCapabilitySlot) {
+    const pid_t child = fork();
+    ASSERT_GE(child, 0);
+    if (child == 0) {
+        setenv("LD_PRELOAD", "/untrusted/libinject.so", 1);
+        std::string error;
+        if (!prepareSystemSettingsEnvironment(91, error) || getenv("LD_PRELOAD") != nullptr ||
+            std::string(getenv("PATH") ? getenv("PATH") : "") != "/System/Core" ||
+            std::string(getenv("LCL_APP_ID") ? getenv("LCL_APP_ID") : "") !=
+                kSystemSettingsAppId ||
+            std::string(getenv("LCL_APP_INSTANCE_ID") ? getenv("LCL_APP_INSTANCE_ID") : "") !=
+                "91" ||
+            std::string(getenv("LCL_SECURITY_ADMIN_FD") ? getenv("LCL_SECURITY_ADMIN_FD") : "") !=
+                "4") {
+            _exit(1);
+        }
+        _exit(0);
+    }
+    int status = 0;
+    ASSERT_EQ(waitpid(child, &status, 0), child);
+    ASSERT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(SessionUserTest, UnprivilegedProcessCannotOpenTheSecurityAdminEndpoint) {
+    const pid_t child = fork();
+    ASSERT_GE(child, 0);
+    if (child == 0) {
+        std::string error;
+        if (!dropToSessionUser(error)) {
+            _exit(2);
+        }
+        SecurityAdminClient client;
+        if (client.connectAsSessionAuthority("/Runtime/lcl-securityd.sock", error)) {
             _exit(1);
         }
         _exit(0);

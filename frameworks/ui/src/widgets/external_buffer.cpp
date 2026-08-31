@@ -106,7 +106,7 @@ uint64_t ExternalBufferView::contentRevision() const noexcept {
 
 void ExternalBufferView::draw(graphics::Canvas& canvas,
                               const graphics::RectF& damageRect) {
-    if (!m_visible || !getPresentationBounds().intersects(damageRect)) return;
+    if (!m_visible || isCollapsed() || !getPresentationBounds().intersects(damageRect)) return;
     beginPresentation(canvas, damageRect);
     if (!m_absoluteBounds.isEmpty()) {
         canvas.drawExternalBufferPlaceholder(getObjectId(), m_absoluteBounds);

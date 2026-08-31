@@ -87,7 +87,7 @@ layout::Size Text::measure(const layout::Constraints& constraints) {
 }
 
 void Text::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
-    if (!m_visible || !getPresentationBounds().intersects(damageRect) || m_text.empty()) return;
+    if (!m_visible || isCollapsed() || !getPresentationBounds().intersects(damageRect) || m_text.empty()) return;
 
     beginPresentation(canvas, damageRect);
 

@@ -33,6 +33,7 @@ add_library(lcl-ui STATIC
     src/widgets/text.cpp
     src/widgets/text_field.cpp
     src/widgets/image.cpp
+    src/widgets/icon.cpp
     src/widgets/external_buffer.cpp
     src/widgets/button.cpp
     src/widgets/backdrop_surface.cpp
@@ -40,6 +41,9 @@ add_library(lcl-ui STATIC
     src/widgets/scroll_view.cpp
     src/widgets/popover.cpp
     src/widgets/menu.cpp
+    src/widgets/navigation_bar.cpp
+    src/widgets/navigation_stack.cpp
+    src/widgets/navigation_split_view.cpp
     src/widgets/toggle.cpp
     src/widgets/picker.cpp
     src/widgets/slider.cpp

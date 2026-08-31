@@ -4,6 +4,7 @@
 #include "lcl-graphics/canvas.hpp"
 #include "lcl-ui/core/render_pass.hpp"
 #include "lcl-ui/core/event_dispatcher.hpp"
+#include "lcl-ui/core/layout_environment.hpp"
 #include "lcl-ui/core/motion.hpp"
 #include "lcl-ui/core/transient_controller.hpp"
 #include "system/ipc/lcl_protocol.hpp"
@@ -27,6 +28,7 @@ using RawPointerCallback = std::function<bool(const PointerEvent&)>;
 using RawTextInputCallback = std::function<bool(const TextInputEvent&)>;
 using IpcMessageCallback = std::function<void(const lcl::protocol::LCLHeader&, const std::vector<uint8_t>&)>;
 using ResizeCallback = std::function<void(float width, float height)>;
+using LayoutEnvironmentChangedCallback = std::function<void(const LayoutEnvironment&)>;
 using FrameCallback = std::function<void()>;
 using HostedSurfaceHandle = uint64_t;
 
@@ -49,6 +51,18 @@ public:
 
     float getWidth() const { return m_width; }
     float getHeight() const { return m_height; }
+    /** Current safe-area-aware logical environment for adaptive layouts. */
+    const LayoutEnvironment& getLayoutEnvironment() const noexcept {
+        return m_layoutEnvironment;
+    }
+    void setSafeAreaInsets(LayoutInsets insets);
+    void setLayoutSizeClassPolicy(LayoutSizeClassPolicy policy);
+    const LayoutSizeClassPolicy& getLayoutSizeClassPolicy() const noexcept {
+        return m_layoutSizeClassPolicy;
+    }
+    void setOnLayoutEnvironmentChanged(LayoutEnvironmentChangedCallback callback) {
+        m_onLayoutEnvironmentChanged = std::move(callback);
+    }
     /** Logical-pixel to shared-buffer-pixel ratio for this client surface. */
     float getBufferScale() const { return m_bufferScale; }
     uint32_t getPixelWidth() const;
@@ -230,6 +244,7 @@ private:
     void configureRetainedWidgetCaches(Widget& widget) noexcept;
     void logFrameTraceIfDue();
     void collectClosedHostedSurfaces();
+    void updateLayoutEnvironment();
 
     struct HostedSurfaceEntry {
         HostedSurfaceHandle handle{0};
@@ -242,6 +257,9 @@ private:
     float m_height;
     // Public layout/input coordinates remain logical. SHM is rasterized at this DPR.
     float m_bufferScale{1.0f};
+    LayoutInsets m_safeAreaInsets{};
+    LayoutSizeClassPolicy m_layoutSizeClassPolicy{};
+    LayoutEnvironment m_layoutEnvironment{};
     std::string m_title;
     std::shared_ptr<uint8_t> m_lifetimeToken{std::make_shared<uint8_t>(0)};
 
@@ -265,6 +283,7 @@ private:
     RawTextInputCallback m_onRawTextInput{nullptr};
     IpcMessageCallback m_onIpcMessage{nullptr};
     ResizeCallback m_onResize{nullptr};
+    LayoutEnvironmentChangedCallback m_onLayoutEnvironmentChanged{nullptr};
     FrameCallback m_onFrame{nullptr};
     WindowResizeConstraints m_resizeConstraints{};
 

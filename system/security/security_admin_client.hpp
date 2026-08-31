@@ -8,7 +8,12 @@
 
 namespace lcl::security {
 
-/** Future trusted Settings client for the narrow lcl-securityd decision API. */
+/**
+ * Client for the already-connected, Settings-only security decision
+ * capability. It deliberately has no public direct-connect operation: only
+ * root sessiond may open the daemon socket, then pass one connected descriptor
+ * across the canonical Settings exec boundary.
+ */
 class SecurityAdminClient final {
 public:
     SecurityAdminClient() = default;
@@ -17,7 +22,13 @@ public:
     SecurityAdminClient(const SecurityAdminClient&) = delete;
     SecurityAdminClient& operator=(const SecurityAdminClient&) = delete;
 
-    bool connect(const std::string& socketPath, std::string& error);
+    /** Root-sessiond-only creation of a capability to pass to Settings. */
+    bool connectAsSessionAuthority(const std::string& socketPath, std::string& error);
+    /** Adopt a connected descriptor supplied by sessiond; ownership transfers. */
+    bool adoptCapabilityDescriptor(int descriptor, std::string& error);
+    /** Releases the owned descriptor for the narrowly scoped Settings exec path. */
+    int releaseCapabilityDescriptor() noexcept;
+    int capabilityDescriptor() const noexcept { return descriptor_; }
     void close();
     bool connected() const noexcept { return descriptor_ >= 0; }
 

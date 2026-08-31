@@ -15,9 +15,10 @@ struct FocusTraversalEntry {
 };
 
 bool isFocusEligible(const Widget* widget) {
-    if (!widget || !widget->isFocusable()) return false;
+    if (!widget || !widget->isFocusable() || widget->isCollapsed()) return false;
     for (const Widget* current = widget; current; current = current->getParent()) {
-        if (!current->isVisible() || !current->isInteractionEnabled()) return false;
+        if (!current->isVisible() || current->isCollapsed() ||
+            !current->isInteractionEnabled()) return false;
     }
     return true;
 }
@@ -70,7 +71,7 @@ bool PointerEvent::cancelPointerDownTarget(Widget& newOwner) const {
 }
 
 bool PointerEvent::requestFocus(Widget& owner) const {
-    if (!m_dispatcher || !owner.isFocusable() || !owner.isVisible() ||
+    if (!m_dispatcher || !owner.isFocusable() || !owner.isVisible() || owner.isCollapsed() ||
         !owner.isInteractionEnabled()) return false;
     m_dispatcher->setFocus(&owner);
     return true;
@@ -83,7 +84,8 @@ bool KeyEvent::requestFocus(Widget& owner) const {
 }
 
 Widget* EventDispatcher::hitTest(Widget* root, float x, float y) {
-    if (!root || !root->isVisible() || !root->containsPresentationPoint(x, y)) {
+    if (!root || !root->isVisible() || root->isCollapsed() ||
+        !root->containsPresentationPoint(x, y)) {
         return nullptr;
     }
 
@@ -358,7 +360,8 @@ void EventDispatcher::applyTouchTapFocus(Widget* downTarget, Widget* upTarget,
 
 bool EventDispatcher::capturePointer(uint32_t pointerId, Widget* owner,
                                      PointerSource source) {
-    if (!owner || !owner->isVisible() || !owner->isInteractionEnabled()) return false;
+    if (!owner || !owner->isVisible() || owner->isCollapsed() ||
+        !owner->isInteractionEnabled()) return false;
     invalidateTouchTapForCapture(pointerId);
     m_pointerCaptures[pointerId] =
         PointerCapture{owner, owner->getLifetimeToken(), source};
@@ -470,7 +473,7 @@ void EventDispatcher::cancelWidgetSubtree(Widget* subtree) {
 bool EventDispatcher::isEventCapableInTree(Widget* root, const Widget* target,
                                            bool ancestorsVisible) {
     if (!root) return false;
-    const bool visible = ancestorsVisible && root->isVisible();
+    const bool visible = ancestorsVisible && root->isVisible() && !root->isCollapsed();
     if (root == target) return visible && root->isInteractionEnabled();
     if (!visible) return false;
     for (const auto& child : root->getChildren()) {

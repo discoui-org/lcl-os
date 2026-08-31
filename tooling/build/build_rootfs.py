@@ -59,6 +59,7 @@ CANONICAL_TARGETS = (
     "lcl-mobile-shell",
     "lcl-shell-launcher",
     "lcl-terminal",
+    "lcl-settings",
     "lcl-sessiond",
     "lcl-sandboxd",
     "lcl-securityd",
@@ -287,6 +288,8 @@ def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
         PROJECT_ROOT / "config" / "gestalt" / "default.json",
         PROJECT_ROOT / "apps" / "terminal" / "Manifest.json",
         PROJECT_ROOT / "apps" / "terminal" / "Resources" / "Icon.png",
+        PROJECT_ROOT / "apps" / "settings" / "Manifest.json",
+        PROJECT_ROOT / "apps" / "settings" / "Resources" / "Icon.png",
         PROJECT_ROOT / "apps" / "sandbox_probe" / "Manifest.json",
     )
     for source_input in source_inputs:
@@ -610,7 +613,7 @@ def stage_canonical_rootfs(
     # 9. System Fonts (/System/Library/Fonts/)
     fonts_src = PROJECT_ROOT / "assets" / "fonts"
     if fonts_src.is_dir():
-        for fam in ["jetbrains-mono", "inter", "liberation-sans", "liberation-serif"]:
+        for fam in ["cupertino-icons", "jetbrains-mono", "inter", "liberation-sans", "liberation-serif"]:
             src_fam = fonts_src / fam
             if src_fam.is_dir():
                 shutil.copytree(src_fam, dest_system_fonts / fam, dirs_exist_ok=True)
@@ -644,6 +647,24 @@ def stage_canonical_rootfs(
     (term_dst / "Executables" / "Terminal").chmod(0o755)
     sha_map["Terminal.app"] = get_sha256(term_dst / "Executables" / "Terminal")
     copy_ldd_deps(term_dst / "Executables" / "Terminal", dest_system_lib)
+
+    # Settings.app is an immutable system bundle. Its executable is the only
+    # program to which sessiond transfers a connected lcl-securityd capability.
+    settings_dst = dest_system_apps / "Settings.app"
+    settings_dst.mkdir(parents=True, exist_ok=True)
+    (settings_dst / "Executables").mkdir(parents=True, exist_ok=True)
+    (settings_dst / "Resources").mkdir(parents=True, exist_ok=True)
+    settings_manifest = PROJECT_ROOT / "apps" / "settings" / "Manifest.json"
+    settings_icon = PROJECT_ROOT / "apps" / "settings" / "Resources" / "Icon.png"
+    if not settings_manifest.is_file() or not settings_icon.is_file():
+        raise RuntimeError("Missing Settings.app source files")
+    shutil.copy2(settings_manifest, settings_dst / "Manifest.json")
+    shutil.copy2(settings_icon, settings_dst / "Resources" / "Icon.png")
+    settings_bin = binaries["lcl-settings"]
+    shutil.copy2(settings_bin, settings_dst / "Executables" / "Settings")
+    (settings_dst / "Executables" / "Settings").chmod(0o755)
+    sha_map["Settings.app"] = get_sha256(settings_dst / "Executables" / "Settings")
+    copy_ldd_deps(settings_dst / "Executables" / "Settings", dest_system_lib)
 
     # Sandbox Probe.app is a non-GUI acceptance helper.  Unlike Terminal it
     # deliberately follows the ordinary third-party sandbox profile, so a
@@ -1103,6 +1124,9 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Applications/Terminal.app/Manifest.json",
         "/System/Applications/Terminal.app/Executables/Terminal",
         "/System/Applications/Terminal.app/Resources/Icon.png",
+        "/System/Applications/Settings.app/Manifest.json",
+        "/System/Applications/Settings.app/Executables/Settings",
+        "/System/Applications/Settings.app/Resources/Icon.png",
         "/System/Applications/Sandbox Probe.app/Manifest.json",
         "/System/Applications/Sandbox Probe.app/Executables/SandboxProbe",
         "/System/Applications/Sandbox Probe.app/Resources/Icon.png",

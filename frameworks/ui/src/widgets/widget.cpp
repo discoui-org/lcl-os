@@ -403,6 +403,18 @@ void Widget::setVisible(bool visible) {
     invalidatePresentation(previousBounds);
 }
 
+void Widget::setLayoutVisibility(LayoutVisibility visibility) {
+    if (m_layoutVisibility == visibility) return;
+    const graphics::RectF previousBounds =
+        !isCollapsed() && m_visible ? getPresentationSubtreePaintBounds()
+                                    : graphics::RectF{};
+    m_layoutVisibility = visibility;
+    m_layoutNode->setCollapsed(isCollapsed());
+    // Changing participation is a layout mutation, whereas m_visible above
+    // intentionally remains a paint-only contract.
+    invalidatePresentation(previousBounds);
+}
+
 void Widget::setClipsToBounds(bool enabled) {
     if (m_clipsToBounds == enabled) return;
     const graphics::RectF previousBounds =
@@ -710,7 +722,8 @@ lcl::motion::AnimationHandle Widget::animate(
 
 void Widget::syncLayout(float parentAbsX, float parentAbsY) {
     const graphics::RectF previousBounds =
-        m_visible ? getPresentationSubtreePaintBounds() : graphics::RectF{};
+        !isCollapsed() && m_visible ? getPresentationSubtreePaintBounds()
+                                    : graphics::RectF{};
     const graphics::RectF nextBounds{
         m_layoutNode->layoutX(),
         m_layoutNode->layoutY(),
@@ -779,11 +792,11 @@ graphics::RectF Widget::getPresentationPaintBounds() const {
 }
 
 graphics::RectF Widget::getVisiblePresentationPaintBounds() const {
-    if (!m_visible) return {};
+    if (!m_visible || isCollapsed()) return {};
     graphics::RectF result = getPresentationPaintBounds();
     for (const Widget* current = this; current && !result.isEmpty();
          current = current->m_parent) {
-        if (!current->m_visible) return {};
+        if (!current->m_visible || current->isCollapsed()) return {};
         if (!current->m_clipsToBounds) continue;
         const graphics::RectF clip = current->mapPresentationRect(
             current->m_absoluteBounds, current);
@@ -793,10 +806,10 @@ graphics::RectF Widget::getVisiblePresentationPaintBounds() const {
 }
 
 graphics::RectF Widget::getPresentationSubtreePaintBounds() const {
-    if (!m_visible) return {};
+    if (!m_visible || isCollapsed()) return {};
     graphics::RectF result = getVisiblePresentationPaintBounds();
     for (const auto& child : m_children) {
-        if (!child->m_visible) continue;
+        if (!child->m_visible || child->isCollapsed()) continue;
         result = result.unionWith(child->getPresentationSubtreePaintBounds());
     }
     return result;
@@ -868,7 +881,7 @@ graphics::Matrix3 Widget::presentationMatrix() const noexcept {
 void Widget::collectRetainedPresentationBounds(
         const Widget& root, graphics::RectF& bounds,
         bool& initialized) const {
-    if (!m_visible) return;
+    if (!m_visible || isCollapsed()) return;
     graphics::RectF candidate = getUntransformedPaintBounds();
     for (const Widget* current = this; current && current != &root;
          current = current->m_parent) {
@@ -984,14 +997,15 @@ void Widget::endPresentation(graphics::Canvas& canvas) const {
 
 void Widget::drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     for (auto& child : m_children) {
-        if (child->isVisible() && child->getPresentationBounds().intersects(damageRect)) {
+        if (child->isVisible() && !child->isCollapsed() &&
+            child->getPresentationBounds().intersects(damageRect)) {
             child->draw(canvas, damageRect);
         }
     }
 }
 
 void Widget::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
-    if (!m_visible) return;
+    if (!m_visible || isCollapsed()) return;
     beginPresentation(canvas, damageRect);
     drawChildren(canvas, damageRect);
     endPresentation(canvas);

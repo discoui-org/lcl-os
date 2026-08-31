@@ -48,10 +48,11 @@ static void setupAppSignalHandlers() {
 
 namespace {
 
-// Retained presentation layers leave stale pixels when a transform changes.
-// Keep the ordinary old/new damage repaint authoritative until that cache path
-// has a frame-accurate invalidation contract for every presentation update.
-constexpr bool kRetainedPresentationCacheEnabled = false;
+// Presentation-only page/window transforms are rasterized once and then
+// composed from retained layers. Widget invalidation contributes both the old
+// and new presentation bounds, while a tree/content mutation invalidates the
+// composition template and forces a full recovery frame.
+constexpr bool kRetainedPresentationCacheEnabled = true;
 
 float sanitizeBufferScale(float scale) {
     if (!std::isfinite(scale) || scale < 0.5f || scale > 4.0f) {
@@ -595,6 +596,7 @@ WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, floa
       m_canvas(std::move(canvas)),
       m_rasterClient(std::make_unique<RasterServiceClient>()) {
     setupAppSignalHandlers();
+    updateLayoutEnvironment();
     if (!m_canvas) return;
     m_frameTraceEnabled = frameTraceEnabled();
     m_layoutOverlayEnabled = layoutOverlayEnabled();
@@ -929,6 +931,7 @@ void WindowApp::resize(float width, float height) {
 
     m_width = width;
     m_height = height;
+    updateLayoutEnvironment();
 
     if (m_windowRoot) {
         m_windowRoot->setWidth(static_cast<float>(width));
@@ -947,6 +950,30 @@ void WindowApp::resize(float width, float height) {
     }
 }
 
+void WindowApp::setSafeAreaInsets(LayoutInsets insets) {
+    insets = sanitizeLayoutInsets(insets);
+    if (m_safeAreaInsets == insets) return;
+    m_safeAreaInsets = insets;
+    updateLayoutEnvironment();
+}
+
+void WindowApp::setLayoutSizeClassPolicy(LayoutSizeClassPolicy policy) {
+    policy = sanitizeLayoutSizeClassPolicy(policy);
+    if (m_layoutSizeClassPolicy == policy) return;
+    m_layoutSizeClassPolicy = policy;
+    updateLayoutEnvironment();
+}
+
+void WindowApp::updateLayoutEnvironment() {
+    const LayoutEnvironment next = makeLayoutEnvironment(
+        m_width, m_height, m_safeAreaInsets, m_layoutSizeClassPolicy);
+    if (next == m_layoutEnvironment) return;
+    m_layoutEnvironment = next;
+    if (m_onLayoutEnvironmentChanged) {
+        m_onLayoutEnvironmentChanged(m_layoutEnvironment);
+    }
+}
+
 void WindowApp::setInitialBounds(float x, float y, float width, float height) {
     if (m_ipcConnected || width == 0 || height == 0) return;
 
@@ -954,6 +981,7 @@ void WindowApp::setInitialBounds(float x, float y, float width, float height) {
     m_initialY = y;
     m_width = width;
     m_height = height;
+    updateLayoutEnvironment();
     const uint32_t pixelWidth = toBufferPixels(width, m_bufferScale);
     const uint32_t pixelHeight = toBufferPixels(height, m_bufferScale);
     if (!m_canvas->usesDisplayListTransport()) {

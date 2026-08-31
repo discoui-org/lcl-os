@@ -19,9 +19,10 @@ bool isReadableFile(const std::string& path) {
 
 std::optional<std::string> resolveFontPath(lcl::graphics::FontFamily family) {
     const bool monospace = family == lcl::graphics::FontFamily::Monospace;
-    const std::string_view fileName = monospace
-        ? "JetBrainsMono-Regular.ttf"
-        : "Inter-Regular.otf";
+    const bool icons = family == lcl::graphics::FontFamily::Icons;
+    const std::string_view fileName = icons
+        ? "CupertinoIcons.ttf"
+        : (monospace ? "JetBrainsMono-Regular.ttf" : "Inter-Regular.otf");
 
     std::vector<std::string> candidates;
     if (const char* fontRoot = std::getenv("LCL_FONT_ROOT");
@@ -32,7 +33,12 @@ std::optional<std::string> resolveFontPath(lcl::graphics::FontFamily family) {
         candidates.push_back(std::move(path));
     }
 
-    if (monospace) {
+    if (icons) {
+        candidates.emplace_back(
+            "/usr/share/fonts/cupertino-icons/CupertinoIcons.ttf");
+        candidates.emplace_back(
+            "assets/fonts/cupertino-icons/CupertinoIcons.ttf");
+    } else if (monospace) {
         candidates.emplace_back(
             "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf");
         candidates.emplace_back(

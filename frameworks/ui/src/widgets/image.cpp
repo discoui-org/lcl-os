@@ -70,7 +70,7 @@ void Image::setOpacity(float opacity) {
 }
 
 void Image::draw(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
-    if (!m_visible || !getPresentationBounds().intersects(damageRect) || !m_sourceImage || !m_sourceImage->isValid()) {
+    if (!m_visible || isCollapsed() || !getPresentationBounds().intersects(damageRect) || !m_sourceImage || !m_sourceImage->isValid()) {
         return;
     }
 

@@ -694,7 +694,7 @@ DisplayListDecodeResult decodeDisplayList(std::span<const uint8_t> bytes,
             const uint8_t family = payload.u8();
             std::string text = payload.string();
             valid = valid && payload.ok() && finite(fontSize) &&
-                    enumAtMost(family, FontFamily::Monospace);
+                    enumAtMost(family, FontFamily::Icons);
             if (valid) {
                 builder.drawText(origin, std::move(text), color, fontSize,
                                  static_cast<FontFamily>(family));

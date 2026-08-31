@@ -1,5 +1,8 @@
 #include "system/session/session_service.hpp"
 
+#include "system/security/security_admin_client.hpp"
+#include "system/security/security_admin_protocol.hpp"
+
 #include "system/security/bundle_record.hpp"
 #include "system/security/bundle_launch_gate.hpp"
 #include "system/security/session_user.hpp"
@@ -45,19 +48,65 @@ executableArgs(const core::AppBundleMetadata &app,
 }
 
 constexpr int kAppExecutableDescriptor = 3;
+constexpr int kSecurityAdminCapabilityDescriptor = 4;
 
-bool pinAndIsolateExecutableDescriptor(int descriptor) {
-  if (descriptor < 0) {
+bool pinAndIsolateExecutableDescriptor(int descriptor,
+                                       int securityCapabilityDescriptor = -1) {
+  if (descriptor < 0 || securityCapabilityDescriptor == kAppExecutableDescriptor ||
+      securityCapabilityDescriptor < -1) {
     return false;
   }
-  if (descriptor != kAppExecutableDescriptor &&
-      dup3(descriptor, kAppExecutableDescriptor, 0) < 0) {
+  // Preserve both sources before assigning their fixed exec descriptors: an
+  // open executable can legitimately occupy fd 4 while the connected
+  // capability occupies fd 3, so assigning either target first could clobber
+  // the other source.
+  const bool hasSecurityCapability = securityCapabilityDescriptor >= 0;
+  const int preservedExecutable = hasSecurityCapability
+      ? fcntl(descriptor, F_DUPFD_CLOEXEC, kSecurityAdminCapabilityDescriptor + 1)
+      : descriptor;
+  const int preservedCapability = hasSecurityCapability
+      ? fcntl(securityCapabilityDescriptor, F_DUPFD_CLOEXEC,
+              kSecurityAdminCapabilityDescriptor + 1)
+      : -1;
+  if (preservedExecutable < 0 || (hasSecurityCapability && preservedCapability < 0)) {
+    if (preservedExecutable >= 0 && preservedExecutable != descriptor) close(preservedExecutable);
+    if (preservedCapability >= 0 && preservedCapability != securityCapabilityDescriptor) {
+      close(preservedCapability);
+    }
+    return false;
+  }
+  if (preservedExecutable != kAppExecutableDescriptor &&
+      dup3(preservedExecutable, kAppExecutableDescriptor, 0) < 0) {
+    if (preservedExecutable != descriptor) close(preservedExecutable);
+    if (preservedCapability >= 0 && preservedCapability != securityCapabilityDescriptor) {
+      close(preservedCapability);
+    }
     return false;
   }
   const int flags = fcntl(kAppExecutableDescriptor, F_GETFD);
   if (flags < 0 ||
       fcntl(kAppExecutableDescriptor, F_SETFD, flags & ~FD_CLOEXEC) != 0) {
     return false;
+  }
+  if (hasSecurityCapability) {
+    if (preservedCapability != kSecurityAdminCapabilityDescriptor &&
+        dup3(preservedCapability, kSecurityAdminCapabilityDescriptor, 0) < 0) {
+      if (preservedExecutable != descriptor) close(preservedExecutable);
+      if (preservedCapability != securityCapabilityDescriptor) close(preservedCapability);
+      return false;
+    }
+    const int capabilityFlags = fcntl(kSecurityAdminCapabilityDescriptor, F_GETFD);
+    if (capabilityFlags < 0 ||
+        fcntl(kSecurityAdminCapabilityDescriptor, F_SETFD,
+              capabilityFlags & ~FD_CLOEXEC) != 0) {
+      if (preservedExecutable != descriptor) close(preservedExecutable);
+      if (preservedCapability != securityCapabilityDescriptor) close(preservedCapability);
+      return false;
+    }
+  }
+  if (preservedExecutable != descriptor) close(preservedExecutable);
+  if (hasSecurityCapability && preservedCapability != securityCapabilityDescriptor) {
+    close(preservedCapability);
   }
 
   struct rlimit limit{};
@@ -66,7 +115,10 @@ bool pinAndIsolateExecutableDescriptor(int descriptor) {
       limit.rlim_cur > static_cast<rlim_t>(std::numeric_limits<int>::max())) {
     return false;
   }
-  for (int inherited = kAppExecutableDescriptor + 1;
+  const int firstDescriptorToClose = hasSecurityCapability
+      ? kSecurityAdminCapabilityDescriptor + 1
+      : kAppExecutableDescriptor + 1;
+  for (int inherited = firstDescriptorToClose;
        inherited < static_cast<int>(limit.rlim_cur); ++inherited) {
     close(inherited);
   }
@@ -294,6 +346,16 @@ LaunchResponse SessionService::launch(const LaunchRequest &request) {
     response.message = "external bundle cannot use a system application ID";
     return response;
   }
+  // This identifier is capability-bearing: even when the system catalog is
+  // unavailable, a user or machine bundle must never be able to claim it and
+  // inherit Settings' direct-exec path.
+  if (app->appId == lcl::security::kSystemSettingsAppId &&
+      !lcl::security::isSystemSettingsBundle(app->appId, app->bundlePath)) {
+    response.status = 3;
+    response.appId = app->appId;
+    response.message = "external bundle cannot use the Settings application ID";
+    return response;
+  }
   if (request.singleInstance) {
     const auto running = m_runningInstanceByAppId.find(app->appId);
     if (running != m_runningInstanceByAppId.end()) {
@@ -311,11 +373,14 @@ LaunchResponse SessionService::launch(const LaunchRequest &request) {
   }
 
   const uint64_t instanceId = m_nextInstanceId++;
-  // Direct exec is retained only for the canonical interactive Terminal.
-  // Every other .app reaches root-owned sandboxd, which resolves all
-  // execution material from its protected system-image registry.  There is
-  // deliberately no session-user or direct-exec fallback for this branch.
-  if (!lcl::security::isTrustedUserShellBundle(app->appId, app->bundlePath)) {
+  const bool isTrustedUserShell =
+      lcl::security::isTrustedUserShellBundle(app->appId, app->bundlePath);
+  const bool isSystemSettings =
+      lcl::security::isSystemSettingsBundle(app->appId, app->bundlePath);
+  // Direct exec is limited to the immutable Terminal shell and Settings.
+  // Settings receives one pre-connected, purpose-limited security capability;
+  // every other bundle reaches root-owned sandboxd.
+  if (!isTrustedUserShell && !isSystemSettings) {
     return launchSandboxed(*app, instanceId);
   }
   if (!app->executableHandle || !app->executableHandle->valid()) {
@@ -323,6 +388,18 @@ LaunchResponse SessionService::launch(const LaunchRequest &request) {
     response.message =
         "application executable handle is unavailable: " + app->executablePath;
     return response;
+  }
+
+  lcl::security::SecurityAdminClient securityCapability;
+  if (isSystemSettings) {
+    std::string capabilityError;
+    if (!securityCapability.connectAsSessionAuthority(
+            lcl::security::kSecurityAdminSocket, capabilityError)) {
+      response.status = 3;
+      response.appId = app->appId;
+      response.message = "Settings security capability is unavailable: " + capabilityError;
+      return response;
+    }
   }
 
   const pid_t child = fork();
@@ -333,10 +410,15 @@ LaunchResponse SessionService::launch(const LaunchRequest &request) {
   }
   if (child == 0) {
     setsid();
-    if (lcl::security::isTrustedUserShellBundle(app->appId, app->bundlePath)) {
+    if (isTrustedUserShell) {
       std::string profileError;
       if (!lcl::security::prepareTrustedUserShellEnvironment(instanceId,
                                                              profileError)) {
+        _exit(127);
+      }
+    } else if (isSystemSettings) {
+      std::string profileError;
+      if (!lcl::security::prepareSystemSettingsEnvironment(instanceId, profileError)) {
         _exit(127);
       }
     }
@@ -345,11 +427,12 @@ LaunchResponse SessionService::launch(const LaunchRequest &request) {
     if (!lcl::security::dropToSessionUser(identityError)) {
       _exit(127);
     }
-    // Keep only the pinned executable descriptor after the privilege drop.
-    // In particular, a desktop app must not inherit sessiond's root-owned
-    // listener sockets, catalog descriptors or approval-store handles.
+    // Keep only the pinned executable, plus Settings' single pre-connected
+    // capability when applicable. No listener, store, control, or arbitrary
+    // inherited descriptor can cross this exec boundary.
     if (!pinAndIsolateExecutableDescriptor(
-            app->executableHandle->descriptor())) {
+            app->executableHandle->descriptor(),
+            isSystemSettings ? securityCapability.capabilityDescriptor() : -1)) {
       _exit(127);
     }
     const auto args = executableArgs(

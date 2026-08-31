@@ -10,7 +10,7 @@
 
 namespace lcl::security {
 
-/** Root-owned, user-decision-only configuration for lcl-securityd. */
+/** Root-owned, sessiond-only configuration for lcl-securityd. */
 struct SecurityAdminDaemonConfig {
     std::string socketPath{kSecurityAdminSocket};
     uid_t sessionUid{kSessionUserUid};
@@ -23,10 +23,11 @@ struct SecurityAdminDaemonConfig {
 /**
  * Narrow root service for a future trusted Settings surface.
  *
- * It exposes only one session user's pending unverified bundle identities and
- * allows that user to approve or revoke one exact hash. It never receives an
- * executable path, launch request, permission grant, elevation request, or
- * file descriptor; those remain outside this authority.
+ * It accepts only root-sessiond connections, then exposes one session user's
+ * pending unverified bundle identities and allows exactly one hash approval
+ * or revoke. Sessiond passes that connected socket only to canonical Settings.
+ * It never receives an executable path, launch request, permission grant,
+ * elevation request, or application-supplied file descriptor.
  */
 class SecurityAdminDaemon final {
 public:
@@ -43,7 +44,7 @@ public:
 private:
     bool validateConfig(std::string& error) const;
     bool validateSocketParent(std::string& error) const;
-    bool peerIsTrustedSessionUser(int descriptor) const;
+    bool peerIsTrustedSessionAuthority(int descriptor) const;
     bool sendPacket(int descriptor, SecurityAdminOpcode opcode, std::uint32_t requestId,
                     const std::vector<std::uint8_t>& payload);
     void acceptConnections();

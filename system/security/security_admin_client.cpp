@@ -1,6 +1,7 @@
 #include "system/security/security_admin_client.hpp"
 
 #include <poll.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -20,10 +21,15 @@ constexpr int kSecurityAdminReplyTimeoutMs = 5000;
 
 SecurityAdminClient::~SecurityAdminClient() { close(); }
 
-bool SecurityAdminClient::connect(const std::string& socketPath, std::string& error) {
+bool SecurityAdminClient::connectAsSessionAuthority(const std::string& socketPath,
+                                                     std::string& error) {
     error.clear();
     if (descriptor_ >= 0) {
         return true;
+    }
+    if (geteuid() != 0) {
+        error = "only root sessiond may open lcl-securityd";
+        return false;
     }
     if (socketPath.empty() || socketPath.size() >= sizeof(sockaddr_un{}.sun_path)) {
         error = "securityd socket path is invalid";
@@ -44,6 +50,32 @@ bool SecurityAdminClient::connect(const std::string& socketPath, std::string& er
     }
     descriptor_ = descriptor;
     return true;
+}
+
+bool SecurityAdminClient::adoptCapabilityDescriptor(int descriptor, std::string& error) {
+    error.clear();
+    if (descriptor_ >= 0 || descriptor < 0) {
+        error = "security capability descriptor is unavailable";
+        return false;
+    }
+    int socketType = 0;
+    socklen_t socketTypeSize = sizeof(socketType);
+    if (getsockopt(descriptor, SOL_SOCKET, SO_TYPE, &socketType, &socketTypeSize) != 0 ||
+        socketTypeSize != sizeof(socketType) || socketType != SOCK_SEQPACKET) {
+        error = "security capability descriptor is not a sequenced packet socket";
+        return false;
+    }
+    const int flags = fcntl(descriptor, F_GETFD);
+    if (flags < 0 || fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) != 0) {
+        error = std::strerror(errno);
+        return false;
+    }
+    descriptor_ = descriptor;
+    return true;
+}
+
+int SecurityAdminClient::releaseCapabilityDescriptor() noexcept {
+    return std::exchange(descriptor_, -1);
 }
 
 void SecurityAdminClient::close() {

@@ -98,6 +98,22 @@ TEST(DisplayListWireTest, RoundTripsStableImageResourceReferences) {
     EXPECT_FLOAT_EQ(image->opacity, 0.75f);
 }
 
+TEST(DisplayListWireTest, RoundTripsPackagedIconFontFamily) {
+    graphics::DisplayListBuilder builder;
+    builder.drawText({4.0f, 5.0f}, "\xef\x9f\x8f", {12, 34, 56, 255},
+                     20.0f, graphics::FontFamily::Icons);
+
+    const auto encoded = graphics::encodeDisplayList(builder.build());
+    ASSERT_TRUE(encoded);
+    const auto decoded = graphics::decodeDisplayList(encoded.bytes);
+    ASSERT_TRUE(decoded);
+    ASSERT_EQ(decoded.displayList.commands().size(), 1u);
+    const auto* text = std::get_if<graphics::DrawTextCommand>(
+        &decoded.displayList.commands().front());
+    ASSERT_NE(text, nullptr);
+    EXPECT_EQ(text->fontFamily, graphics::FontFamily::Icons);
+}
+
 TEST(DisplayListWireTest, RoundTripsExternalBufferPlaceholderWithoutDescriptor) {
     graphics::DisplayListBuilder builder;
     builder.drawExternalBuffer(73, {4.0f, 5.0f, 160.0f, 90.0f});

@@ -19,7 +19,7 @@ struct BundleApprovalAuthorityConfig {
 };
 
 /**
- * Root-side transaction coordinator for a future trusted Settings/admin IPC.
+ * Root-side transaction coordinator for the capability-bearing Settings IPC.
  *
  * It refuses to approve an arbitrary BundleRecord: the exact unverified
  * record must first be present in sessiond's pending queue for that user.

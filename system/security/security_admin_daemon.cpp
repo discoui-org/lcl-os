@@ -109,10 +109,8 @@ bool SecurityAdminDaemon::initialize(std::string& error) {
     if (lstat(config_.socketPath.c_str(), &existing) == 0) {
         const bool rootOwned = existing.st_uid == config_.ownerUid &&
                                existing.st_gid == config_.ownerGid;
-        const bool expectedSessionSocket = existing.st_uid == config_.sessionUid &&
-                                           existing.st_gid == config_.sessionGid &&
-                                           (existing.st_mode & 0777) == 0600;
-        if (!S_ISSOCK(existing.st_mode) || (!rootOwned && !expectedSessionSocket)) {
+        if (!S_ISSOCK(existing.st_mode) || !rootOwned ||
+            (existing.st_mode & 0777) != 0600) {
             error = "securityd refuses to replace an unexpected socket path";
             return false;
         }
@@ -136,7 +134,7 @@ bool SecurityAdminDaemon::initialize(std::string& error) {
     address.sun_family = AF_UNIX;
     std::strncpy(address.sun_path, config_.socketPath.c_str(), sizeof(address.sun_path) - 1);
     if (bind(descriptor, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0 ||
-        lchown(config_.socketPath.c_str(), config_.sessionUid, config_.sessionGid) != 0 ||
+        lchown(config_.socketPath.c_str(), config_.ownerUid, config_.ownerGid) != 0 ||
         chmod(config_.socketPath.c_str(), 0600) != 0 || listen(descriptor, 8) != 0) {
         const int savedErrno = errno;
         close(descriptor);
@@ -161,19 +159,19 @@ void SecurityAdminDaemon::shutdown() {
     if (ownsSocketPath_ && !config_.socketPath.empty()) {
         struct stat status {};
         if (lstat(config_.socketPath.c_str(), &status) == 0 && S_ISSOCK(status.st_mode) &&
-            status.st_uid == config_.sessionUid && status.st_gid == config_.sessionGid) {
+            status.st_uid == config_.ownerUid && status.st_gid == config_.ownerGid) {
             unlink(config_.socketPath.c_str());
         }
     }
     ownsSocketPath_ = false;
 }
 
-bool SecurityAdminDaemon::peerIsTrustedSessionUser(int descriptor) const {
+bool SecurityAdminDaemon::peerIsTrustedSessionAuthority(int descriptor) const {
     struct ucred credential {};
     socklen_t length = sizeof(credential);
     return getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &credential, &length) == 0 &&
-           length == sizeof(credential) && credential.uid == config_.sessionUid &&
-           credential.gid == config_.sessionGid;
+           length == sizeof(credential) && credential.uid == config_.ownerUid &&
+           credential.gid == config_.ownerGid;
 }
 
 bool SecurityAdminDaemon::sendPacket(int descriptor, SecurityAdminOpcode opcode,
@@ -193,7 +191,7 @@ void SecurityAdminDaemon::acceptConnections() {
     while (true) {
         const int descriptor = accept4(serverDescriptor_, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (descriptor >= 0) {
-            if (peerIsTrustedSessionUser(descriptor)) {
+            if (peerIsTrustedSessionAuthority(descriptor)) {
                 clientDescriptors_.push_back(descriptor);
             } else {
                 close(descriptor);

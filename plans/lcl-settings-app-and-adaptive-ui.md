@@ -37,40 +37,40 @@ kullanıcı alanı binary'si Linux ve Android substrate'larında çalışır.
 
 ## 2. Adaptif kullanıcı-arayüzü ortamı
 
-- [ ] `WindowApp` üzerinden backend-bağımsız `LayoutEnvironment` sağla:
+- [x] `WindowApp` üzerinden backend-bağımsız `LayoutEnvironment` sağla:
   logical kullanılabilir genişlik/yükseklik, safe-area inset'leri ve türetilmiş
   `Compact`/`Expanded` size class. Android veya Linux'a göre ayrı UI dalı
   oluşturma.
 - [ ] Safe-area değerlerini Gestalt/platform katmanından UI'a typed API ile
   aktar; uygulama kodu çentik, status bar veya gesture alanı için sabit piksel
   varsayımı yapmasın.
-- [ ] `Widget` için, Yoga'yı public API yapmadan layout'tan tamamen çıkan bir
+- [x] `Widget` için, Yoga'yı public API yapmadan layout'tan tamamen çıkan bir
   `LayoutVisibility::Collapsed` sözleşmesi ekle. Mevcut `setVisible(false)`
   yalnız çizimi kapattığı için sidebar collapse yerine kullanma.
-- [ ] Size class değişiminde mevcut route, seçili ayar, scroll offset, focus ve
+- [x] Size class değişiminde mevcut route, seçili ayar, scroll offset, focus ve
   taslak kullanıcı girdisini koruyan tek bir Settings state modeli tanımla.
-- [ ] Breakpoint politikasını platform/model adına göre değil minimum sidebar
+- [x] Breakpoint politikasını platform/model adına göre değil minimum sidebar
   ve detail ölçülerine göre belirle; sınırın iki yanında deterministik test
   et.
 
 ## 3. LCL UI navigasyon ve liste primitive'leri
 
-- [ ] `NavigationStack` ekle: typed route kimliği, push/pop/replace ve
+- [x] `NavigationStack` ekle: typed route kimliği, push/pop/replace ve
   transition bitene kadar outgoing/incoming page ömür yönetimi.
-- [ ] Compact navigation pop işlemini yalnız görünür başlık geri kontrolüyle
-  başlat; LCL'de hardware-back UI olayı veya platform back tuşu/gesture'ını
-  route pop'a bağlayan public API oluşturma.
-- [ ] `PageTransition` sözleşmesini `NavigationStack` içinde tanımla:
+- [x] Compact navigation pop işlemini görünür başlık geri kontrolü veya
+  `NavigationStack`/`NavigationSplitView` tarafından sahiplenilen interaktif
+  sol-kenar swipe ile başlat; platforma özel back API'si oluşturma.
+- [x] `PageTransition` sözleşmesini `NavigationStack` içinde tanımla:
   başlangıçta `None`, `Push`, `Pop` ve `Replace`; yön, interrupt ve completion
   davranışları belirlenmiş olsun.
-- [ ] `Push` geçişinde container genişliği `W` iken eski sayfayı `0 → -0.5W`,
+- [x] `Push` geçişinde container genişliği `W` iken eski sayfayı `0 → -0.5W`,
   yeni sayfayı `+1.0W → 0` yatay translation ile birlikte animate et.
-- [ ] `Pop` geçişinde mevcut sayfayı `0 → +1.0W`, açığa çıkan önceki sayfayı
+- [x] `Pop` geçişinde mevcut sayfayı `0 → +1.0W`, açığa çıkan önceki sayfayı
   `-0.5W → 0` yatay translation ile animate et; iki sayfayı transition
   tamamlanana kadar canlı ve clip'lenmiş tut.
-- [ ] `Replace` için ayrı, yönsüz bir transition tanımla; sidebar sabitken
+- [x] `Replace` için ayrı, yönsüz bir transition tanımla; sidebar sabitken
   detail route değişiminde Push/Pop stack hareketini kullanma.
-- [ ] `NavigationSplitView` ekle: Expanded modda sidebar ve detail eşzamanlı
+- [x] `NavigationSplitView` ekle: Expanded modda sidebar ve detail eşzamanlı
   görünür; Compact modda aynı route state ile sidebar/list ve detail arasında
   stack üzerinden geçer. Layout değişiminde page state'i yeniden yaratma.
 - [ ] `ListView` ekle: veri kaynağı, stable item key, görünür satır üretimi,
@@ -86,7 +86,7 @@ kullanıcı alanı binary'si Linux ve Android substrate'larında çalışır.
   görünür cancel kontrolü sağla.
 - [ ] `Sheet` ekle: daha uzun form veya seçim akışları için sunum/dismiss
   yaşam döngüsünü tanımla; `AlertDialog` yerine kullanma.
-- [ ] Arama alanını mevcut `TextField` üstünde Settings-özel bir composition
+- [x] Arama alanını mevcut `TextField` üstünde Settings-özel bir composition
   olarak tasarla; ilk Security MVP için global arama index'i veya platform
   özel arama API'si gerektirme.
 - [ ] Settings-özel `SettingsSection` ve `SettingsRow` bileşenlerini mevcut

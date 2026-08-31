@@ -24,6 +24,12 @@ inline constexpr const char* kTrustedUserShellBundlePath =
 inline constexpr const char* kTrustedUserShellProfileId =
     "lcl.trusted-user-shell.v1";
 
+/** Immutable Settings is the sole recipient of the security admin capability. */
+inline constexpr const char* kSystemSettingsAppId = "org.lcl.settings";
+inline constexpr const char* kSystemSettingsBundlePath =
+    "/System/Applications/Settings.app";
+inline constexpr const char* kSystemSettingsProfileId = "lcl.system-settings.v1";
+
 /**
  * Drops a root-owned child to the interactive session identity, clears all capabilities
  * and forbids future privilege gains. A non-root caller remains unprivileged.
@@ -32,12 +38,15 @@ bool dropToSessionUser(std::string& error);
 
 /** Returns true only for the canonical, rootfs-provided Terminal.app bundle. */
 bool isTrustedUserShellBundle(std::string_view appId, std::string_view bundlePath) noexcept;
+bool isSystemSettingsBundle(std::string_view appId, std::string_view bundlePath) noexcept;
 
 /**
  * Replaces inherited init/session environment with the minimal environment of
  * the trusted user shell.  This must run before dropping credentials and exec.
  */
 bool prepareTrustedUserShellEnvironment(uint64_t instanceId, std::string& error);
+/** Minimal unprivileged environment for the canonical Settings system app. */
+bool prepareSystemSettingsEnvironment(uint64_t instanceId, std::string& error);
 
 /** Root-only boot/session provisioning for the writable session home. */
 bool provisionSessionUserHome(std::string& error);

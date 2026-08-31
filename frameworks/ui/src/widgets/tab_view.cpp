@@ -202,7 +202,7 @@ void TabView::styleDidChange() {
 
 void TabView::draw(graphics::Canvas& canvas,
                    const graphics::RectF& damageRect) {
-    if (!m_visible || !getPresentationPaintBounds().intersects(damageRect)) return;
+    if (!m_visible || isCollapsed() || !getPresentationPaintBounds().intersects(damageRect)) return;
     beginPresentation(canvas, damageRect);
     drawChildren(canvas, damageRect);
 
