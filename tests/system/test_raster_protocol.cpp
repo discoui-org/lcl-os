@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <cstring>
 #include <fcntl.h>
+#include <filesystem>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace lcl::raster_protocol {
@@ -133,6 +135,94 @@ lcl::render::RetainedScrollTileCache::NodeMap externalNodes(
 }
 
 } // namespace
+
+TEST(RasterProtocolTest, CredentialsIdentifyForkedSenderWithDescriptor) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    const int enabled = 1;
+    ASSERT_EQ(setsockopt(sockets[1], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)), 0);
+    const pid_t child = fork();
+    ASSERT_GE(child, 0);
+    if (child == 0) {
+        close(sockets[1]);
+        const int descriptor = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        ReleaseLayer release{};
+        _exit(descriptor >= 0 && sendPacket(sockets[0], Opcode::ReleaseLayer, release, descriptor) ? 0 : 1);
+    }
+    Header header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    SenderCredentials sender{};
+    EXPECT_EQ(receivePacket(sockets[1], header, payload, receivedFd, &sender), ReceiveStatus::Received);
+    EXPECT_EQ(sender.pid, child);
+    EXPECT_EQ(sender.uid, getuid());
+    EXPECT_EQ(sender.gid, getgid());
+    EXPECT_GE(receivedFd, 0);
+    if (receivedFd >= 0) {
+        EXPECT_NE(fcntl(receivedFd, F_GETFD) & FD_CLOEXEC, 0);
+        close(receivedFd);
+    }
+    int status = 0;
+    EXPECT_EQ(waitpid(child, &status, 0), child);
+    EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(RasterProtocolTest, RequiredCredentialsFailClosedWhenMissing) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    ReleaseLayer release{};
+    ASSERT_TRUE(sendPacket(sockets[0], Opcode::ReleaseLayer, release));
+    Header header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    SenderCredentials sender{123, 456, 789};
+    EXPECT_EQ(receivePacket(sockets[1], header, payload, receivedFd, &sender), ReceiveStatus::Invalid);
+    EXPECT_EQ(sender.pid, 0);
+    EXPECT_TRUE(payload.empty());
+    EXPECT_EQ(receivedFd, -1);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(RasterProtocolTest, RejectsExtraOrTruncatedDescriptorsWithoutLeaking) {
+    const auto descriptorCount = [] {
+        return std::distance(std::filesystem::directory_iterator("/proc/self/fd"),
+                             std::filesystem::directory_iterator{});
+    };
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    const int enabled = 1;
+    ASSERT_EQ(setsockopt(sockets[1], SOL_SOCKET, SO_PASSCRED, &enabled, sizeof(enabled)), 0);
+    for (size_t count : {2u, 16u}) {
+        const auto before = descriptorCount();
+        Header sent{};
+        iovec vector{&sent, sizeof(sent)};
+        alignas(cmsghdr) char control[CMSG_SPACE(16 * sizeof(int))]{};
+        msghdr message{};
+        message.msg_iov = &vector;
+        message.msg_iovlen = 1;
+        message.msg_control = control;
+        message.msg_controllen = CMSG_SPACE(count * sizeof(int));
+        auto* cmsg = CMSG_FIRSTHDR(&message);
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SCM_RIGHTS;
+        cmsg->cmsg_len = CMSG_LEN(count * sizeof(int));
+        for (size_t i = 0; i < count; ++i)
+            std::memcpy(CMSG_DATA(cmsg) + i * sizeof(int), &sockets[0], sizeof(int));
+        ASSERT_EQ(sendmsg(sockets[0], &message, MSG_NOSIGNAL), sizeof(sent));
+        Header header{};
+        std::vector<uint8_t> payload;
+        int receivedFd = -1;
+        SenderCredentials sender{};
+        EXPECT_EQ(receivePacket(sockets[1], header, payload, receivedFd, &sender), ReceiveStatus::Invalid);
+        EXPECT_EQ(receivedFd, -1);
+        EXPECT_EQ(descriptorCount(), before);
+    }
+    close(sockets[0]);
+    close(sockets[1]);
+}
 
 TEST(RasterProtocolTest,
      RetainedExternalPlaceholderSurvivesPropertyOnlyComposition) {

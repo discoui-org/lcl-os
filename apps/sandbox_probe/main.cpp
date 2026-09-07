@@ -13,6 +13,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <cstdio>
+
+#include "producer_grant_probe.hpp"
+#include "system/ipc/lcl_protocol.hpp"
 
 namespace {
 
@@ -109,6 +113,66 @@ bool hasExpectedPortableResourceLimits() {
          processCount.rlim_max == kExpectedProcessCount;
 }
 
+bool producerGrantIsProcessBound() {
+  namespace protocol = lcl::protocol;
+  namespace raster = lcl::raster_protocol;
+  using namespace lcl::sandbox_probe;
+  const ProbeFd report(open("/Data/producer-grant-probe.txt",
+                           O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600));
+  if (report.get() < 0) return false;
+  const auto record = [&](const char* name, bool passed) {
+    dprintf(report.get(), "%s %s\n", passed ? "PASS" : "FAIL", name);
+    return passed;
+  };
+  const ProbeFd compositor(connectRaster("/Runtime/lcl-compositor.sock"));
+  if (!record("compositor connection", compositor.get() >= 0)) return false;
+  protocol::LCLMsgSurfaceCreate create{};
+  create.surfaceId = 1;
+  create.width = create.height = 64.0f;
+  std::strcpy(create.appId, "org.lcl.sandbox-probe");
+  std::strcpy(create.title, "Producer grant probe");
+  const char* instance = std::getenv("LCL_APP_INSTANCE_ID");
+  if (!instance) return record("launch instance", false);
+  create.appInstanceId = std::strtoull(instance, nullptr, 10);
+  protocol::LCLHeader request{};
+  request.opcode = protocol::LCLOpcode::SurfaceCreate;
+  request.requestId = 1;
+  request.payloadSize = sizeof(create);
+  if (!record("surface request", protocol::sendMsgWithFd(compositor.get(), request, &create)))
+    return false;
+  raster::SurfaceGrant grant{};
+  for (int attempt = 0; attempt < 8 && grant.surfaceId == 0; ++attempt) {
+    pollfd waiter{compositor.get(), POLLIN, 0};
+    if (poll(&waiter, 1, 2000) <= 0) break;
+    protocol::LCLHeader header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    const auto status = protocol::recvPacketWithFd(compositor.get(), header, payload, receivedFd);
+    const ProbeFd received(receivedFd);
+    if (status != protocol::ReceiveStatus::Received) break;
+    if (header.opcode == protocol::LCLOpcode::SurfaceProducerGrant &&
+        payload.size() == sizeof(protocol::LCLMsgSurfaceProducerGrant)) {
+      protocol::LCLMsgSurfaceProducerGrant message{};
+      std::memcpy(&message, payload.data(), sizeof(message));
+      grant = {message.surfaceId, message.ownerPid, message.flags, message.tokenHigh, message.tokenLow};
+    }
+  }
+  if (!record("authenticated surface grant", grant.surfaceId == create.surfaceId &&
+              (grant.tokenHigh != 0 || grant.tokenLow != 0))) return false;
+  constexpr const char* rasterPath = "/Runtime/lcl-raster.sock";
+  const ProbeFd owner(connectRaster(rasterPath));
+  if (!record("owner grant accepted", checkGrant(owner.get(), grant, raster::DiscardReason::InvalidFrame)))
+    return false;
+  bool passed = true;
+  passed &= record("copied grant denied", rejectsChildGrant(rasterPath, grant, GrantAttack::NewConnection));
+  passed &= record("rewritten owner denied", rejectsChildGrant(rasterPath, grant, GrantAttack::RewrittenOwner));
+  passed &= record("inherited socket denied", rejectsChildGrant(rasterPath, grant, GrantAttack::InheritedConnection));
+  passed &= record("owner survives attacks", checkGrant(owner.get(), grant, raster::DiscardReason::InvalidFrame));
+  // Closing the compositor connection revokes the grant and removes the
+  // never-mapped probe surface through the normal client cleanup path.
+  return passed;
+}
+
 } // namespace
 
 int main() {
@@ -137,5 +201,7 @@ int main() {
     return 18;
   if (!hasExpectedPortableResourceLimits())
     return 19;
+  if (!producerGrantIsProcessBound())
+    return 20;
   return 0;
 }

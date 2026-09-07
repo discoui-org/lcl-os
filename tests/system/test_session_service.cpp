@@ -522,3 +522,132 @@ TEST_F(SessionServiceTest,
   ASSERT_EQ(stat(tempDir.c_str(), &status), 0);
   EXPECT_EQ(status.st_mode & 0777, 0711);
 }
+
+TEST_F(SessionServiceTest,
+       SessionSocketRejectsRequestsSentByAChildThatInheritedItsConnection) {
+  if (getuid() != lcl::security::kSessionUserUid ||
+      getgid() != lcl::security::kSessionUserGid) {
+    GTEST_SKIP() << "requires the canonical session identity";
+  }
+  SessionService service({tempDir.string()});
+  const std::string socketPath = (tempDir / "sessiond.sock").string();
+  ASSERT_TRUE(service.initialize(socketPath));
+
+  const int client = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+  ASSERT_GE(client, 0);
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  std::strncpy(address.sun_path, socketPath.c_str(), sizeof(address.sun_path) - 1);
+  ASSERT_EQ(connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
+  service.poll(); // Records the parent process's kernel peer credentials.
+
+  const pid_t child = fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    SessionHeader header{};
+    header.opcode = SessionOpcode::CatalogRequest;
+    header.requestId = 1;
+    std::vector<uint8_t> packet;
+    const bool sent = encodePacket(header, {}, packet) &&
+        send(client, packet.data(), packet.size(), MSG_NOSIGNAL) ==
+            static_cast<ssize_t>(packet.size());
+    _exit(sent ? 0 : 1);
+  }
+  int childStatus = 0;
+  ASSERT_EQ(waitpid(child, &childStatus, 0), child);
+  ASSERT_TRUE(WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0);
+
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    service.poll();
+    pollfd ready{client, POLLHUP, 0};
+    if (poll(&ready, 1, 0) > 0 && (ready.revents & (POLLHUP | POLLERR))) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  std::array<uint8_t, 1> byte{};
+  EXPECT_EQ(recv(client, byte.data(), byte.size(), MSG_DONTWAIT), 0);
+  close(client);
+  service.shutdown();
+}
+
+TEST_F(SessionServiceTest,
+       SessionSocketRejectsRequestsSentThroughAnExplicitlyTransferredDescriptor) {
+  if (getuid() != lcl::security::kSessionUserUid ||
+      getgid() != lcl::security::kSessionUserGid) {
+    GTEST_SKIP() << "requires the canonical session identity";
+  }
+  SessionService service({tempDir.string()});
+  const std::string socketPath = (tempDir / "sessiond.sock").string();
+  ASSERT_TRUE(service.initialize(socketPath));
+
+  const int client = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+  ASSERT_GE(client, 0);
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  std::strncpy(address.sun_path, socketPath.c_str(), sizeof(address.sun_path) - 1);
+  ASSERT_EQ(connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
+  service.poll();
+
+  int transfer[2]{-1, -1};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, transfer), 0);
+  const pid_t child = fork();
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    close(client);
+    close(transfer[0]);
+    char byte = 0;
+    iovec vector{.iov_base = &byte, .iov_len = sizeof(byte)};
+    std::array<char, CMSG_SPACE(sizeof(int))> control{};
+    msghdr message{};
+    message.msg_iov = &vector;
+    message.msg_iovlen = 1;
+    message.msg_control = control.data();
+    message.msg_controllen = control.size();
+    if (recvmsg(transfer[1], &message, MSG_CMSG_CLOEXEC) != 1) _exit(1);
+    const cmsghdr *header = CMSG_FIRSTHDR(&message);
+    if (!header || header->cmsg_level != SOL_SOCKET ||
+        header->cmsg_type != SCM_RIGHTS ||
+        header->cmsg_len != CMSG_LEN(sizeof(int))) _exit(1);
+    int transferred = -1;
+    std::memcpy(&transferred, CMSG_DATA(header), sizeof(transferred));
+    SessionHeader request{};
+    request.opcode = SessionOpcode::CatalogRequest;
+    request.requestId = 1;
+    std::vector<uint8_t> packet;
+    const bool sent = encodePacket(request, {}, packet) &&
+        send(transferred, packet.data(), packet.size(), MSG_NOSIGNAL) ==
+            static_cast<ssize_t>(packet.size());
+    close(transferred);
+    _exit(sent ? 0 : 1);
+  }
+  close(transfer[1]);
+  char byte = 0;
+  iovec vector{.iov_base = &byte, .iov_len = sizeof(byte)};
+  std::array<char, CMSG_SPACE(sizeof(int))> control{};
+  msghdr message{};
+  message.msg_iov = &vector;
+  message.msg_iovlen = 1;
+  message.msg_control = control.data();
+  message.msg_controllen = control.size();
+  cmsghdr *header = CMSG_FIRSTHDR(&message);
+  ASSERT_NE(header, nullptr);
+  header->cmsg_level = SOL_SOCKET;
+  header->cmsg_type = SCM_RIGHTS;
+  header->cmsg_len = CMSG_LEN(sizeof(client));
+  std::memcpy(CMSG_DATA(header), &client, sizeof(client));
+  ASSERT_EQ(sendmsg(transfer[0], &message, MSG_NOSIGNAL), 1);
+  close(transfer[0]);
+
+  int childStatus = 0;
+  ASSERT_EQ(waitpid(child, &childStatus, 0), child);
+  ASSERT_TRUE(WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0);
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    service.poll();
+    pollfd ready{client, POLLHUP, 0};
+    if (poll(&ready, 1, 0) > 0 && (ready.revents & (POLLHUP | POLLERR))) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  std::array<uint8_t, 1> byteResult{};
+  EXPECT_EQ(recv(client, byteResult.data(), byteResult.size(), MSG_DONTWAIT), 0);
+  close(client);
+  service.shutdown();
+}

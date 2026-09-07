@@ -216,6 +216,8 @@ struct SurfaceState {
 struct Client {
     int fd{-1};
     pid_t pid{0};
+    uid_t uid{0};
+    gid_t gid{0};
 };
 
 struct PendingFrame {
@@ -876,6 +878,13 @@ bool setNonBlocking(int fd) {
 int createListener(const std::string& path) {
     const int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) return -1;
+    // Inherited by accepted sockets, including packets queued before accept.
+    const int passCredentials = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_PASSCRED,
+                   &passCredentials, sizeof(passCredentials)) != 0) {
+        close(fd);
+        return -1;
+    }
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     if (path.size() >= sizeof(address.sun_path)) {
@@ -964,11 +973,12 @@ private:
             if (fd < 0) break;
             ucred credentials{};
             socklen_t length = sizeof(credentials);
-            if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) != 0) {
+            if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) != 0 ||
+                length != sizeof(credentials) || credentials.pid <= 0) {
                 close(fd);
                 continue;
             }
-            m_clients.push_back({fd, credentials.pid});
+            m_clients.push_back({fd, credentials.pid, credentials.uid, credentials.gid});
         }
     }
 
@@ -1015,8 +1025,9 @@ private:
                 lcl::raster_protocol::Header header{};
                 std::vector<uint8_t> payload;
                 int receivedFd = -1;
+                lcl::raster_protocol::SenderCredentials sender{};
                 const auto status = lcl::raster_protocol::receivePacket(
-                    it->fd, header, payload, receivedFd);
+                    it->fd, header, payload, receivedFd, &sender);
                 if (status == lcl::raster_protocol::ReceiveStatus::WouldBlock) break;
                 if (status == lcl::raster_protocol::ReceiveStatus::Closed ||
                     status == lcl::raster_protocol::ReceiveStatus::Error) {
@@ -1026,7 +1037,16 @@ private:
                 }
                 if (status != lcl::raster_protocol::ReceiveStatus::Received) {
                     if (receivedFd >= 0) close(receivedFd);
-                    continue;
+                    alive = false;
+                    break;
+                }
+                // SO_PEERCRED alone identifies the connector, not a process
+                // writing through a forked or SCM_RIGHTS-transferred socket.
+                if (sender != lcl::raster_protocol::SenderCredentials{
+                        it->pid, it->uid, it->gid}) {
+                    if (receivedFd >= 0) close(receivedFd);
+                    alive = false;
+                    break;
                 }
                 handleClientPacket(*it, header, payload, receivedFd);
             }

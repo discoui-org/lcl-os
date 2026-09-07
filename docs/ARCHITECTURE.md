@@ -60,6 +60,17 @@ The LCL architecture consists of 5 main decoupled layers:
   imported as an opaque EGL image; a zero CPU row stride is valid and is not
   interpreted as byte-addressable backing. None of these
   platform transports changes the public application surface protocol.
+  Surface producer grants bind the compositor-authenticated process to a
+  random 128-bit token, surface ID and scheduling flags. Rasterd enables
+  `SO_PASSCRED` on its listener before accepting producers and checks each
+  packet's kernel `SCM_CREDENTIALS` PID/UID/GID against `SO_PEERCRED` from
+  connection establishment. Forking or transferring a connected socket cannot
+  transfer producer authority: a different sender closes that connection
+  before resource uploads, fences or retained transactions are handled. A new
+  connection must still match the grant owner's PID and the exact registered
+  token/surface/flags. Credentials are transport metadata, so the canonical
+  application wire ABI stays unchanged. The private compositor channel alone
+  registers/revokes grants and receives ready layers.
   Rasterd retains the accepted node revisions, logical cached-layer bodies,
   damage patches, image resources, layer namespaces, and the last immutable
   output base per surface. Cached-layer namespace changes are transactional:

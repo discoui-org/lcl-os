@@ -6,6 +6,7 @@
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/progress_view.hpp"
 #include "system/render/raster_canvas.hpp"
+#include "apps/sandbox_probe/producer_grant_probe.hpp"
 
 #include <chrono>
 #include <csignal>
@@ -89,6 +90,10 @@ public:
     bool registerSurface(const raster::SurfaceGrant& grant) const {
         return raster::sendPacket(
             m_privateFd, raster::Opcode::RegisterSurface, grant);
+    }
+
+    bool revokeSurface(const raster::SurfaceGrant& grant) const {
+        return raster::sendPacket(m_privateFd, raster::Opcode::RevokeSurface, grant);
     }
 
     bool releaseLayer(
@@ -248,6 +253,7 @@ public:
         presented.configureSerial = ready.configureSerial;
         presented.frameSerial = ready.frameSerial;
         presented.geometryGeneration = ready.geometryGeneration;
+        presented.displaySequence = ready.frameSerial;
         presented.timestampNs = 1;
         presented.refreshIntervalNs = 16666667;
         return protocol::sendMsgWithFd(m_clientFd, header, &presented);
@@ -260,6 +266,55 @@ private:
     int m_listenerFd{-1};
     int m_clientFd{-1};
 };
+
+TEST(RasterServiceIntegrationTest, ProducerGrantRejectsOtherProcessesAndTransferredSockets) {
+    using namespace lcl::sandbox_probe;
+    RasterDaemon daemon;
+    ASSERT_TRUE(daemon.start());
+    const raster::SurfaceGrant grant{7, static_cast<int32_t>(getpid()), 0, 101, 103};
+    ASSERT_TRUE(daemon.registerSurface(grant));
+    ProbeFd owner(connectRaster(daemon.socketPath()));
+    ASSERT_GE(owner.get(), 0);
+    ASSERT_TRUE(checkGrant(owner.get(), grant, raster::DiscardReason::InvalidFrame));
+    EXPECT_TRUE(rejectsChildGrant(daemon.socketPath(), grant, GrantAttack::NewConnection));
+    EXPECT_TRUE(rejectsChildGrant(daemon.socketPath(), grant, GrantAttack::RewrittenOwner));
+    EXPECT_TRUE(rejectsChildGrant(daemon.socketPath(), grant, GrantAttack::InheritedConnection));
+    // An attacker cannot break the owner's independent connection or grant.
+    EXPECT_TRUE(checkGrant(owner.get(), grant, raster::DiscardReason::InvalidFrame));
+    raster::LayerReady ready{};
+    int layerFd = -1;
+    EXPECT_FALSE(daemon.takeLayer(ready, layerFd, 50));
+    if (layerFd >= 0) close(layerFd);
+}
+
+TEST(RasterServiceIntegrationTest, ProducerGrantRejectsTamperingAndRevocation) {
+    using namespace lcl::sandbox_probe;
+    RasterDaemon daemon;
+    ASSERT_TRUE(daemon.start());
+    const raster::SurfaceGrant grant{7, static_cast<int32_t>(getpid()), 0, 107, 109};
+    ASSERT_TRUE(daemon.registerSurface(grant));
+    ProbeFd owner(connectRaster(daemon.socketPath()));
+    ASSERT_GE(owner.get(), 0);
+    ASSERT_TRUE(checkGrant(owner.get(), grant, raster::DiscardReason::InvalidFrame));
+    for (int field = 0; field < 5; ++field) {
+        auto altered = grant;
+        if (field == 0) ++altered.surfaceId;
+        if (field == 1) ++altered.ownerPid;
+        if (field == 2) altered.flags = raster::kGrantInteractiveSystem;
+        if (field == 3) ++altered.tokenHigh;
+        if (field == 4) ++altered.tokenLow;
+        EXPECT_TRUE(checkGrant(owner.get(), altered, raster::DiscardReason::InvalidGrant));
+    }
+    ASSERT_TRUE(daemon.revokeSurface(grant));
+    // Private revoke and public producer packets use different channels; allow
+    // an already-running client drain to finish before asserting revocation.
+    bool revoked = false;
+    for (int attempt = 0; attempt < 20 && !revoked; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        revoked = checkGrant(owner.get(), grant, raster::DiscardReason::InvalidGrant);
+    }
+    EXPECT_TRUE(revoked);
+}
 
 TEST(RasterServiceIntegrationTest,
      WindowAppPublishesFirstConfiguredFrameThroughRasterDaemon) {

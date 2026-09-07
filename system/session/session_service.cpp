@@ -262,6 +262,16 @@ bool SessionService::initialize(const std::string &socketPath) {
       socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
   if (m_serverFd < 0)
     return false;
+  // Each received request must identify its actual sending process. This
+  // closes the otherwise persistent authority transfer path where a trusted
+  // shell's connected session socket is inherited by or passed to an app.
+  const int passCredentials = 1;
+  if (setsockopt(m_serverFd, SOL_SOCKET, SO_PASSCRED, &passCredentials,
+                 sizeof(passCredentials)) != 0) {
+    close(m_serverFd);
+    m_serverFd = -1;
+    return false;
+  }
 
   sockaddr_un address{};
   address.sun_family = AF_UNIX;
@@ -307,9 +317,9 @@ void SessionService::shutdown() {
       kill(-instance.pid, SIGTERM);
     }
   }
-  for (const int fd : m_clientFds)
-    close(fd);
-  m_clientFds.clear();
+  for (const auto &connection : m_clientConnections)
+    close(connection.fd);
+  m_clientConnections.clear();
   m_waiters.clear();
   m_sandboxClient.close();
   if (m_serverFd >= 0) {
@@ -669,7 +679,12 @@ void SessionService::acceptConnections() {
     const int fd =
         accept4(m_serverFd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
     if (fd >= 0) {
-      m_clientFds.push_back(fd);
+      ClientConnection connection{};
+      if (peerIsTrustedSessionAuthority(fd, connection)) {
+        m_clientConnections.push_back(connection);
+      } else {
+        close(fd);
+      }
       continue;
     }
     if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -680,10 +695,33 @@ void SessionService::acceptConnections() {
   }
 }
 
-void SessionService::serviceClient(int fd) {
+bool SessionService::peerIsTrustedSessionAuthority(
+    int fd, ClientConnection &connection) const {
+  ucred credentials{};
+  socklen_t length = sizeof(credentials);
+  if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) != 0 ||
+      length != sizeof(credentials) || credentials.pid <= 0 ||
+      credentials.uid != lcl::security::kSessionUserUid ||
+      credentials.gid != lcl::security::kSessionUserGid) {
+    return false;
+  }
+  connection = {fd, credentials.pid, credentials.uid, credentials.gid};
+  return true;
+}
+
+void SessionService::serviceClient(const ClientConnection &connection) {
+  const int fd = connection.fd;
   std::array<uint8_t, kReceiveBufferSize> bytes{};
   while (true) {
-    const ssize_t count = recv(fd, bytes.data(), bytes.size(), MSG_DONTWAIT);
+    std::array<char, CMSG_SPACE(sizeof(ucred)) + CMSG_SPACE(sizeof(int) * 4)>
+        control{};
+    iovec vector{.iov_base = bytes.data(), .iov_len = bytes.size()};
+    msghdr message{};
+    message.msg_iov = &vector;
+    message.msg_iovlen = 1;
+    message.msg_control = control.data();
+    message.msg_controllen = control.size();
+    const ssize_t count = recvmsg(fd, &message, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
     if (count == 0) {
       removeClient(fd);
       return;
@@ -691,6 +729,38 @@ void SessionService::serviceClient(int fd) {
     if (count < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK)
         return;
+      removeClient(fd);
+      return;
+    }
+    bool validSender = (message.msg_flags & (MSG_CTRUNC | MSG_TRUNC)) == 0;
+    bool sawCredentials = false;
+    for (cmsghdr *header = CMSG_FIRSTHDR(&message); header;
+         header = CMSG_NXTHDR(&message, header)) {
+      if (header->cmsg_level == SOL_SOCKET &&
+          header->cmsg_type == SCM_CREDENTIALS &&
+          header->cmsg_len == CMSG_LEN(sizeof(ucred)) && !sawCredentials) {
+        ucred credentials{};
+        std::memcpy(&credentials, CMSG_DATA(header), sizeof(credentials));
+        sawCredentials = true;
+        validSender = validSender && credentials.pid == connection.pid &&
+                      credentials.uid == connection.uid &&
+                      credentials.gid == connection.gid;
+      } else if (header->cmsg_level == SOL_SOCKET &&
+                 header->cmsg_type == SCM_RIGHTS &&
+                 header->cmsg_len >= CMSG_LEN(0)) {
+        const auto count = (header->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+        for (size_t index = 0; index < count; ++index) {
+          int received = -1;
+          std::memcpy(&received, CMSG_DATA(header) + index * sizeof(int),
+                      sizeof(received));
+          if (received >= 0) close(received);
+        }
+        validSender = false;
+      } else {
+        validSender = false;
+      }
+    }
+    if (!validSender || !sawCredentials) {
       removeClient(fd);
       return;
     }
@@ -745,7 +815,8 @@ void SessionService::serviceClient(int fd) {
 }
 
 void SessionService::removeClient(int fd) {
-  std::erase(m_clientFds, fd);
+  std::erase_if(m_clientConnections,
+                [fd](const ClientConnection &connection) { return connection.fd == fd; });
   for (auto &[_, waiters] : m_waiters)
     std::erase(waiters, fd);
   close(fd);
@@ -852,11 +923,15 @@ void SessionService::completeInstanceExit(uint64_t instanceId, int exitCode) {
 void SessionService::poll() {
   if (m_serverFd >= 0) {
     acceptConnections();
-    const auto clients = m_clientFds;
-    for (const int fd : clients) {
-      if (std::find(m_clientFds.begin(), m_clientFds.end(), fd) !=
-          m_clientFds.end()) {
-        serviceClient(fd);
+    const auto clients = m_clientConnections;
+    for (const auto &connection : clients) {
+      const auto found = std::find_if(
+          m_clientConnections.begin(), m_clientConnections.end(),
+          [&connection](const ClientConnection &current) {
+            return current.fd == connection.fd;
+          });
+      if (found != m_clientConnections.end()) {
+        serviceClient(*found);
       }
     }
   }

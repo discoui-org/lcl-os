@@ -97,7 +97,8 @@ bool decodeCommitTransaction(
 }
 
 ReceiveStatus receivePacket(int fd, Header& header,
-                            std::vector<uint8_t>& payload, int& receivedFd) {
+                            std::vector<uint8_t>& payload, int& receivedFd,
+                            SenderCredentials* sender) {
     // receivePacket() is called from non-blocking drain loops, so the common
     // case is WouldBlock. Allocating and zero-filling kMaxPayload before every
     // recvmsg made an idle raster service churn through hundreds of MiB/s.
@@ -106,6 +107,7 @@ ReceiveStatus receivePacket(int fd, Header& header,
     thread_local std::array<uint8_t, kMaxPayload> receivePayload{};
     payload.clear();
     receivedFd = -1;
+    if (sender) *sender = {};
 
     iovec vectors[2]{};
     vectors[0].iov_base = &header;
@@ -113,7 +115,8 @@ ReceiveStatus receivePacket(int fd, Header& header,
     vectors[1].iov_base = receivePayload.data();
     vectors[1].iov_len = receivePayload.size();
 
-    alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))]{};
+    alignas(cmsghdr) char control[
+        CMSG_SPACE(sizeof(int)) + CMSG_SPACE(sizeof(ucred))]{};
     msghdr message{};
     message.msg_iov = vectors;
     message.msg_iovlen = 2;
@@ -133,16 +136,37 @@ ReceiveStatus receivePacket(int fd, Header& header,
         return ReceiveStatus::Closed;
     }
 
+    bool hasCredentials = false;
+    bool validAncillary = true;
     for (auto* cmsg = CMSG_FIRSTHDR(&message); cmsg;
          cmsg = CMSG_NXTHDR(&message, cmsg)) {
         if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS &&
             cmsg->cmsg_len >= CMSG_LEN(sizeof(int))) {
-            std::memcpy(&receivedFd, CMSG_DATA(cmsg), sizeof(int));
-            break;
+            const size_t count = (cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+            for (size_t i = 0; i < count; ++i) {
+                int descriptor = -1;
+                std::memcpy(&descriptor, CMSG_DATA(cmsg) + i * sizeof(int), sizeof(int));
+                if (receivedFd < 0) receivedFd = descriptor;
+                else {
+                    close(descriptor);
+                    validAncillary = false;
+                }
+            }
+        } else if (cmsg->cmsg_level == SOL_SOCKET &&
+                   cmsg->cmsg_type == SCM_CREDENTIALS) {
+            if (hasCredentials || cmsg->cmsg_len != CMSG_LEN(sizeof(ucred))) {
+                validAncillary = false;
+                continue;
+            }
+            ucred credentials{};
+            std::memcpy(&credentials, CMSG_DATA(cmsg), sizeof(credentials));
+            hasCredentials = credentials.pid > 0;
+            if (sender) *sender = {credentials.pid, credentials.uid, credentials.gid};
         }
     }
 
-    const bool validHeader = received >= static_cast<ssize_t>(sizeof(Header)) &&
+    const bool validHeader = validAncillary && (!sender || hasCredentials) &&
+        received >= static_cast<ssize_t>(sizeof(Header)) &&
         (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) == 0 &&
         header.magic == kMagic && header.version == kVersion &&
         header.payloadSize <= kMaxPayload &&
@@ -150,6 +174,7 @@ ReceiveStatus receivePacket(int fd, Header& header,
     if (!validHeader) {
         if (receivedFd >= 0) close(receivedFd);
         receivedFd = -1;
+        if (sender) *sender = {};
         return ReceiveStatus::Invalid;
     }
 

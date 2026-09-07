@@ -661,7 +661,7 @@ def stage_canonical_rootfs(
     # Sandbox Probe.app is a non-GUI acceptance helper.  Unlike Terminal it
     # deliberately follows the ordinary third-party sandbox profile, so a
     # QEMU run can validate UID, namespaces, Landlock, cgroup setup and the
-    # no-new-privileges boundary without exposing a compositor endpoint yet.
+    # no-new-privileges boundary and process-bound compositor/raster grants.
     smoke_dst = dest_system_apps / "Sandbox Probe.app"
     smoke_dst.mkdir(parents=True, exist_ok=True)
     (smoke_dst / "Executables").mkdir(parents=True, exist_ok=True)

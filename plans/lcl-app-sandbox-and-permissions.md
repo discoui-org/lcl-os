@@ -222,11 +222,11 @@ sözleşmesini kullanmasıdır.
   nasıl yetkilendirileceğini tanımla.
 - [x] `SO_PEERCRED` kimliğini sandbox registry'deki app ID ve instance ID ile
   eşleştir.
-- [ ] Mevcut surface producer grant mekanizmasını yeni process kimliğiyle
+- [x] Mevcut surface producer grant mekanizmasını yeni process kimliğiyle
   doğrula; grant'in başka uygulama tarafından kullanılamamasını test et.
 - [x] Uygulama erişebilen compositor/raster endpoint'lerini sessiond/admin
   endpointlerinden ayır.
-- [ ] Uygulamaların doğrudan sessiond üzerinden keyfî başka uygulama
+- [x] Uygulamaların doğrudan sessiond üzerinden keyfî başka uygulama
   başlatmasını engelle; gerekiyorsa sınırlı `open`/launch portalı tasarla.
 - [x] Compositor socket'in mevcut `0600` modelini, benzersiz app UID'leriyle
   uyumlu ve peer-authenticated bir modele geçir.
@@ -252,6 +252,26 @@ yazıyor. Compositor, `SO_PEERCRED` PID'sinin canlı process group'unu bu kayıt
 birebir eşleştiriyor; eksik, değiştirilmiş veya başka instance'a ait iddia
 yüzey/grant oluşmadan reddediliyor. Kayıtlar process reap sırasında kaldırılıyor
 ve daemon başlangıcında güvenli biçimde sıfırlanıyor.
+
+**Session launch authority kanıtı (2026-09-07):** `lcl-sessiond` endpoint'i
+session kullanıcı kimliği `1000:1000/0600` ile sınırlıydı; servis artık
+accept'te `SO_PEERCRED` ile yalnız UID/GID `1000:1000` bağlantısını kabul
+ediyor. Listener `SO_PASSCRED` açıyor ve her istek paketinin kernel
+`SCM_CREDENTIALS` PID/UID/GID'sini accept edilen bağlantı kimliğiyle eşliyor.
+Bu nedenle trusted shell bağlantısının `fork` ile miras alınması ya da
+`SCM_RIGHTS` üzerinden başka sürece aktarılması launch yetkisini devretmez;
+uyuşmazlık veya FD ekli paket bağlantıyı fail-closed kapatır. Session protocol
+wire ABI'si değişmedi. `SessionService`/protocol, sandbox daemon ve app peer
+authenticator host filtresinde **18/18 PASS**; yeni iki negatif test miras
+alınan ve açıkça aktarılan connected descriptor yollarını kapsıyor (XML:
+`/tmp/lcl-session-authority-host.xml`). Fiziksel `2312DRA50G` Android 16 arm64
+cihazda güncel canonical rootfs sessiond SHA-256
+`ee5183397ce85e2d10af0e892d2d9cef1e664cc8046a1feef5fb66f52d65f5d4`
+ile çalıştı: SELinux `Enforcing`, socket `1000:1000/0600`, mobile shell
+`1000:1000`. Root ADB `chroot ... lcl-open org.lcl.sandbox-test` doğrudan
+launch isteği `Connection reset by peer`, `exit=1` ile reddedildi ve sandbox
+instance oluşmadı. Uygulama kaynaklı cross-app launch gerekirse ayrı,
+trusted-shell promptlu dar bir launch portalı tasarlanacak.
 
 ## 6. Kernel policy katmanları
 
@@ -517,6 +537,58 @@ cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
 - [ ] Bu testte tüm LCL süreçleri hâlâ `u:r:su:s0` context'inde. Ayrı ve dar
   `lcl_core`, `lcl_sandboxd`, `lcl_app` SELinux domainleri tamamlanmadan
   Android MAC katmanı nihai kabul edilmiş sayılmaz.
+
+#### 2026-09-07 — Surface producer grant süreç bağı
+
+- [x] **Static scan:** başlangıç çalışma ağacı temizdi (`c617cea`). Rasterd
+  token/surface/flags ve `SO_PEERCRED` PID'sini denetliyordu; fork veya FD
+  aktarımıyla taşınan açık soketin gerçek göndericisini denetlemiyordu.
+  Listener artık accept'ten önce `SO_PASSCRED` açıyor; her üretici paketinin
+  kernel `SCM_CREDENTIALS` PID/UID/GID'si bağlantı kimliğiyle eşleşmezse soket
+  kapatılıyor. Eksik kimlik fail-closed; fazla/truncated FD'ler kapatılıyor.
+  Kimlik wire payload'a eklenmedi; canonical uygulama ABI'si değişmedi.
+- [x] **Host test:** raster protocol, gerçek rasterd entegrasyonu, app launch
+  registry ve application peer authenticator filtrelerinde **30/30 PASS**.
+  Testler geçerli grant'in aynı UID'deki ayrı süreçte yeni bağlantıdan,
+  değiştirilmiş owner PID ile ve miras alınmış açık bağlantıdan kullanımını;
+  token/surface/flags değiştirmeyi, revoke'u, eksik kimliği ve fazla FD
+  sızıntısını kapsıyor. Sahibin ayrı bağlantısı saldırıdan sonra geçerli
+  kalıyor; ilk kare ve retained devam karesi sunumu da geçiyor. Test harness'in
+  eksik `FramePresented.displaySequence` değeri güncel sözleşmeye uyarlandı.
+  Araç sandbox'ının socket kısıtlamaları dışındaki gerçek host koşumu esas
+  alındı; XML raporu `/tmp/lcl-producer-grant-host.xml`.
+- [x] **Android run / kullanıcı-gözlemi:** gerçek `2312DRA50G` / `garnet`,
+  serial `a1f34b97`, Android 16 / SDK 36, arm64,
+  `5.10.252-Zen-Itsu+`. Güncel rasterd ile Sandbox Test instance `2`, PID
+  `9478`, UID/GID `61002:61002`, ek grup `62000`, effective/permitted/
+  inheritable/ambient capability `0`, `NoNewPrivs=1`, `Seccomp=2` olarak
+  açıldı. Compositor ilk ready layer sonrasında pencereyi map etti; Adreno 710
+  ve AHardwareBuffer transport aktif. Kullanıcı mevcut 14 izolasyon kontrolü
+  için **All checks passed** bildirdi. Bu GUI sonucu aşağıdaki ayrı grant
+  probe'uyla karıştırılmamalı. SELinux `Enforcing`, süreç context'i
+  `u:r:ksu:s0`; ayrı dar LCL SELinux domainleri bu turda doğrulanmadı.
+- [x] **Android run / grant kabulü:** son canonical arm64 rootfs üzerinde
+  `chroot /data/local/tmp/lcl-rootfs /System/Core/lcl-open -w org.lcl.sandbox-probe`
+  normal sessiond → sandboxd zinciriyle instance `1`, PID `11741` başlattı ve
+  **0** döndü. App-private `/Data/producer-grant-probe.txt`, `61000:61000/0600`
+  sahiplik/moduyla **8/8 PASS** içerdi: compositor bağlantısı, surface isteği,
+  doğrulanmış grant, sahibin kabulü, ayrı süreçten kopyalanmış grant'in reddi,
+  owner PID değiştirme reddi, miras alınmış soketin reddi ve saldırılardan
+  sonra sahibin kabulü. Grant kabulü, retained ağacı değiştirmeyen kasıtlı
+  geçersiz bir kareye verilen `InvalidFrame` ile; yetki reddi `InvalidGrant`
+  ile; devredilmiş soket reddi ise bağlantı kapanışıyla ölçülüyor. Timeout
+  başarı sayılmıyor. SELinux son kontrolde **Enforcing** kaldı.
+  Canonical probe SHA-256 cihazda ve host artifact'ında birebir
+  `e3298e119cd15c2c0cc6b8f890303ea7020547517f560ef8dbd3420c5ba54bc3`;
+  dağıtılan rasterd SHA-256
+  `9f2903e69ca840fbbaa709c644636deccc1ad79e05b28ec9b1a60a71d6149b4d`.
+- [ ] **Dağıtım ortamı takip notu:** fiziksel kernel eski/silinmiş LCL rootfs
+  image'larına ait autoclear loop referanslarını tuttu. `losetup -f` ayrıca
+  Android device-mapper holder'ı olan bir aygıt seçtiği için dağıtım aracı
+  fail-closed kaldı; bu turda yeni LCL loop aygıtları oluşturularak ilerlenip
+  son rootfs `loop42` ile açıldı. Eski referansların yaşam döngüsü ayrı
+  incelenecek; Android'e ait loop holder'ları veya SELinux policy'si
+  değiştirilmedi.
 
 #### Önceki çalışma kayıtları
 

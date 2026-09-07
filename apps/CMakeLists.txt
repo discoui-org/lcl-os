@@ -69,13 +69,13 @@ target_link_libraries(lcl-settings PRIVATE
 )
 
 # A non-GUI system bundle used only to prove the end-to-end third-party
-# sandbox boundary on QEMU.  It has no privileged IPC, compositor, or device
-# dependency and reports its narrow checks through its exit status.
+# sandbox boundary on Linux and Android. It uses only app-facing graphics IPC
+# and reports checks through its exit status and an app-private grant report.
 add_executable(lcl-sandbox-smoke
     sandbox_probe/main.cpp
 )
 target_include_directories(lcl-sandbox-smoke PRIVATE ${PROJECT_SOURCE_DIR})
-target_link_libraries(lcl-sandbox-smoke PRIVATE Threads::Threads)
+target_link_libraries(lcl-sandbox-smoke PRIVATE lcl-protocol lcl-raster-protocol Threads::Threads)
 
 add_executable(lcl-sandbox-test sandbox_test/main.cpp)
 target_include_directories(lcl-sandbox-test PRIVATE

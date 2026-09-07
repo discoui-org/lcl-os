@@ -273,8 +273,20 @@ bool sendPacket(int fd, Opcode opcode, const T& payload, int passedFd = -1) {
                       passedFd);
 }
 
+// Transport metadata only; never serialized or supplied by the wire payload.
+struct SenderCredentials {
+    int32_t pid{0};
+    uint32_t uid{0};
+    uint32_t gid{0};
+    bool operator==(const SenderCredentials&) const = default;
+};
+
+// A non-null sender requires kernel SCM_CREDENTIALS (SO_PASSCRED must be
+// enabled before accepting producer connections). Missing credentials fail
+// closed. Private compositor channels do not require this metadata.
 ReceiveStatus receivePacket(int fd, Header& header,
-                            std::vector<uint8_t>& payload, int& receivedFd);
+                            std::vector<uint8_t>& payload, int& receivedFd,
+                            SenderCredentials* sender = nullptr);
 
 template <typename T>
 const T* payloadAs(const Header& header, std::span<const uint8_t> payload,

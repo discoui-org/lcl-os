@@ -11,6 +11,7 @@
 #include "system/security/bundle_snapshot_store.hpp"
 #include "system/security/pending_bundle_approval_store.hpp"
 #include "system/security/permission_store.hpp"
+#include "system/security/session_user.hpp"
 #include "system/session/app_registry.hpp"
 #include "system/session/session_protocol.hpp"
 
@@ -68,12 +69,20 @@ public:
   bool launchDefaultProfile();
 
 private:
+  struct ClientConnection {
+    int fd{-1};
+    pid_t pid{0};
+    uid_t uid{0};
+    gid_t gid{0};
+  };
+
   bool sendPacket(int fd, SessionOpcode opcode, uint32_t requestId,
                   const std::vector<uint8_t> &payload);
   LaunchResponse launchSandboxed(const core::AppBundleMetadata &app,
                                  uint64_t instanceId);
   void acceptConnections();
-  void serviceClient(int fd);
+  bool peerIsTrustedSessionAuthority(int fd, ClientConnection &connection) const;
+  void serviceClient(const ClientConnection &connection);
   void removeClient(int fd);
   void reapChildren();
   void reapSandboxChildren();
@@ -90,7 +99,7 @@ private:
   std::string m_sandboxSocketPath;
   std::string m_socketPath;
   int m_serverFd{-1};
-  std::vector<int> m_clientFds;
+  std::vector<ClientConnection> m_clientConnections;
   std::unordered_map<uint64_t, AppInstance> m_instances;
   std::unordered_map<int32_t, uint64_t> m_instanceByPid;
   std::unordered_map<std::string, uint64_t> m_runningInstanceByAppId;
