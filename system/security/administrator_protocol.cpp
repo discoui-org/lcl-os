@@ -90,7 +90,7 @@ bool visibleText(std::string_view value, std::size_t maximum, bool allowEmpty = 
 
 bool validOpcode(AdministratorOpcode opcode) {
     return opcode >= AdministratorOpcode::ShellHello &&
-           opcode <= AdministratorOpcode::ErrorResponse;
+           opcode <= AdministratorOpcode::RevokeSession;
 }
 
 bool validExecuteRequest(const AdministratorExecuteRequest& request) {

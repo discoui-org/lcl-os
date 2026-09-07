@@ -21,6 +21,7 @@ enum class AdministratorOpcode : std::uint32_t {
     CommandOutput = 5,
     CommandResult = 6,
     ErrorResponse = 7,
+    RevokeSession = 8,
 };
 
 enum class AdministratorOutputStream : std::uint8_t {

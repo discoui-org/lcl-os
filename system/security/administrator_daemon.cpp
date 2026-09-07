@@ -1,7 +1,10 @@
 #include "system/security/administrator_daemon.hpp"
 
 #include <sys/socket.h>
+#include <sys/file.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -15,6 +18,8 @@
 #include <filesystem>
 #include <fstream>
 #include <fcntl.h>
+#include <iomanip>
+#include <initializer_list>
 #include <poll.h>
 #include <sstream>
 #include <string_view>
@@ -26,14 +31,29 @@ constexpr std::size_t kPacketCapacity =
     kAdministratorWireHeaderSize + kAdministratorMaxPayload;
 constexpr std::chrono::minutes kPermissionLifetime{5};
 
-std::string executableName(pid_t pid) {
+std::string executablePath(pid_t pid) {
     std::array<char, 64> path{};
     std::snprintf(path.data(), path.size(), "/proc/%d/exe", static_cast<int>(pid));
     std::array<char, 4096> target{};
     const ssize_t length = readlink(path.data(), target.data(), target.size() - 1);
     if (length <= 0) return {};
     target[static_cast<std::size_t>(length)] = '\0';
-    return std::filesystem::path(target.data()).filename().string();
+    return target.data();
+}
+
+bool rootOwnedExecutable(std::string_view path) {
+    struct stat status {};
+    return !path.empty() && lstat(std::string(path).c_str(), &status) == 0 &&
+           S_ISREG(status.st_mode) && status.st_uid == 0 &&
+           (status.st_mode & 0022) == 0 && (status.st_mode & 0111) != 0;
+}
+
+bool processRunsCanonicalExecutable(
+        pid_t pid, std::initializer_list<std::string_view> allowedPaths) {
+    const std::string path = executablePath(pid);
+    return rootOwnedExecutable(path) &&
+           std::find(allowedPaths.begin(), allowedPaths.end(), path) !=
+               allowedPaths.end();
 }
 
 pid_t parentPid(pid_t pid) {
@@ -51,8 +71,8 @@ pid_t parentPid(pid_t pid) {
 }
 
 bool isTrustedShell(pid_t pid) {
-    const auto name = executableName(pid);
-    return name == "lcl-desktop-shell" || name == "lcl-mobile-shell";
+    return processRunsCanonicalExecutable(pid,
+        {"/System/Core/lcl-desktop-shell", "/System/Core/lcl-mobile-shell"});
 }
 
 std::uint64_t processStartTime(pid_t pid) {
@@ -82,11 +102,11 @@ bool terminalIdentityForSudo(pid_t pid, pid_t& terminalPid,
                              std::uint64_t& terminalStartTime) {
     terminalPid = 0;
     terminalStartTime = 0;
-    if (executableName(pid) != "lcl-sudo") return false;
+    if (!processRunsCanonicalExecutable(pid, {"/System/Core/lcl-sudo"})) return false;
     pid_t ancestor = parentPid(pid);
     for (unsigned depth = 0; depth < 8 && ancestor > 1; ++depth) {
-        const auto name = executableName(ancestor);
-        if (name == "Terminal" || name == "lcl-terminal") {
+        if (processRunsCanonicalExecutable(ancestor,
+                {"/System/Applications/Terminal.app/Executables/Terminal"})) {
             const auto startTime = processStartTime(ancestor);
             if (startTime == 0) return false;
             terminalPid = ancestor;
@@ -96,6 +116,48 @@ bool terminalIdentityForSudo(pid_t pid, pid_t& terminalPid,
         ancestor = parentPid(ancestor);
     }
     return false;
+}
+
+bool writeAll(int descriptor, std::string_view bytes) {
+    while (!bytes.empty()) {
+        const ssize_t count = write(descriptor, bytes.data(), bytes.size());
+        if (count > 0) {
+            bytes.remove_prefix(static_cast<std::size_t>(count));
+            continue;
+        }
+        if (count < 0 && errno == EINTR) continue;
+        return false;
+    }
+    return true;
+}
+
+std::string auditField(std::string_view value) {
+    std::ostringstream encoded;
+    encoded << std::hex << std::setfill('0');
+    for (const unsigned char byte : value) {
+        if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+            (byte >= '0' && byte <= '9') || byte == '.' || byte == '/' ||
+            byte == '_' || byte == '-') {
+            encoded << static_cast<char>(byte);
+        } else {
+            encoded << '%' << std::setw(2) << static_cast<unsigned>(byte);
+        }
+    }
+    return encoded.str();
+}
+
+void closeChildDescriptors() {
+#ifdef SYS_close_range
+    if (syscall(SYS_close_range, 3u, ~0u, 0u) == 0) return;
+#endif
+    rlimit limit{};
+    unsigned long maximum = 65536;
+    if (getrlimit(RLIMIT_NOFILE, &limit) == 0 && limit.rlim_cur != RLIM_INFINITY) {
+        maximum = std::min<unsigned long>(limit.rlim_cur, maximum);
+    }
+    for (unsigned long descriptor = 3; descriptor < maximum; ++descriptor) {
+        close(static_cast<int>(descriptor));
+    }
 }
 
 bool safeSocketPath(const std::string& value) {
@@ -180,8 +242,92 @@ int exitCodeForStatus(int status) {
 
 } // namespace
 
-AdministratorDaemon::AdministratorDaemon(AdministratorDaemonConfig config)
+void AdministratorPermissionLease::grant(
+        AdministratorTerminalIdentity identity,
+        std::chrono::steady_clock::time_point now,
+        std::chrono::seconds lifetime) {
+    if (identity.pid <= 1 || identity.startTime == 0 ||
+        lifetime <= std::chrono::seconds::zero()) {
+        revoke();
+        return;
+    }
+    identity_ = identity;
+    expiresAt_ = now + lifetime;
+}
+
+bool AdministratorPermissionLease::permits(
+        AdministratorTerminalIdentity identity,
+        std::chrono::steady_clock::time_point now) const noexcept {
+    return identity_ && *identity_ == identity && now < expiresAt_;
+}
+
+void AdministratorPermissionLease::revoke() noexcept {
+    identity_.reset();
+    expiresAt_ = {};
+}
+
+AdministratorAuditStore::AdministratorAuditStore(AdministratorAuditStoreConfig config)
     : config_(std::move(config)) {}
+
+bool AdministratorAuditStore::append(
+        std::string_view event, uid_t userUid,
+        AdministratorTerminalIdentity terminal, std::uint32_t requestId,
+        const std::vector<std::string>& arguments, bool accepted,
+        std::string_view result, std::string& error) const {
+    error.clear();
+    const std::filesystem::path path(config_.path);
+    const std::filesystem::path parent = path.parent_path();
+    struct stat parentStatus {};
+    if (!path.is_absolute() || parent.empty() || userUid == 0 || terminal.pid <= 1 ||
+        terminal.startTime == 0 || requestId == 0 || event.empty() || event.size() > 32 ||
+        result.size() > 256 || arguments.empty() ||
+        lstat(parent.c_str(), &parentStatus) != 0 || !S_ISDIR(parentStatus.st_mode) ||
+        S_ISLNK(parentStatus.st_mode) || parentStatus.st_uid != config_.ownerUid ||
+        parentStatus.st_gid != config_.ownerGid || (parentStatus.st_mode & 0022) != 0) {
+        error = "administrator audit path or record is unsafe";
+        return false;
+    }
+    const mode_t previousUmask = umask(0077);
+    const int descriptor = open(config_.path.c_str(),
+        O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    umask(previousUmask);
+    if (descriptor < 0) {
+        error = std::string("could not open administrator audit: ") +
+                std::strerror(errno);
+        return false;
+    }
+    struct stat status {};
+    if (flock(descriptor, LOCK_EX) != 0 || fstat(descriptor, &status) != 0 ||
+        !S_ISREG(status.st_mode) || status.st_uid != config_.ownerUid ||
+        status.st_gid != config_.ownerGid || (status.st_mode & 0777) != 0600 ||
+        status.st_nlink != 1) {
+        error = "administrator audit is not an owner-only regular file";
+        close(descriptor);
+        return false;
+    }
+    const auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::ostringstream line;
+    line << timestamp << '\t' << auditField(event) << '\t' << userUid
+         << "\torg.lcl.terminal\t" << terminal.pid << '\t' << terminal.startTime
+         << '\t' << requestId << '\t'
+         << (accepted ? "allow" : "deny") << '\t' << auditField(result);
+    for (const auto& argument : arguments) line << '\t' << auditField(argument);
+    line << '\n';
+    const std::string record = line.str();
+    const bool ok = writeAll(descriptor, record) && fsync(descriptor) == 0;
+    const int savedErrno = errno;
+    flock(descriptor, LOCK_UN);
+    close(descriptor);
+    if (!ok) {
+        error = std::string("could not append administrator audit: ") +
+                std::strerror(savedErrno);
+    }
+    return ok;
+}
+
+AdministratorDaemon::AdministratorDaemon(AdministratorDaemonConfig config)
+    : config_(std::move(config)), audit_(config_.audit) {}
 
 AdministratorDaemon::~AdministratorDaemon() { shutdown(); }
 
@@ -251,7 +397,7 @@ void AdministratorDaemon::acceptConnections() {
             continue;
         }
         clients_.push_back({descriptor, peer.pid, peer.uid, peer.gid,
-                            ClientRole::Unknown, 0, 0});
+                            ClientRole::Unknown, {}});
     }
 }
 
@@ -302,8 +448,8 @@ void AdministratorDaemon::serviceClient(int descriptor) {
 
     if (client->role == ClientRole::Unknown &&
         packet.header.opcode == AdministratorOpcode::ExecuteRequest &&
-        terminalIdentityForSudo(client->pid, client->terminalPid,
-                                client->terminalStartTime)) {
+        terminalIdentityForSudo(client->pid, client->terminal.pid,
+                                client->terminal.startTime)) {
         AdministratorExecuteRequest request{};
         if (!decodeAdministratorExecuteRequest(packet.payload, request)) {
             sendError(descriptor, packet.header.requestId, "Invalid administrator command.");
@@ -317,22 +463,40 @@ void AdministratorDaemon::serviceClient(int descriptor) {
             return;
         }
         pending_ = PendingCommand{descriptor, packet.header.requestId,
-                                  std::move(request), client->terminalPid,
-                                  client->terminalStartTime};
+                                  std::move(request), client->terminal};
         pruneCachedPermission();
-        if (cachedPermission_ &&
-            cachedPermission_->terminalPid == client->terminalPid &&
-            cachedPermission_->terminalStartTime == client->terminalStartTime) {
+        const bool cached = cachedPermission_.permits(
+            client->terminal, std::chrono::steady_clock::now());
+        std::string auditError;
+        if (!audit(cached ? "authorize" : "request", client->terminal,
+                   packet.header.requestId, pending_->request.arguments, true,
+                   cached ? "cached-permission" : "pending-user-consent",
+                   auditError)) {
+            sendError(descriptor, packet.header.requestId, auditError);
+            pending_.reset();
+            removeClient(descriptor);
+            return;
+        }
+        if (cached) {
             PendingCommand pending = std::move(*pending_);
             pending_.reset();
+            const auto terminal = pending.terminal;
+            const auto arguments = pending.request.arguments;
             std::string error;
             if (!startCommand(std::move(pending), error)) {
+                std::string ignored;
+                audit("failure", terminal, packet.header.requestId,
+                      arguments, false, error, ignored);
                 sendError(descriptor, packet.header.requestId, error);
                 removeClient(descriptor);
             }
             return;
         }
         if (shellDescriptor_ < 0) {
+            std::string ignored;
+            audit("failure", client->terminal, packet.header.requestId,
+                  pending_->request.arguments, false,
+                  "permission-ui-unavailable", ignored);
             sendError(descriptor, packet.header.requestId, "The permission UI is unavailable.");
             pending_.reset();
             removeClient(descriptor);
@@ -347,6 +511,10 @@ void AdministratorDaemon::serviceClient(int descriptor) {
         if (!encodeAdministratorPrompt(prompt, payload) ||
             !sendPacket(shellDescriptor_, AdministratorOpcode::PermissionPrompt,
                         packet.header.requestId, payload)) {
+            std::string ignored;
+            audit("failure", client->terminal, packet.header.requestId,
+                  pending_->request.arguments, false,
+                  "permission-ui-unavailable", ignored);
             sendError(descriptor, packet.header.requestId, "The permission UI is unavailable.");
             pending_.reset();
             removeClient(shellDescriptor_);
@@ -365,7 +533,19 @@ void AdministratorDaemon::serviceClient(int descriptor) {
         }
         PendingCommand pending = std::move(*pending_);
         pending_.reset();
+        if (!terminalIsAlive(pending.terminal)) {
+            std::string ignored;
+            audit("revoke", pending.terminal, pending.requestId,
+                  pending.request.arguments, false, "terminal-exit", ignored);
+            sendError(pending.clientDescriptor, pending.requestId,
+                      "Terminal closed before permission was granted.");
+            removeClient(pending.clientDescriptor);
+            return;
+        }
         if (!allowed) {
+            std::string ignored;
+            audit("decision", pending.terminal, pending.requestId,
+                  pending.request.arguments, false, "user-denied", ignored);
             sendError(pending.clientDescriptor, pending.requestId,
                       "Administrator permission was denied.");
             removeClient(pending.clientDescriptor);
@@ -374,18 +554,34 @@ void AdministratorDaemon::serviceClient(int descriptor) {
         std::string error;
         const int commandClient = pending.clientDescriptor;
         const std::uint32_t commandRequestId = pending.requestId;
-        const pid_t terminalPid = pending.terminalPid;
-        const std::uint64_t terminalStartTime = pending.terminalStartTime;
+        const AdministratorTerminalIdentity terminal = pending.terminal;
+        const std::vector<std::string> arguments = pending.request.arguments;
+        if (!audit("decision", terminal, commandRequestId, arguments, true,
+                   "user-approved", error)) {
+            sendError(commandClient, commandRequestId, error);
+            removeClient(commandClient);
+            return;
+        }
         if (!startCommand(std::move(pending), error)) {
+            std::string ignored;
+            audit("failure", terminal, commandRequestId, arguments, false,
+                  error, ignored);
             sendError(commandClient, commandRequestId, error);
             removeClient(commandClient);
         } else {
-            cachedPermission_ = CachedPermission{
-                terminalPid,
-                terminalStartTime,
-                std::chrono::steady_clock::now() + kPermissionLifetime,
-            };
+            revokeCachedPermission("permission-replaced");
+            cachedPermission_.grant(terminal, std::chrono::steady_clock::now(),
+                                    kPermissionLifetime);
+            cachedRequestId_ = commandRequestId;
+            cachedArguments_ = arguments;
         }
+        return;
+    }
+
+    if (client->role == ClientRole::Shell &&
+        packet.header.opcode == AdministratorOpcode::RevokeSession &&
+        packet.payload.empty()) {
+        revokeTransientAuthority("session-lock");
         return;
     }
 
@@ -429,6 +625,14 @@ bool AdministratorDaemon::startCommand(PendingCommand pending, std::string& erro
         if (nullInput > STDERR_FILENO) close(nullInput);
         close(stdoutPipe[0]); close(stdoutPipe[1]);
         close(stderrPipe[0]); close(stderrPipe[1]);
+        closeChildDescriptors();
+        sigset_t signals;
+        sigemptyset(&signals);
+        sigprocmask(SIG_SETMASK, &signals, nullptr);
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGPIPE, SIG_DFL);
+        umask(0022);
         clearenv();
         setenv("HOME", "/root", 1);
         setenv("USER", "root", 1);
@@ -446,7 +650,8 @@ bool AdministratorDaemon::startCommand(PendingCommand pending, std::string& erro
     close(stdoutPipe[1]);
     close(stderrPipe[1]);
     running_ = RunningCommand{pending.clientDescriptor, pending.requestId, child,
-                              stdoutPipe[0], stderrPipe[0], false, 125};
+                              stdoutPipe[0], stderrPipe[0], false, 125,
+                              pending.terminal, std::move(pending.request.arguments)};
     return true;
 }
 
@@ -500,21 +705,85 @@ void AdministratorDaemon::finishCommandIfReady() {
     const int client = running_->clientDescriptor;
     const auto requestId = running_->requestId;
     const int exitCode = running_->exitCode;
+    const auto terminal = running_->terminal;
+    const auto arguments = running_->arguments;
     running_.reset();
+    std::string auditError;
+    if (!audit("result", terminal, requestId, arguments, true,
+               "exit-" + std::to_string(exitCode), auditError)) {
+        sendError(client, requestId, auditError);
+        removeClient(client);
+        return;
+    }
     if (encodeAdministratorCommandResult(exitCode, payload)) {
         (void)sendPacket(client, AdministratorOpcode::CommandResult, requestId, payload);
     }
     removeClient(client);
 }
 
+bool AdministratorDaemon::terminalIsAlive(
+        AdministratorTerminalIdentity terminal) const {
+    return processRunsCanonicalExecutable(terminal.pid,
+               {"/System/Applications/Terminal.app/Executables/Terminal"}) &&
+           processStartTime(terminal.pid) == terminal.startTime;
+}
+
+bool AdministratorDaemon::audit(
+        std::string_view event, AdministratorTerminalIdentity terminal,
+        std::uint32_t requestId, const std::vector<std::string>& arguments,
+        bool accepted, std::string_view result, std::string& error) const {
+    return audit_.append(event, config_.sessionUid, terminal, requestId,
+                         arguments, accepted, result, error);
+}
+
 void AdministratorDaemon::pruneCachedPermission() {
-    if (!cachedPermission_) return;
-    const auto name = executableName(cachedPermission_->terminalPid);
-    if (std::chrono::steady_clock::now() >= cachedPermission_->expiresAt ||
-        (name != "Terminal" && name != "lcl-terminal") ||
-        processStartTime(cachedPermission_->terminalPid) !=
-            cachedPermission_->terminalStartTime) {
-        cachedPermission_.reset();
+    if (!cachedPermission_.active()) return;
+    const auto identity = *cachedPermission_.identity();
+    const auto now = std::chrono::steady_clock::now();
+    const bool alive = terminalIsAlive(identity);
+    if (!alive || !cachedPermission_.permits(identity, now)) {
+        revokeCachedPermission(alive ? "permission-expired" : "terminal-exit");
+    }
+}
+
+void AdministratorDaemon::revokeCachedPermission(std::string_view reason) {
+    if (!cachedPermission_.active()) return;
+    std::string ignored;
+    audit("revoke", *cachedPermission_.identity(), cachedRequestId_,
+          cachedArguments_, false, reason, ignored);
+    cachedPermission_.revoke();
+    cachedRequestId_ = 0;
+    cachedArguments_.clear();
+}
+
+void AdministratorDaemon::revokeTransientAuthority(std::string_view reason) {
+    revokeCachedPermission(reason);
+    if (pending_) {
+        const int client = pending_->clientDescriptor;
+        const auto requestId = pending_->requestId;
+        const auto terminal = pending_->terminal;
+        const auto arguments = pending_->request.arguments;
+        std::string ignored;
+        audit("revoke", terminal, requestId, arguments, false, reason, ignored);
+        sendError(client, requestId, "Administrator permission was revoked.");
+        pending_.reset();
+        removeClient(client);
+    }
+    if (running_) {
+        const int client = running_->clientDescriptor;
+        std::string ignored;
+        audit("revoke", running_->terminal, running_->requestId,
+              running_->arguments, false, reason, ignored);
+        const pid_t child = running_->pid;
+        if (child > 0) {
+            kill(-child, SIGKILL);
+            kill(child, SIGKILL);
+            while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+        }
+        if (running_->stdoutDescriptor >= 0) close(running_->stdoutDescriptor);
+        if (running_->stderrDescriptor >= 0) close(running_->stderrDescriptor);
+        running_.reset();
+        removeClient(client);
     }
 }
 
@@ -522,17 +791,24 @@ void AdministratorDaemon::removeClient(int descriptor) {
     if (descriptor < 0) return;
     if (shellDescriptor_ == descriptor) {
         shellDescriptor_ = -1;
-        if (pending_) {
-            sendError(pending_->clientDescriptor, pending_->requestId,
-                      "The permission UI disconnected.");
-            const int pendingClient = pending_->clientDescriptor;
-            pending_.reset();
-            if (pendingClient != descriptor) removeClient(pendingClient);
-        }
+        revokeTransientAuthority("permission-ui-disconnect");
     }
-    if (pending_ && pending_->clientDescriptor == descriptor) pending_.reset();
+    if (pending_ && pending_->clientDescriptor == descriptor) {
+        std::string ignored;
+        audit("revoke", pending_->terminal, pending_->requestId,
+              pending_->request.arguments, false, "command-client-disconnect", ignored);
+        pending_.reset();
+    }
     if (running_ && running_->clientDescriptor == descriptor) {
-        if (running_->pid > 0) kill(-running_->pid, SIGKILL);
+        std::string ignored;
+        audit("revoke", running_->terminal, running_->requestId,
+              running_->arguments, false, "command-client-disconnect", ignored);
+        const pid_t child = running_->pid;
+        if (child > 0) {
+            kill(-child, SIGKILL);
+            kill(child, SIGKILL);
+            while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+        }
         if (running_->stdoutDescriptor >= 0) close(running_->stdoutDescriptor);
         if (running_->stderrDescriptor >= 0) close(running_->stderrDescriptor);
         running_.reset();
@@ -548,6 +824,16 @@ void AdministratorDaemon::removeClient(int descriptor) {
 void AdministratorDaemon::poll() {
     if (serverDescriptor_ < 0) return;
     pruneCachedPermission();
+    if (pending_ && !terminalIsAlive(pending_->terminal)) {
+        const int client = pending_->clientDescriptor;
+        std::string ignored;
+        audit("revoke", pending_->terminal, pending_->requestId,
+              pending_->request.arguments, false, "terminal-exit", ignored);
+        sendError(client, pending_->requestId,
+                  "Terminal closed before permission was granted.");
+        pending_.reset();
+        removeClient(client);
+    }
     std::vector<pollfd> descriptors;
     descriptors.push_back({serverDescriptor_, POLLIN, 0});
     for (const auto& client : clients_) {
@@ -582,6 +868,7 @@ void AdministratorDaemon::poll() {
 }
 
 void AdministratorDaemon::shutdown() {
+    revokeTransientAuthority("daemon-shutdown");
     if (running_) {
         if (running_->pid > 0) kill(-running_->pid, SIGKILL);
         if (running_->stdoutDescriptor >= 0) close(running_->stdoutDescriptor);
@@ -589,7 +876,9 @@ void AdministratorDaemon::shutdown() {
         running_.reset();
     }
     pending_.reset();
-    cachedPermission_.reset();
+    cachedPermission_.revoke();
+    cachedRequestId_ = 0;
+    cachedArguments_.clear();
     for (const auto& client : clients_) close(client.descriptor);
     clients_.clear();
     shellDescriptor_ = -1;

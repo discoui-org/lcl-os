@@ -176,7 +176,7 @@ dönüşmez ve eski dosya sahipliği yeni bir uygulamaya taşınmaz.
 
 ## 3.1. Yönetici izni ve `lcl-sudo`
 
-- [ ] Root çalışan `lcl-admind` servisini sandboxd'den ayrı tut; sorumluluğunu
+- [x] Root çalışan `lcl-admind` servisini sandboxd'den ayrı tut; sorumluluğunu
   yalnız yönetici iznini değerlendirme, izin verilen dar işlemi yürütme ve
   denetim kaydı ile sınırla.
 - [x] Manifest şemasına uygulamanın yönetici ayrıcalığı isteyebildiğini
@@ -191,10 +191,11 @@ dönüşmez ve eski dosya sahipliği yeni bir uygulamaya taşınmaz.
   surface'ini ekle. Desktop ortalanmış sheet, mobile bottom sheet kullanır;
   işlem/hedef ayrıntısı ya da ayrı bir “uygulamayı yönetici çalıştır” modu
   göstermez.
-- [ ] `lcl-admind` pending izin isteği/karar IPC'sini ortak shell modalına
+- [x] `lcl-admind` pending izin isteği/karar IPC'sini ortak shell modalına
   bağla; uygulama kullanıcı parolasını, PIN'ini veya admin token'ını görmesin.
-- [ ] Önce dar kapsamlı elevation uygula: sistem ayarı, bundle güven kararını
-  yönetme veya uygulamanın imzalı privileged helper'ı gibi belirli bir işlem.
+- [x] İlk broker işlemi olarak trusted Terminal'den gelen `sudo <komut>`
+  isteğini ayrı root child'da çalıştır; uygulamanın kendisini yükseltme ve
+  etkileşimli root shell oluşturma.
 - [x] Uygulamayı elevated-app olarak yeniden başlatma; normal uygulamaya
   compositor/rasterd aygıtları, Android host `/data`, ham block device veya
   kernel capability verme.
@@ -202,9 +203,13 @@ dönüşmez ve eski dosya sahipliği yeni bir uygulamaya taşınmaz.
   olarak modelle; uygulamanın diske kalıcı root token yazmasını engelle.
 - [ ] Yönetici izni revoke edildiğinde, uygulama kapandığında veya session
   kilitlendiğinde pending istekleri ve geçici broker grant'lerini sonlandır.
-- [ ] Terminaldeki `sudo <komut>` söz dizimini aynı admin servisine bağla;
-  interaktif root shell yalnız trusted Terminal ve açık kullanıcı onayıyla
-  oluşturulabilsin.
+  Terminal PID + process-start-time bağı, Terminal çıkışı, shell bağlantı
+  kaybı, daemon restart ve trusted-shell session-lock revoke mesajı uygulandı;
+  gerçek lock-screen yaşam döngüsü henüz bu mesaja bağlanmadı.
+- [x] Terminaldeki `sudo <komut>` söz dizimini aynı admin servisine bağla.
+  İlk kullanıcı onayı aynı Terminal sürecine beş dakikalık in-memory izin
+  verir; süre dolunca veya Terminal kapanınca yeniden sorulur. `sudo` komutsuz
+  çağrıldığında etkileşimli root shell oluşturulmaz.
 - [x] Elevation kararları için app kimliği, kapsam, zaman, kullanıcı kararı ve
   sonuç içeren değiştirilemez admin audit kaydı oluştur.
 
@@ -215,6 +220,16 @@ dönüşmez ve eski dosya sahipliği yeni bir uygulamaya taşınmaz.
   expire olayları kaydediliyor. İçerik ve dosya modu host testinde doğrulandı.
 - [ ] Prompt olmadan yönetici işlemi, başka app token'ı kullanımı,
   environment/FD sızıntısı, revoke ve broker işlem hatası testlerini ekle.
+
+  `lcl-admind` yalnız root-owned canonical shell, Terminal ve `lcl-sudo`
+  executable yollarını kabul ediyor; yalnız dosya adına dayanan süreç taklidi
+  reddediliyor. Her pakette kernel `SCM_CREDENTIALS` eşleşmesi zorunlu ve
+  `SCM_RIGHTS` reddediliyor. Child environment'i allowlist ile yeniden
+  kuruluyor, stdin `/dev/null` oluyor ve 2 üzerindeki bütün descriptor'lar
+  exec öncesi kapatılıyor. Beş dakikalık lease'in PID/start-time ve expiry
+  testleriyle audit dosyasının `0600`, no-symlink ve satır-enjeksiyonu
+  sözleşmesi eklendi; son değişiklikler kullanıcı talebi gereği henüz
+  derlenip çalıştırılmadı.
 
 ## 4. Uygulama başına filesystem görünümü
 

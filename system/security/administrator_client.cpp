@@ -127,6 +127,14 @@ bool AdministratorPromptClient::decide(std::uint32_t requestId, bool allowed) {
     return true;
 }
 
+bool AdministratorPromptClient::revokeSession() {
+    if (!sendPacket(AdministratorOpcode::RevokeSession, 1, {})) {
+        close();
+        return false;
+    }
+    return true;
+}
+
 AdministratorCommandClient::~AdministratorCommandClient() { close(); }
 
 bool AdministratorCommandClient::connect(const std::string& socketPath,

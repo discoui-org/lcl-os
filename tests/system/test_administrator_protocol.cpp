@@ -1,6 +1,15 @@
 #include <gtest/gtest.h>
 
+#include "system/security/administrator_daemon.hpp"
 #include "system/security/administrator_protocol.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace lcl::security {
 namespace {
@@ -88,6 +97,73 @@ TEST(AdministratorProtocolTest, RejectsInteractiveAndMalformedRequests) {
     header.opcode = static_cast<AdministratorOpcode>(999);
     header.requestId = 1;
     EXPECT_FALSE(encodeAdministratorPacket(header, {}, payload));
+}
+
+TEST(AdministratorProtocolTest, EncodesTrustedShellSessionRevoke) {
+    AdministratorHeader header{};
+    header.opcode = AdministratorOpcode::RevokeSession;
+    header.requestId = 1;
+    std::vector<std::uint8_t> packet;
+    ASSERT_TRUE(encodeAdministratorPacket(header, {}, packet));
+    DecodedAdministratorPacket decoded{};
+    ASSERT_TRUE(decodeAdministratorPacket(packet.data(), packet.size(), decoded));
+    EXPECT_EQ(decoded.header.opcode, AdministratorOpcode::RevokeSession);
+    EXPECT_TRUE(decoded.payload.empty());
+}
+
+TEST(AdministratorPermissionLeaseTest, IsBoundToExactTerminalLifetimeAndExpires) {
+    AdministratorPermissionLease lease;
+    const auto now = std::chrono::steady_clock::now();
+    const AdministratorTerminalIdentity terminal{42, 9001};
+    EXPECT_FALSE(lease.permits(terminal, now));
+    lease.grant(terminal, now, std::chrono::minutes(5));
+    EXPECT_TRUE(lease.permits(terminal, now + std::chrono::minutes(4)));
+    EXPECT_FALSE(lease.permits({43, 9001}, now + std::chrono::minutes(1)));
+    EXPECT_FALSE(lease.permits({42, 9002}, now + std::chrono::minutes(1)));
+    EXPECT_FALSE(lease.permits(terminal, now + std::chrono::minutes(5)));
+    lease.revoke();
+    EXPECT_FALSE(lease.active());
+}
+
+TEST(AdministratorAuditStoreTest, WritesOwnerOnlyInjectionSafeCommandRecord) {
+    char directoryTemplate[] = "/tmp/lcl-administrator-audit-XXXXXX";
+    const char* directory = mkdtemp(directoryTemplate);
+    ASSERT_NE(directory, nullptr);
+    const std::filesystem::path root(directory);
+    const auto auditPath = root / "admin-audit.v1";
+    AdministratorAuditStore store({auditPath.string(), geteuid(), getegid()});
+    std::string error;
+    ASSERT_TRUE(store.append("decision", 1000, {42, 9001}, 7,
+                             {"tool", "field\tbreak", "line\nbreak"},
+                             true, "user-approved", error)) << error;
+    struct stat status {};
+    ASSERT_EQ(stat(auditPath.c_str(), &status), 0);
+    EXPECT_EQ(status.st_mode & 0777, 0600);
+    std::ifstream input(auditPath);
+    const std::string record((std::istreambuf_iterator<char>(input)),
+                             std::istreambuf_iterator<char>());
+    EXPECT_NE(record.find("\torg.lcl.terminal\t42\t9001\t7\tallow\t"),
+              std::string::npos);
+    EXPECT_NE(record.find("field%09break"), std::string::npos);
+    EXPECT_NE(record.find("line%0abreak"), std::string::npos);
+    EXPECT_EQ(std::count(record.begin(), record.end(), '\n'), 1);
+    std::filesystem::remove_all(root);
+}
+
+TEST(AdministratorAuditStoreTest, RejectsSymlinkAuditTarget) {
+    char directoryTemplate[] = "/tmp/lcl-administrator-symlink-XXXXXX";
+    const char* directory = mkdtemp(directoryTemplate);
+    ASSERT_NE(directory, nullptr);
+    const std::filesystem::path root(directory);
+    const auto target = root / "target";
+    const auto auditPath = root / "admin-audit.v1";
+    std::ofstream(target) << "existing\n";
+    ASSERT_EQ(symlink(target.c_str(), auditPath.c_str()), 0);
+    AdministratorAuditStore store({auditPath.string(), geteuid(), getegid()});
+    std::string error;
+    EXPECT_FALSE(store.append("decision", 1000, {42, 9001}, 7, {"id"},
+                              true, "user-approved", error));
+    std::filesystem::remove_all(root);
 }
 
 } // namespace

@@ -21,6 +21,8 @@ public:
     bool isConnected() const noexcept { return descriptor_ >= 0; }
     bool poll(std::uint32_t& requestId, AdministratorPrompt& prompt);
     bool decide(std::uint32_t requestId, bool allowed);
+    /** Called by the trusted shell before entering the locked session state. */
+    bool revokeSession();
 
 private:
     bool sendPacket(AdministratorOpcode opcode, std::uint32_t requestId,
