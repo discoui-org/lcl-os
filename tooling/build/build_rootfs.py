@@ -211,17 +211,7 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
     # update these targets so a protocol/header change cannot be packaged with
     # stale canonical userspace binaries.
     target_build_dir = canonical_build_dir(norm_arch)
-    try:
-        skia_args = host_skia_cmake_args(PROJECT_ROOT, norm_arch)
-    except RuntimeError:
-        package_target = f"host-{norm_arch}"
-        log(f"Preparing missing Skia package {package_target} inside target Docker...")
-        subprocess.run(
-            [sys.executable, str(SCRIPT_DIR / "prepare_skia.py"),
-             "--target", package_target],
-            check=True,
-        )
-        skia_args = host_skia_cmake_args(PROJECT_ROOT, norm_arch)
+    skia_args = host_skia_cmake_args(PROJECT_ROOT, norm_arch)
     cache_exists = (target_build_dir / "CMakeCache.txt").is_file()
     configure = [
         "cmake", "-B", str(target_build_dir), "-S", str(PROJECT_ROOT),
@@ -1293,6 +1283,12 @@ def run_inside_docker(
     norm_arch = normalize_arch(arch)
     plat = ARCH_META[norm_arch]["docker_platform"]
     image_tag = f"lcl-os-qemu-builder:{norm_arch}"
+
+    # Fetch on the host before entering Docker so private GitHub credentials
+    # never need to be forwarded into the builder container. The verified
+    # package is then available through the existing /src bind mount.
+    log(f"Ensuring prebuilt Skia package host-{norm_arch} is available...")
+    host_skia_cmake_args(PROJECT_ROOT, norm_arch)
 
     ensure_binfmt(norm_arch)
 

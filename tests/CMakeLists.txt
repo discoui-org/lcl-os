@@ -130,3 +130,9 @@ add_test(
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tooling/test_prepare_skia.py
 )
 set_tests_properties(PrepareSkiaSourceRecovery PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+add_test(
+    NAME SkiaPackageRelease
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tooling/test_skia_packages.py
+)
+set_tests_properties(SkiaPackageRelease PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})

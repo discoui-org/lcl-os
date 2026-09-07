@@ -1,0 +1,134 @@
+name: Build Skia SDK packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/build-skia.yml
+      - tooling/build/archive_skia.py
+      - tooling/build/prepare_skia.py
+      - tooling/build/skia_release.py
+
+concurrency:
+  group: skia-packages-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: host-x86_64
+            runner: ubuntu-24.04
+            android: false
+          - target: host-aarch64
+            runner: ubuntu-24.04-arm
+            android: false
+          - target: android-x86_64
+            runner: ubuntu-24.04
+            android: true
+          - target: android-arm64-v8a
+            runner: ubuntu-24.04
+            android: true
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out LCL
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential git libegl1-mesa-dev libgles2-mesa-dev \
+            ninja-build python3
+
+      - name: Install pinned Android NDK
+        if: matrix.android
+        run: |
+          ndk_revision="$(python3 -c 'from tooling.build.skia_release import ANDROID_NDK_REVISION; print(ANDROID_NDK_REVISION)')"
+          sdkmanager --install "ndk;${ndk_revision}"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ndk_revision}" >> "${GITHUB_ENV}"
+
+      - name: Build target package
+        run: python3 tooling/build/prepare_skia.py --target "${{ matrix.target }}"
+
+      - name: Create deterministic archive
+        run: >-
+          python3 tooling/build/archive_skia.py
+          --target "${{ matrix.target }}"
+          --output-dir dist
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lcl-skia-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  publish:
+    name: Publish pinned Skia release
+    if: github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Check out LCL metadata
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Download target archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: lcl-skia-*
+          path: dist
+          merge-multiple: true
+
+      - name: Assemble release metadata
+        id: metadata
+        run: |
+          cat dist/*.sha256 | sort --key=2 > dist/SHA256SUMS
+          tag="$(python3 -c 'from tooling.build.skia_release import release_tag; print(release_tag())')"
+          revision="$(python3 -c 'from tooling.build.skia_release import SKIA_REVISION; print(SKIA_REVISION)')"
+          recipe="$(python3 -c 'from tooling.build.skia_release import recipe_digest; print(recipe_digest())')"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "Pinned LCL Skia SDK packages."
+            echo
+            echo "- Skia revision: \`${revision}\`"
+            echo "- LCL recipe: \`${recipe}\`"
+            echo "- Targets: host-x86_64, host-aarch64, android-x86_64, android-arm64-v8a"
+            echo
+            echo "Every archive is verified by \`SHA256SUMS\` before local installation."
+          } > dist/release-notes.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" \
+              --target "${GITHUB_SHA}" \
+              --title "LCL Skia SDK ${RELEASE_TAG}" \
+              --notes-file dist/release-notes.md
+          fi
+          gh release upload "${RELEASE_TAG}" \
+            dist/*.tar.gz dist/SHA256SUMS --clobber

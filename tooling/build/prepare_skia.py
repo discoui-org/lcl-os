@@ -22,13 +22,16 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tooling.paths import SKIA_PACKAGE_DIR, SKIA_SOURCE_DIR
+from tooling.build.skia_release import (
+    ANDROID_NDK_REVISION,
+    GN_REVISION,
+    PACKAGE_TARGETS,
+    SKIA_REPOSITORY,
+    SKIA_REVISION,
+)
 
 DEFAULT_SOURCE = SKIA_SOURCE_DIR
 PACKAGE_ROOT = SKIA_PACKAGE_DIR
-SKIA_REPOSITORY = "https://skia.googlesource.com/skia.git"
-SKIA_REVISION = "2a47279addba493bbbc9bd60346af1c87e11bc69"
-GN_REVISION = "b2afae122eeb6ce09c52d63f67dc53fc517dbdc8"
-
 COMMON_ARGS = (
     "is_official_build=true",
     "is_debug=false",
@@ -101,9 +104,21 @@ def find_ndk() -> Path:
     if ndk_root.is_dir():
         candidates.extend(sorted(ndk_root.iterdir(), reverse=True))
     for candidate in candidates:
-        if (candidate / "build" / "cmake" / "android.toolchain.cmake").is_file():
+        toolchain = candidate / "build" / "cmake" / "android.toolchain.cmake"
+        properties = candidate / "source.properties"
+        if not toolchain.is_file() or not properties.is_file():
+            continue
+        revision = ""
+        for line in properties.read_text(encoding="utf-8").splitlines():
+            if line.startswith("Pkg.Revision"):
+                revision = line.split("=", 1)[1].strip()
+                break
+        if revision == ANDROID_NDK_REVISION:
             return candidate.resolve()
-    raise RuntimeError("Android NDK not found; set ANDROID_NDK_HOME.")
+    raise RuntimeError(
+        f"Android NDK {ANDROID_NDK_REVISION} not found; install it and set "
+        "ANDROID_NDK_HOME."
+    )
 
 
 def prepare_source(source: Path) -> None:
@@ -229,8 +244,16 @@ def build(target: str, source: Path) -> None:
     )
     for library in libraries:
         shutil.copy2(output / f"lib{library}.a", package / "lib")
+    manifest = {
+        "format_version": 1,
+        "skia_revision": SKIA_REVISION,
+        "gn_revision": GN_REVISION,
+        "target": target,
+    }
+    if target.startswith("android-"):
+        manifest["android_ndk_revision"] = ANDROID_NDK_REVISION
     (package / "manifest.json").write_text(
-        json.dumps({"skia_revision": SKIA_REVISION, "target": target}, indent=2)
+        json.dumps(manifest, indent=2, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )
@@ -247,10 +270,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--target", required=True,
-        choices=(
-            "host-x86_64", "host-aarch64",
-            "android-x86_64", "android-arm64-v8a",
-        ),
+        choices=PACKAGE_TARGETS,
     )
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     options = parser.parse_args()
