@@ -41,13 +41,6 @@ BUILD_TOOL_DIR = ROOT_DIR / "tooling" / "build"
 DEPLOY_TOOL_DIR = ROOT_DIR / "tooling" / "deploy"
 EMULATOR_TOOL_DIR = ROOT_DIR / "tooling" / "emulator"
 ANDROID_BUILD_DIR = android_build_dir("arm64-v8a")
-ANDROID_NATIVE_CLIENT_ARTIFACTS = {
-    "lcl-desktop-shell": Path("lcl-desktop-shell"),
-    "lcl-mobile-shell": Path("lcl-mobile-shell"),
-    "lcl-terminal": Path("lcl-terminal"),
-    "lcl-js": Path("lcl-js"),
-}
-ANDROID_NATIVE_CLIENT_TARGETS = tuple(ANDROID_NATIVE_CLIENT_ARTIFACTS)
 ANDROID_PLATFORM_TARGETS = (
     "lcl-core-android",
     "lcl-rasterd-android",
@@ -296,12 +289,9 @@ def build_android_phone_artifacts(
     subprocess.check_call(configure_args, cwd=ROOT_DIR)
 
     jobs = max(1, int(args.jobs))
-    android_targets = list(ANDROID_PLATFORM_TARGETS)
-    if is_arm64 and use_rootfs and not args.software_clients:
-        android_targets.extend(ANDROID_NATIVE_CLIENT_TARGETS)
     build_args = [
         "cmake", "--build", str(build_dir),
-        "--target", *android_targets, "-j", str(jobs),
+        "--target", *ANDROID_PLATFORM_TARGETS, "-j", str(jobs),
     ]
     if args.rebuild:
         build_args.append("--clean-first")
@@ -348,8 +338,6 @@ def cmd_android(args: argparse.Namespace) -> None:
         deploy_args.append("--no-stop-sysui")
     if args.logcat:
         deploy_args.append("--logcat")
-    if args.software_clients:
-        deploy_args.append("--software-clients")
     if args.gestalt:
         deploy_args.extend(("--gestalt", str(args.gestalt)))
 
@@ -540,10 +528,6 @@ def main() -> None:
         help="Stop LCL and restore Android UI without building or launching",
     )
     p_android.add_argument(
-        "--software-clients", action="store_true",
-        help="Use canonical glibc SHM clients instead of Android AHardwareBuffer clients",
-    )
-    p_android.add_argument(
         "--gestalt", type=Path, metavar="JSON",
         help="Override automatic config/devices/<ADB model>.json selection",
     )
@@ -600,7 +584,6 @@ def main() -> None:
                 "--no-stop-sysui": args.no_stop_sysui,
                 "--logcat": args.logcat,
                 "--restore-only": args.restore_only,
-                "--software-clients": args.software_clients,
                 "--gestalt": args.gestalt is not None,
             }
             incompatible = [name for name, enabled in physical_only.items() if enabled]
