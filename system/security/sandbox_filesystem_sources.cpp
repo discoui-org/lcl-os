@@ -5,8 +5,12 @@
 #include <unistd.h>
 
 #include <array>
+#include <cerrno>
+#include <cstring>
 namespace lcl::security {
 namespace {
+
+constexpr std::size_t kMaximumPinnedEndpointPathBytes = 4096;
 
 bool descriptorStatus(int descriptor, struct stat& status) {
     return descriptor >= 0 && fstat(descriptor, &status) == 0 && S_ISDIR(status.st_mode);
@@ -29,6 +33,36 @@ bool isApplicationRuntimeSocket(int descriptor) {
     return descriptor >= 0 && fstat(descriptor, &status) == 0 && S_ISSOCK(status.st_mode) &&
            status.st_uid == kSessionUserUid && status.st_gid == kApplicationRuntimeGid &&
            (status.st_mode & 0777) == 0660;
+}
+
+bool endpointDescriptorStillNamesLinkedSocket(int descriptor, std::string& error) {
+    struct stat expected {};
+    if (!isApplicationRuntimeSocket(descriptor) || fstat(descriptor, &expected) != 0) {
+        error = "sandbox graphics endpoint descriptor is unsafe";
+        return false;
+    }
+
+    const std::string descriptorLink = "/proc/self/fd/" + std::to_string(descriptor);
+    std::array<char, kMaximumPinnedEndpointPathBytes> bytes{};
+    const ssize_t count = readlink(descriptorLink.c_str(), bytes.data(), bytes.size() - 1);
+    if (count <= 0 || static_cast<std::size_t>(count) >= bytes.size() - 1) {
+        error = std::string("could not resolve protected graphics endpoint: ") +
+                std::strerror(errno);
+        return false;
+    }
+    const std::string path(bytes.data(), static_cast<std::size_t>(count));
+    if (path.empty() || path.front() != '/' || path.ends_with(" (deleted)")) {
+        error = "protected graphics endpoint no longer has a stable path";
+        return false;
+    }
+
+    struct stat current {};
+    if (lstat(path.c_str(), &current) != 0 || !S_ISSOCK(current.st_mode) ||
+        current.st_dev != expected.st_dev || current.st_ino != expected.st_ino) {
+        error = "protected graphics endpoint generation changed";
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -96,6 +130,13 @@ bool validateSandboxFilesystemSources(const SandboxFilesystemSources& sources,
         return false;
     }
     return true;
+}
+
+bool validateSandboxRuntimeEndpointGeneration(const SandboxFilesystemSources& sources,
+                                              std::string& error) {
+    error.clear();
+    return endpointDescriptorStillNamesLinkedSocket(sources.compositorSocketDescriptor, error) &&
+           endpointDescriptorStillNamesLinkedSocket(sources.rasterSocketDescriptor, error);
 }
 
 } // namespace lcl::security

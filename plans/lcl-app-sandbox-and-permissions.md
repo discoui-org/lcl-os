@@ -230,7 +230,7 @@ sözleşmesini kullanmasıdır.
   başlatmasını engelle; gerekiyorsa sınırlı `open`/launch portalı tasarla.
 - [x] Compositor socket'in mevcut `0600` modelini, benzersiz app UID'leriyle
   uyumlu ve peer-authenticated bir modele geçir.
-- [ ] Socket yeniden başlatmalarında stale bind mount oluşturmayan per-instance
+- [x] Socket yeniden başlatmalarında stale bind mount oluşturmayan per-instance
   runtime endpoint yaşam döngüsünü oluştur.
 - [ ] Normal pencere açma, popup, raster producer grant ve process exit
   entegrasyon testlerini sandbox altında çalıştır.
@@ -272,6 +272,30 @@ ile çalıştı: SELinux `Enforcing`, socket `1000:1000/0600`, mobile shell
 launch isteği `Connection reset by peer`, `exit=1` ile reddedildi ve sandbox
 instance oluşmadı. Uygulama kaynaklı cross-app launch gerekirse ayrı,
 trusted-shell promptlu dar bir launch portalı tasarlanacak.
+
+**Runtime endpoint yaşam döngüsü kanıtı (2026-09-07):** sandboxd, her
+retained compositor/raster descriptor'ının `/proc/self/fd` ile çözülen mutlak
+yolunun bağlı socket inode'u ile aynı kaldığını doğrular. Endpoint unlink/recreate
+edildiğinde daemon ilk poll'da bütün sandbox child process group'larını `SIGKILL`
+ile sonlandırır, eski inode'a bağlı launch material'larını siler ve system bundle
+kayıtları yeni endpoint'lerle başarıyla kurulana dek tüm launch isteklerini
+fail-closed reddeder. Böylece yaşayan bir child eski private bind mount üzerinden
+retired graphics endpoint'ine bağlanamaz; dış bundle'lar sonraki trusted
+registration sırasında güncel descriptor snapshot'ı alır. Yeni host negatif test
+retained material'in endpoint restart sonrası child spec üretmesini reddeder ve
+stale record'un atılmasını doğrular; root gerektiren beş mount testi bu hostta
+atlandı, daemon filtresindeki iki test geçti (XML:
+`/tmp/lcl-endpoint-final-host.xml`). Fiziksel `2312DRA50G` Android 16 cihazda,
+SELinux `Enforcing` iken trusted shell zinciri Sandbox Test'i instance `2`, PID
+`32404`, UID/GID `61000:61000`, group `62000`, `CapEff=0`, `NoNewPrivs=1` ve
+`Seccomp=2` ile başlattı. Compositor socket inode'u `207007` iken endpoint
+unlink/recreate edildi; yeni inode `207293` oldu, eski child ve `launch-2.v1`
+kaydı kayboldu. Yeni endpoint ile system registration tamamlandıktan sonra aynı
+zincir instance `3` için yeniden `Launched` yanıtı aldı. Kabul sonrası gerçek
+compositor/rootfs oturumu temiz biçimde yeniden başlatıldı; güncel sandboxd
+SHA-256 `2b8ff6d250fd40f3165d9b85f7d8f0e3641d018701432d3d72dc88f01a1e3957`,
+endpointler `1000:62000/0660`, sandboxd `0:0/0600` ve sessiond `1000:1000/0600`
+olarak tekrar doğrulandı.
 
 ## 6. Kernel policy katmanları
 

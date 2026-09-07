@@ -240,12 +240,17 @@ std::size_t SandboxDaemon::runningChildCount() const {
 
 SandboxLaunchResult SandboxDaemon::handleLaunchRequest(const SandboxLaunchRequest& request) {
     std::string error;
+    refreshRuntimeEndpointState();
     if (!validateSandboxLaunchRequest(request, error)) {
         return rejectedLaunch(request, SandboxLaunchStatus::InvalidRequest, std::move(error));
     }
     if (!hardeningReady_) {
         return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
                               "sandboxd platform hardening is not initialized");
+    }
+    if (runtimeEndpointRefreshRequired_) {
+        return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
+                              "sandbox graphics endpoints changed; application registration is refreshing");
     }
     const auto plan = authorizer_.authorize(request, error);
     if (!plan) {
@@ -533,10 +538,41 @@ void SandboxDaemon::reapChildren() {
     }
 }
 
+void SandboxDaemon::refreshRuntimeEndpointState() {
+    std::string error;
+    if (materialRegistry_.runtimeEndpointsCurrent(error)) {
+        return;
+    }
+    if (!runtimeEndpointRefreshRequired_) {
+        // A child holds its private bind mount even after its source socket is
+        // unlinked.  Kill the complete process group immediately so no app
+        // can keep talking to the retired endpoint generation.
+        childReaper_.terminateAll(SIGKILL);
+    }
+    runtimeEndpointRefreshRequired_ = true;
+    // Never retain a descriptor for an unlinked socket generation.  The
+    // authorizer may retain its policy record, but it cannot produce a child
+    // until the root-owned registry supplies current launch material again.
+    materialRegistry_.removeStaleRuntimeEndpointMaterials();
+}
+
+bool SandboxDaemon::completeRuntimeEndpointRefresh(std::string& error) {
+    error.clear();
+    if (!runtimeEndpointRefreshRequired_) {
+        return true;
+    }
+    if (!materialRegistry_.runtimeEndpointsCurrent(error)) {
+        return false;
+    }
+    runtimeEndpointRefreshRequired_ = false;
+    return true;
+}
+
 void SandboxDaemon::poll() {
     if (serverDescriptor_ < 0) {
         return;
     }
+    refreshRuntimeEndpointState();
     acceptConnections();
     const auto clients = clientDescriptors_;
     for (const int descriptor : clients) {

@@ -31,6 +31,7 @@ protected:
     int rasterSocketDescriptor_{-1};
     int compositorSocketFd_{-1};
     int rasterSocketFd_{-1};
+    int replacementCompositorSocketFd_{-1};
 
     void SetUp() override {
         if (geteuid() != 0) {
@@ -84,7 +85,8 @@ protected:
             }
         }
         for (const int descriptor : {compositorSocketDescriptor_, rasterSocketDescriptor_,
-                                     compositorSocketFd_, rasterSocketFd_}) {
+                                     compositorSocketFd_, rasterSocketFd_,
+                                     replacementCompositorSocketFd_}) {
             if (descriptor >= 0) close(descriptor);
         }
         fs::remove_all(executablePath_.parent_path());
@@ -221,6 +223,52 @@ TEST_F(SandboxChildLauncherTest, RetainsOnlyPolicyBoundVerifiedLaunchMaterial) {
     EXPECT_FALSE(registry.makeChildLaunchSpec(changedPlan, linuxHardening, cgroupBinding,
                                               rebuilt, error));
     EXPECT_NE(error.find("unavailable"), std::string::npos);
+}
+
+TEST_F(SandboxChildLauncherTest, RejectsRetainedMaterialAfterGraphicsEndpointRestart) {
+    ASSERT_GE(executableDescriptor_, 0);
+    SandboxChildLaunchSpec protectedSpec = validSpec();
+    SandboxLaunchMaterialRegistry registry;
+    const VerifiedApplication application{
+        .appId = protectedSpec.identity.appId,
+        .identity = protectedSpec.identity,
+        .runtime = protectedSpec.plan.profile.runtime,
+        .requestedPermissions = {},
+        .bundleRecordDigest = protectedSpec.plan.request.bundleRecordDigest,
+        .permissionSubject = std::nullopt,
+    };
+    const SandboxLaunchMaterialInput input{
+        .application = application,
+        .filesystemSources = protectedSpec.filesystemSources,
+        .executableBundlePath = protectedSpec.executableBundlePath,
+        .executableDescriptor = protectedSpec.executableDescriptor,
+        .arguments = protectedSpec.arguments,
+    };
+    std::string error;
+    ASSERT_TRUE(registry.registerMaterial(input, error)) << error;
+
+    const fs::path path = executablePath_.parent_path() / "compositor.sock";
+    ASSERT_EQ(unlink(path.c_str()), 0);
+    replacementCompositorSocketFd_ = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    ASSERT_GE(replacementCompositorSocketFd_, 0);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, path.c_str(), sizeof(address.sun_path) - 1);
+    ASSERT_EQ(bind(replacementCompositorSocketFd_, reinterpret_cast<const sockaddr*>(&address),
+                   sizeof(address)), 0);
+    ASSERT_EQ(chown(path.c_str(), kSessionUserUid, kApplicationRuntimeGid), 0);
+    ASSERT_EQ(chmod(path.c_str(), 0660), 0);
+
+    SandboxChildLaunchSpec rebuilt{};
+    SandboxPlatformHardening hardening{};
+    EXPECT_FALSE(registry.runtimeEndpointsCurrent(error));
+    EXPECT_NE(error.find("generation changed"), std::string::npos);
+    EXPECT_FALSE(registry.makeChildLaunchSpec(protectedSpec.plan, hardening, std::nullopt,
+                                              rebuilt, error));
+    EXPECT_NE(error.find("generation changed"), std::string::npos);
+    registry.removeStaleRuntimeEndpointMaterials();
+    EXPECT_TRUE(registry.runtimeEndpointsCurrent(error)) << error;
+    EXPECT_FALSE(registry.hasMaterialFor(protectedSpec.plan));
 }
 
 } // namespace

@@ -68,6 +68,11 @@ public:
     void shutdown();
     void poll();
 
+    /** A graphics endpoint changed; registrations must be rebuilt before launch resumes. */
+    bool runtimeEndpointRefreshRequired() const noexcept { return runtimeEndpointRefreshRequired_; }
+    /** Marks a successful root-owned system registration refresh as ready for launch. */
+    bool completeRuntimeEndpointRefresh(std::string& error);
+
     /** Trusted, in-process verifier/registry API; never exposed over IPC. */
     bool registerVerifiedApplication(const VerifiedApplication& application,
                                      const std::vector<std::string>& grantedPermissions,
@@ -102,6 +107,7 @@ private:
     void removeClient(int descriptor);
     void sendErrorAndClose(int descriptor, std::uint32_t requestId, const std::string& message);
     void reapChildren();
+    void refreshRuntimeEndpointState();
 
     SandboxLaunchAuthorizer authorizer_;
     SandboxExternalApplicationRegistry externalApplications_;
@@ -115,6 +121,7 @@ private:
     /** Selected locally after probing the actual kernel; never protocol input. */
     SandboxPlatformHardening hardening_{};
     bool hardeningReady_{false};
+    bool runtimeEndpointRefreshRequired_{false};
     SandboxChildReaper childReaper_;
     int serverDescriptor_{-1};
     bool ownsSocketPath_{false};

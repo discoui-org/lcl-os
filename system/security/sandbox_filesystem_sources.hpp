@@ -31,6 +31,16 @@ struct SandboxFilesystemSources {
 bool validateSandboxFilesystemSources(const SandboxFilesystemSources& sources,
                                      const AppIdentity& identity, std::string& error);
 
+/**
+ * Verifies that the retained graphics endpoint descriptors still name the
+ * linked socket objects at their original absolute paths.  A compositor or
+ * rasterd restart unlinks and recreates its socket; keeping the old
+ * descriptor would otherwise let a private sandbox bind mount retain a
+ * stale endpoint generation.
+ */
+bool validateSandboxRuntimeEndpointGeneration(const SandboxFilesystemSources& sources,
+                                              std::string& error);
+
 /** Validates an executable path relative to the protected app-bundle root. */
 bool isSafeSandboxBundleRelativePath(const std::string& path) noexcept;
 
