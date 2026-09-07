@@ -12,33 +12,33 @@ sözleşmesini kullanmasıdır.
   Terminal/Settings dışındaki bundle'ları `launchSandboxed` üzerinden
   sandboxd'ye yönlendiriyor. Tarihsel "uygulama sandbox'ı yok" ifadesi güncel
   durumu yansıtmıyor; Android çalışma kanıtı aşağıdadır.
-- [ ] Mevcut canonical rootfs başlangıcında root, sessiond, shell ve uygulama
+- [x] Mevcut canonical rootfs başlangıcında root, sessiond, shell ve uygulama
   süreçlerinin gerçek UID/GID/capability değerlerini kaydet.
-- [ ] Mevcut Android bootstrap zincirinde `lcl-bootstrap`, `lcl-core-android`,
+- [x] Mevcut Android bootstrap zincirinde `lcl-bootstrap`, `lcl-core-android`,
   rootfs session ve uygulamaların SELinux context'lerini kaydet.
-- [ ] Mevcut QEMU kernel ve hedef Android kernel için namespace, seccomp,
+- [x] Mevcut QEMU kernel ve hedef Android kernel için namespace, seccomp,
   cgroup v2 ve Landlock özelliklerini runtime probe ile raporla.
-- [ ] Üçüncü taraf uygulamaların sandbox özelliği yoksa başlatılmayacağını;
+- [x] Üçüncü taraf uygulamaların sandbox özelliği yoksa başlatılmayacağını;
   yalnız açıkça işaretlenmiş geliştirme/trusted profilinin istisna olacağını
   kararlaştır.
 
 ## Değişmez güvenlik kuralları
 
-- [ ] `lcl-core`, `lcl-core-android` ve `lcl-rasterd` uygulama sandbox'ının
+- [x] `lcl-core`, `lcl-core-android` ve `lcl-rasterd` uygulama sandbox'ının
   dışında kalır; uygulamalar GPU, DRM, Composer veya input aygıtlarına doğrudan
   erişmez.
-- [ ] Her uygulama farklı bir gerçek Linux UID/GID ile çalışır; `USER=Rei`
+- [x] Her uygulama farklı bir gerçek Linux UID/GID ile çalışır; `USER=Rei`
   ortam değişkeni kimlik yerine geçmez.
-- [ ] Uygulamalar varsayılan olarak root, `CAP_SYS_ADMIN`, `CAP_SYS_PTRACE`
+- [x] Uygulamalar varsayılan olarak root, `CAP_SYS_ADMIN`, `CAP_SYS_PTRACE`
   veya retained capability olmadan başlatılır.
 - [ ] Bir uygulama ancak kullanıcı tarafından doğrulanmış bir elevation
   isteğinden sonra, ayrı ve geçici elevated-app oturumunda ek yetki alabilir.
-- [ ] Uygulama manifesti yalnız izin isteyebilir; kendisine izin veremez.
-- [ ] Etkin izin `manifest isteği ∩ kullanıcı kararı ∩ sistem politikası`
+- [x] Uygulama manifesti yalnız izin isteyebilir; kendisine izin veremez.
+- [x] Etkin izin `manifest isteği ∩ kullanıcı kararı ∩ sistem politikası`
   olarak hesaplanır.
-- [ ] Kullanıcı Ayarları Android SELinux policy'sini veya kernel güvenlik
+- [x] Kullanıcı Ayarları Android SELinux policy'sini veya kernel güvenlik
   sınırını genişletemez.
-- [ ] Uygulama izinleri başka uygulamanın verisini ya da sistem aygıtlarını
+- [x] Uygulama izinleri başka uygulamanın verisini ya da sistem aygıtlarını
   doğrudan görünür kılmaz; erişim portal/broker üzerinden sağlanır.
 - [x] Terminal, kullanıcıya kabuk verdiği için üçüncü taraf uygulama profili
   değildir; ayrı bir trusted-user-shell profiliyle çalışır ve root olmaz.
@@ -115,14 +115,14 @@ sözleşmesini kullanmasıdır.
 
 ## 2. Kimlik ve kalıcı uygulama depolaması
 
-- [ ] LCL'ye ayrılmış UID/GID aralığını tanımla; Android substrate'ında bu
+- [x] LCL'ye ayrılmış UID/GID aralığını tanımla; Android substrate'ında bu
   aralığın Android UID alanıyla çakışmadığını doğrula.
 - [x] `app-id -> uid/gid` eşlemesini root-owned kalıcı registry'de sakla.
-- [ ] İlk doğrulanmış/izin verilmiş launch'ta kalıcı `Data`, `Cache` ve
+- [x] İlk doğrulanmış/izin verilmiş launch'ta kalıcı `Data`, `Cache` ve
   `Preferences` dizinlerini oluştur; `Temporary`yi sandbox başlangıcında
   tmpfs olarak oluştur.
 - [x] Uygulama özel dizinlerini ilgili UID/GID sahibi ve `0700` moduyla oluştur.
-- [ ] Rootfs üreticisindeki genel `0755` permission geçişinin uygulama özel
+- [x] Rootfs üreticisindeki genel `0755` permission geçişinin uygulama özel
   dizinleri gevşetmesini engelle.
 - [ ] Uygulama kaldırma, veri saklama ve veri silme kararlarını ayrı işlemler
   olarak tasarla.
@@ -133,7 +133,7 @@ sözleşmesini kullanmasıdır.
 
 - [x] `system/security/` altında platformdan bağımsız `SandboxProfile`,
   `SandboxLaunchRequest` ve `SandboxLaunchResult` sözleşmelerini oluştur.
-- [ ] Capability contract v2'de uygulama izinleri/private filesystem-private
+- [x] Capability contract v2'de uygulama izinleri/private filesystem-private
   network görünümü ile Linux'a özgü PID/IPC namespace, Landlock ve cgroup
   sertleştirmesini ayır; launch digest'inin yalnız ortak LCL capability
   profilini bağladığını Linux ve Android build/testleriyle doğrula. Aynı
@@ -144,9 +144,9 @@ sözleşmesini kullanmasıdır.
 - [x] Protected FD, process group, UID/GID drop, capability clear,
   `no_new_privs` ve allowlist environment uygulayan; zorunlu kernel aşaması
   kaydı yoksa fail-closed kalan sandbox child launcher çekirdeğini oluştur.
-- [ ] Küçük, root çalışan `lcl-sandboxd` servisinin sorumluluğunu yalnız
+- [x] Küçük, root çalışan `lcl-sandboxd` servisinin sorumluluğunu yalnız
   doğrulanmış app ID çözümü, sandbox kurulumu ve child reaping ile sınırla.
-- [ ] `lcl-sessiond`'yi uygulama yaşam döngüsü otoritesi olarak koru; doğrudan
+- [x] `lcl-sessiond`'yi uygulama yaşam döngüsü otoritesi olarak koru; doğrudan
   `fork/exec` yerine sandboxd'ye doğrulanmış spawn isteği göndersin.
 - [x] Sandboxd'nin istemciden keyfî executable yolu, UID, mount yolu veya
   capability maskesi kabul etmesini engelle.
@@ -154,13 +154,13 @@ sözleşmesini kullanmasıdır.
   doğrulanmış Unix socket üzerinden kur.
 - [x] Launch request'e app ID, instance ID, güvenilir bundle referansı ve
   etkin profil digest'ini bağla.
-- [ ] Sandboxd crash/restart durumunda canlı uygulama process group'larının
+- [x] Sandboxd crash/restart durumunda canlı uygulama process group'larının
   nasıl ele alınacağını belirle.
 - [x] Child başlamadan önce group temizleme, `setresgid`, `setresuid`,
   capability drop ve environment temizleme sırasını uygula.
 - [x] `LD_PRELOAD`, tehlikeli `LD_*`, miras alınmış FD'ler ve shell environment
   değerlerini denylist/allowlist ile temizle.
-- [ ] Sandbox launcher için UID düşmesi, capability sıfırlama ve kötü niyetli
+- [x] Sandbox launcher için UID düşmesi, capability sıfırlama ve kötü niyetli
   spawn isteği testleri ekle.
 
 ## 3.1. Uygulama elevation ve `lcl-sudo`
@@ -197,21 +197,21 @@ sözleşmesini kullanmasıdır.
 
 ## 4. Uygulama başına filesystem görünümü
 
-- [ ] Her uygulama için private mount namespace oluştur ve mount propagation'ı
+- [x] Her uygulama için private mount namespace oluştur ve mount propagation'ı
   recursive private yap.
-- [ ] Yeni sandbox kökünü tmpfs veya eşdeğer güvenli kök üzerinde kur.
-- [ ] `/App` altına yalnız ilgili `.app` bundle'ını read-only bind mount et.
-- [ ] `/System`, gerekli dinamik kütüphaneler, fontlar ve runtime dosyalarını
+- [x] Yeni sandbox kökünü tmpfs veya eşdeğer güvenli kök üzerinde kur.
+- [x] `/App` altına yalnız ilgili `.app` bundle'ını read-only bind mount et.
+- [x] `/System`, gerekli dinamik kütüphaneler, fontlar ve runtime dosyalarını
   read-only bind mount et.
-- [ ] `/Data`, `/Cache`, `/Preferences` ve `/Temporary`yi uygulamanın özel
+- [x] `/Data`, `/Cache`, `/Preferences` ve `/Temporary`yi uygulamanın özel
   depolamasına bağla; `HOME` ve `TMPDIR`yi buna göre ayarla.
-- [ ] `/proc`yi private PID namespace'e göre, `/dev`yi ise minimum cihaz
+- [x] `/proc`yi private PID namespace'e göre, `/dev`yi ise minimum cihaz
   kümesiyle kur.
-- [ ] Uygulamaya `/dev/dri`, `/dev/input`, block device, Android Binder ve
+- [x] Uygulamaya `/dev/dri`, `/dev/input`, block device, Android Binder ve
   host `/data` görünürlüğü verme.
-- [ ] `/Runtime` için bütün ortak runtime ağacını bind etmek yerine uygulama
+- [x] `/Runtime` için bütün ortak runtime ağacını bind etmek yerine uygulama
   başına dar ve authenticated endpoint görünümü oluştur.
-- [ ] Sistem, bundle ve diğer uygulamaların verisine yazmayı engelleyen mount
+- [x] Sistem, bundle ve diğer uygulamaların verisine yazmayı engelleyen mount
   ve DAC testleri ekle.
 - [ ] Başka uygulamanın `Data` dizinine erişimin `EACCES` veya `ENOENT` ile
   sonuçlandığını QEMU ve Android'de doğrula.
@@ -299,22 +299,22 @@ olarak tekrar doğrulandı.
 
 ## 6. Kernel policy katmanları
 
-- [ ] Sandbox child'ında `PR_SET_NO_NEW_PRIVS` uygula.
+- [x] Sandbox child'ında `PR_SET_NO_NEW_PRIVS` uygula.
 - [ ] C++ ve JavaScript runtime'ları için ayrı, mimari-doğrulanmış seccomp
   allowlist'leri oluştur.
-- [ ] Seccomp filtrelerinde mimari kontrolü uygula; `ptrace`, `mount`,
+- [x] Seccomp filtrelerinde mimari kontrolü uygula; `ptrace`, `mount`,
   `bpf`, `kexec`, kernel module ve privilege-escalation yollarını reddet.
 - [ ] Seccomp profilini dinamik loader ve gerekli normal uygulama davranışları
   ile trace ederek daralt; filter'i geniş bir production allowlist'e dönüştürme.
-- [ ] Landlock mevcutsa uygulamanın read/write filesystem köklerine ikinci
+- [x] Landlock mevcutsa uygulamanın read/write filesystem köklerine ikinci
   kısıtlama katmanını uygula.
-- [ ] Landlock ABI yoksa profilin güvenlik seviyesini açıkça raporla; üçüncü
+- [x] Landlock ABI yoksa profilin güvenlik seviyesini açıkça raporla; üçüncü
   taraf uygulamalar için kabul/fail-closed kararını uygula.
-- [ ] Network izni olmayan uygulamaya boş network namespace uygula.
+- [x] Network izni olmayan uygulamaya boş network namespace uygula.
 - [ ] Network izni olan uygulamalar için yalnız istemci bağlantısına izin veren
   net policy/broker kararını tanımla; dinamik izin değişiminde yeniden başlatma
   gereksinimini belgeleyin.
-- [ ] cgroup v2 ile her instance için `memory.max`, `pids.max`, CPU ağırlığı ve
+- [x] cgroup v2 ile her instance için `memory.max`, `pids.max`, CPU ağırlığı ve
   gerekirse IO sınırları uygula.
 - [x] cgroup v2 bulunmayan Android capability baseline'ında en az adres alanı
   ve süreç sayısı için taşınabilir `rlimit` sınırlarını child UID düşmeden önce
@@ -326,7 +326,7 @@ olarak tekrar doğrulandı.
 
 ## 7. Android substrate enforcement
 
-- [ ] AOSP/SELinux image build'i gelene kadar yalnız ortak capability
+- [x] AOSP/SELinux image build'i gelene kadar yalnız ortak capability
   baseline'ını uygula: private mount ve network namespace, app UID/GID,
   capability clear, `no_new_privs`, seccomp ve taşınabilir kaynak limitleri.
   PID/IPC namespace, Landlock ve cgroup v2 yoksa bu baseline bunları taklit
@@ -350,7 +350,7 @@ olarak tekrar doğrulandı.
   substrate wrapper veya init service üzerinden tasarla.
 - [ ] Android cgroup yerleştirmesini canonical ABI'ye sızdırmadan substrate
   bridge/task-profile katmanında uygula.
-- [ ] Android'de user namespace'e bağımlı olmadan root sandboxd'nin gerçek
+- [x] Android'de user namespace'e bağımlı olmadan root sandboxd'nin gerçek
   rezerve UID'lerle namespace kurabildiğini doğrula.
 - [ ] Geliştirme için yalnız ilgili LCL domain'ini geçici permissive yap;
   global permissive kullanma.
@@ -416,20 +416,20 @@ olarak tekrar doğrulandı.
   denetlenmiş Ed25519 backend'ini ve root-owned publisher trust store'u bağla.
 - [x] Bundle hash/onay değişimi, manifest rewrite, symlink/hard-link ve
   gevşek approval-store izinleri için host unit testleri ekle.
-- [ ] Sistem uygulamalarını read-only rootfs alanında paketle.
-- [ ] Kopyalanan veya doğrudan seçilen `.app` bundle'ı launch öncesi
+- [x] Sistem uygulamalarını read-only rootfs alanında paketle.
+- [x] Kopyalanan veya doğrudan seçilen `.app` bundle'ı launch öncesi
   descriptor-temelli doğrula; geçerli imzayı veya hash'e bağlı Ayarlar
   onayını kontrol et ve ilk kabul edilmiş launch'ta UID/Data registry'yi
   atomik güncelle.
-- [ ] Ayarlar > Güvenlik'te bekleyen doğrulanamayan bundle'ları, app adı,
+- [x] Ayarlar > Güvenlik'te bekleyen doğrulanamayan bundle'ları, app adı,
   bundle yolu, BundleRecord hash'i ve publisher fingerprint'iyle göster;
   Allow/Remove Allow eylemlerini root-owned approval store'a bağla.
-- [ ] Onaysız veya imzasız bundle için sandbox bypass verme; kullanıcı onayı
+- [x] Onaysız veya imzasız bundle için sandbox bypass verme; kullanıcı onayı
   yalnız normal sandbox altında launch yetkisi verir, root çalıştırma vermez.
-- [ ] Bundle dosyası değiştiğinde unsigned allow kaydını geçersizleştir;
+- [x] Bundle dosyası değiştiğinde unsigned allow kaydını geçersizleştir;
   imzalı güncellemede publisher, UID, Data dizini ve permission grant
   migration davranışını tanımla.
-- [ ] Bundle değişimi, hash approval revoke, imza bozulması ve aynı app ID
+- [x] Bundle değişimi, hash approval revoke, imza bozulması ve aynı app ID
   çakışması testlerini ekle.
 
 ## 12. Doğrulama ve kabul kriterleri
@@ -642,7 +642,7 @@ cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
 
 - [ ] Her uygulama için UID/GID, capability, namespace inode'ları, cgroup
   yolu ve etkin profil digest'ini yalnız admin diagnostic aracıyla raporla.
-- [ ] Host unit testleri: manifest, permission store, profile çözümü,
+- [x] Host unit testleri: manifest, permission store, profile çözümü,
   UID registry ve IPC kimlik kontrolü.
 - [ ] Host integration testleri: iki uygulamanın karşılıklı veri erişimi,
   private runtime endpoint ve process cleanup.
@@ -661,14 +661,14 @@ cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
 
 ## Tamamlanma tanımı
 
-- [ ] Üçüncü taraf native veya JavaScript uygulaması root olmadan, farklı UID
+- [x] Üçüncü taraf native veya JavaScript uygulaması root olmadan, farklı UID
   ile ve private filesystem görünümünde başlatılır.
 - [ ] Uygulama başka uygulamanın verisini, system dosyalarını veya aygıtlarını
   doğrudan okuyamaz/yazamaz.
-- [ ] Android hedefinde SELinux enforcing kalırken LCL uygulaması çalışır.
+- [x] Android hedefinde SELinux enforcing kalırken LCL uygulaması çalışır.
 - [ ] Kullanıcı onayıyla normal uygulama dar kapsamlı veya full elevated-app
   oturumuna geçebilir; onaysız uygulama elevation alamaz.
-- [ ] Compositor/rasterd retained presentation sözleşmesi ve Same-Binary
+- [x] Compositor/rasterd retained presentation sözleşmesi ve Same-Binary
   Invariant korunur.
 - [ ] Kullanıcı izinleri shell promptu ve Ayarlar uygulamasından değiştirilebilir
   fakat kernel/SELinux güvenlik tavanını genişletemez.
