@@ -4,6 +4,7 @@
 #include "system/ipc/raster_protocol.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
+#include "lcl-ui/widgets/navigation_split_view.hpp"
 #include "lcl-ui/widgets/progress_view.hpp"
 #include "system/render/raster_canvas.hpp"
 #include "apps/sandbox_probe/producer_grant_probe.hpp"
@@ -456,6 +457,107 @@ TEST(RasterServiceIntegrationTest,
     EXPECT_LT(patchReady.damageHeight, patchReady.height);
     close(layerFd);
     ASSERT_TRUE(daemon.releaseLayer(patchReady.layerId));
+}
+
+TEST(RasterServiceIntegrationTest,
+     NavigationEntryAndTouchBackReuseClippedPagePixels) {
+    using namespace lcl::ui;
+    class CountingPage final : public Container {
+    public:
+        int paints{0};
+        void draw(lcl::graphics::Canvas& canvas,
+                  const lcl::graphics::RectF& damage) override {
+            ++paints;
+            Container::draw(canvas, damage);
+        }
+    };
+    RasterDaemon daemon;
+    ASSERT_TRUE(daemon.start());
+    FakeCompositorSocket compositor;
+    ASSERT_TRUE(compositor.listenForClient());
+    WindowApp app(lcl::render::makeDisplayListCanvas(), 360, 640,
+                  "Navigation retained pixels");
+    app.setAppId("org.lcl.test.navigation-retained");
+    auto navigation = std::make_unique<NavigationSplitView>();
+    auto* split = navigation.get();
+    auto page = std::make_unique<CountingPage>();
+    auto* pagePtr = page.get();
+    page->setBackgroundColor({20, 50, 90, 255});
+    // The real navigation viewport is a clipped descendant of the moving
+    // NavigationStack. Add another clip to exercise inherited bounds too.
+    page->setClipsToBounds(true);
+    ASSERT_TRUE(split->detailNavigation().setRootPage({
+        .route = NavigationRoute("general"),
+        .title = "General",
+        .content = std::move(page),
+    }));
+    split->setSidebar(std::make_unique<Container>());
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.connectCompositor(compositor.path()));
+    ASSERT_TRUE(compositor.acceptClient());
+    protocol::LCLMsgSurfaceCreate create{};
+    pid_t ownerPid = 0;
+    ASSERT_TRUE(compositor.receiveSurfaceCreate(create, ownerPid));
+    const raster::SurfaceGrant grant{
+        create.surfaceId, static_cast<int32_t>(ownerPid), 0, 201, 203};
+    ASSERT_TRUE(daemon.registerSurface(grant));
+    ASSERT_TRUE(compositor.configure(grant, 360, 640));
+
+    const auto publish = [&]() -> bool {
+        raster::LayerReady ready{};
+        int layerFd = -1;
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline) {
+            (void)app.tick();
+            if (!daemon.takeLayer(ready, layerFd, 10)) continue;
+            if (layerFd >= 0) close(layerFd);
+            return daemon.releaseLayer(ready.layerId) && compositor.present(ready);
+        }
+        return false;
+    };
+    ASSERT_TRUE(publish());
+    split->presentDetail();
+    // Establish the new page's complete composition template.
+    for (int frame = 0; frame < 3; ++frame) {
+        app.advanceAnimations(1.0f / 120.0f);
+        ASSERT_TRUE(publish());
+    }
+    const int entryPaints = pagePtr->paints;
+    ASSERT_GT(entryPaints, 0);
+    for (int frame = 0; frame < 5; ++frame) {
+        app.advanceAnimations(1.0f / 120.0f);
+        ASSERT_TRUE(publish());
+    }
+    EXPECT_EQ(pagePtr->paints, entryPaints);
+
+    for (int frame = 0; frame < 240 && split->isTransitioning(); ++frame) {
+        app.advanceAnimations(1.0f / 60.0f);
+    }
+    ASSERT_FALSE(split->isTransitioning());
+    ASSERT_TRUE(publish());
+    app.sendPointerDown(4, 100, 0, PointerSource::Touch, 51);
+    for (int x : {24, 44, 64}) {
+        app.sendPointerMove(x, 100, PointerSource::Touch, 51);
+        ASSERT_TRUE(publish());
+    }
+    const int dragPaints = pagePtr->paints;
+    for (int x : {84, 104, 124}) {
+        app.sendPointerMove(x, 100, PointerSource::Touch, 51);
+        ASSERT_TRUE(publish());
+    }
+    EXPECT_EQ(pagePtr->paints, dragPaints);
+
+    // A real content change inside the cached page must still be painted.
+    pagePtr->setBackgroundColor({90, 50, 20, 255});
+    ASSERT_TRUE(publish());
+    EXPECT_GT(pagePtr->paints, dragPaints);
+    const int contentPaints = pagePtr->paints;
+    pagePtr->setOpacity(0.8f);
+    ASSERT_TRUE(publish());
+    EXPECT_GT(pagePtr->paints, contentPaints);
+    app.sendPointerUp(124, 100, 0, PointerSource::Touch, 51);
+    EXPECT_FALSE(split->isDetailPresented());
 }
 
 } // namespace

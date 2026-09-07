@@ -218,6 +218,7 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
     configure = [
         "cmake", "-B", str(target_build_dir), "-S", str(PROJECT_ROOT),
         "-DBUILD_TESTS=OFF",
+        "-DCMAKE_BUILD_TYPE=Release",
         *skia_args,
     ]
     if not cache_exists:

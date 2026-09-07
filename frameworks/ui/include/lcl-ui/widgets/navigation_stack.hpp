@@ -31,7 +31,7 @@ enum class PageTransition {
 
 /**
  * Persistent navigation chrome plus an animated page viewport.
- * Only the explicit NavigationBar back control initiates pop.
+ * Back navigation uses the NavigationBar control or a touch-only edge swipe.
  */
 class NavigationStack final : public Container {
 public:

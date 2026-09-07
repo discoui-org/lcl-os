@@ -24,8 +24,7 @@ lcl::motion::Motion navigationSpring() {
 }
 
 bool supportsEdgeDrag(const PointerEvent& event) {
-    return event.source == PointerSource::Touch ||
-        (event.source == PointerSource::Mouse && event.button == 0);
+    return event.source == PointerSource::Touch;
 }
 
 } // namespace

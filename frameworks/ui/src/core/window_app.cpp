@@ -186,12 +186,21 @@ struct WindowApp::PrivateRenderState {
                 [&](const auto& update) {
                     const auto* previous = findRetainedNode(
                         tree, update.node.id);
-                    return previous && !update.contentChanged &&
-                        update.propertiesChanged &&
-                        retainedPresentationLayers.contains(update.node.id) &&
-                        nextPresentationLayers.contains(update.node.id) &&
-                        isRetainedPresentationUpdate(
+                    if (!previous || update.contentChanged ||
+                        !update.propertiesChanged) return false;
+                    if (retainedPresentationLayers.contains(update.node.id) &&
+                        nextPresentationLayers.contains(update.node.id)) {
+                        return isRetainedPresentationUpdate(
                             update.node, *previous);
+                    }
+                    // Descendant screen bounds follow the cached owner's
+                    // transform; their unchanged local pixels are already in
+                    // that texture. Local changes still require a paint frame.
+                    return isWithinRetainedPresentation(
+                            tree, retainedPresentationLayers, update.node.id) &&
+                        isWithinRetainedPresentation(
+                            next, nextPresentationLayers, update.node.id) &&
+                        isInheritedPresentationUpdate(update.node, *previous);
                 });
         externalBufferTransaction =
             !transaction.replacesTree && transaction.creates.empty() &&
@@ -548,8 +557,39 @@ private:
             node.parentId == previous.parentId &&
             node.siblingIndex == previous.siblingIndex &&
             sameRect(node.layoutBounds, previous.layoutBounds) &&
-            sameOptionalRect(node.clipBounds, previous.clipBounds) &&
+            sameRetainedClip(node, previous) &&
             node.children == previous.children;
+    }
+
+    static bool sameRetainedClip(
+            const detail::RetainedRenderNode& node,
+            const detail::RetainedRenderNode& previous) noexcept {
+        if (sameOptionalRect(node.clipBounds, previous.clipBounds)) return true;
+        // clipsToBounds is recorded inside the identity-space cached layer.
+        // Its screen-space envelope moving with the owner is not a new clip.
+        return node.clipBounds && previous.clipBounds &&
+            sameRect(*node.clipBounds, node.presentationBounds) &&
+            sameRect(*previous.clipBounds, previous.presentationBounds);
+    }
+
+    static bool isInheritedPresentationUpdate(
+            const detail::RetainedRenderNode& node,
+            const detail::RetainedRenderNode& previous) noexcept {
+        const auto& p = node.presentation;
+        const auto& old = previous.presentation;
+        return node.propertyRevision == previous.propertyRevision &&
+            node.boundaryReasons == previous.boundaryReasons &&
+            node.parentId == previous.parentId &&
+            node.siblingIndex == previous.siblingIndex &&
+            sameRect(node.layoutBounds, previous.layoutBounds) &&
+            sameRetainedClip(node, previous) &&
+            node.children == previous.children &&
+            node.externalBufferId == previous.externalBufferId &&
+            node.externalBufferRevision == previous.externalBufferRevision &&
+            p.opacity == old.opacity && p.translationX == old.translationX &&
+            p.translationY == old.translationY && p.scaleX == old.scaleX &&
+            p.scaleY == old.scaleY && p.rotationRadians == old.rotationRadians &&
+            p.originX == old.originX && p.originY == old.originY;
     }
 
     static bool isExternalBufferUpdate(

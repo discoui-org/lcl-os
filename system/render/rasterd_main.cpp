@@ -686,15 +686,43 @@ bool isRetainedPresentationProperties(
         return std::fabs(lhs - rhs) <= kEpsilon;
     };
     if (mutation.type !=
-            lcl::raster_protocol::NodeMutationType::SetProperties ||
-        !candidates.contains(mutation.node.id)) {
+            lcl::raster_protocol::NodeMutationType::SetProperties) {
         return false;
     }
     const auto& node = mutation.node;
     const auto* old = findRetainedNode(nodes, node.id);
     if (!old || !validNodeState(node)) return false;
     const uint32_t allowedReasons = kTransformReason | kOpacityReason;
-    return isRetainedPresentationCandidate(node) &&
+    const bool owner = candidates.contains(node.id);
+    if (!owner && !std::any_of(
+            candidates.begin(), candidates.end(), [&](uint64_t candidate) {
+                return descendsFrom(nodes, node.id, candidate);
+            })) return false;
+    const bool sameClip =
+        (same(node.clipX, old->clipX) && same(node.clipY, old->clipY) &&
+         same(node.clipWidth, old->clipWidth) &&
+         same(node.clipHeight, old->clipHeight)) ||
+        ((node.flags & lcl::raster_protocol::kNodeHasClip) != 0 &&
+         same(node.clipX, node.presentationX) &&
+         same(node.clipY, node.presentationY) &&
+         same(node.clipWidth, node.presentationWidth) &&
+         same(node.clipHeight, node.presentationHeight) &&
+         same(old->clipX, old->presentationX) &&
+         same(old->clipY, old->presentationY) &&
+         same(old->clipWidth, old->presentationWidth) &&
+         same(old->clipHeight, old->presentationHeight));
+    // Screen bounds of descendants move with the owner. Only unchanged local
+    // state can reuse the pixels baked into that owner's identity-space layer.
+    const bool inherited = !owner &&
+        node.propertyRevision == old->propertyRevision &&
+        node.boundaryReasons == old->boundaryReasons &&
+        same(node.opacity, old->opacity) &&
+        same(node.translationX, old->translationX) &&
+        same(node.translationY, old->translationY) &&
+        same(node.scaleX, old->scaleX) && same(node.scaleY, old->scaleY) &&
+        same(node.rotationRadians, old->rotationRadians) &&
+        same(node.originX, old->originX) && same(node.originY, old->originY);
+    return ((owner && isRetainedPresentationCandidate(node)) || inherited) &&
         ((node.boundaryReasons ^ old->boundaryReasons) &
          ~allowedReasons) == 0 &&
         node.parentId == old->parentId &&
@@ -707,10 +735,7 @@ bool isRetainedPresentationProperties(
         same(node.layoutY, old->layoutY) &&
         same(node.layoutWidth, old->layoutWidth) &&
         same(node.layoutHeight, old->layoutHeight) &&
-        same(node.clipX, old->clipX) &&
-        same(node.clipY, old->clipY) &&
-        same(node.clipWidth, old->clipWidth) &&
-        same(node.clipHeight, old->clipHeight);
+        sameClip;
 }
 
 bool isRetainedPresentationOnly(

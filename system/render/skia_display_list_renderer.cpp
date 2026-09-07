@@ -37,6 +37,33 @@
 namespace lcl::render {
 namespace {
 
+// Source-over draws at unit group opacity can use the current target. A clear
+// or backdrop filter needs the isolated destination provided by saveLayer.
+// Keep cached-target boundaries conservative, and leave unmatched layers alone.
+std::vector<bool> findPassthroughLayers(
+        const std::vector<graphics::DisplayCommand>& commands) {
+    std::vector<bool> passthrough(commands.size(), false);
+    struct Layer { size_t index; bool isolated; };
+    std::vector<Layer> layers;
+    for (size_t index = 0; index < commands.size(); ++index) {
+        const auto& command = commands[index];
+        if (const auto* begin = std::get_if<graphics::BeginLayerCommand>(&command)) {
+            layers.push_back({index, begin->opacity < 1.0f});
+        } else if (std::holds_alternative<graphics::EndLayerCommand>(command)) {
+            if (!layers.empty()) {
+                passthrough[layers.back().index] = !layers.back().isolated;
+                layers.pop_back();
+            }
+        } else if (std::holds_alternative<graphics::ClearRectCommand>(command) ||
+                   std::holds_alternative<graphics::ApplyBackdropEffectsCommand>(command) ||
+                   std::holds_alternative<graphics::BeginCachedLayerCommand>(command) ||
+                   std::holds_alternative<graphics::EndCachedLayerCommand>(command)) {
+            for (auto& layer : layers) layer.isolated = true;
+        }
+    }
+    return passthrough;
+}
+
 SkMatrix toSkMatrix(const lcl::graphics::Matrix3& value) {
     SkMatrix matrix;
     matrix.setAll(value.a, value.c, value.tx,
@@ -394,37 +421,68 @@ bool SkiaDisplayListRenderer::replay(
         int cachedCanvasSaveCount{0};
         int outerLogicalSaveDepth{0};
         int outerLogicalLayerDepth{0};
+        std::vector<bool> outerPartialClipStack;
     };
 
     int logicalSaveDepth = 0;
     int logicalLayerDepth = 0;
+    // Applying an antialiased clip to each draw differs from clipping a group's
+    // composite once. Only flatten groups whose inherited clip has hard edges.
+    std::vector<bool> partialClipStack{false};
     bool replaySucceeded = true;
     std::optional<CachedLayerReplayState> cachedLayerReplayState;
-    for (const auto& command : displayList.commands()) {
+    const auto& commands = displayList.commands();
+    const auto passthroughLayers = findPassthroughLayers(commands);
+    for (size_t commandIndex = 0; commandIndex < commands.size(); ++commandIndex) {
+        const auto& command = commands[commandIndex];
         std::visit([&](const auto& op) {
             if (!replaySucceeded) return;
             using T = std::decay_t<decltype(op)>;
             if constexpr (std::is_same_v<T, lcl::graphics::SaveCommand>) {
                 canvas->save();
+                partialClipStack.push_back(partialClipStack.back());
                 ++logicalSaveDepth;
             } else if constexpr (std::is_same_v<T, lcl::graphics::RestoreCommand>) {
                 if (logicalSaveDepth > 0) {
                     canvas->restore();
+                    partialClipStack.pop_back();
                     --logicalSaveDepth;
                 }
             } else if constexpr (std::is_same_v<T, lcl::graphics::ConcatCommand>) {
                 canvas->concat(toSkMatrix(op.transform));
             } else if constexpr (std::is_same_v<T, lcl::graphics::BeginLayerCommand>) {
-                canvas->saveLayerAlphaf(nullptr, std::clamp(op.opacity, 0.0f, 1.0f));
+                const bool passthrough = passthroughLayers[commandIndex] &&
+                    !partialClipStack.back();
+                if (passthrough) {
+                    canvas->save();
+                } else {
+                    canvas->saveLayerAlphaf(nullptr, std::clamp(op.opacity, 0.0f, 1.0f));
+                }
+                // A real layer receives the inherited soft clip when it is
+                // composited back. Its own draws can therefore flatten nested
+                // unit-opacity groups until another soft clip is introduced.
+                partialClipStack.push_back(passthrough
+                    ? partialClipStack.back() : false);
                 ++logicalLayerDepth;
             } else if constexpr (std::is_same_v<T, lcl::graphics::EndLayerCommand>) {
                 if (logicalLayerDepth > 0) {
                     canvas->restore();
+                    partialClipStack.pop_back();
                     --logicalLayerDepth;
                 }
             } else if constexpr (std::is_same_v<T, lcl::graphics::ClipRectCommand>) {
+                const auto matrix = canvas->getLocalToDeviceAs3x3();
+                SkRect deviceRect;
+                matrix.mapRect(&deviceRect, toSkRect(op.rect));
+                const bool hardEdges = matrix.rectStaysRect() &&
+                    deviceRect.left() == std::floor(deviceRect.left()) &&
+                    deviceRect.top() == std::floor(deviceRect.top()) &&
+                    deviceRect.right() == std::floor(deviceRect.right()) &&
+                    deviceRect.bottom() == std::floor(deviceRect.bottom());
+                partialClipStack.back() = partialClipStack.back() || !hardEdges;
                 canvas->clipRect(toSkRect(op.rect), SkClipOp::kIntersect, true);
             } else if constexpr (std::is_same_v<T, lcl::graphics::ClipPathCommand>) {
+                partialClipStack.back() = true;
                 canvas->clipPath(toSkPath(op.path, op.fillRule),
                                  SkClipOp::kIntersect, true);
             } else if constexpr (std::is_same_v<T, lcl::graphics::ClearRectCommand>) {
@@ -526,10 +584,12 @@ bool SkiaDisplayListRenderer::replay(
                 cachedLayerReplayState = CachedLayerReplayState{
                     canvas, cachedCanvasSaveCount,
                     logicalSaveDepth, logicalLayerDepth,
+                    std::move(partialClipStack),
                 };
                 canvas = cachedCanvas;
                 logicalSaveDepth = 0;
                 logicalLayerDepth = 0;
+                partialClipStack = {false};
             } else if constexpr (std::is_same_v<T, lcl::graphics::EndCachedLayerCommand>) {
                 if (!cachedLayerReplayState) {
                     replaySucceeded = false;
@@ -542,6 +602,8 @@ bool SkiaDisplayListRenderer::replay(
                     cachedLayerReplayState->outerLogicalSaveDepth;
                 logicalLayerDepth =
                     cachedLayerReplayState->outerLogicalLayerDepth;
+                partialClipStack =
+                    std::move(cachedLayerReplayState->outerPartialClipStack);
                 cachedLayerReplayState.reset();
             } else if constexpr (std::is_same_v<T, lcl::graphics::DrawCachedLayerCommand>) {
                 const auto found = m_impl->cachedLayers.find(op.id);

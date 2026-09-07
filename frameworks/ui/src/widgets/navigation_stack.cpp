@@ -24,8 +24,7 @@ constexpr float kGestureSlop = 9.0f;
 constexpr float kCommitProgress = 0.32f;
 
 bool supportsEdgeDrag(const PointerEvent& event) {
-    return event.source == PointerSource::Touch ||
-        (event.source == PointerSource::Mouse && event.button == 0);
+    return event.source == PointerSource::Touch;
 }
 
 } // namespace
