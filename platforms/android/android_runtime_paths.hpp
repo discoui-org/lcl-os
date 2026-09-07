@@ -42,6 +42,13 @@ public:
         return "/System/Applications";
     }
 
+    std::string applicationIdentityRegistryPath() const override {
+        const char* rootfs = std::getenv("LCL_ROOTFS_MOUNT");
+        const std::string root = rootfs && rootfs[0] == '/'
+            ? rootfs : "/data/local/tmp/lcl-rootfs";
+        return root + "/var/lib/lcl-security/app-identities.v1";
+    }
+
     std::vector<std::string> fontSearchDirectories() const override {
         return {"/System/Library/Fonts", "/usr/share/fonts", "/system/fonts"};
     }

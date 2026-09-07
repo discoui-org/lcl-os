@@ -735,7 +735,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
             const auto* declaration = reinterpret_cast<const lcl::protocol::LCLMsgSetSystemSurfaceKind*>(msg.payload.data());
             if (!SystemSurfacePolicyRegistry::isValidKind(declaration->kind) ||
-                !SystemSurfacePolicyRegistry::isTrustedShellPeer(msg.pid)) {
+                !SystemSurfacePolicyRegistry::isTrustedShellPeer(
+                    msg.pid, msg.uid, msg.gid)) {
                 requestAck.error(5, "system-surface declaration denied");
                 continue;
             }
@@ -748,7 +749,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 requestAck.error(3, "invalid shell-state subscription");
                 continue;
             }
-            if (!SystemSurfacePolicyRegistry::isTrustedShellPeer(msg.pid)) {
+            if (!SystemSurfacePolicyRegistry::isTrustedShellPeer(
+                    msg.pid, msg.uid, msg.gid)) {
                 requestAck.error(4, "shell-state subscription requires a trusted shell peer");
                 continue;
             }
@@ -1047,7 +1049,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
         }
 
         if (isAttachedSurfaceCreate) {
-            if (!SystemSurfacePolicyRegistry::isTrustedShellPeer(msg.pid)) {
+            if (!SystemSurfacePolicyRegistry::isTrustedShellPeer(
+                    msg.pid, msg.uid, msg.gid)) {
                 std::cerr << "[LCL Compositor ERROR] Attached surface denied for PID "
                           << msg.pid << ": untrusted WM peer\n";
                 requestAck.error(5, "attached surfaces require trusted WM capability");
@@ -1261,6 +1264,17 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 resizeHeightIncrement = sm->resizeHeightIncrement;
             }
 
+            std::string identityError;
+            if (!m_peerAuthenticator.authenticate(
+                    appId, msg.uid, msg.gid, identityError)) {
+                m_pendingSystemSurfaceKinds.erase(msg.clientFd);
+                std::cerr << "[LCL Compositor SECURITY] SurfaceCreate denied for PID "
+                          << msg.pid << " UID " << msg.uid << " GID " << msg.gid
+                          << ": " << identityError << '\n';
+                requestAck.error(5, "surface application identity denied");
+                continue;
+            }
+
             auto kindIt = m_pendingSystemSurfaceKinds.find(msg.clientFd);
             const protocol::LCLSystemSurfaceKind requestedSystemKind =
                 kindIt != m_pendingSystemSurfaceKinds.end()
@@ -1465,7 +1479,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 
         } else if (msg.header.opcode ==
                    lcl::protocol::LCLOpcode::RequestManagedWindowAction) {
-            if (!SystemSurfacePolicyRegistry::isTrustedShellPeer(msg.pid)) {
+            if (!SystemSurfacePolicyRegistry::isTrustedShellPeer(
+                    msg.pid, msg.uid, msg.gid)) {
                 requestAck.error(5, "managed window action requires trusted WM capability");
                 continue;
             }

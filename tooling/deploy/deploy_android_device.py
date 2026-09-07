@@ -1198,6 +1198,7 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
         # ANDROID_DATA=/data is required for linker and binder initialization
         launch_env = (
             f"LCL_RUNTIME_DIR={runtime_dir} LCL_FONT_ROOT={DEVICE_FONT_DIR} "
+            f"LCL_ROOTFS_MOUNT={DEVICE_ROOTFS_MOUNT} "
             f"LCL_RASTERD_PATH={DEVICE_RASTERD_PATH} ANDROID_DATA=/data "
             f"LD_LIBRARY_PATH={DEVICE_TMP_DIR}:/system/lib64:/vendor/lib64:/system_ext/lib64"
         )

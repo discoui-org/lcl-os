@@ -27,6 +27,17 @@ bool environmentEnabled(const char* name) {
 
 Compositor::Compositor(lcl::platform::IPlatformServices& platformServices)
     : m_platformServices(platformServices),
+      m_peerAuthenticator({
+          .identities = {
+              .registryPath = platformServices.paths().applicationIdentityRegistryPath(),
+              .firstAppUid = 61000,
+              .lastAppUid = 61999,
+              .ownerUid = 0,
+              .ownerGid = 0,
+          },
+          .sessionUid = lcl::security::kSessionUserUid,
+          .sessionGid = lcl::security::kSessionUserGid,
+      }),
       m_rasterService(platformServices) {}
 
 Compositor::~Compositor() {
@@ -176,7 +187,7 @@ bool Compositor::initialize() {
     m_protocolDispatcher = std::make_unique<ProtocolDispatcher>(
         m_renderer, m_windowManager, m_surfaces, m_sceneRegistry,
         m_focusController, m_shellStateBroker, *m_windowingPolicy,
-        m_rasterService);
+        m_rasterService, m_peerAuthenticator);
 
     if (!m_rasterService.initialize(paths.rasterServiceExecutable(),
                                     paths.rasterSocketPath())) {

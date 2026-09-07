@@ -2,12 +2,14 @@
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/text.hpp"
+#include "system/ipc/lcl_protocol.hpp"
 #include "system/render/raster_canvas.hpp"
 
 #include <fcntl.h>
 #include <grp.h>
 #include <linux/capability.h>
 #include <linux/seccomp.h>
+#include <poll.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -18,6 +20,7 @@
 
 #include <array>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -71,6 +74,71 @@ bool systemIsReadOnly() {
     return errno == EROFS || errno == EACCES;
 }
 
+bool compositorRejectsForgedAppId() {
+    const char* socketPath = std::getenv("LCL_COMPOSITOR_SOCKET");
+    if (!socketPath || socketPath[0] == '\0') {
+        socketPath = "/Runtime/lcl-compositor.sock";
+    }
+
+    const int descriptor = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    if (descriptor < 0) return false;
+
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    if (std::strlen(socketPath) >= sizeof(address.sun_path)) {
+        close(descriptor);
+        return false;
+    }
+    std::strncpy(address.sun_path, socketPath, sizeof(address.sun_path) - 1);
+    if (connect(descriptor, reinterpret_cast<sockaddr*>(&address),
+                sizeof(address)) != 0) {
+        close(descriptor);
+        return false;
+    }
+
+    lcl::protocol::LCLMsgSurfaceCreate surface{};
+    surface.surfaceId = 1;
+    surface.width = 64.0f;
+    surface.height = 64.0f;
+    std::strncpy(surface.title, "Identity spoof probe",
+                 sizeof(surface.title) - 1);
+    std::strncpy(surface.appId, "org.lcl.identity-spoof",
+                 sizeof(surface.appId) - 1);
+
+    lcl::protocol::LCLHeader request{};
+    request.opcode = lcl::protocol::LCLOpcode::SurfaceCreate;
+    request.requestId = 1;
+    request.payloadSize = sizeof(surface);
+    if (!lcl::protocol::sendMsgWithFd(descriptor, request, &surface)) {
+        close(descriptor);
+        return false;
+    }
+
+    pollfd waiter{descriptor, POLLIN, 0};
+    if (poll(&waiter, 1, 500) <= 0 || (waiter.revents & POLLIN) == 0) {
+        close(descriptor);
+        return false;
+    }
+
+    lcl::protocol::LCLHeader response{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    const auto status = lcl::protocol::recvPacketWithFd(
+        descriptor, response, payload, receivedFd);
+    if (receivedFd >= 0) close(receivedFd);
+    close(descriptor);
+    if (status != lcl::protocol::ReceiveStatus::Received ||
+        response.opcode != lcl::protocol::LCLOpcode::AckResponse ||
+        response.requestId != request.requestId ||
+        payload.size() != sizeof(lcl::protocol::LCLMsgAckResponse)) {
+        return false;
+    }
+    const auto* ack = reinterpret_cast<const lcl::protocol::LCLMsgAckResponse*>(
+        payload.data());
+    return ack->status == 5 &&
+        std::strcmp(ack->message, "surface application identity denied") == 0;
+}
+
 struct Check { std::string label; bool passed; };
 
 std::vector<Check> runChecks() {
@@ -90,6 +158,7 @@ std::vector<Check> runChecks() {
         {"securityd is hidden", serviceIsHidden("/Runtime/lcl-securityd.sock")},
         {"sandboxd is hidden", serviceIsHidden("/Runtime/lcl-sandboxd.sock")},
         {"Process limit is installed", limited},
+        {"Forged compositor app ID is rejected", compositorRejectsForgedAppId()},
     };
 }
 

@@ -29,6 +29,10 @@ std::string DesktopRuntimePaths::appCatalogDirectory() const {
     return "/System/Applications";
 }
 
+std::string DesktopRuntimePaths::applicationIdentityRegistryPath() const {
+    return "/var/lib/lcl-security/app-identities.v1";
+}
+
 std::vector<std::string> DesktopRuntimePaths::fontSearchDirectories() const {
     return {
         "/System/Library/Fonts",

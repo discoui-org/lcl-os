@@ -48,7 +48,7 @@ public:
                                       float& x, float& y, float& width, float& height) noexcept;
     /** Derive work-area reservations from logical surface geometry only. */
     static SystemReservedZone computeReservedZone(const SurfaceRegistry& surfaces) noexcept;
-    static bool isTrustedShellPeer(pid_t pid) noexcept;
+    static bool isTrustedShellPeer(pid_t pid, uid_t uid, gid_t gid) noexcept;
 };
 
 } // namespace lcl::core

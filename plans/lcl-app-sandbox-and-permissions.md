@@ -218,22 +218,36 @@ sözleşmesini kullanmasıdır.
 
 ## 5. Compositor, rasterd ve session IPC uyarlaması
 
-- [ ] Uygulama UID'leri farklı olduğunda compositor/rasterd socket erişiminin
+- [x] Uygulama UID'leri farklı olduğunda compositor/rasterd socket erişiminin
   nasıl yetkilendirileceğini tanımla.
 - [ ] `SO_PEERCRED` kimliğini sandbox registry'deki app ID ve instance ID ile
   eşleştir.
 - [ ] Mevcut surface producer grant mekanizmasını yeni process kimliğiyle
   doğrula; grant'in başka uygulama tarafından kullanılamamasını test et.
-- [ ] Uygulama erişebilen compositor/raster endpoint'lerini sessiond/admin
+- [x] Uygulama erişebilen compositor/raster endpoint'lerini sessiond/admin
   endpointlerinden ayır.
 - [ ] Uygulamaların doğrudan sessiond üzerinden keyfî başka uygulama
   başlatmasını engelle; gerekiyorsa sınırlı `open`/launch portalı tasarla.
-- [ ] Compositor socket'in mevcut `0600` modelini, benzersiz app UID'leriyle
+- [x] Compositor socket'in mevcut `0600` modelini, benzersiz app UID'leriyle
   uyumlu ve peer-authenticated bir modele geçir.
 - [ ] Socket yeniden başlatmalarında stale bind mount oluşturmayan per-instance
   runtime endpoint yaşam döngüsünü oluştur.
 - [ ] Normal pencere açma, popup, raster producer grant ve process exit
   entegrasyon testlerini sandbox altında çalıştır.
+
+**IPC kimlik kanıtı (2026-09-07):** compositor ve raster soketleri
+`1000:62000/0660`; sandbox child yalnız ek `62000` grafik grubunu alıyor.
+`SurfaceCreate` içindeki canonical app ID artık kernel `SO_PEERCRED` UID/GID'si
+ile root-owned `app-identities.v1` kaydında birebir doğrulanıyor ve hata halinde
+yüzey/grant oluşturulmadan fail-closed reddediliyor. Registry compositor
+başladıktan sonra yeni uygulama kaydı alabileceği için her yeni ana yüzeyde
+güvenli sahiplik/mod/link doğrulamasıyla yeniden yükleniyor. UID 1000 yalnız
+sabit shell/WM, Terminal ve Settings kimliklerini bildirebiliyor; sistem-yüzeyi
+komutları ayrıca UID/GID 1000 ve gerçek shell executable kontrolü gerektiriyor.
+Android x86_64 ve arm64 compositor build'leri geçti; enforcing Android'da
+`org.lcl.sandbox-test` UID/GID `61000:61000` ile iki dar grafik soketine
+bağlanarak açıldı. Instance-ID'nin privileged launch kaydıyla bağlanması bu
+maddenin kalan işidir.
 
 ## 6. Kernel policy katmanları
 
@@ -269,7 +283,7 @@ sözleşmesini kullanmasıdır.
   capability clear, `no_new_privs`, seccomp ve taşınabilir kaynak limitleri.
   PID/IPC namespace, Landlock ve cgroup v2 yoksa bu baseline bunları taklit
   etmeyecek; Linux tam sertleştirmesi ise zayıflatılmayacak.
-- [ ] Mevcut global `setenforce 0` geliştirme yolunu production başlangıç
+- [x] Mevcut global `setenforce 0` geliştirme yolunu production başlangıç
   akışından çıkar.
 - [ ] Android init policy'sinde `lcl_bootstrap`, `lcl_core_android`,
   `lcl_rasterd`, `lcl_sandboxd`, `lcl_admind`, `lcl_app` ve

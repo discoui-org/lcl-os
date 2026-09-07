@@ -1,6 +1,7 @@
 #include "system/compositor/system_surface_policy.hpp"
 
 #include "system/compositor/surface_registry.hpp"
+#include "system/security/session_user.hpp"
 
 #include <algorithm>
 #include <array>
@@ -111,8 +112,10 @@ SystemReservedZone SystemSurfacePolicyRegistry::computeReservedZone(
     return zone;
 }
 
-bool SystemSurfacePolicyRegistry::isTrustedShellPeer(pid_t pid) noexcept {
-    if (pid <= 0) return false;
+bool SystemSurfacePolicyRegistry::isTrustedShellPeer(
+        pid_t pid, uid_t uid, gid_t gid) noexcept {
+    if (pid <= 0 || uid != security::kSessionUserUid ||
+        gid != security::kSessionUserGid) return false;
     std::array<char, 64> procPath{};
     std::snprintf(procPath.data(), procPath.size(), "/proc/%d/exe", static_cast<int>(pid));
     std::array<char, 4096> resolved{};

@@ -11,6 +11,7 @@
 #include "system/compositor/system_surface_policy.hpp"
 #include "system/compositor/windowing_policy.hpp"
 #include "system/compositor/raster_service_host.hpp"
+#include "system/security/application_peer_authenticator.hpp"
 #include "system/render/renderer.hpp"
 #include "system/render/window_manager.hpp"
 
@@ -26,10 +27,12 @@ public:
                        FocusController& focus,
                        ShellStateBroker& shellState,
                        const WindowingPolicy& windowingPolicy,
-                       RasterServiceHost& rasterService)
+                       RasterServiceHost& rasterService,
+                       const security::ApplicationPeerAuthenticator& peerAuthenticator)
         : m_renderer(renderer), m_windowManager(windowManager), m_surfaces(surfaces),
           m_scenes(scenes), m_focus(focus), m_shellState(shellState),
-          m_windowingPolicy(windowingPolicy), m_rasterService(rasterService) {}
+          m_windowingPolicy(windowingPolicy), m_rasterService(rasterService),
+          m_peerAuthenticator(peerAuthenticator) {}
     ~ProtocolDispatcher() = default;
 
     /** Process every queued IPC message and report whether a frame is required. */
@@ -65,6 +68,7 @@ private:
     ShellStateBroker& m_shellState;
     const WindowingPolicy& m_windowingPolicy;
     RasterServiceHost& m_rasterService;
+    const security::ApplicationPeerAuthenticator& m_peerAuthenticator;
     uint64_t m_nextShmContentSerial{1};
     std::unordered_map<int, protocol::LCLSystemSurfaceKind> m_pendingSystemSurfaceKinds;
     struct ShellSubscription {

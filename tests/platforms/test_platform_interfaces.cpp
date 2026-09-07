@@ -100,6 +100,9 @@ public:
     std::string rasterServiceExecutable() const override { return "/tmp/mock-rasterd"; }
     std::string sessionSocketPath() const override { return "/tmp/mock-session.sock"; }
     std::string appCatalogDirectory() const override { return "/tmp/mock-apps"; }
+    std::string applicationIdentityRegistryPath() const override {
+        return "/tmp/mock-app-identities.v1";
+    }
     std::vector<std::string> fontSearchDirectories() const override { return {"/tmp/mock-fonts"}; }
     std::string temporaryDirectory() const override { return "/tmp"; }
     std::string gestaltFilePath() const override { return "/tmp/mock-gestalt.json"; }
@@ -191,6 +194,8 @@ TEST(PlatformInterfacesTest, RuntimePathsContract) {
     EXPECT_EQ(paths.compositorSocketPath(), "/tmp/mock-compositor.sock");
     EXPECT_EQ(paths.sessionSocketPath(), "/tmp/mock-session.sock");
     EXPECT_EQ(paths.appCatalogDirectory(), "/tmp/mock-apps");
+    EXPECT_EQ(paths.applicationIdentityRegistryPath(),
+              "/tmp/mock-app-identities.v1");
     ASSERT_EQ(paths.fontSearchDirectories().size(), 1u);
     EXPECT_EQ(paths.fontSearchDirectories()[0], "/tmp/mock-fonts");
     EXPECT_EQ(paths.gestaltFilePath(), "/tmp/mock-gestalt.json");
@@ -275,6 +280,8 @@ TEST(DesktopPlatformTest, DesktopRuntimePathsImplementsIRuntimePaths) {
     EXPECT_EQ(iface.compositorSocketPath(), "/Runtime/lcl-compositor.sock");
     EXPECT_EQ(iface.sessionSocketPath(), "/Runtime/lcl-sessiond.sock");
     EXPECT_EQ(iface.appCatalogDirectory(), "/System/Applications");
+    EXPECT_EQ(iface.applicationIdentityRegistryPath(),
+              "/var/lib/lcl-security/app-identities.v1");
     EXPECT_EQ(iface.temporaryDirectory(), "/Runtime/Temporary");
     EXPECT_FALSE(iface.fontSearchDirectories().empty());
 }

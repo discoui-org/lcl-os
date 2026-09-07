@@ -22,6 +22,7 @@
 #include "system/scene/shell_state_broker.hpp"
 #include "system/render/renderer.hpp"
 #include "system/render/window_manager.hpp"
+#include "system/security/application_peer_authenticator.hpp"
 
 namespace lcl::core {
 
@@ -80,6 +81,7 @@ private:
     lcl::platform::IPlatformServices& m_platformServices;
 
     // Subsystems — declared in init order, destructed in reverse
+    lcl::security::ApplicationPeerAuthenticator m_peerAuthenticator;
     IPCManager             m_ipcManager;
     render::Renderer       m_renderer;
     render::WindowManager  m_windowManager;
