@@ -5,6 +5,8 @@
 
 #include "system/security/bundle_record.hpp"
 #include "system/security/bundle_launch_gate.hpp"
+#include "system/security/bundle_signature_backend.hpp"
+#include "system/security/bundle_signature_verifier.hpp"
 #include "system/security/session_user.hpp"
 
 #include <algorithm>
@@ -24,6 +26,7 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utility>
 
 namespace lcl::session {
 namespace {
@@ -202,14 +205,15 @@ lcl::security::BundleSourceScope bundleSourceScope(
   return lcl::security::BundleSourceScope::Direct;
 }
 
-lcl::security::PermissionSubject makeUnverifiedBundlePermissionSubject(
+lcl::security::PermissionSubject makeBundlePermissionSubject(
     const lcl::core::AppBundleMetadata &app,
-    const lcl::security::Sha256Digest &bundleRecordDigest) {
+    const lcl::security::Sha256Digest &bundleRecordDigest,
+    std::string publisherIdentity) {
   return {
       .userUid = lcl::security::kSessionUserUid,
       .appId = app.appId,
       .bundleRecordDigest = bundleRecordDigest,
-      .publisherIdentity = "unverified",
+      .publisherIdentity = std::move(publisherIdentity),
       .permissionVersion = lcl::security::kPermissionDecisionVersion,
   };
 }
@@ -513,20 +517,30 @@ SessionService::launchSandboxed(const core::AppBundleMetadata &app,
     permissionSubject = lcl::security::makeSystemImagePermissionSubject(
         lcl::security::kSessionUserUid, app.appId, record->digest);
   } else {
-    // An Ed25519 backend and publisher trust store are not installed yet, so
-    // an external bundle is deliberately treated as unverified. The launch
-    // gate permits it only after Settings writes an exact-record approval.
+    lcl::security::OpenSslEd25519Verifier ed25519;
+    lcl::security::RootPublisherTrustStore publisherTrust;
+    lcl::security::BundleSignatureVerifier signatureVerifier(ed25519,
+                                                               publisherTrust);
+    const lcl::security::BundleSignatureVerification signature =
+        signatureVerifier.verify(app, *record);
+    const lcl::security::BundlePublisherState publisherState =
+        signature.publisherState;
+    const std::string publisherIdentity =
+        publisherState == lcl::security::BundlePublisherState::SignatureVerified
+            ? "ed25519:" +
+                  lcl::security::hexEncodeDigest(signature.publisherFingerprint)
+            : "unverified";
     lcl::security::BundleLaunchGate gate(m_bundleApprovals);
     const lcl::security::BundleLaunchAssessment assessment = gate.assess(
         lcl::security::kSessionUserUid, bundleSourceScope(app), *record,
-        lcl::security::BundlePublisherState::Unverified);
+        publisherState);
     if (!assessment.allowed()) {
       response.status = 3;
       if (assessment.decision ==
           lcl::security::BundleLaunchDecision::NeedsUserApproval) {
         if (!m_pendingBundleApprovals.record(
                 lcl::security::kSessionUserUid, *record,
-                lcl::security::BundlePublisherState::Unverified,
+                publisherState,
                 bundleSourceScope(app), app.bundlePath, app.name, error)) {
           response.message =
               "lcl-sandboxd launch rejected because the pending bundle approval could not be saved: " +
@@ -557,7 +571,8 @@ SessionService::launchSandboxed(const core::AppBundleMetadata &app,
       response.message = "lcl-sandboxd is unavailable: " + error;
       return response;
     }
-    permissionSubject = makeUnverifiedBundlePermissionSubject(app, record->digest);
+    permissionSubject = makeBundlePermissionSubject(
+        app, record->digest, publisherIdentity);
     const lcl::security::SandboxApplicationRegistration registration{
         .userUid = permissionSubject.userUid,
         .appId = app.appId,

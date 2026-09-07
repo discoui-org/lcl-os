@@ -5,7 +5,7 @@
 namespace lcl::security {
 namespace {
 
-constexpr std::array<PermissionDefinition, 8> kPermissionDefinitions{{
+constexpr std::array<PermissionDefinition, 9> kPermissionDefinitions{{
     {"network.client", PermissionEvaluationPhase::LaunchTime, true, false},
     {"files.user-selected", PermissionEvaluationPhase::BrokerTime, false, false},
     {"files.documents.read", PermissionEvaluationPhase::BrokerTime, false, false},
@@ -14,6 +14,7 @@ constexpr std::array<PermissionDefinition, 8> kPermissionDefinitions{{
     {"camera", PermissionEvaluationPhase::BrokerTime, false, false},
     {"microphone", PermissionEvaluationPhase::BrokerTime, false, false},
     {"notifications", PermissionEvaluationPhase::BrokerTime, false, false},
+    {"apps.open", PermissionEvaluationPhase::BrokerTime, false, true},
 }};
 
 constexpr PermissionDefinition kElevationDefinition{

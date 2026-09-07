@@ -195,6 +195,9 @@ int main() {
     return 15;
   if (!pathIsInaccessible("/Runtime/lcl-sessiond.sock"))
     return 16;
+  if (!pathIsInaccessible(
+          "/Users/Rei/Library/Containers/org.lcl.sandbox-test/Data"))
+    return 21;
   if (!systemPathIsNotWritable())
     return 17;
   if (!cannotReachLoopback())

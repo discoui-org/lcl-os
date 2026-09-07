@@ -338,6 +338,7 @@ def stage_canonical_rootfs(
         "System/Library/Gestalt",
         "System/Library/Wallpapers",
         "System/Library/Libraries",
+        "System/Library/Security/Publishers",
         "Users/Rei/Applications",
         "Users/Rei/Desktop",
         "Users/Rei/Documents",

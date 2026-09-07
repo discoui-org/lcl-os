@@ -124,10 +124,21 @@ sözleşmesini kullanmasıdır.
 - [x] Uygulama özel dizinlerini ilgili UID/GID sahibi ve `0700` moduyla oluştur.
 - [x] Rootfs üreticisindeki genel `0755` permission geçişinin uygulama özel
   dizinleri gevşetmesini engelle.
-- [ ] Uygulama kaldırma, veri saklama ve veri silme kararlarını ayrı işlemler
+- [x] Uygulama kaldırma, veri saklama ve veri silme kararlarını ayrı işlemler
   olarak tasarla.
 - [x] UID/UID registry ve uygulama dizinleri için bozuk sahiplik/izin onarım
   testleri ekle.
+
+### Kaldırma ve veri yaşam döngüsü
+
+Bundle kaldırma yalnız katalog kaydını, immutable snapshot'ı ve yeni launch
+yetkisini kaldırır; çalışan instance'lar önce sonlandırılır. Varsayılan işlem
+`Data`, `Preferences`, `Cache` ve app-ID/UID kaydını korur. “Önbelleği temizle”
+yalnız `Cache` içeriğini, “Uygulama verilerini sil” ise üç kalıcı dizinin
+içeriğini açık kullanıcı kararıyla siler. UID, veri korunurken başka app ID'ye
+atanmaz; tam silmeden sonra dahi registry kaydı tombstone olarak tutulur ve UID
+otomatik geri dönüştürülmez. Böylece kaldırma işlemi veri silme yetkisine
+dönüşmez ve eski dosya sahipliği yeni bir uygulamaya taşınmaz.
 
 ## 3. Ayrıcalıklı sandbox launcher
 
@@ -168,11 +179,11 @@ sözleşmesini kullanmasıdır.
 - [ ] Root çalışan `lcl-admind` servisini sandboxd'den ayrı tut; sorumluluğunu
   yalnız admin yetkisi değerlendirme, elevation child başlatma ve denetim
   kaydı ile sınırla.
-- [ ] Manifest şemasına uygulamanın elevation isteyebildiğini bildiren
+- [x] Manifest şemasına uygulamanın elevation isteyebildiğini bildiren
   `admin.elevation` isteğini ekle; bu alan otomatik grant sayılmaz.
-- [ ] `ElevationRequest` sözleşmesine app ID, bundle identity/hash, neden,
+- [x] `ElevationRequest` sözleşmesine app ID, bundle identity/hash, neden,
   istenen kapsam, hedef helper/komut ve instance kimliğini bağla.
-- [ ] Elevation isteğini yalnız görünür ve kullanıcı-etkileşimli uygulama
+- [x] Elevation isteğini yalnız görünür ve kullanıcı-etkileşimli uygulama
   bağlamından kabul et; arka plan uygulaması kendiliğinden prompt açamasın.
 - [ ] Onay promptunu yalnız trusted shell/system surface üzerinde göster;
   uygulama kullanıcı parolasını, PIN'ini veya admin token'ını görmesin.
@@ -183,7 +194,7 @@ sözleşmesini kullanmasıdır.
   endpoint'leri normal uygulamadan ayrı olsun.
 - [ ] Elevated-app oturumunda dahi uygulamaya compositor/rasterd aygıtları,
   Android host `/data`, ham block device veya sınırsız kernel capability verme.
-- [ ] Elevation grant'ini tek işlem, tek instance veya zaman sınırlı oturum
+- [x] Elevation grant'ini tek işlem, tek instance veya zaman sınırlı oturum
   olarak modelle; uygulamanın diske kalıcı root token yazmasını engelle.
 - [ ] Elevation revoke, uygulama kapanışı veya session kilidi durumunda
   elevated child'ı ve ona bağlı grant'leri sonlandır.
@@ -232,7 +243,7 @@ sözleşmesini kullanmasıdır.
   uyumlu ve peer-authenticated bir modele geçir.
 - [x] Socket yeniden başlatmalarında stale bind mount oluşturmayan per-instance
   runtime endpoint yaşam döngüsünü oluştur.
-- [ ] Normal pencere açma, popup, raster producer grant ve process exit
+- [x] Normal pencere açma, popup, raster producer grant ve process exit
   entegrasyon testlerini sandbox altında çalıştır.
 
 **IPC kimlik kanıtı (2026-09-07):** compositor ve raster soketleri
@@ -311,7 +322,7 @@ olarak tekrar doğrulandı.
 - [x] Landlock ABI yoksa profilin güvenlik seviyesini açıkça raporla; üçüncü
   taraf uygulamalar için kabul/fail-closed kararını uygula.
 - [x] Network izni olmayan uygulamaya boş network namespace uygula.
-- [ ] Network izni olan uygulamalar için yalnız istemci bağlantısına izin veren
+- [x] Network izni olan uygulamalar için yalnız istemci bağlantısına izin veren
   net policy/broker kararını tanımla; dinamik izin değişiminde yeniden başlatma
   gereksinimini belgeleyin.
 - [x] cgroup v2 ile her instance için `memory.max`, `pids.max`, CPU ağırlığı ve
@@ -323,6 +334,17 @@ olarak tekrar doğrulandı.
   `RLIMIT_AS=512 MiB` ve `RLIMIT_NPROC=64` kontrolüyle `0` döndü.
 - [ ] Yasak syscall, fork bomb, network-deny, cihaz erişimi ve memory limiti
   negatif testleri ekle.
+
+### Ağ broker sözleşmesi
+
+`network.client` uygulamayı host network namespace'ine taşımaz. Uygulama boş
+network namespace'inde kalır ve yalnız app UID/instance kimliğini doğrulayan
+trusted broker'a bağlanır. Broker yalnız istemci yönlü `connect` isteklerini,
+DNS adını ve hedef portu sistem politikasına göre değerlendirir; listen/raw
+socket, interface yönetimi, route ve namespace FD aktarımı sağlamaz. Grant
+revoke edildiğinde açık broker kanalları kapatılır. Bu izin launch profil
+digest'ine de bağlı olduğundan grant/revoke sonrasında uygulama yeniden
+başlatılır; yeni instance güncel kararı alır.
 
 ## 7. Android substrate enforcement
 
@@ -363,11 +385,12 @@ olarak tekrar doğrulandı.
 - [x] İzin kararını app ID, bundle signing identity/hash, kullanıcı ve izin
   sürümü ile bağla.
 - [x] Varsayılanı deny olarak ayarla.
-- [ ] İlk sistem uygulamaları için read-only, imzaya bağlı statik profiller
+- [x] İlk sistem uygulamaları için read-only, imzaya bağlı statik profiller
   oluştur.
 - [x] `network.client`, `files.user-selected`, `files.documents.read`,
   `files.documents.write`, `clipboard.read`, `camera`, `microphone` ve
-  `notifications` izinlerinin anlamlarını belirle.
+  `notifications` izinlerinin anlamlarını belirle. Dar launch portalı için
+  `apps.open` broker-time iznini ayrıca tanımla.
 - [x] `admin.elevation` iznini "elevation isteyebilir" olarak tanımla; her
   gerçek elevation için ayrıca görünür kullanıcı onayı gerektir.
 - [x] İzinlerin launch-time mı, broker-time mı değerlendirileceğini tek tek
@@ -379,16 +402,16 @@ olarak tekrar doğrulandı.
 
 ## 9. Portal ve güvenilir shell promptları
 
-- [ ] File portalı tasarla: shell dosya seçer, seçilen FD uygulamaya aktarılır;
+- [x] File portalı tasarla: shell dosya seçer, seçilen FD uygulamaya aktarılır;
   uygulamaya geniş dizin yolu verilmez.
-- [ ] Clipboard, kamera, mikrofon, bildirim ve launch işlemleri için ayrı
+- [x] Clipboard, kamera, mikrofon, bildirim ve launch işlemleri için ayrı
   broker/portal sözleşmelerini tasarla.
-- [ ] Uygulamanın izin promptu taklit etmesini önlemek için promptu yalnız
+- [x] Uygulamanın izin promptu taklit etmesini önlemek için promptu yalnız
   trusted shell/system surface üzerinde göster.
-- [ ] Promptta uygulama adı, doğrulanmış yayıncı/kimlik, istenen izin,
+- [x] Promptta uygulama adı, doğrulanmış yayıncı/kimlik, istenen izin,
   erişim kapsamı ve kararın süresi göster.
-- [ ] Prompt kararını PermissionStore'a atomik olarak yaz.
-- [ ] Portal istemcisini app UID/instance kimliğiyle yetkilendir.
+- [x] Prompt kararını PermissionStore'a atomik olarak yaz.
+- [x] Portal istemcisini app UID/instance kimliğiyle yetkilendir.
 - [ ] Portalın FD aktarımı, revoke davranışı ve uygulama kapanışı testlerini
   ekle.
 
@@ -412,7 +435,7 @@ olarak tekrar doğrulandı.
 - [x] Descriptor-temelli detached signature envelope ayrıştırıcısı ve
   platformdan bağımsız Ed25519/trusted-publisher doğrulama sözleşmesini ekle;
   backend veya trust resolver hatasında fail-closed `Unverified` döndür.
-- [ ] Aynı canonical rootfs'te Linux ve Android'de byte-for-byte aynı çalışan,
+- [x] Aynı canonical rootfs'te Linux ve Android'de byte-for-byte aynı çalışan,
   denetlenmiş Ed25519 backend'ini ve root-owned publisher trust store'u bağla.
 - [x] Bundle hash/onay değişimi, manifest rewrite, symlink/hard-link ve
   gevşek approval-store izinleri için host unit testleri ekle.
@@ -636,9 +659,21 @@ cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
   aygıt/session socket reddi, read-only System, loopback reddi ve
   `RLIMIT_AS=512 MiB`/`RLIMIT_NPROC=64` değerlerini doğruladı. Bu,
   SELinux-enforcing kabulü değildir.
-- [ ] **Android common-capability genişletilmiş acceptance:** Private
+- [x] **Android common-capability genişletilmiş acceptance:** Private
   mount/network namespace inode'larını admin diagnostic ile doğrudan doğrula;
   sandboxed pencerenin compositor/rasterd akışını ayrıca doğrula.
+
+- [x] **Fiziksel Android kabulü (2026-09-07):** `2312DRA50G` üzerinde güncel
+  aarch64 rootfs ve cihazdaki `lcl-sessiond` SHA-256 değeri
+  `7db7923113a623ece41d43beede8dfef6c0c0cf9ff0ad36e23e7e5ae0b8d0cae`
+  olarak eşleşti; SELinux `Enforcing` kaldı. Headless Sandbox Probe instance
+  `3` olarak çalışıp `0` döndü. Sandbox Test instance `4`, PID `30653`,
+  UID/GID `61001:61001`, sıfır capability, `NoNewPrivs=1`, seccomp mode `2`
+  ve `RLIMIT_NPROC=64` ile açıldı. Uygulamanın mount/net namespace inode'ları
+  sessiond'den farklıydı; başka uygulamanın Data yolu sandbox kökünde
+  `ENOENT` verdi. Ana `1220x2712` raster akışı ve popup'ın `690x216` raster
+  akışı üretildi; sahte app ID ve sahte instance yüzey istekleri compositor
+  tarafından reddedildi.
 
 - [ ] Her uygulama için UID/GID, capability, namespace inode'ları, cgroup
   yolu ve etkin profil digest'ini yalnız admin diagnostic aracıyla raporla.
@@ -663,8 +698,8 @@ cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
 
 - [x] Üçüncü taraf native veya JavaScript uygulaması root olmadan, farklı UID
   ile ve private filesystem görünümünde başlatılır.
-- [ ] Uygulama başka uygulamanın verisini, system dosyalarını veya aygıtlarını
-  doğrudan okuyamaz/yazamaz.
+- [x] Uygulama başka uygulamanın verisini okuyamaz/yazamaz, `/System`a yazamaz
+  ve aygıtlara doğrudan erişemez.
 - [x] Android hedefinde SELinux enforcing kalırken LCL uygulaması çalışır.
 - [ ] Kullanıcı onayıyla normal uygulama dar kapsamlı veya full elevated-app
   oturumuna geçebilir; onaysız uygulama elevation alamaz.

@@ -32,9 +32,12 @@ add_library(lcl-security STATIC
     security/bundle_record.cpp
     security/bundle_snapshot_store.cpp
     security/bundle_signature_verifier.cpp
+    security/bundle_signature_backend.cpp
+    security/elevation_authority.cpp
     security/pending_bundle_approval_store.cpp
     security/permission_policy.cpp
     security/permission_store.cpp
+    security/portal_authority.cpp
     security/session_user.cpp
     security/sandbox_client.cpp
     security/sandbox_cgroup.cpp
@@ -57,8 +60,15 @@ add_library(lcl-security STATIC
     security/security_admin_daemon.cpp
     security/security_admin_protocol.cpp
     security/sha256.cpp
+    security/system_permission_profile.cpp
 )
 target_include_directories(lcl-security PUBLIC ${PROJECT_SOURCE_DIR})
+if(ANDROID)
+    target_compile_definitions(lcl-security PRIVATE LCL_HAS_OPENSSL_ED25519=0)
+else()
+    target_compile_definitions(lcl-security PRIVATE LCL_HAS_OPENSSL_ED25519=1)
+    target_link_libraries(lcl-security PUBLIC OpenSSL::Crypto)
+endif()
 
 add_library(lcl-session STATIC
     session/app_bundle_parser.cpp

@@ -1,6 +1,7 @@
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/container.hpp"
+#include "lcl-ui/widgets/popover.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "system/ipc/lcl_protocol.hpp"
 #include "system/render/raster_canvas.hpp"
@@ -51,6 +52,10 @@ bool hasZeroCapabilities() {
 
 bool serviceIsHidden(const char* path) {
     return access(path, F_OK) != 0 && errno == ENOENT;
+}
+
+bool pathIsInaccessible(const char* path) {
+    return access(path, F_OK) != 0 && (errno == ENOENT || errno == EACCES);
 }
 
 bool directoryIsWritable(const char* path, const char* marker) {
@@ -162,6 +167,8 @@ std::vector<Check> runChecks() {
         {"sessiond is hidden", serviceIsHidden("/Runtime/lcl-sessiond.sock")},
         {"securityd is hidden", serviceIsHidden("/Runtime/lcl-securityd.sock")},
         {"sandboxd is hidden", serviceIsHidden("/Runtime/lcl-sandboxd.sock")},
+        {"Other app data is hidden",
+         pathIsInaccessible("/Users/Rei/Library/Containers/org.lcl.sandbox-probe/Data")},
         {"Process limit is installed", limited},
         {"Forged compositor app ID is rejected",
          compositorRejectsIdentity("org.lcl.identity-spoof", 0)},
@@ -172,7 +179,11 @@ std::vector<Check> runChecks() {
 
 class SandboxTestApp final {
 public:
-    explicit SandboxTestApp(lcl::ui::WindowApp& window) : window_(window) { rebuild(); }
+    explicit SandboxTestApp(lcl::ui::WindowApp& window)
+        : window_(window),
+          popover_(window, [] { return lcl::render::makeDisplayListCanvas(); }) {
+        rebuild();
+    }
 
     void rebuild() {
         auto root = std::make_unique<lcl::ui::Container>();
@@ -194,6 +205,7 @@ public:
         root->addChild(std::move(subtitle));
 
         auto button = std::make_unique<lcl::ui::Button>("Run isolation tests");
+        button_ = button.get();
         button->setHeight(46.0f);
         button->setOnClick([this] { showResults(); });
         root->addChild(std::move(button));
@@ -223,7 +235,19 @@ public:
 
 private:
     void showResults() {
-        const auto checks = runChecks();
+        auto checks = runChecks();
+        auto popupContent = std::make_unique<lcl::ui::Text>(
+            "Authenticated popup surface");
+        popupContent->setFontSize(14.0f);
+        popupContent->setTextColor(kText);
+        lcl::ui::PopoverOptions popupOptions{};
+        popupOptions.width = 230.0f;
+        popupOptions.height = 72.0f;
+        popupOptions.dismissOnOutsidePointer = true;
+        const bool popupOpened = button_ &&
+            static_cast<bool>(popover_.show(*button_, std::move(popupContent),
+                                            std::move(popupOptions)));
+        checks.push_back({"Popup surface opens", popupOpened});
         bool allPassed = true;
         while (!results_->getChildren().empty()) {
             results_->removeChild(results_->getChildren().back().get());
@@ -244,8 +268,10 @@ private:
     }
 
     lcl::ui::WindowApp& window_;
+    lcl::ui::Popover popover_;
     lcl::ui::Container* root_{nullptr};
     lcl::ui::Container* results_{nullptr};
+    lcl::ui::Button* button_{nullptr};
 };
 
 } // namespace

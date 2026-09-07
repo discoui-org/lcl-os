@@ -7,6 +7,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
 
+if(NOT ANDROID)
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+endif()
+
 include(cmake/LclSkia.cmake)
 lcl_import_skia()
 
