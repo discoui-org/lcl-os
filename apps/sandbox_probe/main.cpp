@@ -2,10 +2,13 @@
 #include <fcntl.h>
 #include <linux/capability.h>
 #include <netinet/in.h>
+#include <sched.h>
 #include <sys/prctl.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <array>
@@ -14,6 +17,7 @@
 #include <cstring>
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 
 #include "producer_grant_probe.hpp"
 #include "system/ipc/lcl_protocol.hpp"
@@ -113,6 +117,56 @@ bool hasExpectedPortableResourceLimits() {
          processCount.rlim_max == kExpectedProcessCount;
 }
 
+bool forbiddenSyscallIsDenied() {
+#ifdef SYS_unshare
+  errno = 0;
+  return syscall(SYS_unshare, CLONE_NEWNS) == -1 && errno == EPERM;
+#else
+  return false;
+#endif
+}
+
+bool addressSpaceLimitIsEnforced() {
+  constexpr std::size_t kAboveLimit = 513ULL * 1024ULL * 1024ULL;
+  errno = 0;
+  void *mapping = mmap(nullptr, kAboveLimit, PROT_NONE,
+                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  if (mapping != MAP_FAILED) {
+    munmap(mapping, kAboveLimit);
+    return false;
+  }
+  return errno == ENOMEM;
+}
+
+bool processLimitIsEnforced() {
+  int barrier[2]{-1, -1};
+  if (pipe2(barrier, O_CLOEXEC) != 0)
+    return false;
+  std::vector<pid_t> children;
+  children.reserve(72);
+  bool limited = false;
+  for (unsigned attempt = 0; attempt < 72; ++attempt) {
+    const pid_t child = fork();
+    if (child == 0) {
+      close(barrier[1]);
+      char byte = 0;
+      while (read(barrier[0], &byte, 1) < 0 && errno == EINTR) {}
+      _exit(0);
+    }
+    if (child < 0) {
+      limited = errno == EAGAIN;
+      break;
+    }
+    children.push_back(child);
+  }
+  close(barrier[0]);
+  close(barrier[1]);
+  for (const pid_t child : children) {
+    while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+  }
+  return limited && children.size() < 72;
+}
+
 bool producerGrantIsProcessBound() {
   namespace protocol = lcl::protocol;
   namespace raster = lcl::raster_protocol;
@@ -204,6 +258,12 @@ int main() {
     return 18;
   if (!hasExpectedPortableResourceLimits())
     return 19;
+  if (!forbiddenSyscallIsDenied())
+    return 22;
+  if (!addressSpaceLimitIsEnforced())
+    return 23;
+  if (!processLimitIsEnforced())
+    return 24;
   if (!producerGrantIsProcessBound())
     return 20;
   return 0;

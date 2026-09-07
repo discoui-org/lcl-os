@@ -384,6 +384,7 @@ JSValue setSystemKind(JSContext* ctx, JSValueConst self, int argc, JSValueConst*
     else if (*value == "menu-bar" || *value == "menuBar") target->setSystemSurfaceKind(Kind::MenuBar);
     else if (*value == "dock") target->setSystemSurfaceKind(Kind::Dock);
     else if (*value == "home-screen" || *value == "homeScreen") target->setSystemSurfaceKind(Kind::HomeScreen);
+    else if (*value == "permission-prompt" || *value == "permissionPrompt") target->setSystemSurfaceKind(Kind::PermissionPrompt);
     else return JS_ThrowRangeError(ctx, "unknown system surface kind");
     return JS_UNDEFINED;
 }

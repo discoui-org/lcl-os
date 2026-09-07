@@ -71,13 +71,14 @@ ElevationAuditStore::ElevationAuditStore(ElevationAuditStoreConfig config)
 
 bool ElevationAuditStore::append(std::string_view event,
                                  const ElevationRequest& request,
-                                 bool accepted, std::string_view result,
+                                 uid_t userUid, bool accepted, std::string_view result,
                                  std::string& error) const {
     error.clear();
     const std::filesystem::path path(config_.path);
     const std::filesystem::path parent = path.parent_path();
     struct stat parentStatus {};
-    if (!path.is_absolute() || parent.empty() || !visibleText(event, 32) ||
+    if (!path.is_absolute() || parent.empty() || userUid == 0 ||
+        !visibleText(event, 32) ||
         !visibleText(result, 256, true) || lstat(parent.c_str(), &parentStatus) != 0 ||
         !S_ISDIR(parentStatus.st_mode) || S_ISLNK(parentStatus.st_mode) ||
         parentStatus.st_uid != config_.ownerUid || parentStatus.st_gid != config_.ownerGid ||
@@ -106,8 +107,10 @@ bool ElevationAuditStore::append(std::string_view event,
     const auto now = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     std::ostringstream line;
-    line << now << '\t' << event << '\t' << request.appId << '\t'
-         << request.instanceId << '\t' << request.requestId << '\t'
+    line << now << '\t' << event << '\t' << userUid << '\t' << request.appId << '\t'
+         << hexEncodeDigest(request.bundleRecordDigest) << '\t'
+         << request.publisherIdentity << '\t' << request.instanceId << '\t'
+         << request.requestId << '\t'
          << static_cast<unsigned>(request.scope) << '\t' << request.target << '\t'
          << (accepted ? "allow" : "deny") << '\t' << result << '\n';
     const std::string encoded = line.str();
@@ -152,7 +155,7 @@ std::optional<ElevationPrompt> ElevationAuthority::request(
         error = "elevation requires a focused visible app and trusted interaction serial";
         const std::string diagnostic = error;
         std::string auditError;
-        audit_.append("request", requestValue, false, diagnostic, auditError);
+        audit_.append("request", requestValue, subject.userUid, false, diagnostic, auditError);
         return std::nullopt;
     }
     if (std::find(requestedPermissions.begin(), requestedPermissions.end(),
@@ -160,14 +163,14 @@ std::optional<ElevationPrompt> ElevationAuthority::request(
         error = "application manifest did not request admin.elevation";
         const std::string diagnostic = error;
         std::string auditError;
-        audit_.append("request", requestValue, false, diagnostic, auditError);
+        audit_.append("request", requestValue, subject.userUid, false, diagnostic, auditError);
         return std::nullopt;
     }
     if (!permissions_.isGranted(subject, "admin.elevation", error)) {
         if (error.empty()) error = "admin.elevation is not enabled for this bundle";
         const std::string diagnostic = error;
         std::string auditError;
-        audit_.append("request", requestValue, false, diagnostic, auditError);
+        audit_.append("request", requestValue, subject.userUid, false, diagnostic, auditError);
         return std::nullopt;
     }
     if (pending_.contains(requestValue.requestId)) {
@@ -175,9 +178,10 @@ std::optional<ElevationPrompt> ElevationAuthority::request(
         return std::nullopt;
     }
     ElevationPrompt prompt{requestValue, std::move(displayName)};
-    pending_.emplace(requestValue.requestId, Pending{prompt});
+    pending_.emplace(requestValue.requestId, Pending{prompt, subject.userUid});
     std::string auditError;
-    if (!audit_.append("request", requestValue, true, "pending-visible-consent", auditError)) {
+    if (!audit_.append("request", requestValue, subject.userUid, true,
+                       "pending-visible-consent", auditError)) {
         pending_.erase(requestValue.requestId);
         error = auditError;
         return std::nullopt;
@@ -201,7 +205,7 @@ void ElevationAuthority::removeExpired() {
     for (auto iterator = grants_.begin(); iterator != grants_.end();) {
         if (iterator->second.expiresAt <= now) {
             std::string auditError;
-            audit_.append("expire", iterator->second.request, false,
+            audit_.append("expire", iterator->second.request, iterator->second.userUid, false,
                           "grant-expired", auditError);
             iterator = grants_.erase(iterator);
         } else {
@@ -221,16 +225,18 @@ std::optional<ElevationGrant> ElevationAuthority::decide(
         return std::nullopt;
     }
     const ElevationRequest requestValue = found->second.prompt.request;
+    const uid_t userUid = found->second.userUid;
     pending_.erase(found);
     if (!approved) {
-        if (!audit_.append("decision", requestValue, false, "user-denied", error)) return std::nullopt;
+        if (!audit_.append("decision", requestValue, userUid, false,
+                           "user-denied", error)) return std::nullopt;
         error = "elevation denied by user";
         return std::nullopt;
     }
     if (lifetime <= std::chrono::seconds::zero() || lifetime > kMaximumGrantLifetime) {
         error = "elevation grant lifetime is invalid";
         std::string auditError;
-        audit_.append("decision", requestValue, false, error, auditError);
+        audit_.append("decision", requestValue, userUid, false, error, auditError);
         return std::nullopt;
     }
     const std::uint64_t grantId = allocateGrantId();
@@ -241,10 +247,10 @@ std::optional<ElevationGrant> ElevationAuthority::decide(
     ElevationGrant grant{grantId, requestValue.instanceId, requestValue.appId,
                          requestValue.bundleRecordDigest, requestValue.scope,
                          requestValue.target};
-    if (!audit_.append("decision", requestValue, true, "one-shot-grant", error)) {
+    if (!audit_.append("decision", requestValue, userUid, true, "one-shot-grant", error)) {
         return std::nullopt;
     }
-    grants_.emplace(grantId, LiveGrant{grant, requestValue,
+    grants_.emplace(grantId, LiveGrant{grant, requestValue, userUid,
                                       std::chrono::steady_clock::now() + lifetime});
     return grant;
 }
@@ -261,7 +267,8 @@ bool ElevationAuthority::consume(const ElevationGrant& grant, std::string& error
         return false;
     }
     const ElevationRequest requestValue = found->second.request;
-    if (!audit_.append("consume", requestValue, true, "operation-consumed", error)) {
+    if (!audit_.append("consume", requestValue, found->second.userUid, true,
+                       "operation-consumed", error)) {
         return false;
     }
     grants_.erase(found);
@@ -277,7 +284,7 @@ void ElevationAuthority::revokeInstance(std::string_view appId, std::uint64_t in
         if (iterator->second.grant.appId == appId &&
             iterator->second.grant.instanceId == instanceId) {
             std::string auditError;
-            audit_.append("revoke", iterator->second.request, false,
+            audit_.append("revoke", iterator->second.request, iterator->second.userUid, false,
                           "application-exit", auditError);
             iterator = grants_.erase(iterator);
         } else {
@@ -291,7 +298,8 @@ void ElevationAuthority::revokeAll() {
     for (const auto& [grantId, live] : grants_) {
         (void)grantId;
         std::string auditError;
-        audit_.append("revoke", live.request, false, "session-lock", auditError);
+        audit_.append("revoke", live.request, live.userUid, false,
+                      "session-lock", auditError);
     }
     grants_.clear();
 }

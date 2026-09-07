@@ -12,6 +12,14 @@ add_executable(lcl-securityd ${PROJECT_SOURCE_DIR}/system/security/security_admi
 target_include_directories(lcl-securityd PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(lcl-securityd PRIVATE lcl-security Threads::Threads)
 
+add_executable(lcl-admind ${PROJECT_SOURCE_DIR}/system/security/administrator_daemon_main.cpp)
+target_include_directories(lcl-admind PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(lcl-admind PRIVATE lcl-security Threads::Threads)
+
+add_executable(lcl-sudo terminal/sudo_main.cpp)
+target_include_directories(lcl-sudo PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(lcl-sudo PRIVATE lcl-security)
+
 add_executable(lcl-sandbox-probe ${PROJECT_SOURCE_DIR}/system/security/sandbox_platform_probe_main.cpp)
 target_include_directories(lcl-sandbox-probe PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(lcl-sandbox-probe PRIVATE lcl-security)
@@ -26,6 +34,7 @@ target_link_libraries(lcl-open PRIVATE lcl-session)
 
 add_executable(lcl-desktop-shell
     ${PROJECT_SOURCE_DIR}/system/shells/desktop/ui_main.cpp
+    ${PROJECT_SOURCE_DIR}/system/shells/permission_prompt.cpp
     ${PROJECT_SOURCE_DIR}/system/ipc/ipc_manager.cpp
 )
 target_include_directories(lcl-desktop-shell PRIVATE
@@ -33,16 +42,19 @@ target_include_directories(lcl-desktop-shell PRIVATE
     ${PROJECT_SOURCE_DIR}/frameworks/ui/include
 )
 target_link_libraries(lcl-desktop-shell PRIVATE
-    lcl-ui lcl-raster lcl-protocol lcl-shell-state lcl-session Threads::Threads
+    lcl-ui lcl-raster lcl-protocol lcl-shell-state lcl-session lcl-security Threads::Threads
 )
 
-add_executable(lcl-mobile-shell ${PROJECT_SOURCE_DIR}/system/shells/mobile/ui_main.cpp)
+add_executable(lcl-mobile-shell
+    ${PROJECT_SOURCE_DIR}/system/shells/mobile/ui_main.cpp
+    ${PROJECT_SOURCE_DIR}/system/shells/permission_prompt.cpp
+)
 target_include_directories(lcl-mobile-shell PRIVATE
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/frameworks/ui/include
 )
 target_link_libraries(lcl-mobile-shell PRIVATE
-    lcl-ui lcl-raster lcl-protocol lcl-shell-state lcl-session Threads::Threads
+    lcl-ui lcl-raster lcl-protocol lcl-shell-state lcl-session lcl-security Threads::Threads
 )
 
 add_executable(lcl-terminal
@@ -107,6 +119,8 @@ foreach(root_runtime_target IN ITEMS
         lcl-sessiond
         lcl-sandboxd
         lcl-securityd
+        lcl-admind
+        lcl-sudo
         lcl-sandbox-probe
         lcl-shell-launcher
         lcl-open

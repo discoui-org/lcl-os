@@ -63,6 +63,8 @@ CANONICAL_TARGETS = (
     "lcl-sessiond",
     "lcl-sandboxd",
     "lcl-securityd",
+    "lcl-admind",
+    "lcl-sudo",
     "lcl-sandbox-probe",
     "lcl-sandbox-smoke",
     "lcl-sandbox-test",
@@ -428,6 +430,8 @@ def stage_canonical_rootfs(
         "lcl-sessiond": dest_system_core / "lcl-sessiond",
         "lcl-sandboxd": dest_system_core / "lcl-sandboxd",
         "lcl-securityd": dest_system_core / "lcl-securityd",
+        "lcl-admind": dest_system_core / "lcl-admind",
+        "lcl-sudo": dest_system_core / "lcl-sudo",
         "lcl-sandbox-probe": dest_system_core / "lcl-sandbox-probe",
         "lcl-rasterd": dest_system_core / "lcl-rasterd",
         "lcl-open": dest_system_core / "lcl-open",
@@ -446,6 +450,11 @@ def stage_canonical_rootfs(
     if open_sym.exists() or open_sym.is_symlink():
         open_sym.unlink()
     open_sym.symlink_to("lcl-open")
+
+    sudo_sym = dest_system_core / "sudo"
+    if sudo_sym.exists() or sudo_sym.is_symlink():
+        sudo_sym.unlink()
+    sudo_sym.symlink_to("lcl-sudo")
 
     # 5. GNU Bash and System Tools (/System/Tools/)
     bash_src = find_host_bin("bash") or find_host_bin("sh")
@@ -847,6 +856,14 @@ if [ -x /System/Core/lcl-securityd ]; then
     sleep 0.1
 fi
 
+# admind never elevates the calling app. It executes one approved command as
+# a separate root broker child and streams the result back to lcl-sudo.
+if [ -x /System/Core/lcl-admind ]; then
+    echo "[init] Starting lcl-admind..."
+    /System/Core/lcl-admind 2>&1 | tee /var/log/lcl_admind.log &
+    sleep 0.1
+fi
+
 # Start LCL Session Daemon (sole application launch authority)
 if [ -x /System/Core/lcl-sessiond ]; then
     echo "[init] Starting lcl-sessiond..."
@@ -1143,6 +1160,9 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Core/lcl-sessiond",
         "/System/Core/lcl-sandboxd",
         "/System/Core/lcl-securityd",
+        "/System/Core/lcl-admind",
+        "/System/Core/lcl-sudo",
+        "/System/Core/sudo",
         "/System/Core/lcl-sandbox-probe",
         "/System/Core/lcl-open",
         "/System/Core/lcl-js",

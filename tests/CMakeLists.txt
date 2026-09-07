@@ -25,6 +25,7 @@ add_executable(lcl_unit_tests
     system/test_bundle_snapshot_store.cpp
     system/test_pending_bundle_approval_store.cpp
     system/test_security_admin_protocol.cpp
+    system/test_administrator_protocol.cpp
     system/test_bundle_launch_gate.cpp
     system/test_bundle_signature_verifier.cpp
     system/test_permission_policy.cpp
@@ -44,6 +45,7 @@ add_executable(lcl_unit_tests
     platforms/test_key_mapper.cpp
     system/test_compositor_components.cpp
     system/test_shell_state_model.cpp
+    system/test_permission_prompt.cpp
     system/test_window_manager.cpp
     frameworks/graphics/test_display_list_wire.cpp
     frameworks/ui/test_lcl_ui.cpp
@@ -52,6 +54,7 @@ add_executable(lcl_unit_tests
     system/test_js_runtime.cpp
     ${PROJECT_SOURCE_DIR}/system/shells/state/shell_state_client.cpp
     ${PROJECT_SOURCE_DIR}/system/shells/state/shell_state_model.cpp
+    ${PROJECT_SOURCE_DIR}/system/shells/permission_prompt.cpp
     ${PROJECT_SOURCE_DIR}/system/ipc/ipc_manager.cpp
     ${PROJECT_SOURCE_DIR}/system/compositor/frame_scheduler.cpp
     ${PROJECT_SOURCE_DIR}/system/compositor/input_router.cpp

@@ -31,8 +31,8 @@ sözleşmesini kullanmasıdır.
   ortam değişkeni kimlik yerine geçmez.
 - [x] Uygulamalar varsayılan olarak root, `CAP_SYS_ADMIN`, `CAP_SYS_PTRACE`
   veya retained capability olmadan başlatılır.
-- [ ] Bir uygulama ancak kullanıcı tarafından doğrulanmış bir elevation
-  isteğinden sonra, ayrı ve geçici elevated-app oturumunda ek yetki alabilir.
+- [x] Yönetici izni uygulamanın UID, capability veya sandbox profilini
+  değiştirmez; onaylanan dar işlemi yalnız root broker gerçekleştirir.
 - [x] Uygulama manifesti yalnız izin isteyebilir; kendisine izin veremez.
 - [x] Etkin izin `manifest isteği ∩ kullanıcı kararı ∩ sistem politikası`
   olarak hesaplanır.
@@ -174,37 +174,47 @@ dönüşmez ve eski dosya sahipliği yeni bir uygulamaya taşınmaz.
 - [x] Sandbox launcher için UID düşmesi, capability sıfırlama ve kötü niyetli
   spawn isteği testleri ekle.
 
-## 3.1. Uygulama elevation ve `lcl-sudo`
+## 3.1. Yönetici izni ve `lcl-sudo`
 
 - [ ] Root çalışan `lcl-admind` servisini sandboxd'den ayrı tut; sorumluluğunu
-  yalnız admin yetkisi değerlendirme, elevation child başlatma ve denetim
-  kaydı ile sınırla.
-- [x] Manifest şemasına uygulamanın elevation isteyebildiğini bildiren
-  `admin.elevation` isteğini ekle; bu alan otomatik grant sayılmaz.
+  yalnız yönetici iznini değerlendirme, izin verilen dar işlemi yürütme ve
+  denetim kaydı ile sınırla.
+- [x] Manifest şemasına uygulamanın yönetici ayrıcalığı isteyebildiğini
+  bildiren `admin.elevation` iznini ekle; manifest beyanı otomatik grant
+  sayılmaz.
 - [x] `ElevationRequest` sözleşmesine app ID, bundle identity/hash, neden,
   istenen kapsam, hedef helper/komut ve instance kimliğini bağla.
 - [x] Elevation isteğini yalnız görünür ve kullanıcı-etkileşimli uygulama
   bağlamından kabul et; arka plan uygulaması kendiliğinden prompt açamasın.
-- [ ] Onay promptunu yalnız trusted shell/system surface üzerinde göster;
-  uygulama kullanıcı parolasını, PIN'ini veya admin token'ını görmesin.
+- [x] Normal izinlerle yönetici izninin kullandığı ortak modalı ve yalnız
+  trusted desktop/mobile shell'in açabildiği `PermissionPrompt` system
+  surface'ini ekle. Desktop ortalanmış sheet, mobile bottom sheet kullanır;
+  işlem/hedef ayrıntısı ya da ayrı bir “uygulamayı yönetici çalıştır” modu
+  göstermez.
+- [ ] `lcl-admind` pending izin isteği/karar IPC'sini ortak shell modalına
+  bağla; uygulama kullanıcı parolasını, PIN'ini veya admin token'ını görmesin.
 - [ ] Önce dar kapsamlı elevation uygula: sistem ayarı, bundle güven kararını
   yönetme veya uygulamanın imzalı privileged helper'ı gibi belirli bir işlem.
-- [ ] Kullanıcı açıkça isterse uygulamayı yeniden başlatan geçici
-  `elevated-app` oturumu ekle; bu oturumun mount namespace'i ve runtime
-  endpoint'leri normal uygulamadan ayrı olsun.
-- [ ] Elevated-app oturumunda dahi uygulamaya compositor/rasterd aygıtları,
-  Android host `/data`, ham block device veya sınırsız kernel capability verme.
+- [x] Uygulamayı elevated-app olarak yeniden başlatma; normal uygulamaya
+  compositor/rasterd aygıtları, Android host `/data`, ham block device veya
+  kernel capability verme.
 - [x] Elevation grant'ini tek işlem, tek instance veya zaman sınırlı oturum
   olarak modelle; uygulamanın diske kalıcı root token yazmasını engelle.
-- [ ] Elevation revoke, uygulama kapanışı veya session kilidi durumunda
-  elevated child'ı ve ona bağlı grant'leri sonlandır.
+- [ ] Yönetici izni revoke edildiğinde, uygulama kapandığında veya session
+  kilitlendiğinde pending istekleri ve geçici broker grant'lerini sonlandır.
 - [ ] Terminaldeki `sudo <komut>` söz dizimini aynı admin servisine bağla;
   interaktif root shell yalnız trusted Terminal ve açık kullanıcı onayıyla
   oluşturulabilsin.
-- [ ] Elevation kararları için app kimliği, kapsam, zaman, kullanıcı kararı ve
+- [x] Elevation kararları için app kimliği, kapsam, zaman, kullanıcı kararı ve
   sonuç içeren değiştirilemez admin audit kaydı oluştur.
-- [ ] Prompt olmadan elevation, başka app token'ı kullanımı, environment/FD
-  sızıntısı, revoke ve elevated-child crash testlerini ekle.
+
+  Audit kaydı root-controlled dizinde `O_NOFOLLOW|O_APPEND`, `0600`, tek-link
+  regular file ve `fsync` ile tutuluyor. Her satır zaman, kullanıcı UID'si,
+  app ID, bundle digest, yayıncı kimliği, instance/request, kapsam, hedef,
+  allow/deny kararı ve sonucu bağlıyor; request, decision, consume, revoke ve
+  expire olayları kaydediliyor. İçerik ve dosya modu host testinde doğrulandı.
+- [ ] Prompt olmadan yönetici işlemi, başka app token'ı kullanımı,
+  environment/FD sızıntısı, revoke ve broker işlem hatası testlerini ekle.
 
 ## 4. Uygulama başına filesystem görünümü
 
@@ -224,7 +234,7 @@ dönüşmez ve eski dosya sahipliği yeni bir uygulamaya taşınmaz.
   başına dar ve authenticated endpoint görünümü oluştur.
 - [x] Sistem, bundle ve diğer uygulamaların verisine yazmayı engelleyen mount
   ve DAC testleri ekle.
-- [ ] Başka uygulamanın `Data` dizinine erişimin `EACCES` veya `ENOENT` ile
+- [x] Başka uygulamanın `Data` dizinine erişimin `EACCES` veya `ENOENT` ile
   sonuçlandığını QEMU ve Android'de doğrula.
 
 ## 5. Compositor, rasterd ve session IPC uyarlaması
@@ -332,8 +342,19 @@ olarak tekrar doğrulandı.
   uygula; bunun cgroup CPU adaleti yerine geçmediğini açıkça raporla.
   **Kanıt (2026-08-31, Android kullanıcı-gözlemi):** sandbox probe
   `RLIMIT_AS=512 MiB` ve `RLIMIT_NPROC=64` kontrolüyle `0` döndü.
-- [ ] Yasak syscall, fork bomb, network-deny, cihaz erişimi ve memory limiti
+- [x] Yasak syscall, fork bomb, network-deny, cihaz erişimi ve memory limiti
   negatif testleri ekle.
+
+  **Fiziksel Android kanıtı (2026-09-07):** güncel Sandbox Probe, normal
+  sessiond → sandboxd zincirinde instance `2`, PID `8479` olarak başladı ve
+  `0` döndü. Önceki network loopback ve `/dev/dri`/`/dev/input` redlerine ek
+  olarak seccomp altında `unshare(CLONE_NEWNS)` çağrısının `EPERM` vermesini,
+  `RLIMIT_AS=512 MiB` altında 513 MiB `mmap` isteğinin `ENOMEM` vermesini ve
+  canlı child'larla yapılan fork yükünün `RLIMIT_NPROC=64` sınırında `EAGAIN`
+  vermesini doğruladı; tüm child'lar reap edildi. Host ve cihaz executable
+  SHA-256 değeri
+  `d6316ca9ad54630d20aea058235e002b48bc56a2a70e388d2f9844b2e71ef3b4`
+  olarak eşleşti ve SELinux `Enforcing` kaldı.
 
 ### Ağ broker sözleşmesi
 
@@ -356,8 +377,8 @@ başlatılır; yeni instance güncel kararı alır.
 - [x] Mevcut global `setenforce 0` geliştirme yolunu production başlangıç
   akışından çıkar.
 - [ ] Android init policy'sinde `lcl_bootstrap`, `lcl_core_android`,
-  `lcl_rasterd`, `lcl_sandboxd`, `lcl_admind`, `lcl_app` ve
-  `lcl_elevated_app` için ayrı domainleri tanımla.
+  `lcl_rasterd`, `lcl_sandboxd`, `lcl_admind` ve `lcl_app` için ayrı
+  domainleri tanımla.
 - [ ] Bootstrap domain'ine rootfs attach için gereken en dar mount/chroot
   yetkilerini ver; bootstrap tamamlanınca ayrıcalıklı iş yapmamasını sağla.
 - [ ] Compositor domain'ine yalnız Composer/Binder/graphics ihtiyaçlarını ver.
@@ -365,9 +386,9 @@ başlatılır; yeni instance güncel kararı alır.
 - [ ] Sandboxd domain'ine yalnız sandbox kurulumu için gereken yetkileri ver;
   Android user data, input ve network yönetim erişimi verme.
 - [ ] Uygulama domain'ini capability'siz, aygıtsız ve default-deny tanımla.
-- [ ] Elevated-app domain'ini normal uygulamadan ayrı tanımla; yalnız
-  kullanıcının onayladığı LCL yönetim kapsamına erişim ver, Android substrate
-  veya diğer uygulama verilerine genel erişim verme.
+- [ ] `lcl_admind` domain'ine yalnız desteklenen broker işlemleri için gereken
+  yetkileri ver; Android substrate veya diğer uygulama verilerine genel erişim
+  verme.
 - [ ] Canonical glibc sandboxd'nin Android SELinux domainine güvenli geçişini
   substrate wrapper veya init service üzerinden tasarla.
 - [ ] Android cgroup yerleştirmesini canonical ABI'ye sızdırmadan substrate
@@ -391,8 +412,9 @@ başlatılır; yeni instance güncel kararı alır.
   `files.documents.write`, `clipboard.read`, `camera`, `microphone` ve
   `notifications` izinlerinin anlamlarını belirle. Dar launch portalı için
   `apps.open` broker-time iznini ayrıca tanımla.
-- [x] `admin.elevation` iznini "elevation isteyebilir" olarak tanımla; her
-  gerçek elevation için ayrıca görünür kullanıcı onayı gerektir.
+- [x] `admin.elevation` iznini yüksek riskli, broker-time yönetici izni olarak
+  tanımla; karar diğer izinlerle aynı trusted shell modalı ve PermissionStore
+  modeli üzerinden verilir.
 - [x] İzinlerin launch-time mı, broker-time mı değerlendirileceğini tek tek
   belirle.
 - [x] Grant/revoke ve bundle güncellemesi sonrası eski grant'in geçersizleşme
@@ -412,8 +434,18 @@ başlatılır; yeni instance güncel kararı alır.
   erişim kapsamı ve kararın süresi göster.
 - [x] Prompt kararını PermissionStore'a atomik olarak yaz.
 - [x] Portal istemcisini app UID/instance kimliğiyle yetkilendir.
-- [ ] Portalın FD aktarımı, revoke davranışı ve uygulama kapanışı testlerini
+- [x] Portalın FD aktarımı, revoke davranışı ve uygulama kapanışı testlerini
   ekle.
+
+**Portal yaşam döngüsü kanıtı (2026-09-07):** one-shot karar yalnız aynı
+request/instance/subject için bir kez tüketiliyor; session kararı yalnız aynı
+izin ve scope için yeni isteklere uygulanıyor. App exit hook'u instance'a ait
+pending ve transient grant'leri, session-lock hook'u tüm transient durumu
+siliyor. Broker sonucu yalnız request ID taşıyan sürümlü `SOCK_SEQPACKET`
+mesajında tam bir `SCM_RIGHTS` FD'si olarak aktarılıyor; alıcı yanlış request
+ID'yi reddedip alınan FD'yi kapatıyor ve kabul edilen FD'yi `CLOEXEC` yapıyor.
+Kalıcı kararlar yine atomik PermissionStore üzerinden yürütülüyor. İlgili
+host testleri **5/5 PASS**.
 
 ## 10. Settings kullanıcı-arayüzü bağımlılığı
 
@@ -681,18 +713,55 @@ cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
   UID registry ve IPC kimlik kontrolü.
 - [ ] Host integration testleri: iki uygulamanın karşılıklı veri erişimi,
   private runtime endpoint ve process cleanup.
-- [ ] QEMU acceptance: uygulama root değildir; diğer app Data görünmez;
+- [x] QEMU acceptance: uygulama root değildir; diğer app Data görünmez;
   `/System` yazılamaz; yasak network/aygıt erişimi başarısız olur.
+
+  **x86_64 QEMU kabulü (2026-09-07):** kabul koşumunda sabit session
+  UID/GID'sine düşüldükten sonra `lcl-open -w org.lcl.sandbox-probe` çağrısı
+  normal sessiond → sandboxd zincirinden yapıldı. Koşuma özel boot hook'u
+  doğrulama sonrasında kaldırıldı. Linux `6.8.0-138` üzerinde
+  mount/PID/IPC/network namespace, no-new-privs, seccomp, Landlock ABI 4 ve
+  cgroup v2 memory/pids/cpu controller ön kontrolleri desteklendi. Ordinary app
+  probe instance `2`, PID `180` olarak çalışıp seri konsolda
+  `[LCL SANDBOX ACCEPTANCE] PASS exit=0` üretti. Bu sonuç root olmayan app
+  kimliği, başka app Data görünmezliği, read-only `/System`, network ve aygıt
+  reddi, private yazılabilir alanlar, kaynak limitleri ve süreç-bağlı raster
+  grant kontrollerinin tamamının geçtiğini ifade eder. Probe executable
+  SHA-256 değeri
+  `c5a8566768b3fb178d97d96a90e34fac8c401c650ab28cd266bd9d313bea8dc6`.
 - [x] Android enforcing acceptance: SELinux enforcing kalır; aynı negatif
   erişim testleri canonical rootfs içinde geçer.
 - [x] Android compositor/rasterd acceptance: sandboxed uygulama pencere açar,
   rasterd producer grant alır ve AHardwareBuffer sunumu bozulmaz.
-- [ ] Terminal acceptance: kullanıcı UID'sinde PTY/bash çalışır; root shell
+- [x] Terminal acceptance: kullanıcı UID'sinde PTY/bash çalışır; root shell
   açılmaz; kendi trusted profilinin kapsamı doğrulanır.
+
+  **Fiziksel Android kanıtı (2026-09-07):** canonical Terminal instance `3`,
+  PID `9232` olarak açıldı ve `bash --login -i` child'ı PID `9233` ile
+  `/dev/pts/0` üzerinde çalıştı. İki süreç de UID/GID `1000:1000`, boş
+  supplementary group ve sıfır inheritable/permitted/effective/ambient
+  capability ile `NoNewPrivs=1` taşıdı. Child root'u canonical rootfs, çalışma
+  dizini `/Users/Rei`; Terminal ortamı yalnız sabit `HOME`, `USER`, `SHELL`,
+  `PATH`, app/instance kimliği ve `LCL_LAUNCH_PROFILE=lcl.trusted-user-shell.v1`
+  değerlerini içerdi. SELinux `Enforcing` kaldı.
 - [ ] Stress acceptance: process crash, socket restart, permission revoke,
   cgroup OOM ve hızlı launch/exit döngülerinde kaynak sızıntısı olmaz.
-- [ ] Her kabul maddesi için kanıt seviyesini ayrı yaz: static scan, host test,
+- [x] Her kabul maddesi için kanıt seviyesini ayrı yaz: static scan, host test,
   QEMU run, Android run veya kullanıcı-gözlemi.
+
+| Kabul sınırı | Static scan | Host test | QEMU run | Android run | Kullanıcı gözlemi |
+| --- | --- | --- | --- | --- | --- |
+| App UID/capability/no-new-privs | evet | evet | evet | evet | evet |
+| Private filesystem ve başka app Data reddi | evet | kısmi | evet | evet | evet |
+| Seccomp, network ve kaynak limitleri | evet | policy testi | evet | evet | evet |
+| Compositor/raster producer kimliği | evet | evet | evet | evet | evet |
+| Portal geçici grant/FD/revoke | evet | evet | — | — | — |
+| Bundle imzası/approval/permission store | evet | evet | — | — | Settings approval |
+| Ayrı Android SELinux domainleri | eksik | — | — | eksik | — |
+| Yönetici izni/broker/sudo | policy ve modal çekirdeği | kısmi | — | — | — |
+
+`—` ilgili kabulün henüz o seviyede çalıştırılmadığını, `kısmi` ise policy veya
+yaşam döngüsünün doğrulanıp tam platform entegrasyonunun kalmasını ifade eder.
 
 ## Tamamlanma tanımı
 
@@ -701,8 +770,8 @@ cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
 - [x] Uygulama başka uygulamanın verisini okuyamaz/yazamaz, `/System`a yazamaz
   ve aygıtlara doğrudan erişemez.
 - [x] Android hedefinde SELinux enforcing kalırken LCL uygulaması çalışır.
-- [ ] Kullanıcı onayıyla normal uygulama dar kapsamlı veya full elevated-app
-  oturumuna geçebilir; onaysız uygulama elevation alamaz.
+- [ ] Kullanıcı onayıyla normal uygulama sandbox içinde kalırken dar kapsamlı
+  yönetici işlemini broker üzerinden isteyebilir; izinsiz istek çalışmaz.
 - [x] Compositor/rasterd retained presentation sözleşmesi ve Same-Binary
   Invariant korunur.
 - [ ] Kullanıcı izinleri shell promptu ve Ayarlar uygulamasından değiştirilebilir

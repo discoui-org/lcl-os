@@ -365,6 +365,7 @@ def stop_rootfs_session() -> None:
     process_names = (
         "lcl-desktop-shell", "lcl-mobile-shell", "lcl-sessiond", "lcl-sandboxd",
         "lcl-securityd", "lcl-terminal", "lcl-settings", "lcl-open", "lcl-js",
+        "lcl-admind", "lcl-sudo",
     )
     def active_pids() -> list[str]:
         pids = rootfs_process_ids()
@@ -806,6 +807,7 @@ def prepare_runtime_for_launch() -> None:
     """Stop an existing LCL session, then clear its private runtime sockets."""
     process_names = (
         "lcl-core-android", "lcl-sessiond", "lcl-sandboxd", "lcl-securityd",
+        "lcl-admind", "lcl-sudo",
         "lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal", "lcl-settings",
     )
 

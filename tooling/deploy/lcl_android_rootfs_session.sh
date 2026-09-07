@@ -22,6 +22,7 @@ export LD_LIBRARY_PATH=/System/Library/Libraries
 SESSIOND_PID=""
 SANDBOXD_PID=""
 SECURITYD_PID=""
+ADMIND_PID=""
 SHELL_PID=""
 
 cleanup() {
@@ -29,12 +30,13 @@ cleanup() {
     if [ -n "$SESSIOND_PID" ]; then kill -TERM "$SESSIOND_PID" 2>/dev/null || true; fi
     if [ -n "$SANDBOXD_PID" ]; then kill -TERM "$SANDBOXD_PID" 2>/dev/null || true; fi
     if [ -n "$SECURITYD_PID" ]; then kill -TERM "$SECURITYD_PID" 2>/dev/null || true; fi
+    if [ -n "$ADMIND_PID" ]; then kill -TERM "$ADMIND_PID" 2>/dev/null || true; fi
     wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
 echo "[LCL SESSION] Starting canonical rootfs userspace..."
-rm -f /Runtime/lcl-sessiond.sock /Runtime/lcl-sandboxd.sock /Runtime/lcl-securityd.sock
+rm -f /Runtime/lcl-sessiond.sock /Runtime/lcl-sandboxd.sock /Runtime/lcl-securityd.sock /Runtime/lcl-admind.sock
 
 # sandboxd pins both graphics endpoints while registering immutable bundles.
 # The compositor listener appears slightly before its raster child on Android,
@@ -107,6 +109,19 @@ if [ ! -S "/Runtime/lcl-securityd.sock" ]; then
         SECURITYD_PID=""
     fi
     echo "[LCL SESSION] lcl-securityd is unavailable; new unsigned-bundle approvals are disabled" >&2
+fi
+
+if [ -x /System/Core/lcl-admind ]; then
+    /System/Core/lcl-admind > /Runtime/lcl-admind.log 2>&1 &
+    ADMIND_PID=$!
+    for ((i=0; i<100; i++)); do
+        if [ -S "/Runtime/lcl-admind.sock" ]; then break; fi
+        if ! kill -0 "$ADMIND_PID" 2>/dev/null; then ADMIND_PID=""; break; fi
+        sleep 0.05
+    done
+fi
+if [ ! -S "/Runtime/lcl-admind.sock" ]; then
+    echo "[LCL SESSION] lcl-admind is unavailable; administrator commands are disabled" >&2
 fi
 
 /System/Core/lcl-sessiond > /Runtime/lcl-sessiond.log 2>&1 &

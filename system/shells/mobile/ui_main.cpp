@@ -10,7 +10,9 @@
 #include <vector>
 
 #include "system/ipc/lcl_protocol.hpp"
+#include "system/security/administrator_client.hpp"
 #include "system/session/session_client.hpp"
+#include "system/shells/permission_prompt.hpp"
 #include "system/shells/state/shell_state_client.hpp"
 #include "system/shells/state/shell_state_model.hpp"
 #include "system/shells/mobile/gesture_indicator.hpp"
@@ -355,6 +357,10 @@ int main() {
 
     lcl::ui::WindowApp home(lcl::render::makeDisplayListCanvas(), width, height,
                             "LCL Mobile Home");
+    lcl::shell::PermissionPromptSurface permissionPrompt(
+        lcl::shell::PermissionPromptPresentation::Mobile, 0xfffffffeu,
+        "org.lcl.mobile-shell", width, height);
+    lcl::security::AdministratorPromptClient administratorPrompts;
     home.setSurfaceId(kHomeSurfaceId);
     home.setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::HomeScreen);
     home.setAppId("org.lcl.mobile-shell");
@@ -454,7 +460,26 @@ int main() {
         refreshGesturePill();
     });
     auto nextShellReconnect = std::chrono::steady_clock::now();
+    auto nextAdminReconnect = std::chrono::steady_clock::now();
     home.setOnFrame([&] {
+        permissionPrompt.tick();
+        if (!administratorPrompts.isConnected() &&
+            std::chrono::steady_clock::now() >= nextAdminReconnect) {
+            administratorPrompts.connect();
+            nextAdminReconnect =
+                std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        }
+        std::uint32_t adminRequestId = 0;
+        lcl::security::AdministratorPrompt adminPrompt;
+        if (administratorPrompts.poll(adminRequestId, adminPrompt)) {
+            const bool shown = permissionPrompt.show(
+                {adminPrompt.appName, adminPrompt.title,
+                 adminPrompt.description},
+                [&administratorPrompts, adminRequestId](bool allowed) {
+                    administratorPrompts.decide(adminRequestId, allowed);
+                });
+            if (!shown) administratorPrompts.decide(adminRequestId, false);
+        }
         if (!shellState.isConnected() &&
             std::chrono::steady_clock::now() >= nextShellReconnect) {
             shellState.connect();

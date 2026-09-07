@@ -100,16 +100,42 @@ public:
                                PortalConsentDuration duration,
                                std::string& error);
 
+    /** Consumes an exact one-shot grant or checks a live session grant. */
+    bool consumeTransientGrant(const PortalRequest& request,
+                               const PermissionSubject& subject,
+                               std::string& error);
+
+    /** App-exit and session-lock hooks for broker-owned transient authority. */
+    void revokeInstance(std::string_view appId, std::uint64_t instanceId);
+    void revokeAll();
+
 private:
     struct PendingConsent {
         PortalRequest request;
         PermissionSubject subject;
         std::string permission;
     };
+    struct TransientGrant {
+        PortalRequest request;
+        PermissionSubject subject;
+        std::string permission;
+        PortalConsentDuration duration{PortalConsentDuration::Once};
+    };
 
     ApplicationPeerAuthenticator peers_;
     PermissionStore permissions_;
     std::unordered_map<std::uint64_t, PendingConsent> pending_;
+    std::unordered_map<std::uint64_t, TransientGrant> transient_;
 };
+
+/**
+ * Transfers exactly one broker-owned descriptor for one authorized request.
+ * The wire message contains only a version and request ID; paths and ambient
+ * directory authority never cross the app-facing socket.
+ */
+bool sendPortalDescriptor(int socketDescriptor, std::uint64_t requestId,
+                          int transferredDescriptor, std::string& error);
+bool receivePortalDescriptor(int socketDescriptor, std::uint64_t expectedRequestId,
+                             int& transferredDescriptor, std::string& error);
 
 } // namespace lcl::security

@@ -76,6 +76,7 @@ enum class LCLSystemSurfaceKind : uint32_t {
     MenuBar = 2,
     Dock = 3,
     HomeScreen = 4,
+    PermissionPrompt = 5,
 };
 
 enum class LCLSceneVisibility : uint8_t {

@@ -75,7 +75,8 @@ class ElevationAuditStore final {
 public:
     explicit ElevationAuditStore(ElevationAuditStoreConfig config = {});
     bool append(std::string_view event, const ElevationRequest& request,
-                bool accepted, std::string_view result, std::string& error) const;
+                uid_t userUid, bool accepted, std::string_view result,
+                std::string& error) const;
 
 private:
     ElevationAuditStoreConfig config_;
@@ -113,10 +114,12 @@ public:
 private:
     struct Pending {
         ElevationPrompt prompt;
+        uid_t userUid{0};
     };
     struct LiveGrant {
         ElevationGrant grant;
         ElevationRequest request;
+        uid_t userUid{0};
         std::chrono::steady_clock::time_point expiresAt;
     };
 

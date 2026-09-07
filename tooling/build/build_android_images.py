@@ -427,9 +427,10 @@ export HOME=/Users/Rei
 export USER=Rei
 export TERM=xterm-256color
 
-rm -f /Runtime/lcl-sandboxd.sock /Runtime/lcl-securityd.sock
+rm -f /Runtime/lcl-sandboxd.sock /Runtime/lcl-securityd.sock /Runtime/lcl-admind.sock
 SANDBOXD_PID=""
 SECURITYD_PID=""
+ADMIND_PID=""
 if [ -x /System/Core/lcl-sandboxd ]; then
     echo "[LCL SESSION] Starting lcl-sandboxd..."
     /System/Core/lcl-sandboxd --session-uid 0 --session-gid 0 \\
@@ -475,6 +476,20 @@ if [ ! -S "/Runtime/lcl-securityd.sock" ]; then
         wait $SECURITYD_PID 2>/dev/null || true
     fi
     echo "[LCL SESSION] lcl-securityd is unavailable; new unsigned-bundle approvals are disabled"
+fi
+
+if [ -x /System/Core/lcl-admind ]; then
+    echo "[LCL SESSION] Starting lcl-admind..."
+    /System/Core/lcl-admind > /Runtime/lcl-admind.log 2>&1 &
+    ADMIND_PID=$!
+    for ((i=0; i<100; i++)); do
+        if [ -S "/Runtime/lcl-admind.sock" ]; then break; fi
+        if ! kill -0 $ADMIND_PID 2>/dev/null; then ADMIND_PID=""; break; fi
+        sleep 0.05
+    done
+fi
+if [ ! -S "/Runtime/lcl-admind.sock" ]; then
+    echo "[LCL SESSION] lcl-admind is unavailable; administrator commands are disabled"
 fi
 
 echo "[LCL SESSION] Starting sessiond..."

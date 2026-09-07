@@ -7,6 +7,9 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fcntl.h>
+#include <fstream>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -85,6 +88,81 @@ TEST_F(PortalElevationAuthorityTest, BindsPromptAndDecisionToAuthenticatedLiveIn
               PortalAuthorization::Granted) << error;
 }
 
+TEST_F(PortalElevationAuthorityTest, TransientConsentIsBoundAndRevokedOnAppExit) {
+    PortalAuthority authority(peers(), permissions_);
+    const PortalPeerCredentials peer{getpid(), identity_->uid, identity_->gid};
+    std::string error;
+    const PortalRequest once{.requestId = 11, .instanceId = 77,
+        .appId = identity_->appId, .operation = PortalOperation::OpenFile,
+        .scope = "one user-selected file"};
+    ASSERT_EQ(authority.authorize(peer, once, subject_, {"files.user-selected"}, error),
+              PortalAuthorization::NeedsVisibleConsent) << error;
+    ASSERT_TRUE(authority.recordVisibleDecision(once, subject_, true,
+                                                PortalConsentDuration::Once, error)) << error;
+    EXPECT_EQ(authority.authorize(peer, once, subject_, {"files.user-selected"}, error),
+              PortalAuthorization::Denied);
+    EXPECT_TRUE(authority.consumeTransientGrant(once, subject_, error)) << error;
+    EXPECT_FALSE(authority.consumeTransientGrant(once, subject_, error));
+
+    const PortalRequest session{.requestId = 12, .instanceId = 77,
+        .appId = identity_->appId, .operation = PortalOperation::ReadClipboard,
+        .scope = "clipboard for this application session"};
+    ASSERT_EQ(authority.authorize(peer, session, subject_, {"clipboard.read"}, error),
+              PortalAuthorization::NeedsVisibleConsent) << error;
+    ASSERT_TRUE(authority.recordVisibleDecision(session, subject_, true,
+                                                PortalConsentDuration::Session, error)) << error;
+    const PortalRequest sameSessionScope{.requestId = 13, .instanceId = 77,
+        .appId = identity_->appId, .operation = PortalOperation::ReadClipboard,
+        .scope = "clipboard for this application session"};
+    EXPECT_EQ(authority.authorize(peer, sameSessionScope, subject_, {"clipboard.read"}, error),
+              PortalAuthorization::Granted) << error;
+    authority.revokeInstance(identity_->appId, 77);
+    const PortalRequest afterExit{.requestId = 14, .instanceId = 77,
+        .appId = identity_->appId, .operation = PortalOperation::ReadClipboard,
+        .scope = "clipboard for this application session"};
+    EXPECT_EQ(authority.authorize(peer, afterExit, subject_, {"clipboard.read"}, error),
+              PortalAuthorization::NeedsVisibleConsent) << error;
+    authority.revokeAll();
+    EXPECT_FALSE(authority.makeTrustedPrompt(afterExit, subject_, "Portal Test", error));
+}
+
+TEST_F(PortalElevationAuthorityTest, TransfersExactlyOneCloseOnExecDescriptor) {
+    int sockets[2]{-1, -1};
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    const int source = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    ASSERT_GE(source, 0);
+    std::string error;
+    ASSERT_TRUE(sendPortalDescriptor(sockets[0], 91, source, error)) << error;
+    int received = -1;
+    ASSERT_TRUE(receivePortalDescriptor(sockets[1], 91, received, error)) << error;
+    ASSERT_GE(received, 0);
+    EXPECT_NE(fcntl(received, F_GETFD) & FD_CLOEXEC, 0);
+    struct stat sourceStatus {};
+    struct stat receivedStatus {};
+    ASSERT_EQ(fstat(source, &sourceStatus), 0);
+    ASSERT_EQ(fstat(received, &receivedStatus), 0);
+    EXPECT_EQ(sourceStatus.st_rdev, receivedStatus.st_rdev);
+    close(received);
+    close(source);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST_F(PortalElevationAuthorityTest, RejectsDescriptorForAnotherRequest) {
+    int sockets[2]{-1, -1};
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    const int source = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    ASSERT_GE(source, 0);
+    std::string error;
+    ASSERT_TRUE(sendPortalDescriptor(sockets[0], 92, source, error)) << error;
+    int received = -1;
+    EXPECT_FALSE(receivePortalDescriptor(sockets[1], 93, received, error));
+    EXPECT_EQ(received, -1);
+    close(source);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST_F(PortalElevationAuthorityTest, IssuesOneShotElevationOnlyAfterTrustedInteraction) {
     PermissionStore permissions(permissions_);
     std::string error;
@@ -108,6 +186,15 @@ TEST_F(PortalElevationAuthorityTest, IssuesOneShotElevationOnlyAfterTrustedInter
     struct stat auditStatus {};
     ASSERT_EQ(stat(audit_.path.c_str(), &auditStatus), 0);
     EXPECT_EQ(auditStatus.st_mode & 0777, 0600);
+    std::ifstream audit(audit_.path);
+    const std::string records((std::istreambuf_iterator<char>(audit)),
+                              std::istreambuf_iterator<char>());
+    EXPECT_NE(records.find("\t1000\torg.lcl.portal-test\t" +
+                           hexEncodeDigest(subject_.bundleRecordDigest) +
+                           "\tunverified\t77\t31\t2\tappearance.theme\tallow\t"),
+              std::string::npos);
+    EXPECT_NE(records.find("\tdecision\t"), std::string::npos);
+    EXPECT_NE(records.find("\tconsume\t"), std::string::npos);
 }
 
 } // namespace

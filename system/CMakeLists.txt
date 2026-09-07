@@ -22,6 +22,9 @@ add_library(lcl-session-protocol STATIC session/session_protocol.cpp)
 target_include_directories(lcl-session-protocol PUBLIC ${PROJECT_SOURCE_DIR})
 
 add_library(lcl-security STATIC
+    security/administrator_client.cpp
+    security/administrator_daemon.cpp
+    security/administrator_protocol.cpp
     security/app_data_store.cpp
     security/app_identity_registry.cpp
     security/app_launch_registry.cpp
