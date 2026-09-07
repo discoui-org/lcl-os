@@ -57,8 +57,14 @@ jobs:
         if: matrix.android
         run: |
           ndk_revision="$(python3 -c 'from tooling.build.skia_release import ANDROID_NDK_REVISION; print(ANDROID_NDK_REVISION)')"
-          sdkmanager --install "ndk;${ndk_revision}"
-          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ndk_revision}" >> "${GITHUB_ENV}"
+          android_sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          sdkmanager_path="${android_sdk_root}/cmdline-tools/latest/bin/sdkmanager"
+          if [ -z "${android_sdk_root}" ] || [ ! -x "${sdkmanager_path}" ]; then
+            echo "Android sdkmanager was not found under ANDROID_SDK_ROOT/ANDROID_HOME" >&2
+            exit 1
+          fi
+          "${sdkmanager_path}" --install "ndk;${ndk_revision}"
+          echo "ANDROID_NDK_HOME=${android_sdk_root}/ndk/${ndk_revision}" >> "${GITHUB_ENV}"
 
       - name: Build target package
         run: python3 tooling/build/prepare_skia.py --target "${{ matrix.target }}"
