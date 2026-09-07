@@ -271,4 +271,26 @@ bool assignSessionUserOwnership(const std::string& path, mode_t mode, std::strin
     return true;
 }
 
+bool assignApplicationRuntimeOwnership(const std::string& path, std::string& error) {
+    error.clear();
+    constexpr mode_t kEndpointMode = 0660;
+    if (geteuid() != 0) {
+        if (chmod(path.c_str(), kEndpointMode) != 0) {
+            error = std::string("could not secure application runtime endpoint '") + path +
+                    "': " + std::strerror(errno);
+            return false;
+        }
+        return true;
+    }
+    struct stat status {};
+    if (lstat(path.c_str(), &status) != 0 || !S_ISSOCK(status.st_mode) ||
+        lchown(path.c_str(), kSessionUserUid, kApplicationRuntimeGid) != 0 ||
+        chmod(path.c_str(), kEndpointMode) != 0) {
+        error = std::string("could not assign application runtime endpoint '") + path +
+                "': " + std::strerror(errno);
+        return false;
+    }
+    return true;
+}
+
 } // namespace lcl::security

@@ -18,6 +18,8 @@ struct SandboxSystemApplicationRegistryConfig {
     std::string systemApplicationsPath{"/System/Applications"};
     std::string systemPath{"/System"};
     std::string javascriptRuntimePath{"/System/Core/lcl-js"};
+    std::string compositorSocketPath{"/Runtime/lcl-compositor.sock"};
+    std::string rasterSocketPath{"/Runtime/lcl-raster.sock"};
     AppIdentityRegistryConfig identities{
         .registryPath = "/var/lib/lcl-security/app-identities.v1",
         .firstAppUid = 61000,

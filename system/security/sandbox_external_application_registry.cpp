@@ -84,6 +84,15 @@ ScopedFd openDirectory(const std::string& path, std::string& error) {
     return descriptor;
 }
 
+ScopedFd openRuntimeSocket(const std::string& path, std::string& error) {
+    ScopedFd descriptor(open(path.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW));
+    if (!descriptor.valid()) {
+        error = std::string("could not open protected graphics endpoint '") + path +
+                "': " + std::strerror(errno);
+    }
+    return descriptor;
+}
+
 ScopedFd openExecutable(const std::string& path, std::string& error) {
     ScopedFd descriptor(open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
     struct stat status {};
@@ -158,7 +167,10 @@ bool SandboxExternalApplicationRegistry::registerSnapshot(
     ScopedFd data = openDirectory(directories.data, error);
     ScopedFd cache = openDirectory(directories.cache, error);
     ScopedFd preferences = openDirectory(directories.preferences, error);
+    ScopedFd compositorSocket = openRuntimeSocket(config_.compositorSocketPath, error);
+    ScopedFd rasterSocket = openRuntimeSocket(config_.rasterSocketPath, error);
     if (!system.valid() || !data.valid() || !cache.valid() || !preferences.valid() ||
+        !compositorSocket.valid() || !rasterSocket.valid() ||
         !isRootControlledDirectory(system.get())) {
         if (error.empty()) {
             error = "external sandbox registration could not prepare protected filesystem sources";
@@ -194,6 +206,8 @@ bool SandboxExternalApplicationRegistry::registerSnapshot(
         .dataDescriptor = data.get(),
         .cacheDescriptor = cache.get(),
         .preferencesDescriptor = preferences.get(),
+        .compositorSocketDescriptor = compositorSocket.get(),
+        .rasterSocketDescriptor = rasterSocket.get(),
     };
     material.executableBundlePath = registration.executableBundlePath;
     material.executableDescriptor = executableDescriptor;

@@ -890,7 +890,7 @@ int createListener(const std::string& path) {
         return -1;
     }
     std::string ownershipError;
-    if (!lcl::security::assignSessionUserOwnership(path, 0600, ownershipError)) {
+    if (!lcl::security::assignApplicationRuntimeOwnership(path, ownershipError)) {
         std::cerr << "[LCL Rasterd ERROR] " << ownershipError << "\n";
         close(fd);
         unlink(path.c_str());

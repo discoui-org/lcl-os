@@ -150,4 +150,28 @@ TEST(SessionUserTest, SecuresRootCreatedRuntimeSocketForTheSessionUser) {
     unlink(path.c_str());
 }
 
+TEST(SessionUserTest, SecuresGraphicsSocketForSandboxApplicationGroup) {
+    const std::string path = "/tmp/lcl-app-runtime-" + std::to_string(getpid()) + ".sock";
+    unlink(path.c_str());
+    const int socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    ASSERT_GE(socketFd, 0);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    ASSERT_LT(path.size(), sizeof(address.sun_path));
+    std::strncpy(address.sun_path, path.c_str(), sizeof(address.sun_path) - 1);
+    ASSERT_EQ(bind(socketFd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)), 0);
+
+    std::string error;
+    ASSERT_TRUE(assignApplicationRuntimeOwnership(path, error)) << error;
+    struct stat status {};
+    ASSERT_EQ(lstat(path.c_str(), &status), 0);
+    EXPECT_EQ(status.st_mode & 0777, 0660);
+    if (geteuid() == 0) {
+        EXPECT_EQ(status.st_uid, kSessionUserUid);
+        EXPECT_EQ(status.st_gid, kApplicationRuntimeGid);
+    }
+    close(socketFd);
+    unlink(path.c_str());
+}
+
 } // namespace lcl::security

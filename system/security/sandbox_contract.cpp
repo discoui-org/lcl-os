@@ -41,8 +41,7 @@ bool normalizePermissions(const std::vector<std::string>& input, std::vector<std
     output = input;
     std::sort(output.begin(), output.end());
     for (std::size_t index = 0; index < output.size(); ++index) {
-        if (!AppIdentityRegistry::isValidAppId(output[index]) ||
-            !isKnownPermission(output[index])) {
+        if (!isKnownPermission(output[index])) {
             error = "sandbox profile contains an invalid permission identifier";
             return false;
         }

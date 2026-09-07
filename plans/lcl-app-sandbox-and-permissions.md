@@ -7,8 +7,11 @@ sözleşmesini kullanmasıdır.
 
 ## Başlangıç noktası
 
-- [ ] Mevcut davranışı referans olarak kaydet: `lcl-sessiond`, uygulamaları
-  doğrudan `fork()` ve `execv()` ile başlatıyor; uygulama sandbox'ı yok.
+- [x] Başlangıç davranışını güncel kodla karşılaştır ve referans olarak kaydet.
+  **Static scan (2026-09-07, `d49d239`):** `SessionService::launch`, canonical
+  Terminal/Settings dışındaki bundle'ları `launchSandboxed` üzerinden
+  sandboxd'ye yönlendiriyor. Tarihsel "uygulama sandbox'ı yok" ifadesi güncel
+  durumu yansıtmıyor; Android çalışma kanıtı aşağıdadır.
 - [ ] Mevcut canonical rootfs başlangıcında root, sessiond, shell ve uygulama
   süreçlerinin gerçek UID/GID/capability değerlerini kaydet.
 - [ ] Mevcut Android bootstrap zincirinde `lcl-bootstrap`, `lcl-core-android`,
@@ -371,6 +374,123 @@ sözleşmesini kullanmasıdır.
 
 ### Kanıt kaydı
 
+#### 2026-09-07 — Mevcut durum denetimi
+
+- [x] **Android run:** `emulator-5554` / `sdk_phone64_x86_64`, kernel
+  `6.6.66-android15-8-gb66429556fb8-ab13070261`. Kullanıcı LCL'nin açıldığını
+  bildirdi. Mevcut dağıtılmış rootfs'te ADB üzerinden
+  `chroot /data/local/tmp/lcl-rootfs /System/Core/lcl-open -w org.lcl.sandbox-probe`
+  çalıştırıldı; sessiond instance `1`, PID `6215` döndürdü, komut `0` ile
+  tamamlandı. App doğrudan root olarak exec edilmedi; root tanılama istemcisi
+  normal sessiond → sandboxd zincirini kullandı. Bu, paketli probe'un smoke
+  sonucudur; sandboxed GUI veya enforcing kabulü değildir.
+- [x] **Android run / kernel config:** rootfs içindeki
+  `/System/Core/lcl-sandbox-probe` mount/network namespace, `no_new_privs` ve
+  seccomp filter desteğini raporladı; PID/IPC namespace `EINVAL`, Landlock
+  `ENOSYS`. Host `/proc/config.gz` içinde `CONFIG_PID_NS`, `CONFIG_SYSVIPC`
+  ve `CONFIG_SECURITY_LANDLOCK` kapalı; Landlock yalnız açılış parametresiyle
+  etkinleştirilemez. Android host `/sys/fs/cgroup/cgroup.controllers` yalnız
+  `memory` içeriyor; `CONFIG_CGROUP_PIDS` kapalı. Rootfs probe'u kendi
+  görünümünde cgroup v2 mount'u bulamıyor. Bu iki sonuç "Android kernelinde
+  hiç cgroup v2 yok" diye birleştirilmemeli.
+- [x] **Android run / kimlik:** compositor, rasterd, sandboxd, securityd ve
+  sessiond root; mobile shell UID/GID `1000`. Terminal açılışından sonra
+  sessiond çocuğu PID `6543` ve bash PID `6544` gerçek/etkin/saved UID/GID
+  `1000`, effective/permitted/inheritable/ambient capability `0`,
+  `NoNewPrivs=1`, `Seccomp=0` gösterdi. Terminal trusted-user-shell profilidir;
+  bu sonuç üçüncü taraf sandbox kimliği veya seccomp kanıtı sayılmaz.
+- [x] **Android run / SELinux başlangıç kaydı:** LCL açılmadan önce ve
+  çalışırken `Permissive`; listelenen LCL süreçleri ve Terminal/bash
+  `u:r:su:s0` context'inde. **Static scan:**
+  `tooling/deploy/deploy_android_device.py::ensure_permissive_selinux`
+  enforcing açıksa `setenforce 0` çağırıyor. Enforcing ve ayrı dar LCL
+  domainleri henüz bu denetimde doğrulanmadı; bu turda policy değiştirilmedi.
+  Bu eski bootstrap davranışı aşağıdaki dokunmatik kabul turunda kaldırıldı.
+- [x] **Host başlangıç denetimi:** `d49d239` kaynaklarından
+  `cmake --build build_host --target lcl_unit_tests -j2` başarılı. Yeni
+  `build_host/lcl_unit_tests` üzerinde sandbox/session/identity/bundle/
+  permission/security-admin filtreli 90 testin 86'sı geçti, 3'ü başarısız,
+  1'i atlandı (Unix socket kısıtlaması dışındaki tekrar koşum sonucu).
+  Başarısızlar: `SandboxContractTest.RejectsAGrantMissingFromManifest`,
+  `SandboxDaemonTest.AcceptsOnlyPreviouslyVerifiedApplicationRecords`,
+  `SessionServiceTest.ClientReceivesThirdPartyLaunchRefusalFromSessiond`.
+  Atlanan: `SandboxFilesystemSourcesTest.LandlockRulesRequireOnlyPreparedPrivateDirectories`.
+  `build_host` kökündeki CTest keşfi eski test listesini kullanıyor; oradaki
+  7/7 sonucu güncel güvenlik paketi kabulü sayılmadı. Düzeltme sonucu aşağıdadır.
+- [x] **Host düzeltme/doğrulama:** test keşfi kök `enable_testing()` ile
+  düzeltildi. `camera`, `microphone`, `notifications` izinlerinin app-ID
+  biçimi doğrulaması yüzünden reddedilmesi manifest → BundleRecord →
+  sandbox profile → PermissionStore zincirinde giderildi; yalnız kapalı izin
+  sözlüğündeki adlar kabul ediliyor. İki eski test platform hardening
+  başlatılmadan launch reddi ve `SessionClient::launch` hata dönüşü
+  sözleşmelerine uyarlandı; test store'ları geçici dizine izole edildi.
+  Tekrarda CTest üzerinden seçilen 98 testin **97'si geçti, 1'i atlandı,
+  0 başarısız** (güvenlik/session testleri, SHA-256 ve bundle şeması).
+  Atlanan Landlock testi hedef sistem doğrulaması olarak açık kalıyor;
+  bu sonuç Android enforcing kabulü değildir.
+- [x] **Kullanıcı-gözlemi:** kullanıcı "açıldı input cursor yanıp sönüyo"
+  diyerek Android Terminal penceresinin açıldığını ve imlecin çalıştığını
+  doğruladı. Android klavye girişi desteklenmediği için metin/komut girişi
+  test edilmedi. Bu, trusted Terminal'in görsel açılış kaydıdır; sandboxed
+  üçüncü taraf pencere kabulü ayrı yapılacak.
+
+Bu Android turu mevcut dağıtılmış binary'lerle yapıldı; yeni host build'i
+cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
+
+- `lcl-sessiond`: `ecd2bb937a6a9baaad33f8109c54789cb04fb5a561402599f38bd3740dafeedf`
+- `lcl-sandboxd`: `4d1670959e4bb3c3c52a7ab157ab029d587c79688262db0c4f4c76cb878f121d`
+- `lcl-sandbox-probe` (platform tanılama aracı): `8dfb660167696663ad595b0689fe8c0c444f81f2e748600de7f1b9613c91399c`
+
+#### 2026-09-07 — Dokunmatik sandbox GUI kabulü
+
+- [x] Canonical rootfs'e normal `org.lcl.sandbox-test` GUI bundle'ı eklendi;
+  Terminal/Settings özel launch yollarından değil sessiond → sandboxd
+  zincirinden instance `1`, PID `21709` olarak açıldı.
+- [x] Private mount namespace'e bütün `/Runtime` yerine yalnız descriptor ile
+  doğrulanıp inode eşleştirilen `lcl-compositor.sock` ve `lcl-raster.sock`
+  bind edildi. İki endpoint `1000:62000`, `0660`; app UID/GID `61001`, tek
+  supplementary group `62000`. App görünümündeki `/Runtime` yalnız bu iki
+  soketi içeriyor; sessiond/securityd/sandboxd yolları yok.
+- [x] Android kullanıcı-gözlemi: ilk font ölçümünde canonical `/System`
+  font fallback'i eksik olduğu için şekiller çizilip yazılar görünmedi.
+  `/System/Library/Fonts/{inter,jetbrains-mono,cupertino-icons}` fallback'leri
+  eklendi, rootfs tekrar dağıtıldı. Kullanıcı ekran görüntüsünde dokunmatik
+  `Run isolation tests` sonucunun **12/12 PASS** ve `All checks passed`
+  olduğunu doğruladı.
+- [x] ADB yönetici tanılaması aynı çalışan süreçte gerçek/effective/saved UID
+  ve GID `61001`, capability setlerinin tümü `0`, `NoNewPrivs=1`, `Seccomp=2`
+  gösterdi. `/Data/touch-test.txt` `0600`, `61001:61001` ve beklenen
+  `sandbox-ok` içeriğiyle oluştu. `/App` ve `/System` salt-okunur; `/Data`
+  noexec; app `/Runtime` görünümünde yalnız iki grafik soketi mevcut.
+- [x] Android başlatma yarışı bulundu ve düzeltildi: compositor listener'ı
+  raster listener'dan önce oluştuğunda sandboxd eksik endpoint nedeniyle
+  doğru biçimde fail-closed kapanıyordu. Rootfs session launcher artık her iki
+  grafik endpoint'ini bekliyor.
+- [x] Aynı graphics-endpoint hazır olma bariyeri QEMU `/init` yoluna eklendi;
+  önceki sabit `sleep 0.2` cold boot'ta sandboxd'nin raster soketinden önce
+  başlamasına izin veriyordu. Yenilenen x86_64 rootfs paket/doğrulama adımları
+  başarılı. Kullanıcı QEMU'da sandbox GUI'nin açıldığını ve 10/12 kontrolün
+  geçtiğini doğruladı. `No new privileges` ile `Seccomp filter active`
+  satırları gerçek enforcement kaybı değil, Linux Landlock profilinin
+  `/proc/self/status` okumasını reddetmesi nedeniyle yanlış negatifti. Test
+  bunları doğrudan `prctl(PR_GET_NO_NEW_PRIVS)` ve `prctl(PR_GET_SECCOMP)` ile
+  ölçmek üzere düzeltildi; yeni rootfs doğrulandı. Kullanıcı tekrar koşumunda
+  Linux QEMU sonucunun **12/12 PASS** olduğunu doğruladı.
+- [x] Aynı canlı oturum `setenforce 1` sonrasında compositor, rasterd,
+  sandboxd ve app süreçlerini korudu; `getenforce=Enforcing` iken ikinci
+  sandbox instance'ı da başarıyla açıldı. Kullanıcı ikinci instance'ta
+  dokunmatik acceptance düğmesine bastı ve yeniden **12/12 PASS** ekran
+  görüntüsü sağladı. İki instance da UID/GID `61001`, supplementary group
+  `62000`, `CapEff=0`, `NoNewPrivs=1`, `Seccomp=2`; persistent Data marker'ı
+  ikinci çalıştırmada yine app-owned `0600` olarak güncellendi. Dağıtım aracı artık `setenforce 0`
+  çağırmıyor; `Enforcing` durumunu koruyor, `Permissive` ise önce güvenli moda
+  geçiriyor ve bunu yapamazsa dağıtımı fail-closed reddediyor.
+- [ ] Bu testte tüm LCL süreçleri hâlâ `u:r:su:s0` context'inde. Ayrı ve dar
+  `lcl_core`, `lcl_sandboxd`, `lcl_app` SELinux domainleri tamamlanmadan
+  Android MAC katmanı nihai kabul edilmiş sayılmaz.
+
+#### Önceki çalışma kayıtları
+
 - [x] **QEMU kullanıcı-gözlemi (2026-08-31):** `open -w
   org.lcl.sandbox-probe` üçüncü taraf native profile ile başlatıldı ve `0`
   döndü. Probe; root olmayan UID/GID, PID namespace init, `no_new_privs`, boş
@@ -403,9 +523,9 @@ sözleşmesini kullanmasıdır.
   private runtime endpoint ve process cleanup.
 - [ ] QEMU acceptance: uygulama root değildir; diğer app Data görünmez;
   `/System` yazılamaz; yasak network/aygıt erişimi başarısız olur.
-- [ ] Android enforcing acceptance: SELinux enforcing kalır; aynı negatif
+- [x] Android enforcing acceptance: SELinux enforcing kalır; aynı negatif
   erişim testleri canonical rootfs içinde geçer.
-- [ ] Android compositor/rasterd acceptance: sandboxed uygulama pencere açar,
+- [x] Android compositor/rasterd acceptance: sandboxed uygulama pencere açar,
   rasterd producer grant alır ve AHardwareBuffer sunumu bozulmaz.
 - [ ] Terminal acceptance: kullanıcı UID'sinde PTY/bash çalışır; root shell
   açılmaz; kendi trusted profilinin kapsamı doğrulanır.

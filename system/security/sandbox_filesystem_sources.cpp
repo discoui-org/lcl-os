@@ -1,4 +1,5 @@
 #include "system/security/sandbox_filesystem_sources.hpp"
+#include "system/security/session_user.hpp"
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -21,6 +22,13 @@ bool isPrivateAppDirectory(int descriptor, const AppIdentity& identity) {
     struct stat status {};
     return descriptorStatus(descriptor, status) && status.st_uid == identity.uid &&
            status.st_gid == identity.gid && (status.st_mode & 0777) == 0700;
+}
+
+bool isApplicationRuntimeSocket(int descriptor) {
+    struct stat status {};
+    return descriptor >= 0 && fstat(descriptor, &status) == 0 && S_ISSOCK(status.st_mode) &&
+           status.st_uid == kSessionUserUid && status.st_gid == kApplicationRuntimeGid &&
+           (status.st_mode & 0777) == 0660;
 }
 
 } // namespace
@@ -81,6 +89,11 @@ bool validateSandboxFilesystemSources(const SandboxFilesystemSources& sources,
             error = "sandbox app storage source is not app-owned 0700";
             return false;
         }
+    }
+    if (!isApplicationRuntimeSocket(sources.compositorSocketDescriptor) ||
+        !isApplicationRuntimeSocket(sources.rasterSocketDescriptor)) {
+        error = "sandbox graphics source is not a protected application runtime socket";
+        return false;
     }
     return true;
 }

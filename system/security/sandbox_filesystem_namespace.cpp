@@ -151,6 +151,8 @@ struct SandboxDirectorySourcePaths final {
     std::string data;
     std::string cache;
     std::string preferences;
+    std::string compositorSocket;
+    std::string rasterSocket;
 };
 
 bool capturePinnedDirectoryPath(int descriptor, std::string& path, std::string& error) {
@@ -175,7 +177,32 @@ bool captureSandboxDirectorySourcePaths(const SandboxFilesystemSources& sources,
            capturePinnedDirectoryPath(sources.systemDescriptor, paths.system, error) &&
            capturePinnedDirectoryPath(sources.dataDescriptor, paths.data, error) &&
            capturePinnedDirectoryPath(sources.cacheDescriptor, paths.cache, error) &&
-           capturePinnedDirectoryPath(sources.preferencesDescriptor, paths.preferences, error);
+           capturePinnedDirectoryPath(sources.preferencesDescriptor, paths.preferences, error) &&
+           capturePinnedDirectoryPath(sources.compositorSocketDescriptor, paths.compositorSocket, error) &&
+           capturePinnedDirectoryPath(sources.rasterSocketDescriptor, paths.rasterSocket, error);
+}
+
+bool bindMountRuntimeSocket(int sourceDescriptor, const std::string& sourcePath,
+                            const std::string& target, std::string& error) {
+    struct stat expected {};
+    struct stat current {};
+    if (fstat(sourceDescriptor, &expected) != 0 || lstat(sourcePath.c_str(), &current) != 0 ||
+        !S_ISSOCK(expected.st_mode) || !S_ISSOCK(current.st_mode) ||
+        expected.st_dev != current.st_dev || expected.st_ino != current.st_ino) {
+        error = "protected graphics endpoint changed before sandbox mount";
+        return false;
+    }
+    ScopedFd placeholder(open(target.c_str(), O_CREAT | O_EXCL | O_RDONLY | O_CLOEXEC, 0600));
+    if (!placeholder.valid()) {
+        error = std::string("could not create sandbox graphics endpoint target: ") +
+                std::strerror(errno);
+        return false;
+    }
+    if (mount(sourcePath.c_str(), target.c_str(), nullptr, MS_BIND, nullptr) != 0) {
+        error = std::string("could not bind sandbox graphics endpoint: ") + std::strerror(errno);
+        return false;
+    }
+    return true;
 }
 
 ScopedFd reopenPinnedDirectoryInCurrentMountNamespace(int originalDescriptor,
@@ -323,6 +350,12 @@ bool enterSandboxFilesystemNamespace(const SandboxFilesystemSources& sources,
         !bindMountFromDirectoryDescriptor(dataSource.get(), data, false, true, error) ||
         !bindMountFromDirectoryDescriptor(cacheSource.get(), cache, false, true, error) ||
         !bindMountFromDirectoryDescriptor(preferencesSource.get(), preferences, false, true, error)) {
+        return false;
+    }
+    if (!bindMountRuntimeSocket(sources.compositorSocketDescriptor, sourcePaths.compositorSocket,
+                                runtime + "/lcl-compositor.sock", error) ||
+        !bindMountRuntimeSocket(sources.rasterSocketDescriptor, sourcePaths.rasterSocket,
+                                runtime + "/lcl-raster.sock", error)) {
         return false;
     }
     // The kernel resolves an ELF interpreter before it starts the app.  LCL's

@@ -86,6 +86,30 @@ TEST_F(PermissionStoreTest, BindsEveryGrantToUserBundlePublisherAndPermissionVer
     EXPECT_TRUE(error.empty());
 }
 
+TEST_F(PermissionStoreTest, PersistsAndRevokesKnownUndottedPermissions) {
+    PermissionStore store(config());
+    const PermissionSubject app = subject();
+    std::string error;
+    for (const char* permission : {"camera", "microphone", "notifications"}) {
+        SCOPED_TRACE(permission);
+        EXPECT_FALSE(store.isGranted(app, permission, error));
+        ASSERT_TRUE(error.empty()) << error;
+        ASSERT_TRUE(store.setDecision(app, permission, true, error)) << error;
+    }
+    PermissionStore reloaded(config());
+    ASSERT_TRUE(reloaded.load(error)) << error;
+    for (const char* permission : {"camera", "microphone", "notifications"}) {
+        SCOPED_TRACE(permission);
+        EXPECT_TRUE(reloaded.isGranted(app, permission, error)) << error;
+        ASSERT_TRUE(reloaded.revoke(app, permission, error)) << error;
+    }
+    PermissionStore revoked(config());
+    ASSERT_TRUE(revoked.load(error)) << error;
+    EXPECT_EQ(revoked.size(), 0U);
+    EXPECT_FALSE(revoked.setDecision(app, "org.lcl.unknown", true, error));
+    EXPECT_FALSE(error.empty());
+}
+
 TEST_F(PermissionStoreTest, RevocationReturnsToDefaultDenyAndDecisionUpdatesAreAtomic) {
     PermissionStore store(config());
     const PermissionSubject app = subject();

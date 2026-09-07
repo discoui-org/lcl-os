@@ -19,6 +19,8 @@ struct SandboxFilesystemSources {
     int dataDescriptor{-1};
     int cacheDescriptor{-1};
     int preferencesDescriptor{-1};
+    int compositorSocketDescriptor{-1};
+    int rasterSocketDescriptor{-1};
 };
 
 /**

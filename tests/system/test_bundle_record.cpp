@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -30,13 +31,20 @@ protected:
         fs::remove_all(temporaryDirectory_);
     }
 
-    fs::path createBundle(const std::string& name = "Example.app") {
+    fs::path createBundle(const std::string& name = "Example.app",
+                          const std::vector<std::string>& permissions =
+                              {"network.client", "files.user-selected"}) {
         const fs::path bundle = temporaryDirectory_ / name;
         fs::create_directories(bundle / "Resources");
         fs::create_directories(bundle / "Executables");
 
         std::ofstream manifest(bundle / "Manifest.json");
-        manifest << R"({"id":"org.lcl.example","name":"Example","version":"1.0.0","icon":"Resources/Icon.png","executable":"Executables/app","runtime":"org.lcl.native","requestedPermissions":["network.client","files.user-selected"]})";
+        manifest << R"({"id":"org.lcl.example","name":"Example","version":"1.0.0","icon":"Resources/Icon.png","executable":"Executables/app","runtime":"org.lcl.native","requestedPermissions":[)";
+        for (std::size_t index = 0; index < permissions.size(); ++index) {
+            if (index != 0) manifest << ',';
+            manifest << '"' << permissions[index] << '"';
+        }
+        manifest << "]}";
         manifest.close();
         std::ofstream icon(bundle / "Resources" / "Icon.png");
         icon << "icon bytes";
@@ -75,6 +83,31 @@ TEST_F(BundleRecordTest, RecordsEveryRegularFileInCanonicalOrder) {
     EXPECT_EQ(record->files[2].relativePath, "Resources/Icon.png");
     EXPECT_FALSE(isZeroDigest(record->digest));
     EXPECT_TRUE(validateBundleRecord(*record, error)) << error;
+}
+
+TEST_F(BundleRecordTest, CarriesKnownUndottedPermissionsFromManifestIntoCanonicalRecord) {
+    const fs::path bundle = createBundle(
+        "Media.app", {"notifications", "camera", "microphone"});
+    auto metadata = lcl::core::AppBundleParser::parseBundle(bundle.string());
+    ASSERT_TRUE(metadata.has_value());
+    std::string error;
+    auto record = makeBundleRecord(*metadata, error);
+    ASSERT_TRUE(record.has_value()) << error;
+    EXPECT_EQ(record->requestedPermissions,
+              std::vector<std::string>({"camera", "microphone", "notifications"}));
+    EXPECT_TRUE(validateBundleRecord(*record, error)) << error;
+
+    record->requestedPermissions = {"org.lcl.unknown"};
+    EXPECT_FALSE(validateBundleRecord(*record, error));
+    EXPECT_EQ(error, "bundle record permissions are not canonical");
+    metadata->requestedPermissions = {"org.lcl.unknown"};
+    EXPECT_FALSE(makeBundleRecord(*metadata, error));
+    EXPECT_EQ(error, "bundle metadata has invalid requested permissions");
+}
+
+TEST_F(BundleRecordTest, RejectsUnknownPermissionNamesAtManifestBoundary) {
+    const fs::path bundle = createBundle("Unknown.app", {"org.lcl.unknown"});
+    EXPECT_FALSE(lcl::core::AppBundleParser::parseBundle(bundle.string()));
 }
 
 TEST_F(BundleRecordTest, RejectsAManifestChangeAfterTheSchemaSnapshotWasParsed) {

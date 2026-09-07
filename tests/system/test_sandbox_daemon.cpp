@@ -18,7 +18,7 @@ VerifiedApplication validApplication() {
     return application;
 }
 
-TEST(SandboxDaemonTest, AcceptsOnlyPreviouslyVerifiedApplicationRecords) {
+TEST(SandboxDaemonTest, RefusesLaunchBeforePlatformHardeningEvenForRegisteredApplications) {
     SandboxDaemon daemon({.socketPath = "/Runtime/lcl-sandboxd-test.sock",
                           .sessionUid = 61002,
                           .sessionGid = 61002});
@@ -28,15 +28,19 @@ TEST(SandboxDaemonTest, AcceptsOnlyPreviouslyVerifiedApplicationRecords) {
     ASSERT_TRUE(plan.has_value()) << error;
 
     SandboxLaunchResult result = daemon.handleLaunchRequest(plan->request);
-    EXPECT_EQ(result.status, SandboxLaunchStatus::PolicyRejected);
-    EXPECT_NE(result.message.find("no registered verified application"), std::string::npos);
+    EXPECT_EQ(result.status, SandboxLaunchStatus::SetupFailed);
+    EXPECT_NE(result.message.find("platform hardening is not initialized"), std::string::npos);
+    EXPECT_EQ(result.pid, 0);
+    EXPECT_EQ(daemon.runningChildCount(), 0U);
 
     ASSERT_TRUE(daemon.registerVerifiedApplication(application, {"network.client"}, error)) << error;
     EXPECT_EQ(daemon.registeredApplicationCount(), 1U);
     result = daemon.handleLaunchRequest(plan->request);
     EXPECT_EQ(result.status, SandboxLaunchStatus::SetupFailed);
     EXPECT_EQ(result.instanceId, 101U);
-    EXPECT_NE(result.message.find("material"), std::string::npos);
+    EXPECT_NE(result.message.find("platform hardening is not initialized"), std::string::npos);
+    EXPECT_EQ(result.pid, 0);
+    EXPECT_EQ(daemon.runningChildCount(), 0U);
 }
 
 TEST(SandboxDaemonTest, DoesNotTurnMalformedRequestsIntoLaunches) {

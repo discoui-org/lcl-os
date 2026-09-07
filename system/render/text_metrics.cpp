@@ -35,15 +35,20 @@ std::optional<std::string> resolveFontPath(lcl::graphics::FontFamily family) {
 
     if (icons) {
         candidates.emplace_back(
+            "/System/Library/Fonts/cupertino-icons/CupertinoIcons.ttf");
+        candidates.emplace_back(
             "/usr/share/fonts/cupertino-icons/CupertinoIcons.ttf");
         candidates.emplace_back(
             "assets/fonts/cupertino-icons/CupertinoIcons.ttf");
     } else if (monospace) {
         candidates.emplace_back(
+            "/System/Library/Fonts/jetbrains-mono/JetBrainsMono-Regular.ttf");
+        candidates.emplace_back(
             "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf");
         candidates.emplace_back(
             "assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf");
     } else {
+        candidates.emplace_back("/System/Library/Fonts/inter/Inter-Regular.otf");
         candidates.emplace_back("/usr/share/fonts/inter/Inter-Regular.otf");
         candidates.emplace_back("assets/fonts/inter/Inter-Regular.otf");
     }

@@ -76,7 +76,8 @@ int duplicateDescriptor(int descriptor, std::string& error) {
 void closeSources(SandboxFilesystemSources& sources) {
     for (int* descriptor : {&sources.appBundleDescriptor, &sources.systemDescriptor,
                             &sources.dataDescriptor, &sources.cacheDescriptor,
-                            &sources.preferencesDescriptor}) {
+                            &sources.preferencesDescriptor, &sources.compositorSocketDescriptor,
+                            &sources.rasterSocketDescriptor}) {
         if (*descriptor >= 0) {
             close(*descriptor);
             *descriptor = -1;
@@ -162,6 +163,10 @@ bool SandboxLaunchMaterialRegistry::registerMaterial(const SandboxLaunchMaterial
         duplicateDescriptor(input.filesystemSources.cacheDescriptor, error);
     material->filesystemSources.preferencesDescriptor =
         duplicateDescriptor(input.filesystemSources.preferencesDescriptor, error);
+    material->filesystemSources.compositorSocketDescriptor =
+        duplicateDescriptor(input.filesystemSources.compositorSocketDescriptor, error);
+    material->filesystemSources.rasterSocketDescriptor =
+        duplicateDescriptor(input.filesystemSources.rasterSocketDescriptor, error);
     material->executableDescriptor = duplicateDescriptor(input.executableDescriptor, error);
     if (input.application.runtime == SandboxRuntime::JavaScript) {
         material->runtimeDescriptor = duplicateDescriptor(input.runtimeDescriptor, error);

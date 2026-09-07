@@ -36,6 +36,19 @@ trap cleanup EXIT INT TERM
 echo "[LCL SESSION] Starting canonical rootfs userspace..."
 rm -f /Runtime/lcl-sessiond.sock /Runtime/lcl-sandboxd.sock /Runtime/lcl-securityd.sock
 
+# sandboxd pins both graphics endpoints while registering immutable bundles.
+# The compositor listener appears slightly before its raster child on Android,
+# so do not start the authority against a partial runtime directory.
+for ((i=0; i<100; i++)); do
+    if [ -S /Runtime/lcl-compositor.sock ] && [ -S /Runtime/lcl-raster.sock ]; then
+        break
+    fi
+    sleep 0.05
+done
+if [ ! -S /Runtime/lcl-compositor.sock ] || [ ! -S /Runtime/lcl-raster.sock ]; then
+    echo "[LCL SESSION] graphics endpoints did not become ready; sandbox launches remain disabled" >&2
+fi
+
 # sandboxd is a separate root-owned authority.  Its 0600 control socket is
 # exclusively for the root session daemon; third-party applications never
 # receive this endpoint.  On an Android kernel that cannot enforce the

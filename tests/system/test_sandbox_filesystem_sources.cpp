@@ -2,11 +2,15 @@
 
 #include "system/security/sandbox_filesystem_sources.hpp"
 #include "system/security/sandbox_landlock.hpp"
+#include "system/security/session_user.hpp"
 
 #include <filesystem>
 #include <fstream>
+#include <cstring>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -22,14 +26,18 @@ protected:
     int dataDescriptor_{-1};
     int cacheDescriptor_{-1};
     int preferencesDescriptor_{-1};
+    int compositorSocketDescriptor_{-1};
+    int rasterSocketDescriptor_{-1};
+    int compositorSocketFd_{-1};
+    int rasterSocketFd_{-1};
     int executableDescriptor_{-1};
     int temporaryDescriptor_{-1};
     int deviceDescriptor_{-1};
     AppIdentity identity_;
 
     void SetUp() override {
-        if (getuid() != 0 && getuid() != getgid()) {
-            GTEST_SKIP() << "test identity requires a matching UID/GID";
+        if (geteuid() != 0) {
+            GTEST_SKIP() << "protected graphics socket ownership requires root";
         }
         root_ = fs::temp_directory_path() /
                 ("lcl_sandbox_sources_" + std::to_string(getpid()));
@@ -39,6 +47,21 @@ protected:
         fs::create_directories(root_ / "Preferences");
         fs::create_directories(root_ / "Temporary");
         fs::create_directories(root_ / "Dev");
+        auto makeRuntimeSocket = [this](const char* name, int& socketFd, int& descriptor) {
+            const fs::path path = root_ / name;
+            socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+            ASSERT_GE(socketFd, 0);
+            sockaddr_un address{};
+            address.sun_family = AF_UNIX;
+            std::strncpy(address.sun_path, path.c_str(), sizeof(address.sun_path) - 1);
+            ASSERT_EQ(bind(socketFd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)), 0);
+            ASSERT_EQ(chown(path.c_str(), kSessionUserUid, kApplicationRuntimeGid), 0);
+            ASSERT_EQ(chmod(path.c_str(), 0660), 0);
+            descriptor = open(path.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW);
+            ASSERT_GE(descriptor, 0);
+        };
+        makeRuntimeSocket("compositor.sock", compositorSocketFd_, compositorSocketDescriptor_);
+        makeRuntimeSocket("raster.sock", rasterSocketFd_, rasterSocketDescriptor_);
         std::ofstream executable(root_ / "App" / "app");
         executable << "sandbox executable";
         executable.close();
@@ -66,7 +89,9 @@ protected:
     void TearDown() override {
         for (const int descriptor : {appBundleDescriptor_, systemDescriptor_, dataDescriptor_,
                                      cacheDescriptor_, preferencesDescriptor_, temporaryDescriptor_,
-                                     executableDescriptor_, deviceDescriptor_}) {
+                                     executableDescriptor_, deviceDescriptor_,
+                                     compositorSocketDescriptor_, rasterSocketDescriptor_,
+                                     compositorSocketFd_, rasterSocketFd_}) {
             if (descriptor >= 0) {
                 close(descriptor);
             }
@@ -81,6 +106,8 @@ protected:
             .dataDescriptor = dataDescriptor_,
             .cacheDescriptor = cacheDescriptor_,
             .preferencesDescriptor = preferencesDescriptor_,
+            .compositorSocketDescriptor = compositorSocketDescriptor_,
+            .rasterSocketDescriptor = rasterSocketDescriptor_,
         };
     }
 

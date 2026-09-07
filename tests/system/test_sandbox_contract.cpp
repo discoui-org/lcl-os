@@ -80,6 +80,39 @@ TEST(SandboxContractTest, CanonicalizesPermissionsBeforeDigestingProfile) {
     EXPECT_EQ(first->request.profileDigest, second->request.profileDigest);
 }
 
+TEST(SandboxContractTest, AcceptsKnownUndottedPermissionsWithoutGrantingRequests) {
+    auto application = validApplication();
+    application.requestedPermissions = {"notifications", "camera", "microphone"};
+    std::string error;
+    const auto denied = makeThirdPartySandboxLaunchPlan(application, {}, 41, error);
+    ASSERT_TRUE(denied.has_value()) << error;
+    EXPECT_TRUE(denied->profile.effectivePermissions.empty());
+
+    const auto granted = makeThirdPartySandboxLaunchPlan(
+        application, {"microphone", "camera", "notifications"}, 41, error);
+    ASSERT_TRUE(granted.has_value()) << error;
+    EXPECT_EQ(granted->profile.effectivePermissions,
+              std::vector<std::string>({"camera", "microphone", "notifications"}));
+    EXPECT_TRUE(validateSandboxProfile(granted->profile, error)) << error;
+    EXPECT_NE(denied->request.profileDigest, granted->request.profileDigest);
+}
+
+TEST(SandboxContractTest, RejectsUnknownPermissionNamesAndDuplicateDeclarations) {
+    for (const std::string permission : {"unknown", "org.lcl.unknown", "Camera", "camera "}) {
+        SCOPED_TRACE(permission);
+        std::string error;
+        EXPECT_FALSE(makeThirdPartySandboxProfile(
+            SandboxRuntime::Native, {permission}, {}, error));
+        EXPECT_FALSE(makeThirdPartySandboxProfile(
+            SandboxRuntime::Native, {"camera"}, {permission}, error));
+    }
+    std::string error;
+    EXPECT_FALSE(makeThirdPartySandboxProfile(
+        SandboxRuntime::Native, {"camera", "camera"}, {}, error));
+    EXPECT_FALSE(makeThirdPartySandboxProfile(
+        SandboxRuntime::Native, {"camera"}, {"camera", "camera"}, error));
+}
+
 TEST(SandboxContractTest, BuildsAnIdentityFreeProfileForTheSessionLaunchRequest) {
     std::string error;
     const auto profile = makeThirdPartySandboxProfile(

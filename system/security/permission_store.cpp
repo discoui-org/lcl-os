@@ -104,8 +104,7 @@ bool decodeDigest(std::string_view text, Sha256Digest& digest) {
 }
 
 bool validatePermission(std::string_view permission, std::string& error) {
-    if (!AppIdentityRegistry::isValidAppId(std::string(permission)) ||
-        !isKnownPermission(permission)) {
+    if (!isKnownPermission(permission)) {
         error = "permission identifier is invalid";
         return false;
     }

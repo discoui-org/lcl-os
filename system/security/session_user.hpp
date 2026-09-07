@@ -10,6 +10,8 @@ namespace lcl::security {
 /** Canonical unprivileged interactive session identity in the LCL rootfs. */
 inline constexpr uid_t kSessionUserUid = 1000;
 inline constexpr gid_t kSessionUserGid = 1000;
+/** Supplementary group used only for compositor/raster client endpoints. */
+inline constexpr gid_t kApplicationRuntimeGid = 62000;
 inline constexpr const char* kSessionUserName = "Rei";
 inline constexpr const char* kSessionUserHome = "/Users/Rei";
 
@@ -53,5 +55,8 @@ bool provisionSessionUserHome(std::string& error);
 
 /** Assigns a root-created runtime socket or file to the session identity. */
 bool assignSessionUserOwnership(const std::string& path, mode_t mode, std::string& error);
+
+/** Makes a root-created graphics endpoint reachable by the session and sandbox app group. */
+bool assignApplicationRuntimeOwnership(const std::string& path, std::string& error);
 
 } // namespace lcl::security

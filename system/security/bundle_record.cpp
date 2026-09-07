@@ -1,6 +1,7 @@
 #include "system/security/bundle_record.hpp"
 
 #include "system/security/app_identity_registry.hpp"
+#include "system/security/permission_policy.hpp"
 #include "system/session/app_bundle_parser.hpp"
 
 #include <algorithm>
@@ -356,7 +357,7 @@ bool validateBundleRecord(const BundleRecord& record, std::string& error) {
     }
 
     for (std::size_t index = 0; index < record.requestedPermissions.size(); ++index) {
-        if (!AppIdentityRegistry::isValidAppId(record.requestedPermissions[index]) ||
+        if (!isKnownPermission(record.requestedPermissions[index]) ||
             (index > 0 && record.requestedPermissions[index - 1] >= record.requestedPermissions[index])) {
             error = "bundle record permissions are not canonical";
             return false;
@@ -406,7 +407,7 @@ std::optional<BundleRecord> makeBundleRecord(const lcl::core::AppBundleMetadata&
     record.requestedPermissions = metadata.requestedPermissions;
     std::sort(record.requestedPermissions.begin(), record.requestedPermissions.end());
     for (std::size_t index = 0; index < record.requestedPermissions.size(); ++index) {
-        if (!AppIdentityRegistry::isValidAppId(record.requestedPermissions[index]) ||
+        if (!isKnownPermission(record.requestedPermissions[index]) ||
             (index > 0 && record.requestedPermissions[index - 1] == record.requestedPermissions[index])) {
             error = "bundle metadata has invalid requested permissions";
             return std::nullopt;

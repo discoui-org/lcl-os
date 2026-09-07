@@ -53,10 +53,11 @@ bool IPCManager::initialize(const std::string& socketPath) {
         return false;
     }
 
-    // The root compositor creates this endpoint, but only the unprivileged
-    // desktop session owns the 0600 client-facing socket.
+    // The private sandbox mount exposes this exact endpoint to app processes;
+    // the supplementary runtime group makes it connectable without sharing
+    // sessiond or either security daemon socket.
     std::string ownershipError;
-    if (!lcl::security::assignSessionUserOwnership(m_socketPath, 0600, ownershipError)) {
+    if (!lcl::security::assignApplicationRuntimeOwnership(m_socketPath, ownershipError)) {
         std::cerr << "[LCL IPC ERROR] " << ownershipError << "\n";
         close(m_serverFd);
         m_serverFd = -1;
@@ -73,7 +74,7 @@ bool IPCManager::initialize(const std::string& socketPath) {
     }
 
     m_initialized = true;
-    std::cout << "[LCL IPC] Secure Unix Domain Socket server active on " << m_socketPath << " (permissions: 0600)\n";
+    std::cout << "[LCL IPC] Secure Unix Domain Socket server active on " << m_socketPath << " (permissions: 0660)\n";
     return true;
 }
 

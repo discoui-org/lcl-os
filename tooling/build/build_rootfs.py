@@ -65,6 +65,7 @@ CANONICAL_TARGETS = (
     "lcl-securityd",
     "lcl-sandbox-probe",
     "lcl-sandbox-smoke",
+    "lcl-sandbox-test",
     "lcl-rasterd",
     "lcl-open",
     "lcl-core",
@@ -291,6 +292,7 @@ def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
         PROJECT_ROOT / "apps" / "settings" / "Manifest.json",
         PROJECT_ROOT / "apps" / "settings" / "Resources" / "Icon.png",
         PROJECT_ROOT / "apps" / "sandbox_probe" / "Manifest.json",
+        PROJECT_ROOT / "apps" / "sandbox_test" / "Manifest.json",
     )
     for source_input in source_inputs:
         if source_input.is_dir():
@@ -685,6 +687,25 @@ def stage_canonical_rootfs(
     sha_map["Sandbox Probe.app"] = get_sha256(smoke_dst / "Executables" / "SandboxProbe")
     copy_ldd_deps(smoke_dst / "Executables" / "SandboxProbe", dest_system_lib)
 
+    # Sandbox Test.app is a touch-only ordinary GUI app. It must launch through
+    # sandboxd and can reach only the compositor/raster endpoints mounted into
+    # its private /Runtime.
+    sandbox_test_dst = dest_system_apps / "Sandbox Test.app"
+    sandbox_test_dst.mkdir(parents=True, exist_ok=True)
+    (sandbox_test_dst / "Executables").mkdir(parents=True, exist_ok=True)
+    (sandbox_test_dst / "Resources").mkdir(parents=True, exist_ok=True)
+    sandbox_test_manifest = PROJECT_ROOT / "apps" / "sandbox_test" / "Manifest.json"
+    if not sandbox_test_manifest.is_file() or not settings_icon.is_file():
+        raise RuntimeError("Missing Sandbox Test.app source files")
+    shutil.copy2(sandbox_test_manifest, sandbox_test_dst / "Manifest.json")
+    shutil.copy2(settings_icon, sandbox_test_dst / "Resources" / "Icon.png")
+    sandbox_test_bin = binaries["lcl-sandbox-test"]
+    shutil.copy2(sandbox_test_bin, sandbox_test_dst / "Executables" / "SandboxTest")
+    (sandbox_test_dst / "Executables" / "SandboxTest").chmod(0o755)
+    sha_map["Sandbox Test.app"] = get_sha256(
+        sandbox_test_dst / "Executables" / "SandboxTest")
+    copy_ldd_deps(sandbox_test_dst / "Executables" / "SandboxTest", dest_system_lib)
+
     # Validate all app bundles
     validate_app_bundles(staging_dir)
 
@@ -710,6 +731,7 @@ def stage_canonical_rootfs(
     (staging_dir / "etc" / "group").write_text(
         "root:x:0:\n"
         "Rei:x:1000:\n"
+        "lcl-app-runtime:x:62000:\n"
     )
 
     (staging_dir / "Users" / "Rei" / ".bashrc").write_text(
@@ -808,7 +830,22 @@ fi
 
 # Start Compositor Display Server
 /System/Core/lcl-core 2>&1 | tee /var/log/lcl_compositor.log &
-sleep 0.2
+
+# sandboxd pins both graphics endpoints while registering immutable bundles.
+# The compositor listener may appear before its raster child, especially on a
+# cold QEMU boot, so never start the launch authority against a partial
+# runtime directory.
+i=0
+while [ "$i" -lt 100 ]; do
+    if [ -S /Runtime/lcl-compositor.sock ] && [ -S /Runtime/lcl-raster.sock ]; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.05
+done
+if [ ! -S /Runtime/lcl-compositor.sock ] || [ ! -S /Runtime/lcl-raster.sock ]; then
+    echo "[init] graphics endpoints unavailable; sandboxd will remain fail-closed" >&2
+fi
 
 # securityd owns only the session user's unsigned-bundle allow/revoke
 # decisions. It is deliberately separate from sandboxd's launch authority.
@@ -1130,6 +1167,9 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Applications/Sandbox Probe.app/Manifest.json",
         "/System/Applications/Sandbox Probe.app/Executables/SandboxProbe",
         "/System/Applications/Sandbox Probe.app/Resources/Icon.png",
+        "/System/Applications/Sandbox Test.app/Manifest.json",
+        "/System/Applications/Sandbox Test.app/Executables/SandboxTest",
+        "/System/Applications/Sandbox Test.app/Resources/Icon.png",
         "/System/Library/Fonts/inter",
         "/System/Library/Gestalt/default.json",
         "/System/Library/Wallpapers/wallpaper.jpg",

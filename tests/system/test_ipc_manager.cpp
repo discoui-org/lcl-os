@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "system/ipc/ipc_manager.hpp"
+#include "system/security/session_user.hpp"
 #include "system/ipc/lcl_protocol.hpp"
 #include <filesystem>
 #include <cstring>
@@ -33,9 +34,13 @@ TEST_F(IPCManagerTest, InitializeSocketServerAndPermissions) {
     struct stat st{};
     ASSERT_EQ(stat(testSocketPath.c_str(), &st), 0);
 
-    // Verify permissions are 0600 (S_IRUSR | S_IWUSR)
+    // Session and sandbox applications share only this graphics endpoint.
     mode_t perm = st.st_mode & 0777;
-    EXPECT_EQ(perm, static_cast<mode_t>(0600));
+    EXPECT_EQ(perm, static_cast<mode_t>(0660));
+    if (geteuid() == 0) {
+        EXPECT_EQ(st.st_uid, lcl::security::kSessionUserUid);
+        EXPECT_EQ(st.st_gid, lcl::security::kApplicationRuntimeGid);
+    }
 
     manager.shutdown();
     EXPECT_FALSE(manager.isInitialized());

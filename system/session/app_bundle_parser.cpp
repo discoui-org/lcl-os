@@ -655,8 +655,7 @@ std::optional<AppBundleMetadata> AppBundleParser::parseBundle(const std::string&
 
     std::unordered_set<std::string> permissions;
     for (const std::string& permission : fields.requestedPermissions) {
-        if (!isValidDottedIdentifier(permission, 128) ||
-            !lcl::security::isKnownPermission(permission) ||
+        if (!lcl::security::isKnownPermission(permission) ||
             !permissions.insert(permission).second) {
             return std::nullopt;
         }

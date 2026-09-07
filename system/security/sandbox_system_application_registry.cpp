@@ -72,6 +72,15 @@ ScopedFd openDirectory(const std::string &path, std::string &error) {
   return descriptor;
 }
 
+ScopedFd openRuntimeSocket(const std::string& path, std::string& error) {
+  ScopedFd descriptor(open(path.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW));
+  if (!descriptor.valid()) {
+    error = std::string("could not open protected graphics endpoint '") + path +
+            "': " + std::strerror(errno);
+  }
+  return descriptor;
+}
+
 SandboxRuntime runtimeForBundle(const lcl::core::AppBundleMetadata &metadata,
                                 std::string &error) {
   if (metadata.runtime.empty()) {
@@ -105,6 +114,8 @@ bool registerOneSystemApplication(
     SandboxDaemon &daemon, const SandboxSystemApplicationRegistryConfig &config,
     AppIdentityRegistry &identities, const AppDataStore &dataStore,
     const ScopedFd &systemDescriptor,
+    const ScopedFd &compositorSocketDescriptor,
+    const ScopedFd &rasterSocketDescriptor,
     const lcl::core::AppBundleMetadata &metadata, std::string &error) {
   if (!metadata.valid || !bundleIsInsideSystemApplications(metadata, config) ||
       !metadata.bundleHandle || !metadata.bundleHandle->valid() ||
@@ -172,6 +183,8 @@ bool registerOneSystemApplication(
       .dataDescriptor = data.get(),
       .cacheDescriptor = cache.get(),
       .preferencesDescriptor = preferences.get(),
+      .compositorSocketDescriptor = compositorSocketDescriptor.get(),
+      .rasterSocketDescriptor = rasterSocketDescriptor.get(),
   };
   material.executableBundlePath = metadata.executable;
   material.executableDescriptor = metadata.executableHandle->descriptor();
@@ -211,14 +224,18 @@ bool SandboxSystemApplicationRegistry::registerSystemApplications(
   }
   const AppDataStore dataStore(config_.dataStore);
   ScopedFd systemDescriptor = openDirectory(config_.systemPath, error);
-  if (!systemDescriptor.valid()) {
+  ScopedFd compositorSocketDescriptor = openRuntimeSocket(config_.compositorSocketPath, error);
+  ScopedFd rasterSocketDescriptor = openRuntimeSocket(config_.rasterSocketPath, error);
+  if (!systemDescriptor.valid() || !compositorSocketDescriptor.valid() ||
+      !rasterSocketDescriptor.valid()) {
     return false;
   }
   const auto bundles =
       lcl::core::AppBundleParser::scanDirectory(config_.systemApplicationsPath);
   for (const lcl::core::AppBundleMetadata &bundle : bundles) {
     if (!registerOneSystemApplication(daemon, config_, identities, dataStore,
-                                      systemDescriptor, bundle, error)) {
+                                      systemDescriptor, compositorSocketDescriptor,
+                                      rasterSocketDescriptor, bundle, error)) {
       return false;
     }
   }

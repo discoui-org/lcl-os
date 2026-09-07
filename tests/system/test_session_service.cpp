@@ -473,7 +473,16 @@ TEST_F(SessionServiceTest,
 
 TEST_F(SessionServiceTest, ClientReceivesThirdPartyLaunchRefusalFromSessiond) {
   createBundle("Rpc.app", "org.lcl.rpc", "#!/bin/sh\nsleep 0.02\nexit 9\n");
-  SessionService service({tempDir.string()});
+  SessionService service(
+      {tempDir.string()}, (tempDir / "sandboxd.sock").string(),
+      {.storePath = (tempDir / "permissions.v1").string(),
+       .ownerUid = getuid(), .ownerGid = getgid()},
+      {.storePath = (tempDir / "bundle-approvals.v1").string(),
+       .ownerUid = getuid(), .ownerGid = getgid()},
+      {.snapshotsRoot = (tempDir / "bundle-snapshots").string(),
+       .ownerUid = getuid(), .ownerGid = getgid()},
+      {.storePath = (tempDir / "pending-bundle-approvals.v1").string(),
+       .ownerUid = getuid(), .ownerGid = getgid()});
   const std::string socketPath = (tempDir / "sessiond.sock").string();
   ASSERT_TRUE(service.initialize(socketPath));
 
@@ -489,18 +498,17 @@ TEST_F(SessionServiceTest, ClientReceivesThirdPartyLaunchRefusalFromSessiond) {
   ASSERT_TRUE(client.connect(socketPath));
   LaunchResponse response;
   std::string error;
-  const bool received = client.launch({"org.lcl.rpc", true}, response, error);
-  EXPECT_TRUE(received) << error;
-  if (received) {
-    EXPECT_EQ(response.status, 3u);
-    EXPECT_EQ(response.appId, "org.lcl.rpc");
-    EXPECT_EQ(response.instanceId, 0u);
-    EXPECT_EQ(response.pid, 0);
-    EXPECT_NE(response.message.find("lcl-sandboxd"), std::string::npos);
-  }
+  EXPECT_FALSE(client.launch({"org.lcl.rpc", true}, response, error));
+  EXPECT_EQ(response.status, 3u);
+  EXPECT_EQ(response.appId, "org.lcl.rpc");
+  EXPECT_EQ(response.instanceId, 0u);
+  EXPECT_EQ(response.pid, 0);
+  EXPECT_EQ(error, response.message);
+  EXPECT_NE(error.find("yayıncısını doğrulayamadı"), std::string::npos);
 
   serving = false;
   server.join();
+  EXPECT_TRUE(service.instances().empty());
   service.shutdown();
 }
 

@@ -7,6 +7,7 @@
 #include "system/security/sandbox_landlock.hpp"
 #include "system/security/sandbox_namespace.hpp"
 #include "system/security/sandbox_seccomp.hpp"
+#include "system/security/session_user.hpp"
 
 #include <fcntl.h>
 #include <grp.h>
@@ -204,8 +205,9 @@ void closeLandlockDescriptors(SandboxLandlockRules& rules) {
 [[noreturn]] void execSandboxChild(SandboxChildLaunchSpec spec, SandboxLandlockRules landlockRules) {
     std::string error;
     const pid_t expectedParent = getppid();
+    const gid_t runtimeGroup = kApplicationRuntimeGid;
     if (!applyPortableResourceLimits(spec.hardening.resourceLimits) ||
-        prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0 || setgroups(0, nullptr) != 0 ||
+        prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0 || setgroups(1, &runtimeGroup) != 0 ||
         setresgid(spec.identity.gid, spec.identity.gid, spec.identity.gid) != 0 ||
         setresuid(spec.identity.uid, spec.identity.uid, spec.identity.uid) != 0 ||
         prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != expectedParent ||
