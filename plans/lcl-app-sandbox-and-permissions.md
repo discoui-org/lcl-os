@@ -220,7 +220,7 @@ sözleşmesini kullanmasıdır.
 
 - [x] Uygulama UID'leri farklı olduğunda compositor/rasterd socket erişiminin
   nasıl yetkilendirileceğini tanımla.
-- [ ] `SO_PEERCRED` kimliğini sandbox registry'deki app ID ve instance ID ile
+- [x] `SO_PEERCRED` kimliğini sandbox registry'deki app ID ve instance ID ile
   eşleştir.
 - [ ] Mevcut surface producer grant mekanizmasını yeni process kimliğiyle
   doğrula; grant'in başka uygulama tarafından kullanılamamasını test et.
@@ -246,8 +246,12 @@ sabit shell/WM, Terminal ve Settings kimliklerini bildirebiliyor; sistem-yüzeyi
 komutları ayrıca UID/GID 1000 ve gerçek shell executable kontrolü gerektiriyor.
 Android x86_64 ve arm64 compositor build'leri geçti; enforcing Android'da
 `org.lcl.sandbox-test` UID/GID `61000:61000` ile iki dar grafik soketine
-bağlanarak açıldı. Instance-ID'nin privileged launch kaydıyla bağlanması bu
-maddenin kalan işidir.
+bağlanarak açıldı. Sandboxd child'ı exec'e bırakmadan önce root-owned/private
+launch registry'ye `instance ID + app ID + process group ID + UID/GID` kaydı
+yazıyor. Compositor, `SO_PEERCRED` PID'sinin canlı process group'unu bu kayıtla
+birebir eşleştiriyor; eksik, değiştirilmiş veya başka instance'a ait iddia
+yüzey/grant oluşmadan reddediliyor. Kayıtlar process reap sırasında kaldırılıyor
+ve daemon başlangıcında güvenli biçimde sıfırlanıyor.
 
 ## 6. Kernel policy katmanları
 
@@ -499,6 +503,17 @@ cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
   ikinci çalıştırmada yine app-owned `0600` olarak güncellendi. Dağıtım aracı artık `setenforce 0`
   çağırmıyor; `Enforcing` durumunu koruyor, `Permissive` ise önce güvenli moda
   geçiriyor ve bunu yapamazsa dağıtımı fail-closed reddediyor.
+- [x] **Android compositor instance-kimliği kabulü (2026-09-07):** güncel
+  x86_64 rootfs ve Android compositor `config/gestalt/mobile.json` ile
+  enforcing Pixel 8 Pro AVD'ye dağıtıldı. Sandbox Test instance `1`, PID/PGID
+  `3168`, UID/GID `61000:61000` olarak açıldı; root-owned `0600`
+  `launch-1.v1` kaydı aynı kimliği taşıdı. Compositor logu sahte app ID'yi
+  `peer credentials do not match the claimed app ID`, doğru app ID ile sahte
+  instance'ı `peer is not a member of the claimed app launch instance`
+  gerekçesiyle fail-closed reddetti. Kullanıcı dokunmatik testte yeni iki
+  negatif kontrol dahil **14/14 PASS** ve `All checks passed` ekran görüntüsü
+  sağladı. İlgili 16 host testinin 12'si geçti; root gerektiren 4 launcher
+  testi beklenen biçimde atlandı.
 - [ ] Bu testte tüm LCL süreçleri hâlâ `u:r:su:s0` context'inde. Ayrı ve dar
   `lcl_core`, `lcl_sandboxd`, `lcl_app` SELinux domainleri tamamlanmadan
   Android MAC katmanı nihai kabul edilmiş sayılmaz.

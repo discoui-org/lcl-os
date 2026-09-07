@@ -2,6 +2,7 @@
 
 #include <array>
 #include <utility>
+#include <unistd.h>
 
 namespace lcl::security {
 
@@ -26,7 +27,8 @@ bool ApplicationPeerAuthenticator::isTrustedSessionAppId(
 }
 
 bool ApplicationPeerAuthenticator::authenticate(
-        std::string_view appId, uid_t peerUid, gid_t peerGid,
+        std::string_view appId, std::uint64_t instanceId, pid_t peerPid,
+        uid_t peerUid, gid_t peerGid,
         std::string& error) const {
     error.clear();
     const std::string canonicalAppId(appId);
@@ -59,6 +61,16 @@ bool ApplicationPeerAuthenticator::authenticate(
     const auto identity = identities.find(canonicalAppId);
     if (!identity || identity->uid != peerUid || identity->gid != peerGid) {
         error = "peer credentials do not match the claimed app ID";
+        return false;
+    }
+    AppLaunchRegistry launches(config_.launches);
+    const auto launch = launches.find(instanceId, error);
+    if (!launch || launch->appId != canonicalAppId ||
+        launch->uid != peerUid || launch->gid != peerGid || peerPid <= 0 ||
+        getpgid(peerPid) != launch->processGroupId) {
+        if (error.empty()) {
+            error = "peer is not a member of the claimed app launch instance";
+        }
         return false;
     }
     return true;

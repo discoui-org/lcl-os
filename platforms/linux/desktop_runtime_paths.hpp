@@ -17,6 +17,7 @@ public:
     std::string sessionSocketPath() const override;
     std::string appCatalogDirectory() const override;
     std::string applicationIdentityRegistryPath() const override;
+    std::string applicationLaunchRegistryPath() const override;
     std::vector<std::string> fontSearchDirectories() const override;
     std::string temporaryDirectory() const override;
     std::string gestaltFilePath() const override;

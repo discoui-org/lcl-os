@@ -35,6 +35,13 @@ Compositor::Compositor(lcl::platform::IPlatformServices& platformServices)
               .ownerUid = 0,
               .ownerGid = 0,
           },
+          .launches = {
+              .directoryPath = platformServices.paths().applicationLaunchRegistryPath(),
+              .firstAppUid = 61000,
+              .lastAppUid = 61999,
+              .ownerUid = 0,
+              .ownerGid = 0,
+          },
           .sessionUid = lcl::security::kSessionUserUid,
           .sessionGid = lcl::security::kSessionUserGid,
       }),

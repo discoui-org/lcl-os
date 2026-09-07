@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "system/security/sandbox_child_reaper.hpp"
+#include "system/security/app_launch_registry.hpp"
 #include "system/security/sandbox_cgroup.hpp"
 #include "system/security/sandbox_external_application_registry.hpp"
 #include "system/security/sandbox_launch_authorizer.hpp"
@@ -33,6 +34,7 @@ struct SandboxDaemonConfig {
     SandboxPlatformMode platformMode{SandboxPlatformMode::LinuxFull};
     PermissionStoreConfig permissionStore{};
     SandboxExternalApplicationRegistryConfig externalApplications{};
+    AppLaunchRegistryConfig launches{};
 };
 
 /**
@@ -103,6 +105,7 @@ private:
 
     SandboxLaunchAuthorizer authorizer_;
     SandboxExternalApplicationRegistry externalApplications_;
+    AppLaunchRegistry launchRegistry_;
     SandboxDaemonConfig config_;
     SandboxLaunchMaterialRegistry materialRegistry_;
     // The daemon owns the only cgroup v2 allocator.  It is initialized before

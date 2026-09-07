@@ -51,6 +51,7 @@ SandboxLaunchResult rejectedLaunch(const SandboxLaunchRequest& request, SandboxL
 
 SandboxDaemon::SandboxDaemon(SandboxDaemonConfig config)
     : authorizer_(config.permissionStore), externalApplications_(config.externalApplications),
+      launchRegistry_(config.launches),
       config_(std::move(config)) {}
 
 SandboxDaemon::~SandboxDaemon() { shutdown(); }
@@ -94,6 +95,9 @@ bool SandboxDaemon::initialize(std::string& error) {
         return false;
     }
     if (!validateConfig(error) || !validateSocketParent(error)) {
+        return false;
+    }
+    if (!launchRegistry_.initializeAndReset(error)) {
         return false;
     }
     const SandboxPlatformCapabilities capabilities = probeSandboxPlatformCapabilities();
@@ -163,6 +167,10 @@ bool SandboxDaemon::initialize(std::string& error) {
 
 void SandboxDaemon::shutdown() {
     childReaper_.terminateAll(SIGTERM);
+    if (hardeningReady_) {
+        std::string cleanupError;
+        launchRegistry_.initializeAndReset(cleanupError);
+    }
     for (const int descriptor : clientDescriptors_) {
         close(descriptor);
     }
@@ -270,8 +278,25 @@ SandboxLaunchResult SandboxDaemon::handleLaunchRequest(const SandboxLaunchReques
         }
         return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed, std::move(error));
     }
-    SandboxLaunchResult launch = spawnSandboxChild(spec);
+    bool launchIdentityRegistered = false;
+    SandboxLaunchResult launch = spawnSandboxChild(
+        spec, [&](pid_t processGroupId, std::string& registrationError) {
+            launchIdentityRegistered = launchRegistry_.registerLaunch(
+                {
+                    .instanceId = plan->request.instanceId,
+                    .appId = plan->request.appId,
+                    .processGroupId = processGroupId,
+                    .uid = spec.identity.uid,
+                    .gid = spec.identity.gid,
+                },
+                registrationError);
+            return launchIdentityRegistered;
+        });
     if (launch.status != SandboxLaunchStatus::Launched) {
+        if (launchIdentityRegistered) {
+            std::string cleanupError;
+            launchRegistry_.remove(plan->request.instanceId, cleanupError);
+        }
         if (cgroup) {
             // Child-side setup normally removes this itself.  Repeating the
             // root-owned removal is harmless when it already disappeared and
@@ -289,6 +314,7 @@ SandboxLaunchResult SandboxDaemon::handleLaunchRequest(const SandboxLaunchReques
             }
             std::string cleanupError;
             cgroupManager_.removeInstance(*cgroup, cleanupError);
+            launchRegistry_.remove(plan->request.instanceId, cleanupError);
             return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
                                   "could not track sandbox child ownership: " + error);
         }
@@ -297,6 +323,8 @@ SandboxLaunchResult SandboxDaemon::handleLaunchRequest(const SandboxLaunchReques
         kill(launch.pid, SIGKILL);
         while (waitpid(launch.pid, nullptr, 0) < 0 && errno == EINTR) {
         }
+        std::string cleanupError;
+        launchRegistry_.remove(plan->request.instanceId, cleanupError);
         return rejectedLaunch(request, SandboxLaunchStatus::SetupFailed,
                               "could not track sandbox child ownership: " + error);
     }
@@ -480,6 +508,8 @@ void SandboxDaemon::removeClient(int descriptor) {
 
 void SandboxDaemon::reapChildren() {
     for (const SandboxChildExit& exited : childReaper_.reap()) {
+        std::string launchCleanupError;
+        launchRegistry_.remove(exited.instanceId, launchCleanupError);
         if (exited.cgroup.has_value()) {
             std::string cleanupError;
             // The process has been reaped before its cgroup is removed.  A

@@ -1266,7 +1266,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 
             std::string identityError;
             if (!m_peerAuthenticator.authenticate(
-                    appId, msg.uid, msg.gid, identityError)) {
+                    appId, appInstanceId, msg.pid, msg.uid, msg.gid,
+                    identityError)) {
                 m_pendingSystemSurfaceKinds.erase(msg.clientFd);
                 std::cerr << "[LCL Compositor SECURITY] SurfaceCreate denied for PID "
                           << msg.pid << " UID " << msg.uid << " GID " << msg.gid

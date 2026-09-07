@@ -19,6 +19,7 @@ add_executable(lcl_unit_tests
     system/test_app_bundle_parser.cpp
     system/test_app_data_store.cpp
     system/test_app_identity_registry.cpp
+    system/test_app_launch_registry.cpp
     system/test_application_peer_authenticator.cpp
     system/test_bundle_record.cpp
     system/test_bundle_snapshot_store.cpp

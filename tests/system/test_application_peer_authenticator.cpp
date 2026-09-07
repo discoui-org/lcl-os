@@ -15,6 +15,7 @@ class ApplicationPeerAuthenticatorTest : public ::testing::Test {
 protected:
     fs::path tempDir;
     AppIdentityRegistryConfig identities;
+    AppLaunchRegistryConfig launches;
 
     void SetUp() override {
         tempDir = fs::temp_directory_path() /
@@ -30,6 +31,16 @@ protected:
             .ownerUid = getuid(),
             .ownerGid = getgid(),
         };
+        launches = {
+            .directoryPath = (tempDir / "launches").string(),
+            .firstAppUid = 61000,
+            .lastAppUid = 61009,
+            .ownerUid = getuid(),
+            .ownerGid = getgid(),
+        };
+        AppLaunchRegistry registry(launches);
+        std::string error;
+        ASSERT_TRUE(registry.initializeAndReset(error)) << error;
     }
 
     void TearDown() override { fs::remove_all(tempDir); }
@@ -37,6 +48,7 @@ protected:
     ApplicationPeerAuthenticator makeAuthenticator() const {
         return ApplicationPeerAuthenticator({
             .identities = identities,
+            .launches = launches,
             .sessionUid = 45000,
             .sessionGid = 45000,
         });
@@ -48,10 +60,24 @@ TEST_F(ApplicationPeerAuthenticatorTest, AcceptsExactRegistryIdentity) {
     std::string error;
     const auto identity = registry.getOrCreate("org.lcl.sandbox-test", error);
     ASSERT_TRUE(identity) << error;
+    AppLaunchRegistry launchRegistry(launches);
+    ASSERT_TRUE(launchRegistry.registerLaunch(
+        {41, identity->appId, getpgrp(), identity->uid, identity->gid}, error))
+        << error;
 
     const auto authenticator = makeAuthenticator();
     EXPECT_TRUE(authenticator.authenticate(
-        identity->appId, identity->uid, identity->gid, error)) << error;
+        identity->appId, 41, getpid(), identity->uid, identity->gid, error))
+        << error;
+    EXPECT_FALSE(authenticator.authenticate(
+        identity->appId, 42, getpid(), identity->uid, identity->gid, error));
+
+    ASSERT_TRUE(launchRegistry.registerLaunch(
+        {42, identity->appId, getpgrp() + 1, identity->uid, identity->gid}, error))
+        << error;
+    EXPECT_FALSE(authenticator.authenticate(
+        identity->appId, 42, getpid(), identity->uid, identity->gid, error));
+    EXPECT_EQ(error, "peer is not a member of the claimed app launch instance");
 }
 
 TEST_F(ApplicationPeerAuthenticatorTest, RejectsClaimForAnotherSandboxUid) {
@@ -64,7 +90,7 @@ TEST_F(ApplicationPeerAuthenticatorTest, RejectsClaimForAnotherSandboxUid) {
 
     const auto authenticator = makeAuthenticator();
     EXPECT_FALSE(authenticator.authenticate(
-        second->appId, first->uid, first->gid, error));
+        second->appId, 1, getpid(), first->uid, first->gid, error));
     EXPECT_EQ(error, "peer credentials do not match the claimed app ID");
 }
 
@@ -72,9 +98,10 @@ TEST_F(ApplicationPeerAuthenticatorTest, RejectsRootAndSplitCredentials) {
     const auto authenticator = makeAuthenticator();
     std::string error;
 
-    EXPECT_FALSE(authenticator.authenticate("org.lcl.sandbox-test", 0, 0, error));
     EXPECT_FALSE(authenticator.authenticate(
-        "org.lcl.sandbox-test", 61000, 61001, error));
+        "org.lcl.sandbox-test", 1, getpid(), 0, 0, error));
+    EXPECT_FALSE(authenticator.authenticate(
+        "org.lcl.sandbox-test", 1, getpid(), 61000, 61001, error));
 }
 
 TEST_F(ApplicationPeerAuthenticatorTest, SessionUidCanOnlyClaimTrustedSystemIds) {
@@ -82,15 +109,15 @@ TEST_F(ApplicationPeerAuthenticatorTest, SessionUidCanOnlyClaimTrustedSystemIds)
     std::string error;
 
     EXPECT_TRUE(authenticator.authenticate(
-        "org.lcl.desktop-shell", 45000, 45000, error)) << error;
+        "org.lcl.desktop-shell", 0, getpid(), 45000, 45000, error)) << error;
     EXPECT_TRUE(authenticator.authenticate(
-        kTrustedUserShellAppId, 45000, 45000, error)) << error;
+        kTrustedUserShellAppId, 7, getpid(), 45000, 45000, error)) << error;
     EXPECT_TRUE(authenticator.authenticate(
-        kSystemSettingsAppId, 45000, 45000, error)) << error;
+        kSystemSettingsAppId, 8, getpid(), 45000, 45000, error)) << error;
     EXPECT_FALSE(authenticator.authenticate(
-        "org.lcl.sandbox-test", 45000, 45000, error));
+        "org.lcl.sandbox-test", 1, getpid(), 45000, 45000, error));
     EXPECT_FALSE(authenticator.authenticate(
-        "org.lcl.desktop-shell", 45000, 45001, error));
+        "org.lcl.desktop-shell", 1, getpid(), 45000, 45001, error));
 }
 
 TEST_F(ApplicationPeerAuthenticatorTest, FailsClosedForUnsafeRegistry) {
@@ -102,6 +129,6 @@ TEST_F(ApplicationPeerAuthenticatorTest, FailsClosedForUnsafeRegistry) {
 
     const auto authenticator = makeAuthenticator();
     EXPECT_FALSE(authenticator.authenticate(
-        identity->appId, identity->uid, identity->gid, error));
+        identity->appId, 1, getpid(), identity->uid, identity->gid, error));
     EXPECT_FALSE(error.empty());
 }

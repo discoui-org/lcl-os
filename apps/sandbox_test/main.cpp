@@ -74,7 +74,8 @@ bool systemIsReadOnly() {
     return errno == EROFS || errno == EACCES;
 }
 
-bool compositorRejectsForgedAppId() {
+bool compositorRejectsIdentity(std::string_view appId,
+                               uint64_t appInstanceId) {
     const char* socketPath = std::getenv("LCL_COMPOSITOR_SOCKET");
     if (!socketPath || socketPath[0] == '\0') {
         socketPath = "/Runtime/lcl-compositor.sock";
@@ -102,8 +103,12 @@ bool compositorRejectsForgedAppId() {
     surface.height = 64.0f;
     std::strncpy(surface.title, "Identity spoof probe",
                  sizeof(surface.title) - 1);
-    std::strncpy(surface.appId, "org.lcl.identity-spoof",
-                 sizeof(surface.appId) - 1);
+    if (appId.size() >= sizeof(surface.appId)) {
+        close(descriptor);
+        return false;
+    }
+    std::memcpy(surface.appId, appId.data(), appId.size());
+    surface.appInstanceId = appInstanceId;
 
     lcl::protocol::LCLHeader request{};
     request.opcode = lcl::protocol::LCLOpcode::SurfaceCreate;
@@ -158,7 +163,10 @@ std::vector<Check> runChecks() {
         {"securityd is hidden", serviceIsHidden("/Runtime/lcl-securityd.sock")},
         {"sandboxd is hidden", serviceIsHidden("/Runtime/lcl-sandboxd.sock")},
         {"Process limit is installed", limited},
-        {"Forged compositor app ID is rejected", compositorRejectsForgedAppId()},
+        {"Forged compositor app ID is rejected",
+         compositorRejectsIdentity("org.lcl.identity-spoof", 0)},
+        {"Forged compositor instance is rejected",
+         compositorRejectsIdentity("org.lcl.sandbox-test", 0)},
     };
 }
 
