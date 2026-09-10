@@ -1064,8 +1064,12 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
                     "LCL compositor did not expose a live listening IPC socket "
                     "before the rootfs session timeout."
                 )
+            session_trace_env = (
+                "LCL_TRACE_FRAMES=1 "
+                if os.environ.get("LCL_TRACE_FRAMES") == "1" else ""
+            )
             session_proc = subprocess.Popen(adb_shell_command(
-                f"{DEVICE_SESSION_LAUNCHER} 2>&1",
+                f"{session_trace_env}{DEVICE_SESSION_LAUNCHER} 2>&1",
                 as_root=True,
             ))
             log(f"Canonical {TARGET_ARCH} rootfs session launched.")

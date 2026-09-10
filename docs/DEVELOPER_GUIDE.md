@@ -92,6 +92,14 @@ summary:
 LCL_TRACE_FRAMES=1 /usr/bin/lcl-terminal
 ```
 
+For the trusted Settings application on Android, enable the same trace while
+starting the rootfs session. The deployment helper forwards only this boolean
+diagnostic flag through Settings' otherwise fixed launch environment:
+
+```bash
+LCL_TRACE_FRAMES=1 python3 tooling/deploy/deploy_android_device.py --rootfs --no-build --logcat
+```
+
 The `[LCL TRACE ...]` line reports layout passes and mean duration,
 rendered frame count and end-to-end paint duration, plus its `stages` split:
 logical clear, widget/effect DisplayList recording, and sealed rasterd submit.

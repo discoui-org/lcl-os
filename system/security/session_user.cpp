@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <linux/capability.h>
+#include <linux/securebits.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -50,6 +51,26 @@ bool clearCapabilities() {
     header.version = _LINUX_CAPABILITY_VERSION_3;
     std::array<__user_cap_data_struct, 2> capabilities{};
     return syscall(SYS_capset, &header, capabilities.data()) == 0;
+}
+
+bool clearAmbientCapabilities() {
+#if defined(PR_CAP_AMBIENT) && defined(PR_CAP_AMBIENT_CLEAR_ALL)
+    if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) == 0) {
+        return true;
+    }
+    // Kernels predating ambient capabilities report EINVAL and therefore have
+    // no ambient set to clear.
+    return errno == EINVAL;
+#else
+    return true;
+#endif
+}
+
+bool credentialDropFailed(std::string& error, const char* operation,
+                          int operationError = errno) {
+    error = std::string("could not drop to the session user (") + operation + "): " +
+            std::strerror(operationError);
+    return false;
 }
 
 bool ensureSessionDirectoryAt(int parentDescriptor, const char* name, ScopedFd& directory,
@@ -141,11 +162,44 @@ bool dropToSessionUser(std::string& error) {
     if (geteuid() != 0) {
         return true;
     }
-    if (prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0 || setgroups(0, nullptr) != 0 ||
-        setresgid(kSessionUserGid, kSessionUserGid, kSessionUserGid) != 0 ||
-        setresuid(kSessionUserUid, kSessionUserUid, kSessionUserUid) != 0 || !clearCapabilities() ||
-        prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 || prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
-        error = std::string("could not drop to the session user: ") + std::strerror(errno);
+
+    const int secureBits = prctl(PR_GET_SECUREBITS, 0, 0, 0, 0);
+    if (secureBits < 0) {
+        return credentialDropFailed(error, "PR_GET_SECUREBITS");
+    }
+
+    // Android root brokers can enter with KEEP_CAPS locked. In that state a
+    // redundant PR_SET_KEEPCAPS(0) fails with EPERM before the UID transition.
+    // Continue through the transition and explicitly clear every capability
+    // set below; KEEP_CAPS itself is cleared by execve.
+    if ((secureBits & SECBIT_KEEP_CAPS_LOCKED) == 0 &&
+        prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0) {
+        return credentialDropFailed(error, "PR_SET_KEEPCAPS");
+    }
+    if (setgroups(0, nullptr) != 0) {
+        return credentialDropFailed(error, "setgroups");
+    }
+    if (setresgid(kSessionUserGid, kSessionUserGid, kSessionUserGid) != 0) {
+        return credentialDropFailed(error, "setresgid");
+    }
+    if (setresuid(kSessionUserUid, kSessionUserUid, kSessionUserUid) != 0) {
+        return credentialDropFailed(error, "setresuid");
+    }
+    if (!clearAmbientCapabilities()) {
+        return credentialDropFailed(error, "PR_CAP_AMBIENT_CLEAR_ALL");
+    }
+    if (!clearCapabilities()) {
+        return credentialDropFailed(error, "capset");
+    }
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+        return credentialDropFailed(error, "PR_SET_NO_NEW_PRIVS");
+    }
+    if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
+        return credentialDropFailed(error, "PR_SET_DUMPABLE");
+    }
+    if (geteuid() != kSessionUserUid || getegid() != kSessionUserGid ||
+        getgroups(0, nullptr) != 0) {
+        error = "could not drop to the session user (credential verification failed)";
         return false;
     }
     return true;
@@ -186,6 +240,12 @@ bool prepareTrustedUserShellEnvironment(uint64_t instanceId, std::string& error)
 
 bool prepareSystemSettingsEnvironment(uint64_t instanceId, std::string& error) {
     error.clear();
+    // Settings normally receives a fixed, capability-free environment. Frame
+    // tracing is the one developer-only diagnostic admitted from sessiond;
+    // accept exactly the boolean enable value, never arbitrary variables.
+    const char* traceFrames = std::getenv("LCL_TRACE_FRAMES");
+    const bool frameTraceEnabled = traceFrames &&
+        std::strcmp(traceFrames, "1") == 0;
     if (clearenv() != 0) {
         error = std::string("could not clear inherited process environment: ") +
                 std::strerror(errno);
@@ -199,6 +259,10 @@ bool prepareSystemSettingsEnvironment(uint64_t instanceId, std::string& error) {
         !setEnvironmentVariable("LCL_APP_INSTANCE_ID", std::to_string(instanceId), error) ||
         !setEnvironmentVariable("LCL_LAUNCH_PROFILE", kSystemSettingsProfileId, error) ||
         !setEnvironmentVariable("LCL_SECURITY_ADMIN_FD", "4", error)) {
+        return false;
+    }
+    if (frameTraceEnabled &&
+        !setEnvironmentVariable("LCL_TRACE_FRAMES", "1", error)) {
         return false;
     }
     umask(0077);
