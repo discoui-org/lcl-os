@@ -10,6 +10,7 @@ struct MobileLaunchBackdropPresentation {
     float wallpaperScale{1.0f};
     float homeScale{1.0f};
     float brightness{1.0f};
+    float dimmingOpacity{0.0f};
 };
 
 inline MobileLaunchBackdropPresentation resolveMobileLaunchBackdrop(
@@ -19,11 +20,14 @@ inline MobileLaunchBackdropPresentation resolveMobileLaunchBackdrop(
     constexpr float kCoveredBrightness = 0.82f;
 
     const float clamped = std::clamp(progress, 0.0f, 1.0f);
+    const float brightness =
+        1.0f + (kCoveredBrightness - 1.0f) * clamped;
     return {
         clamped,
         1.0f + (kWallpaperCoveredScale - 1.0f) * clamped,
         1.0f + (kHomeCoveredScale - 1.0f) * clamped,
-        1.0f + (kCoveredBrightness - 1.0f) * clamped,
+        brightness,
+        1.0f - brightness,
     };
 }
 

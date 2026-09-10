@@ -447,6 +447,49 @@ void Compositor::renderDiagnosticOverlay() {
 }
 
 void Compositor::renderFrame() {
+    // A successfully resolved launch can still lose its client before the
+    // first raster layer. Never let that white fullscreen proxy permanently
+    // cover Home/Wallpaper. Detach the visual after a bounded interval while
+    // retaining a registered client surface so a late first frame can map as
+    // an ordinary window.
+    const auto launchNow = std::chrono::steady_clock::now();
+    std::vector<SurfaceRegistry::Key> expiredLaunchPlaceholders;
+    for (const auto& [surfaceKey, entry] : m_surfaces) {
+        if (entry.hasCommittedBuffer || entry.launchToken == 0 ||
+            entry.launchPlaceholderDeadline.time_since_epoch().count() == 0 ||
+            launchNow < entry.launchPlaceholderDeadline) {
+            continue;
+        }
+        expiredLaunchPlaceholders.push_back(surfaceKey);
+    }
+    for (const auto surfaceKey : expiredLaunchPlaceholders) {
+        auto found = m_surfaces.find(surfaceKey);
+        if (found == m_surfaces.end()) continue;
+        auto& entry = found->second;
+        if (m_protocolDispatcher) {
+            (void)m_protocolDispatcher->publishLaunchIconVisibility(
+                entry, true);
+        }
+        if (entry.windowId != 0) {
+            m_windowManager.removeWindow(entry.windowId);
+            entry.windowId = 0;
+        }
+        if (entry.isLaunchPlaceholder) {
+            m_surfaces.erase(found);
+        } else {
+            entry.launchToken = 0;
+            entry.launchOwnerFd = -1;
+            entry.hasLaunchOrigin = false;
+            entry.launchMorphActive = false;
+            entry.launchPlaceholderActive = false;
+            entry.launchPlaceholderDeadline = {};
+            entry.transitionPhase =
+                SurfaceRegistry::SurfaceEntry::TransitionPhase::None;
+            entry.transitionOpacity = 1.0f;
+            entry.transitionScale = 1.0f;
+        }
+        m_needsRedraw = true;
+    }
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
     // Resolve ready WindowGroup epochs without stalling the output.
     // CompositorRenderer retains only an incomplete group's last complete
@@ -500,7 +543,8 @@ void Compositor::renderFrame() {
         [this] { renderDiagnosticOverlay(); },
         !hasActiveTransitions && !m_showFpsOverlay,
         m_windowingPolicy &&
-            m_windowingPolicy->usesMobileWindowDecorations());
+            m_windowingPolicy->usesMobileWindowDecorations(),
+        hasActiveTransitions);
     m_lastComposeMs = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - composeStart).count();
 

@@ -164,6 +164,9 @@ public:
         std::chrono::steady_clock::time_point launchIconHandoffDeadline{};
         bool isLaunchPlaceholder{false};
         bool launchPlaceholderActive{false};
+        // Bounds the white launch proxy when a process registers but never
+        // publishes its first layer. A late first layer may still map normally.
+        std::chrono::steady_clock::time_point launchPlaceholderDeadline{};
         bool launchContentFadeActive{false};
         float launchContentOpacity{1.0f};
         float launchContentFadeElapsedSec{0.0f};

@@ -843,6 +843,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 // the white first-launch placeholder until resolution. A
                 // reused surface already owns the content it must present.
                 entry.launchPlaceholderActive = false;
+                entry.launchPlaceholderDeadline =
+                    std::chrono::steady_clock::now() +
+                    std::chrono::seconds(2);
                 entry.launchContentOpacity = 0.0f;
                 entry.launchContentFadeElapsedSec = 0.0f;
                 entry.launchContentFadeActive = false;

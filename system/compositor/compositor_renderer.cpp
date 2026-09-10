@@ -6,6 +6,7 @@
 #include "system/compositor/surface_damage_geometry.hpp"
 #include "lcl-theme/theme.hpp"
 #include "system/render/window_group_transform.hpp"
+#include "system/shells/mobile/gesture_indicator.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -21,7 +22,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
                                  const SurfaceRegistry::Snapshot& surfaces,
                                  const std::function<void()>& beforePresent,
                                  bool allowIncrementalDamage,
-                                 bool useMobilePresentation) const {
+                                 bool useMobilePresentation,
+                                 bool presentationTransitionActive) const {
     using SurfaceEntry = SurfaceRegistry::SurfaceEntry;
     // The snapshot contains only const entry pointers, so protocol/input work
     // cannot mutate the surface state while this frame is being composed.
@@ -1005,18 +1007,18 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 matchingSurface->systemSurfaceKind ==
                     protocol::LCLSystemSurfaceKind::HomeScreen &&
                 mobileBackdrop.progress > 0.0001f) {
-                protocol::FilterOp brightness{};
-                brightness.type = protocol::FilterType::Brightness;
-                brightness.value = mobileBackdrop.brightness;
-
-                // Launch progress changes brightness directly; it never becomes
-                // effect opacity.
-                raster->applyBackdropFilter(
-                    0.0f, 0.0f,
-                    windowManager.getScreenWidth(),
-                    windowManager.getScreenHeight(),
-                    0.0f, 2.0f, 1.0f,
-                    {brightness});
+                // Multiplying an opaque scene by brightness is equivalent to
+                // compositing black at (1 - brightness). Keep this launch-only
+                // effect in one blended pass instead of capturing the complete
+                // display, running a color-matrix pass, then copying it back.
+                const auto dimmingAlpha = static_cast<uint8_t>(std::clamp(
+                    std::lround(mobileBackdrop.dimmingOpacity * 255.0f),
+                    0l, 255l));
+                raster->drawRect(
+                    {0.0f, 0.0f,
+                     windowManager.getScreenWidth(),
+                     windowManager.getScreenHeight()},
+                    {0, 0, 0, dimmingAlpha});
             }
 
         }
@@ -1169,7 +1171,26 @@ void CompositorRenderer::render(render::Renderer& renderer,
             }
         }
 
-        if (!atomicConfigurePending) {
+        // The mobile navigation affordance is compositor-owned decoration.
+        // Keeping it in the WindowGroup removes the client-surface grant and
+        // native-buffer race while preserving identical placement on every
+        // graphics substrate. Home/Wallpaper are system surfaces and do not
+        // receive an in-app gesture indicator.
+        if (useMobilePresentation && matchingSurface &&
+            matchingSurface->systemSurfaceKind ==
+                protocol::LCLSystemSurfaceKind::None &&
+            matchingSurface->hasRenderableBuffer() &&
+            !matchingSurface->pendingDestroy) {
+            replayLogicalList(
+                lcl::mobile::buildGestureIndicatorDisplayList(
+                    group.globalBounds, windowOpacity));
+        }
+
+        // This cache is the last stable WindowGroup used by AtomicRetained
+        // resize. A presentation animation transforms already-ready layers;
+        // caching its changing bounds would reallocate and copy one large
+        // texture per window on every animation frame.
+        if (!atomicConfigurePending && !presentationTransitionActive) {
             const float retainedCornerRadius =
                 matchingSurface && matchingSurface->launchMorphActive
                     ? matchingSurface->launchMorphCornerRadius

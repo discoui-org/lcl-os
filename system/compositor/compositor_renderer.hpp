@@ -20,7 +20,8 @@ public:
                 const SurfaceRegistry::Snapshot& surfaces,
                 const std::function<void()>& beforePresent = {},
                 bool allowIncrementalDamage = false,
-                bool useMobilePresentation = false) const;
+                bool useMobilePresentation = false,
+                bool presentationTransitionActive = false) const;
 
 private:
     struct RetainedWindowGroup {
