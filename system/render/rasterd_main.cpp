@@ -347,7 +347,7 @@ PixelDamage pixelDamageFor(const CommitTransaction& submit, uint32_t width,
 }
 
 bool validNodeState(const RetainedNodeState& node) noexcept {
-    constexpr uint32_t kBoundaryMask = 0xffu;
+    constexpr uint32_t kBoundaryMask = 0x1ffu;
     constexpr uint32_t kExternalReason = 1u << 7u;
     constexpr uint32_t kAllowedFlags =
         lcl::raster_protocol::kNodeHasClip |
@@ -588,9 +588,11 @@ bool isRetainedPresentationCandidate(
     constexpr uint32_t kScrollViewportReason = 1u << 4u;
     constexpr uint32_t kScrollContentReason = 1u << 5u;
     constexpr uint32_t kExternalBufferReason = 1u << 7u;
+    constexpr uint32_t kRetainedPresentationReason = 1u << 8u;
     const bool presentation =
         (node.boundaryReasons &
-         (kTransformReason | kOpacityReason)) != 0;
+         (kTransformReason | kOpacityReason |
+          kRetainedPresentationReason)) != 0;
     const float area = node.layoutWidth * node.layoutHeight;
     return presentation &&
         (node.boundaryReasons & kRootReason) == 0 &&
@@ -681,6 +683,7 @@ bool isRetainedPresentationProperties(
         const std::unordered_set<uint64_t>& candidates) noexcept {
     constexpr uint32_t kTransformReason = 1u << 2u;
     constexpr uint32_t kOpacityReason = 1u << 3u;
+    constexpr uint32_t kRetainedPresentationReason = 1u << 8u;
     constexpr float kEpsilon = 0.0001f;
     const auto same = [=](float lhs, float rhs) {
         return std::fabs(lhs - rhs) <= kEpsilon;
@@ -692,7 +695,8 @@ bool isRetainedPresentationProperties(
     const auto& node = mutation.node;
     const auto* old = findRetainedNode(nodes, node.id);
     if (!old || !validNodeState(node)) return false;
-    const uint32_t allowedReasons = kTransformReason | kOpacityReason;
+    const uint32_t allowedReasons = kTransformReason | kOpacityReason |
+        kRetainedPresentationReason;
     const bool owner = candidates.contains(node.id);
     if (!owner && !std::any_of(
             candidates.begin(), candidates.end(), [&](uint64_t candidate) {

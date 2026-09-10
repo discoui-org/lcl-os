@@ -83,6 +83,11 @@ private:
         Widget* incoming{nullptr};
         Widget* activeAfterCompletion{nullptr};
         bool removeOutgoing{false};
+        bool preparingPush{false};
+        unsigned preparationTicks{0};
+        float outgoingTarget{0.0f};
+        float incomingTarget{0.0f};
+        float preparedIncomingStart{0.0f};
         uint64_t generation{0};
     };
 
@@ -106,7 +111,11 @@ private:
     void beginSpringTransition(PageTransition kind, Widget* outgoing,
                                Widget* incoming, Widget* activeAfterCompletion,
                                bool removeOutgoing, float outgoingTarget,
-                               float incomingTarget);
+                               float incomingTarget,
+                               bool preparePush = false,
+                               float preparedIncomingStart = 0.0f);
+    void startSpringAnimations(uint64_t generation);
+    void updateRetainedPageHints();
     void tickTransition(uint64_t generation);
     void completeTransition(uint64_t generation);
     void finishActiveTransition();

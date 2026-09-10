@@ -1,5 +1,8 @@
 #include "lcl-ui/widgets/navigation_stack.hpp"
 
+#include "lcl-ui/widgets/external_buffer.hpp"
+#include "lcl-ui/widgets/scroll_view.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -25,6 +28,18 @@ constexpr float kCommitProgress = 0.32f;
 
 bool supportsEdgeDrag(const PointerEvent& event) {
     return event.source == PointerSource::Touch;
+}
+
+bool supportsRetainedPagePresentation(const Widget& widget) {
+    if (dynamic_cast<const ScrollView*>(&widget) ||
+        dynamic_cast<const ExternalBufferView*>(&widget)) {
+        return false;
+    }
+    return std::all_of(
+        widget.getChildren().begin(), widget.getChildren().end(),
+        [](const auto& child) {
+            return child && supportsRetainedPagePresentation(*child);
+        });
 }
 
 } // namespace
@@ -60,6 +75,8 @@ NavigationStack::~NavigationStack() {
 Widget* NavigationStack::mountPage(NavigationPage& page) {
     if (!page.content) return nullptr;
     Widget* content = page.content.get();
+    content->setRetainedPresentationHint(
+        supportsRetainedPagePresentation(*content));
     content->setPositionType(layout::PositionType::Absolute);
     content->setPosition(layout::Edge::Left, 0.0f);
     content->setPosition(layout::Edge::Top, 0.0f);
@@ -76,6 +93,7 @@ bool NavigationStack::setRootPage(NavigationPage page) {
     Widget* content = mountPage(page);
     if (!content) return false;
     m_entries.push_back({std::move(page.route), std::move(page.title), content});
+    updateRetainedPageHints();
     updateBar();
     notifyRouteChanged();
     return true;
@@ -88,6 +106,7 @@ bool NavigationStack::push(NavigationPage page, PageTransition transition) {
     Widget* incoming = mountPage(page);
     if (!incoming) return false;
     m_entries.push_back({std::move(page.route), std::move(page.title), incoming});
+    updateRetainedPageHints();
     updateBar();
     notifyRouteChanged();
     beginTransition(transition, outgoing, incoming);
@@ -100,6 +119,7 @@ bool NavigationStack::pop(PageTransition transition) {
     Widget* outgoing = m_entries.back().content;
     m_entries.pop_back();
     Widget* incoming = m_entries.back().content;
+    updateRetainedPageHints();
     incoming->setVisible(true);
     incoming->setInteractionEnabled(true);
     updateBar();
@@ -116,6 +136,7 @@ bool NavigationStack::replace(NavigationPage page, PageTransition transition) {
     if (!incoming) return false;
     m_entries.pop_back();
     m_entries.push_back({std::move(page.route), std::move(page.title), incoming});
+    updateRetainedPageHints();
     updateBar();
     notifyRouteChanged();
     beginTransition(transition, outgoing, incoming);
@@ -136,6 +157,7 @@ bool NavigationStack::reset(NavigationPage page, PageTransition transition) {
     Widget* incoming = mountPage(page);
     if (!incoming) return false;
     m_entries.push_back({std::move(page.route), std::move(page.title), incoming});
+    updateRetainedPageHints();
     updateBar();
     notifyRouteChanged();
 
@@ -221,9 +243,20 @@ void NavigationStack::beginTransition(PageTransition kind, Widget* outgoing,
     incoming->setVisible(true);
 
     if (kind == PageTransition::Push) {
-        incoming->setTranslationX(width);
-        beginSpringTransition(kind, outgoing, incoming, incoming, false,
-                              -kBackParallax * width, 0.0f);
+        if (incoming->retainedPresentationHint()) {
+            // Record the new page into its retained layer while it is
+            // invisible but still within the viewport. The spring starts
+            // after that frame is presented, avoiding a full page raster
+            // during the visible slide.
+            incoming->setTranslationX(0.0f);
+            incoming->setOpacity(0.0f);
+            beginSpringTransition(kind, outgoing, incoming, incoming, false,
+                                  -kBackParallax * width, 0.0f, true, width);
+        } else {
+            incoming->setTranslationX(width);
+            beginSpringTransition(kind, outgoing, incoming, incoming, false,
+                                  -kBackParallax * width, 0.0f);
+        }
     } else if (kind == PageTransition::Pop) {
         incoming->setTranslationX(-kBackParallax * width);
         beginSpringTransition(kind, outgoing, incoming, incoming, true,
@@ -265,11 +298,13 @@ void NavigationStack::beginTransition(PageTransition kind, Widget* outgoing,
 void NavigationStack::beginSpringTransition(
         PageTransition kind, Widget* outgoing, Widget* incoming,
         Widget* activeAfterCompletion, bool removeOutgoing,
-        float outgoingTarget, float incomingTarget) {
+        float outgoingTarget, float incomingTarget,
+        bool preparePush, float preparedIncomingStart) {
     auto* coordinator = getMotionCoordinator();
     if (!coordinator) {
         outgoing->setTranslationX(outgoingTarget);
         incoming->setTranslationX(incomingTarget);
+        incoming->setOpacity(1.0f);
         if (removeOutgoing) m_viewport->removeChild(outgoing);
         activeAfterCompletion->setInteractionEnabled(true);
         return;
@@ -282,14 +317,37 @@ void NavigationStack::beginSpringTransition(
         .incoming = incoming,
         .activeAfterCompletion = activeAfterCompletion,
         .removeOutgoing = removeOutgoing,
+        .preparingPush = preparePush,
+        .preparationTicks = preparePush ? 1u : 0u,
+        .outgoingTarget = outgoingTarget,
+        .incomingTarget = incomingTarget,
+        .preparedIncomingStart = preparedIncomingStart,
         .generation = generation,
     };
+    const auto lifetime = getLifetimeToken();
+    coordinator->registerPresentation(*this, [lifetime, this, generation](float) {
+        if (!lifetime.expired()) tickTransition(generation);
+    });
+    if (preparePush) return;
+    startSpringAnimations(generation);
+}
+
+void NavigationStack::startSpringAnimations(uint64_t generation) {
+    if (!m_transition.active || m_transition.generation != generation) return;
+    auto* coordinator = getMotionCoordinator();
+    if (!coordinator) {
+        completeTransition(generation);
+        return;
+    }
+    Widget* outgoing = m_transition.outgoing;
+    Widget* incoming = m_transition.incoming;
     const auto motion = pageSpring();
     const auto outgoingLifetime = outgoing->getLifetimeToken();
     const auto incomingLifetime = incoming->getLifetimeToken();
     coordinator->animateFloat(
         *outgoing, AnimatableProperty::TranslationX,
-        outgoing->getPresentationState().translationX, outgoingTarget, motion,
+        outgoing->getPresentationState().translationX,
+        m_transition.outgoingTarget, motion,
         [outgoingLifetime, outgoing](float value) {
             if (!outgoingLifetime.expired())
                 outgoing->applyPresentationValue(
@@ -297,20 +355,31 @@ void NavigationStack::beginSpringTransition(
         });
     coordinator->animateFloat(
         *incoming, AnimatableProperty::TranslationX,
-        incoming->getPresentationState().translationX, incomingTarget, motion,
+        incoming->getPresentationState().translationX,
+        m_transition.incomingTarget, motion,
         [incomingLifetime, incoming](float value) {
             if (!incomingLifetime.expired())
                 incoming->applyPresentationValue(
                     AnimatableProperty::TranslationX, value);
         });
-    const auto lifetime = getLifetimeToken();
-    coordinator->registerPresentation(*this, [lifetime, this, generation](float) {
-        if (!lifetime.expired()) tickTransition(generation);
-    });
 }
 
 void NavigationStack::tickTransition(uint64_t generation) {
     if (!m_transition.active || m_transition.generation != generation) return;
+    if (m_transition.preparingPush) {
+        if (m_transition.preparationTicks > 0) {
+            --m_transition.preparationTicks;
+            return;
+        }
+        m_transition.preparingPush = false;
+        if (m_transition.incoming) {
+            m_transition.incoming->setTranslationX(
+                m_transition.preparedIncomingStart);
+            m_transition.incoming->setOpacity(1.0f);
+        }
+        startSpringAnimations(generation);
+        return;
+    }
     auto* coordinator = getMotionCoordinator();
     if (!coordinator ||
         (!coordinator->isObjectAnimating(m_transition.outgoing->getObjectId()) &&
@@ -334,7 +403,10 @@ void NavigationStack::completeTransition(uint64_t generation) {
         incoming->setOpacity(1.0f);
         incoming->setInteractionEnabled(incoming == active);
     }
-    if (!outgoing || outgoing == incoming) return;
+    if (!outgoing || outgoing == incoming) {
+        updateRetainedPageHints();
+        return;
+    }
     outgoing->setTranslationX(0.0f);
     outgoing->setOpacity(1.0f);
     if (!removeOutgoing) {
@@ -342,6 +414,19 @@ void NavigationStack::completeTransition(uint64_t generation) {
         outgoing->setInteractionEnabled(outgoing == active);
     } else {
         m_viewport->removeChild(outgoing);
+    }
+    updateRetainedPageHints();
+}
+
+void NavigationStack::updateRetainedPageHints() {
+    const size_t firstRetained = m_entries.size() > 2
+        ? m_entries.size() - 2 : 0;
+    for (size_t index = 0; index < m_entries.size(); ++index) {
+        if (m_entries[index].content) {
+            m_entries[index].content->setRetainedPresentationHint(
+                index >= firstRetained && supportsRetainedPagePresentation(
+                    *m_entries[index].content));
+        }
     }
 }
 

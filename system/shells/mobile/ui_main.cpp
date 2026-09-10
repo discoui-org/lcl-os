@@ -258,9 +258,25 @@ std::unique_ptr<lcl::ui::Container> makeLauncherTile(
 std::unique_ptr<lcl::ui::Widget> makeWallpaperRoot(
     const std::string& wallpaperPath,
     uint32_t width,
-    uint32_t height) {
-    auto wallpaper = std::make_unique<lcl::ui::Image>(wallpaperPath);
-    wallpaper->setFit(lcl::ui::ImageFit::Cover);
+    uint32_t height,
+    float bufferScale) {
+    const uint32_t pixelWidth = std::max(
+        1u, static_cast<uint32_t>(std::ceil(width * bufferScale)));
+    const uint32_t pixelHeight = std::max(
+        1u, static_cast<uint32_t>(std::ceil(height * bufferScale)));
+
+    std::shared_ptr<const lcl::ui::ImageData> image;
+    if (auto source = lcl::ui::ImageLoader::loadArgb32(wallpaperPath)) {
+        auto resized = lcl::ui::ImageLoader::resizeCover(
+            *source, pixelWidth, pixelHeight);
+        if (resized.isValid()) {
+            image = std::make_shared<const lcl::ui::ImageData>(
+                std::move(resized));
+        }
+    }
+
+    auto wallpaper = std::make_unique<lcl::ui::Image>(std::move(image));
+    wallpaper->setFit(lcl::ui::ImageFit::Fill);
     wallpaper->setWidth(static_cast<float>(width));
     wallpaper->setHeight(static_cast<float>(height));
     return wallpaper;
@@ -334,11 +350,32 @@ int main() {
     wallpaper->setInputEnabled(false);
     wallpaper->setInitialBounds(0, 0, width, height);
     wallpaper->setRootWidget(
-        makeWallpaperRoot(wallpaperPath, width, height));
-    wallpaper->setOnResize([&, wallpaperApp](
+        makeWallpaperRoot(
+            wallpaperPath, width, height, wallpaper->getBufferScale()));
+    uint32_t wallpaperPixelWidth = wallpaper->getPixelWidth();
+    uint32_t wallpaperPixelHeight = wallpaper->getPixelHeight();
+    auto rebuildWallpaper = [&, wallpaperApp](
             uint32_t resizedWidth, uint32_t resizedHeight) {
+        wallpaperPixelWidth = wallpaperApp->getPixelWidth();
+        wallpaperPixelHeight = wallpaperApp->getPixelHeight();
         wallpaperApp->setRootWidget(makeWallpaperRoot(
-            wallpaperPath, resizedWidth, resizedHeight));
+            wallpaperPath, resizedWidth, resizedHeight,
+            wallpaperApp->getBufferScale()));
+    };
+    wallpaper->setOnResize([&rebuildWallpaper](
+            uint32_t resizedWidth, uint32_t resizedHeight) {
+        rebuildWallpaper(resizedWidth, resizedHeight);
+    });
+    wallpaper->setOnFrame([&, wallpaperApp] {
+        const uint32_t pixelWidth = wallpaperApp->getPixelWidth();
+        const uint32_t pixelHeight = wallpaperApp->getPixelHeight();
+        if (pixelWidth == wallpaperPixelWidth &&
+            pixelHeight == wallpaperPixelHeight) {
+            return;
+        }
+        rebuildWallpaper(
+            static_cast<uint32_t>(wallpaperApp->getWidth()),
+            static_cast<uint32_t>(wallpaperApp->getHeight()));
     });
     wallpaper->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 

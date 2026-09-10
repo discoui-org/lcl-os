@@ -1183,7 +1183,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
             !matchingSurface->pendingDestroy) {
             replayLogicalList(
                 lcl::mobile::buildGestureIndicatorDisplayList(
-                    group.globalBounds, windowOpacity));
+                    group.localBounds, windowOpacity),
+                group.localToGlobal);
         }
 
         // This cache is the last stable WindowGroup used by AtomicRetained

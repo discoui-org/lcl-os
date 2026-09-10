@@ -449,6 +449,13 @@ void Widget::setTranslationY(float value) {
         [this](float next) { applyPresentationValue(AnimatableProperty::TranslationY, next); });
     else applyPresentationValue(AnimatableProperty::TranslationY, value);
 }
+
+void Widget::setRetainedPresentationHint(bool enabled) {
+    if (m_retainedPresentationHint == enabled) return;
+    const graphics::RectF previous = getVisiblePresentationPaintBounds();
+    m_retainedPresentationHint = enabled;
+    invalidatePresentationForCompositing(previous);
+}
 void Widget::setScale(float value) { setScale(value, value); }
 void Widget::setScale(float x, float y) {
     m_modelTransform.scaleX = x;

@@ -159,4 +159,94 @@ ImageData ImageLoader::resizeBilinear(const ImageData& src, uint32_t targetWidth
     return out;
 }
 
+ImageData ImageLoader::resizeCover(const ImageData& src,
+                                   uint32_t targetWidth,
+                                   uint32_t targetHeight) {
+    ImageData out{};
+    out.resourceId = allocateImageResourceId();
+    out.width = targetWidth;
+    out.height = targetHeight;
+
+    if (!src.isValid() || targetWidth == 0 || targetHeight == 0) {
+        return out;
+    }
+
+    out.pixels.resize(
+        static_cast<size_t>(targetWidth) * static_cast<size_t>(targetHeight));
+    out.opaque = true;
+
+    const double sourceAspect =
+        static_cast<double>(src.width) / static_cast<double>(src.height);
+    const double targetAspect =
+        static_cast<double>(targetWidth) / static_cast<double>(targetHeight);
+    double cropWidth = static_cast<double>(src.width);
+    double cropHeight = static_cast<double>(src.height);
+    if (sourceAspect > targetAspect) {
+        cropWidth = cropHeight * targetAspect;
+    } else {
+        cropHeight = cropWidth / targetAspect;
+    }
+    const double cropX =
+        (static_cast<double>(src.width) - cropWidth) * 0.5;
+    const double cropY =
+        (static_cast<double>(src.height) - cropHeight) * 0.5;
+
+    auto channel = [](uint32_t argb, uint32_t shift) {
+        return static_cast<double>((argb >> shift) & 0xFFu);
+    };
+    auto sampleChannel = [&](uint32_t topLeft, uint32_t topRight,
+                             uint32_t bottomLeft, uint32_t bottomRight,
+                             uint32_t shift, double fx, double fy) {
+        const double top = channel(topLeft, shift) * (1.0 - fx) +
+                           channel(topRight, shift) * fx;
+        const double bottom = channel(bottomLeft, shift) * (1.0 - fx) +
+                              channel(bottomRight, shift) * fx;
+        return static_cast<uint32_t>(std::clamp(
+            std::lround(top * (1.0 - fy) + bottom * fy), 0l, 255l));
+    };
+
+    for (uint32_t y = 0; y < targetHeight; ++y) {
+        const double sourceY = std::clamp(
+            cropY + (static_cast<double>(y) + 0.5) * cropHeight /
+                        targetHeight - 0.5,
+            0.0, static_cast<double>(src.height - 1));
+        const int y0 = static_cast<int>(std::floor(sourceY));
+        const int y1 = std::min(y0 + 1, static_cast<int>(src.height) - 1);
+        const double fy = sourceY - std::floor(sourceY);
+
+        for (uint32_t x = 0; x < targetWidth; ++x) {
+            const double sourceX = std::clamp(
+                cropX + (static_cast<double>(x) + 0.5) * cropWidth /
+                            targetWidth - 0.5,
+                0.0, static_cast<double>(src.width - 1));
+            const int x0 = static_cast<int>(std::floor(sourceX));
+            const int x1 = std::min(x0 + 1, static_cast<int>(src.width) - 1);
+            const double fx = sourceX - std::floor(sourceX);
+
+            const uint32_t topLeft =
+                src.pixels[static_cast<size_t>(y0) * src.width + x0];
+            const uint32_t topRight =
+                src.pixels[static_cast<size_t>(y0) * src.width + x1];
+            const uint32_t bottomLeft =
+                src.pixels[static_cast<size_t>(y1) * src.width + x0];
+            const uint32_t bottomRight =
+                src.pixels[static_cast<size_t>(y1) * src.width + x1];
+
+            const uint32_t a = sampleChannel(
+                topLeft, topRight, bottomLeft, bottomRight, 24, fx, fy);
+            const uint32_t r = sampleChannel(
+                topLeft, topRight, bottomLeft, bottomRight, 16, fx, fy);
+            const uint32_t g = sampleChannel(
+                topLeft, topRight, bottomLeft, bottomRight, 8, fx, fy);
+            const uint32_t b = sampleChannel(
+                topLeft, topRight, bottomLeft, bottomRight, 0, fx, fy);
+            out.pixels[static_cast<size_t>(y) * targetWidth + x] =
+                (a << 24) | (r << 16) | (g << 8) | b;
+            out.opaque = out.opaque && a == 0xFFu;
+        }
+    }
+
+    return out;
+}
+
 } // namespace lcl::ui

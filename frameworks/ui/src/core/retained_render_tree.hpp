@@ -24,6 +24,7 @@ enum class RenderBoundaryReason : uint32_t {
     ScrollContent = 1u << 5u,
     Effect = 1u << 6u,
     ExternalBuffer = 1u << 7u,
+    RetainedPresentation = 1u << 8u,
 };
 
 constexpr RenderBoundaryReason operator|(RenderBoundaryReason lhs,

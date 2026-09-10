@@ -394,9 +394,12 @@ private:
         constexpr auto kRoot = detail::RenderBoundaryReason::Root;
         constexpr auto kTransform = detail::RenderBoundaryReason::Transform;
         constexpr auto kOpacity = detail::RenderBoundaryReason::Opacity;
+        constexpr auto kHint =
+            detail::RenderBoundaryReason::RetainedPresentation;
         const bool presentation = detail::hasBoundaryReason(
                 node.boundaryReasons, kTransform) ||
-            detail::hasBoundaryReason(node.boundaryReasons, kOpacity);
+            detail::hasBoundaryReason(node.boundaryReasons, kOpacity) ||
+            detail::hasBoundaryReason(node.boundaryReasons, kHint);
         const float area = node.layoutBounds.width * node.layoutBounds.height;
         return presentation &&
             !detail::hasBoundaryReason(node.boundaryReasons, kRoot) &&
@@ -547,8 +550,11 @@ private:
             const detail::RetainedRenderNode& previous) noexcept {
         constexpr auto kTransform = detail::RenderBoundaryReason::Transform;
         constexpr auto kOpacity = detail::RenderBoundaryReason::Opacity;
+        constexpr auto kHint =
+            detail::RenderBoundaryReason::RetainedPresentation;
         const auto allowedReasons = static_cast<uint32_t>(kTransform) |
-            static_cast<uint32_t>(kOpacity);
+            static_cast<uint32_t>(kOpacity) |
+            static_cast<uint32_t>(kHint);
         const auto reasonsChanged = static_cast<uint32_t>(
             node.boundaryReasons) ^ static_cast<uint32_t>(
             previous.boundaryReasons);

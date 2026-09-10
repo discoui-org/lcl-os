@@ -241,6 +241,9 @@ std::optional<std::size_t> compileWidget(const Widget& widget,
     if (externalBuffer != nullptr) {
         reasons |= RenderBoundaryReason::ExternalBuffer;
     }
+    if (widget.retainedPresentationHint()) {
+        reasons |= RenderBoundaryReason::RetainedPresentation;
+    }
 
     RenderNode node;
     node.id = widget.getObjectId();
