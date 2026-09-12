@@ -340,6 +340,21 @@ struct WindowApp::PrivateRenderState {
         return !retainedPresentationLayers.empty();
     }
 
+    /** True only when this frame recorded every selected presentation owner. */
+    bool recordsAllRetainedPresentationLayers(
+            const graphics::DisplayList& displayList) const {
+        if (retainedPresentationLayers.empty()) return false;
+        std::unordered_set<uint64_t> recorded;
+        for (const auto& command : displayList.commands()) {
+            const auto* draw = std::get_if<graphics::DrawCachedLayerCommand>(
+                &command);
+            if (draw && retainedPresentationLayers.contains(draw->id)) {
+                recorded.insert(draw->id);
+            }
+        }
+        return recorded.size() == retainedPresentationLayers.size();
+    }
+
     bool hasScrollContent() const noexcept {
         return std::any_of(
             tree.retainedNodes.begin(), tree.retainedNodes.end(),
@@ -394,6 +409,7 @@ private:
         constexpr auto kRoot = detail::RenderBoundaryReason::Root;
         constexpr auto kTransform = detail::RenderBoundaryReason::Transform;
         constexpr auto kOpacity = detail::RenderBoundaryReason::Opacity;
+        constexpr auto kEffect = detail::RenderBoundaryReason::Effect;
         constexpr auto kHint =
             detail::RenderBoundaryReason::RetainedPresentation;
         const bool presentation = detail::hasBoundaryReason(
@@ -403,6 +419,7 @@ private:
         const float area = node.layoutBounds.width * node.layoutBounds.height;
         return presentation &&
             !detail::hasBoundaryReason(node.boundaryReasons, kRoot) &&
+            !detail::hasBoundaryReason(node.boundaryReasons, kEffect) &&
             !isScrollBoundary(node) &&
             !isExternalBuffer(node) &&
             node.layoutBounds.width > 0.0f &&
@@ -471,7 +488,19 @@ private:
                         (descendant.id == node.id || descendsFrom(
                             candidate, descendant.id, node.id));
                 });
-            if (!containsScroll && !containsExternal) result.insert(node.id);
+            const bool containsBackdropDependency = std::any_of(
+                candidate.retainedNodes.begin(), candidate.retainedNodes.end(),
+                [&](const auto& descendant) {
+                    return detail::hasBoundaryReason(
+                               descendant.boundaryReasons,
+                               detail::RenderBoundaryReason::Effect) &&
+                        (descendant.id == node.id || descendsFrom(
+                            candidate, descendant.id, node.id));
+                });
+            if (!containsScroll && !containsExternal &&
+                !containsBackdropDependency) {
+                result.insert(node.id);
+            }
         }
         return result;
     }
@@ -658,6 +687,12 @@ WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, floa
         m_pixelBuffer.empty() ? nullptr : m_pixelBuffer.data());
     updateCanvasRenderTarget();
     m_motionCoordinator.setLayoutCallback([this] { updateLayout(); });
+    m_motionCoordinator.setCompositorAnimationDelegate(
+        [this](Widget& widget, AnimatableProperty property, float start,
+               float target, float velocity, const lcl::motion::Motion& motion) {
+            return submitPresentationAnimation(
+                widget, property, start, target, velocity, motion);
+        });
 
     auto defaultRoot = std::make_unique<Container>();
     defaultRoot->setWidth(static_cast<float>(width));
@@ -1077,21 +1112,41 @@ void WindowApp::pollIPC() {
     if (!m_ipcConnected || m_socketFd < 0) return;
 
     const bool rasterWasConnected = m_rasterClient->isConnected();
-    for (const auto& discarded : m_rasterClient->pollDiscards()) {
-        if (discarded.surfaceId != m_surfaceId ||
-            discarded.frameSerial != m_submittedFrameSerial) continue;
-        m_submittedConfigureSerial = 0;
-        m_submittedFrameSerial = 0;
-        m_submittedGeometryGeneration = 0;
-        m_retainedRasterFrameSerial = 0;
-        m_scrollTransformFastPathReady = false;
-        m_retainedPresentationFastPathReady = false;
-        m_externalBufferFastPathReady = false;
-        m_frameGateOpen = true;
-        m_firstFrame = true;
-    }
-    for (const auto& released :
-         m_rasterClient->takeExternalBufferReleases()) {
+    for (auto event : m_rasterClient->pollEvents()) {
+        if (event.kind == RasterServiceEvent::Kind::FrameDiscarded) {
+            const auto& discarded = event.discarded;
+            if (discarded.surfaceId != m_surfaceId ||
+                discarded.frameSerial != m_submittedFrameSerial) continue;
+            m_submittedConfigureSerial = 0;
+            m_submittedFrameSerial = 0;
+            m_submittedGeometryGeneration = 0;
+            m_retainedRasterFrameSerial = 0;
+            m_scrollTransformFastPathReady = false;
+            m_retainedPresentationFastPathReady = false;
+            m_externalBufferFastPathReady = false;
+            m_frameGateOpen = true;
+            m_firstFrame = true;
+            continue;
+        }
+        if (event.kind ==
+            RasterServiceEvent::Kind::PresentationAnimationResult) {
+            m_motionCoordinator.completeCompositorAnimation(
+                event.animation.nodeId, event.animation.transactionId);
+            // Results can arrive while the content frame gate is closed. Run
+            // completion observers immediately so a NavigationStack keeps its
+            // outgoing page alive through the final sampled vSync, then hands
+            // input to the incoming page without waiting for another raster
+            // credit.
+            m_motionCoordinator.tickCompositorPresentations();
+            if (m_onPresentationAnimationResult) {
+                m_onPresentationAnimationResult(event.animation);
+            }
+            continue;
+        }
+        if (event.kind != RasterServiceEvent::Kind::ExternalBufferReleased) {
+            continue;
+        }
+        const auto& released = event.externalBufferRelease;
         const auto found = m_uploadedExternalBuffers.find(
             released.message.bufferId);
         if (found != m_uploadedExternalBuffers.end() &&
@@ -1283,6 +1338,11 @@ void WindowApp::pollIPC() {
                     m_submittedFrameSerial = 0;
                     m_submittedGeometryGeneration = 0;
                     m_frameGateOpen = true;
+                    // Navigation cache preparation is a presented-frame state
+                    // machine. Advance it at the acknowledgement itself so it
+                    // cannot depend on a later generic animation tick.
+                    m_motionCoordinator.tickCompositorPresentations();
+                    m_presentedFrameObserverTicked = true;
                     if (m_frameTraceEnabled) {
                         ++m_tracePresentedFrames;
                         const auto appendDuration = [](uint64_t startNs,
@@ -1360,8 +1420,9 @@ void WindowApp::pollIPC() {
                 if (visibility->visible != 0) {
                     lcl::protocol::LCLMsgLaunchIconVisibilityAck ack{};
                     ack.launchToken = visibility->launchToken;
-                    std::strncpy(ack.appId, visibility->appId,
-                                 sizeof(ack.appId) - 1);
+                    std::memcpy(ack.appId, visibility->appId,
+                                sizeof(ack.appId));
+                    ack.appId[sizeof(ack.appId) - 1] = '\0';
                     m_pendingLaunchIconVisibilityAck = ack;
                 }
             } else if (header.opcode == lcl::protocol::LCLOpcode::SurfaceDestroy) {
@@ -1477,6 +1538,7 @@ void WindowApp::runEventLoop() {
 
 bool WindowApp::tick() {
     m_transients.pruneExpiredOwners();
+    m_presentedFrameObserverTicked = false;
     pollIPC();
     if (m_onFrame) {
         m_onFrame();
@@ -1491,7 +1553,11 @@ bool WindowApp::tick() {
         const float dtSec = std::chrono::duration<float>(
             now - m_lastAnimationTick).count();
         m_lastAnimationTick = now;
-        advanceAnimations(dtSec);
+        const bool motionActive = m_motionCoordinator.tick(
+            dtSec, !m_presentedFrameObserverTicked);
+        if (m_morphInputFrozen && !motionActive) {
+            m_morphInputFrozen = false;
+        }
     }
     bool rendered = renderFrame();
     m_tickingHostedSurfaces = true;
@@ -1633,9 +1699,117 @@ void WindowApp::animate(const lcl::motion::Motion& motion,
 }
 
 bool WindowApp::advanceAnimations(float dtSec) {
+    // A connected surface has exactly one outstanding content credit.  Do not
+    // let a caller that is manually stepping animations advance a navigation
+    // cache/preparation observer while the compositor still owns that credit:
+    // its target layer has not reached FramePresented yet.  Unconnected host
+    // tests retain their normal deterministic stepping behavior.
+    if (m_ipcConnected && !m_frameGateOpen) {
+        return m_motionCoordinator.hasActiveAnimations();
+    }
     const bool motionActive = m_motionCoordinator.tick(dtSec);
     if (m_morphInputFrozen && !motionActive) m_morphInputFrozen = false;
     return motionActive;
+}
+
+bool WindowApp::submitPresentationAnimation(
+        Widget& widget, AnimatableProperty property, float start, float target,
+        float velocity, const lcl::motion::Motion& motion) {
+    const bool supportedProperty = property == AnimatableProperty::Opacity ||
+        property == AnimatableProperty::TranslationX ||
+        property == AnimatableProperty::TranslationY ||
+        property == AnimatableProperty::ScaleX ||
+        property == AnimatableProperty::ScaleY ||
+        property == AnimatableProperty::Rotation;
+    if (!supportedProperty || !m_ipcConnected || !m_rasterClient ||
+        !m_rasterClient->isConfigured()) {
+        return false;
+    }
+    const bool eligible = m_retainedPresentationFastPathReady &&
+        m_privateRenderState->isRetainedPresentationLayer(widget.getObjectId()) &&
+        std::isfinite(start) && std::isfinite(target) &&
+        std::isfinite(velocity);
+    if (!eligible) {
+        // No retained boundary (layout/scroll/external/backdrop dependency,
+        // or an allocation/budget rejection): do not recreate the old
+        // low-FPS raster loop. The caller applies final presentation state;
+        // its ordinary one-shot commit restores the correct pixels.
+        return true;
+    }
+    const auto& current = widget.getPresentationState();
+    auto animation = lcl::raster_protocol::PresentationAnimation{};
+    animation.grant = m_rasterClient->surfaceGrant();
+    animation.transactionId = m_nextPresentationAnimationTransaction++;
+    if (m_nextPresentationAnimationTransaction == 0) {
+        m_nextPresentationAnimationTransaction = 1;
+    }
+    animation.nodeId = widget.getObjectId();
+    animation.curve = motion.mode == lcl::motion::MotionMode::Spring
+        ? lcl::raster_protocol::PresentationAnimationCurve::Spring
+        : lcl::raster_protocol::PresentationAnimationCurve::Tween;
+    animation.durationSec = motion.mode == lcl::motion::MotionMode::Tween
+        ? motion.tweenParams.durationSec
+        : lcl::motion::estimateSettlingTime(motion.springParams);
+    animation.durationSec = std::clamp(animation.durationSec, 0.001f, 10.0f);
+    animation.springMass = motion.springParams.mass;
+    animation.springStiffness = motion.springParams.stiffness;
+    animation.springDamping = motion.springParams.damping;
+    animation.startTranslationX = current.translationX;
+    animation.targetTranslationX = current.translationX;
+    animation.startTranslationY = current.translationY;
+    animation.targetTranslationY = current.translationY;
+    animation.startScaleX = current.scaleX;
+    animation.targetScaleX = current.scaleX;
+    animation.startScaleY = current.scaleY;
+    animation.targetScaleY = current.scaleY;
+    animation.startRotationRadians = current.rotationRadians;
+    animation.targetRotationRadians = current.rotationRadians;
+    animation.startOpacity = current.opacity;
+    animation.targetOpacity = current.opacity;
+    switch (property) {
+        case AnimatableProperty::Opacity:
+            animation.propertyMask = lcl::raster_protocol::kAnimationOpacity;
+            animation.startOpacity = start;
+            animation.targetOpacity = target;
+            animation.initialVelocityOpacity = velocity;
+            break;
+        case AnimatableProperty::TranslationX:
+            animation.propertyMask = lcl::raster_protocol::kAnimationTranslation;
+            animation.startTranslationX = start;
+            animation.targetTranslationX = target;
+            animation.initialVelocityX = velocity;
+            break;
+        case AnimatableProperty::TranslationY:
+            animation.propertyMask = lcl::raster_protocol::kAnimationTranslation;
+            animation.startTranslationY = start;
+            animation.targetTranslationY = target;
+            animation.initialVelocityY = velocity;
+            break;
+        case AnimatableProperty::ScaleX:
+            animation.propertyMask = lcl::raster_protocol::kAnimationScale;
+            animation.startScaleX = start;
+            animation.targetScaleX = target;
+            animation.initialVelocityScale = velocity;
+            break;
+        case AnimatableProperty::ScaleY:
+            animation.propertyMask = lcl::raster_protocol::kAnimationScale;
+            animation.startScaleY = start;
+            animation.targetScaleY = target;
+            animation.initialVelocityScale = velocity;
+            break;
+        case AnimatableProperty::Rotation:
+            animation.propertyMask = lcl::raster_protocol::kAnimationRotation;
+            animation.startRotationRadians = start;
+            animation.targetRotationRadians = target;
+            animation.initialVelocityRotation = velocity;
+            break;
+        default:
+            return false;
+    }
+    if (!m_rasterClient->submitPresentationAnimation(animation)) return false;
+    m_motionCoordinator.trackCompositorAnimation(
+        widget.getObjectId(), animation.transactionId);
+    return true;
 }
 
 bool WindowApp::hasActiveAnimations() const noexcept {
@@ -2359,16 +2533,9 @@ bool WindowApp::renderFrame() {
                             });
                     });
             }
-            const bool frameHasRetainedPresentationLayer =
-                !propertyOnly && std::any_of(
-                    frame->displayList.commands().begin(),
-                    frame->displayList.commands().end(),
-                    [&](const auto& command) {
-                        const auto* draw = std::get_if<
-                            graphics::DrawCachedLayerCommand>(&command);
-                        return draw && m_privateRenderState->
-                            isRetainedPresentationLayer(draw->id);
-                    });
+            const bool frameHasAllRetainedPresentationLayers =
+                !propertyOnly && m_privateRenderState->
+                    recordsAllRetainedPresentationLayers(frame->displayList);
             const bool frameHasExternalBufferPlaceholder =
                 !propertyOnly && std::any_of(
                     frame->displayList.commands().begin(),
@@ -2445,13 +2612,14 @@ bool WindowApp::renderFrame() {
                         if (!m_privateRenderState->
                                 hasRetainedPresentationLayers()) {
                             m_retainedPresentationFastPathReady = false;
-                        } else if (replacesRetainedScene ||
-                                   retainedPresentationRecovery) {
+                        } else {
+                            // A complete content frame that records selected
+                            // cached boundaries prepares the next compositor
+                            // handoff as well. The frame gate prevents the
+                            // NavigationStack preparation callback from using
+                            // this state until FramePresented confirms it.
                             m_retainedPresentationFastPathReady =
-                                frameHasRetainedPresentationLayer;
-                        } else if (m_privateRenderState->
-                                       invalidatesRetainedCompositionTemplate()) {
-                            m_retainedPresentationFastPathReady = false;
+                                frameHasAllRetainedPresentationLayers;
                         }
                     }
                     if (!externalBufferOnly &&

@@ -269,7 +269,11 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         }
     }
     const size_t retainedPoolSize = m_dmaBufs.size();
-    for (uint32_t index = 0; index < 3; ++index) {
+    // Root plus the current/previous navigation pages require one staging
+    // target while the compositor still owns the active atomic snapshot.
+    // Four slots keep that hand-off fence-driven instead of forcing a CPU
+    // fallback or reusing a sampled AHardwareBuffer.
+    for (uint32_t index = 0; index < 4; ++index) {
         DmaBufSlot slot{};
         slot.id = m_nextDmaBufId++;
         slot.width = width;
@@ -330,7 +334,7 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
     m_dmaBufCapacityWidth = width;
     m_dmaBufCapacityHeight = height;
     if (!m_dmaBufTransportLogged) {
-        std::cerr << "[LCL Canvas] Client AHardwareBuffer transport active (3 buffers)\n";
+        std::cerr << "[LCL Canvas] Client AHardwareBuffer transport active (4 buffers)\n";
         m_dmaBufTransportLogged = true;
     }
     return true;
@@ -345,8 +349,8 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         eglGetProcAddress("glEGLImageTargetTexture2DOES"));
     if (!createImage || !destroyImage || !imageTarget) return false;
 
-    // Three independent BOs prevent the client from writing a frame the
-    // compositor still samples. Every slot becomes reusable only via
+    // Four independent BOs retain root/current/previous presentation storage
+    // plus one staging target. Every slot becomes reusable only via
     // ReleaseDmaBuf.
     // Free slots from the old generation can be destroyed immediately. Busy
     // slots stay alive, retired, until their compositor release arrives.
@@ -360,7 +364,7 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         }
     }
     const size_t retainedPoolSize = m_dmaBufs.size();
-    for (uint32_t index = 0; index < 3; ++index) {
+    for (uint32_t index = 0; index < 4; ++index) {
         DmaBufSlot slot{};
         slot.id = m_nextDmaBufId++;
         slot.width = width;
@@ -416,7 +420,7 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
     m_dmaBufCapacityWidth = width;
     m_dmaBufCapacityHeight = height;
     if (!m_dmaBufTransportLogged) {
-        std::cerr << "[LCL Canvas] Client DMA-BUF transport active (3 GBM buffers)\n";
+        std::cerr << "[LCL Canvas] Client DMA-BUF transport active (4 GBM buffers)\n";
         m_dmaBufTransportLogged = true;
     }
     return true;

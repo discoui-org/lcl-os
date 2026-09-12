@@ -364,7 +364,7 @@ def stop_rootfs_session() -> None:
     """Stop canonical userspace processes before unmounting its rootfs."""
     process_names = (
         "lcl-desktop-shell", "lcl-mobile-shell", "lcl-sessiond", "lcl-sandboxd",
-        "lcl-securityd", "lcl-terminal", "lcl-settings", "lcl-open", "lcl-js",
+        "lcl-securityd", "lcl-terminal", "lcl-open", "lcl-js",
         "lcl-admind", "lcl-sudo",
     )
     def active_pids() -> list[str]:
@@ -808,7 +808,7 @@ def prepare_runtime_for_launch() -> None:
     process_names = (
         "lcl-core-android", "lcl-sessiond", "lcl-sandboxd", "lcl-securityd",
         "lcl-admind", "lcl-sudo",
-        "lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal", "lcl-settings",
+        "lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal",
     )
 
     def active_processes() -> list[str]:
@@ -953,6 +953,7 @@ def push_runtime_fonts() -> None:
 
 
 def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
+               logcat_system: bool = False,
                use_rootfs: bool = False, force_rootfs: bool = False,
                no_build: bool = False,
                gestalt_path: Path | None = None) -> None:
@@ -1030,11 +1031,23 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
     lc_proc = None
     lcl_proc = None
     session_proc = None
+    session_trace_proc = None
 
     try:
         if logcat:
+            # Core/rasterd write their primary diagnostic stream directly to
+            # DEVICE_LOG_PATH and this host terminal. Do not also subscribe to
+            # every Android warning: after SurfaceFlinger is intentionally
+            # stopped for takeover, ServiceManager retry warnings can flood
+            # logcat and hide LCL diagnostics. The broad system stream remains
+            # available on demand for platform-service investigations.
+            logcat_filters = ["LCL:V", "lcl:V"]
+            if logcat_system:
+                logcat_filters.append("*:W")
+            else:
+                logcat_filters.append("*:S")
             lc_proc = subprocess.Popen(
-                ["adb", "logcat", "-s", "LCL:V", "lcl:V", "*:W"],
+                ["adb", "logcat", "-v", "threadtime", "-s", *logcat_filters],
                 stdout=None, stderr=None
             )
 
@@ -1073,6 +1086,16 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
                 as_root=True,
             ))
             log(f"Canonical {TARGET_ARCH} rootfs session launched.")
+            if os.environ.get("LCL_TRACE_FRAMES") == "1":
+                # The canonical session deliberately keeps application stderr
+                # in its private Runtime log.  Forward that one log when frame
+                # tracing is explicitly enabled, rather than widening logcat
+                # to Android framework warnings while SurfaceFlinger is down.
+                session_trace_proc = subprocess.Popen(adb_shell_command(
+                    f"tail -n 0 -F {runtime_dir}/lcl-sessiond.log 2>&1",
+                    as_root=True,
+                ))
+                log("Streaming rootfs frame traces from lcl-sessiond.log.")
 
         lcl_proc.wait()
 
@@ -1085,6 +1108,8 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
     finally:
         if use_rootfs:
             stop_rootfs_session()
+            if session_trace_proc is not None and session_trace_proc.poll() is None:
+                session_trace_proc.terminate()
             if session_proc is not None and session_proc.poll() is None:
                 session_proc.terminate()
         stop_lcl_process()
@@ -1133,7 +1158,13 @@ def main() -> None:
     parser.add_argument(
         "--logcat",
         action="store_true",
-        help="Show Android logcat output alongside LCL compositor logs"
+        help="Show only LCL-tagged Android logcat output alongside compositor logs"
+    )
+    parser.add_argument(
+        "--logcat-system",
+        action="store_true",
+        help=("Also show all Android warnings/errors (very noisy while "
+              "SurfaceFlinger is stopped; implies --logcat)")
     )
     parser.add_argument(
         "--rootfs",
@@ -1164,7 +1195,8 @@ def main() -> None:
 
     launch_lcl(
         no_stop_sysui=args.no_stop_sysui,
-        logcat=args.logcat,
+        logcat=args.logcat or args.logcat_system,
+        logcat_system=args.logcat_system,
         use_rootfs=args.rootfs or args.push_rootfs,
         force_rootfs=args.push_rootfs,
         no_build=args.no_build,

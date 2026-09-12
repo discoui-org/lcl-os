@@ -60,7 +60,27 @@ public:
             uint64_t layerId{0};
             uint32_t texture{0};
         };
+        /**
+         * One immutable local-coordinate layer in the promoted presentation
+         * snapshot.  Root storage remains in the legacy fields below because
+         * it is also the window's ordinary client buffer; presentation
+         * children are owned independently and are never flattened back into
+         * that root by the compositor.
+         */
+        struct PresentationLayer {
+            raster_protocol::LayerReady ready{};
+            raster_protocol::PresentationLayerState state{};
+            int shmFd{-1};
+            void* pixels{nullptr};
+            size_t shmSize{0};
+            uint32_t texture{0};
+            uint64_t shmContentSerial{0};
+        };
         uint64_t rasterLayerId{0};
+        // Identity of the immutable root storage.  A later manifest may refer
+        // to this unchanged buffer while changing only presentation state.
+        uint64_t rasterLayerNodeId{0};
+        uint64_t rasterLayerContentRevision{0};
         uint32_t rasterLayerTexture{0};
         uint64_t frameSerial{0};
         uint64_t layerGeometryGeneration{0};
@@ -70,6 +90,7 @@ public:
         uint64_t rasterStartNs{0};
         uint64_t rasterReadyNs{0};
         std::vector<RasterLayerRelease> pendingRasterLayerReleases;
+        std::vector<PresentationLayer> presentationLayers;
         int shmFd{-1};
         void* pixels{nullptr};
         uint32_t width{0};

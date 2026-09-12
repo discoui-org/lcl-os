@@ -108,18 +108,69 @@ public:
             m_privateFd, raster::Opcode::ReleaseLayer, release);
     }
 
-    bool takeLayer(raster::LayerReady& ready, int& layerFd,
-                   int timeoutMs) const {
-        raster::Header header{};
-        std::vector<uint8_t> payload;
-        if (!receiveWithin(m_privateFd, header, payload, layerFd, timeoutMs)) {
-            return false;
+    bool takeLayer(raster::LayerReady& ready, int& layerFd, int timeoutMs,
+                   raster::PresentationFrameReady* presentation = nullptr,
+                   bool* animationCompleted = nullptr) const {
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            raster::Header header{};
+            std::vector<uint8_t> payload;
+            layerFd = -1;
+            if (!receiveWithin(
+                    m_privateFd, header, payload, layerFd,
+                    attempt == 0 ? timeoutMs : 0)) {
+                return false;
+            }
+            const auto* layer = raster::payloadAs<raster::LayerReady>(
+                header, payload, raster::Opcode::LayerReady);
+            if (layer) {
+                ready = *layer;
+                m_lastStorageFrameSerial = ready.frameSerial;
+                return true;
+            }
+            raster::PresentationFrameReady frame{};
+            std::vector<raster::PresentationLayerState> layers;
+            if (raster::decodePresentationFrameReady(header, payload, frame,
+                                                     layers)) {
+                // A normal raster output is followed by its snapshot
+                // manifest. The fake compositor has already presented that
+                // root storage; skip only this matching declaration. A later
+                // manifest without fresh storage is the retained-property
+                // path and must receive FramePresented as well.
+                if (frame.frameSerial != m_lastStorageFrameSerial &&
+                    presentation) {
+                    ready = {};
+                    *presentation = frame;
+                    if (layerFd >= 0) close(layerFd);
+                    layerFd = -1;
+                    return true;
+                }
+            }
+            raster::PresentationAnimation animation{};
+            if (animationCompleted && raster::decodePresentationAnimation(
+                    header, payload, animation)) {
+                raster::PresentationAnimationResult result{};
+                result.grant = animation.grant;
+                result.transactionId = animation.transactionId;
+                result.nodeId = animation.nodeId;
+                result.outcome =
+                    raster::PresentationAnimationOutcome::Completed;
+                if (layerFd >= 0) close(layerFd);
+                layerFd = -1;
+                if (!raster::sendPacket(
+                        m_privateFd, raster::Opcode::PresentationAnimationResult,
+                        result)) {
+                    return false;
+                }
+                *animationCompleted = true;
+                // The client normally submitted the matching retained-state
+                // manifest in the same tick. Keep draining so this fake
+                // compositor presents it before the next input sample.
+                continue;
+            }
+            if (layerFd >= 0) close(layerFd);
+            layerFd = -1;
         }
-        const auto* layer = raster::payloadAs<raster::LayerReady>(
-            header, payload, raster::Opcode::LayerReady);
-        if (!layer) return false;
-        ready = *layer;
-        return true;
+        return false;
     }
 
     const std::string& socketPath() const noexcept { return m_socketPath; }
@@ -137,6 +188,7 @@ private:
     std::string m_socketPath;
     pid_t m_pid{-1};
     int m_privateFd{-1};
+    mutable uint64_t m_lastStorageFrameSerial{0};
 };
 
 class FakeCompositorSocket final {
@@ -246,19 +298,33 @@ public:
     }
 
     bool present(const raster::LayerReady& ready) const {
+        return present(ready.grant, ready.configureSerial, ready.frameSerial,
+                       ready.geometryGeneration);
+    }
+
+    bool present(const raster::PresentationFrameReady& frame) const {
+        return present(frame.grant, frame.configureSerial, frame.frameSerial,
+                       frame.geometryGeneration);
+    }
+
+private:
+    bool present(const raster::SurfaceGrant& grant, uint64_t configureSerial,
+                 uint64_t frameSerial, uint64_t geometryGeneration) const {
         protocol::LCLHeader header{};
         header.opcode = protocol::LCLOpcode::FramePresented;
         header.payloadSize = sizeof(protocol::LCLMsgFramePresented);
         protocol::LCLMsgFramePresented presented{};
-        presented.surfaceId = ready.grant.surfaceId;
-        presented.configureSerial = ready.configureSerial;
-        presented.frameSerial = ready.frameSerial;
-        presented.geometryGeneration = ready.geometryGeneration;
-        presented.displaySequence = ready.frameSerial;
+        presented.surfaceId = grant.surfaceId;
+        presented.configureSerial = configureSerial;
+        presented.frameSerial = frameSerial;
+        presented.geometryGeneration = geometryGeneration;
+        presented.displaySequence = frameSerial;
         presented.timestampNs = 1;
         presented.refreshIntervalNs = 16666667;
         return protocol::sendMsgWithFd(m_clientFd, header, &presented);
     }
+
+public:
 
     const std::string& path() const noexcept { return m_path; }
 
@@ -503,14 +569,27 @@ TEST(RasterServiceIntegrationTest,
     ASSERT_TRUE(daemon.registerSurface(grant));
     ASSERT_TRUE(compositor.configure(grant, 360, 640));
 
-    const auto publish = [&]() -> bool {
+    const auto publish = [&](bool allowIdle = false) -> bool {
         raster::LayerReady ready{};
+        raster::PresentationFrameReady presentation{};
+        bool animationCompleted = false;
         int layerFd = -1;
         const auto deadline = std::chrono::steady_clock::now() +
             std::chrono::seconds(3);
         while (std::chrono::steady_clock::now() < deadline) {
             (void)app.tick();
-            if (!daemon.takeLayer(ready, layerFd, 10)) continue;
+            if (!daemon.takeLayer(
+                    ready, layerFd, 10, &presentation, &animationCompleted)) {
+                // A compositor-owned spring advances immutable presentation
+                // layers without another client/raster transaction. Once its
+                // completion result has been consumed, this is a successful
+                // idle step rather than a missing frame.
+                if (allowIdle && !app.hasActiveAnimations()) return true;
+                continue;
+            }
+            if (presentation.frameSerial != 0) {
+                return compositor.present(presentation);
+            }
             if (layerFd >= 0) close(layerFd);
             return daemon.releaseLayer(ready.layerId) && compositor.present(ready);
         }
@@ -527,15 +606,18 @@ TEST(RasterServiceIntegrationTest,
     ASSERT_GT(entryPaints, 0);
     for (int frame = 0; frame < 5; ++frame) {
         app.advanceAnimations(1.0f / 120.0f);
-        ASSERT_TRUE(publish());
+        ASSERT_TRUE(publish(true));
     }
     EXPECT_EQ(pagePtr->paints, entryPaints);
 
     for (int frame = 0; frame < 240 && split->isTransitioning(); ++frame) {
         app.advanceAnimations(1.0f / 60.0f);
     }
+    // Compositor-owned springs report completion over rasterd's private
+    // channel, so consume that result before checking transition ownership.
+    ASSERT_TRUE(publish(true));
     ASSERT_FALSE(split->isTransitioning());
-    ASSERT_TRUE(publish());
+    ASSERT_TRUE(publish(true));
     app.sendPointerDown(4, 100, 0, PointerSource::Touch, 51);
     for (int x : {24, 44, 64}) {
         app.sendPointerMove(x, 100, PointerSource::Touch, 51);

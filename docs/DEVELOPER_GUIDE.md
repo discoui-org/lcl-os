@@ -94,11 +94,19 @@ LCL_TRACE_FRAMES=1 /usr/bin/lcl-terminal
 
 For the trusted Settings application on Android, enable the same trace while
 starting the rootfs session. The deployment helper forwards only this boolean
-diagnostic flag through Settings' otherwise fixed launch environment:
+diagnostic flag through Settings' otherwise fixed launch environment and
+streams the session trace log to the host terminal:
 
 ```bash
 LCL_TRACE_FRAMES=1 python3 tooling/deploy/deploy_android_device.py --rootfs --no-build --logcat
 ```
+
+`--logcat` intentionally shows only LCL-tagged Android entries; the compositor
+and raster service already stream their primary diagnostics to the launch
+terminal and `/data/local/tmp/lcl-core.log`. This avoids Android framework
+retry warnings obscuring frame diagnostics while LCL owns the display. For a
+short, explicit Android-platform investigation, add `--logcat-system`; it
+also includes all Android warnings and errors and is expected to be noisy.
 
 The `[LCL TRACE ...]` line reports layout passes and mean duration,
 rendered frame count and end-to-end paint duration, plus its `stages` split:

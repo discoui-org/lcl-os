@@ -71,24 +71,6 @@ target_link_libraries(lcl-terminal PRIVATE
     lcl-ui lcl-raster lcl-protocol Threads::Threads
 )
 
-add_executable(lcl-settings settings/main.cpp)
-target_include_directories(lcl-settings PRIVATE
-    ${PROJECT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/frameworks/ui/include
-)
-target_link_libraries(lcl-settings PRIVATE
-    lcl-ui lcl-raster lcl-protocol lcl-security Threads::Threads
-)
-
-# A non-GUI system bundle used only to prove the end-to-end third-party
-# sandbox boundary on Linux and Android. It uses only app-facing graphics IPC
-# and reports checks through its exit status and an app-private grant report.
-add_executable(lcl-sandbox-smoke
-    sandbox_probe/main.cpp
-)
-target_include_directories(lcl-sandbox-smoke PRIVATE ${PROJECT_SOURCE_DIR})
-target_link_libraries(lcl-sandbox-smoke PRIVATE lcl-protocol lcl-raster-protocol Threads::Threads)
-
 add_executable(lcl-sandbox-test sandbox_test/main.cpp)
 target_include_directories(lcl-sandbox-test PRIVATE
     ${PROJECT_SOURCE_DIR}
@@ -127,8 +109,6 @@ foreach(root_runtime_target IN ITEMS
         lcl-desktop-shell
         lcl-mobile-shell
         lcl-terminal
-        lcl-settings
-        lcl-sandbox-smoke
         lcl-sandbox-test
         lcl-js)
     set_target_properties(${root_runtime_target} PROPERTIES

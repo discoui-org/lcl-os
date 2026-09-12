@@ -800,21 +800,36 @@ bool RasterRenderer::ensureFrameBackingCapacity(uint32_t width, uint32_t height)
 }
 
 void RasterRenderer::setExternalFrameTarget(uint32_t framebuffer, uint32_t texture,
-                                          uint32_t backingWidth, uint32_t backingHeight) {
+                                          uint32_t backingWidth, uint32_t backingHeight,
+                                          bool renderDirect) {
 #ifndef LCL_SOFTWARE_ONLY
     m_glOutputFrameFBO = framebuffer;
-    (void)texture;
-    (void)backingWidth;
-    (void)backingHeight;
+    m_externalFrameTargetIsScene = renderDirect;
+    if (renderDirect) {
+        m_glExternalFrameFBO = framebuffer;
+        m_glExternalFrameTexture = texture;
+        m_glExternalBackingWidth = backingWidth;
+        m_glExternalBackingHeight = backingHeight;
+    }
 #else
     (void)framebuffer;
     (void)texture;
+    (void)backingWidth;
+    (void)backingHeight;
+    (void)renderDirect;
 #endif
 }
 
 void RasterRenderer::clearExternalFrameTarget() {
 #ifndef LCL_SOFTWARE_ONLY
     m_glOutputFrameFBO = 0;
+    if (m_externalFrameTargetIsScene) {
+        m_glExternalFrameFBO = 0;
+        m_glExternalFrameTexture = 0;
+        m_glExternalBackingWidth = 0;
+        m_glExternalBackingHeight = 0;
+    }
+    m_externalFrameTargetIsScene = false;
 #endif
 }
 
@@ -1976,7 +1991,7 @@ void RasterRenderer::beginFrame() {
         m_eglBackend->makeCurrent();
         glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
         glViewport(0, 0, m_width, m_height);
-        if (!m_retainsFrameBacking) {
+        if (!m_retainsFrameBacking || m_externalFrameTargetIsScene) {
             if (m_eglBackend->presentsToDisplay()) {
                 glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
             } else {
@@ -2065,7 +2080,9 @@ void RasterRenderer::endFrame() {
                 glFlush();
                 m_eglBackend->present();
             }
-        } else if (m_glOutputFrameFBO != 0 && m_glSceneTexture != 0) {
+        } else if (m_glOutputFrameFBO != 0 &&
+                   !m_externalFrameTargetIsScene &&
+                   m_glSceneTexture != 0) {
             // Each rotating DMA-BUF retains its own last complete scene. The
             // producer supplies the union of patches missed while this slot
             // was compositor-owned; a missing union requests a full copy.
@@ -2389,6 +2406,74 @@ void RasterRenderer::drawDmaBufTextureTransformed(float dstX, float dstY, int sr
     (void)drawWidth;
     (void)drawHeight;
     (void)sampling;
+#endif
+}
+
+void RasterRenderer::drawDmaBufTextureQuad(
+        const RasterQuad& destination, int srcW, int srcH,
+        int backingW, int backingH, uint32_t texture, float opacity) {
+#ifndef LCL_SOFTWARE_ONLY
+    if (m_backendType != RasterBackend::OpenGL_EGL || !m_eglBackend ||
+        texture == 0 || srcW <= 0 || srcH <= 0 || backingW <= 0 ||
+        backingH <= 0 || m_glProgram == 0) {
+        return;
+    }
+    const auto toDevice = [this](float value, float origin) {
+        return value * m_deviceScale + origin;
+    };
+    const float x0 = toDevice(destination.topLeftX, m_contentOriginX);
+    const float y0 = toDevice(destination.topLeftY, m_contentOriginY);
+    const float x1 = toDevice(destination.bottomLeftX, m_contentOriginX);
+    const float y1 = toDevice(destination.bottomLeftY, m_contentOriginY);
+    const float x2 = toDevice(destination.topRightX, m_contentOriginX);
+    const float y2 = toDevice(destination.topRightY, m_contentOriginY);
+    const float x3 = toDevice(destination.bottomRightX, m_contentOriginX);
+    const float y3 = toDevice(destination.bottomRightY, m_contentOriginY);
+    const float uMax = static_cast<float>(srcW) /
+        static_cast<float>(backingW);
+    const float vMax = static_cast<float>(srcH) /
+        static_cast<float>(backingH);
+    const auto clipX = [this](float x) {
+        return (x / static_cast<float>(m_width)) * 2.0f - 1.0f;
+    };
+    const auto clipY = [this](float y) {
+        return 1.0f - (y / static_cast<float>(m_height)) * 2.0f;
+    };
+    const float quad[16] = {
+        clipX(x0), clipY(y0), 0.0f, vMax,
+        clipX(x1), clipY(y1), 0.0f, 0.0f,
+        clipX(x2), clipY(y2), uMax, vMax,
+        clipX(x3), clipY(y3), uMax, 0.0f,
+    };
+    m_eglBackend->makeCurrent();
+    glBindFramebuffer(GL_FRAMEBUFFER, activeSceneFBO());
+    glViewport(0, 0, m_width, m_height);
+    applyScissorState();
+    glUseProgram(m_glProgram);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glUniform1i(m_uTextureLoc, 0);
+    glUniform1f(m_uOpacityLoc, std::clamp(opacity, 0.0f, 1.0f));
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glVertexAttribPointer(m_aPosLoc, 2, GL_FLOAT, GL_FALSE,
+                          4 * sizeof(float), quad);
+    glEnableVertexAttribArray(m_aPosLoc);
+    glVertexAttribPointer(m_aTexLoc, 2, GL_FLOAT, GL_FALSE,
+                          4 * sizeof(float), quad + 2);
+    glEnableVertexAttribArray(m_aTexLoc);
+    beginPremultipliedAlphaSourceOver();
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    endPremultipliedAlphaSourceOver();
+    glDisableVertexAttribArray(m_aPosLoc);
+    glDisableVertexAttribArray(m_aTexLoc);
+#else
+    (void)destination;
+    (void)srcW;
+    (void)srcH;
+    (void)backingW;
+    (void)backingH;
+    (void)texture;
+    (void)opacity;
 #endif
 }
 

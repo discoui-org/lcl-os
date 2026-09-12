@@ -115,10 +115,6 @@ void RasterServiceClient::configure(
 void RasterServiceClient::disconnect() noexcept {
     if (m_fd >= 0) close(m_fd);
     m_fd = -1;
-    for (auto& release : m_externalBufferReleases) {
-        if (release.releaseFenceFd >= 0) close(release.releaseFenceFd);
-    }
-    m_externalBufferReleases.clear();
 }
 
 bool RasterServiceClient::isConfigured() const noexcept {
@@ -304,9 +300,24 @@ bool RasterServiceClient::commitTransaction(
     return sent;
 }
 
-std::vector<raster_protocol::FrameDiscarded>
-RasterServiceClient::pollDiscards() {
-    std::vector<raster_protocol::FrameDiscarded> result;
+bool RasterServiceClient::submitPresentationAnimation(
+        const raster_protocol::PresentationAnimation& animation) {
+    if (!connectIfNeeded() || animation.grant.surfaceId != m_grant.surfaceId ||
+        animation.grant.ownerPid != m_grant.ownerPid ||
+        animation.grant.flags != m_grant.flags ||
+        animation.grant.tokenHigh != m_grant.tokenHigh ||
+        animation.grant.tokenLow != m_grant.tokenLow ||
+        animation.transactionId == 0 || animation.nodeId == 0 ||
+        animation.propertyMask == 0) {
+        return false;
+    }
+    const bool sent = raster_protocol::sendPresentationAnimation(m_fd, animation);
+    if (!sent && errno != EAGAIN && errno != EWOULDBLOCK) disconnect();
+    return sent;
+}
+
+std::vector<RasterServiceEvent> RasterServiceClient::pollEvents() {
+    std::vector<RasterServiceEvent> result;
     if (m_fd < 0) return result;
     while (true) {
         raster_protocol::Header header{};
@@ -325,22 +336,31 @@ RasterServiceClient::pollDiscards() {
         if (const auto* discarded = raster_protocol::payloadAs<
                 raster_protocol::FrameDiscarded>(
                 header, payload, raster_protocol::Opcode::FrameDiscarded)) {
-            result.push_back(*discarded);
+            RasterServiceEvent event{};
+            event.kind = RasterServiceEvent::Kind::FrameDiscarded;
+            event.discarded = *discarded;
+            result.push_back(event);
         } else if (const auto* released = raster_protocol::payloadAs<
                        raster_protocol::ExternalBufferReleased>(
                        header, payload,
                        raster_protocol::Opcode::ExternalBufferReleased)) {
-            m_externalBufferReleases.push_back({*released, receivedFd});
+            RasterServiceEvent event{};
+            event.kind = RasterServiceEvent::Kind::ExternalBufferReleased;
+            event.externalBufferRelease = {*released, receivedFd};
+            result.push_back(event);
             receivedFd = -1;
+        } else if (const auto* animation = raster_protocol::payloadAs<
+                       raster_protocol::PresentationAnimationResult>(
+                       header, payload,
+                       raster_protocol::Opcode::PresentationAnimationResult)) {
+            RasterServiceEvent event{};
+            event.kind = RasterServiceEvent::Kind::PresentationAnimationResult;
+            event.animation = *animation;
+            result.push_back(event);
         }
         if (receivedFd >= 0) close(receivedFd);
     }
     return result;
-}
-
-std::vector<ExternalBufferRelease>
-RasterServiceClient::takeExternalBufferReleases() {
-    return std::exchange(m_externalBufferReleases, {});
 }
 
 } // namespace lcl::ui

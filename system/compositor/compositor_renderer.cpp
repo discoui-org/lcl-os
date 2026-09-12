@@ -9,6 +9,7 @@
 #include "system/shells/mobile/gesture_indicator.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <optional>
 #include <string>
@@ -93,6 +94,42 @@ void CompositorRenderer::render(render::Renderer& renderer,
             return surface.entry &&
                 surface.entry->atomicConfigureGeneration != 0;
         });
+    const auto presentationRevision = [](const SurfaceEntry& entry) {
+        uint64_t hash = 1469598103934665603ull;
+        const auto mix = [&hash](uint64_t value) {
+            hash ^= value;
+            hash *= 1099511628211ull;
+        };
+        const auto mixFloat = [&mix](float value) {
+            mix(std::bit_cast<uint32_t>(value));
+        };
+        mix(entry.presentationLayers.size());
+        for (const auto& layer : entry.presentationLayers) {
+            const auto& state = layer.state;
+            mix(layer.ready.layerId);
+            mix(state.nodeId);
+            mix(state.contentRevision);
+            mix(state.zOrder);
+            mix(state.flags);
+            mixFloat(state.x);
+            mixFloat(state.y);
+            mixFloat(state.width);
+            mixFloat(state.height);
+            mixFloat(state.opacity);
+            mixFloat(state.translationX);
+            mixFloat(state.translationY);
+            mixFloat(state.scaleX);
+            mixFloat(state.scaleY);
+            mixFloat(state.rotationRadians);
+            mixFloat(state.originX);
+            mixFloat(state.originY);
+            mixFloat(state.clipX);
+            mixFloat(state.clipY);
+            mixFloat(state.clipWidth);
+            mixFloat(state.clipHeight);
+        }
+        return hash;
+    };
     // Blur and Glass sample pixels outside their own effect bounds. A normal
     // incremental replay is therefore unsafe. The one bounded exception is a
     // client-only update on the same surface: its already-filtered pre-client
@@ -206,12 +243,15 @@ void CompositorRenderer::render(render::Renderer& renderer,
                 entry->frameSerial,
                 entry->shmContentSerial,
                 entry->rasterLayerId,
+                presentationRevision(*entry),
             };
             const auto previous = m_composedSurfaceFrames.find(surface.key);
             const bool changed = previous == m_composedSurfaceFrames.end() ||
                 previous->second.frameSerial != current.frameSerial ||
                 previous->second.shmContentSerial != current.shmContentSerial ||
-                previous->second.rasterLayerId != current.rasterLayerId;
+                previous->second.rasterLayerId != current.rasterLayerId ||
+                previous->second.presentationRevision !=
+                    current.presentationRevision;
             if (!changed) continue;
             hasChangedSurface = true;
             ++changedSurfaceCount;
@@ -580,6 +620,105 @@ void CompositorRenderer::render(render::Renderer& renderer,
             cornerRadius, cornerRoundness, squareTopCorners,
             drawWidth, drawHeight, sampling);
 #endif
+    };
+    auto drawPresentationLayers = [&](const SurfaceEntry& surface,
+                                      const render::WindowGroupTransform& group,
+                                      const render::Window& window,
+                                      float contentOpacity) {
+        if (surface.presentationLayers.empty() ||
+            surface.configuredWidth <= 0.0f ||
+            surface.configuredHeight <= 0.0f) {
+            return;
+        }
+        // Presentation coordinates are local to the app viewport, not to the
+        // decorated WindowGroup.  The group transform remains the common
+        // authority for launch/minimize scale and input alignment.
+        const float contentTop = window.decorationMode == render::DecorationMode::SSD
+            ? group.titleHeight / std::max(0.001f, group.scale) : 0.0f;
+        const graphics::RectF viewport = group.mapRect({
+            0.0f, contentTop,
+            surface.configuredWidth, surface.configuredHeight});
+        const auto previousClip = raster->getClipRect();
+        for (const auto& layer : surface.presentationLayers) {
+            const auto& state = layer.state;
+            if (state.width <= 0.0f || state.height <= 0.0f ||
+                state.opacity <= 0.0f) {
+                continue;
+            }
+            graphics::RectF clip = viewport;
+            if ((state.flags & raster_protocol::kPresentationLayerHasClip) != 0) {
+                clip = clip.intersection(group.mapRect({
+                    state.clipX, contentTop + state.clipY,
+                    state.clipWidth, state.clipHeight}));
+            }
+            if (clip.isEmpty()) continue;
+            raster->setClipRect(std::optional<render::RasterRect>{
+                render::RasterRect{clip.x, clip.y, clip.width, clip.height}});
+
+            const float originX = state.x + state.width * state.originX;
+            const float originY = state.y + state.height * state.originY;
+            const float cosine = std::cos(state.rotationRadians);
+            const float sine = std::sin(state.rotationRadians);
+            const auto mapPoint = [&](float x, float y) {
+                const float localX = x - originX;
+                const float localY = y - originY;
+                return group.mapPoint({
+                    originX + state.translationX +
+                        cosine * state.scaleX * localX -
+                        sine * state.scaleY * localY,
+                    contentTop + originY + state.translationY +
+                        sine * state.scaleX * localX +
+                        cosine * state.scaleY * localY,
+                });
+            };
+            const auto topLeft = mapPoint(state.x, state.y);
+            const auto bottomLeft = mapPoint(state.x, state.y + state.height);
+            const auto topRight = mapPoint(state.x + state.width, state.y);
+            const auto bottomRight = mapPoint(
+                state.x + state.width, state.y + state.height);
+            const float opacity = contentOpacity * std::clamp(
+                state.opacity, 0.0f, 1.0f);
+            if (layer.texture != 0) {
+                raster->drawDmaBufTextureQuad(
+                    {topLeft.x, topLeft.y,
+                     bottomLeft.x, bottomLeft.y,
+                     topRight.x, topRight.y,
+                     bottomRight.x, bottomRight.y},
+                    static_cast<int>(layer.ready.width),
+                    static_cast<int>(layer.ready.height),
+                    static_cast<int>(layer.ready.backingWidth),
+                    static_cast<int>(layer.ready.backingHeight),
+                    layer.texture, opacity);
+            } else if (layer.pixels) {
+                // SHM is the desktop/software fallback. Its sampling path is
+                // axis-aligned; the GPU/AHardwareBuffer path above preserves
+                // the full affine transform used by page presentation.
+                const graphics::RectF bounds{
+                    std::min({topLeft.x, bottomLeft.x, topRight.x, bottomRight.x}),
+                    std::min({topLeft.y, bottomLeft.y, topRight.y, bottomRight.y}),
+                    std::max({topLeft.x, bottomLeft.x, topRight.x, bottomRight.x}) -
+                        std::min({topLeft.x, bottomLeft.x, topRight.x, bottomRight.x}),
+                    std::max({topLeft.y, bottomLeft.y, topRight.y, bottomRight.y}) -
+                        std::min({topLeft.y, bottomLeft.y, topRight.y, bottomRight.y}),
+                };
+                drawShmSurface(
+                    layer.ready.layerId, layer.shmContentSerial,
+                    bounds.x, bounds.y,
+                    static_cast<int>(layer.ready.width),
+                    static_cast<int>(layer.ready.height),
+                    static_cast<int>(layer.ready.backingWidth),
+                    static_cast<int>(layer.ready.backingHeight),
+                    reinterpret_cast<const uint32_t*>(layer.pixels),
+                    static_cast<int>(layer.ready.stride / sizeof(uint32_t)),
+                    static_cast<int>(layer.ready.damageX),
+                    static_cast<int>(layer.ready.damageY),
+                    static_cast<int>(layer.ready.damageWidth),
+                    static_cast<int>(layer.ready.damageHeight),
+                    opacity, 0.0f, 2.0f, false,
+                    bounds.width, bounds.height);
+            }
+        }
+        raster->setClipRect(previousClip);
     };
     auto resolveWindowCornerRadiusLogical = [&](const render::Window& win) {
         if (win.cornerRadius >= 0.0f) {
@@ -996,6 +1135,8 @@ void CompositorRenderer::render(render::Renderer& renderer,
                     win.decorationMode == render::DecorationMode::SSD,
                     drawW, drawH, contentSampling);
             }
+            drawPresentationLayers(
+                *matchingSurface, group, win, contentOpacity);
 
             if (matchingSurface->hasRenderableBuffer() &&
                 !matchingSurface->effectRegions.empty()) {
@@ -1226,6 +1367,7 @@ void CompositorRenderer::render(render::Renderer& renderer,
             entry->frameSerial,
             entry->shmContentSerial,
             entry->rasterLayerId,
+            presentationRevision(*entry),
         };
     }
 }

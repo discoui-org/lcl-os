@@ -772,6 +772,32 @@ TEST(LclUiTest, MotionCoordinatorReportsPresentationOwnerAsAnimating) {
     EXPECT_FALSE(coordinator.isObjectAnimating(widget->getObjectId()));
 }
 
+TEST(LclUiTest, MotionCoordinatorForwardsInteractiveRetargetWithoutLocalTick) {
+    MotionCoordinator coordinator;
+    Widget widget;
+    widget.setMotionCoordinator(&coordinator);
+    bool submitted = false;
+    coordinator.setCompositorAnimationDelegate(
+        [&](Widget& target, AnimatableProperty property, float start,
+            float destination, float velocity, const lcl::motion::Motion& motion) {
+            submitted = &target == &widget &&
+                property == AnimatableProperty::TranslationX &&
+                start == 0.0f && destination == 48.0f && velocity == 0.0f &&
+                motion.mode == lcl::motion::MotionMode::Tween;
+            return true;
+        });
+
+    EXPECT_TRUE(coordinator.updateCompositorFloat(
+        widget, AnimatableProperty::TranslationX, 0.0f, 48.0f,
+        [&widget](float value) {
+            widget.applyPresentationValue(
+                AnimatableProperty::TranslationX, value);
+        }));
+    EXPECT_TRUE(submitted);
+    EXPECT_FLOAT_EQ(widget.getPresentationState().translationX, 48.0f);
+    EXPECT_FALSE(coordinator.hasActiveAnimations());
+}
+
 TEST(LclUiTest, IndeterminateProgressUsesPresentationInvalidation) {
     RecordingCanvas canvas;
     RenderPass pass;
@@ -2893,6 +2919,97 @@ TEST(LclUiTest, NavigationSplitViewOnlyTouchEdgeSwipeReturnsToPrimary) {
     }
     EXPECT_FALSE(split->isTransitioning());
     EXPECT_FALSE(split->isDetailPresented());
+}
+
+TEST(LclUiTest, NavigationSplitViewAnimatesCompactDetailReplacement) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 360, 640, "Compact detail replacement");
+    auto navigation = std::make_unique<NavigationSplitView>();
+    NavigationSplitView* split = navigation.get();
+    navigation->setWidth(360.0f);
+    navigation->setHeight(640.0f);
+    split->setSidebar(std::make_unique<Container>());
+    ASSERT_TRUE(split->detailNavigation().setRootPage({
+        .route = NavigationRoute("general"),
+        .title = "General",
+        .content = std::make_unique<Container>(),
+    }));
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.renderFrame());
+
+    ASSERT_TRUE(split->setDetailPage({
+        .route = NavigationRoute("privacy"),
+        .title = "Privacy",
+        .content = std::make_unique<Container>(),
+    }, PageTransition::Replace));
+    EXPECT_TRUE(split->isTransitioning());
+}
+
+TEST(LclUiTest, NavigationSplitViewPreparesAlreadyCurrentCompactDetail) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 360, 640, "Compact current detail");
+    auto navigation = std::make_unique<NavigationSplitView>();
+    NavigationSplitView* split = navigation.get();
+    navigation->setWidth(360.0f);
+    navigation->setHeight(640.0f);
+    split->setSidebar(std::make_unique<Container>());
+    ASSERT_TRUE(split->detailNavigation().setRootPage({
+        .route = NavigationRoute("general"),
+        .title = "General",
+        .content = std::make_unique<Container>(),
+    }));
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.renderFrame());
+
+    split->presentDetail();
+
+    EXPECT_TRUE(split->isTransitioning());
+    EXPECT_TRUE(split->isDetailPresented());
+    EXPECT_FLOAT_EQ(split->detailNavigation().getPresentationState().opacity,
+                    0.0f);
+}
+
+TEST(LclUiTest, NavigationSplitViewCompletesWhenRetainedAnimationIsUnavailable) {
+    MotionCoordinator coordinator;
+    coordinator.setCompositorAnimationDelegate(
+        [](Widget&, AnimatableProperty, float, float, float,
+           const lcl::motion::Motion&) {
+            // Connected WindowApp uses this result when no retained cache is
+            // eligible: the model is committed directly and no compositor
+            // completion callback will follow.
+            return true;
+        });
+
+    NavigationSplitView split;
+    split.setWidth(360.0f);
+    split.setHeight(640.0f);
+    split.setSidebar(std::make_unique<Container>());
+    ASSERT_TRUE(split.detailNavigation().setRootPage({
+        .route = NavigationRoute("general"),
+        .title = "General",
+        .content = std::make_unique<Container>(),
+    }));
+    split.setMotionCoordinator(&coordinator);
+    split.calculateLayout(360.0f, 640.0f);
+    split.syncLayout();
+
+    split.presentDetail();
+    ASSERT_TRUE(split.isTransitioning());
+    coordinator.tick(1.0f / 60.0f);
+    coordinator.tick(1.0f / 60.0f);
+    coordinator.tick(1.0f / 60.0f);
+
+    EXPECT_FALSE(split.isTransitioning());
+    EXPECT_TRUE(split.isDetailPresented());
+    EXPECT_TRUE(split.detailNavigation().isInteractionEnabled());
+    EXPECT_FLOAT_EQ(
+        split.detailNavigation().getPresentationState().opacity, 1.0f);
+    EXPECT_NEAR(
+        split.detailNavigation().getPresentationState().translationX,
+        0.0f, 0.01f);
+    ASSERT_FALSE(split.getChildren().empty());
+    EXPECT_NEAR(split.getChildren().front()->getPresentationState().translationX,
+                -180.0f, 0.01f);
 }
 
 TEST(LclUiTest, ToggleDefaultsProgrammaticValueAndNotificationsAreDeterministic) {

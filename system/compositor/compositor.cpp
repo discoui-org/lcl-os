@@ -254,10 +254,26 @@ void Compositor::processIPC() {
     m_rasterService.poll();
     if (m_protocolDispatcher) {
         for (auto& layer : m_rasterService.takeReadyLayers()) {
-            if (m_protocolDispatcher->acceptRasterLayer(std::move(layer))) {
+            (void)m_protocolDispatcher->acceptRasterLayer(std::move(layer));
+        }
+        // Storage import and snapshot promotion are intentionally separate.
+        // A frame with any missing layer leaves the old presentation intact.
+        for (auto& frame : m_rasterService.takePresentationFrames()) {
+            if (m_protocolDispatcher->acceptPresentationFrame(std::move(frame))) {
                 m_needsRedraw = true;
                 m_shellStateDirty = true;
             }
+        }
+        // Android AHardwareBuffers are delivered on a side-band FIFO.  If a
+        // manifest beat that FIFO by one poll, retry it after the import pass
+        // without ever promoting a partial frame.
+        if (m_protocolDispatcher->retryPendingPresentationFrames()) {
+            m_needsRedraw = true;
+            m_shellStateDirty = true;
+        }
+        for (auto& animation : m_rasterService.takePresentationAnimations()) {
+            m_protocolDispatcher->acceptPresentationAnimation(
+                std::move(animation));
         }
     }
     if (m_protocolDispatcher && m_protocolDispatcher->process(m_ipcManager)) {
@@ -331,6 +347,19 @@ void Compositor::run() {
             m_shellStateDirty = true;
         }
         processIPC();
+        if (m_protocolDispatcher) {
+            const auto animationNow = std::chrono::steady_clock::now();
+            const float animationDelta = m_lastPresentationAnimationTick
+                    .time_since_epoch().count() == 0
+                ? 0.0f
+                : std::chrono::duration<float>(
+                      animationNow - m_lastPresentationAnimationTick).count();
+            m_lastPresentationAnimationTick = animationNow;
+            if (m_protocolDispatcher->advancePresentationAnimations(
+                    animationDelta)) {
+                m_needsRedraw = true;
+            }
+        }
         // Refresh-cadenced Live configures may have been deferred while an
         // input batch arrived. Revisit the coalesced newest geometry once per
         // compositor loop even when the pointer becomes stationary.
@@ -626,7 +655,12 @@ void Compositor::renderFrame() {
         if (found != m_surfaces.end()) {
             if (found->second.producerGrant.tokenHigh != 0 ||
                 found->second.producerGrant.tokenLow != 0) {
-                m_rasterService.revokeSurface(found->second.producerGrant);
+                if (m_protocolDispatcher) {
+                    m_protocolDispatcher->releaseSurfaceRasterState(
+                        found->second);
+                } else {
+                    m_rasterService.revokeSurface(found->second.producerGrant);
+                }
             }
             if (found->second.rasterLayerId != 0) {
                 const int releaseFenceFd =

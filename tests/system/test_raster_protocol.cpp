@@ -6,6 +6,7 @@
 #include "platforms/common/native_buffer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
@@ -305,6 +306,130 @@ TEST(RasterProtocolTest, LayerReadyCarriesGenerationAndOnePrivateDescriptor) {
 
     close(receivedFd);
     close(descriptor);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(RasterProtocolTest,
+     PresentationManifestPromotesOnlyACompleteUniqueLayerSnapshot) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+
+    PresentationFrameReady sent{};
+    sent.grant = {7, 42, 0, 11, 13};
+    sent.configureSerial = 17;
+    sent.frameSerial = 19;
+    sent.geometryGeneration = 23;
+    sent.rootNodeId = 71;
+    sent.layerCount = 2;
+    std::array<PresentationLayerState, 2> layers{};
+    layers[0].nodeId = 71;
+    layers[0].layerId = 91;
+    layers[0].contentRevision = 4;
+    layers[0].width = 640.0f;
+    layers[0].height = 480.0f;
+    layers[1].nodeId = 72;
+    layers[1].layerId = 92;
+    layers[1].contentRevision = 5;
+    layers[1].zOrder = 1;
+    layers[1].x = 40.0f;
+    layers[1].y = 20.0f;
+    layers[1].width = 200.0f;
+    layers[1].height = 120.0f;
+    layers[1].flags = kPresentationLayerHasClip;
+    layers[1].clipX = 0.0f;
+    layers[1].clipY = 0.0f;
+    layers[1].clipWidth = 640.0f;
+    layers[1].clipHeight = 480.0f;
+    ASSERT_TRUE(sendPresentationFrameReady(sockets[0], sent, layers));
+
+    Header header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_EQ(receivePacket(sockets[1], header, payload, receivedFd),
+              ReceiveStatus::Received);
+    EXPECT_EQ(receivedFd, -1);
+    PresentationFrameReady decoded{};
+    std::vector<PresentationLayerState> decodedLayers;
+    ASSERT_TRUE(decodePresentationFrameReady(
+        header, payload, decoded, decodedLayers));
+    EXPECT_EQ(decoded.rootNodeId, 71u);
+    ASSERT_EQ(decodedLayers.size(), 2u);
+    EXPECT_EQ(decodedLayers[1].layerId, 92u);
+    EXPECT_EQ(decodedLayers[1].zOrder, 1u);
+
+    layers[1].nodeId = layers[0].nodeId;
+    EXPECT_FALSE(sendPresentationFrameReady(sockets[0], sent, layers));
+    layers[1].nodeId = 72;
+    sent.layerCount = 1;
+    EXPECT_FALSE(sendPresentationFrameReady(sockets[0], sent, layers));
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(RasterProtocolTest, PresentationAnimationResultIsAPrivateEvent) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    PresentationAnimationResult sent{};
+    sent.grant = {7, 42, 0, 11, 13};
+    sent.transactionId = 101;
+    sent.nodeId = 71;
+    sent.outcome = PresentationAnimationOutcome::Canceled;
+    ASSERT_TRUE(sendPacket(
+        sockets[0], Opcode::PresentationAnimationResult, sent));
+
+    Header header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_EQ(receivePacket(sockets[1], header, payload, receivedFd),
+              ReceiveStatus::Received);
+    EXPECT_EQ(receivedFd, -1);
+    const auto* decoded = payloadAs<PresentationAnimationResult>(
+        header, payload, Opcode::PresentationAnimationResult);
+    ASSERT_NE(decoded, nullptr);
+    EXPECT_EQ(decoded->transactionId, 101u);
+    EXPECT_EQ(decoded->outcome, PresentationAnimationOutcome::Canceled);
+
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
+TEST(RasterProtocolTest, PresentationAnimationRejectsMalformedValues) {
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+
+    PresentationAnimation sent{};
+    sent.grant = {7, 42, 0, 11, 13};
+    sent.transactionId = 101;
+    sent.nodeId = 71;
+    sent.propertyMask = kAnimationTranslation | kAnimationOpacity;
+    sent.curve = PresentationAnimationCurve::Spring;
+    sent.initialVelocityX = 40.0f;
+    sent.startOpacity = 0.0f;
+    sent.targetTranslationX = 120.0f;
+    sent.springMass = 1.0f;
+    sent.springStiffness = 180.0f;
+    sent.springDamping = 26.0f;
+    ASSERT_TRUE(sendPresentationAnimation(sockets[0], sent));
+
+    Header header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_EQ(receivePacket(sockets[1], header, payload, receivedFd),
+              ReceiveStatus::Received);
+    EXPECT_EQ(receivedFd, -1);
+    PresentationAnimation decoded{};
+    ASSERT_TRUE(decodePresentationAnimation(header, payload, decoded));
+    EXPECT_EQ(decoded.transactionId, sent.transactionId);
+    EXPECT_EQ(decoded.curve, PresentationAnimationCurve::Spring);
+
+    sent.targetScaleX = 0.0f;
+    EXPECT_FALSE(sendPresentationAnimation(sockets[0], sent));
+    sent.targetScaleX = 1.0f;
+    sent.propertyMask = 1u << 30u;
+    EXPECT_FALSE(sendPresentationAnimation(sockets[0], sent));
+
     close(sockets[0]);
     close(sockets[1]);
 }
