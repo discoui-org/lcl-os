@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 
 #include "lcl-motion/motion.hpp"
 #include "lcl-graphics/canvas.hpp"
@@ -108,10 +109,16 @@ public:
      * property animation, it controls its own discrete presentation state.
      */
     using PresentationCallback = std::function<void(float)>;
+    using CompositorAnimationDelegate = std::function<bool(
+        Widget&, AnimatableProperty, float, float, float,
+        const lcl::motion::Motion&)>;
 
     MotionCoordinator() = default;
 
     void setLayoutCallback(LayoutCallback layout);
+    void setCompositorAnimationDelegate(CompositorAnimationDelegate delegate) {
+        m_compositorAnimationDelegate = std::move(delegate);
+    }
     void setInteractionTheme(InteractionMotionTheme theme) { m_interactionTheme = std::move(theme); }
     const InteractionMotionTheme& interactionTheme() const noexcept { return m_interactionTheme; }
     void beginTransaction(const lcl::motion::Motion& motion,
@@ -128,6 +135,10 @@ public:
                       float presentationValue, float targetValue,
                       const lcl::motion::Motion& motion,
                       ApplyFloat applyPresentation, bool affectsLayout = false);
+    /** Retarget one already-retained property directly from an input sample. */
+    bool updateCompositorFloat(Widget& widget, AnimatableProperty property,
+                               float presentationValue, float targetValue,
+                               ApplyFloat applyPresentation);
     void setColor(Widget& widget, AnimatableProperty firstChannel,
                   graphics::Color presentation, graphics::Color target,
                   std::function<void(graphics::Color)> applyPresentation,
@@ -136,9 +147,17 @@ public:
                                          std::vector<lcl::motion::Keyframe> keyframes,
                                          const lcl::motion::AnimationOptions& options = {});
 
-    bool tick(float dtSec);
+    bool tick(float dtSec, bool tickPresentationObservers = true);
     bool hasActiveAnimations() const noexcept;
+    bool hasCompositorAnimations() const noexcept {
+        return !m_compositorAnimations.empty();
+    }
+    /** Drive completion observers without advancing UI-owned channels. */
+    void tickCompositorPresentations();
     bool isObjectAnimating(uint64_t objectId) const;
+    /** Keep transition/input ownership live while compositor samples a handoff. */
+    void trackCompositorAnimation(uint64_t objectId, uint64_t transactionId);
+    void completeCompositorAnimation(uint64_t objectId, uint64_t transactionId);
     /** Registers an active presentation owner; Widget teardown removes it. */
     void registerPresentation(Widget& widget, PresentationCallback callback);
     void unregisterPresentation(uint64_t objectId);
@@ -163,11 +182,13 @@ private:
     lcl::motion::AnimationEngine m_engine;
     lcl::motion::Timeline m_timeline;
     std::unordered_map<lcl::motion::ChannelId, Binding> m_bindings;
+    std::unordered_map<uint64_t, uint64_t> m_compositorAnimations;
     std::unordered_map<uint64_t, PresentationBinding> m_presentationBindings;
     lcl::motion::Motion m_motion{lcl::motion::Motion::spring(0.18f, 0.0f)};
     AnimationTransactionOptions m_options{};
     bool m_transactionActive{false};
     LayoutCallback m_layoutCallback;
+    CompositorAnimationDelegate m_compositorAnimationDelegate;
     InteractionMotionTheme m_interactionTheme{};
 };
 

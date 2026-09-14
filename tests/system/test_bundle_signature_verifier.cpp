@@ -1,13 +1,16 @@
 #include <gtest/gtest.h>
 
 #include "system/security/bundle_signature_verifier.hpp"
+#include "system/security/bundle_signature_backend.hpp"
 #include "system/session/app_bundle_parser.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
@@ -158,6 +161,68 @@ TEST_F(BundleSignatureVerifierTest, RejectsInvalidEnvelopeSerialization) {
     EXPECT_FALSE(parseBundleSignatureEnvelope(
         std::span<const std::uint8_t>(truncated.data(), truncated.size()), parsed, error));
     EXPECT_FALSE(error.empty());
+}
+
+std::vector<std::uint8_t> decodeHex(std::string_view input) {
+    const auto nibble = [](char value) -> std::uint8_t {
+        if (value >= '0' && value <= '9') return static_cast<std::uint8_t>(value - '0');
+        if (value >= 'a' && value <= 'f') return static_cast<std::uint8_t>(value - 'a' + 10);
+        return 0xff;
+    };
+    std::vector<std::uint8_t> result;
+    if (input.size() % 2 != 0) return result;
+    result.reserve(input.size() / 2);
+    for (std::size_t index = 0; index < input.size(); index += 2) {
+        const std::uint8_t high = nibble(input[index]);
+        const std::uint8_t low = nibble(input[index + 1]);
+        if (high == 0xff || low == 0xff) return {};
+        result.push_back(static_cast<std::uint8_t>((high << 4) | low));
+    }
+    return result;
+}
+
+TEST_F(BundleSignatureVerifierTest, OpenSslBackendAcceptsRfc8032VectorAndRejectsMutation) {
+    const auto publicBytes = decodeHex(
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
+    const auto signatureBytes = decodeHex(
+        "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155"
+        "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b");
+    ASSERT_EQ(publicBytes.size(), Ed25519PublicKey{}.size());
+    ASSERT_EQ(signatureBytes.size(), Ed25519Signature{}.size());
+    Ed25519PublicKey publicKey{};
+    Ed25519Signature signature{};
+    std::copy(publicBytes.begin(), publicBytes.end(), publicKey.begin());
+    std::copy(signatureBytes.begin(), signatureBytes.end(), signature.begin());
+
+    OpenSslEd25519Verifier verifier;
+    const std::array<std::uint8_t, 0> emptyMessage{};
+    EXPECT_TRUE(verifier.verify(emptyMessage, publicKey, signature));
+    signature[0] ^= 1;
+    EXPECT_FALSE(verifier.verify(emptyMessage, publicKey, signature));
+}
+
+TEST_F(BundleSignatureVerifierTest, RootTrustStoreAcceptsOnlyPinnedSafeRawKey) {
+    const fs::path trustDirectory = temporaryDirectory_ / "Publishers";
+    fs::create_directory(trustDirectory);
+    ASSERT_EQ(chmod(trustDirectory.c_str(), 0700), 0);
+    Ed25519PublicKey publicKey{};
+    publicKey[0] = 0x42;
+    const fs::path keyPath = trustDirectory / "org.lcl.publisher.ed25519.pub";
+    std::ofstream key(keyPath, std::ios::binary);
+    key.write(reinterpret_cast<const char*>(publicKey.data()), publicKey.size());
+    key.close();
+    ASSERT_EQ(chmod(keyPath.c_str(), 0600), 0);
+
+    RootPublisherTrustStore trust({trustDirectory.string(), getuid(), getgid()});
+    const auto publisher = trust.resolve("org.lcl.publisher", {});
+    ASSERT_TRUE(publisher);
+    EXPECT_EQ(publisher->publicKey, publicKey);
+    EXPECT_EQ(publisher->fingerprint,
+              sha256(std::string_view(reinterpret_cast<const char*>(publicKey.data()),
+                                      publicKey.size())));
+    const std::array<std::uint8_t, 1> untrustedChain{1};
+    EXPECT_FALSE(trust.resolve("org.lcl.publisher", untrustedChain));
+    EXPECT_FALSE(trust.resolve("org.lcl.unknown", {}));
 }
 
 } // namespace

@@ -10,10 +10,9 @@
 #include <vector>
 
 #include "system/ipc/lcl_protocol.hpp"
+#include "system/security/administrator_client.hpp"
 #include "system/session/session_client.hpp"
-#include "system/shells/state/shell_state_client.hpp"
-#include "system/shells/state/shell_state_model.hpp"
-#include "system/shells/mobile/gesture_indicator.hpp"
+#include "system/shells/permission_prompt.hpp"
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-ui/widgets/image.hpp"
@@ -41,16 +40,6 @@ constexpr float kRowGap = 22.0f;
 constexpr uint64_t kLaunchTokenMask = (uint64_t{1} << 63) - 1;
 constexpr uint32_t kHomeSurfaceId = 1;
 constexpr uint32_t kWallpaperSurfaceId = 2;
-
-std::unique_ptr<lcl::ui::Container> makeGesturePill(float width,
-                                                    float height) {
-    auto pill = std::make_unique<lcl::ui::Container>();
-    pill->setBackgroundColor({255, 255, 255, 235});
-    pill->setBorderRadius(height * 0.5f);
-    pill->setWidth(width);
-    pill->setHeight(height);
-    return pill;
-}
 
 struct LauncherIcon {
     std::unique_ptr<lcl::ui::Widget> widget;
@@ -269,9 +258,25 @@ std::unique_ptr<lcl::ui::Container> makeLauncherTile(
 std::unique_ptr<lcl::ui::Widget> makeWallpaperRoot(
     const std::string& wallpaperPath,
     uint32_t width,
-    uint32_t height) {
-    auto wallpaper = std::make_unique<lcl::ui::Image>(wallpaperPath);
-    wallpaper->setFit(lcl::ui::ImageFit::Cover);
+    uint32_t height,
+    float bufferScale) {
+    const uint32_t pixelWidth = std::max(
+        1u, static_cast<uint32_t>(std::ceil(width * bufferScale)));
+    const uint32_t pixelHeight = std::max(
+        1u, static_cast<uint32_t>(std::ceil(height * bufferScale)));
+
+    std::shared_ptr<const lcl::ui::ImageData> image;
+    if (auto source = lcl::ui::ImageLoader::loadArgb32(wallpaperPath)) {
+        auto resized = lcl::ui::ImageLoader::resizeCover(
+            *source, pixelWidth, pixelHeight);
+        if (resized.isValid()) {
+            image = std::make_shared<const lcl::ui::ImageData>(
+                std::move(resized));
+        }
+    }
+
+    auto wallpaper = std::make_unique<lcl::ui::Image>(std::move(image));
+    wallpaper->setFit(lcl::ui::ImageFit::Fill);
     wallpaper->setWidth(static_cast<float>(width));
     wallpaper->setHeight(static_cast<float>(height));
     return wallpaper;
@@ -345,16 +350,41 @@ int main() {
     wallpaper->setInputEnabled(false);
     wallpaper->setInitialBounds(0, 0, width, height);
     wallpaper->setRootWidget(
-        makeWallpaperRoot(wallpaperPath, width, height));
-    wallpaper->setOnResize([&, wallpaperApp](
+        makeWallpaperRoot(
+            wallpaperPath, width, height, wallpaper->getBufferScale()));
+    uint32_t wallpaperPixelWidth = wallpaper->getPixelWidth();
+    uint32_t wallpaperPixelHeight = wallpaper->getPixelHeight();
+    auto rebuildWallpaper = [&, wallpaperApp](
             uint32_t resizedWidth, uint32_t resizedHeight) {
+        wallpaperPixelWidth = wallpaperApp->getPixelWidth();
+        wallpaperPixelHeight = wallpaperApp->getPixelHeight();
         wallpaperApp->setRootWidget(makeWallpaperRoot(
-            wallpaperPath, resizedWidth, resizedHeight));
+            wallpaperPath, resizedWidth, resizedHeight,
+            wallpaperApp->getBufferScale()));
+    };
+    wallpaper->setOnResize([&rebuildWallpaper](
+            uint32_t resizedWidth, uint32_t resizedHeight) {
+        rebuildWallpaper(resizedWidth, resizedHeight);
+    });
+    wallpaper->setOnFrame([&, wallpaperApp] {
+        const uint32_t pixelWidth = wallpaperApp->getPixelWidth();
+        const uint32_t pixelHeight = wallpaperApp->getPixelHeight();
+        if (pixelWidth == wallpaperPixelWidth &&
+            pixelHeight == wallpaperPixelHeight) {
+            return;
+        }
+        rebuildWallpaper(
+            static_cast<uint32_t>(wallpaperApp->getWidth()),
+            static_cast<uint32_t>(wallpaperApp->getHeight()));
     });
     wallpaper->setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 
     lcl::ui::WindowApp home(lcl::render::makeDisplayListCanvas(), width, height,
                             "LCL Mobile Home");
+    lcl::shell::PermissionPromptSurface permissionPrompt(
+        lcl::shell::PermissionPromptPresentation::Mobile, 0xfffffffeu,
+        "org.lcl.mobile-shell", width, height);
+    lcl::security::AdministratorPromptClient administratorPrompts;
     home.setSurfaceId(kHomeSurfaceId);
     home.setSystemSurfaceKind(lcl::protocol::LCLSystemSurfaceKind::HomeScreen);
     home.setAppId("org.lcl.mobile-shell");
@@ -384,92 +414,31 @@ int main() {
     });
     home.setDecorationMode(lcl::protocol::LCLDecorationMode::None);
 
-    lcl::shell::ShellStateModel wmState;
-    lcl::shell::ShellStateClient shellState;
-    lcl::ui::HostedSurfaceHandle gesturePillHandle = 0;
-    uint32_t nextGesturePillSurfaceId = 3;
-    uint64_t gesturePillSceneId = 0;
-    int32_t gesturePillSceneWidth = 0;
-    int32_t gesturePillSceneHeight = 0;
-    auto refreshGesturePill = [&]() {
-        const auto& snapshot = wmState.snapshot();
-        const auto scene = std::find_if(
-            snapshot.scenes.begin(), snapshot.scenes.end(),
-            [&snapshot](const auto& item) {
-                return item.sceneId == snapshot.activeSceneId &&
-                    item.visibility ==
-                        lcl::protocol::LCLSceneVisibility::Visible;
-            });
-        if (scene == snapshot.scenes.end() || scene->windowId == 0) {
-            if (gesturePillHandle != 0) {
-                home.removeHostedSurface(gesturePillHandle);
-                gesturePillHandle = 0;
-            }
-            gesturePillSceneId = 0;
-            return;
-        }
-        if (gesturePillHandle != 0 && gesturePillSceneId == scene->sceneId &&
-            gesturePillSceneWidth == scene->width &&
-            gesturePillSceneHeight == scene->height) return;
-        if (gesturePillHandle != 0) {
-            home.removeHostedSurface(gesturePillHandle);
-            gesturePillHandle = 0;
-        }
-
-        const float parentWidth = static_cast<float>(std::max(1, scene->width));
-        const float parentHeight = static_cast<float>(std::max(1, scene->height));
-        const auto layout = lcl::mobile::layoutGestureIndicator(
-            {0.0f, 0.0f, parentWidth, parentHeight});
-        const float pillWidth = layout.bounds.width;
-        const float pillHeight = layout.bounds.height;
-        auto pill = std::make_unique<lcl::ui::WindowApp>(
-            lcl::render::makeDisplayListCanvas(), pillWidth, pillHeight,
-            "MobileWM Gesture Indicator");
-        pill->setSurfaceId(nextGesturePillSurfaceId++);
-        pill->setAppId("org.lcl.mobile-wm");
-        pill->setInputEnabled(false);
-        pill->configureAttachedSurface(
-            scene->windowId,
-            lcl::protocol::LCLAttachedSurfaceRole::Adornment,
-            layout.bounds.x, layout.bounds.y, pillWidth, pillHeight,
-            false, false, false);
-        pill->setRootWidget(makeGesturePill(pillWidth, pillHeight));
-        if (!pill->connectCompositor()) {
-            std::cerr << "[MobileWM] Could not attach gesture indicator to window "
-                      << scene->windowId << "\n";
-            return;
-        }
-        gesturePillHandle = home.hostSurface(std::move(pill));
-        gesturePillSceneId = scene->sceneId;
-        gesturePillSceneWidth = scene->width;
-        gesturePillSceneHeight = scene->height;
-    };
-    shellState.setOnSnapshot([&](
-            const lcl::shell::ShellStateSnapshot& snapshot) {
-        wmState.applySnapshot(snapshot);
-        refreshGesturePill();
-    });
-    shellState.setOnDelta([&](const lcl::shell::ShellStateDelta& delta) {
-        wmState.applyDelta(delta);
-        refreshGesturePill();
-    });
-    auto nextShellReconnect = std::chrono::steady_clock::now();
+    auto nextAdminReconnect = std::chrono::steady_clock::now();
     home.setOnFrame([&] {
-        if (!shellState.isConnected() &&
-            std::chrono::steady_clock::now() >= nextShellReconnect) {
-            shellState.connect();
-            nextShellReconnect =
+        permissionPrompt.tick();
+        if (!administratorPrompts.isConnected() &&
+            std::chrono::steady_clock::now() >= nextAdminReconnect) {
+            administratorPrompts.connect();
+            nextAdminReconnect =
                 std::chrono::steady_clock::now() + std::chrono::seconds(1);
         }
-        shellState.poll();
+        std::uint32_t adminRequestId = 0;
+        lcl::security::AdministratorPrompt adminPrompt;
+        if (administratorPrompts.poll(adminRequestId, adminPrompt)) {
+            const bool shown = permissionPrompt.show(
+                {adminPrompt.appName, adminPrompt.title,
+                 adminPrompt.description},
+                [&administratorPrompts, adminRequestId](bool allowed) {
+                    administratorPrompts.decide(adminRequestId, allowed);
+                });
+            if (!shown) administratorPrompts.decide(adminRequestId, false);
+        }
     });
 
     if (!wallpaper->connectCompositor()) return 1;
     home.hostSurface(std::move(wallpaper));
     if (!home.connectCompositor()) return 1;
-    if (!shellState.connect()) {
-        std::cerr << "[LCL Mobile Shell] Could not subscribe to shell state\n";
-    }
     home.runEventLoop();
     return 0;
 }

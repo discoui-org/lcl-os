@@ -14,7 +14,7 @@ namespace lcl::core {
 
 bool SystemSurfacePolicyRegistry::isValidKind(protocol::LCLSystemSurfaceKind kind) noexcept {
     return kind >= protocol::LCLSystemSurfaceKind::Wallpaper &&
-           kind <= protocol::LCLSystemSurfaceKind::HomeScreen;
+           kind <= protocol::LCLSystemSurfaceKind::PermissionPrompt;
 }
 
 SystemSurfacePolicy SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind kind) noexcept {
@@ -48,6 +48,14 @@ SystemSurfacePolicy SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSu
             return policy;
         case protocol::LCLSystemSurfaceKind::HomeScreen:
             policy.layer = protocol::LCLWindowLayer::Normal;
+            policy.unfocusable = false;
+            policy.insetBorderEnabled = false;
+            policy.suppressInitialTransition = true;
+            policy.isSystemSurface = true;
+            policy.placement = SystemSurfacePlacement::OutputBounds;
+            return policy;
+        case protocol::LCLSystemSurfaceKind::PermissionPrompt:
+            policy.layer = protocol::LCLWindowLayer::TopMost;
             policy.unfocusable = false;
             policy.insetBorderEnabled = false;
             policy.suppressInitialTransition = true;

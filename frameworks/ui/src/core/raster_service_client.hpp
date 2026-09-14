@@ -16,6 +16,20 @@ struct ExternalBufferRelease {
     int releaseFenceFd{-1};
 };
 
+/** One private raster-service event drained from the non-blocking socket. */
+struct RasterServiceEvent {
+    enum class Kind : uint8_t {
+        FrameDiscarded,
+        ExternalBufferReleased,
+        PresentationAnimationResult,
+    };
+
+    Kind kind{Kind::FrameDiscarded};
+    raster_protocol::FrameDiscarded discarded{};
+    ExternalBufferRelease externalBufferRelease{};
+    raster_protocol::PresentationAnimationResult animation{};
+};
+
 class RasterServiceClient {
 public:
     RasterServiceClient() = default;
@@ -37,13 +51,18 @@ public:
         const detail::RenderTreeTransaction& renderTreeTransaction,
         const std::vector<uint8_t>& displayList,
         uint64_t clientFrameStartNs);
-    std::vector<raster_protocol::FrameDiscarded> pollDiscards();
-    std::vector<ExternalBufferRelease>
-        takeExternalBufferReleases();
+    /** Send one compositor-owned retained-presentation animation declaration. */
+    bool submitPresentationAnimation(
+        const raster_protocol::PresentationAnimation& animation);
+    /** Drain discard, external-release, and animation-result events together. */
+    std::vector<RasterServiceEvent> pollEvents();
     bool isConfigured() const noexcept;
     bool isConnected() const noexcept { return m_fd >= 0; }
     uint64_t connectionGeneration() const noexcept {
         return m_connectionGeneration;
+    }
+    const raster_protocol::SurfaceGrant& surfaceGrant() const noexcept {
+        return m_grant;
     }
 
 private:
@@ -54,8 +73,6 @@ private:
     raster_protocol::SurfaceGrant m_grant{};
     int m_fd{-1};
     uint64_t m_connectionGeneration{0};
-    std::vector<ExternalBufferRelease>
-        m_externalBufferReleases;
 };
 
 } // namespace lcl::ui

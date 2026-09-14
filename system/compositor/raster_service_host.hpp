@@ -23,6 +23,15 @@ public:
         std::shared_ptr<const platform::INativeBuffer> nativeBuffer;
     };
 
+    struct ReceivedPresentationFrame {
+        raster_protocol::PresentationFrameReady metadata{};
+        std::vector<raster_protocol::PresentationLayerState> layers;
+    };
+
+    struct ReceivedPresentationAnimation {
+        raster_protocol::PresentationAnimation animation{};
+    };
+
     explicit RasterServiceHost(platform::IPlatformServices& platformServices)
         : m_platformServices(platformServices) {}
     ~RasterServiceHost();
@@ -33,6 +42,10 @@ public:
     void shutdown() noexcept;
     void poll();
     std::vector<ReceivedLayer> takeReadyLayers();
+    std::vector<ReceivedPresentationFrame> takePresentationFrames();
+    std::vector<ReceivedPresentationAnimation> takePresentationAnimations();
+    bool sendPresentationAnimationResult(
+        const raster_protocol::PresentationAnimationResult& result);
 
     raster_protocol::SurfaceGrant registerSurface(
         uint32_t surfaceId, pid_t ownerPid, bool interactiveSystem);
@@ -62,6 +75,8 @@ private:
     void sendAllGrants();
     bool sendGrant(const raster_protocol::SurfaceGrant& grant);
     static TokenKey keyOf(const raster_protocol::SurfaceGrant& grant) noexcept;
+    bool isAuthorizedGrant(
+        const raster_protocol::SurfaceGrant& grant) const noexcept;
 
     std::string m_executable;
     std::string m_publicSocketPath;
@@ -75,6 +90,8 @@ private:
     std::chrono::steady_clock::time_point m_nextRestart{};
     std::unordered_map<TokenKey, raster_protocol::SurfaceGrant, TokenHash> m_grants;
     std::vector<ReceivedLayer> m_readyLayers;
+    std::vector<ReceivedPresentationFrame> m_presentationFrames;
+    std::vector<ReceivedPresentationAnimation> m_presentationAnimations;
     struct PendingNativeLayer {
         ReceivedLayer layer;
         bool authorized{false};

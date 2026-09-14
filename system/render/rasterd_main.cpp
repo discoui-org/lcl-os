@@ -203,6 +203,12 @@ struct SurfaceState {
     std::unique_ptr<lcl::render::ClientEGLContext> gpuContext;
     std::unique_ptr<lcl::render::RasterRenderer> gpuRenderer;
     std::unordered_map<uint64_t, uint32_t> gpuLayers;
+    // Storage identities in the last complete presentation snapshot.  A
+    // transform-only transaction republishes only its manifest and reuses
+    // these immutable buffers; it never allocates another root target.
+    lcl::raster_protocol::LayerReady presentationRoot{};
+    std::unordered_map<uint64_t, lcl::raster_protocol::LayerReady>
+        presentationLayers;
     std::unordered_map<uint32_t, uint64_t> gpuBufferIds;
     lcl::platform::RetainedOutputDamageTracker gpuOutputDamage;
     uint64_t gpuFrameSerial{0};
@@ -210,12 +216,18 @@ struct SurfaceState {
     uint32_t gpuWidth{0};
     uint32_t gpuHeight{0};
     float gpuScale{0.0f};
+    // A complete property-only replay may draw directly into a rotating
+    // output AHardwareBuffer. Its private scene FBO is then intentionally
+    // stale and must be rebuilt before accepting a later partial replay.
+    bool gpuSceneNeedsRebuild{false};
     bool gpuUnavailable{false};
 };
 
 struct Client {
     int fd{-1};
     pid_t pid{0};
+    uid_t uid{0};
+    gid_t gid{0};
 };
 
 struct PendingFrame {
@@ -344,8 +356,135 @@ PixelDamage pixelDamageFor(const CommitTransaction& submit, uint32_t width,
             bottom > top ? bottom - top : 0};
 }
 
+const RetainedNodeState* rootRetainedNode(
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes) noexcept {
+    const auto root = std::find_if(
+        nodes.begin(), nodes.end(), [](const auto& item) {
+            return item.second.parentId == 0 && item.second.id != 0;
+        });
+    return root == nodes.end() ? nullptr : &root->second;
+}
+
+bool publishSingleRootPresentationFrame(
+        int compositorFd, const LayerReady& ready,
+        const RetainedNodeState& root, float logicalWidth,
+        float logicalHeight) {
+    if (ready.role != lcl::raster_protocol::LayerRole::Root ||
+        ready.nodeId != root.id || ready.contentRevision != root.contentRevision ||
+        ready.layerId == 0 || ready.width == 0 || ready.height == 0 ||
+        !std::isfinite(logicalWidth) || !std::isfinite(logicalHeight) ||
+        logicalWidth <= 0.0f || logicalHeight <= 0.0f) {
+        return false;
+    }
+    lcl::raster_protocol::PresentationLayerState state{};
+    state.nodeId = ready.nodeId;
+    state.layerId = ready.layerId;
+    state.contentRevision = ready.contentRevision;
+    state.flags = lcl::raster_protocol::kPresentationLayerOpaque;
+    // The root scene's storage always covers the configured local viewport.
+    // Do not inherit the root widget's absolute placement: WindowGroup owns it.
+    // CommitTransaction is the configure-authoritative local viewport.  A
+    // retained root can have different presentation bounds while its parent
+    // geometry is being updated, but its immutable storage still represents
+    // this exact configured content extent.
+    state.width = logicalWidth;
+    state.height = logicalHeight;
+    lcl::raster_protocol::PresentationFrameReady frame{};
+    frame.grant = ready.grant;
+    frame.configureSerial = ready.configureSerial;
+    frame.frameSerial = ready.frameSerial;
+    frame.geometryGeneration = ready.geometryGeneration;
+    frame.rootNodeId = root.id;
+    frame.layerCount = 1;
+    return lcl::raster_protocol::sendPresentationFrameReady(
+        compositorFd, frame, std::span<const lcl::raster_protocol::
+            PresentationLayerState>(&state, 1));
+}
+
+lcl::raster_protocol::PresentationLayerState presentationStateFor(
+        const RetainedNodeState& node,
+        const lcl::raster_protocol::LayerReady& ready,
+        uint32_t zOrder) {
+    lcl::raster_protocol::PresentationLayerState state{};
+    state.nodeId = node.id;
+    state.layerId = ready.layerId;
+    state.contentRevision = ready.contentRevision;
+    state.zOrder = zOrder;
+    // A cached presentation boundary is recorded in the toplevel's local
+    // coordinate space. Its layout origin stays outside the transform so the
+    // compositor can apply origin -> scale/rotation -> translation exactly
+    // once, matching Widget::presentationMatrix().
+    state.x = node.layoutX;
+    state.y = node.layoutY;
+    state.width = node.layoutWidth;
+    state.height = node.layoutHeight;
+    state.opacity = node.opacity;
+    state.translationX = node.translationX;
+    state.translationY = node.translationY;
+    state.scaleX = node.scaleX;
+    state.scaleY = node.scaleY;
+    state.rotationRadians = node.rotationRadians;
+    state.originX = node.originX;
+    state.originY = node.originY;
+    if ((node.flags & lcl::raster_protocol::kNodeHasClip) != 0) {
+        state.flags |= lcl::raster_protocol::kPresentationLayerHasClip;
+        state.clipX = node.clipX;
+        state.clipY = node.clipY;
+        state.clipWidth = node.clipWidth;
+        state.clipHeight = node.clipHeight;
+    }
+    return state;
+}
+
+bool publishReusedPresentationFrame(
+        int compositorFd, const SurfaceState& surface,
+        const CommitTransaction& submit, const RetainedNodeState& root,
+        const std::unordered_map<uint64_t, RetainedNodeState>& nodes,
+        const std::unordered_set<uint64_t>& presentationIds) {
+    if (surface.presentationRoot.layerId == 0 ||
+        surface.presentationRoot.nodeId != root.id ||
+        surface.presentationRoot.contentRevision != root.contentRevision ||
+        presentationIds.size() != surface.presentationLayers.size()) {
+        return false;
+    }
+    std::vector<lcl::raster_protocol::PresentationLayerState> states;
+    states.reserve(presentationIds.size() + 1);
+    auto rootState = presentationStateFor(root, surface.presentationRoot, 0);
+    rootState.x = rootState.y = 0.0f;
+    rootState.width = submit.logicalWidth;
+    rootState.height = submit.logicalHeight;
+    rootState.opacity = 1.0f;
+    rootState.translationX = rootState.translationY = 0.0f;
+    rootState.scaleX = rootState.scaleY = 1.0f;
+    rootState.rotationRadians = 0.0f;
+    rootState.flags = lcl::raster_protocol::kPresentationLayerOpaque;
+    states.push_back(rootState);
+    std::vector<uint64_t> orderedIds(
+        presentationIds.begin(), presentationIds.end());
+    std::sort(orderedIds.begin(), orderedIds.end());
+    uint32_t zOrder = 1;
+    for (const uint64_t nodeId : orderedIds) {
+        const auto node = nodes.find(nodeId);
+        const auto layer = surface.presentationLayers.find(nodeId);
+        if (node == nodes.end() || layer == surface.presentationLayers.end() ||
+            layer->second.contentRevision != node->second.contentRevision) {
+            return false;
+        }
+        states.push_back(presentationStateFor(node->second, layer->second, zOrder++));
+    }
+    lcl::raster_protocol::PresentationFrameReady frame{};
+    frame.grant = submit.grant;
+    frame.configureSerial = submit.configureSerial;
+    frame.frameSerial = submit.frameSerial;
+    frame.geometryGeneration = submit.geometryGeneration;
+    frame.rootNodeId = root.id;
+    frame.layerCount = static_cast<uint32_t>(states.size());
+    return lcl::raster_protocol::sendPresentationFrameReady(
+        compositorFd, frame, states);
+}
+
 bool validNodeState(const RetainedNodeState& node) noexcept {
-    constexpr uint32_t kBoundaryMask = 0xffu;
+    constexpr uint32_t kBoundaryMask = 0x1ffu;
     constexpr uint32_t kExternalReason = 1u << 7u;
     constexpr uint32_t kAllowedFlags =
         lcl::raster_protocol::kNodeHasClip |
@@ -585,15 +724,18 @@ bool isRetainedPresentationCandidate(
     constexpr uint32_t kOpacityReason = 1u << 3u;
     constexpr uint32_t kScrollViewportReason = 1u << 4u;
     constexpr uint32_t kScrollContentReason = 1u << 5u;
+    constexpr uint32_t kEffectReason = 1u << 6u;
     constexpr uint32_t kExternalBufferReason = 1u << 7u;
+    constexpr uint32_t kRetainedPresentationReason = 1u << 8u;
     const bool presentation =
         (node.boundaryReasons &
-         (kTransformReason | kOpacityReason)) != 0;
+         (kTransformReason | kOpacityReason |
+          kRetainedPresentationReason)) != 0;
     const float area = node.layoutWidth * node.layoutHeight;
     return presentation &&
         (node.boundaryReasons & kRootReason) == 0 &&
         (node.boundaryReasons &
-         (kScrollViewportReason | kScrollContentReason)) == 0 &&
+         (kScrollViewportReason | kScrollContentReason | kEffectReason)) == 0 &&
         (node.boundaryReasons & kExternalBufferReason) == 0 &&
         node.layoutWidth > 0.0f && node.layoutHeight > 0.0f &&
         node.layoutWidth <= 2048.0f && node.layoutHeight <= 2048.0f &&
@@ -668,7 +810,16 @@ std::unordered_set<uint64_t> retainedPresentationNodeIds(
                     (descendant.first == id ||
                      descendsFrom(nodes, descendant.first, id));
             });
-        if (!containsScroll && !containsExternal) result.insert(id);
+        const bool containsBackdropDependency = std::any_of(
+            nodes.begin(), nodes.end(), [&](const auto& descendant) {
+                return (descendant.second.boundaryReasons & (1u << 6u)) != 0 &&
+                    (descendant.first == id ||
+                     descendsFrom(nodes, descendant.first, id));
+            });
+        if (!containsScroll && !containsExternal &&
+            !containsBackdropDependency) {
+            result.insert(id);
+        }
     }
     return result;
 }
@@ -679,20 +830,50 @@ bool isRetainedPresentationProperties(
         const std::unordered_set<uint64_t>& candidates) noexcept {
     constexpr uint32_t kTransformReason = 1u << 2u;
     constexpr uint32_t kOpacityReason = 1u << 3u;
+    constexpr uint32_t kRetainedPresentationReason = 1u << 8u;
     constexpr float kEpsilon = 0.0001f;
     const auto same = [=](float lhs, float rhs) {
         return std::fabs(lhs - rhs) <= kEpsilon;
     };
     if (mutation.type !=
-            lcl::raster_protocol::NodeMutationType::SetProperties ||
-        !candidates.contains(mutation.node.id)) {
+            lcl::raster_protocol::NodeMutationType::SetProperties) {
         return false;
     }
     const auto& node = mutation.node;
     const auto* old = findRetainedNode(nodes, node.id);
     if (!old || !validNodeState(node)) return false;
-    const uint32_t allowedReasons = kTransformReason | kOpacityReason;
-    return isRetainedPresentationCandidate(node) &&
+    const uint32_t allowedReasons = kTransformReason | kOpacityReason |
+        kRetainedPresentationReason;
+    const bool owner = candidates.contains(node.id);
+    if (!owner && !std::any_of(
+            candidates.begin(), candidates.end(), [&](uint64_t candidate) {
+                return descendsFrom(nodes, node.id, candidate);
+            })) return false;
+    const bool sameClip =
+        (same(node.clipX, old->clipX) && same(node.clipY, old->clipY) &&
+         same(node.clipWidth, old->clipWidth) &&
+         same(node.clipHeight, old->clipHeight)) ||
+        ((node.flags & lcl::raster_protocol::kNodeHasClip) != 0 &&
+         same(node.clipX, node.presentationX) &&
+         same(node.clipY, node.presentationY) &&
+         same(node.clipWidth, node.presentationWidth) &&
+         same(node.clipHeight, node.presentationHeight) &&
+         same(old->clipX, old->presentationX) &&
+         same(old->clipY, old->presentationY) &&
+         same(old->clipWidth, old->presentationWidth) &&
+         same(old->clipHeight, old->presentationHeight));
+    // Screen bounds of descendants move with the owner. Only unchanged local
+    // state can reuse the pixels baked into that owner's identity-space layer.
+    const bool inherited = !owner &&
+        node.propertyRevision == old->propertyRevision &&
+        node.boundaryReasons == old->boundaryReasons &&
+        same(node.opacity, old->opacity) &&
+        same(node.translationX, old->translationX) &&
+        same(node.translationY, old->translationY) &&
+        same(node.scaleX, old->scaleX) && same(node.scaleY, old->scaleY) &&
+        same(node.rotationRadians, old->rotationRadians) &&
+        same(node.originX, old->originX) && same(node.originY, old->originY);
+    return ((owner && isRetainedPresentationCandidate(node)) || inherited) &&
         ((node.boundaryReasons ^ old->boundaryReasons) &
          ~allowedReasons) == 0 &&
         node.parentId == old->parentId &&
@@ -705,10 +886,7 @@ bool isRetainedPresentationProperties(
         same(node.layoutY, old->layoutY) &&
         same(node.layoutWidth, old->layoutWidth) &&
         same(node.layoutHeight, old->layoutHeight) &&
-        same(node.clipX, old->clipX) &&
-        same(node.clipY, old->clipY) &&
-        same(node.clipWidth, old->clipWidth) &&
-        same(node.clipHeight, old->clipHeight);
+        sameClip;
 }
 
 bool isRetainedPresentationOnly(
@@ -876,6 +1054,13 @@ bool setNonBlocking(int fd) {
 int createListener(const std::string& path) {
     const int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) return -1;
+    // Inherited by accepted sockets, including packets queued before accept.
+    const int passCredentials = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_PASSCRED,
+                   &passCredentials, sizeof(passCredentials)) != 0) {
+        close(fd);
+        return -1;
+    }
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     if (path.size() >= sizeof(address.sun_path)) {
@@ -964,11 +1149,12 @@ private:
             if (fd < 0) break;
             ucred credentials{};
             socklen_t length = sizeof(credentials);
-            if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) != 0) {
+            if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) != 0 ||
+                length != sizeof(credentials) || credentials.pid <= 0) {
                 close(fd);
                 continue;
             }
-            m_clients.push_back({fd, credentials.pid});
+            m_clients.push_back({fd, credentials.pid, credentials.uid, credentials.gid});
         }
     }
 
@@ -1003,6 +1189,23 @@ private:
                 releaseLayer(
                     release->layerId, release->reason,
                     std::exchange(receivedFd, -1));
+            } else if (const auto* result = lcl::raster_protocol::payloadAs<
+                           lcl::raster_protocol::PresentationAnimationResult>(
+                           header, payload,
+                           Opcode::PresentationAnimationResult)) {
+                const auto surface = m_surfaces.find(tokenOf(result->grant));
+                if (surface != m_surfaces.end()) {
+                    const auto client = std::find_if(
+                        m_clients.begin(), m_clients.end(),
+                        [&surface](const Client& candidate) {
+                            return candidate.pid == surface->second.grant.ownerPid;
+                        });
+                    if (client != m_clients.end()) {
+                        (void)lcl::raster_protocol::sendPacket(
+                            client->fd, Opcode::PresentationAnimationResult,
+                            *result);
+                    }
+                }
             }
             if (receivedFd >= 0) close(receivedFd);
         }
@@ -1015,8 +1218,9 @@ private:
                 lcl::raster_protocol::Header header{};
                 std::vector<uint8_t> payload;
                 int receivedFd = -1;
+                lcl::raster_protocol::SenderCredentials sender{};
                 const auto status = lcl::raster_protocol::receivePacket(
-                    it->fd, header, payload, receivedFd);
+                    it->fd, header, payload, receivedFd, &sender);
                 if (status == lcl::raster_protocol::ReceiveStatus::WouldBlock) break;
                 if (status == lcl::raster_protocol::ReceiveStatus::Closed ||
                     status == lcl::raster_protocol::ReceiveStatus::Error) {
@@ -1026,7 +1230,16 @@ private:
                 }
                 if (status != lcl::raster_protocol::ReceiveStatus::Received) {
                     if (receivedFd >= 0) close(receivedFd);
-                    continue;
+                    alive = false;
+                    break;
+                }
+                // SO_PEERCRED alone identifies the connector, not a process
+                // writing through a forked or SCM_RIGHTS-transferred socket.
+                if (sender != lcl::raster_protocol::SenderCredentials{
+                        it->pid, it->uid, it->gid}) {
+                    if (receivedFd >= 0) close(receivedFd);
+                    alive = false;
+                    break;
                 }
                 handleClientPacket(*it, header, payload, receivedFd);
             }
@@ -1206,6 +1419,27 @@ private:
             return;
         }
 
+        if (header.opcode == Opcode::PresentationAnimation) {
+            lcl::raster_protocol::PresentationAnimation animation{};
+            const bool decoded = lcl::raster_protocol::decodePresentationAnimation(
+                header, payload, animation);
+            const auto* surface = decoded
+                ? authorizedSurface(client, animation.grant) : nullptr;
+            lcl::raster_protocol::PresentationAnimationResult result{};
+            result.grant = animation.grant;
+            result.transactionId = animation.transactionId;
+            result.nodeId = animation.nodeId;
+            result.outcome = lcl::raster_protocol::PresentationAnimationOutcome::Rejected;
+            if (receivedFd >= 0) close(receivedFd);
+            if (surface && lcl::raster_protocol::sendPresentationAnimation(
+                    m_compositorFd, animation)) {
+                return;
+            }
+            (void)lcl::raster_protocol::sendPacket(
+                client.fd, Opcode::PresentationAnimationResult, result);
+            return;
+        }
+
         CommitTransaction transaction{};
         std::vector<NodeMutation> mutations;
         if (lcl::raster_protocol::decodeCommitTransaction(
@@ -1357,6 +1591,8 @@ private:
                      int displayListFd) {
         const uint64_t rasterStartNs = submit.clientFrameStartNs != 0
             ? monotonicNowNs() : 0;
+        const auto* root = rootRetainedNode(nextNodes);
+        if (!root) return false;
         if (!replacesRetainedScene(submit) &&
             !retainedBaseMatches(
                 submit, surface.gpuFrameSerial,
@@ -1527,9 +1763,43 @@ private:
                 requiresGpuExternal = true;
             }
         }
+        // A candidate is exportable only when Widget recorded its immutable
+        // cached boundary in this DisplayList. Keeping an ordinary draw in
+        // the root for a missing cache preserves correctness instead of
+        // producing a transparent/mixed frame.
+        std::unordered_set<uint64_t> exportablePresentationIds;
+        for (const uint64_t nodeId : retainedPresentationIds) {
+            if (nextLayerNamespaces.contains(nodeId)) {
+                exportablePresentationIds.insert(nodeId);
+            }
+        }
+        // Keep root plus two full-size pool slots below the compositor's
+        // 64 MiB per-surface cap on high-DPI phones. That also covers the
+        // NavigationStack's outgoing/incoming pair. Refuse the whole optional
+        // promotion when it cannot fit instead of publishing a partial tree.
+        if (exportablePresentationIds.size() > 2) {
+            exportablePresentationIds.clear();
+        }
+        auto rootCommands = std::make_shared<std::vector<
+            lcl::graphics::DisplayCommand>>(*resolvedCommands);
+        std::erase_if(*rootCommands, [&](const auto& command) {
+            const auto* draw = std::get_if<
+                lcl::graphics::DrawCachedLayerCommand>(&command);
+            if (!draw) return false;
+            return std::any_of(
+                exportablePresentationIds.begin(),
+                exportablePresentationIds.end(), [&](uint64_t nodeId) {
+                    const auto layer = nextLayerNamespaces.find(nodeId);
+                    return layer != nextLayerNamespaces.end() &&
+                        layer->second == draw->id;
+                });
+        });
         const auto immutableResolved = std::shared_ptr<const std::vector<
             lcl::graphics::DisplayCommand>>(resolvedCommands);
         const lcl::graphics::DisplayList displayList(immutableResolved);
+        const auto immutableRootCommands = std::shared_ptr<const std::vector<
+            lcl::graphics::DisplayCommand>>(rootCommands);
+        const lcl::graphics::DisplayList rootDisplayList(immutableRootCommands);
         const auto releaseCachedLayers = [&](std::span<const uint64_t> ids) {
             for (const uint64_t id : ids) {
                 if (surface.gpuRenderer) {
@@ -1550,7 +1820,61 @@ private:
             releaseCachedLayers(tiled->createdLayerIds);
             releaseCachedLayers(createdNamespaceLayers);
         };
-        if (rasterGpuFrame(surface, submit, displayList, rasterStartNs)) {
+        const bool activePresentationMatches =
+            surface.presentationRoot.layerId != 0 &&
+            surface.presentationRoot.nodeId == root->id &&
+            surface.presentationRoot.contentRevision == root->contentRevision &&
+            surface.presentationRoot.configureSerial == submit.configureSerial &&
+            surface.presentationRoot.geometryGeneration ==
+                submit.geometryGeneration &&
+            surface.presentationLayers.size() ==
+                exportablePresentationIds.size() &&
+            std::all_of(
+                exportablePresentationIds.begin(),
+                exportablePresentationIds.end(), [&](uint64_t nodeId) {
+                    const auto node = nextNodes.find(nodeId);
+                    const auto layer = surface.presentationLayers.find(nodeId);
+                    return node != nextNodes.end() &&
+                        layer != surface.presentationLayers.end() &&
+                        layer->second.contentRevision ==
+                            node->second.contentRevision &&
+                        layer->second.configureSerial == submit.configureSerial &&
+                        layer->second.geometryGeneration ==
+                            submit.geometryGeneration;
+                });
+        bool retainedPropertyOnly = isRetainedPropertyOnly(
+            submit, mutations, surface.retainedNodes);
+        if (retainedPresentationTransaction &&
+            !activePresentationMatches) {
+            // A property-only retained-tree diff is not a compositor-only
+            // frame until the corresponding root + sublayer snapshot actually
+            // exists. Treat the first handoff as a normal scene rebuild; the
+            // old full root may still contain those pixels and would otherwise
+            // be composed underneath the new sublayer as a duplicate.
+            retainedPropertyOnly = false;
+        }
+        // The complete immutable layer tree already exists in the compositor.
+        // For eligible transform/opacity changes, publish a new atomic state
+        // manifest only.  This is deliberately before rasterGpuFrame(): no
+        // DisplayList replay, AHardwareBuffer acquisition, or root copy is
+        // allowed on the animation path.
+        if (retainedPresentationTransaction &&
+            publishReusedPresentationFrame(
+                m_compositorFd, surface, submit, *root, nextNodes,
+                exportablePresentationIds)) {
+            surface.gpuFrameSerial = submit.frameSerial;
+            surface.gpuGeometryGeneration = submit.geometryGeneration;
+            surface.gpuWidth = std::max(1u, static_cast<uint32_t>(
+                std::ceil(submit.logicalWidth * submit.bufferScale)));
+            surface.gpuHeight = std::max(1u, static_cast<uint32_t>(
+                std::ceil(submit.logicalHeight * submit.bufferScale)));
+            surface.gpuScale = submit.bufferScale;
+            commitTiledState();
+            return true;
+        }
+        if (rasterGpuFrame(surface, submit, rootDisplayList, rasterStartNs,
+                           retainedPropertyOnly, *root, nextNodes,
+                           exportablePresentationIds, nextLayerNamespaces)) {
             commitTiledState();
             return true;
         }
@@ -1626,6 +1950,9 @@ private:
         LayerReady ready{};
         ready.grant = submit.grant;
         ready.layerId = slot->layerId;
+        ready.role = lcl::raster_protocol::LayerRole::Root;
+        ready.nodeId = root->id;
+        ready.contentRevision = root->contentRevision;
         ready.configureSerial = submit.configureSerial;
         ready.frameSerial = submit.frameSerial;
         ready.geometryGeneration = submit.geometryGeneration;
@@ -1651,6 +1978,14 @@ private:
             discardPreparedCaches();
             return false;
         }
+        if (!publishSingleRootPresentationFrame(
+                m_compositorFd, ready, *root,
+                submit.logicalWidth, submit.logicalHeight)) {
+            slot->busy = false;
+            surface.softwareFrameSerial = 0;
+            discardPreparedCaches();
+            return false;
+        }
         surface.softwareFrameSerial = submit.frameSerial;
         surface.softwareGeometryGeneration = submit.geometryGeneration;
         surface.softwareScale = submit.bufferScale;
@@ -1658,10 +1993,152 @@ private:
         return true;
     }
 
+    bool publishGpuPresentationLayer(
+            SurfaceState& surface, const CommitTransaction& submit,
+            const RetainedNodeState& node, uint64_t cachedLayerId,
+            uint32_t zOrder, uint64_t rasterStartNs,
+            lcl::raster_protocol::PresentationLayerState& state) {
+        if (!surface.gpuContext || !surface.gpuRenderer || cachedLayerId == 0) {
+            return false;
+        }
+        const uint32_t backingWidth = std::max(1u, static_cast<uint32_t>(
+            std::ceil(submit.logicalWidth * submit.bufferScale)));
+        const uint32_t backingHeight = std::max(1u, static_cast<uint32_t>(
+            std::ceil(submit.logicalHeight * submit.bufferScale)));
+        const uint32_t layerWidth = std::max(1u, static_cast<uint32_t>(
+            std::ceil(node.layoutWidth * submit.bufferScale)));
+        const uint32_t layerHeight = std::max(1u, static_cast<uint32_t>(
+            std::ceil(node.layoutHeight * submit.bufferScale)));
+        const auto target = surface.gpuContext->acquireDmaBufTarget();
+        if (!target) return false;
+
+        // Pool allocations are currently toplevel-sized, but the published
+        // image is local to this node: place the cached source at (0, 0), mark
+        // only that logical extent as ready, and let backingWidth/Height carry
+        // the larger allocation stride. Publishing a stretched full-surface
+        // image here duplicates/scales Settings content when the compositor
+        // maps it back into the node bounds.
+        auto commands = std::make_shared<std::vector<
+            lcl::graphics::DisplayCommand>>();
+        commands->emplace_back(lcl::graphics::ClearRectCommand{
+            {0.0f, 0.0f, submit.logicalWidth, submit.logicalHeight},
+            {0, 0, 0, 0}});
+        commands->emplace_back(lcl::graphics::DrawCachedLayerCommand{
+            cachedLayerId,
+            {0.0f, 0.0f, node.layoutWidth, node.layoutHeight}, 1.0f});
+        const auto immutableCommands = std::shared_ptr<const std::vector<
+            lcl::graphics::DisplayCommand>>(commands);
+        const lcl::graphics::DisplayList displayList(immutableCommands);
+        surface.gpuRenderer->setExternalFrameTarget(
+            target->framebuffer, target->texture, target->width,
+            target->height, true);
+        surface.gpuRenderer->setDeviceScale(submit.bufferScale);
+        surface.gpuRenderer->setFrameExtent(backingWidth, backingHeight);
+        surface.gpuRenderer->beginFrame();
+        surface.gpuRenderer->setFrameDamageRect(std::optional<
+            lcl::render::RasterRect>{lcl::render::RasterRect{
+                0.0f, 0.0f, submit.logicalWidth, submit.logicalHeight}});
+        const bool replayed = surface.gpuRenderer->replayDisplayList(
+            displayList, {{submit.logicalWidth, submit.logicalHeight},
+                          {backingWidth, backingHeight}, submit.bufferScale});
+        surface.gpuRenderer->setOutputFrameDamageRect(std::nullopt);
+        surface.gpuRenderer->endFrame();
+        surface.gpuRenderer->clearExternalFrameTarget();
+        if (!replayed) {
+            surface.gpuContext->cancelCurrentDmaBuf();
+            return false;
+        }
+        const auto exported = surface.gpuContext->exportCurrentDmaBuf();
+#if defined(__ANDROID__)
+        const bool invalidExport = !exported ||
+            !exported->androidHardwareBuffer || exported->fd >= 0 ||
+            exported->format == 0;
+#else
+        const bool invalidExport = !exported || exported->fd < 0 ||
+            exported->androidHardwareBuffer;
+#endif
+        if (invalidExport) {
+            surface.gpuContext->releaseDmaBuf(target->bufferId);
+            return false;
+        }
+        const uint64_t layerId =
+            (static_cast<uint64_t>(static_cast<uint32_t>(getpid())) << 32u) |
+            m_nextLayerId++;
+        auto [bufferIdentity, inserted] = surface.gpuBufferIds.try_emplace(
+            target->bufferId, 0);
+        if (inserted) {
+            bufferIdentity->second =
+                (static_cast<uint64_t>(static_cast<uint32_t>(getpid())) << 32u) |
+                m_nextBufferId++;
+        }
+        lcl::raster_protocol::LayerReady ready{};
+        ready.grant = submit.grant;
+        ready.layerId = layerId;
+        ready.role = lcl::raster_protocol::LayerRole::Presentation;
+        ready.nodeId = node.id;
+        ready.contentRevision = node.contentRevision;
+        ready.bufferId = bufferIdentity->second;
+        ready.configureSerial = submit.configureSerial;
+        ready.frameSerial = submit.frameSerial;
+        ready.geometryGeneration = submit.geometryGeneration;
+        ready.width = layerWidth;
+        ready.height = layerHeight;
+        ready.backingWidth = exported->width;
+        ready.backingHeight = exported->height;
+        ready.stride = exported->stride;
+        ready.damageWidth = layerWidth;
+        ready.damageHeight = layerHeight;
+        ready.transport =
+#if defined(__ANDROID__)
+            lcl::raster_protocol::LayerTransport::AndroidHardwareBuffer;
+#else
+            lcl::raster_protocol::LayerTransport::DmaBuf;
+#endif
+        ready.format = exported->format;
+        ready.modifier = exported->modifier;
+        ready.clientFrameStartNs = submit.clientFrameStartNs;
+        ready.clientSubmitNs = submit.clientSubmitNs;
+        ready.rasterStartNs = rasterStartNs;
+        ready.rasterReadyNs = rasterStartNs != 0 ? monotonicNowNs() : 0;
+        const int descriptor =
+#if defined(__ANDROID__)
+            exported->acquireFenceFd;
+#else
+            exported->fd;
+#endif
+#if defined(__ANDROID__)
+        if (!surface.gpuContext->sendNativeBufferHandle(
+                m_nativeBufferFd, target->bufferId)) {
+            if (descriptor >= 0) close(descriptor);
+            surface.gpuContext->releaseDmaBuf(target->bufferId);
+            m_running = false;
+            return false;
+        }
+#endif
+        const bool sent = lcl::raster_protocol::sendPacket(
+            m_compositorFd, Opcode::LayerReady, ready, descriptor);
+        if (descriptor >= 0) close(descriptor);
+        if (!sent) {
+            surface.gpuContext->releaseDmaBuf(target->bufferId);
+#if defined(__ANDROID__)
+            m_running = false;
+#endif
+            return false;
+        }
+        surface.gpuLayers.emplace(layerId, target->bufferId);
+        state = presentationStateFor(node, ready, zOrder);
+        surface.presentationLayers.emplace(node.id, ready);
+        return true;
+    }
+
     bool rasterGpuFrame(
             SurfaceState& surface, const CommitTransaction& submit,
             const lcl::graphics::DisplayList& displayList,
-            uint64_t rasterStartNs) {
+            uint64_t rasterStartNs, bool retainedPropertyOnly,
+            const RetainedNodeState& root,
+            const std::unordered_map<uint64_t, RetainedNodeState>& nodes,
+            const std::unordered_set<uint64_t>& presentationIds,
+            const std::unordered_map<uint64_t, uint64_t>& cachedLayerNamespaces) {
         if (surface.gpuUnavailable) return false;
         const uint32_t width = std::max(1u, static_cast<uint32_t>(
             std::ceil(submit.logicalWidth * submit.bufferScale)));
@@ -1763,6 +2240,23 @@ private:
             releaseExternalTextures();
             return false;
         }
+        // The rotating AHardwareBuffer pool keeps its own copy of the last
+        // complete scene.  Track that history in *framebuffer pixels*, not
+        // logical UI units: RasterRenderer converts its output-copy clip back
+        // to logical units immediately before issuing the GLES blit.
+        const PixelDamage outputDamage = pixelDamageFor(submit, width, height);
+        const bool fullSubmittedDamage =
+            outputDamage.x == 0 && outputDamage.y == 0 &&
+            outputDamage.width == width && outputDamage.height == height;
+        // The page-slide fast path consists exclusively of cached-layer
+        // transforms and covers the whole output. Rendering it straight into
+        // this exported buffer saves one 1220x2712 scene-FBO copy. Partial
+        // updates continue through the authoritative scene FBO, which is what
+        // preserves rotating-buffer history correctly.
+        const bool directRetainedReplay = retainedPropertyOnly &&
+            fullSubmittedDamage && !surface.gpuSceneNeedsRebuild;
+        const bool rebuildScene = surface.gpuSceneNeedsRebuild &&
+            !directRetainedReplay;
         const lcl::platform::RetainedOutputDamageTracker::Frame outputFrame{
             submit.frameSerial,
             submit.baseFrameSerial,
@@ -1771,40 +2265,47 @@ private:
             height,
             submit.bufferScale,
             lcl::platform::PresentationDamage{
-                submit.damageX, submit.damageY,
-                submit.damageWidth, submit.damageHeight},
+                static_cast<float>(outputDamage.x),
+                static_cast<float>(outputDamage.y),
+                static_cast<float>(outputDamage.width),
+                static_cast<float>(outputDamage.height)},
             replacesRetainedScene(submit),
         };
-        std::optional<lcl::render::RasterRect> rasterOutputDamage;
-#if defined(__ANDROID__)
-        const auto outputDamage = surface.gpuOutputDamage.copyDamage(
+        // A freshly allocated/replaced slot deliberately receives a full
+        // scene copy.  Once a slot has a known base, reconstruct only the
+        // union of patches it missed while Composer owned it.  This is
+        // especially important for retained page transforms: their content is
+        // already cached in the scene FBO, so a property-only transaction must
+        // not turn into a full 1220x2712 output copy on every animation tick.
+        const auto outputCopyDamage = surface.gpuOutputDamage.copyDamage(
             target->bufferId, outputFrame);
-        if (outputDamage) {
-            rasterOutputDamage = {
-                outputDamage->x, outputDamage->y,
-                outputDamage->width, outputDamage->height};
+        std::optional<lcl::render::RasterRect> rasterOutputDamage;
+        if (outputCopyDamage) {
+            rasterOutputDamage = lcl::render::RasterRect{
+                outputCopyDamage->x / submit.bufferScale,
+                outputCopyDamage->y / submit.bufferScale,
+                outputCopyDamage->width / submit.bufferScale,
+                outputCopyDamage->height / submit.bufferScale,
+            };
         }
-#else
-        // The desktop GBM path has no release-fence handoff to establish the
-        // exact retained revision in a reused output buffer. The scene FBO is
-        // authoritative, so copy it completely rather than exposing stale
-        // tiles from a prior producer frame. This is one GPU texture copy,
-        // not a full Widget/DisplayList repaint.
-#endif
         surface.gpuRenderer->setExternalFrameTarget(
             target->framebuffer, target->texture,
-            target->width, target->height);
+            target->width, target->height, directRetainedReplay);
         surface.gpuRenderer->setDeviceScale(submit.bufferScale);
         surface.gpuRenderer->setFrameExtent(width, height);
         surface.gpuRenderer->beginFrame();
-        surface.gpuRenderer->setFrameDamageRect(lcl::render::RasterRect{
-            submit.damageX, submit.damageY,
-            submit.damageWidth, submit.damageHeight});
+        surface.gpuRenderer->setFrameDamageRect(rebuildScene
+            ? lcl::render::RasterRect{
+                0.0f, 0.0f, submit.logicalWidth, submit.logicalHeight}
+            : lcl::render::RasterRect{
+                submit.damageX, submit.damageY,
+                submit.damageWidth, submit.damageHeight});
         const bool replayed = surface.gpuRenderer->replayDisplayList(
             gpuDisplayList,
             {{submit.logicalWidth, submit.logicalHeight},
              {width, height}, submit.bufferScale});
-        surface.gpuRenderer->setOutputFrameDamageRect(rasterOutputDamage);
+        surface.gpuRenderer->setOutputFrameDamageRect(rebuildScene
+            ? std::nullopt : rasterOutputDamage);
         surface.gpuRenderer->endFrame();
         releaseExternalTextures();
         if (!replayed) {
@@ -1813,6 +2314,7 @@ private:
             surface.gpuOutputDamage.invalidateBuffer(target->bufferId);
             return false;
         }
+        surface.gpuSceneNeedsRebuild = directRetainedReplay;
         const auto exported = surface.gpuContext->exportCurrentDmaBuf();
         surface.gpuRenderer->clearExternalFrameTarget();
 #if defined(__ANDROID__)
@@ -1841,6 +2343,9 @@ private:
         LayerReady ready{};
         ready.grant = submit.grant;
         ready.layerId = layerId;
+        ready.role = lcl::raster_protocol::LayerRole::Root;
+        ready.nodeId = root.id;
+        ready.contentRevision = root.contentRevision;
         ready.bufferId = bufferIdentity->second;
         ready.configureSerial = submit.configureSerial;
         ready.frameSerial = submit.frameSerial;
@@ -1850,11 +2355,10 @@ private:
         ready.backingWidth = exported->width;
         ready.backingHeight = exported->height;
         ready.stride = exported->stride;
-        const PixelDamage damage = pixelDamageFor(submit, width, height);
-        ready.damageX = damage.x;
-        ready.damageY = damage.y;
-        ready.damageWidth = damage.width;
-        ready.damageHeight = damage.height;
+        ready.damageX = outputDamage.x;
+        ready.damageY = outputDamage.y;
+        ready.damageWidth = outputDamage.width;
+        ready.damageHeight = outputDamage.height;
         ready.transport =
 #if defined(__ANDROID__)
             lcl::raster_protocol::LayerTransport::AndroidHardwareBuffer;
@@ -1899,6 +2403,69 @@ private:
 #if defined(__ANDROID__)
             m_running = false;
 #endif
+            return false;
+        }
+        std::vector<lcl::raster_protocol::PresentationLayerState> states;
+        states.reserve(presentationIds.size() + 1);
+        auto rootState = presentationStateFor(root, ready, 0);
+        rootState.x = rootState.y = 0.0f;
+        rootState.width = submit.logicalWidth;
+        rootState.height = submit.logicalHeight;
+        rootState.opacity = 1.0f;
+        rootState.translationX = rootState.translationY = 0.0f;
+        rootState.scaleX = rootState.scaleY = 1.0f;
+        rootState.rotationRadians = 0.0f;
+        rootState.flags = lcl::raster_protocol::kPresentationLayerOpaque;
+        states.push_back(rootState);
+        surface.presentationRoot = ready;
+        // A transition prewarm commonly keeps the outgoing page unchanged and
+        // introduces one incoming page. Retain that old immutable buffer in
+        // the new manifest instead of consuming another rotating EGL slot to
+        // raster it again. With root + old snapshot already in flight this is
+        // what keeps a two-page slide within the four-slot pool.
+        auto previousPresentationLayers = std::move(surface.presentationLayers);
+        surface.presentationLayers.clear();
+        std::vector<uint64_t> orderedPresentationIds(
+            presentationIds.begin(), presentationIds.end());
+        std::sort(orderedPresentationIds.begin(), orderedPresentationIds.end());
+        uint32_t zOrder = 1;
+        for (const uint64_t nodeId : orderedPresentationIds) {
+            const auto node = nodes.find(nodeId);
+            const auto cache = cachedLayerNamespaces.find(nodeId);
+            lcl::raster_protocol::PresentationLayerState state{};
+            if (node == nodes.end()) {
+                surface.gpuContext->releaseDmaBuf(target->bufferId);
+                surface.gpuOutputDamage.invalidateBuffer(target->bufferId);
+                return false;
+            }
+            const auto previous = previousPresentationLayers.find(nodeId);
+            if (previous != previousPresentationLayers.end() &&
+                previous->second.contentRevision == node->second.contentRevision &&
+                previous->second.configureSerial == submit.configureSerial &&
+                previous->second.geometryGeneration == submit.geometryGeneration) {
+                state = presentationStateFor(node->second, previous->second, zOrder++);
+                surface.presentationLayers.emplace(nodeId, previous->second);
+            } else if (cache == cachedLayerNamespaces.end() ||
+                       !publishGpuPresentationLayer(
+                           surface, submit, node->second, cache->second, zOrder++,
+                           rasterStartNs, state)) {
+                surface.gpuContext->releaseDmaBuf(target->bufferId);
+                surface.gpuOutputDamage.invalidateBuffer(target->bufferId);
+                return false;
+            }
+            states.push_back(state);
+        }
+        lcl::raster_protocol::PresentationFrameReady frame{};
+        frame.grant = submit.grant;
+        frame.configureSerial = submit.configureSerial;
+        frame.frameSerial = submit.frameSerial;
+        frame.geometryGeneration = submit.geometryGeneration;
+        frame.rootNodeId = root.id;
+        frame.layerCount = static_cast<uint32_t>(states.size());
+        if (!lcl::raster_protocol::sendPresentationFrameReady(
+                m_compositorFd, frame, states)) {
+            surface.gpuContext->releaseDmaBuf(target->bufferId);
+            surface.gpuOutputDamage.invalidateBuffer(target->bufferId);
             return false;
         }
         surface.gpuOutputDamage.commit(target->bufferId, outputFrame);

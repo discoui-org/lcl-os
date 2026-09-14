@@ -333,7 +333,9 @@ bool validateSandboxChildLaunchSpec(const SandboxChildLaunchSpec& spec, std::str
     return true;
 }
 
-SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
+SandboxLaunchResult spawnSandboxChild(
+        const SandboxChildLaunchSpec& spec,
+        const SandboxChildReadyCallback& beforeExec) {
     SandboxLaunchResult result{};
     result.instanceId = spec.plan.request.instanceId;
     std::string error;
@@ -361,12 +363,13 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
         return result;
     }
     int setupGate[2] = {-1, -1};
-    if (spec.hardening.requireCgroupResourceAccounting && pipe2(setupGate, O_CLOEXEC) != 0) {
+    if (pipe2(setupGate, O_CLOEXEC) != 0) {
         const int savedErrno = errno;
         close(failurePipe[0]);
         close(failurePipe[1]);
         result.status = SandboxLaunchStatus::SetupFailed;
-        result.message = std::string("could not create sandbox cgroup gate: ") + std::strerror(savedErrno);
+        result.message = std::string("could not create sandbox launch gate: ") +
+                         std::strerror(savedErrno);
         return result;
     }
     const pid_t child = fork();
@@ -397,9 +400,9 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
         if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != expectedDaemon) {
             childExit(ChildFailureStage::Setup, "sandboxd parent process disappeared during launch");
         }
-        if (spec.hardening.requireCgroupResourceAccounting && !waitForSetupGate(setupGate[0])) {
+        if (!waitForSetupGate(setupGate[0])) {
             close(setupGate[0]);
-            childExit(ChildFailureStage::Setup, "sandbox cgroup placement gate was not released");
+            childExit(ChildFailureStage::Setup, "sandbox launch gate was not released");
         }
         if (setupGate[0] >= 0) close(setupGate[0]);
         if (setpgid(0, 0) != 0) {
@@ -455,16 +458,33 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
         kill(child, SIGKILL);
         while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
         }
-        std::string cleanupError;
-        spec.cgroup->manager->removeInstance(spec.cgroup->cgroup, cleanupError);
+        if (spec.hardening.requireCgroupResourceAccounting) {
+            std::string cleanupError;
+            spec.cgroup->manager->removeInstance(spec.cgroup->cgroup,
+                                                 cleanupError);
+        }
         close(failurePipe[0]);
         result.status = SandboxLaunchStatus::SetupFailed;
         result.message = "could not place sandbox child into its cgroup: " + error;
         return result;
     }
+    if (beforeExec && !beforeExec(child, error)) {
+        close(setupGate[1]);
+        kill(child, SIGKILL);
+        while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
+        }
+        if (spec.hardening.requireCgroupResourceAccounting) {
+            std::string cleanupError;
+            spec.cgroup->manager->removeInstance(spec.cgroup->cgroup, cleanupError);
+        }
+        close(failurePipe[0]);
+        result.status = SandboxLaunchStatus::SetupFailed;
+        result.message = "sandbox launch identity registration failed: " + error;
+        return result;
+    }
     const char gateToken = 'G';
-    if (spec.hardening.requireCgroupResourceAccounting &&
-        write(setupGate[1], &gateToken, sizeof(gateToken)) != static_cast<ssize_t>(sizeof(gateToken))) {
+    if (write(setupGate[1], &gateToken, sizeof(gateToken)) !=
+        static_cast<ssize_t>(sizeof(gateToken))) {
         const int savedErrno = errno;
         close(setupGate[1]);
         kill(child, SIGKILL);
@@ -474,7 +494,7 @@ SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec) {
         spec.cgroup->manager->removeInstance(spec.cgroup->cgroup, cleanupError);
         close(failurePipe[0]);
         result.status = SandboxLaunchStatus::SetupFailed;
-        result.message = std::string("could not release sandbox cgroup gate: ") +
+        result.message = std::string("could not release sandbox launch gate: ") +
                          std::strerror(savedErrno);
         return result;
     }

@@ -229,6 +229,7 @@ private:
     static constexpr uint32_t kTransformReason = 1u << 2u;
     static constexpr uint32_t kOpacityReason = 1u << 3u;
     static constexpr uint32_t kExternalBufferReason = 1u << 7u;
+    static constexpr uint32_t kRetainedPresentationReason = 1u << 8u;
     static constexpr float kEpsilon = 0.001f;
 
     static bool isScrollViewport(
@@ -245,7 +246,8 @@ private:
             const raster_protocol::RetainedNodeState& node) noexcept {
         const bool presentation =
             (node.boundaryReasons &
-             (kTransformReason | kOpacityReason)) != 0;
+             (kTransformReason | kOpacityReason |
+              kRetainedPresentationReason)) != 0;
         const float area = node.layoutWidth * node.layoutHeight;
         return presentation &&
             (node.boundaryReasons & kRootReason) == 0 &&

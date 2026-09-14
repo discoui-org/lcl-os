@@ -39,6 +39,38 @@ or accepted as validation of this layout.
 
 ---
 
+## Prebuilt Skia SDK packages
+
+LCL does not require developers to compile Skia locally. Run the
+**Build Skia SDK packages** workflow once from GitHub Actions. It builds and
+publishes checksum-verified packages for:
+
+- `host-x86_64`
+- `host-aarch64`
+- `android-x86_64`
+- `android-arm64-v8a`
+
+The normal Python build entry points automatically download the exact package
+matching the pinned Skia revision and LCL build recipe into
+`out/skia/packages/<target>`. To prefetch every ABI explicitly:
+
+```bash
+python3 tooling/build/fetch_skia.py --all
+```
+
+Set `LCL_SKIA_GITHUB_REPOSITORY=owner/repository` when consuming packages from
+a fork. For a private repository, pass a GitHub token with read access; an
+authenticated GitHub CLI can supply it without storing it in the project:
+
+```bash
+GITHUB_TOKEN="$(gh auth token)" python3 tooling/build/fetch_skia.py --all
+```
+
+Direct CMake configuration can use the downloaded package with
+`-DLCL_SKIA_ROOT=out/skia/packages/<target>`.
+
+---
+
 ## Quick Start & Unified CLI
 
 LCL OS provides a unified CLI driver via `./main.py`:

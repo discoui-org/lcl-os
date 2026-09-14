@@ -772,6 +772,32 @@ TEST(LclUiTest, MotionCoordinatorReportsPresentationOwnerAsAnimating) {
     EXPECT_FALSE(coordinator.isObjectAnimating(widget->getObjectId()));
 }
 
+TEST(LclUiTest, MotionCoordinatorForwardsInteractiveRetargetWithoutLocalTick) {
+    MotionCoordinator coordinator;
+    Widget widget;
+    widget.setMotionCoordinator(&coordinator);
+    bool submitted = false;
+    coordinator.setCompositorAnimationDelegate(
+        [&](Widget& target, AnimatableProperty property, float start,
+            float destination, float velocity, const lcl::motion::Motion& motion) {
+            submitted = &target == &widget &&
+                property == AnimatableProperty::TranslationX &&
+                start == 0.0f && destination == 48.0f && velocity == 0.0f &&
+                motion.mode == lcl::motion::MotionMode::Tween;
+            return true;
+        });
+
+    EXPECT_TRUE(coordinator.updateCompositorFloat(
+        widget, AnimatableProperty::TranslationX, 0.0f, 48.0f,
+        [&widget](float value) {
+            widget.applyPresentationValue(
+                AnimatableProperty::TranslationX, value);
+        }));
+    EXPECT_TRUE(submitted);
+    EXPECT_FLOAT_EQ(widget.getPresentationState().translationX, 48.0f);
+    EXPECT_FALSE(coordinator.hasActiveAnimations());
+}
+
 TEST(LclUiTest, IndeterminateProgressUsesPresentationInvalidation) {
     RecordingCanvas canvas;
     RenderPass pass;
@@ -2754,6 +2780,13 @@ TEST(LclUiTest, NavigationStackEdgeSwipeTracksFingerAndCommitsPop) {
     }
     ASSERT_FALSE(stack->isTransitioning());
 
+    app.sendPointerDown(4.0f, 100.0f, 0, PointerSource::Mouse, 41);
+    app.sendPointerMove(150.0f, 103.0f, PointerSource::Mouse, 41);
+    EXPECT_FLOAT_EQ(detailPointer->getPresentationState().translationX, 0.0f);
+    app.sendPointerUp(150.0f, 103.0f, 0, PointerSource::Mouse, 41);
+    EXPECT_EQ(stack->pageCount(), 2u);
+    EXPECT_FALSE(stack->isTransitioning());
+
     app.sendPointerDown(4.0f, 100.0f, 0, PointerSource::Touch, 91);
     ASSERT_TRUE(app.sendPointerMove(
         150.0f, 103.0f, PointerSource::Touch, 91));
@@ -2849,7 +2882,7 @@ TEST(LclUiTest, NavigationSplitViewPreservesItsPanesAcrossSizeClassChanges) {
     EXPECT_EQ(detailPointer->pageCount(), 1u);
 }
 
-TEST(LclUiTest, NavigationSplitViewMouseEdgeSwipeReturnsToPrimary) {
+TEST(LclUiTest, NavigationSplitViewOnlyTouchEdgeSwipeReturnsToPrimary) {
     auto canvas = std::make_unique<RecordingCanvas>();
     WindowApp app(std::move(canvas), 360, 640, "Adaptive navigation edge swipe");
     auto navigation = std::make_unique<NavigationSplitView>();
@@ -2867,17 +2900,116 @@ TEST(LclUiTest, NavigationSplitViewMouseEdgeSwipeReturnsToPrimary) {
     ASSERT_TRUE(split->isDetailPresented());
 
     app.sendPointerDown(4.0f, 100.0f, 0, PointerSource::Mouse, 41);
+    app.sendPointerMove(150.0f, 102.0f, PointerSource::Mouse, 41);
+    EXPECT_FLOAT_EQ(
+        split->detailNavigation().getPresentationState().translationX, 0.0f);
+    app.sendPointerUp(150.0f, 102.0f, 0, PointerSource::Mouse, 41);
+    EXPECT_TRUE(split->isDetailPresented());
+    EXPECT_FALSE(split->isTransitioning());
+
+    app.sendPointerDown(4.0f, 100.0f, 0, PointerSource::Touch, 42);
     ASSERT_TRUE(app.sendPointerMove(
-        150.0f, 102.0f, PointerSource::Mouse, 41));
+        150.0f, 102.0f, PointerSource::Touch, 42));
     EXPECT_GT(split->detailNavigation().getPresentationState().translationX,
               100.0f);
-    app.sendPointerUp(150.0f, 102.0f, 0, PointerSource::Mouse, 41);
+    app.sendPointerUp(150.0f, 102.0f, 0, PointerSource::Touch, 42);
     EXPECT_FALSE(split->isDetailPresented());
     for (int frame = 0; frame < 180 && split->isTransitioning(); ++frame) {
         app.advanceAnimations(1.0f / 120.0f);
     }
     EXPECT_FALSE(split->isTransitioning());
     EXPECT_FALSE(split->isDetailPresented());
+}
+
+TEST(LclUiTest, NavigationSplitViewAnimatesCompactDetailReplacement) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 360, 640, "Compact detail replacement");
+    auto navigation = std::make_unique<NavigationSplitView>();
+    NavigationSplitView* split = navigation.get();
+    navigation->setWidth(360.0f);
+    navigation->setHeight(640.0f);
+    split->setSidebar(std::make_unique<Container>());
+    ASSERT_TRUE(split->detailNavigation().setRootPage({
+        .route = NavigationRoute("general"),
+        .title = "General",
+        .content = std::make_unique<Container>(),
+    }));
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.renderFrame());
+
+    ASSERT_TRUE(split->setDetailPage({
+        .route = NavigationRoute("privacy"),
+        .title = "Privacy",
+        .content = std::make_unique<Container>(),
+    }, PageTransition::Replace));
+    EXPECT_TRUE(split->isTransitioning());
+}
+
+TEST(LclUiTest, NavigationSplitViewPreparesAlreadyCurrentCompactDetail) {
+    auto canvas = std::make_unique<RecordingCanvas>();
+    WindowApp app(std::move(canvas), 360, 640, "Compact current detail");
+    auto navigation = std::make_unique<NavigationSplitView>();
+    NavigationSplitView* split = navigation.get();
+    navigation->setWidth(360.0f);
+    navigation->setHeight(640.0f);
+    split->setSidebar(std::make_unique<Container>());
+    ASSERT_TRUE(split->detailNavigation().setRootPage({
+        .route = NavigationRoute("general"),
+        .title = "General",
+        .content = std::make_unique<Container>(),
+    }));
+    app.setRootWidget(std::move(navigation));
+    ASSERT_TRUE(app.renderFrame());
+
+    split->presentDetail();
+
+    EXPECT_TRUE(split->isTransitioning());
+    EXPECT_TRUE(split->isDetailPresented());
+    EXPECT_FLOAT_EQ(split->detailNavigation().getPresentationState().opacity,
+                    0.0f);
+}
+
+TEST(LclUiTest, NavigationSplitViewCompletesWhenRetainedAnimationIsUnavailable) {
+    MotionCoordinator coordinator;
+    coordinator.setCompositorAnimationDelegate(
+        [](Widget&, AnimatableProperty, float, float, float,
+           const lcl::motion::Motion&) {
+            // Connected WindowApp uses this result when no retained cache is
+            // eligible: the model is committed directly and no compositor
+            // completion callback will follow.
+            return true;
+        });
+
+    NavigationSplitView split;
+    split.setWidth(360.0f);
+    split.setHeight(640.0f);
+    split.setSidebar(std::make_unique<Container>());
+    ASSERT_TRUE(split.detailNavigation().setRootPage({
+        .route = NavigationRoute("general"),
+        .title = "General",
+        .content = std::make_unique<Container>(),
+    }));
+    split.setMotionCoordinator(&coordinator);
+    split.calculateLayout(360.0f, 640.0f);
+    split.syncLayout();
+
+    split.presentDetail();
+    ASSERT_TRUE(split.isTransitioning());
+    coordinator.tick(1.0f / 60.0f);
+    coordinator.tick(1.0f / 60.0f);
+    coordinator.tick(1.0f / 60.0f);
+
+    EXPECT_FALSE(split.isTransitioning());
+    EXPECT_TRUE(split.isDetailPresented());
+    EXPECT_TRUE(split.detailNavigation().isInteractionEnabled());
+    EXPECT_FLOAT_EQ(
+        split.detailNavigation().getPresentationState().opacity, 1.0f);
+    EXPECT_NEAR(
+        split.detailNavigation().getPresentationState().translationX,
+        0.0f, 0.01f);
+    ASSERT_FALSE(split.getChildren().empty());
+    EXPECT_NEAR(split.getChildren().front()->getPresentationState().translationX,
+                -180.0f, 0.01f);
 }
 
 TEST(LclUiTest, ToggleDefaultsProgrammaticValueAndNotificationsAreDeterministic) {
@@ -4045,6 +4177,90 @@ TEST(LclUiTest, RasterRendererTransformsCachedLayerAtCompositionTime) {
     EXPECT_EQ(pixels[0], 0x00000000u);
     EXPECT_EQ(pixels[3 + 2 * 8], 0xFFFF0000u);
     EXPECT_EQ(pixels[4 + 3 * 8], 0xFFFF0000u);
+}
+
+TEST(LclUiTest, OpaquePresentationLayersPreserveNestedGroupOpacityAndClipping) {
+    std::vector<uint32_t> pixels(8 * 8, 0u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(8, 8, nullptr, pixels.data()));
+    graphics::DisplayListBuilder frame;
+    frame.clearRect({0, 0, 8, 8}, {255, 255, 255, 255});
+    frame.beginLayer(1.0f);
+    frame.clipRect({2, 2, 4, 4});
+    frame.concat(graphics::Matrix3::translation(2, 2));
+    graphics::Path rect;
+    rect.addRect({0, 0, 4, 4});
+    frame.drawPath(rect, graphics::Paint{{255, 0, 0, 255}});
+    frame.beginLayer(0.5f);
+    frame.beginLayer(1.0f);
+    // These overlapping draws must receive group alpha once, not per draw.
+    frame.drawPath(rect, graphics::Paint{{0, 0, 255, 255}});
+    frame.drawPath(rect, graphics::Paint{{0, 0, 255, 255}});
+    frame.endLayer();
+    frame.endLayer();
+    frame.endLayer();
+    renderer.beginFrame();
+    ASSERT_TRUE(renderer.replayDisplayList(
+        frame.build(), {{8, 8}, {8, 8}, 1.0f}));
+    renderer.endFrame();
+    EXPECT_EQ(pixels[0], 0xFFFFFFFFu);
+    EXPECT_EQ(pixels[6 + 6 * 8], 0xFFFFFFFFu);
+    const auto center = pixels[3 + 3 * 8];
+    EXPECT_NEAR((center >> 16) & 255u, 127, 1);
+    EXPECT_EQ((center >> 8) & 255u, 0u);
+    EXPECT_NEAR(center & 255u, 128, 1);
+    EXPECT_EQ(center >> 24, 255u);
+}
+
+TEST(LclUiTest, OpaquePresentationLayerClearKeepsItsIsolatedDestination) {
+    std::vector<uint32_t> pixels(8 * 8, 0u);
+    lcl::render::RasterRenderer renderer;
+    ASSERT_TRUE(renderer.initialize(8, 8, nullptr, pixels.data()));
+    graphics::DisplayListBuilder frame;
+    frame.clearRect({0, 0, 8, 8}, {255, 255, 255, 255});
+    frame.beginLayer(1.0f);
+    graphics::Path rect;
+    rect.addRect({0, 0, 8, 8});
+    frame.drawPath(rect, graphics::Paint{{255, 0, 0, 255}});
+    frame.clearRect({2, 2, 4, 4}, {0, 0, 0, 0});
+    frame.endLayer();
+    renderer.beginFrame();
+    ASSERT_TRUE(renderer.replayDisplayList(
+        frame.build(), {{8, 8}, {8, 8}, 1.0f}));
+    renderer.endFrame();
+    EXPECT_EQ(pixels[0], 0xFFFF0000u);
+    EXPECT_EQ(pixels[3 + 3 * 8], 0xFFFFFFFFu);
+}
+
+TEST(LclUiTest, OpaquePresentationLayerMatchesIsolatedAntialiasedClip) {
+    const auto paint = [](bool forceIsolation, bool rounded) {
+        std::vector<uint32_t> pixels(16 * 16, 0u);
+        lcl::render::RasterRenderer renderer;
+        if (!renderer.initialize(16, 16, nullptr, pixels.data())) return pixels;
+        graphics::DisplayListBuilder frame;
+        frame.clearRect({0, 0, 16, 16}, {255, 255, 255, 255});
+        if (rounded) {
+            graphics::Path clip;
+            clip.addRRect({{1.25f, 1.25f, 12.5f, 12.5f}, 3, 3, 2});
+            frame.clipPath(clip);
+        } else {
+            frame.clipRect({1.25f, 1.25f, 12.5f, 12.5f});
+        }
+        frame.beginLayer(1.0f);
+        if (forceIsolation) frame.clearRect({0, 0, 16, 16}, {0, 0, 0, 0});
+        graphics::Path rect;
+        rect.addRect({0, 0, 16, 16});
+        frame.drawPath(rect, graphics::Paint{{255, 0, 0, 160}});
+        frame.drawPath(rect, graphics::Paint{{0, 0, 255, 160}});
+        frame.endLayer();
+        renderer.beginFrame();
+        EXPECT_TRUE(renderer.replayDisplayList(
+            frame.build(), {{16, 16}, {16, 16}, 1.0f}));
+        renderer.endFrame();
+        return pixels;
+    };
+    EXPECT_EQ(paint(false, true), paint(true, true));
+    EXPECT_EQ(paint(false, false), paint(true, false));
 }
 
 TEST(LclUiTest, PresentationMotionDoesNotInvalidateAncestorPaintCacheRevision) {

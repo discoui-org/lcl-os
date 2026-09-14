@@ -26,7 +26,6 @@ class AndroidBuildTargetsTest(unittest.TestCase):
             jobs=4,
             rebuild=False,
             size=1024,
-            software_clients=False,
         )
         with (
             mock.patch.object(
@@ -44,6 +43,33 @@ class AndroidBuildTargetsTest(unittest.TestCase):
             configure_command[configure_command.index("-B") + 1],
             str(lcl_main.ROOT_DIR / "out" / "android" / "x86_64"),
         )
+        build_command = check_call.call_args_list[1].args[0]
+        target_start = build_command.index("--target") + 1
+        target_end = build_command.index("-j")
+        self.assertEqual(
+            build_command[target_start:target_end],
+            ["lcl-core-android", "lcl-rasterd-android"],
+        )
+
+    def test_arm64_rootfs_build_does_not_build_android_app_binaries(self) -> None:
+        args = argparse.Namespace(
+            jobs=4,
+            rebuild=False,
+            size=1024,
+        )
+        available_zstd = mock.Mock()
+        available_zstd.is_file.return_value = True
+        with (
+            mock.patch.object(lcl_main, "ANDROID_ZSTD_BINARY", available_zstd),
+            mock.patch.object(
+                lcl_main, "find_android_ndk", return_value=Path("/ndk")),
+            mock.patch.object(
+                lcl_main, "android_skia_cmake_args", return_value=[]),
+            mock.patch.object(lcl_main.subprocess, "check_call") as check_call,
+        ):
+            lcl_main.build_android_phone_artifacts(
+                args, use_rootfs=True, abi="arm64-v8a")
+
         build_command = check_call.call_args_list[1].args[0]
         target_start = build_command.index("--target") + 1
         target_end = build_command.index("-j")

@@ -60,6 +60,17 @@ The LCL architecture consists of 5 main decoupled layers:
   imported as an opaque EGL image; a zero CPU row stride is valid and is not
   interpreted as byte-addressable backing. None of these
   platform transports changes the public application surface protocol.
+  Surface producer grants bind the compositor-authenticated process to a
+  random 128-bit token, surface ID and scheduling flags. Rasterd enables
+  `SO_PASSCRED` on its listener before accepting producers and checks each
+  packet's kernel `SCM_CREDENTIALS` PID/UID/GID against `SO_PEERCRED` from
+  connection establishment. Forking or transferring a connected socket cannot
+  transfer producer authority: a different sender closes that connection
+  before resource uploads, fences or retained transactions are handled. A new
+  connection must still match the grant owner's PID and the exact registered
+  token/surface/flags. Credentials are transport metadata, so the canonical
+  application wire ABI stays unchanged. The private compositor channel alone
+  registers/revokes grants and receives ready layers.
   Rasterd retains the accepted node revisions, logical cached-layer bodies,
   damage patches, image resources, layer namespaces, and the last immutable
   output base per surface. Cached-layer namespace changes are transactional:
@@ -112,8 +123,8 @@ The LCL architecture consists of 5 main decoupled layers:
 * **Session RPC:** `lcl-sessiond` exposes an owner-only `SOCK_SEQPACKET`
   endpoint at `/run/user/1000/lcl-sessiond.sock`. Its explicit little-endian
   requests cover catalog snapshots and launch/process-exit lifecycle; this is
-  distinct from compositor protocol v27 surface IPC.
-* **Secure Unix Domain Socket IPC:** Compositor protocol v27 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Application-facing surface IPC carries lifecycle, configure, input, effect, action, producer-grant and frame-feedback messages; it accepts no client layer descriptor or DisplayList commit. A 128-bit surface grant authorizes the same process on rasterd's owner-only socket. Only rasterd's private channels may publish `LayerReady` storage and synchronization handles to the compositor. Edge-to-edge remains platform-neutral, and neither desktop nor mobile policy may rewrite client alpha. `PopupSurface` and `AttachedSurface` are composed and hit-tested inside their parent WindowGroup rather than entering the normal window stack.
+  distinct from compositor protocol v29 surface IPC.
+* **Secure Unix Domain Socket IPC:** Compositor protocol v29 operates over Unix Domain `SOCK_SEQPACKET` (`/run/user/1000/lcl-compositor.sock`) with strict `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Application-facing surface IPC carries lifecycle, configure, input, effect, action, producer-grant and frame-feedback messages; it accepts no client layer descriptor or DisplayList commit. A 128-bit surface grant authorizes the same process on rasterd's owner-only socket. Only rasterd's private channels may publish `LayerReady` storage and synchronization handles to the compositor. Edge-to-edge remains platform-neutral, and neither desktop nor mobile policy may rewrite client alpha. `PopupSurface` and `AttachedSurface` are composed and hit-tested inside their parent WindowGroup rather than entering the normal window stack.
 * **Native App Bundle Architecture (`.app`):** strict bundles contain
   `Manifest.json` and `Resources/`. The manifest must declare canonical `id`,
   `name`, `executable`, and `Resources/`-scoped `icon` fields. Legacy
@@ -148,7 +159,7 @@ optimization:
    committed-layer transaction. Platform differences begin below native-buffer
    import, synchronization, and scanout/present.
 
-Protocol v27 completes this boundary: `CommitDisplayList`, direct SHM/DMA-BUF/
+Protocol v29 completes this boundary: `CommitDisplayList`, direct SHM/DMA-BUF/
 native-buffer attach, and compositor-side application replay are not part of
 the surface ABI. The compositor only imports rasterd layers, retains,
 transforms, composites, and presents them.
@@ -350,8 +361,8 @@ Window-local transient UI ayrı bir surface veya ikinci bir layout ağacı deği
 
 ## 7. Unix Domain Socket IPC & Disconnect Detection
 
-1. **Secure Domain Socket Protocol:** Compositor IPC v27 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Rasterd uses a separate owner-only public producer socket plus a private compositor socketpair.
-2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v27 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
+1. **Secure Domain Socket Protocol:** Compositor IPC v29 operates on `/run/user/1000/lcl-compositor.sock` as `SOCK_SEQPACKET`, with `0600` permissions and kernel peer authentication (`SO_PEERCRED`). Rasterd uses a separate owner-only public producer socket plus a private compositor socketpair.
+2. **Orderly Socket EOF Handling:** When a client process exits or terminates (`Ctrl+C`), `recvmsg()` returns `0` (EOF). The v29 transport reports this as `ReceiveStatus::Closed`, independently of stale `errno` values.
 3. **Decoupled Surface & Window Reclamation:** `IPCManager` emits a typed disconnect event upon socket EOF. `ProtocolDispatcher` ilgili pencereyi `WindowManager`dan kaldırır; `SurfaceRegistry` SHM eşlemesini ve memfd'yi tek sahip olarak serbest bırakır.
 
 ---

@@ -33,6 +33,10 @@ std::string DesktopRuntimePaths::applicationIdentityRegistryPath() const {
     return "/var/lib/lcl-security/app-identities.v1";
 }
 
+std::string DesktopRuntimePaths::applicationLaunchRegistryPath() const {
+    return "/var/lib/lcl-security/app-launches";
+}
+
 std::vector<std::string> DesktopRuntimePaths::fontSearchDirectories() const {
     return {
         "/System/Library/Fonts",

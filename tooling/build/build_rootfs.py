@@ -59,12 +59,12 @@ CANONICAL_TARGETS = (
     "lcl-mobile-shell",
     "lcl-shell-launcher",
     "lcl-terminal",
-    "lcl-settings",
     "lcl-sessiond",
     "lcl-sandboxd",
     "lcl-securityd",
+    "lcl-admind",
+    "lcl-sudo",
     "lcl-sandbox-probe",
-    "lcl-sandbox-smoke",
     "lcl-sandbox-test",
     "lcl-rasterd",
     "lcl-open",
@@ -211,21 +211,12 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
     # update these targets so a protocol/header change cannot be packaged with
     # stale canonical userspace binaries.
     target_build_dir = canonical_build_dir(norm_arch)
-    try:
-        skia_args = host_skia_cmake_args(PROJECT_ROOT, norm_arch)
-    except RuntimeError:
-        package_target = f"host-{norm_arch}"
-        log(f"Preparing missing Skia package {package_target} inside target Docker...")
-        subprocess.run(
-            [sys.executable, str(SCRIPT_DIR / "prepare_skia.py"),
-             "--target", package_target],
-            check=True,
-        )
-        skia_args = host_skia_cmake_args(PROJECT_ROOT, norm_arch)
+    skia_args = host_skia_cmake_args(PROJECT_ROOT, norm_arch)
     cache_exists = (target_build_dir / "CMakeCache.txt").is_file()
     configure = [
         "cmake", "-B", str(target_build_dir), "-S", str(PROJECT_ROOT),
         "-DBUILD_TESTS=OFF",
+        "-DCMAKE_BUILD_TYPE=Release",
         *skia_args,
     ]
     if not cache_exists:
@@ -289,9 +280,6 @@ def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
         PROJECT_ROOT / "config" / "gestalt" / "default.json",
         PROJECT_ROOT / "apps" / "terminal" / "Manifest.json",
         PROJECT_ROOT / "apps" / "terminal" / "Resources" / "Icon.png",
-        PROJECT_ROOT / "apps" / "settings" / "Manifest.json",
-        PROJECT_ROOT / "apps" / "settings" / "Resources" / "Icon.png",
-        PROJECT_ROOT / "apps" / "sandbox_probe" / "Manifest.json",
         PROJECT_ROOT / "apps" / "sandbox_test" / "Manifest.json",
     )
     for source_input in source_inputs:
@@ -348,6 +336,7 @@ def stage_canonical_rootfs(
         "System/Library/Gestalt",
         "System/Library/Wallpapers",
         "System/Library/Libraries",
+        "System/Library/Security/Publishers",
         "Users/Rei/Applications",
         "Users/Rei/Desktop",
         "Users/Rei/Documents",
@@ -437,6 +426,8 @@ def stage_canonical_rootfs(
         "lcl-sessiond": dest_system_core / "lcl-sessiond",
         "lcl-sandboxd": dest_system_core / "lcl-sandboxd",
         "lcl-securityd": dest_system_core / "lcl-securityd",
+        "lcl-admind": dest_system_core / "lcl-admind",
+        "lcl-sudo": dest_system_core / "lcl-sudo",
         "lcl-sandbox-probe": dest_system_core / "lcl-sandbox-probe",
         "lcl-rasterd": dest_system_core / "lcl-rasterd",
         "lcl-open": dest_system_core / "lcl-open",
@@ -455,6 +446,11 @@ def stage_canonical_rootfs(
     if open_sym.exists() or open_sym.is_symlink():
         open_sym.unlink()
     open_sym.symlink_to("lcl-open")
+
+    sudo_sym = dest_system_core / "sudo"
+    if sudo_sym.exists() or sudo_sym.is_symlink():
+        sudo_sym.unlink()
+    sudo_sym.symlink_to("lcl-sudo")
 
     # 5. GNU Bash and System Tools (/System/Tools/)
     bash_src = find_host_bin("bash") or find_host_bin("sh")
@@ -650,43 +646,6 @@ def stage_canonical_rootfs(
     sha_map["Terminal.app"] = get_sha256(term_dst / "Executables" / "Terminal")
     copy_ldd_deps(term_dst / "Executables" / "Terminal", dest_system_lib)
 
-    # Settings.app is an immutable system bundle. Its executable is the only
-    # program to which sessiond transfers a connected lcl-securityd capability.
-    settings_dst = dest_system_apps / "Settings.app"
-    settings_dst.mkdir(parents=True, exist_ok=True)
-    (settings_dst / "Executables").mkdir(parents=True, exist_ok=True)
-    (settings_dst / "Resources").mkdir(parents=True, exist_ok=True)
-    settings_manifest = PROJECT_ROOT / "apps" / "settings" / "Manifest.json"
-    settings_icon = PROJECT_ROOT / "apps" / "settings" / "Resources" / "Icon.png"
-    if not settings_manifest.is_file() or not settings_icon.is_file():
-        raise RuntimeError("Missing Settings.app source files")
-    shutil.copy2(settings_manifest, settings_dst / "Manifest.json")
-    shutil.copy2(settings_icon, settings_dst / "Resources" / "Icon.png")
-    settings_bin = binaries["lcl-settings"]
-    shutil.copy2(settings_bin, settings_dst / "Executables" / "Settings")
-    (settings_dst / "Executables" / "Settings").chmod(0o755)
-    sha_map["Settings.app"] = get_sha256(settings_dst / "Executables" / "Settings")
-    copy_ldd_deps(settings_dst / "Executables" / "Settings", dest_system_lib)
-
-    # Sandbox Probe.app is a non-GUI acceptance helper.  Unlike Terminal it
-    # deliberately follows the ordinary third-party sandbox profile, so a
-    # QEMU run can validate UID, namespaces, Landlock, cgroup setup and the
-    # no-new-privileges boundary without exposing a compositor endpoint yet.
-    smoke_dst = dest_system_apps / "Sandbox Probe.app"
-    smoke_dst.mkdir(parents=True, exist_ok=True)
-    (smoke_dst / "Executables").mkdir(parents=True, exist_ok=True)
-    (smoke_dst / "Resources").mkdir(parents=True, exist_ok=True)
-    smoke_manifest = PROJECT_ROOT / "apps" / "sandbox_probe" / "Manifest.json"
-    if not smoke_manifest.is_file() or not term_icon.is_file():
-        raise RuntimeError("Missing Sandbox Probe.app source files")
-    shutil.copy2(smoke_manifest, smoke_dst / "Manifest.json")
-    shutil.copy2(term_icon, smoke_dst / "Resources" / "Icon.png")
-    smoke_bin = binaries["lcl-sandbox-smoke"]
-    shutil.copy2(smoke_bin, smoke_dst / "Executables" / "SandboxProbe")
-    (smoke_dst / "Executables" / "SandboxProbe").chmod(0o755)
-    sha_map["Sandbox Probe.app"] = get_sha256(smoke_dst / "Executables" / "SandboxProbe")
-    copy_ldd_deps(smoke_dst / "Executables" / "SandboxProbe", dest_system_lib)
-
     # Sandbox Test.app is a touch-only ordinary GUI app. It must launch through
     # sandboxd and can reach only the compositor/raster endpoints mounted into
     # its private /Runtime.
@@ -695,10 +654,10 @@ def stage_canonical_rootfs(
     (sandbox_test_dst / "Executables").mkdir(parents=True, exist_ok=True)
     (sandbox_test_dst / "Resources").mkdir(parents=True, exist_ok=True)
     sandbox_test_manifest = PROJECT_ROOT / "apps" / "sandbox_test" / "Manifest.json"
-    if not sandbox_test_manifest.is_file() or not settings_icon.is_file():
+    if not sandbox_test_manifest.is_file() or not term_icon.is_file():
         raise RuntimeError("Missing Sandbox Test.app source files")
     shutil.copy2(sandbox_test_manifest, sandbox_test_dst / "Manifest.json")
-    shutil.copy2(settings_icon, sandbox_test_dst / "Resources" / "Icon.png")
+    shutil.copy2(term_icon, sandbox_test_dst / "Resources" / "Icon.png")
     sandbox_test_bin = binaries["lcl-sandbox-test"]
     shutil.copy2(sandbox_test_bin, sandbox_test_dst / "Executables" / "SandboxTest")
     (sandbox_test_dst / "Executables" / "SandboxTest").chmod(0o755)
@@ -853,6 +812,14 @@ if [ -x /System/Core/lcl-securityd ]; then
     echo "[init] Starting lcl-securityd..."
     /System/Core/lcl-securityd --session-uid 1000 --session-gid 1000 \
         2>&1 | tee /var/log/lcl_securityd.log &
+    sleep 0.1
+fi
+
+# admind never elevates the calling app. It executes one approved command as
+# a separate root broker child and streams the result back to lcl-sudo.
+if [ -x /System/Core/lcl-admind ]; then
+    echo "[init] Starting lcl-admind..."
+    /System/Core/lcl-admind 2>&1 | tee /var/log/lcl_admind.log &
     sleep 0.1
 fi
 
@@ -1152,6 +1119,9 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Core/lcl-sessiond",
         "/System/Core/lcl-sandboxd",
         "/System/Core/lcl-securityd",
+        "/System/Core/lcl-admind",
+        "/System/Core/lcl-sudo",
+        "/System/Core/sudo",
         "/System/Core/lcl-sandbox-probe",
         "/System/Core/lcl-open",
         "/System/Core/lcl-js",
@@ -1161,12 +1131,6 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Applications/Terminal.app/Manifest.json",
         "/System/Applications/Terminal.app/Executables/Terminal",
         "/System/Applications/Terminal.app/Resources/Icon.png",
-        "/System/Applications/Settings.app/Manifest.json",
-        "/System/Applications/Settings.app/Executables/Settings",
-        "/System/Applications/Settings.app/Resources/Icon.png",
-        "/System/Applications/Sandbox Probe.app/Manifest.json",
-        "/System/Applications/Sandbox Probe.app/Executables/SandboxProbe",
-        "/System/Applications/Sandbox Probe.app/Resources/Icon.png",
         "/System/Applications/Sandbox Test.app/Manifest.json",
         "/System/Applications/Sandbox Test.app/Executables/SandboxTest",
         "/System/Applications/Sandbox Test.app/Resources/Icon.png",
@@ -1184,7 +1148,7 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
 
     for req in required_files:
         # debugfs tokenizes its -R command independently of subprocess.  App
-        # bundle names may contain spaces (for example, Sandbox Probe.app), so
+        # Bundle names may contain spaces, so
         # quote the filesystem path for debugfs rather than letting it split
         # the path into multiple command arguments.
         debugfs_path = req.replace("\\", "\\\\").replace('"', '\\"')
@@ -1294,6 +1258,12 @@ def run_inside_docker(
     plat = ARCH_META[norm_arch]["docker_platform"]
     image_tag = f"lcl-os-qemu-builder:{norm_arch}"
 
+    # Fetch on the host before entering Docker so private GitHub credentials
+    # never need to be forwarded into the builder container. The verified
+    # package is then available through the existing /src bind mount.
+    log(f"Ensuring prebuilt Skia package host-{norm_arch} is available...")
+    host_skia_cmake_args(PROJECT_ROOT, norm_arch)
+
     ensure_binfmt(norm_arch)
 
     log(f"Executing rootfs build inside Docker ({norm_arch}, {plat})...")
@@ -1357,15 +1327,20 @@ def run_inside_docker(
     return staging_dir, out_ext4, {}
 
 
-def fix_permissions() -> None:
-    """Fix ownership and permissions on out/ after a Docker build."""
-    if not BUILD_DIR.exists():
+def fix_permissions(*paths: Path) -> None:
+    """Return Docker-created output paths to the invoking host user."""
+    targets = tuple(path for path in (paths or (BUILD_DIR,)) if path.exists())
+    if not targets:
         return
     uid = os.environ.get("HOST_UID")
     gid = os.environ.get("HOST_GID")
     if uid and gid:
         try:
-            subprocess.run(["chown", "-R", f"{uid}:{gid}", str(BUILD_DIR)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(
+                ["chown", "-R", f"{uid}:{gid}", *(str(path) for path in targets)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         except Exception:
             pass
 
@@ -1400,6 +1375,10 @@ def build_rootfs_ext4(
     if cache_allowed and not force and out_ext4.is_file() and fingerprint_path.is_file():
         if fingerprint_path.read_text(encoding="utf-8").strip() == fingerprint:
             log(f"Reusing current {out_ext4.name}; packaged inputs are unchanged.")
+            # The bind-mounted artifact may still be owned by the container's
+            # root user. QEMU opens the root disk read-write, so repair host
+            # ownership even when packaging takes the cache fast path.
+            fix_permissions(out_ext4)
             return staging_dir, out_ext4, {}
 
     sha_map = stage_canonical_rootfs(staging_dir, norm_arch, binaries=binaries)

@@ -8,7 +8,11 @@
 namespace lcl::raster_protocol {
 
 inline constexpr uint32_t kMagic = 0x5254434c; // "LCTR"
-inline constexpr uint32_t kVersion = 10;
+// v11 adds an atomic retained-presentation manifest.  A LayerReady packet
+// only makes immutable storage importable; it never makes that storage
+// visible.  The compositor promotes storage exclusively after receiving the
+// complete PresentationFrameReady manifest that references it.
+inline constexpr uint32_t kVersion = 11;
 inline constexpr uint32_t kMaxPayload = 1024u * 1024u;
 
 enum class Opcode : uint32_t {
@@ -23,6 +27,9 @@ enum class Opcode : uint32_t {
     UploadExternalBuffer = 9,
     SetExternalBufferFence = 10,
     ExternalBufferReleased = 11,
+    PresentationFrameReady = 12,
+    PresentationAnimation = 13,
+    PresentationAnimationResult = 14,
 };
 
 enum class ReceiveStatus {
@@ -187,6 +194,12 @@ enum class LayerTransport : uint32_t {
     AndroidHardwareBuffer = 2,
 };
 
+/** The root scene is a normal layer; sublayers use local node coordinates. */
+enum class LayerRole : uint32_t {
+    Root = 0,
+    Presentation = 1,
+};
+
 /**
  * The packet descriptor is SHM/DMA-BUF storage for those transports. For an
  * AndroidHardwareBuffer it is the optional acquire fence; the matching AHB
@@ -196,6 +209,11 @@ enum class LayerTransport : uint32_t {
 struct LayerReady {
     SurfaceGrant grant{};
     uint64_t layerId{0};
+    LayerRole role{LayerRole::Root};
+    uint32_t reserved{0};
+    /** Stable render-node identity; layerId changes only with its content. */
+    uint64_t nodeId{0};
+    uint64_t contentRevision{0};
     /** Stable identity of one reusable producer buffer; zero for SHM layers. */
     uint64_t bufferId{0};
     uint64_t configureSerial{0};
@@ -225,6 +243,103 @@ struct LayerReady {
     uint64_t clientSubmitNs{0};
     uint64_t rasterStartNs{0};
     uint64_t rasterReadyNs{0};
+};
+
+/**
+ * One immutable layer placement in a complete presentation snapshot.
+ * Geometry is in the toplevel's logical coordinate system.  The compositor
+ * applies origin -> scale/rotation -> translation, then opacity and clip.
+ */
+struct PresentationLayerState {
+    uint64_t nodeId{0};
+    uint64_t layerId{0};
+    uint64_t contentRevision{0};
+    uint32_t zOrder{0};
+    uint32_t flags{0};
+    float x{0.0f};
+    float y{0.0f};
+    float width{0.0f};
+    float height{0.0f};
+    float opacity{1.0f};
+    float translationX{0.0f};
+    float translationY{0.0f};
+    float scaleX{1.0f};
+    float scaleY{1.0f};
+    float rotationRadians{0.0f};
+    float originX{0.5f};
+    float originY{0.5f};
+    float clipX{0.0f};
+    float clipY{0.0f};
+    float clipWidth{0.0f};
+    float clipHeight{0.0f};
+};
+
+inline constexpr uint32_t kPresentationLayerHasClip = 1u << 0u;
+inline constexpr uint32_t kPresentationLayerOpaque = 1u << 1u;
+
+/** Header followed by exactly layerCount PresentationLayerState records. */
+struct PresentationFrameReady {
+    SurfaceGrant grant{};
+    uint64_t configureSerial{0};
+    uint64_t frameSerial{0};
+    uint64_t geometryGeneration{0};
+    uint64_t rootNodeId{0};
+    uint32_t layerCount{0};
+    uint32_t reserved{0};
+};
+
+enum class PresentationAnimationCurve : uint32_t {
+    Tween = 0,
+    Spring = 1,
+};
+
+enum class PresentationAnimationOutcome : uint32_t {
+    Completed = 0,
+    Canceled = 1,
+    Rejected = 2,
+};
+
+inline constexpr uint32_t kAnimationTranslation = 1u << 0u;
+inline constexpr uint32_t kAnimationScale = 1u << 1u;
+inline constexpr uint32_t kAnimationRotation = 1u << 2u;
+inline constexpr uint32_t kAnimationOpacity = 1u << 3u;
+
+/** One compositor-owned animation declaration for an existing node. */
+struct PresentationAnimation {
+    SurfaceGrant grant{};
+    uint64_t transactionId{0};
+    uint64_t nodeId{0};
+    uint32_t propertyMask{0};
+    PresentationAnimationCurve curve{PresentationAnimationCurve::Tween};
+    float durationSec{0.0f};
+    float initialVelocityX{0.0f};
+    float initialVelocityY{0.0f};
+    float initialVelocityScale{0.0f};
+    float initialVelocityRotation{0.0f};
+    float initialVelocityOpacity{0.0f};
+    float startTranslationX{0.0f};
+    float startTranslationY{0.0f};
+    float startScaleX{1.0f};
+    float startScaleY{1.0f};
+    float startRotationRadians{0.0f};
+    float startOpacity{1.0f};
+    float targetTranslationX{0.0f};
+    float targetTranslationY{0.0f};
+    float targetScaleX{1.0f};
+    float targetScaleY{1.0f};
+    float targetRotationRadians{0.0f};
+    float targetOpacity{1.0f};
+    float springMass{1.0f};
+    float springStiffness{0.0f};
+    float springDamping{0.0f};
+};
+
+struct PresentationAnimationResult {
+    SurfaceGrant grant{};
+    uint64_t transactionId{0};
+    uint64_t nodeId{0};
+    PresentationAnimationOutcome outcome{
+        PresentationAnimationOutcome::Rejected};
 };
 
 enum class LayerReleaseReason : uint32_t {
@@ -267,14 +382,44 @@ bool decodeCommitTransaction(
     const Header& header, std::span<const uint8_t> payload,
     CommitTransaction& transaction, std::vector<NodeMutation>& mutations);
 
+bool sendPresentationFrameReady(
+    int fd, const PresentationFrameReady& frame,
+    std::span<const PresentationLayerState> layers);
+
+bool decodePresentationFrameReady(
+    const Header& header, std::span<const uint8_t> payload,
+    PresentationFrameReady& frame,
+    std::vector<PresentationLayerState>& layers);
+
+/** Validate and send one compositor-owned retained-presentation animation. */
+bool sendPresentationAnimation(
+    int fd, const PresentationAnimation& animation);
+
+/** Decode exactly one validated animation declaration without an FD. */
+bool decodePresentationAnimation(
+    const Header& header, std::span<const uint8_t> payload,
+    PresentationAnimation& animation);
+
 template <typename T>
 bool sendPacket(int fd, Opcode opcode, const T& payload, int passedFd = -1) {
     return sendPacket(fd, opcode, &payload, static_cast<uint32_t>(sizeof(T)),
                       passedFd);
 }
 
+// Transport metadata only; never serialized or supplied by the wire payload.
+struct SenderCredentials {
+    int32_t pid{0};
+    uint32_t uid{0};
+    uint32_t gid{0};
+    bool operator==(const SenderCredentials&) const = default;
+};
+
+// A non-null sender requires kernel SCM_CREDENTIALS (SO_PASSCRED must be
+// enabled before accepting producer connections). Missing credentials fail
+// closed. Private compositor channels do not require this metadata.
 ReceiveStatus receivePacket(int fd, Header& header,
-                            std::vector<uint8_t>& payload, int& receivedFd);
+                            std::vector<uint8_t>& payload, int& receivedFd,
+                            SenderCredentials* sender = nullptr);
 
 template <typename T>
 const T* payloadAs(const Header& header, std::span<const uint8_t> payload,

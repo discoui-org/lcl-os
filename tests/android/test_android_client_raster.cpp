@@ -1,4 +1,5 @@
 #include "system/render/client_egl_context.hpp"
+#include "system/render/raster_renderer.hpp"
 
 #include <android/hardware_buffer.h>
 #include <EGL/egl.h>
@@ -32,28 +33,54 @@ int main() {
         std::cerr << "android_client_ahb_acquire=no\n";
         return 2;
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, target->framebuffer);
-    glViewport(0, 0, kWidth, kHeight);
-    glClearColor(1.0f, 0.0f, 1.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    lcl::render::RasterRenderer renderer;
+    if (!renderer.initialize(kWidth, kHeight, &context, nullptr)) {
+        std::cerr << "android_client_renderer=no\n";
+        return 3;
+    }
+    renderer.setRetainsFrameBacking(true);
+    renderer.setExternalFrameTarget(
+        target->framebuffer, target->texture, target->width, target->height);
+    renderer.beginFrame();
+    lcl::graphics::DisplayListBuilder displayList;
+    displayList.clearRect(
+        {0.0f, 0.0f, static_cast<float>(kWidth),
+         static_cast<float>(kHeight)},
+        {0, 0, 0, 0});
+    lcl::graphics::Path opaqueHalf;
+    opaqueHalf.addRect(
+        {0.0f, 0.0f, static_cast<float>(kWidth),
+         static_cast<float>(kHeight / 2)});
+    displayList.drawPath(
+        opaqueHalf,
+        {{255, 0, 255, 255}, lcl::graphics::PaintStyle::Fill});
+    if (!renderer.replayDisplayList(
+            displayList.build(),
+            {{static_cast<float>(kWidth), static_cast<float>(kHeight)},
+             {kWidth, kHeight}, 1.0f})) {
+        std::cerr << "android_client_display_list_replay=no\n";
+        return 4;
+    }
+    renderer.endFrame();
+    renderer.clearExternalFrameTarget();
 
     const auto frame = context.exportCurrentDmaBuf();
     if (!frame || !frame->androidHardwareBuffer) {
         std::cerr << "android_client_ahb_export=no\n";
-        return 3;
+        return 5;
     }
 
     int sockets[2]{-1, -1};
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) != 0 ||
         !context.sendNativeBufferHandle(sockets[0], frame->bufferId)) {
         std::cerr << "android_client_ahb_send=no\n";
-        return 4;
+        return 6;
     }
     AHardwareBuffer* received = nullptr;
     if (AHardwareBuffer_recvHandleFromUnixSocket(sockets[1], &received) != 0 ||
         !received) {
         std::cerr << "android_client_ahb_receive=no\n";
-        return 5;
+        return 7;
     }
 
     const auto getNativeClientBuffer = reinterpret_cast<GetNativeClientBuffer>(
@@ -66,7 +93,7 @@ int main() {
         eglGetProcAddress("glEGLImageTargetTexture2DOES"));
     if (!getNativeClientBuffer || !createImage || !destroyImage || !imageTarget) {
         std::cerr << "android_client_ahb_import_api=no\n";
-        return 6;
+        return 8;
     }
 
     const EGLint attributes[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
@@ -83,10 +110,24 @@ int main() {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, texture, 0);
     glFinish();
-    uint8_t pixel[4]{};
-    glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-    const bool sharedPixel = pixel[0] > 240 && pixel[1] < 16 &&
-                             pixel[2] > 240 && pixel[3] > 240;
+    uint8_t lowerPixel[4]{};
+    uint8_t upperPixel[4]{};
+    glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, lowerPixel);
+    glReadPixels(1, kHeight - 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, upperPixel);
+    const auto opaqueMagenta = [](const uint8_t* pixel) {
+        return pixel[0] > 240 && pixel[1] < 16 &&
+               pixel[2] > 240 && pixel[3] > 240;
+    };
+    const auto transparent = [](const uint8_t* pixel) {
+        return pixel[3] < 16;
+    };
+    // Raster coordinates are top-left anchored while GL readback is
+    // bottom-left anchored. Accept either half as the opaque half: the
+    // contract under test is that one remains opaque and the other remains
+    // transparent across the renderer -> AHB -> EGLImage path.
+    const bool sharedPixel =
+        (opaqueMagenta(lowerPixel) && transparent(upperPixel)) ||
+        (opaqueMagenta(upperPixel) && transparent(lowerPixel));
 
     glDeleteFramebuffers(1, &framebuffer);
     glDeleteTextures(1, &texture);
@@ -101,5 +142,5 @@ int main() {
               << "android_client_ahb_handle_transfer=yes\n"
               << "android_client_ahb_shared_pixel="
               << (sharedPixel ? "yes" : "no") << "\n";
-    return sharedPixel ? 0 : 7;
+    return sharedPixel ? 0 : 9;
 }

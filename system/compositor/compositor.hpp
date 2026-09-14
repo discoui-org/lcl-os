@@ -105,6 +105,7 @@ private:
     bool                                 m_shellStateDirty{true};
     uint64_t                             m_loopTicks{0};
     uint64_t                             m_refreshIntervalNs{16666667};
+    std::chrono::steady_clock::time_point m_lastPresentationAnimationTick{};
     uint64_t                             m_displaySequence{0};
 
     // Diagnostic Overlay & FPS metrics

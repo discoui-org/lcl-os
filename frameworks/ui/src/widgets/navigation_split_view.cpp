@@ -24,8 +24,7 @@ lcl::motion::Motion navigationSpring() {
 }
 
 bool supportsEdgeDrag(const PointerEvent& event) {
-    return event.source == PointerSource::Touch ||
-        (event.source == PointerSource::Mouse && event.button == 0);
+    return event.source == PointerSource::Touch;
 }
 
 } // namespace
@@ -61,6 +60,12 @@ NavigationSplitView::NavigationSplitView() {
     detail->setPosition(layout::Edge::Top, 0.0f);
     detail->setPosition(layout::Edge::Right, 0.0f);
     detail->setPosition(layout::Edge::Bottom, 0.0f);
+    // Compact primary/detail navigation keeps both visual panes as retained
+    // presentation layers.  The two layers fit the bounded navigation pool
+    // and permit the primary page's -0.5W parallax without a client raster
+    // frame on every spring sample.
+    m_sidebarPane->setRetainedPresentationHint(true);
+    detail->setRetainedPresentationHint(true);
     addChild(std::move(detail));
 
     applyMode();
@@ -109,7 +114,9 @@ bool NavigationSplitView::setDetailPage(NavigationPage page,
             m_sizeClass == LayoutSizeClass::Expanded
                 ? transition : PageTransition::None);
     if (!changed) return false;
-    if (m_sizeClass == LayoutSizeClass::Compact) presentDetail();
+    if (m_sizeClass == LayoutSizeClass::Compact) {
+        presentDetail();
+    }
     return true;
 }
 
@@ -117,9 +124,13 @@ void NavigationSplitView::presentDetail() {
     if (m_sizeClass == LayoutSizeClass::Expanded ||
         m_compactDetailPresented || m_detail->pageCount() == 0) return;
     m_compactDetailPresented = true;
+    m_detail->setRetainedPresentationHint(true);
     m_detail->setParentBack(m_primaryBar->title(),
                             [this] { presentPrimary(); });
-    animateCompactPresentation(true);
+    // This also covers selecting the already-current Settings route. That
+    // path does not call setDetailPage(), and the offscreen compact pane has
+    // therefore never been guaranteed to own an imported layer.
+    animateCompactPresentation(true, true);
 }
 
 void NavigationSplitView::presentPrimary() {
@@ -130,7 +141,11 @@ void NavigationSplitView::presentPrimary() {
         return;
     }
     m_compactDetailPresented = false;
-    animateCompactPresentation(false);
+    // A nested NavigationStack transition temporarily gives ownership to its
+    // page layers. Re-form the single detail layer before sliding the whole
+    // pane back to the sidebar.
+    m_detail->setRetainedPresentationHint(true);
+    animateCompactPresentation(false, true);
 }
 
 void NavigationSplitView::syncLayout(float parentAbsX, float parentAbsY) {
@@ -143,17 +158,28 @@ void NavigationSplitView::syncLayout(float parentAbsX, float parentAbsY) {
 void NavigationSplitView::applyMode(bool preservePresentation) {
     const float width = std::max(1.0f, getBounds().width);
     if (m_sizeClass == LayoutSizeClass::Expanded) {
+        // Expanded NavigationStack transitions retain their individual pages;
+        // the split container itself is only a compact presentation boundary.
+        m_sidebarPane->setRetainedPresentationHint(false);
+        m_detail->setRetainedPresentationHint(false);
         m_sidebarPane->setWidth(m_sidebarWidth);
         m_detail->setPosition(layout::Edge::Left, m_sidebarWidth);
         m_primaryBar->setLayoutVisibility(LayoutVisibility::Collapsed);
         m_sidebarPane->setTranslationX(0.0f);
         m_detail->setTranslationX(0.0f);
+        m_detail->setOpacity(1.0f);
         m_sidebarPane->setInteractionEnabled(true);
         m_detail->setInteractionEnabled(true);
         m_detail->clearParentBack();
         return;
     }
 
+    // Page push/pop needs outgoing and incoming page layers independently.
+    // Outside such a transition, a one-page stack can be retained as the
+    // single pane used by the compact primary/detail slide.
+    m_sidebarPane->setRetainedPresentationHint(true);
+    m_detail->setRetainedPresentationHint(
+        !m_detail->isTransitioning() && m_detail->pageCount() <= 1);
     m_sidebarPane->setWidthAuto();
     m_detail->setPosition(layout::Edge::Left, 0.0f);
     m_primaryBar->setLayoutVisibility(LayoutVisibility::Visible);
@@ -164,12 +190,14 @@ void NavigationSplitView::applyMode(bool preservePresentation) {
             m_compactDetailPresented ? -kPrimaryParallax * width : 0.0f);
         m_detail->setTranslationX(
             m_compactDetailPresented ? 0.0f : width);
+        m_detail->setOpacity(1.0f);
     }
     m_sidebarPane->setInteractionEnabled(!m_compactDetailPresented);
     m_detail->setInteractionEnabled(m_compactDetailPresented);
 }
 
-void NavigationSplitView::animateCompactPresentation(bool detailPresented) {
+void NavigationSplitView::animateCompactPresentation(bool detailPresented,
+                                                      bool prepareDetail) {
     finishTransition();
     const float width = std::max(1.0f, getBounds().width);
     auto* coordinator = getMotionCoordinator();
@@ -177,6 +205,7 @@ void NavigationSplitView::animateCompactPresentation(bool detailPresented) {
         m_sidebarPane->setTranslationX(
             detailPresented ? -kPrimaryParallax * width : 0.0f);
         m_detail->setTranslationX(detailPresented ? 0.0f : width);
+        m_detail->setOpacity(1.0f);
         applyMode(true);
         return;
     }
@@ -184,13 +213,40 @@ void NavigationSplitView::animateCompactPresentation(bool detailPresented) {
     m_transitionTargetDetail = detailPresented;
     m_sidebarPane->setInteractionEnabled(false);
     m_detail->setInteractionEnabled(false);
+    const auto lifetime = getLifetimeToken();
+    coordinator->registerPresentation(*this, [lifetime, this](float) {
+        if (!lifetime.expired()) tickTransition();
+    });
+
+    if (prepareDetail) {
+        // Record/import the detail once at identity. On entrance it remains
+        // hidden so the sidebar is still the complete visible snapshot; on
+        // exit it stays opaque and replaces the independent page layers at
+        // the exact same visual position.
+        m_preparingDetail = true;
+        m_preparationTicks = 1;
+        m_detail->setTranslationX(0.0f);
+        m_detail->setOpacity(detailPresented ? 0.0f : 1.0f);
+        return;
+    }
+
+    startCompactAnimation();
+}
+
+void NavigationSplitView::startCompactAnimation() {
+    auto* coordinator = getMotionCoordinator();
+    if (!coordinator) {
+        finishTransition();
+        return;
+    }
+    const float width = std::max(1.0f, getBounds().width);
     const auto motion = navigationSpring();
     const auto sidebarLifetime = m_sidebarPane->getLifetimeToken();
     const auto detailLifetime = m_detail->getLifetimeToken();
     coordinator->animateFloat(
         *m_sidebarPane, AnimatableProperty::TranslationX,
         m_sidebarPane->getPresentationState().translationX,
-        detailPresented ? -kPrimaryParallax * width : 0.0f, motion,
+        m_transitionTargetDetail ? -kPrimaryParallax * width : 0.0f, motion,
         [sidebarLifetime, sidebar = m_sidebarPane](float value) {
             if (!sidebarLifetime.expired()) sidebar->applyPresentationValue(
                 AnimatableProperty::TranslationX, value);
@@ -198,19 +254,47 @@ void NavigationSplitView::animateCompactPresentation(bool detailPresented) {
     coordinator->animateFloat(
         *m_detail, AnimatableProperty::TranslationX,
         m_detail->getPresentationState().translationX,
-        detailPresented ? 0.0f : width, motion,
+        m_transitionTargetDetail ? 0.0f : width, motion,
         [detailLifetime, detail = m_detail](float value) {
             if (!detailLifetime.expired()) detail->applyPresentationValue(
                 AnimatableProperty::TranslationX, value);
         });
-    const auto lifetime = getLifetimeToken();
-    coordinator->registerPresentation(*this, [lifetime, this](float) {
-        if (!lifetime.expired()) tickTransition();
-    });
+    // An unavailable/rejected retained cache is handled by the compositor
+    // delegate as a one-shot final-state commit. In that path there will be no
+    // PresentationAnimationResult callback, so complete ownership now rather
+    // than leaving both panes input-disabled indefinitely.
+    if (!coordinator->isObjectAnimating(m_sidebarPane->getObjectId()) &&
+        !coordinator->isObjectAnimating(m_detail->getObjectId())) {
+        finishTransition();
+    }
 }
 
 void NavigationSplitView::tickTransition() {
     if (!m_transitionActive) return;
+    if (m_preparingDetail) {
+        if (m_preparationTicks > 0) {
+            --m_preparationTicks;
+            return;
+        }
+        m_preparingDetail = false;
+        if (m_transitionTargetDetail) {
+            const float width = std::max(1.0f, getBounds().width);
+            // Frame A recorded the detail cache at identity and opacity zero.
+            // Publish Frame B at the offscreen visible starting position; the
+            // following FramePresented is the first safe point to animate it.
+            m_detail->setTranslationX(width);
+            m_detail->setOpacity(1.0f);
+            m_positioningDetail = true;
+            return;
+        }
+        startCompactAnimation();
+        return;
+    }
+    if (m_positioningDetail) {
+        m_positioningDetail = false;
+        startCompactAnimation();
+        return;
+    }
     auto* coordinator = getMotionCoordinator();
     if (!coordinator ||
         (!coordinator->isObjectAnimating(m_sidebarPane->getObjectId()) &&
@@ -222,10 +306,14 @@ void NavigationSplitView::tickTransition() {
 void NavigationSplitView::finishTransition() {
     if (!m_transitionActive) return;
     m_transitionActive = false;
+    m_preparingDetail = false;
+    m_positioningDetail = false;
+    m_preparationTicks = 0;
     if (m_motionCoordinator) {
         m_motionCoordinator->unregisterPresentation(getObjectId());
     }
     m_compactDetailPresented = m_transitionTargetDetail;
+    m_detail->setOpacity(1.0f);
     applyMode(true);
 }
 
@@ -296,9 +384,29 @@ void NavigationSplitView::updateEdgeDrag(float x) {
     const float width = std::max(1.0f, getBounds().width);
     const float dx = std::clamp(x - m_edgeStartX, 0.0f, width);
     m_edgeProgress = dx / width;
-    m_detail->setTranslationX(dx);
-    m_sidebarPane->setTranslationX(
-        -kPrimaryParallax * width * (1.0f - m_edgeProgress));
+    auto* coordinator = getMotionCoordinator();
+    const float current = m_detail->getPresentationState().translationX;
+    const auto lifetime = m_detail->getLifetimeToken();
+    const bool submitted = coordinator && coordinator->updateCompositorFloat(
+        *m_detail, AnimatableProperty::TranslationX, current, dx,
+        [lifetime, detail = m_detail](float value) {
+            if (!lifetime.expired()) detail->applyPresentationValue(
+                AnimatableProperty::TranslationX, value);
+        });
+    if (!submitted) m_detail->setTranslationX(dx);
+    const float primaryTarget =
+        -kPrimaryParallax * width * (1.0f - m_edgeProgress);
+    const float primaryCurrent =
+        m_sidebarPane->getPresentationState().translationX;
+    const auto primaryLifetime = m_sidebarPane->getLifetimeToken();
+    const bool primarySubmitted = coordinator && coordinator->updateCompositorFloat(
+        *m_sidebarPane, AnimatableProperty::TranslationX,
+        primaryCurrent, primaryTarget,
+        [primaryLifetime, sidebar = m_sidebarPane](float value) {
+            if (!primaryLifetime.expired()) sidebar->applyPresentationValue(
+                AnimatableProperty::TranslationX, value);
+        });
+    if (!primarySubmitted) m_sidebarPane->setTranslationX(primaryTarget);
 }
 
 void NavigationSplitView::finishEdgeDrag(bool commit) {

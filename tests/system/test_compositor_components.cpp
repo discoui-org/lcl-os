@@ -72,17 +72,20 @@ TEST(MobileLaunchBackdropTest, UsesScaleAndBrightnessWithoutEffectOpacity) {
     EXPECT_FLOAT_EQ(start.wallpaperScale, 1.0f);
     EXPECT_FLOAT_EQ(start.homeScale, 1.0f);
     EXPECT_FLOAT_EQ(start.brightness, 1.0f);
+    EXPECT_FLOAT_EQ(start.dimmingOpacity, 0.0f);
 
     const auto halfway = resolveMobileLaunchBackdrop(0.5f);
     EXPECT_FLOAT_EQ(halfway.progress, 0.5f);
     EXPECT_FLOAT_EQ(halfway.wallpaperScale, 1.03f);
     EXPECT_FLOAT_EQ(halfway.homeScale, 0.97f);
     EXPECT_FLOAT_EQ(halfway.brightness, 0.91f);
+    EXPECT_NEAR(halfway.dimmingOpacity, 0.09f, 0.0001f);
 
     const auto covered = resolveMobileLaunchBackdrop(1.0f);
     EXPECT_FLOAT_EQ(covered.wallpaperScale, 1.06f);
     EXPECT_FLOAT_EQ(covered.homeScale, 0.94f);
     EXPECT_FLOAT_EQ(covered.brightness, 0.82f);
+    EXPECT_NEAR(covered.dimmingOpacity, 0.18f, 0.0001f);
 }
 
 TEST(MobileWindowDecorationTest,
@@ -2584,6 +2587,8 @@ TEST(SystemSurfacePolicyTest, MenuAndDockAreCompositorOwnedUnfocusablePanels) {
     const auto wallpaper = SystemSurfacePolicyRegistry::policyFor(protocol::LCLSystemSurfaceKind::Wallpaper);
     const auto home = SystemSurfacePolicyRegistry::policyFor(
         protocol::LCLSystemSurfaceKind::HomeScreen);
+    const auto permissionPrompt = SystemSurfacePolicyRegistry::policyFor(
+        protocol::LCLSystemSurfaceKind::PermissionPrompt);
 
     EXPECT_TRUE(menu.isSystemSurface);
     EXPECT_EQ(menu.layer, protocol::LCLWindowLayer::TopMost);
@@ -2601,6 +2606,11 @@ TEST(SystemSurfacePolicyTest, MenuAndDockAreCompositorOwnedUnfocusablePanels) {
     EXPECT_FALSE(home.unfocusable);
     EXPECT_EQ(home.placement, SystemSurfacePlacement::OutputBounds);
     EXPECT_FALSE(home.insetBorderEnabled);
+    EXPECT_TRUE(permissionPrompt.isSystemSurface);
+    EXPECT_EQ(permissionPrompt.layer, protocol::LCLWindowLayer::TopMost);
+    EXPECT_FALSE(permissionPrompt.unfocusable);
+    EXPECT_EQ(permissionPrompt.placement, SystemSurfacePlacement::OutputBounds);
+    EXPECT_FALSE(permissionPrompt.reservesWorkArea);
     EXPECT_FALSE(SystemSurfacePolicyRegistry::isValidKind(protocol::LCLSystemSurfaceKind::None));
 }
 

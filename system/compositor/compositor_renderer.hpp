@@ -20,7 +20,8 @@ public:
                 const SurfaceRegistry::Snapshot& surfaces,
                 const std::function<void()>& beforePresent = {},
                 bool allowIncrementalDamage = false,
-                bool useMobilePresentation = false) const;
+                bool useMobilePresentation = false,
+                bool presentationTransitionActive = false) const;
 
 private:
     struct RetainedWindowGroup {
@@ -40,6 +41,7 @@ private:
         uint64_t frameSerial{0};
         uint64_t shmContentSerial{0};
         uint64_t rasterLayerId{0};
+        uint64_t presentationRevision{0};
     };
 
     struct RetainedBackdropBase {

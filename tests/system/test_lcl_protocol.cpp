@@ -847,7 +847,7 @@ TEST(LCLProtocolTest, ShellStateSnapshotAndDeltaRoundTripWithExplicitRevision) {
 
 TEST(LCLProtocolTest, SystemSurfaceDeclarationRoundTripsAndRejectsNone) {
     LCLMsgSetSystemSurfaceKind request{};
-    request.kind = LCLSystemSurfaceKind::HomeScreen;
+    request.kind = LCLSystemSurfaceKind::PermissionPrompt;
     LCLHeader header{};
     header.opcode = LCLOpcode::SetSystemSurfaceKind;
     header.requestId = 63;
@@ -861,7 +861,7 @@ TEST(LCLProtocolTest, SystemSurfaceDeclarationRoundTripsAndRejectsNone) {
     ASSERT_EQ(decodedHeader.opcode, LCLOpcode::SetSystemSurfaceKind);
     ASSERT_EQ(payload.size(), sizeof(request));
     EXPECT_EQ(reinterpret_cast<const LCLMsgSetSystemSurfaceKind*>(payload.data())->kind,
-              LCLSystemSurfaceKind::HomeScreen);
+              LCLSystemSurfaceKind::PermissionPrompt);
 
     request.kind = LCLSystemSurfaceKind::None;
     EXPECT_FALSE(encodePacket(header, &request, packet));

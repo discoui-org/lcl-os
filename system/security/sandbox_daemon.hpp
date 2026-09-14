@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "system/security/sandbox_child_reaper.hpp"
+#include "system/security/app_launch_registry.hpp"
 #include "system/security/sandbox_cgroup.hpp"
 #include "system/security/sandbox_external_application_registry.hpp"
 #include "system/security/sandbox_launch_authorizer.hpp"
@@ -33,6 +34,7 @@ struct SandboxDaemonConfig {
     SandboxPlatformMode platformMode{SandboxPlatformMode::LinuxFull};
     PermissionStoreConfig permissionStore{};
     SandboxExternalApplicationRegistryConfig externalApplications{};
+    AppLaunchRegistryConfig launches{};
 };
 
 /**
@@ -65,6 +67,11 @@ public:
     bool initialize(std::string& error);
     void shutdown();
     void poll();
+
+    /** A graphics endpoint changed; registrations must be rebuilt before launch resumes. */
+    bool runtimeEndpointRefreshRequired() const noexcept { return runtimeEndpointRefreshRequired_; }
+    /** Marks a successful root-owned system registration refresh as ready for launch. */
+    bool completeRuntimeEndpointRefresh(std::string& error);
 
     /** Trusted, in-process verifier/registry API; never exposed over IPC. */
     bool registerVerifiedApplication(const VerifiedApplication& application,
@@ -100,9 +107,11 @@ private:
     void removeClient(int descriptor);
     void sendErrorAndClose(int descriptor, std::uint32_t requestId, const std::string& message);
     void reapChildren();
+    void refreshRuntimeEndpointState();
 
     SandboxLaunchAuthorizer authorizer_;
     SandboxExternalApplicationRegistry externalApplications_;
+    AppLaunchRegistry launchRegistry_;
     SandboxDaemonConfig config_;
     SandboxLaunchMaterialRegistry materialRegistry_;
     // The daemon owns the only cgroup v2 allocator.  It is initialized before
@@ -112,6 +121,7 @@ private:
     /** Selected locally after probing the actual kernel; never protocol input. */
     SandboxPlatformHardening hardening_{};
     bool hardeningReady_{false};
+    bool runtimeEndpointRefreshRequired_{false};
     SandboxChildReaper childReaper_;
     int serverDescriptor_{-1};
     bool ownsSocketPath_{false};

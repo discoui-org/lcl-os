@@ -56,10 +56,51 @@ void MotionCoordinator::animateFloat(Widget& widget, AnimatableProperty property
                                      const lcl::motion::Motion& motion,
                                      ApplyFloat applyPresentation, bool affectsLayout) {
     const lcl::motion::ChannelKey key{widget.getObjectId(), static_cast<uint32_t>(property)};
+    float velocity = 0.0f;
+    if (const auto existing = m_engine.findChannel(key)) {
+        velocity = m_engine.sample(*existing).velocity;
+    }
+    if (!affectsLayout && m_compositorAnimationDelegate &&
+        m_compositorAnimationDelegate(
+            widget, property, presentationValue, targetValue, velocity, motion)) {
+        if (const auto existing = m_engine.findChannel(key)) {
+            (void)m_engine.stop(*existing, false);
+            m_bindings.erase(*existing);
+        }
+        // The model/manifest advances to final state; compositor motion keeps
+        // sampling the immutable old layer until it reaches that target.
+        applyPresentation(targetValue);
+        return;
+    }
     const auto channel = m_engine.ensureChannel(key, presentationValue);
     if (!m_engine.isActive(channel)) m_engine.setValue(channel, presentationValue);
     m_bindings[channel] = Binding{widget.getObjectId(), &widget, std::move(applyPresentation), affectsLayout};
     m_engine.animateTo(channel, targetValue, motion);
+}
+
+bool MotionCoordinator::updateCompositorFloat(
+        Widget& widget, AnimatableProperty property,
+        float presentationValue, float targetValue,
+        ApplyFloat applyPresentation) {
+    if (!m_compositorAnimationDelegate || !applyPresentation) return false;
+    constexpr float kInputSampleDurationSec = 1.0f / 240.0f;
+    const auto motion = lcl::motion::Motion::tween(
+        kInputSampleDurationSec, lcl::motion::Easing::linear());
+    if (!m_compositorAnimationDelegate(
+            widget, property, presentationValue, targetValue, 0.0f, motion)) {
+        return false;
+    }
+    const lcl::motion::ChannelKey key{
+        widget.getObjectId(), static_cast<uint32_t>(property)};
+    if (const auto existing = m_engine.findChannel(key)) {
+        (void)m_engine.stop(*existing, false);
+        m_bindings.erase(*existing);
+    }
+    // Keep hit testing and a later settle declaration synchronized with the
+    // most recent finger position. The compositor samples the visible layer;
+    // the ordinary invalidation is coalesced and is not required for pacing.
+    applyPresentation(targetValue);
+    return true;
 }
 
 void MotionCoordinator::setColor(Widget& widget, AnimatableProperty firstChannel,
@@ -91,6 +132,29 @@ lcl::motion::AnimationHandle MotionCoordinator::animate(
         Widget& widget, AnimatableProperty property,
         std::vector<lcl::motion::Keyframe> keyframes,
         const lcl::motion::AnimationOptions& options) {
+    const bool compositorProperty = property == AnimatableProperty::Opacity ||
+        property == AnimatableProperty::TranslationX ||
+        property == AnimatableProperty::TranslationY ||
+        property == AnimatableProperty::ScaleX ||
+        property == AnimatableProperty::ScaleY ||
+        property == AnimatableProperty::Rotation;
+    if (compositorProperty && m_compositorAnimationDelegate &&
+        !keyframes.empty()) {
+        const auto final = std::max_element(
+            keyframes.begin(), keyframes.end(),
+            [](const auto& lhs, const auto& rhs) {
+                return lhs.offset < rhs.offset;
+            });
+        const float start = widget.getPresentationValue(property);
+        const auto motion = lcl::motion::Motion::tween(
+            std::max(0.001f, options.durationSec), options.easing,
+            std::max(0.0f, options.delaySec));
+        if (m_compositorAnimationDelegate(
+                widget, property, start, final->value, 0.0f, motion)) {
+            widget.applyPresentationValue(property, final->value);
+            return {};
+        }
+    }
     const auto lifetime = widget.getLifetimeToken();
     Widget* pointer = &widget;
     return m_timeline.animate(std::move(keyframes), options,
@@ -106,7 +170,7 @@ lcl::motion::AnimationHandle MotionCoordinator::animate(
         });
 }
 
-bool MotionCoordinator::tick(float dtSec) {
+bool MotionCoordinator::tick(float dtSec, bool tickPresentationObservers) {
     const auto changed = m_engine.tick(dtSec);
     bool layoutChanged = false;
     for (const auto channel : changed) {
@@ -117,13 +181,17 @@ bool MotionCoordinator::tick(float dtSec) {
     }
     if (layoutChanged && m_layoutCallback) m_layoutCallback();
     m_timeline.tick(dtSec);
-    tickPresentations(dtSec);
+    if (tickPresentationObservers) tickPresentations(dtSec);
     return hasActiveAnimations();
 }
 
 bool MotionCoordinator::hasActiveAnimations() const noexcept {
     return m_engine.hasActiveAnimations() || m_timeline.hasActiveAnimations() ||
-        !m_presentationBindings.empty();
+        !m_presentationBindings.empty() || !m_compositorAnimations.empty();
+}
+
+void MotionCoordinator::tickCompositorPresentations() {
+    tickPresentations(0.0f);
 }
 
 bool MotionCoordinator::isObjectAnimating(uint64_t objectId) const {
@@ -131,8 +199,25 @@ bool MotionCoordinator::isObjectAnimating(uint64_t objectId) const {
         if (binding.objectId == objectId && m_engine.isActive(channel)) return true;
     }
     const auto presentation = m_presentationBindings.find(objectId);
-    return presentation != m_presentationBindings.end() &&
-        !presentation->second.lifetime.expired();
+    return (presentation != m_presentationBindings.end() &&
+            !presentation->second.lifetime.expired()) ||
+        m_compositorAnimations.contains(objectId);
+}
+
+void MotionCoordinator::trackCompositorAnimation(
+        uint64_t objectId, uint64_t transactionId) {
+    if (objectId != 0 && transactionId != 0) {
+        m_compositorAnimations[objectId] = transactionId;
+    }
+}
+
+void MotionCoordinator::completeCompositorAnimation(
+        uint64_t objectId, uint64_t transactionId) {
+    const auto found = m_compositorAnimations.find(objectId);
+    if (found != m_compositorAnimations.end() &&
+        found->second == transactionId) {
+        m_compositorAnimations.erase(found);
+    }
 }
 
 void MotionCoordinator::registerPresentation(Widget& widget,
@@ -173,11 +258,13 @@ void MotionCoordinator::unregisterObject(uint64_t objectId) {
     m_engine.clearObjectChannels(objectId);
     std::erase_if(m_bindings, [objectId](const auto& item) { return item.second.objectId == objectId; });
     unregisterPresentation(objectId);
+    m_compositorAnimations.erase(objectId);
 }
 
 void MotionCoordinator::clear() {
     m_bindings.clear();
     m_presentationBindings.clear();
+    m_compositorAnimations.clear();
     m_engine.clearAll();
     m_timeline.clear();
     m_transactionActive = false;

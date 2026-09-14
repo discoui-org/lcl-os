@@ -4,6 +4,7 @@
 #include "system/security/sandbox_daemon.hpp"
 #include "system/security/sandbox_launch_material.hpp"
 #include "system/security/session_user.hpp"
+#include "system/security/system_permission_profile.hpp"
 #include "system/session/app_bundle_parser.hpp"
 
 #include <fcntl.h>
@@ -190,7 +191,10 @@ bool registerOneSystemApplication(
   material.executableDescriptor = metadata.executableHandle->descriptor();
   material.runtimeDescriptor = runtimeDescriptor.get();
 
-  if (!daemon.registerVerifiedApplication(application, {}, error)) {
+  const std::vector<std::string> grantedPermissions =
+      staticSystemImagePermissionGrants(application.appId,
+                                        application.requestedPermissions);
+  if (!daemon.registerVerifiedApplication(application, grantedPermissions, error)) {
     return false;
   }
   if (!daemon.registerVerifiedLaunchMaterial(material, error)) {

@@ -111,8 +111,25 @@ int main(int argc, char** argv) {
         std::cerr << "[LCL Sandbox ERROR] " << error << "\n";
         return 1;
     }
+    std::string lastEndpointRefreshError;
     while (gRunning.load()) {
         daemon.poll();
+        if (daemon.runtimeEndpointRefreshRequired()) {
+            // Reopen the protected graphics sockets and replace every
+            // system-image material record.  Until this succeeds sandboxd
+            // rejects launches and has already killed children that carried
+            // stale private bind mounts.
+            if (!systemApplications.registerSystemApplications(daemon, error) ||
+                !daemon.completeRuntimeEndpointRefresh(error)) {
+                if (error != lastEndpointRefreshError) {
+                    std::cerr << "[LCL Sandbox ERROR] graphics endpoint refresh failed: " << error
+                              << "\n";
+                    lastEndpointRefreshError = error;
+                }
+            } else {
+                lastEndpointRefreshError.clear();
+            }
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     return 0;

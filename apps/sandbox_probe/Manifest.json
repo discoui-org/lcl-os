@@ -1,8 +1,0 @@
-{
-  "id": "org.lcl.sandbox-probe",
-  "name": "Sandbox Probe",
-  "version": "1.0.0",
-  "executable": "Executables/SandboxProbe",
-  "icon": "Resources/Icon.png",
-  "type": "cli"
-}

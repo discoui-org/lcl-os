@@ -6,6 +6,7 @@
 #include "system/security/sandbox_kernel_enforcement.hpp"
 
 #include <optional>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -44,11 +45,16 @@ struct SandboxChildLaunchSpec {
 
 bool validateSandboxChildLaunchSpec(const SandboxChildLaunchSpec& spec, std::string& error);
 
+using SandboxChildReadyCallback =
+    std::function<bool(pid_t processGroupId, std::string& error)>;
+
 /**
  * Forks one daemon-owned app process group and applies cgroup placement,
  * namespaces, private mounts, Landlock, credential drop, seccomp and the
  * environment boundary before exec.  It never falls back to direct exec.
  */
-SandboxLaunchResult spawnSandboxChild(const SandboxChildLaunchSpec& spec);
+SandboxLaunchResult spawnSandboxChild(
+    const SandboxChildLaunchSpec& spec,
+    const SandboxChildReadyCallback& beforeExec = {});
 
 } // namespace lcl::security

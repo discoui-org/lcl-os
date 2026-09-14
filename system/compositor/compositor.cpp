@@ -35,6 +35,13 @@ Compositor::Compositor(lcl::platform::IPlatformServices& platformServices)
               .ownerUid = 0,
               .ownerGid = 0,
           },
+          .launches = {
+              .directoryPath = platformServices.paths().applicationLaunchRegistryPath(),
+              .firstAppUid = 61000,
+              .lastAppUid = 61999,
+              .ownerUid = 0,
+              .ownerGid = 0,
+          },
           .sessionUid = lcl::security::kSessionUserUid,
           .sessionGid = lcl::security::kSessionUserGid,
       }),
@@ -247,10 +254,26 @@ void Compositor::processIPC() {
     m_rasterService.poll();
     if (m_protocolDispatcher) {
         for (auto& layer : m_rasterService.takeReadyLayers()) {
-            if (m_protocolDispatcher->acceptRasterLayer(std::move(layer))) {
+            (void)m_protocolDispatcher->acceptRasterLayer(std::move(layer));
+        }
+        // Storage import and snapshot promotion are intentionally separate.
+        // A frame with any missing layer leaves the old presentation intact.
+        for (auto& frame : m_rasterService.takePresentationFrames()) {
+            if (m_protocolDispatcher->acceptPresentationFrame(std::move(frame))) {
                 m_needsRedraw = true;
                 m_shellStateDirty = true;
             }
+        }
+        // Android AHardwareBuffers are delivered on a side-band FIFO.  If a
+        // manifest beat that FIFO by one poll, retry it after the import pass
+        // without ever promoting a partial frame.
+        if (m_protocolDispatcher->retryPendingPresentationFrames()) {
+            m_needsRedraw = true;
+            m_shellStateDirty = true;
+        }
+        for (auto& animation : m_rasterService.takePresentationAnimations()) {
+            m_protocolDispatcher->acceptPresentationAnimation(
+                std::move(animation));
         }
     }
     if (m_protocolDispatcher && m_protocolDispatcher->process(m_ipcManager)) {
@@ -324,6 +347,19 @@ void Compositor::run() {
             m_shellStateDirty = true;
         }
         processIPC();
+        if (m_protocolDispatcher) {
+            const auto animationNow = std::chrono::steady_clock::now();
+            const float animationDelta = m_lastPresentationAnimationTick
+                    .time_since_epoch().count() == 0
+                ? 0.0f
+                : std::chrono::duration<float>(
+                      animationNow - m_lastPresentationAnimationTick).count();
+            m_lastPresentationAnimationTick = animationNow;
+            if (m_protocolDispatcher->advancePresentationAnimations(
+                    animationDelta)) {
+                m_needsRedraw = true;
+            }
+        }
         // Refresh-cadenced Live configures may have been deferred while an
         // input batch arrived. Revisit the coalesced newest geometry once per
         // compositor loop even when the pointer becomes stationary.
@@ -440,6 +476,49 @@ void Compositor::renderDiagnosticOverlay() {
 }
 
 void Compositor::renderFrame() {
+    // A successfully resolved launch can still lose its client before the
+    // first raster layer. Never let that white fullscreen proxy permanently
+    // cover Home/Wallpaper. Detach the visual after a bounded interval while
+    // retaining a registered client surface so a late first frame can map as
+    // an ordinary window.
+    const auto launchNow = std::chrono::steady_clock::now();
+    std::vector<SurfaceRegistry::Key> expiredLaunchPlaceholders;
+    for (const auto& [surfaceKey, entry] : m_surfaces) {
+        if (entry.hasCommittedBuffer || entry.launchToken == 0 ||
+            entry.launchPlaceholderDeadline.time_since_epoch().count() == 0 ||
+            launchNow < entry.launchPlaceholderDeadline) {
+            continue;
+        }
+        expiredLaunchPlaceholders.push_back(surfaceKey);
+    }
+    for (const auto surfaceKey : expiredLaunchPlaceholders) {
+        auto found = m_surfaces.find(surfaceKey);
+        if (found == m_surfaces.end()) continue;
+        auto& entry = found->second;
+        if (m_protocolDispatcher) {
+            (void)m_protocolDispatcher->publishLaunchIconVisibility(
+                entry, true);
+        }
+        if (entry.windowId != 0) {
+            m_windowManager.removeWindow(entry.windowId);
+            entry.windowId = 0;
+        }
+        if (entry.isLaunchPlaceholder) {
+            m_surfaces.erase(found);
+        } else {
+            entry.launchToken = 0;
+            entry.launchOwnerFd = -1;
+            entry.hasLaunchOrigin = false;
+            entry.launchMorphActive = false;
+            entry.launchPlaceholderActive = false;
+            entry.launchPlaceholderDeadline = {};
+            entry.transitionPhase =
+                SurfaceRegistry::SurfaceEntry::TransitionPhase::None;
+            entry.transitionOpacity = 1.0f;
+            entry.transitionScale = 1.0f;
+        }
+        m_needsRedraw = true;
+    }
     if (!m_needsRedraw && !m_windowManager.isAnyWindowDirty()) return;
     // Resolve ready WindowGroup epochs without stalling the output.
     // CompositorRenderer retains only an incomplete group's last complete
@@ -493,7 +572,8 @@ void Compositor::renderFrame() {
         [this] { renderDiagnosticOverlay(); },
         !hasActiveTransitions && !m_showFpsOverlay,
         m_windowingPolicy &&
-            m_windowingPolicy->usesMobileWindowDecorations());
+            m_windowingPolicy->usesMobileWindowDecorations(),
+        hasActiveTransitions);
     m_lastComposeMs = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - composeStart).count();
 
@@ -575,7 +655,12 @@ void Compositor::renderFrame() {
         if (found != m_surfaces.end()) {
             if (found->second.producerGrant.tokenHigh != 0 ||
                 found->second.producerGrant.tokenLow != 0) {
-                m_rasterService.revokeSurface(found->second.producerGrant);
+                if (m_protocolDispatcher) {
+                    m_protocolDispatcher->releaseSurfaceRasterState(
+                        found->second);
+                } else {
+                    m_rasterService.revokeSurface(found->second.producerGrant);
+                }
             }
             if (found->second.rasterLayerId != 0) {
                 const int releaseFenceFd =

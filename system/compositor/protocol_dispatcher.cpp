@@ -11,6 +11,8 @@
 #include <iostream>
 #include <limits>
 #include <poll.h>
+#include <unordered_set>
+#include <utility>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -103,7 +105,130 @@ private:
     std::string m_message{"ok"};
 };
 
+constexpr uint64_t kPresentationLayerBudgetPerSurface =
+    64ull * 1024ull * 1024ull;
+constexpr uint64_t kPresentationLayerBudgetGlobal =
+    192ull * 1024ull * 1024ull;
+
+bool sameGrant(const raster_protocol::SurfaceGrant& lhs,
+               const raster_protocol::SurfaceGrant& rhs) noexcept {
+    return lhs.surfaceId == rhs.surfaceId &&
+        lhs.ownerPid == rhs.ownerPid &&
+        lhs.flags == rhs.flags &&
+        lhs.tokenHigh == rhs.tokenHigh &&
+        lhs.tokenLow == rhs.tokenLow;
+}
+
+bool layerStorageBytes(const raster_protocol::LayerReady& layer,
+                       uint64_t& bytes) noexcept {
+    if (layer.byteSize != 0) {
+        bytes = layer.byteSize;
+        return true;
+    }
+    uint64_t rowBytes = layer.stride;
+    if (rowBytes == 0) {
+        if (layer.backingWidth >
+            std::numeric_limits<uint64_t>::max() / sizeof(uint32_t)) {
+            return false;
+        }
+        rowBytes = static_cast<uint64_t>(layer.backingWidth) *
+            sizeof(uint32_t);
+    }
+    if (layer.backingHeight == 0 ||
+        rowBytes > std::numeric_limits<uint64_t>::max() /
+            layer.backingHeight) {
+        return false;
+    }
+    bytes = rowBytes * layer.backingHeight;
+    return bytes != 0;
+}
+
+bool addWithin(uint64_t& total, uint64_t value, uint64_t limit) noexcept {
+    if (value > limit || total > limit - value) return false;
+    total += value;
+    return true;
+}
+
 } // namespace
+
+ProtocolDispatcher::~ProtocolDispatcher() {
+    for (const auto& [_, animation] : m_activePresentationAnimations) {
+        (void)sendPresentationAnimationResult(
+            animation.declaration,
+            raster_protocol::PresentationAnimationOutcome::Canceled);
+    }
+    m_activePresentationAnimations.clear();
+    while (!m_pendingRasterLayers.empty()) {
+        releasePendingRasterLayer(
+            m_pendingRasterLayers.begin()->first,
+            raster_protocol::LayerReleaseReason::SurfaceRevoked);
+    }
+}
+
+uint64_t ProtocolDispatcher::presentationAnimationObjectId(
+        SurfaceRegistry::Key surfaceKey, uint64_t nodeId) noexcept {
+    // Node ids are stable only within an application tree. Fold the surface
+    // identity in so two applications cannot retarget one another's channels.
+    return nodeId ^ (surfaceKey + 0x9e3779b97f4a7c15ull +
+                     (nodeId << 6u) + (nodeId >> 2u));
+}
+
+bool ProtocolDispatcher::sendPresentationAnimationResult(
+        const raster_protocol::PresentationAnimation& animation,
+        raster_protocol::PresentationAnimationOutcome outcome) {
+    raster_protocol::PresentationAnimationResult result{};
+    result.grant = animation.grant;
+    result.transactionId = animation.transactionId;
+    result.nodeId = animation.nodeId;
+    result.outcome = outcome;
+    return m_rasterService.sendPresentationAnimationResult(result);
+}
+
+void ProtocolDispatcher::releasePendingRasterLayer(
+        uint64_t layerId, raster_protocol::LayerReleaseReason reason) {
+    const auto pending = m_pendingRasterLayers.find(layerId);
+    if (pending == m_pendingRasterLayers.end()) return;
+    auto& layer = pending->second;
+    if (layer.pixels && layer.shmSize > 0) {
+        munmap(layer.pixels, layer.shmSize);
+    }
+    if (layer.shmFd >= 0) close(layer.shmFd);
+    const int releaseFenceFd = layer.texture != 0
+        ? m_renderer.createNativeFence() : -1;
+    if (layer.texture != 0) {
+        m_renderer.getRasterRenderer()->releaseDmaBufTexture(layer.texture);
+    }
+    m_rasterService.releaseLayer(layerId, reason, releaseFenceFd);
+    m_pendingRasterLayers.erase(pending);
+}
+
+void ProtocolDispatcher::releasePendingRasterLayersForSurface(
+        SurfaceRegistry::Key surfaceKey,
+        raster_protocol::LayerReleaseReason reason) {
+    for (auto pending = m_pendingRasterLayers.begin();
+         pending != m_pendingRasterLayers.end();) {
+        if (pending->second.surfaceKey != surfaceKey) {
+            ++pending;
+            continue;
+        }
+        const uint64_t layerId = pending->first;
+        ++pending;
+        releasePendingRasterLayer(layerId, reason);
+    }
+}
+
+void ProtocolDispatcher::discardPendingPresentationFramesForSurface(
+        SurfaceRegistry::Key surfaceKey) {
+    const auto surface = std::find_if(
+        m_surfaces.begin(), m_surfaces.end(),
+        [surfaceKey](const auto& item) { return item.first == surfaceKey; });
+    if (surface == m_surfaces.end()) return;
+    const auto grant = surface->second.producerGrant;
+    std::erase_if(m_pendingPresentationFrames,
+                  [grant](const auto& frame) {
+        return sameGrant(grant, frame.metadata.grant);
+    });
+}
 
 bool ProtocolDispatcher::publishLaunchIconVisibility(
         const SurfaceRegistry::SurfaceEntry& entry, bool visible) const {
@@ -269,11 +394,66 @@ void ProtocolDispatcher::grantRasterSurface(
 }
 
 void ProtocolDispatcher::revokeRasterSurface(SurfaceEntry& entry) {
+    // LayerReady storage is imported before its snapshot manifest.  Revoke
+    // that invisible storage with the same lifetime as the producer grant so
+    // a close/reconfigure can never strand a mapped SHM region or an imported
+    // EGL image waiting for a manifest that will no longer arrive.
+    for (const auto& [surfaceKey, candidate] : m_surfaces) {
+        if (&candidate == &entry) {
+            releasePendingRasterLayersForSurface(
+                surfaceKey, raster_protocol::LayerReleaseReason::SurfaceRevoked);
+            discardPendingPresentationFramesForSurface(surfaceKey);
+            break;
+        }
+    }
     if (entry.producerGrant.tokenHigh == 0 && entry.producerGrant.tokenLow == 0) {
         return;
     }
     m_rasterService.revokeSurface(entry.producerGrant);
     entry.producerGrant = {};
+}
+
+void ProtocolDispatcher::releaseSurfaceRasterState(SurfaceEntry& entry) {
+    // The root buffer has the ordinary SurfaceRegistry teardown path.  Child
+    // presentation layers do not: release their mapped/imported storage here
+    // before revoking the producer grant, so a destroyed surface cannot leave
+    // a retained page waiting forever for a manifest or a fence.
+    for (const auto& [surfaceKey, candidate] : m_surfaces) {
+        if (&candidate != &entry) continue;
+        for (auto active = m_activePresentationAnimations.begin();
+             active != m_activePresentationAnimations.end();) {
+            if (active->first.surfaceKey != surfaceKey) {
+                ++active;
+                continue;
+            }
+            (void)sendPresentationAnimationResult(
+                active->second.declaration,
+                raster_protocol::PresentationAnimationOutcome::Canceled);
+            active = m_activePresentationAnimations.erase(active);
+        }
+        break;
+    }
+    for (auto& layer : entry.presentationLayers) {
+        if (layer.pixels && layer.shmSize > 0) {
+            munmap(layer.pixels, layer.shmSize);
+        }
+        if (layer.shmFd >= 0) close(layer.shmFd);
+        const int releaseFenceFd = layer.texture != 0
+            ? m_renderer.createNativeFence() : -1;
+        if (layer.texture != 0) {
+            m_renderer.getRasterRenderer()->releaseDmaBufTexture(layer.texture);
+        }
+        if (layer.ready.layerId != 0) {
+            m_rasterService.releaseLayer(
+                layer.ready.layerId,
+                raster_protocol::LayerReleaseReason::SurfaceRevoked,
+                releaseFenceFd);
+        } else if (releaseFenceFd >= 0) {
+            close(releaseFenceFd);
+        }
+    }
+    entry.presentationLayers.clear();
+    revokeRasterSurface(entry);
 }
 
 bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer layer) {
@@ -285,11 +465,7 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
     const auto& ready = layer.metadata;
     auto surface = std::find_if(
         m_surfaces.begin(), m_surfaces.end(), [&ready](const auto& item) {
-            const auto& grant = item.second.producerGrant;
-            return grant.surfaceId == ready.grant.surfaceId &&
-                grant.ownerPid == ready.grant.ownerPid &&
-                grant.tokenHigh == ready.grant.tokenHigh &&
-                grant.tokenLow == ready.grant.tokenLow;
+            return sameGrant(item.second.producerGrant, ready.grant);
         });
     if (surface == m_surfaces.end()) {
         closeLayer(raster_protocol::LayerReleaseReason::SurfaceRevoked);
@@ -306,10 +482,14 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
     const bool hasTransportStorage = nativeBufferLayer
         ? static_cast<bool>(layer.nativeBuffer)
         : layer.fd >= 0;
-    if (!hasTransportStorage || ready.layerId == 0 ||
+    if (!hasTransportStorage || ready.layerId == 0 || ready.nodeId == 0 ||
+        ready.contentRevision == 0 || ready.reserved != 0 ||
+        (ready.role != raster_protocol::LayerRole::Root &&
+         ready.role != raster_protocol::LayerRole::Presentation) ||
         ready.width == 0 || ready.height == 0 ||
-        !SurfaceRegistry::matchesConfiguredBufferExtent(
-            entry, ready.width, ready.height) ||
+        (ready.role == raster_protocol::LayerRole::Root &&
+         !SurfaceRegistry::matchesConfiguredBufferExtent(
+             entry, ready.width, ready.height)) ||
         ready.backingWidth < ready.width ||
         ready.backingHeight < ready.height ||
         ready.backingWidth >
@@ -349,6 +529,90 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         closeLayer(entry.ignoreBufferCommits || entry.pendingDestroy
             ? raster_protocol::LayerReleaseReason::SurfaceRevoked
             : raster_protocol::LayerReleaseReason::RejectedFrame);
+        return false;
+    }
+    if (entry.frameSerial != 0 && ready.frameSerial < entry.frameSerial) {
+        (void)LayerFeedbackHandler::discard(
+            entry.clientFd, ready, protocol::LCLFrameDiscardReason::Superseded);
+        closeLayer(raster_protocol::LayerReleaseReason::RejectedFrame);
+        return false;
+    }
+    // A newer frame replaces any invisible imports for the same configured
+    // surface. Equal serials are sibling layers of one atomic manifest and
+    // therefore remain together until that manifest arrives.
+    std::vector<uint64_t> superseded;
+    for (const auto& [layerId, pending] : m_pendingRasterLayers) {
+        if (pending.surfaceKey == surface->first &&
+            pending.metadata.configureSerial == ready.configureSerial &&
+            pending.metadata.frameSerial < ready.frameSerial) {
+            superseded.push_back(layerId);
+        }
+    }
+    for (uint64_t layerId : superseded) {
+        releasePendingRasterLayer(
+            layerId, raster_protocol::LayerReleaseReason::RejectedFrame);
+    }
+    uint64_t incomingBytes = 0;
+    if (!layerStorageBytes(ready, incomingBytes)) {
+        (void)LayerFeedbackHandler::discard(
+            entry.clientFd, ready, protocol::LCLFrameDiscardReason::InvalidFrame);
+        closeLayer(raster_protocol::LayerReleaseReason::RejectedFrame);
+        return false;
+    }
+    uint64_t surfaceBytes = 0;
+    uint64_t globalBytes = 0;
+    bool withinBudget = true;
+    for (const auto& [surfaceKey, candidate] : m_surfaces) {
+        if (candidate.rasterLayerId == 0) continue;
+        raster_protocol::LayerReady current{};
+        current.byteSize = candidate.shmSize;
+        current.stride = candidate.stride;
+        current.backingWidth = candidate.backingWidth;
+        current.backingHeight = candidate.backingHeight;
+        uint64_t bytes = 0;
+        if (!layerStorageBytes(current, bytes) ||
+            !addWithin(globalBytes, bytes, kPresentationLayerBudgetGlobal) ||
+            (surfaceKey == surface->first &&
+             !addWithin(surfaceBytes, bytes,
+                        kPresentationLayerBudgetPerSurface))) {
+            withinBudget = false;
+            break;
+        }
+        for (const auto& presentation : candidate.presentationLayers) {
+            uint64_t presentationBytes = 0;
+            if (!layerStorageBytes(presentation.ready, presentationBytes) ||
+                !addWithin(globalBytes, presentationBytes,
+                           kPresentationLayerBudgetGlobal) ||
+                (surfaceKey == surface->first &&
+                 !addWithin(surfaceBytes, presentationBytes,
+                            kPresentationLayerBudgetPerSurface))) {
+                withinBudget = false;
+                break;
+            }
+        }
+        if (!withinBudget) break;
+    }
+    for (const auto& [_, pending] : m_pendingRasterLayers) {
+        uint64_t bytes = 0;
+        if (!layerStorageBytes(pending.metadata, bytes) ||
+            !addWithin(globalBytes, bytes, kPresentationLayerBudgetGlobal) ||
+            (pending.surfaceKey == surface->first &&
+             !addWithin(surfaceBytes, bytes,
+                        kPresentationLayerBudgetPerSurface))) {
+            withinBudget = false;
+            break;
+        }
+    }
+    if (!withinBudget ||
+        !addWithin(globalBytes, incomingBytes, kPresentationLayerBudgetGlobal) ||
+        !addWithin(surfaceBytes, incomingBytes,
+                   kPresentationLayerBudgetPerSurface)) {
+        // Do not fall back to a per-frame raster path when immutable retained
+        // storage cannot fit. The active snapshot remains visible and the UI
+        // receives the normal discard signal, allowing a final-state commit.
+        (void)LayerFeedbackHandler::discard(
+            entry.clientFd, ready, protocol::LCLFrameDiscardReason::InvalidFrame);
+        closeLayer(raster_protocol::LayerReleaseReason::RejectedFrame);
         return false;
     }
     void* pixels = nullptr;
@@ -438,16 +702,70 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         }
     }
 
+    // Importing storage is deliberately not a visible state change.  A later
+    // PresentationFrameReady packet promotes all of a frame's layers at once;
+    // an incomplete or malformed frame therefore leaves the old snapshot on
+    // screen instead of exposing a mixed root/sublayer tree.
+    if (m_pendingRasterLayers.contains(ready.layerId)) {
+        if (pixels && shmLayer) munmap(pixels, ready.byteSize);
+        if (shmLayer && layer.fd >= 0) {
+            close(layer.fd);
+            layer.fd = -1;
+        }
+        if (texture != 0) {
+            m_renderer.getRasterRenderer()->releaseDmaBufTexture(texture);
+        }
+        closeLayer(raster_protocol::LayerReleaseReason::RejectedFrame);
+        return false;
+    }
+    PendingRasterLayer pending{};
+    pending.surfaceKey = surface->first;
+    pending.metadata = ready;
+    pending.pixels = pixels;
+    pending.shmFd = shmLayer ? layer.fd : -1;
+    pending.shmSize = shmLayer ? ready.byteSize : 0;
+    pending.texture = texture;
+    if (shmLayer) layer.fd = -1;
+    m_pendingRasterLayers.emplace(ready.layerId, std::move(pending));
+    return false;
+}
+
+bool ProtocolDispatcher::promoteRootPresentation(
+        SurfaceRegistry::iterator surface,
+        const raster_protocol::PresentationFrameReady& frame,
+        const raster_protocol::PresentationLayerState& rootLayer) {
+    if (surface == m_surfaces.end()) return false;
+    auto pending = m_pendingRasterLayers.find(rootLayer.layerId);
+    if (pending == m_pendingRasterLayers.end() ||
+        pending->second.surfaceKey != surface->first) {
+        return false;
+    }
+    auto& entry = surface->second;
+    const auto& ready = pending->second.metadata;
+    if (!SurfaceRegistry::acceptsBufferCommit(entry, frame.configureSerial) ||
+        ready.configureSerial != frame.configureSerial ||
+        ready.frameSerial != frame.frameSerial ||
+        ready.geometryGeneration != frame.geometryGeneration ||
+        !SurfaceRegistry::matchesConfiguredBufferExtent(
+            entry, ready.width, ready.height)) {
+        (void)LayerFeedbackHandler::discard(
+            entry.clientFd, ready, protocol::LCLFrameDiscardReason::Superseded);
+        releasePendingRasterLayer(
+            ready.layerId, raster_protocol::LayerReleaseReason::RejectedFrame);
+        return false;
+    }
+
+    PendingRasterLayer imported = std::move(pending->second);
+    m_pendingRasterLayers.erase(pending);
     if (entry.rasterLayerId != 0) {
         entry.pendingRasterLayerReleases.push_back(
             {entry.rasterLayerId, entry.rasterLayerTexture});
     }
     if (entry.pixels && entry.shmSize > 0) munmap(entry.pixels, entry.shmSize);
     if (entry.shmFd >= 0) close(entry.shmFd);
-    entry.pixels = pixels;
-    entry.shmFd = shmLayer ? layer.fd : -1;
-    if (shmLayer) layer.fd = -1;
-    entry.shmSize = shmLayer ? ready.byteSize : 0;
+    entry.pixels = imported.pixels;
+    entry.shmFd = imported.shmFd;
+    entry.shmSize = imported.shmSize;
     entry.width = ready.width;
     entry.height = ready.height;
     entry.backingWidth = ready.backingWidth;
@@ -459,7 +777,9 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
     entry.shmDamageHeight = ready.damageHeight;
     entry.shmContentSerial = m_nextShmContentSerial++;
     entry.rasterLayerId = ready.layerId;
-    entry.rasterLayerTexture = texture;
+    entry.rasterLayerNodeId = ready.nodeId;
+    entry.rasterLayerContentRevision = ready.contentRevision;
+    entry.rasterLayerTexture = imported.texture;
     entry.frameSerial = ready.frameSerial;
     entry.layerGeometryGeneration = ready.geometryGeneration;
     entry.clientFrameStartNs = ready.clientFrameStartNs;
@@ -472,15 +792,22 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         entry.hasCommittedBuffer = true;
     } else if (!entry.hasCommittedBuffer &&
                !mapSurface(surface->first, entry, ready.grant.ownerPid)) {
-        // mapSurface() is the last step of the first-frame transaction. Do not
-        // leave a released rasterd slot mapped in an otherwise-unmapped entry
-        // if policy rejects that map.
+        // A policy failure must release the newly imported storage rather than
+        // leave an unmapped layer eligible for a later manifest.
         SurfaceRegistry::releaseBuffer(entry);
+        const int releaseFenceFd = entry.rasterLayerTexture != 0
+            ? m_renderer.createNativeFence() : -1;
         if (entry.rasterLayerTexture != 0) {
             m_renderer.getRasterRenderer()->releaseDmaBufTexture(
                 entry.rasterLayerTexture);
         }
+        m_rasterService.releaseLayer(
+            entry.rasterLayerId,
+            raster_protocol::LayerReleaseReason::RejectedFrame,
+            releaseFenceFd);
         entry.rasterLayerId = 0;
+        entry.rasterLayerNodeId = 0;
+        entry.rasterLayerContentRevision = 0;
         entry.rasterLayerTexture = 0;
         entry.frameSerial = 0;
         entry.layerGeometryGeneration = 0;
@@ -493,29 +820,407 @@ bool ProtocolDispatcher::acceptRasterLayer(RasterServiceHost::ReceivedLayer laye
         entry.backingWidth = entry.backingHeight = 0;
         entry.stride = 0;
         entry.hasCommittedBuffer = false;
-        for (const auto& stale : entry.pendingRasterLayerReleases) {
-            const int releaseFenceFd = stale.texture != 0
-                ? m_renderer.createNativeFence() : -1;
-            if (stale.texture != 0) {
-                m_renderer.getRasterRenderer()->releaseDmaBufTexture(
-                    stale.texture);
-            }
-            m_rasterService.releaseLayer(
-                stale.layerId,
-                raster_protocol::LayerReleaseReason::Presented,
-                releaseFenceFd);
-        }
-        entry.pendingRasterLayerReleases.clear();
-        closeLayer(raster_protocol::LayerReleaseReason::RejectedFrame);
         return false;
     }
     SurfaceRegistry::queuePresentation(entry, ready.configureSerial);
-    // Atomic WindowGroup geometry is committed only after every participant is
-    // ready. Non-atomic initial/focus-only frames may update immediately.
     if (entry.atomicConfigureGeneration == 0) {
         (void)commitClientSurfaceGeometry(entry);
     }
     return true;
+}
+
+bool ProtocolDispatcher::acceptPresentationFrame(
+        RasterServiceHost::ReceivedPresentationFrame frame) {
+    return acceptPresentationFrameImpl(std::move(frame), true);
+}
+
+bool ProtocolDispatcher::retryPendingPresentationFrames() {
+    auto pending = std::exchange(m_pendingPresentationFrames, {});
+    bool promoted = false;
+    for (auto& frame : pending) {
+        promoted |= acceptPresentationFrameImpl(std::move(frame), true);
+    }
+    return promoted;
+}
+
+void ProtocolDispatcher::deferPresentationFrame(
+        RasterServiceHost::ReceivedPresentationFrame frame) {
+    const auto duplicate = std::find_if(
+        m_pendingPresentationFrames.begin(), m_pendingPresentationFrames.end(),
+        [&frame](const auto& candidate) {
+            return sameGrant(candidate.metadata.grant, frame.metadata.grant) &&
+                candidate.metadata.configureSerial == frame.metadata.configureSerial &&
+                candidate.metadata.frameSerial == frame.metadata.frameSerial;
+        });
+    if (duplicate == m_pendingPresentationFrames.end()) {
+        m_pendingPresentationFrames.push_back(std::move(frame));
+    }
+}
+
+bool ProtocolDispatcher::acceptPresentationFrameImpl(
+        RasterServiceHost::ReceivedPresentationFrame frame,
+        bool deferIncomplete) {
+    const auto surface = std::find_if(
+        m_surfaces.begin(), m_surfaces.end(), [&frame](const auto& item) {
+            return sameGrant(item.second.producerGrant, frame.metadata.grant);
+        });
+    if (surface == m_surfaces.end()) {
+        return false;
+    }
+    const auto rejectFrame = [&](protocol::LCLFrameDiscardReason reason) {
+        std::unordered_set<uint64_t> released;
+        const raster_protocol::LayerReady* diagnostic = nullptr;
+        for (const auto& declared : frame.layers) {
+            const auto pending = m_pendingRasterLayers.find(declared.layerId);
+            if (pending == m_pendingRasterLayers.end() ||
+                pending->second.surfaceKey != surface->first ||
+                !released.insert(declared.layerId).second) {
+                continue;
+            }
+            if (!diagnostic) diagnostic = &pending->second.metadata;
+        }
+        if (diagnostic) {
+            (void)LayerFeedbackHandler::discard(
+                surface->second.clientFd, *diagnostic, reason);
+        }
+        for (uint64_t layerId : released) {
+            releasePendingRasterLayer(
+                layerId, raster_protocol::LayerReleaseReason::RejectedFrame);
+        }
+        return false;
+    };
+    const auto same = [](float lhs, float rhs) {
+        return std::fabs(lhs - rhs) <= 0.001f;
+    };
+    auto& entry = surface->second;
+    // A manifest is a state snapshot, not necessarily a new set of pixels.
+    // Resolve each declared layer against freshly imported storage first, then
+    // against the currently promoted immutable snapshot.  The latter is what
+    // makes an opacity/transform-only commit allocation-free.
+    const auto activeReady = [&](const raster_protocol::PresentationLayerState& declared)
+            -> const raster_protocol::LayerReady* {
+        if (declared.nodeId == frame.metadata.rootNodeId) {
+            if (entry.rasterLayerId == declared.layerId &&
+                entry.rasterLayerNodeId == declared.nodeId &&
+                entry.rasterLayerContentRevision == declared.contentRevision &&
+                entry.acceptedConfigureSerial == frame.metadata.configureSerial &&
+                entry.layerGeometryGeneration == frame.metadata.geometryGeneration) {
+                // The legacy root fields intentionally retain only the
+                // identity needed for a reuse match; geometry comes from the
+                // current configured surface and was verified at first import.
+                static thread_local raster_protocol::LayerReady ready{};
+                ready = {};
+                ready.role = raster_protocol::LayerRole::Root;
+                ready.layerId = entry.rasterLayerId;
+                ready.nodeId = entry.rasterLayerNodeId;
+                ready.contentRevision = entry.rasterLayerContentRevision;
+                ready.configureSerial = entry.acceptedConfigureSerial;
+                ready.geometryGeneration = entry.layerGeometryGeneration;
+                ready.width = entry.width;
+                ready.height = entry.height;
+                return &ready;
+            }
+            return nullptr;
+        }
+        const auto found = std::find_if(
+            entry.presentationLayers.begin(), entry.presentationLayers.end(),
+            [&declared](const auto& layer) {
+                return layer.ready.layerId == declared.layerId &&
+                    layer.ready.nodeId == declared.nodeId &&
+                    layer.ready.contentRevision == declared.contentRevision;
+            });
+        if (found == entry.presentationLayers.end() ||
+            found->ready.configureSerial != frame.metadata.configureSerial ||
+            found->ready.geometryGeneration != frame.metadata.geometryGeneration) {
+            return nullptr;
+        }
+        return &found->ready;
+    };
+    const raster_protocol::PresentationLayerState* root = nullptr;
+    bool incomplete = false;
+    for (const auto& declared : frame.layers) {
+        const auto imported = m_pendingRasterLayers.find(declared.layerId);
+        const bool isPending = imported != m_pendingRasterLayers.end() &&
+            imported->second.surfaceKey == surface->first;
+        const auto* ready = isPending ? &imported->second.metadata : activeReady(declared);
+        if (!ready) {
+            // LayerReady travels over the main socket while Android storage is
+            // delivered over a second FIFO socket. Treat an absent import as
+            // an ordering condition, not malformed content: keep the old
+            // snapshot and retry after the next native-buffer drain.
+            incomplete = true;
+            continue;
+        }
+        const bool isRoot = declared.nodeId == frame.metadata.rootNodeId;
+        if ((isRoot && (root != nullptr ||
+                        ready->role != raster_protocol::LayerRole::Root)) ||
+            (!isRoot && (ready->role != raster_protocol::LayerRole::Presentation ||
+                         declared.zOrder == 0)) ||
+            ready->nodeId != declared.nodeId ||
+            ready->layerId != declared.layerId ||
+            ready->contentRevision != declared.contentRevision ||
+            ready->configureSerial != frame.metadata.configureSerial ||
+            (isPending && ready->frameSerial != frame.metadata.frameSerial) ||
+            ready->geometryGeneration != frame.metadata.geometryGeneration) {
+            return rejectFrame(protocol::LCLFrameDiscardReason::InvalidFrame);
+        }
+        if (isRoot) root = &declared;
+    }
+    if (incomplete) {
+        if (deferIncomplete) deferPresentationFrame(std::move(frame));
+        return false;
+    }
+    if (!root) return rejectFrame(protocol::LCLFrameDiscardReason::InvalidFrame);
+
+    const auto importedRoot = m_pendingRasterLayers.find(root->layerId);
+    const bool rootIsPending = importedRoot != m_pendingRasterLayers.end() &&
+        importedRoot->second.surfaceKey == surface->first;
+    const auto* rootReady = rootIsPending ? &importedRoot->second.metadata : activeReady(*root);
+    if (!rootReady) return rejectFrame(protocol::LCLFrameDiscardReason::InvalidFrame);
+    const bool rootState = rootReady->role == raster_protocol::LayerRole::Root &&
+        rootReady->nodeId == root->nodeId && rootReady->layerId == root->layerId &&
+        rootReady->contentRevision == root->contentRevision &&
+        root->zOrder == 0 && root->x == 0.0f && root->y == 0.0f &&
+        same(root->width, surface->second.configuredWidth) &&
+        same(root->height, surface->second.configuredHeight) &&
+        root->opacity == 1.0f && root->translationX == 0.0f &&
+        root->translationY == 0.0f && root->scaleX == 1.0f &&
+        root->scaleY == 1.0f && root->rotationRadians == 0.0f &&
+        (root->flags & raster_protocol::kPresentationLayerHasClip) == 0;
+    if (!rootState) {
+        return rejectFrame(protocol::LCLFrameDiscardReason::InvalidFrame);
+    }
+    if (rootIsPending) {
+        if (!promoteRootPresentation(surface, frame.metadata, *root)) {
+            return rejectFrame(protocol::LCLFrameDiscardReason::InvalidFrame);
+        }
+    } else {
+        // Pixel identity and configured geometry were already validated at
+        // import. This is a metadata-only snapshot transition.
+        entry.frameSerial = frame.metadata.frameSerial;
+        SurfaceRegistry::queuePresentation(entry, frame.metadata.configureSerial);
+    }
+
+    // Promotion is a single snapshot switch.  The previous sublayer storage
+    // is no longer sampled after the root promotion above, but the producer is
+    // notified only after this composed frame has reached the presenter.
+    auto previousLayers = std::move(entry.presentationLayers);
+    entry.presentationLayers.reserve(frame.layers.size() - 1);
+    for (const auto& declared : frame.layers) {
+        if (declared.layerId == root->layerId) continue;
+        const auto imported = m_pendingRasterLayers.find(declared.layerId);
+        if (imported != m_pendingRasterLayers.end() &&
+            imported->second.surfaceKey == surface->first) {
+            PendingRasterLayer pending = std::move(imported->second);
+            m_pendingRasterLayers.erase(imported);
+            SurfaceEntry::PresentationLayer layer{};
+            layer.ready = pending.metadata;
+            layer.state = declared;
+            layer.shmFd = pending.shmFd;
+            layer.pixels = pending.pixels;
+            layer.shmSize = pending.shmSize;
+            layer.texture = pending.texture;
+            layer.shmContentSerial = m_nextShmContentSerial++;
+            entry.presentationLayers.push_back(std::move(layer));
+            continue;
+        }
+        const auto previous = std::find_if(
+            previousLayers.begin(), previousLayers.end(), [&declared](const auto& layer) {
+                return layer.ready.layerId == declared.layerId &&
+                    layer.ready.nodeId == declared.nodeId &&
+                    layer.ready.contentRevision == declared.contentRevision;
+            });
+        if (previous == previousLayers.end()) return false;
+        previous->state = declared;
+        entry.presentationLayers.push_back(std::move(*previous));
+        previousLayers.erase(previous);
+    }
+    for (auto& previous : previousLayers) {
+        if (previous.pixels && previous.shmSize > 0) munmap(previous.pixels, previous.shmSize);
+        if (previous.shmFd >= 0) close(previous.shmFd);
+        entry.pendingRasterLayerReleases.push_back(
+            {previous.ready.layerId, previous.texture});
+    }
+    std::sort(entry.presentationLayers.begin(), entry.presentationLayers.end(),
+              [](const auto& lhs, const auto& rhs) {
+                  if (lhs.state.zOrder != rhs.state.zOrder) {
+                      return lhs.state.zOrder < rhs.state.zOrder;
+                  }
+                  return lhs.ready.nodeId < rhs.ready.nodeId;
+              });
+    return true;
+}
+
+void ProtocolDispatcher::acceptPresentationAnimation(
+        RasterServiceHost::ReceivedPresentationAnimation received) {
+    const auto& animation = received.animation;
+    const auto surface = std::find_if(
+        m_surfaces.begin(), m_surfaces.end(), [&animation](const auto& item) {
+            return sameGrant(item.second.producerGrant, animation.grant);
+        });
+    if (surface == m_surfaces.end()) {
+        (void)sendPresentationAnimationResult(
+            animation, raster_protocol::PresentationAnimationOutcome::Rejected);
+        return;
+    }
+    auto layer = std::find_if(
+        surface->second.presentationLayers.begin(),
+        surface->second.presentationLayers.end(), [&animation](const auto& item) {
+            return item.ready.nodeId == animation.nodeId;
+        });
+    if (layer == surface->second.presentationLayers.end()) {
+        // Root storage is a complete client scene, not a local immutable
+        // presentation subtree. It must not be animated through this path.
+        (void)sendPresentationAnimationResult(
+            animation, raster_protocol::PresentationAnimationOutcome::Rejected);
+        return;
+    }
+
+    const PresentationAnimationKey key{surface->first, animation.nodeId};
+    bool retargeting = false;
+    if (const auto active = m_activePresentationAnimations.find(key);
+        active != m_activePresentationAnimations.end()) {
+        // A replacement declaration owns the same node. Complete the old
+        // transaction exactly once before preserving the engine's sampled
+        // velocity for the retarget.
+        (void)sendPresentationAnimationResult(
+            active->second.declaration,
+            raster_protocol::PresentationAnimationOutcome::Canceled);
+        m_activePresentationAnimations.erase(active);
+        retargeting = true;
+    }
+
+    const uint64_t objectId = presentationAnimationObjectId(
+        surface->first, animation.nodeId);
+    const auto motion = animation.curve ==
+            raster_protocol::PresentationAnimationCurve::Spring
+        ? lcl::motion::Motion::spring(
+              animation.springMass, animation.springStiffness,
+              animation.springDamping, animation.initialVelocityX)
+        : lcl::motion::Motion::tween(
+              animation.durationSec, lcl::motion::Easing::named(
+                  lcl::motion::EasingName::EaseOutCubic));
+    ActivePresentationAnimation active{};
+    active.declaration = animation;
+    active.layerId = layer->ready.layerId;
+    active.contentRevision = layer->ready.contentRevision;
+    const auto makeChannel = [&](uint32_t property, float start, float target,
+                                 float velocity, lcl::motion::ChannelId& channel) {
+        channel = m_presentationMotion.ensureChannel({objectId, property}, start);
+        // AnimationEngine::animateTo intentionally retains the sampled spring
+        // velocity of an already-active channel. Reset only a fresh channel;
+        // retargeting must never turn a gesture handoff into a hard snap.
+        if (!retargeting) (void)m_presentationMotion.setValue(channel, start);
+        auto propertyMotion = motion;
+        if (propertyMotion.mode == lcl::motion::MotionMode::Spring) {
+            propertyMotion.springParams.initialVelocity = velocity;
+        }
+        return m_presentationMotion.animateTo(channel, target, propertyMotion);
+    };
+    bool valid = true;
+    if ((animation.propertyMask & raster_protocol::kAnimationTranslation) != 0) {
+        valid = makeChannel(1, animation.startTranslationX,
+                            animation.targetTranslationX,
+                            animation.initialVelocityX, active.translationX) && valid;
+        valid = makeChannel(2, animation.startTranslationY,
+                            animation.targetTranslationY,
+                            animation.initialVelocityY, active.translationY) && valid;
+    }
+    if ((animation.propertyMask & raster_protocol::kAnimationScale) != 0) {
+        valid = makeChannel(3, animation.startScaleX, animation.targetScaleX,
+                            animation.initialVelocityScale, active.scaleX) && valid;
+        valid = makeChannel(4, animation.startScaleY, animation.targetScaleY,
+                            animation.initialVelocityScale, active.scaleY) && valid;
+    }
+    if ((animation.propertyMask & raster_protocol::kAnimationRotation) != 0) {
+        valid = makeChannel(5, animation.startRotationRadians,
+                            animation.targetRotationRadians,
+                            animation.initialVelocityRotation,
+                            active.rotation) && valid;
+    }
+    if ((animation.propertyMask & raster_protocol::kAnimationOpacity) != 0) {
+        valid = makeChannel(6, animation.startOpacity, animation.targetOpacity,
+                            animation.initialVelocityOpacity, active.opacity) && valid;
+    }
+    if (!valid) {
+        (void)sendPresentationAnimationResult(
+            animation, raster_protocol::PresentationAnimationOutcome::Rejected);
+        return;
+    }
+    m_activePresentationAnimations.emplace(key, std::move(active));
+}
+
+bool ProtocolDispatcher::advancePresentationAnimations(float deltaSeconds) {
+    if (m_activePresentationAnimations.empty() || !std::isfinite(deltaSeconds) ||
+        deltaSeconds <= 0.0f) {
+        return false;
+    }
+    (void)m_presentationMotion.tick(deltaSeconds);
+    bool changed = false;
+    std::vector<PresentationAnimationKey> completed;
+    for (auto& [key, active] : m_activePresentationAnimations) {
+        const auto surface = m_surfaces.find(key.surfaceKey);
+        if (surface == m_surfaces.end()) {
+            (void)sendPresentationAnimationResult(
+                active.declaration,
+                raster_protocol::PresentationAnimationOutcome::Canceled);
+            completed.push_back(key);
+            continue;
+        }
+        const auto layer = std::find_if(
+            surface->second.presentationLayers.begin(),
+            surface->second.presentationLayers.end(), [&key](const auto& item) {
+                return item.ready.nodeId == key.nodeId;
+            });
+        if (layer == surface->second.presentationLayers.end() ||
+            layer->ready.layerId != active.layerId ||
+            layer->ready.contentRevision != active.contentRevision) {
+            (void)sendPresentationAnimationResult(
+                active.declaration,
+                raster_protocol::PresentationAnimationOutcome::Canceled);
+            completed.push_back(key);
+            continue;
+        }
+        auto& state = layer->state;
+        const auto sample = [this](lcl::motion::ChannelId channel) {
+            return channel == 0 ? lcl::motion::AnimatedSample{}
+                                : m_presentationMotion.sample(channel);
+        };
+        const auto& declaration = active.declaration;
+        bool running = false;
+        if ((declaration.propertyMask & raster_protocol::kAnimationTranslation) != 0) {
+            const auto x = sample(active.translationX);
+            const auto y = sample(active.translationY);
+            state.translationX = x.value;
+            state.translationY = y.value;
+            running = running || x.active || y.active;
+        }
+        if ((declaration.propertyMask & raster_protocol::kAnimationScale) != 0) {
+            const auto x = sample(active.scaleX);
+            const auto y = sample(active.scaleY);
+            state.scaleX = x.value;
+            state.scaleY = y.value;
+            running = running || x.active || y.active;
+        }
+        if ((declaration.propertyMask & raster_protocol::kAnimationRotation) != 0) {
+            const auto value = sample(active.rotation);
+            state.rotationRadians = value.value;
+            running = running || value.active;
+        }
+        if ((declaration.propertyMask & raster_protocol::kAnimationOpacity) != 0) {
+            const auto value = sample(active.opacity);
+            state.opacity = value.value;
+            running = running || value.active;
+        }
+        changed = true;
+        if (!running) {
+            (void)sendPresentationAnimationResult(
+                declaration, raster_protocol::PresentationAnimationOutcome::Completed);
+            completed.push_back(key);
+        }
+    }
+    for (const auto& key : completed) m_activePresentationAnimations.erase(key);
+    return changed;
 }
 
 bool ProtocolDispatcher::process(IPCManager& ipcManager) {
@@ -579,7 +1284,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             it->second.pendingDestroy = true;
             changed = true;
         } else if (!beginClosingTransition(it->second)) {
-            revokeRasterSurface(it->second);
+            releaseSurfaceRasterState(it->second);
             publishLaunchIconVisibility(it->second, true);
             if (it->second.windowId > 0) {
                 m_windowManager.removeWindow(it->second.windowId);
@@ -709,7 +1414,7 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
             }
             for (uint64_t key : surfacesToRemove) {
                 if (auto entry = m_surfaces.find(key); entry != m_surfaces.end()) {
-                    revokeRasterSurface(entry->second);
+                    releaseSurfaceRasterState(entry->second);
                 }
                 m_scenes.removeSurface(key);
                 m_surfaces.erase(key);
@@ -843,6 +1548,9 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
                 // the white first-launch placeholder until resolution. A
                 // reused surface already owns the content it must present.
                 entry.launchPlaceholderActive = false;
+                entry.launchPlaceholderDeadline =
+                    std::chrono::steady_clock::now() +
+                    std::chrono::seconds(2);
                 entry.launchContentOpacity = 0.0f;
                 entry.launchContentFadeElapsedSec = 0.0f;
                 entry.launchContentFadeActive = false;
@@ -1266,7 +1974,8 @@ bool ProtocolDispatcher::process(IPCManager& ipcManager) {
 
             std::string identityError;
             if (!m_peerAuthenticator.authenticate(
-                    appId, msg.uid, msg.gid, identityError)) {
+                    appId, appInstanceId, msg.pid, msg.uid, msg.gid,
+                    identityError)) {
                 m_pendingSystemSurfaceKinds.erase(msg.clientFd);
                 std::cerr << "[LCL Compositor SECURITY] SurfaceCreate denied for PID "
                           << msg.pid << " UID " << msg.uid << " GID " << msg.gid

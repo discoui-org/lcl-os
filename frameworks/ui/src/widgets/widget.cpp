@@ -308,6 +308,24 @@ void Widget::invalidatePaint() {
     ++m_localPaintRevision;
     if (m_renderPass) {
         m_renderPass->addDirtyRect(getVisiblePresentationPaintBounds());
+        // A retained presentation layer records identity-space pixels.  Its
+        // owner can be fully translated outside the viewport (for example a
+        // compact navigation detail behind the primary page), but a content
+        // change still has to update that cached source before the page is
+        // shown again.
+        for (Widget* owner = this; owner; owner = owner->m_parent) {
+            if (!owner->m_retainedPresentationBoundary) continue;
+            const graphics::RectF source =
+                owner->retainedPresentationSourceBounds();
+            m_renderPass->addDirtyRect(source);
+            if (!owner->getPresentationBounds().intersects(source)) {
+                // An offscreen owner cannot map the visible damage back into
+                // its cache. Re-record the bounded identity layer in full so
+                // a later navigation reveal never samples stale pixels.
+                owner->invalidateRetainedPresentationCache();
+            }
+            break;
+        }
     }
     advancePaintRevision();
 }
@@ -317,6 +335,16 @@ void Widget::invalidatePaint(const graphics::RectF& damageRect) {
     if (m_renderPass) {
         m_renderPass->addDirtyRect(
             damageRect.intersection(getVisiblePresentationPaintBounds()));
+        for (Widget* owner = this; owner; owner = owner->m_parent) {
+            if (!owner->m_retainedPresentationBoundary) continue;
+            const graphics::RectF source =
+                owner->retainedPresentationSourceBounds();
+            m_renderPass->addDirtyRect(source);
+            if (!owner->getPresentationBounds().intersects(source)) {
+                owner->invalidateRetainedPresentationCache();
+            }
+            break;
+        }
     }
     advancePaintRevision();
 }
@@ -448,6 +476,13 @@ void Widget::setTranslationY(float value) {
         m_presentation.translationY, value,
         [this](float next) { applyPresentationValue(AnimatableProperty::TranslationY, next); });
     else applyPresentationValue(AnimatableProperty::TranslationY, value);
+}
+
+void Widget::setRetainedPresentationHint(bool enabled) {
+    if (m_retainedPresentationHint == enabled) return;
+    const graphics::RectF previous = getVisiblePresentationPaintBounds();
+    m_retainedPresentationHint = enabled;
+    invalidatePresentationForCompositing(previous);
 }
 void Widget::setScale(float value) { setScale(value, value); }
 void Widget::setScale(float x, float y) {
@@ -945,9 +980,16 @@ void Widget::beginPresentation(
         bool beganCache = false;
         if (!source.isEmpty() && geometryMatches) {
             const auto inverse = presentationMatrix().inverted();
-            const graphics::RectF update = inverse
+            graphics::RectF update = inverse
                 ? inverse->mapRect(damageRect).intersection(source)
                 : source;
+            // invalidatePaint() may deliberately schedule this owner's
+            // identity source while the layer itself is offscreen. In that
+            // case the transformed damage does not overlap, but the cached
+            // texture still needs the identity-space patch.
+            if (update.isEmpty() && damageRect.intersects(source)) {
+                update = damageRect.intersection(source);
+            }
             beganCache = !update.isEmpty() &&
                 canvas.beginCachedLayerUpdate(
                     m_objectId, source, update);
@@ -998,7 +1040,10 @@ void Widget::endPresentation(graphics::Canvas& canvas) const {
 void Widget::drawChildren(graphics::Canvas& canvas, const graphics::RectF& damageRect) {
     for (auto& child : m_children) {
         if (child->isVisible() && !child->isCollapsed() &&
-            child->getPresentationBounds().intersects(damageRect)) {
+            (child->getPresentationBounds().intersects(damageRect) ||
+             (child->m_retainedPresentationBoundary &&
+              child->retainedPresentationSourceBounds().intersects(
+                  damageRect)))) {
             child->draw(canvas, damageRect);
         }
     }

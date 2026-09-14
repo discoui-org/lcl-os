@@ -120,6 +120,7 @@ bool SandboxLaunchMaterialRegistry::registerMaterial(const SandboxLaunchMaterial
          input.application.runtime != SandboxRuntime::JavaScript) ||
         isZeroDigest(input.application.bundleRecordDigest) ||
         !validateSandboxFilesystemSources(input.filesystemSources, input.application.identity, error) ||
+        !validateSandboxRuntimeEndpointGeneration(input.filesystemSources, error) ||
         !isSafeSandboxBundleRelativePath(input.executableBundlePath) ||
         !isRegularDescriptor(input.executableDescriptor,
                              input.application.runtime == SandboxRuntime::Native) ||
@@ -174,6 +175,7 @@ bool SandboxLaunchMaterialRegistry::registerMaterial(const SandboxLaunchMaterial
     if (error.empty() &&
         (!validateSandboxFilesystemSources(material->filesystemSources, material->application.identity,
                                             error) ||
+         !validateSandboxRuntimeEndpointGeneration(material->filesystemSources, error) ||
          !isSafeSandboxBundleRelativePath(material->executableBundlePath) ||
          !isRegularDescriptor(material->executableDescriptor,
                               material->application.runtime == SandboxRuntime::Native) ||
@@ -210,6 +212,27 @@ bool SandboxLaunchMaterialRegistry::hasMaterialFor(const SandboxLaunchPlan& plan
            found->second->application.runtime == plan.profile.runtime;
 }
 
+bool SandboxLaunchMaterialRegistry::runtimeEndpointsCurrent(std::string& error) const {
+    error.clear();
+    for (const auto& [_, material] : materials_) {
+        if (!validateSandboxRuntimeEndpointGeneration(material->filesystemSources, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void SandboxLaunchMaterialRegistry::removeStaleRuntimeEndpointMaterials() {
+    for (auto iterator = materials_.begin(); iterator != materials_.end();) {
+        std::string error;
+        if (!validateSandboxRuntimeEndpointGeneration(iterator->second->filesystemSources, error)) {
+            iterator = materials_.erase(iterator);
+        } else {
+            ++iterator;
+        }
+    }
+}
+
 bool SandboxLaunchMaterialRegistry::makeChildLaunchSpec(const SandboxLaunchPlan& plan,
                                                          const SandboxPlatformHardening& hardening,
                                                          std::optional<SandboxCgroupBinding> cgroup,
@@ -236,6 +259,7 @@ bool SandboxLaunchMaterialRegistry::makeChildLaunchSpec(const SandboxLaunchPlan&
     const auto found = materials_.find(plan.request.appId);
     const StoredMaterial& material = *found->second;
     if (!validateSandboxFilesystemSources(material.filesystemSources, material.application.identity, error) ||
+        !validateSandboxRuntimeEndpointGeneration(material.filesystemSources, error) ||
         !isSafeSandboxBundleRelativePath(material.executableBundlePath) ||
         !isRegularDescriptor(material.executableDescriptor,
                              material.application.runtime == SandboxRuntime::Native) ||

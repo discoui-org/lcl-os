@@ -5,7 +5,9 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <linux/securebits.h>
 #include <string>
+#include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -121,6 +123,44 @@ TEST(SessionUserTest, RootChildDropsAllTheWayToTheSessionIdentity) {
     int status = 0;
     ASSERT_EQ(waitpid(child, &status, 0), child);
     ASSERT_TRUE(WIFEXITED(status));
+    EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+TEST(SessionUserTest, RootChildDropsIdentityWhenKeepCapsIsAlreadyLocked) {
+    if (geteuid() != 0) {
+        GTEST_SKIP() << "securebit credential-drop coverage requires root";
+    }
+
+    const pid_t child = fork();
+    ASSERT_GE(child, 0);
+    if (child == 0) {
+        const int currentSecureBits = prctl(PR_GET_SECUREBITS, 0, 0, 0, 0);
+        if (currentSecureBits < 0 ||
+            prctl(PR_SET_SECUREBITS,
+                  currentSecureBits | SECBIT_KEEP_CAPS | SECBIT_KEEP_CAPS_LOCKED,
+                  0, 0, 0) != 0) {
+            _exit(77);
+        }
+
+        errno = 0;
+        if (prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) == 0 || errno != EPERM) {
+            _exit(2);
+        }
+
+        std::string error;
+        if (!dropToSessionUser(error) || geteuid() != kSessionUserUid ||
+            getegid() != kSessionUserGid || getgroups(0, nullptr) != 0) {
+            _exit(3);
+        }
+        _exit(0);
+    }
+
+    int status = 0;
+    ASSERT_EQ(waitpid(child, &status, 0), child);
+    ASSERT_TRUE(WIFEXITED(status));
+    if (WEXITSTATUS(status) == 77) {
+        GTEST_SKIP() << "test environment cannot install a locked KEEP_CAPS securebit";
+    }
     EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 

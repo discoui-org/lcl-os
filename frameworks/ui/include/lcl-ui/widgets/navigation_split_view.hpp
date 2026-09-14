@@ -53,7 +53,9 @@ private:
     enum class EdgeState { Idle, Pending, Dragging };
 
     void applyMode(bool preservePresentation = false);
-    void animateCompactPresentation(bool detailPresented);
+    void animateCompactPresentation(bool detailPresented,
+                                    bool prepareDetail = false);
+    void startCompactAnimation();
     void tickTransition();
     void finishTransition();
     void updateEdgeDrag(float x);
@@ -69,6 +71,13 @@ private:
     bool m_compactDetailPresented{false};
     bool m_transitionActive{false};
     bool m_transitionTargetDetail{false};
+    bool m_preparingDetail{false};
+    // The identity-space cache and its offscreen starting position need
+    // separate FramePresented handoffs.  Starting a compositor animation
+    // between them would target a layer whose current manifest is still the
+    // transparent prewarm state.
+    bool m_positioningDetail{false};
+    unsigned m_preparationTicks{0};
     EdgeState m_edgeState{EdgeState::Idle};
     uint32_t m_edgePointerId{0};
     float m_edgeStartX{0.0f};

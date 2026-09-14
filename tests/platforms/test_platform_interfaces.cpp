@@ -103,6 +103,9 @@ public:
     std::string applicationIdentityRegistryPath() const override {
         return "/tmp/mock-app-identities.v1";
     }
+    std::string applicationLaunchRegistryPath() const override {
+        return "/tmp/mock-app-launches";
+    }
     std::vector<std::string> fontSearchDirectories() const override { return {"/tmp/mock-fonts"}; }
     std::string temporaryDirectory() const override { return "/tmp"; }
     std::string gestaltFilePath() const override { return "/tmp/mock-gestalt.json"; }
@@ -196,6 +199,7 @@ TEST(PlatformInterfacesTest, RuntimePathsContract) {
     EXPECT_EQ(paths.appCatalogDirectory(), "/tmp/mock-apps");
     EXPECT_EQ(paths.applicationIdentityRegistryPath(),
               "/tmp/mock-app-identities.v1");
+    EXPECT_EQ(paths.applicationLaunchRegistryPath(), "/tmp/mock-app-launches");
     ASSERT_EQ(paths.fontSearchDirectories().size(), 1u);
     EXPECT_EQ(paths.fontSearchDirectories()[0], "/tmp/mock-fonts");
     EXPECT_EQ(paths.gestaltFilePath(), "/tmp/mock-gestalt.json");
@@ -282,6 +286,8 @@ TEST(DesktopPlatformTest, DesktopRuntimePathsImplementsIRuntimePaths) {
     EXPECT_EQ(iface.appCatalogDirectory(), "/System/Applications");
     EXPECT_EQ(iface.applicationIdentityRegistryPath(),
               "/var/lib/lcl-security/app-identities.v1");
+    EXPECT_EQ(iface.applicationLaunchRegistryPath(),
+              "/var/lib/lcl-security/app-launches");
     EXPECT_EQ(iface.temporaryDirectory(), "/Runtime/Temporary");
     EXPECT_FALSE(iface.fontSearchDirectories().empty());
 }

@@ -20,7 +20,9 @@
 #include <unistd.h>
 
 #include "system/ipc/lcl_protocol.hpp"
+#include "system/security/administrator_client.hpp"
 #include "system/session/session_client.hpp"
+#include "system/shells/permission_prompt.hpp"
 #include "system/shells/state/shell_state_client.hpp"
 #include "system/shells/state/shell_state_model.hpp"
 #include "lcl-ui/core/window_app.hpp"
@@ -348,6 +350,10 @@ int main() {
 
   std::unique_ptr<lcl::ui::WindowApp> menu;
   std::unique_ptr<lcl::ui::WindowApp> dock;
+  lcl::shell::PermissionPromptSurface permissionPrompt(
+      lcl::shell::PermissionPromptPresentation::Desktop, 0xfffffffeu,
+      "org.lcl.desktop-shell", width, height);
+  lcl::security::AdministratorPromptClient administratorPrompts;
   lcl::ui::Text *clock = nullptr;
   DockStateModel dockState;
   lcl::shell::ShellStateModel wmState;
@@ -530,6 +536,7 @@ int main() {
 
   std::string lastTime;
   auto nextShellReconnect = std::chrono::steady_clock::now();
+  auto nextAdminReconnect = std::chrono::steady_clock::now();
   while (true) {
     const auto frameStart = std::chrono::steady_clock::now();
     const std::string now = timeText();
@@ -545,8 +552,25 @@ int main() {
           std::chrono::steady_clock::now() + std::chrono::seconds(1);
     }
     shellState.poll();
+    if (!administratorPrompts.isConnected() &&
+        std::chrono::steady_clock::now() >= nextAdminReconnect) {
+      administratorPrompts.connect();
+      nextAdminReconnect =
+          std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    }
+    std::uint32_t adminRequestId = 0;
+    lcl::security::AdministratorPrompt adminPrompt;
+    if (administratorPrompts.poll(adminRequestId, adminPrompt)) {
+      const bool shown = permissionPrompt.show(
+          {adminPrompt.appName, adminPrompt.title, adminPrompt.description},
+          [&administratorPrompts, adminRequestId](bool allowed) {
+            administratorPrompts.decide(adminRequestId, allowed);
+          });
+      if (!shown) administratorPrompts.decide(adminRequestId, false);
+    }
     rendered = menu->tick() || rendered;
     rendered = dock->tick() || rendered;
+    rendered = permissionPrompt.tick() || rendered;
     for (auto &[_, decoration] : decorations)
       rendered = decoration.surface->tick() || rendered;
 

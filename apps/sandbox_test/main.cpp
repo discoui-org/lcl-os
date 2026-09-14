@@ -1,6 +1,7 @@
 #include "lcl-ui/core/window_app.hpp"
 #include "lcl-ui/widgets/button.hpp"
 #include "lcl-ui/widgets/container.hpp"
+#include "lcl-ui/widgets/popover.hpp"
 #include "lcl-ui/widgets/text.hpp"
 #include "system/ipc/lcl_protocol.hpp"
 #include "system/render/raster_canvas.hpp"
@@ -53,6 +54,10 @@ bool serviceIsHidden(const char* path) {
     return access(path, F_OK) != 0 && errno == ENOENT;
 }
 
+bool pathIsInaccessible(const char* path) {
+    return access(path, F_OK) != 0 && (errno == ENOENT || errno == EACCES);
+}
+
 bool directoryIsWritable(const char* path, const char* marker) {
     const std::string target = std::string(path) + "/" + marker;
     const int fd = open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
@@ -74,7 +79,8 @@ bool systemIsReadOnly() {
     return errno == EROFS || errno == EACCES;
 }
 
-bool compositorRejectsForgedAppId() {
+bool compositorRejectsIdentity(std::string_view appId,
+                               uint64_t appInstanceId) {
     const char* socketPath = std::getenv("LCL_COMPOSITOR_SOCKET");
     if (!socketPath || socketPath[0] == '\0') {
         socketPath = "/Runtime/lcl-compositor.sock";
@@ -102,8 +108,12 @@ bool compositorRejectsForgedAppId() {
     surface.height = 64.0f;
     std::strncpy(surface.title, "Identity spoof probe",
                  sizeof(surface.title) - 1);
-    std::strncpy(surface.appId, "org.lcl.identity-spoof",
-                 sizeof(surface.appId) - 1);
+    if (appId.size() >= sizeof(surface.appId)) {
+        close(descriptor);
+        return false;
+    }
+    std::memcpy(surface.appId, appId.data(), appId.size());
+    surface.appInstanceId = appInstanceId;
 
     lcl::protocol::LCLHeader request{};
     request.opcode = lcl::protocol::LCLOpcode::SurfaceCreate;
@@ -157,14 +167,23 @@ std::vector<Check> runChecks() {
         {"sessiond is hidden", serviceIsHidden("/Runtime/lcl-sessiond.sock")},
         {"securityd is hidden", serviceIsHidden("/Runtime/lcl-securityd.sock")},
         {"sandboxd is hidden", serviceIsHidden("/Runtime/lcl-sandboxd.sock")},
+        {"Other app data is hidden",
+         pathIsInaccessible("/Users/Rei/Library/Containers/org.lcl.sandbox-probe/Data")},
         {"Process limit is installed", limited},
-        {"Forged compositor app ID is rejected", compositorRejectsForgedAppId()},
+        {"Forged compositor app ID is rejected",
+         compositorRejectsIdentity("org.lcl.identity-spoof", 0)},
+        {"Forged compositor instance is rejected",
+         compositorRejectsIdentity("org.lcl.sandbox-test", 0)},
     };
 }
 
 class SandboxTestApp final {
 public:
-    explicit SandboxTestApp(lcl::ui::WindowApp& window) : window_(window) { rebuild(); }
+    explicit SandboxTestApp(lcl::ui::WindowApp& window)
+        : window_(window),
+          popover_(window, [] { return lcl::render::makeDisplayListCanvas(); }) {
+        rebuild();
+    }
 
     void rebuild() {
         auto root = std::make_unique<lcl::ui::Container>();
@@ -186,6 +205,7 @@ public:
         root->addChild(std::move(subtitle));
 
         auto button = std::make_unique<lcl::ui::Button>("Run isolation tests");
+        button_ = button.get();
         button->setHeight(46.0f);
         button->setOnClick([this] { showResults(); });
         root->addChild(std::move(button));
@@ -215,7 +235,19 @@ public:
 
 private:
     void showResults() {
-        const auto checks = runChecks();
+        auto checks = runChecks();
+        auto popupContent = std::make_unique<lcl::ui::Text>(
+            "Authenticated popup surface");
+        popupContent->setFontSize(14.0f);
+        popupContent->setTextColor(kText);
+        lcl::ui::PopoverOptions popupOptions{};
+        popupOptions.width = 230.0f;
+        popupOptions.height = 72.0f;
+        popupOptions.dismissOnOutsidePointer = true;
+        const bool popupOpened = button_ &&
+            static_cast<bool>(popover_.show(*button_, std::move(popupContent),
+                                            std::move(popupOptions)));
+        checks.push_back({"Popup surface opens", popupOpened});
         bool allPassed = true;
         while (!results_->getChildren().empty()) {
             results_->removeChild(results_->getChildren().back().get());
@@ -236,8 +268,10 @@ private:
     }
 
     lcl::ui::WindowApp& window_;
+    lcl::ui::Popover popover_;
     lcl::ui::Container* root_{nullptr};
     lcl::ui::Container* results_{nullptr};
+    lcl::ui::Button* button_{nullptr};
 };
 
 } // namespace

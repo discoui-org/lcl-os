@@ -20,6 +20,7 @@ public:
     virtual std::string sessionSocketPath() const = 0;
     virtual std::string appCatalogDirectory() const = 0;
     virtual std::string applicationIdentityRegistryPath() const = 0;
+    virtual std::string applicationLaunchRegistryPath() const = 0;
     virtual std::vector<std::string> fontSearchDirectories() const = 0;
     virtual std::string temporaryDirectory() const = 0;
     virtual std::string gestaltFilePath() const = 0;

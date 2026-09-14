@@ -32,6 +32,10 @@ public:
 
     // Bilinear resize to target dimensions, preserving ARGB32 format.
     static ImageData resizeBilinear(const ImageData& src, uint32_t targetWidth, uint32_t targetHeight);
+
+    // Bilinear cover resize with a centered crop, preserving ARGB32 format.
+    static ImageData resizeCover(const ImageData& src, uint32_t targetWidth,
+                                 uint32_t targetHeight);
 };
 
 } // namespace lcl::ui

@@ -46,6 +46,12 @@ public:
      */
     bool hasMaterialFor(const SandboxLaunchPlan& plan) const;
 
+    /** True only when every retained material refers to the live endpoint generation. */
+    bool runtimeEndpointsCurrent(std::string& error) const;
+
+    /** Drops records pinned to a retired graphics endpoint generation. */
+    void removeStaleRuntimeEndpointMaterials();
+
     /** Rebuilds protected child launch data for an already-authorized plan. */
     bool makeChildLaunchSpec(const SandboxLaunchPlan& plan,
                              const SandboxPlatformHardening& hardening,

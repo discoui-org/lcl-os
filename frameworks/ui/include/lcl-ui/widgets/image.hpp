@@ -17,9 +17,11 @@ enum class ImageFit {
 class Image : public Widget {
 public:
     explicit Image(const std::string& sourcePath = "");
+    explicit Image(std::shared_ptr<const ImageData> sourceImage);
     ~Image() override = default;
 
     bool setSourcePath(const std::string& sourcePath);
+    bool setImageData(std::shared_ptr<const ImageData> sourceImage);
     const std::string& getSourcePath() const { return m_sourcePath; }
 
     void clearSource();

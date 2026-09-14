@@ -45,6 +45,18 @@ struct RasterRect {
     float height{0.0f};
 };
 
+/** Four logical destination points in GL triangle-strip order. */
+struct RasterQuad {
+    float topLeftX{0.0f};
+    float topLeftY{0.0f};
+    float bottomLeftX{0.0f};
+    float bottomLeftY{0.0f};
+    float topRightX{0.0f};
+    float topRightY{0.0f};
+    float bottomRightX{0.0f};
+    float bottomRightY{0.0f};
+};
+
 struct RasterGradient {
     RasterColor startColor;
     RasterColor endColor;
@@ -98,8 +110,13 @@ public:
     /** Grow the retained scene texture without changing its content viewport. */
     bool ensureFrameBackingCapacity(uint32_t width, uint32_t height);
     /** Select an externally owned GL framebuffer for one client frame. */
+    // `renderDirect` is reserved for a complete retained replay.  It makes
+    // the exported DMA-BUF the active scene target and avoids the otherwise
+    // redundant scene-FBO -> DMA-BUF full-screen copy.
     void setExternalFrameTarget(uint32_t framebuffer, uint32_t texture = 0,
-                                uint32_t backingWidth = 0, uint32_t backingHeight = 0);
+                                uint32_t backingWidth = 0,
+                                uint32_t backingHeight = 0,
+                                bool renderDirect = false);
     void clearExternalFrameTarget();
     /** Allocate one same-context RGBA texture/FBO for a widget cache. */
     bool createCachedLayerTarget(uint32_t width, uint32_t height,
@@ -313,6 +330,11 @@ public:
                                       float drawHeight,
                                       RasterBufferSampling sampling =
                                           RasterBufferSampling::Stretch);
+    /** Composite an imported layer after an arbitrary compositor transform. */
+    void drawDmaBufTextureQuad(const RasterQuad& destination,
+                               int srcW, int srcH,
+                               int backingW, int backingH,
+                               uint32_t texture, float opacity);
     /** Composite a cropped region of an imported surface into a logical rect. */
     void drawDmaBufTextureRegionTransformed(
         float dstX, float dstY, float drawWidth, float drawHeight,
@@ -457,6 +479,7 @@ private:
     // Rotating DMA-BUF output is separate from the authoritative retained
     // scene FBO. A completed scene is copied here once per submitted frame.
     uint32_t m_glOutputFrameFBO{0};
+    bool m_externalFrameTargetIsScene{false};
     std::optional<RasterRect> m_outputFrameDamageRect;
     std::vector<CachedLayerTargetState> m_cachedLayerTargetStates;
     std::unordered_map<uint64_t, CachedDisplayLayer> m_cachedDisplayLayers;

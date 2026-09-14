@@ -51,6 +51,18 @@ RasterServiceHost::TokenKey RasterServiceHost::keyOf(
     return {grant.tokenHigh, grant.tokenLow};
 }
 
+bool RasterServiceHost::isAuthorizedGrant(
+        const raster_protocol::SurfaceGrant& grant) const noexcept {
+    const auto found = m_grants.find(keyOf(grant));
+    if (found == m_grants.end()) return false;
+    const auto& expected = found->second;
+    return expected.surfaceId == grant.surfaceId &&
+        expected.ownerPid == grant.ownerPid &&
+        expected.flags == grant.flags &&
+        expected.tokenHigh == grant.tokenHigh &&
+        expected.tokenLow == grant.tokenLow;
+}
+
 RasterServiceHost::~RasterServiceHost() {
     shutdown();
 }
@@ -186,6 +198,8 @@ void RasterServiceHost::shutdown() noexcept {
         if (layer.fd >= 0) close(layer.fd);
     }
     m_readyLayers.clear();
+    m_presentationFrames.clear();
+    m_presentationAnimations.clear();
     stopChild();
 }
 
@@ -243,7 +257,7 @@ void RasterServiceHost::poll() {
         if (const auto* ready = raster_protocol::payloadAs<
                 raster_protocol::LayerReady>(
                 header, payload, raster_protocol::Opcode::LayerReady)) {
-            const bool authorized = m_grants.contains(keyOf(ready->grant));
+            const bool authorized = isAuthorizedGrant(ready->grant);
             if (ready->transport ==
                     raster_protocol::LayerTransport::AndroidHardwareBuffer) {
                 constexpr size_t kMaxPendingNativeLayers = 64;
@@ -264,6 +278,27 @@ void RasterServiceHost::poll() {
                 continue;
             } else {
                 m_readyLayers.push_back({*ready, receivedFd, {}});
+            }
+        } else if (header.opcode ==
+                   raster_protocol::Opcode::PresentationFrameReady) {
+            raster_protocol::PresentationFrameReady frame{};
+            std::vector<raster_protocol::PresentationLayerState> layers;
+            if (receivedFd < 0 && raster_protocol::decodePresentationFrameReady(
+                    header, payload, frame, layers) &&
+                isAuthorizedGrant(frame.grant)) {
+                m_presentationFrames.push_back({frame, std::move(layers)});
+            } else if (receivedFd >= 0) {
+                close(receivedFd);
+            }
+        } else if (header.opcode ==
+                   raster_protocol::Opcode::PresentationAnimation) {
+            raster_protocol::PresentationAnimation animation{};
+            if (receivedFd < 0 && raster_protocol::decodePresentationAnimation(
+                    header, payload, animation) &&
+                isAuthorizedGrant(animation.grant)) {
+                m_presentationAnimations.push_back({animation});
+            } else if (receivedFd >= 0) {
+                close(receivedFd);
             }
         } else if (receivedFd >= 0) {
             close(receivedFd);
@@ -331,6 +366,25 @@ RasterServiceHost::takeReadyLayers() {
     return std::exchange(m_readyLayers, {});
 }
 
+std::vector<RasterServiceHost::ReceivedPresentationFrame>
+RasterServiceHost::takePresentationFrames() {
+    return std::exchange(m_presentationFrames, {});
+}
+
+std::vector<RasterServiceHost::ReceivedPresentationAnimation>
+RasterServiceHost::takePresentationAnimations() {
+    return std::exchange(m_presentationAnimations, {});
+}
+
+bool RasterServiceHost::sendPresentationAnimationResult(
+        const raster_protocol::PresentationAnimationResult& result) {
+    return m_ready && m_channelFd >= 0 &&
+        raster_protocol::sendPacket(
+            m_channelFd,
+            raster_protocol::Opcode::PresentationAnimationResult,
+            result);
+}
+
 raster_protocol::SurfaceGrant RasterServiceHost::registerSurface(
         uint32_t surfaceId, pid_t ownerPid, bool interactiveSystem) {
     raster_protocol::SurfaceGrant grant{};
@@ -349,6 +403,7 @@ raster_protocol::SurfaceGrant RasterServiceHost::registerSurface(
 
 void RasterServiceHost::revokeSurface(
         const raster_protocol::SurfaceGrant& grant) {
+    if (!isAuthorizedGrant(grant)) return;
     m_grants.erase(keyOf(grant));
     if (m_ready) {
         (void)raster_protocol::sendPacket(

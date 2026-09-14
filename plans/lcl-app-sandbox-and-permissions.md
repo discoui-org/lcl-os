@@ -12,33 +12,33 @@ sözleşmesini kullanmasıdır.
   Terminal/Settings dışındaki bundle'ları `launchSandboxed` üzerinden
   sandboxd'ye yönlendiriyor. Tarihsel "uygulama sandbox'ı yok" ifadesi güncel
   durumu yansıtmıyor; Android çalışma kanıtı aşağıdadır.
-- [ ] Mevcut canonical rootfs başlangıcında root, sessiond, shell ve uygulama
+- [x] Mevcut canonical rootfs başlangıcında root, sessiond, shell ve uygulama
   süreçlerinin gerçek UID/GID/capability değerlerini kaydet.
-- [ ] Mevcut Android bootstrap zincirinde `lcl-bootstrap`, `lcl-core-android`,
+- [x] Mevcut Android bootstrap zincirinde `lcl-bootstrap`, `lcl-core-android`,
   rootfs session ve uygulamaların SELinux context'lerini kaydet.
-- [ ] Mevcut QEMU kernel ve hedef Android kernel için namespace, seccomp,
+- [x] Mevcut QEMU kernel ve hedef Android kernel için namespace, seccomp,
   cgroup v2 ve Landlock özelliklerini runtime probe ile raporla.
-- [ ] Üçüncü taraf uygulamaların sandbox özelliği yoksa başlatılmayacağını;
+- [x] Üçüncü taraf uygulamaların sandbox özelliği yoksa başlatılmayacağını;
   yalnız açıkça işaretlenmiş geliştirme/trusted profilinin istisna olacağını
   kararlaştır.
 
 ## Değişmez güvenlik kuralları
 
-- [ ] `lcl-core`, `lcl-core-android` ve `lcl-rasterd` uygulama sandbox'ının
+- [x] `lcl-core`, `lcl-core-android` ve `lcl-rasterd` uygulama sandbox'ının
   dışında kalır; uygulamalar GPU, DRM, Composer veya input aygıtlarına doğrudan
   erişmez.
-- [ ] Her uygulama farklı bir gerçek Linux UID/GID ile çalışır; `USER=Rei`
+- [x] Her uygulama farklı bir gerçek Linux UID/GID ile çalışır; `USER=Rei`
   ortam değişkeni kimlik yerine geçmez.
-- [ ] Uygulamalar varsayılan olarak root, `CAP_SYS_ADMIN`, `CAP_SYS_PTRACE`
+- [x] Uygulamalar varsayılan olarak root, `CAP_SYS_ADMIN`, `CAP_SYS_PTRACE`
   veya retained capability olmadan başlatılır.
-- [ ] Bir uygulama ancak kullanıcı tarafından doğrulanmış bir elevation
-  isteğinden sonra, ayrı ve geçici elevated-app oturumunda ek yetki alabilir.
-- [ ] Uygulama manifesti yalnız izin isteyebilir; kendisine izin veremez.
-- [ ] Etkin izin `manifest isteği ∩ kullanıcı kararı ∩ sistem politikası`
+- [x] Yönetici izni uygulamanın UID, capability veya sandbox profilini
+  değiştirmez; onaylanan dar işlemi yalnız root broker gerçekleştirir.
+- [x] Uygulama manifesti yalnız izin isteyebilir; kendisine izin veremez.
+- [x] Etkin izin `manifest isteği ∩ kullanıcı kararı ∩ sistem politikası`
   olarak hesaplanır.
-- [ ] Kullanıcı Ayarları Android SELinux policy'sini veya kernel güvenlik
+- [x] Kullanıcı Ayarları Android SELinux policy'sini veya kernel güvenlik
   sınırını genişletemez.
-- [ ] Uygulama izinleri başka uygulamanın verisini ya da sistem aygıtlarını
+- [x] Uygulama izinleri başka uygulamanın verisini ya da sistem aygıtlarını
   doğrudan görünür kılmaz; erişim portal/broker üzerinden sağlanır.
 - [x] Terminal, kullanıcıya kabuk verdiği için üçüncü taraf uygulama profili
   değildir; ayrı bir trusted-user-shell profiliyle çalışır ve root olmaz.
@@ -115,25 +115,36 @@ sözleşmesini kullanmasıdır.
 
 ## 2. Kimlik ve kalıcı uygulama depolaması
 
-- [ ] LCL'ye ayrılmış UID/GID aralığını tanımla; Android substrate'ında bu
+- [x] LCL'ye ayrılmış UID/GID aralığını tanımla; Android substrate'ında bu
   aralığın Android UID alanıyla çakışmadığını doğrula.
 - [x] `app-id -> uid/gid` eşlemesini root-owned kalıcı registry'de sakla.
-- [ ] İlk doğrulanmış/izin verilmiş launch'ta kalıcı `Data`, `Cache` ve
+- [x] İlk doğrulanmış/izin verilmiş launch'ta kalıcı `Data`, `Cache` ve
   `Preferences` dizinlerini oluştur; `Temporary`yi sandbox başlangıcında
   tmpfs olarak oluştur.
 - [x] Uygulama özel dizinlerini ilgili UID/GID sahibi ve `0700` moduyla oluştur.
-- [ ] Rootfs üreticisindeki genel `0755` permission geçişinin uygulama özel
+- [x] Rootfs üreticisindeki genel `0755` permission geçişinin uygulama özel
   dizinleri gevşetmesini engelle.
-- [ ] Uygulama kaldırma, veri saklama ve veri silme kararlarını ayrı işlemler
+- [x] Uygulama kaldırma, veri saklama ve veri silme kararlarını ayrı işlemler
   olarak tasarla.
 - [x] UID/UID registry ve uygulama dizinleri için bozuk sahiplik/izin onarım
   testleri ekle.
+
+### Kaldırma ve veri yaşam döngüsü
+
+Bundle kaldırma yalnız katalog kaydını, immutable snapshot'ı ve yeni launch
+yetkisini kaldırır; çalışan instance'lar önce sonlandırılır. Varsayılan işlem
+`Data`, `Preferences`, `Cache` ve app-ID/UID kaydını korur. “Önbelleği temizle”
+yalnız `Cache` içeriğini, “Uygulama verilerini sil” ise üç kalıcı dizinin
+içeriğini açık kullanıcı kararıyla siler. UID, veri korunurken başka app ID'ye
+atanmaz; tam silmeden sonra dahi registry kaydı tombstone olarak tutulur ve UID
+otomatik geri dönüştürülmez. Böylece kaldırma işlemi veri silme yetkisine
+dönüşmez ve eski dosya sahipliği yeni bir uygulamaya taşınmaz.
 
 ## 3. Ayrıcalıklı sandbox launcher
 
 - [x] `system/security/` altında platformdan bağımsız `SandboxProfile`,
   `SandboxLaunchRequest` ve `SandboxLaunchResult` sözleşmelerini oluştur.
-- [ ] Capability contract v2'de uygulama izinleri/private filesystem-private
+- [x] Capability contract v2'de uygulama izinleri/private filesystem-private
   network görünümü ile Linux'a özgü PID/IPC namespace, Landlock ve cgroup
   sertleştirmesini ayır; launch digest'inin yalnız ortak LCL capability
   profilini bağladığını Linux ve Android build/testleriyle doğrula. Aynı
@@ -144,9 +155,9 @@ sözleşmesini kullanmasıdır.
 - [x] Protected FD, process group, UID/GID drop, capability clear,
   `no_new_privs` ve allowlist environment uygulayan; zorunlu kernel aşaması
   kaydı yoksa fail-closed kalan sandbox child launcher çekirdeğini oluştur.
-- [ ] Küçük, root çalışan `lcl-sandboxd` servisinin sorumluluğunu yalnız
+- [x] Küçük, root çalışan `lcl-sandboxd` servisinin sorumluluğunu yalnız
   doğrulanmış app ID çözümü, sandbox kurulumu ve child reaping ile sınırla.
-- [ ] `lcl-sessiond`'yi uygulama yaşam döngüsü otoritesi olarak koru; doğrudan
+- [x] `lcl-sessiond`'yi uygulama yaşam döngüsü otoritesi olarak koru; doğrudan
   `fork/exec` yerine sandboxd'ye doğrulanmış spawn isteği göndersin.
 - [x] Sandboxd'nin istemciden keyfî executable yolu, UID, mount yolu veya
   capability maskesi kabul etmesini engelle.
@@ -154,85 +165,110 @@ sözleşmesini kullanmasıdır.
   doğrulanmış Unix socket üzerinden kur.
 - [x] Launch request'e app ID, instance ID, güvenilir bundle referansı ve
   etkin profil digest'ini bağla.
-- [ ] Sandboxd crash/restart durumunda canlı uygulama process group'larının
+- [x] Sandboxd crash/restart durumunda canlı uygulama process group'larının
   nasıl ele alınacağını belirle.
 - [x] Child başlamadan önce group temizleme, `setresgid`, `setresuid`,
   capability drop ve environment temizleme sırasını uygula.
 - [x] `LD_PRELOAD`, tehlikeli `LD_*`, miras alınmış FD'ler ve shell environment
   değerlerini denylist/allowlist ile temizle.
-- [ ] Sandbox launcher için UID düşmesi, capability sıfırlama ve kötü niyetli
+- [x] Sandbox launcher için UID düşmesi, capability sıfırlama ve kötü niyetli
   spawn isteği testleri ekle.
 
-## 3.1. Uygulama elevation ve `lcl-sudo`
+## 3.1. Yönetici izni ve `lcl-sudo`
 
-- [ ] Root çalışan `lcl-admind` servisini sandboxd'den ayrı tut; sorumluluğunu
-  yalnız admin yetkisi değerlendirme, elevation child başlatma ve denetim
-  kaydı ile sınırla.
-- [ ] Manifest şemasına uygulamanın elevation isteyebildiğini bildiren
-  `admin.elevation` isteğini ekle; bu alan otomatik grant sayılmaz.
-- [ ] `ElevationRequest` sözleşmesine app ID, bundle identity/hash, neden,
+- [x] Root çalışan `lcl-admind` servisini sandboxd'den ayrı tut; sorumluluğunu
+  yalnız yönetici iznini değerlendirme, izin verilen dar işlemi yürütme ve
+  denetim kaydı ile sınırla.
+- [x] Manifest şemasına uygulamanın yönetici ayrıcalığı isteyebildiğini
+  bildiren `admin.elevation` iznini ekle; manifest beyanı otomatik grant
+  sayılmaz.
+- [x] `ElevationRequest` sözleşmesine app ID, bundle identity/hash, neden,
   istenen kapsam, hedef helper/komut ve instance kimliğini bağla.
-- [ ] Elevation isteğini yalnız görünür ve kullanıcı-etkileşimli uygulama
+- [x] Elevation isteğini yalnız görünür ve kullanıcı-etkileşimli uygulama
   bağlamından kabul et; arka plan uygulaması kendiliğinden prompt açamasın.
-- [ ] Onay promptunu yalnız trusted shell/system surface üzerinde göster;
-  uygulama kullanıcı parolasını, PIN'ini veya admin token'ını görmesin.
-- [ ] Önce dar kapsamlı elevation uygula: sistem ayarı, bundle güven kararını
-  yönetme veya uygulamanın imzalı privileged helper'ı gibi belirli bir işlem.
-- [ ] Kullanıcı açıkça isterse uygulamayı yeniden başlatan geçici
-  `elevated-app` oturumu ekle; bu oturumun mount namespace'i ve runtime
-  endpoint'leri normal uygulamadan ayrı olsun.
-- [ ] Elevated-app oturumunda dahi uygulamaya compositor/rasterd aygıtları,
-  Android host `/data`, ham block device veya sınırsız kernel capability verme.
-- [ ] Elevation grant'ini tek işlem, tek instance veya zaman sınırlı oturum
+- [x] Normal izinlerle yönetici izninin kullandığı ortak modalı ve yalnız
+  trusted desktop/mobile shell'in açabildiği `PermissionPrompt` system
+  surface'ini ekle. Desktop ortalanmış sheet, mobile bottom sheet kullanır;
+  işlem/hedef ayrıntısı ya da ayrı bir “uygulamayı yönetici çalıştır” modu
+  göstermez.
+- [x] `lcl-admind` pending izin isteği/karar IPC'sini ortak shell modalına
+  bağla; uygulama kullanıcı parolasını, PIN'ini veya admin token'ını görmesin.
+- [x] İlk broker işlemi olarak trusted Terminal'den gelen `sudo <komut>`
+  isteğini ayrı root child'da çalıştır; uygulamanın kendisini yükseltme ve
+  etkileşimli root shell oluşturma.
+- [x] Uygulamayı elevated-app olarak yeniden başlatma; normal uygulamaya
+  compositor/rasterd aygıtları, Android host `/data`, ham block device veya
+  kernel capability verme.
+- [x] Elevation grant'ini tek işlem, tek instance veya zaman sınırlı oturum
   olarak modelle; uygulamanın diske kalıcı root token yazmasını engelle.
-- [ ] Elevation revoke, uygulama kapanışı veya session kilidi durumunda
-  elevated child'ı ve ona bağlı grant'leri sonlandır.
-- [ ] Terminaldeki `sudo <komut>` söz dizimini aynı admin servisine bağla;
-  interaktif root shell yalnız trusted Terminal ve açık kullanıcı onayıyla
-  oluşturulabilsin.
-- [ ] Elevation kararları için app kimliği, kapsam, zaman, kullanıcı kararı ve
+- [ ] Yönetici izni revoke edildiğinde, uygulama kapandığında veya session
+  kilitlendiğinde pending istekleri ve geçici broker grant'lerini sonlandır.
+  Terminal PID + process-start-time bağı, Terminal çıkışı, shell bağlantı
+  kaybı, daemon restart ve trusted-shell session-lock revoke mesajı uygulandı;
+  gerçek lock-screen yaşam döngüsü henüz bu mesaja bağlanmadı.
+- [x] Terminaldeki `sudo <komut>` söz dizimini aynı admin servisine bağla.
+  İlk kullanıcı onayı aynı Terminal sürecine beş dakikalık in-memory izin
+  verir; süre dolunca veya Terminal kapanınca yeniden sorulur. `sudo` komutsuz
+  çağrıldığında etkileşimli root shell oluşturulmaz.
+- [x] Elevation kararları için app kimliği, kapsam, zaman, kullanıcı kararı ve
   sonuç içeren değiştirilemez admin audit kaydı oluştur.
-- [ ] Prompt olmadan elevation, başka app token'ı kullanımı, environment/FD
-  sızıntısı, revoke ve elevated-child crash testlerini ekle.
+
+  Audit kaydı root-controlled dizinde `O_NOFOLLOW|O_APPEND`, `0600`, tek-link
+  regular file ve `fsync` ile tutuluyor. Her satır zaman, kullanıcı UID'si,
+  app ID, bundle digest, yayıncı kimliği, instance/request, kapsam, hedef,
+  allow/deny kararı ve sonucu bağlıyor; request, decision, consume, revoke ve
+  expire olayları kaydediliyor. İçerik ve dosya modu host testinde doğrulandı.
+- [ ] Prompt olmadan yönetici işlemi, başka app token'ı kullanımı,
+  environment/FD sızıntısı, revoke ve broker işlem hatası testlerini ekle.
+
+  `lcl-admind` yalnız root-owned canonical shell, Terminal ve `lcl-sudo`
+  executable yollarını kabul ediyor; yalnız dosya adına dayanan süreç taklidi
+  reddediliyor. Her pakette kernel `SCM_CREDENTIALS` eşleşmesi zorunlu ve
+  `SCM_RIGHTS` reddediliyor. Child environment'i allowlist ile yeniden
+  kuruluyor, stdin `/dev/null` oluyor ve 2 üzerindeki bütün descriptor'lar
+  exec öncesi kapatılıyor. Beş dakikalık lease'in PID/start-time ve expiry
+  testleriyle audit dosyasının `0600`, no-symlink ve satır-enjeksiyonu
+  sözleşmesi eklendi; son değişiklikler kullanıcı talebi gereği henüz
+  derlenip çalıştırılmadı.
 
 ## 4. Uygulama başına filesystem görünümü
 
-- [ ] Her uygulama için private mount namespace oluştur ve mount propagation'ı
+- [x] Her uygulama için private mount namespace oluştur ve mount propagation'ı
   recursive private yap.
-- [ ] Yeni sandbox kökünü tmpfs veya eşdeğer güvenli kök üzerinde kur.
-- [ ] `/App` altına yalnız ilgili `.app` bundle'ını read-only bind mount et.
-- [ ] `/System`, gerekli dinamik kütüphaneler, fontlar ve runtime dosyalarını
+- [x] Yeni sandbox kökünü tmpfs veya eşdeğer güvenli kök üzerinde kur.
+- [x] `/App` altına yalnız ilgili `.app` bundle'ını read-only bind mount et.
+- [x] `/System`, gerekli dinamik kütüphaneler, fontlar ve runtime dosyalarını
   read-only bind mount et.
-- [ ] `/Data`, `/Cache`, `/Preferences` ve `/Temporary`yi uygulamanın özel
+- [x] `/Data`, `/Cache`, `/Preferences` ve `/Temporary`yi uygulamanın özel
   depolamasına bağla; `HOME` ve `TMPDIR`yi buna göre ayarla.
-- [ ] `/proc`yi private PID namespace'e göre, `/dev`yi ise minimum cihaz
+- [x] `/proc`yi private PID namespace'e göre, `/dev`yi ise minimum cihaz
   kümesiyle kur.
-- [ ] Uygulamaya `/dev/dri`, `/dev/input`, block device, Android Binder ve
+- [x] Uygulamaya `/dev/dri`, `/dev/input`, block device, Android Binder ve
   host `/data` görünürlüğü verme.
-- [ ] `/Runtime` için bütün ortak runtime ağacını bind etmek yerine uygulama
+- [x] `/Runtime` için bütün ortak runtime ağacını bind etmek yerine uygulama
   başına dar ve authenticated endpoint görünümü oluştur.
-- [ ] Sistem, bundle ve diğer uygulamaların verisine yazmayı engelleyen mount
+- [x] Sistem, bundle ve diğer uygulamaların verisine yazmayı engelleyen mount
   ve DAC testleri ekle.
-- [ ] Başka uygulamanın `Data` dizinine erişimin `EACCES` veya `ENOENT` ile
+- [x] Başka uygulamanın `Data` dizinine erişimin `EACCES` veya `ENOENT` ile
   sonuçlandığını QEMU ve Android'de doğrula.
 
 ## 5. Compositor, rasterd ve session IPC uyarlaması
 
 - [x] Uygulama UID'leri farklı olduğunda compositor/rasterd socket erişiminin
   nasıl yetkilendirileceğini tanımla.
-- [ ] `SO_PEERCRED` kimliğini sandbox registry'deki app ID ve instance ID ile
+- [x] `SO_PEERCRED` kimliğini sandbox registry'deki app ID ve instance ID ile
   eşleştir.
-- [ ] Mevcut surface producer grant mekanizmasını yeni process kimliğiyle
+- [x] Mevcut surface producer grant mekanizmasını yeni process kimliğiyle
   doğrula; grant'in başka uygulama tarafından kullanılamamasını test et.
 - [x] Uygulama erişebilen compositor/raster endpoint'lerini sessiond/admin
   endpointlerinden ayır.
-- [ ] Uygulamaların doğrudan sessiond üzerinden keyfî başka uygulama
+- [x] Uygulamaların doğrudan sessiond üzerinden keyfî başka uygulama
   başlatmasını engelle; gerekiyorsa sınırlı `open`/launch portalı tasarla.
 - [x] Compositor socket'in mevcut `0600` modelini, benzersiz app UID'leriyle
   uyumlu ve peer-authenticated bir modele geçir.
-- [ ] Socket yeniden başlatmalarında stale bind mount oluşturmayan per-instance
+- [x] Socket yeniden başlatmalarında stale bind mount oluşturmayan per-instance
   runtime endpoint yaşam döngüsünü oluştur.
-- [ ] Normal pencere açma, popup, raster producer grant ve process exit
+- [x] Normal pencere açma, popup, raster producer grant ve process exit
   entegrasyon testlerini sandbox altında çalıştır.
 
 **IPC kimlik kanıtı (2026-09-07):** compositor ve raster soketleri
@@ -246,39 +282,109 @@ sabit shell/WM, Terminal ve Settings kimliklerini bildirebiliyor; sistem-yüzeyi
 komutları ayrıca UID/GID 1000 ve gerçek shell executable kontrolü gerektiriyor.
 Android x86_64 ve arm64 compositor build'leri geçti; enforcing Android'da
 `org.lcl.sandbox-test` UID/GID `61000:61000` ile iki dar grafik soketine
-bağlanarak açıldı. Instance-ID'nin privileged launch kaydıyla bağlanması bu
-maddenin kalan işidir.
+bağlanarak açıldı. Sandboxd child'ı exec'e bırakmadan önce root-owned/private
+launch registry'ye `instance ID + app ID + process group ID + UID/GID` kaydı
+yazıyor. Compositor, `SO_PEERCRED` PID'sinin canlı process group'unu bu kayıtla
+birebir eşleştiriyor; eksik, değiştirilmiş veya başka instance'a ait iddia
+yüzey/grant oluşmadan reddediliyor. Kayıtlar process reap sırasında kaldırılıyor
+ve daemon başlangıcında güvenli biçimde sıfırlanıyor.
+
+**Session launch authority kanıtı (2026-09-07):** `lcl-sessiond` endpoint'i
+session kullanıcı kimliği `1000:1000/0600` ile sınırlıydı; servis artık
+accept'te `SO_PEERCRED` ile yalnız UID/GID `1000:1000` bağlantısını kabul
+ediyor. Listener `SO_PASSCRED` açıyor ve her istek paketinin kernel
+`SCM_CREDENTIALS` PID/UID/GID'sini accept edilen bağlantı kimliğiyle eşliyor.
+Bu nedenle trusted shell bağlantısının `fork` ile miras alınması ya da
+`SCM_RIGHTS` üzerinden başka sürece aktarılması launch yetkisini devretmez;
+uyuşmazlık veya FD ekli paket bağlantıyı fail-closed kapatır. Session protocol
+wire ABI'si değişmedi. `SessionService`/protocol, sandbox daemon ve app peer
+authenticator host filtresinde **18/18 PASS**; yeni iki negatif test miras
+alınan ve açıkça aktarılan connected descriptor yollarını kapsıyor (XML:
+`/tmp/lcl-session-authority-host.xml`). Fiziksel `2312DRA50G` Android 16 arm64
+cihazda güncel canonical rootfs sessiond SHA-256
+`ee5183397ce85e2d10af0e892d2d9cef1e664cc8046a1feef5fb66f52d65f5d4`
+ile çalıştı: SELinux `Enforcing`, socket `1000:1000/0600`, mobile shell
+`1000:1000`. Root ADB `chroot ... lcl-open org.lcl.sandbox-test` doğrudan
+launch isteği `Connection reset by peer`, `exit=1` ile reddedildi ve sandbox
+instance oluşmadı. Uygulama kaynaklı cross-app launch gerekirse ayrı,
+trusted-shell promptlu dar bir launch portalı tasarlanacak.
+
+**Runtime endpoint yaşam döngüsü kanıtı (2026-09-07):** sandboxd, her
+retained compositor/raster descriptor'ının `/proc/self/fd` ile çözülen mutlak
+yolunun bağlı socket inode'u ile aynı kaldığını doğrular. Endpoint unlink/recreate
+edildiğinde daemon ilk poll'da bütün sandbox child process group'larını `SIGKILL`
+ile sonlandırır, eski inode'a bağlı launch material'larını siler ve system bundle
+kayıtları yeni endpoint'lerle başarıyla kurulana dek tüm launch isteklerini
+fail-closed reddeder. Böylece yaşayan bir child eski private bind mount üzerinden
+retired graphics endpoint'ine bağlanamaz; dış bundle'lar sonraki trusted
+registration sırasında güncel descriptor snapshot'ı alır. Yeni host negatif test
+retained material'in endpoint restart sonrası child spec üretmesini reddeder ve
+stale record'un atılmasını doğrular; root gerektiren beş mount testi bu hostta
+atlandı, daemon filtresindeki iki test geçti (XML:
+`/tmp/lcl-endpoint-final-host.xml`). Fiziksel `2312DRA50G` Android 16 cihazda,
+SELinux `Enforcing` iken trusted shell zinciri Sandbox Test'i instance `2`, PID
+`32404`, UID/GID `61000:61000`, group `62000`, `CapEff=0`, `NoNewPrivs=1` ve
+`Seccomp=2` ile başlattı. Compositor socket inode'u `207007` iken endpoint
+unlink/recreate edildi; yeni inode `207293` oldu, eski child ve `launch-2.v1`
+kaydı kayboldu. Yeni endpoint ile system registration tamamlandıktan sonra aynı
+zincir instance `3` için yeniden `Launched` yanıtı aldı. Kabul sonrası gerçek
+compositor/rootfs oturumu temiz biçimde yeniden başlatıldı; güncel sandboxd
+SHA-256 `2b8ff6d250fd40f3165d9b85f7d8f0e3641d018701432d3d72dc88f01a1e3957`,
+endpointler `1000:62000/0660`, sandboxd `0:0/0600` ve sessiond `1000:1000/0600`
+olarak tekrar doğrulandı.
 
 ## 6. Kernel policy katmanları
 
-- [ ] Sandbox child'ında `PR_SET_NO_NEW_PRIVS` uygula.
+- [x] Sandbox child'ında `PR_SET_NO_NEW_PRIVS` uygula.
 - [ ] C++ ve JavaScript runtime'ları için ayrı, mimari-doğrulanmış seccomp
   allowlist'leri oluştur.
-- [ ] Seccomp filtrelerinde mimari kontrolü uygula; `ptrace`, `mount`,
+- [x] Seccomp filtrelerinde mimari kontrolü uygula; `ptrace`, `mount`,
   `bpf`, `kexec`, kernel module ve privilege-escalation yollarını reddet.
 - [ ] Seccomp profilini dinamik loader ve gerekli normal uygulama davranışları
   ile trace ederek daralt; filter'i geniş bir production allowlist'e dönüştürme.
-- [ ] Landlock mevcutsa uygulamanın read/write filesystem köklerine ikinci
+- [x] Landlock mevcutsa uygulamanın read/write filesystem köklerine ikinci
   kısıtlama katmanını uygula.
-- [ ] Landlock ABI yoksa profilin güvenlik seviyesini açıkça raporla; üçüncü
+- [x] Landlock ABI yoksa profilin güvenlik seviyesini açıkça raporla; üçüncü
   taraf uygulamalar için kabul/fail-closed kararını uygula.
-- [ ] Network izni olmayan uygulamaya boş network namespace uygula.
-- [ ] Network izni olan uygulamalar için yalnız istemci bağlantısına izin veren
+- [x] Network izni olmayan uygulamaya boş network namespace uygula.
+- [x] Network izni olan uygulamalar için yalnız istemci bağlantısına izin veren
   net policy/broker kararını tanımla; dinamik izin değişiminde yeniden başlatma
   gereksinimini belgeleyin.
-- [ ] cgroup v2 ile her instance için `memory.max`, `pids.max`, CPU ağırlığı ve
+- [x] cgroup v2 ile her instance için `memory.max`, `pids.max`, CPU ağırlığı ve
   gerekirse IO sınırları uygula.
 - [x] cgroup v2 bulunmayan Android capability baseline'ında en az adres alanı
   ve süreç sayısı için taşınabilir `rlimit` sınırlarını child UID düşmeden önce
   uygula; bunun cgroup CPU adaleti yerine geçmediğini açıkça raporla.
   **Kanıt (2026-08-31, Android kullanıcı-gözlemi):** sandbox probe
   `RLIMIT_AS=512 MiB` ve `RLIMIT_NPROC=64` kontrolüyle `0` döndü.
-- [ ] Yasak syscall, fork bomb, network-deny, cihaz erişimi ve memory limiti
+- [x] Yasak syscall, fork bomb, network-deny, cihaz erişimi ve memory limiti
   negatif testleri ekle.
+
+  **Fiziksel Android kanıtı (2026-09-07):** güncel Sandbox Probe, normal
+  sessiond → sandboxd zincirinde instance `2`, PID `8479` olarak başladı ve
+  `0` döndü. Önceki network loopback ve `/dev/dri`/`/dev/input` redlerine ek
+  olarak seccomp altında `unshare(CLONE_NEWNS)` çağrısının `EPERM` vermesini,
+  `RLIMIT_AS=512 MiB` altında 513 MiB `mmap` isteğinin `ENOMEM` vermesini ve
+  canlı child'larla yapılan fork yükünün `RLIMIT_NPROC=64` sınırında `EAGAIN`
+  vermesini doğruladı; tüm child'lar reap edildi. Host ve cihaz executable
+  SHA-256 değeri
+  `d6316ca9ad54630d20aea058235e002b48bc56a2a70e388d2f9844b2e71ef3b4`
+  olarak eşleşti ve SELinux `Enforcing` kaldı.
+
+### Ağ broker sözleşmesi
+
+`network.client` uygulamayı host network namespace'ine taşımaz. Uygulama boş
+network namespace'inde kalır ve yalnız app UID/instance kimliğini doğrulayan
+trusted broker'a bağlanır. Broker yalnız istemci yönlü `connect` isteklerini,
+DNS adını ve hedef portu sistem politikasına göre değerlendirir; listen/raw
+socket, interface yönetimi, route ve namespace FD aktarımı sağlamaz. Grant
+revoke edildiğinde açık broker kanalları kapatılır. Bu izin launch profil
+digest'ine de bağlı olduğundan grant/revoke sonrasında uygulama yeniden
+başlatılır; yeni instance güncel kararı alır.
 
 ## 7. Android substrate enforcement
 
-- [ ] AOSP/SELinux image build'i gelene kadar yalnız ortak capability
+- [x] AOSP/SELinux image build'i gelene kadar yalnız ortak capability
   baseline'ını uygula: private mount ve network namespace, app UID/GID,
   capability clear, `no_new_privs`, seccomp ve taşınabilir kaynak limitleri.
   PID/IPC namespace, Landlock ve cgroup v2 yoksa bu baseline bunları taklit
@@ -286,8 +392,8 @@ maddenin kalan işidir.
 - [x] Mevcut global `setenforce 0` geliştirme yolunu production başlangıç
   akışından çıkar.
 - [ ] Android init policy'sinde `lcl_bootstrap`, `lcl_core_android`,
-  `lcl_rasterd`, `lcl_sandboxd`, `lcl_admind`, `lcl_app` ve
-  `lcl_elevated_app` için ayrı domainleri tanımla.
+  `lcl_rasterd`, `lcl_sandboxd`, `lcl_admind` ve `lcl_app` için ayrı
+  domainleri tanımla.
 - [ ] Bootstrap domain'ine rootfs attach için gereken en dar mount/chroot
   yetkilerini ver; bootstrap tamamlanınca ayrıcalıklı iş yapmamasını sağla.
 - [ ] Compositor domain'ine yalnız Composer/Binder/graphics ihtiyaçlarını ver.
@@ -295,14 +401,14 @@ maddenin kalan işidir.
 - [ ] Sandboxd domain'ine yalnız sandbox kurulumu için gereken yetkileri ver;
   Android user data, input ve network yönetim erişimi verme.
 - [ ] Uygulama domain'ini capability'siz, aygıtsız ve default-deny tanımla.
-- [ ] Elevated-app domain'ini normal uygulamadan ayrı tanımla; yalnız
-  kullanıcının onayladığı LCL yönetim kapsamına erişim ver, Android substrate
-  veya diğer uygulama verilerine genel erişim verme.
+- [ ] `lcl_admind` domain'ine yalnız desteklenen broker işlemleri için gereken
+  yetkileri ver; Android substrate veya diğer uygulama verilerine genel erişim
+  verme.
 - [ ] Canonical glibc sandboxd'nin Android SELinux domainine güvenli geçişini
   substrate wrapper veya init service üzerinden tasarla.
 - [ ] Android cgroup yerleştirmesini canonical ABI'ye sızdırmadan substrate
   bridge/task-profile katmanında uygula.
-- [ ] Android'de user namespace'e bağımlı olmadan root sandboxd'nin gerçek
+- [x] Android'de user namespace'e bağımlı olmadan root sandboxd'nin gerçek
   rezerve UID'lerle namespace kurabildiğini doğrula.
 - [ ] Geliştirme için yalnız ilgili LCL domain'ini geçici permissive yap;
   global permissive kullanma.
@@ -315,13 +421,15 @@ maddenin kalan işidir.
 - [x] İzin kararını app ID, bundle signing identity/hash, kullanıcı ve izin
   sürümü ile bağla.
 - [x] Varsayılanı deny olarak ayarla.
-- [ ] İlk sistem uygulamaları için read-only, imzaya bağlı statik profiller
+- [x] İlk sistem uygulamaları için read-only, imzaya bağlı statik profiller
   oluştur.
 - [x] `network.client`, `files.user-selected`, `files.documents.read`,
   `files.documents.write`, `clipboard.read`, `camera`, `microphone` ve
-  `notifications` izinlerinin anlamlarını belirle.
-- [x] `admin.elevation` iznini "elevation isteyebilir" olarak tanımla; her
-  gerçek elevation için ayrıca görünür kullanıcı onayı gerektir.
+  `notifications` izinlerinin anlamlarını belirle. Dar launch portalı için
+  `apps.open` broker-time iznini ayrıca tanımla.
+- [x] `admin.elevation` iznini yüksek riskli, broker-time yönetici izni olarak
+  tanımla; karar diğer izinlerle aynı trusted shell modalı ve PermissionStore
+  modeli üzerinden verilir.
 - [x] İzinlerin launch-time mı, broker-time mı değerlendirileceğini tek tek
   belirle.
 - [x] Grant/revoke ve bundle güncellemesi sonrası eski grant'in geçersizleşme
@@ -331,18 +439,28 @@ maddenin kalan işidir.
 
 ## 9. Portal ve güvenilir shell promptları
 
-- [ ] File portalı tasarla: shell dosya seçer, seçilen FD uygulamaya aktarılır;
+- [x] File portalı tasarla: shell dosya seçer, seçilen FD uygulamaya aktarılır;
   uygulamaya geniş dizin yolu verilmez.
-- [ ] Clipboard, kamera, mikrofon, bildirim ve launch işlemleri için ayrı
+- [x] Clipboard, kamera, mikrofon, bildirim ve launch işlemleri için ayrı
   broker/portal sözleşmelerini tasarla.
-- [ ] Uygulamanın izin promptu taklit etmesini önlemek için promptu yalnız
+- [x] Uygulamanın izin promptu taklit etmesini önlemek için promptu yalnız
   trusted shell/system surface üzerinde göster.
-- [ ] Promptta uygulama adı, doğrulanmış yayıncı/kimlik, istenen izin,
+- [x] Promptta uygulama adı, doğrulanmış yayıncı/kimlik, istenen izin,
   erişim kapsamı ve kararın süresi göster.
-- [ ] Prompt kararını PermissionStore'a atomik olarak yaz.
-- [ ] Portal istemcisini app UID/instance kimliğiyle yetkilendir.
-- [ ] Portalın FD aktarımı, revoke davranışı ve uygulama kapanışı testlerini
+- [x] Prompt kararını PermissionStore'a atomik olarak yaz.
+- [x] Portal istemcisini app UID/instance kimliğiyle yetkilendir.
+- [x] Portalın FD aktarımı, revoke davranışı ve uygulama kapanışı testlerini
   ekle.
+
+**Portal yaşam döngüsü kanıtı (2026-09-07):** one-shot karar yalnız aynı
+request/instance/subject için bir kez tüketiliyor; session kararı yalnız aynı
+izin ve scope için yeni isteklere uygulanıyor. App exit hook'u instance'a ait
+pending ve transient grant'leri, session-lock hook'u tüm transient durumu
+siliyor. Broker sonucu yalnız request ID taşıyan sürümlü `SOCK_SEQPACKET`
+mesajında tam bir `SCM_RIGHTS` FD'si olarak aktarılıyor; alıcı yanlış request
+ID'yi reddedip alınan FD'yi kapatıyor ve kabul edilen FD'yi `CLOEXEC` yapıyor.
+Kalıcı kararlar yine atomik PermissionStore üzerinden yürütülüyor. İlgili
+host testleri **5/5 PASS**.
 
 ## 10. Settings kullanıcı-arayüzü bağımlılığı
 
@@ -364,24 +482,24 @@ maddenin kalan işidir.
 - [x] Descriptor-temelli detached signature envelope ayrıştırıcısı ve
   platformdan bağımsız Ed25519/trusted-publisher doğrulama sözleşmesini ekle;
   backend veya trust resolver hatasında fail-closed `Unverified` döndür.
-- [ ] Aynı canonical rootfs'te Linux ve Android'de byte-for-byte aynı çalışan,
+- [x] Aynı canonical rootfs'te Linux ve Android'de byte-for-byte aynı çalışan,
   denetlenmiş Ed25519 backend'ini ve root-owned publisher trust store'u bağla.
 - [x] Bundle hash/onay değişimi, manifest rewrite, symlink/hard-link ve
   gevşek approval-store izinleri için host unit testleri ekle.
-- [ ] Sistem uygulamalarını read-only rootfs alanında paketle.
-- [ ] Kopyalanan veya doğrudan seçilen `.app` bundle'ı launch öncesi
+- [x] Sistem uygulamalarını read-only rootfs alanında paketle.
+- [x] Kopyalanan veya doğrudan seçilen `.app` bundle'ı launch öncesi
   descriptor-temelli doğrula; geçerli imzayı veya hash'e bağlı Ayarlar
   onayını kontrol et ve ilk kabul edilmiş launch'ta UID/Data registry'yi
   atomik güncelle.
-- [ ] Ayarlar > Güvenlik'te bekleyen doğrulanamayan bundle'ları, app adı,
+- [x] Ayarlar > Güvenlik'te bekleyen doğrulanamayan bundle'ları, app adı,
   bundle yolu, BundleRecord hash'i ve publisher fingerprint'iyle göster;
   Allow/Remove Allow eylemlerini root-owned approval store'a bağla.
-- [ ] Onaysız veya imzasız bundle için sandbox bypass verme; kullanıcı onayı
+- [x] Onaysız veya imzasız bundle için sandbox bypass verme; kullanıcı onayı
   yalnız normal sandbox altında launch yetkisi verir, root çalıştırma vermez.
-- [ ] Bundle dosyası değiştiğinde unsigned allow kaydını geçersizleştir;
+- [x] Bundle dosyası değiştiğinde unsigned allow kaydını geçersizleştir;
   imzalı güncellemede publisher, UID, Data dizini ve permission grant
   migration davranışını tanımla.
-- [ ] Bundle değişimi, hash approval revoke, imza bozulması ve aynı app ID
+- [x] Bundle değişimi, hash approval revoke, imza bozulması ve aynı app ID
   çakışması testlerini ekle.
 
 ## 12. Doğrulama ve kabul kriterleri
@@ -499,9 +617,72 @@ cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
   ikinci çalıştırmada yine app-owned `0600` olarak güncellendi. Dağıtım aracı artık `setenforce 0`
   çağırmıyor; `Enforcing` durumunu koruyor, `Permissive` ise önce güvenli moda
   geçiriyor ve bunu yapamazsa dağıtımı fail-closed reddediyor.
+- [x] **Android compositor instance-kimliği kabulü (2026-09-07):** güncel
+  x86_64 rootfs ve Android compositor `config/gestalt/mobile.json` ile
+  enforcing Pixel 8 Pro AVD'ye dağıtıldı. Sandbox Test instance `1`, PID/PGID
+  `3168`, UID/GID `61000:61000` olarak açıldı; root-owned `0600`
+  `launch-1.v1` kaydı aynı kimliği taşıdı. Compositor logu sahte app ID'yi
+  `peer credentials do not match the claimed app ID`, doğru app ID ile sahte
+  instance'ı `peer is not a member of the claimed app launch instance`
+  gerekçesiyle fail-closed reddetti. Kullanıcı dokunmatik testte yeni iki
+  negatif kontrol dahil **14/14 PASS** ve `All checks passed` ekran görüntüsü
+  sağladı. İlgili 16 host testinin 12'si geçti; root gerektiren 4 launcher
+  testi beklenen biçimde atlandı.
 - [ ] Bu testte tüm LCL süreçleri hâlâ `u:r:su:s0` context'inde. Ayrı ve dar
   `lcl_core`, `lcl_sandboxd`, `lcl_app` SELinux domainleri tamamlanmadan
   Android MAC katmanı nihai kabul edilmiş sayılmaz.
+
+#### 2026-09-07 — Surface producer grant süreç bağı
+
+- [x] **Static scan:** başlangıç çalışma ağacı temizdi (`c617cea`). Rasterd
+  token/surface/flags ve `SO_PEERCRED` PID'sini denetliyordu; fork veya FD
+  aktarımıyla taşınan açık soketin gerçek göndericisini denetlemiyordu.
+  Listener artık accept'ten önce `SO_PASSCRED` açıyor; her üretici paketinin
+  kernel `SCM_CREDENTIALS` PID/UID/GID'si bağlantı kimliğiyle eşleşmezse soket
+  kapatılıyor. Eksik kimlik fail-closed; fazla/truncated FD'ler kapatılıyor.
+  Kimlik wire payload'a eklenmedi; canonical uygulama ABI'si değişmedi.
+- [x] **Host test:** raster protocol, gerçek rasterd entegrasyonu, app launch
+  registry ve application peer authenticator filtrelerinde **30/30 PASS**.
+  Testler geçerli grant'in aynı UID'deki ayrı süreçte yeni bağlantıdan,
+  değiştirilmiş owner PID ile ve miras alınmış açık bağlantıdan kullanımını;
+  token/surface/flags değiştirmeyi, revoke'u, eksik kimliği ve fazla FD
+  sızıntısını kapsıyor. Sahibin ayrı bağlantısı saldırıdan sonra geçerli
+  kalıyor; ilk kare ve retained devam karesi sunumu da geçiyor. Test harness'in
+  eksik `FramePresented.displaySequence` değeri güncel sözleşmeye uyarlandı.
+  Araç sandbox'ının socket kısıtlamaları dışındaki gerçek host koşumu esas
+  alındı; XML raporu `/tmp/lcl-producer-grant-host.xml`.
+- [x] **Android run / kullanıcı-gözlemi:** gerçek `2312DRA50G` / `garnet`,
+  serial `a1f34b97`, Android 16 / SDK 36, arm64,
+  `5.10.252-Zen-Itsu+`. Güncel rasterd ile Sandbox Test instance `2`, PID
+  `9478`, UID/GID `61002:61002`, ek grup `62000`, effective/permitted/
+  inheritable/ambient capability `0`, `NoNewPrivs=1`, `Seccomp=2` olarak
+  açıldı. Compositor ilk ready layer sonrasında pencereyi map etti; Adreno 710
+  ve AHardwareBuffer transport aktif. Kullanıcı mevcut 14 izolasyon kontrolü
+  için **All checks passed** bildirdi. Bu GUI sonucu aşağıdaki ayrı grant
+  probe'uyla karıştırılmamalı. SELinux `Enforcing`, süreç context'i
+  `u:r:ksu:s0`; ayrı dar LCL SELinux domainleri bu turda doğrulanmadı.
+- [x] **Android run / grant kabulü:** son canonical arm64 rootfs üzerinde
+  `chroot /data/local/tmp/lcl-rootfs /System/Core/lcl-open -w org.lcl.sandbox-probe`
+  normal sessiond → sandboxd zinciriyle instance `1`, PID `11741` başlattı ve
+  **0** döndü. App-private `/Data/producer-grant-probe.txt`, `61000:61000/0600`
+  sahiplik/moduyla **8/8 PASS** içerdi: compositor bağlantısı, surface isteği,
+  doğrulanmış grant, sahibin kabulü, ayrı süreçten kopyalanmış grant'in reddi,
+  owner PID değiştirme reddi, miras alınmış soketin reddi ve saldırılardan
+  sonra sahibin kabulü. Grant kabulü, retained ağacı değiştirmeyen kasıtlı
+  geçersiz bir kareye verilen `InvalidFrame` ile; yetki reddi `InvalidGrant`
+  ile; devredilmiş soket reddi ise bağlantı kapanışıyla ölçülüyor. Timeout
+  başarı sayılmıyor. SELinux son kontrolde **Enforcing** kaldı.
+  Canonical probe SHA-256 cihazda ve host artifact'ında birebir
+  `e3298e119cd15c2c0cc6b8f890303ea7020547517f560ef8dbd3420c5ba54bc3`;
+  dağıtılan rasterd SHA-256
+  `9f2903e69ca840fbbaa709c644636deccc1ad79e05b28ec9b1a60a71d6149b4d`.
+- [ ] **Dağıtım ortamı takip notu:** fiziksel kernel eski/silinmiş LCL rootfs
+  image'larına ait autoclear loop referanslarını tuttu. `losetup -f` ayrıca
+  Android device-mapper holder'ı olan bir aygıt seçtiği için dağıtım aracı
+  fail-closed kaldı; bu turda yeni LCL loop aygıtları oluşturularak ilerlenip
+  son rootfs `loop42` ile açıldı. Eski referansların yaşam döngüsü ayrı
+  incelenecek; Android'e ait loop holder'ları veya SELinux policy'si
+  değiştirilmedi.
 
 #### Önceki çalışma kayıtları
 
@@ -525,39 +706,88 @@ cihaza dağıtılmadı. Ölçülen SHA-256 değerleri:
   aygıt/session socket reddi, read-only System, loopback reddi ve
   `RLIMIT_AS=512 MiB`/`RLIMIT_NPROC=64` değerlerini doğruladı. Bu,
   SELinux-enforcing kabulü değildir.
-- [ ] **Android common-capability genişletilmiş acceptance:** Private
+- [x] **Android common-capability genişletilmiş acceptance:** Private
   mount/network namespace inode'larını admin diagnostic ile doğrudan doğrula;
   sandboxed pencerenin compositor/rasterd akışını ayrıca doğrula.
 
+- [x] **Fiziksel Android kabulü (2026-09-07):** `2312DRA50G` üzerinde güncel
+  aarch64 rootfs ve cihazdaki `lcl-sessiond` SHA-256 değeri
+  `7db7923113a623ece41d43beede8dfef6c0c0cf9ff0ad36e23e7e5ae0b8d0cae`
+  olarak eşleşti; SELinux `Enforcing` kaldı. Headless Sandbox Probe instance
+  `3` olarak çalışıp `0` döndü. Sandbox Test instance `4`, PID `30653`,
+  UID/GID `61001:61001`, sıfır capability, `NoNewPrivs=1`, seccomp mode `2`
+  ve `RLIMIT_NPROC=64` ile açıldı. Uygulamanın mount/net namespace inode'ları
+  sessiond'den farklıydı; başka uygulamanın Data yolu sandbox kökünde
+  `ENOENT` verdi. Ana `1220x2712` raster akışı ve popup'ın `690x216` raster
+  akışı üretildi; sahte app ID ve sahte instance yüzey istekleri compositor
+  tarafından reddedildi.
+
 - [ ] Her uygulama için UID/GID, capability, namespace inode'ları, cgroup
   yolu ve etkin profil digest'ini yalnız admin diagnostic aracıyla raporla.
-- [ ] Host unit testleri: manifest, permission store, profile çözümü,
+- [x] Host unit testleri: manifest, permission store, profile çözümü,
   UID registry ve IPC kimlik kontrolü.
 - [ ] Host integration testleri: iki uygulamanın karşılıklı veri erişimi,
   private runtime endpoint ve process cleanup.
-- [ ] QEMU acceptance: uygulama root değildir; diğer app Data görünmez;
+- [x] QEMU acceptance: uygulama root değildir; diğer app Data görünmez;
   `/System` yazılamaz; yasak network/aygıt erişimi başarısız olur.
+
+  **x86_64 QEMU kabulü (2026-09-07):** kabul koşumunda sabit session
+  UID/GID'sine düşüldükten sonra `lcl-open -w org.lcl.sandbox-probe` çağrısı
+  normal sessiond → sandboxd zincirinden yapıldı. Koşuma özel boot hook'u
+  doğrulama sonrasında kaldırıldı. Linux `6.8.0-138` üzerinde
+  mount/PID/IPC/network namespace, no-new-privs, seccomp, Landlock ABI 4 ve
+  cgroup v2 memory/pids/cpu controller ön kontrolleri desteklendi. Ordinary app
+  probe instance `2`, PID `180` olarak çalışıp seri konsolda
+  `[LCL SANDBOX ACCEPTANCE] PASS exit=0` üretti. Bu sonuç root olmayan app
+  kimliği, başka app Data görünmezliği, read-only `/System`, network ve aygıt
+  reddi, private yazılabilir alanlar, kaynak limitleri ve süreç-bağlı raster
+  grant kontrollerinin tamamının geçtiğini ifade eder. Probe executable
+  SHA-256 değeri
+  `c5a8566768b3fb178d97d96a90e34fac8c401c650ab28cd266bd9d313bea8dc6`.
 - [x] Android enforcing acceptance: SELinux enforcing kalır; aynı negatif
   erişim testleri canonical rootfs içinde geçer.
 - [x] Android compositor/rasterd acceptance: sandboxed uygulama pencere açar,
   rasterd producer grant alır ve AHardwareBuffer sunumu bozulmaz.
-- [ ] Terminal acceptance: kullanıcı UID'sinde PTY/bash çalışır; root shell
+- [x] Terminal acceptance: kullanıcı UID'sinde PTY/bash çalışır; root shell
   açılmaz; kendi trusted profilinin kapsamı doğrulanır.
+
+  **Fiziksel Android kanıtı (2026-09-07):** canonical Terminal instance `3`,
+  PID `9232` olarak açıldı ve `bash --login -i` child'ı PID `9233` ile
+  `/dev/pts/0` üzerinde çalıştı. İki süreç de UID/GID `1000:1000`, boş
+  supplementary group ve sıfır inheritable/permitted/effective/ambient
+  capability ile `NoNewPrivs=1` taşıdı. Child root'u canonical rootfs, çalışma
+  dizini `/Users/Rei`; Terminal ortamı yalnız sabit `HOME`, `USER`, `SHELL`,
+  `PATH`, app/instance kimliği ve `LCL_LAUNCH_PROFILE=lcl.trusted-user-shell.v1`
+  değerlerini içerdi. SELinux `Enforcing` kaldı.
 - [ ] Stress acceptance: process crash, socket restart, permission revoke,
   cgroup OOM ve hızlı launch/exit döngülerinde kaynak sızıntısı olmaz.
-- [ ] Her kabul maddesi için kanıt seviyesini ayrı yaz: static scan, host test,
+- [x] Her kabul maddesi için kanıt seviyesini ayrı yaz: static scan, host test,
   QEMU run, Android run veya kullanıcı-gözlemi.
+
+| Kabul sınırı | Static scan | Host test | QEMU run | Android run | Kullanıcı gözlemi |
+| --- | --- | --- | --- | --- | --- |
+| App UID/capability/no-new-privs | evet | evet | evet | evet | evet |
+| Private filesystem ve başka app Data reddi | evet | kısmi | evet | evet | evet |
+| Seccomp, network ve kaynak limitleri | evet | policy testi | evet | evet | evet |
+| Compositor/raster producer kimliği | evet | evet | evet | evet | evet |
+| Portal geçici grant/FD/revoke | evet | evet | — | — | — |
+| Bundle imzası/approval/permission store | evet | evet | — | — | Settings approval |
+| Ayrı Android SELinux domainleri | eksik | — | — | eksik | — |
+| Yönetici izni/broker/sudo | policy ve modal çekirdeği | kısmi | — | — | — |
+
+`—` ilgili kabulün henüz o seviyede çalıştırılmadığını, `kısmi` ise policy veya
+yaşam döngüsünün doğrulanıp tam platform entegrasyonunun kalmasını ifade eder.
 
 ## Tamamlanma tanımı
 
-- [ ] Üçüncü taraf native veya JavaScript uygulaması root olmadan, farklı UID
+- [x] Üçüncü taraf native veya JavaScript uygulaması root olmadan, farklı UID
   ile ve private filesystem görünümünde başlatılır.
-- [ ] Uygulama başka uygulamanın verisini, system dosyalarını veya aygıtlarını
-  doğrudan okuyamaz/yazamaz.
-- [ ] Android hedefinde SELinux enforcing kalırken LCL uygulaması çalışır.
-- [ ] Kullanıcı onayıyla normal uygulama dar kapsamlı veya full elevated-app
-  oturumuna geçebilir; onaysız uygulama elevation alamaz.
-- [ ] Compositor/rasterd retained presentation sözleşmesi ve Same-Binary
+- [x] Uygulama başka uygulamanın verisini okuyamaz/yazamaz, `/System`a yazamaz
+  ve aygıtlara doğrudan erişemez.
+- [x] Android hedefinde SELinux enforcing kalırken LCL uygulaması çalışır.
+- [ ] Kullanıcı onayıyla normal uygulama sandbox içinde kalırken dar kapsamlı
+  yönetici işlemini broker üzerinden isteyebilir; izinsiz istek çalışmaz.
+- [x] Compositor/rasterd retained presentation sözleşmesi ve Same-Binary
   Invariant korunur.
 - [ ] Kullanıcı izinleri shell promptu ve Ayarlar uygulamasından değiştirilebilir
   fakat kernel/SELinux güvenlik tavanını genişletemez.

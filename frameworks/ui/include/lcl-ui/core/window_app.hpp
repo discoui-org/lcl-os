@@ -8,6 +8,7 @@
 #include "lcl-ui/core/motion.hpp"
 #include "lcl-ui/core/transient_controller.hpp"
 #include "system/ipc/lcl_protocol.hpp"
+#include "system/ipc/raster_protocol.hpp"
 #include "lcl-ui/widgets/container.hpp"
 #include "lcl-theme/theme.hpp"
 #include <memory>
@@ -30,6 +31,9 @@ using IpcMessageCallback = std::function<void(const lcl::protocol::LCLHeader&, c
 using ResizeCallback = std::function<void(float width, float height)>;
 using LayoutEnvironmentChangedCallback = std::function<void(const LayoutEnvironment&)>;
 using FrameCallback = std::function<void()>;
+/** Completion from a compositor-owned retained-presentation animation. */
+using PresentationAnimationResultCallback = std::function<void(
+    const lcl::raster_protocol::PresentationAnimationResult&)>;
 using HostedSurfaceHandle = uint64_t;
 
 /** Compositor-owned interactive resize grid in logical content pixels. */
@@ -183,6 +187,11 @@ public:
     bool setResizeConstraints(WindowResizeConstraints constraints);
     /** Runs once per WindowApp event-loop tick before damage is rendered. */
     void setOnFrame(FrameCallback callback) { m_onFrame = std::move(callback); }
+    /** Receives Completed, Canceled, or Rejected for private presentation motion. */
+    void setOnPresentationAnimationResult(
+        PresentationAnimationResultCallback callback) {
+        m_onPresentationAnimationResult = std::move(callback);
+    }
     void requestQuit() { m_running = false; }
 
     /** Ask the compositor to begin moving this window from a client-local point. */
@@ -236,6 +245,11 @@ private:
     bool requestWindowAction(lcl::protocol::LCLWindowAction action,
                              float localX = 0.0f, float localY = 0.0f);
     bool requestSurfaceDestroy(uint32_t surfaceId);
+    bool submitPresentationAnimation(Widget& widget,
+                                     AnimatableProperty property,
+                                     float start, float target,
+                                     float velocity,
+                                     const lcl::motion::Motion& motion);
     bool sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
                              uint32_t payloadSize, int passedFd = -1);
     bool uploadImageResource(const graphics::ImageResourceView& resource);
@@ -285,6 +299,7 @@ private:
     ResizeCallback m_onResize{nullptr};
     LayoutEnvironmentChangedCallback m_onLayoutEnvironmentChanged{nullptr};
     FrameCallback m_onFrame{nullptr};
+    PresentationAnimationResultCallback m_onPresentationAnimationResult{nullptr};
     WindowResizeConstraints m_resizeConstraints{};
 
     std::vector<uint32_t> m_pixelBuffer;
@@ -336,10 +351,12 @@ private:
     // This prevents clients from producing obsolete generations faster than
     // the display can present them.
     bool m_frameGateOpen{true};
+    bool m_presentedFrameObserverTicked{false};
     uint64_t m_lastPresentedTimestampNs{0};
     uint64_t m_refreshIntervalNs{0};
     uint64_t m_submittedConfigureSerial{0};
     uint64_t m_nextFrameSerial{1};
+    uint64_t m_nextPresentationAnimationTransaction{1};
     uint64_t m_submittedFrameSerial{0};
     // Last raster frame known to be presented and therefore safe to patch.
     uint64_t m_retainedRasterFrameSerial{0};

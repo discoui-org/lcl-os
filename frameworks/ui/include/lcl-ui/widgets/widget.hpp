@@ -77,6 +77,11 @@ public:
     void setTranslation(float x, float y);
     void setTranslationX(float x);
     void setTranslationY(float y);
+    /** Keep this bounded subtree ready for transform/opacity presentation. */
+    void setRetainedPresentationHint(bool enabled);
+    bool retainedPresentationHint() const noexcept {
+        return m_retainedPresentationHint;
+    }
     void setScale(float scale);
     void setScale(float x, float y);
     void setRotation(float radians);
@@ -321,6 +326,7 @@ private:
     uint64_t m_presentationRevision{0};
     uint64_t m_layoutRevision{1};
     bool m_layoutDirty{true};
+    bool m_retainedPresentationHint{false};
     bool m_retainedPresentationBoundary{false};
     mutable bool m_recordingRetainedPresentationCache{false};
     mutable bool m_retainedPresentationCacheValid{false};

@@ -160,7 +160,7 @@ bool validShellDeltaKind(LCLShellStateDeltaKind value) {
 }
 bool validSystemSurfaceKind(LCLSystemSurfaceKind value) {
     return value >= LCLSystemSurfaceKind::None &&
-           value <= LCLSystemSurfaceKind::HomeScreen;
+           value <= LCLSystemSurfaceKind::PermissionPrompt;
 }
 bool validPopupRole(LCLPopupRole value) {
     return value == LCLPopupRole::Transient;

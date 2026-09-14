@@ -13,6 +13,10 @@ Image::Image(const std::string& sourcePath) {
     }
 }
 
+Image::Image(std::shared_ptr<const ImageData> sourceImage) {
+    setImageData(std::move(sourceImage));
+}
+
 bool Image::setSourcePath(const std::string& sourcePath) {
     if (sourcePath == m_sourcePath && m_sourceImage) {
         return true;
@@ -28,6 +32,21 @@ bool Image::setSourcePath(const std::string& sourcePath) {
 
     m_sourcePath = sourcePath;
     m_sourceImage = std::move(loaded);
+    invalidatePaint();
+    return true;
+}
+
+bool Image::setImageData(std::shared_ptr<const ImageData> sourceImage) {
+    if (!sourceImage || !sourceImage->isValid()) {
+        clearSource();
+        return false;
+    }
+    if (sourceImage == m_sourceImage && m_sourcePath.empty()) {
+        return true;
+    }
+
+    m_sourcePath.clear();
+    m_sourceImage = std::move(sourceImage);
     invalidatePaint();
     return true;
 }

@@ -1,9 +1,0 @@
-{
-  "id": "org.lcl.settings",
-  "name": "Settings",
-  "version": "1.0.0",
-  "executable": "Executables/Settings",
-  "icon": "Resources/Icon.png",
-  "runtime": "org.lcl.native",
-  "type": "gui"
-}

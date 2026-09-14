@@ -31,7 +31,7 @@ enum class PageTransition {
 
 /**
  * Persistent navigation chrome plus an animated page viewport.
- * Only the explicit NavigationBar back control initiates pop.
+ * Back navigation uses the NavigationBar control or a touch-only edge swipe.
  */
 class NavigationStack final : public Container {
 public:
@@ -83,6 +83,15 @@ private:
         Widget* incoming{nullptr};
         Widget* activeAfterCompletion{nullptr};
         bool removeOutgoing{false};
+        bool preparingPush{false};
+        bool awaitingBoundaryHandoff{false};
+        // After cache prewarm, publish the incoming page at +1.0W before
+        // asking compositor to animate it back to zero.
+        bool positioningIncoming{false};
+        unsigned preparationTicks{0};
+        float outgoingTarget{0.0f};
+        float incomingTarget{0.0f};
+        float preparedIncomingStart{0.0f};
         uint64_t generation{0};
     };
 
@@ -106,7 +115,12 @@ private:
     void beginSpringTransition(PageTransition kind, Widget* outgoing,
                                Widget* incoming, Widget* activeAfterCompletion,
                                bool removeOutgoing, float outgoingTarget,
-                               float incomingTarget);
+                               float incomingTarget,
+                               bool preparePush = false,
+                               float preparedIncomingStart = 0.0f,
+                               bool prepareBoundaryHandoff = false);
+    void startSpringAnimations(uint64_t generation);
+    void updateRetainedPageHints();
     void tickTransition(uint64_t generation);
     void completeTransition(uint64_t generation);
     void finishActiveTransition();

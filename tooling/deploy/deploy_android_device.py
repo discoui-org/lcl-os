@@ -68,21 +68,6 @@ DEVICE_ZSTD_BINARY = f"{DEVICE_TMP_DIR}/lcl-zstd"
 DEVICE_ROOTFS_MOUNT = f"{DEVICE_TMP_DIR}/lcl-rootfs"
 DEVICE_ROOTFS_LOOP = f"{DEVICE_TMP_DIR}/lcl-rootfs.loop"
 DEVICE_SESSION_LAUNCHER = f"{DEVICE_TMP_DIR}/lcl-android-rootfs-session.sh"
-NATIVE_CLIENT_WRAPPER = Path(__file__).resolve().parent / "lcl_android_native_client_wrapper.sh"
-DEVICE_NATIVE_CLIENT_DIR = f"{DEVICE_TMP_DIR}/lcl-native-clients"
-DEVICE_NATIVE_CLIENT_WRAPPER = f"{DEVICE_NATIVE_CLIENT_DIR}/launch"
-NATIVE_CLIENT_ARTIFACTS = {
-    "lcl-desktop-shell": Path("lcl-desktop-shell"),
-    "lcl-mobile-shell": Path("lcl-mobile-shell"),
-    "lcl-terminal": Path("lcl-terminal"),
-    "lcl-settings": Path("lcl-settings"),
-    "lcl-js": Path("lcl-js"),
-}
-NATIVE_CLIENT_BINARIES = tuple(NATIVE_CLIENT_ARTIFACTS)
-ANDROID_NATIVE_LD_LIBRARY_PATH = (
-    "/apex/com.android.i18n/lib64:/apex/com.android.runtime/lib64/bionic:"
-    "/system/lib64:/vendor/lib64:/system_ext/lib64"
-)
 ROOT_SHELL_MODE: str | None = None
 RUNTIME_FONTS = {
     "CupertinoIcons.ttf": (
@@ -379,7 +364,8 @@ def stop_rootfs_session() -> None:
     """Stop canonical userspace processes before unmounting its rootfs."""
     process_names = (
         "lcl-desktop-shell", "lcl-mobile-shell", "lcl-sessiond", "lcl-sandboxd",
-        "lcl-securityd", "lcl-terminal", "lcl-settings", "lcl-open", "lcl-js",
+        "lcl-securityd", "lcl-terminal", "lcl-open", "lcl-js",
+        "lcl-admind", "lcl-sudo",
     )
     def active_pids() -> list[str]:
         pids = rootfs_process_ids()
@@ -755,47 +741,10 @@ def push_rootfs_image(force: bool = False, allow_build: bool = True) -> None:
     log(f"Canonical rootfs deployed: {DEVICE_ROOTFS_IMAGE}")
 
 
-def push_native_clients() -> None:
-    """Stage Android-bionic graphics clients without mutating the rootfs image."""
-    if not NATIVE_CLIENT_WRAPPER.is_file():
-        raise RuntimeError(f"Native-client wrapper missing: {NATIVE_CLIENT_WRAPPER}")
-    missing = [
-        name for name, relative_path in NATIVE_CLIENT_ARTIFACTS.items()
-        if not (BUILD_ANDROID_DIR / relative_path).is_file()
-    ]
-    if missing:
-        raise RuntimeError(
-            "Android-native client target(s) missing: " + ", ".join(missing) +
-            f". Build them in {BUILD_ANDROID_DIR.name} first."
-        )
-    adb_shell(f"mkdir -p {DEVICE_NATIVE_CLIENT_DIR}", as_root=False)
-    for name, relative_path in NATIVE_CLIENT_ARTIFACTS.items():
-        run_adb("push", str(BUILD_ANDROID_DIR / relative_path),
-                f"{DEVICE_NATIVE_CLIENT_DIR}/{name}")
-    run_adb("push", str(NATIVE_CLIENT_WRAPPER), DEVICE_NATIVE_CLIENT_WRAPPER)
-    native_paths = " ".join(
-        f"{DEVICE_NATIVE_CLIENT_DIR}/{name}"
-        for name in NATIVE_CLIENT_BINARIES
-    )
-    adb_shell(
-        f"chmod 0755 {native_paths} {DEVICE_NATIVE_CLIENT_WRAPPER}",
-        as_root=True,
-    )
-    log("Android-native AHardwareBuffer clients staged.")
-
-
-def remove_native_clients() -> None:
-    """Remove only the explicitly staged Android-native client payload."""
-    for name in (*NATIVE_CLIENT_BINARIES, "launch"):
-        adb_shell(f"rm -f {DEVICE_NATIVE_CLIENT_DIR}/{name}", as_root=True)
-    adb_shell(f"rmdir {DEVICE_NATIVE_CLIENT_DIR}", as_root=True)
-
-
-def mount_rootfs(native_clients: bool = False) -> None:
+def mount_rootfs() -> None:
     """Loop-mount rootfs and bind Android kernel/runtime views into it."""
     # A prior process can die after creating only part of the bind graph. Never
-    # layer a new launch over that stale graph: native-client file binds in
-    # particular cannot be refreshed reliably when their old source was removed.
+    # layer a new launch over that stale graph.
     if not unmount_rootfs():
         raise RuntimeError("Cannot mount rootfs over stale mount layers.")
     loop_device = attach_rootfs_loop()
@@ -835,101 +784,6 @@ def mount_rootfs(native_clients: bool = False) -> None:
             )
         make_mount_rslave(destination)
 
-    if native_clients:
-        android_views = (
-            ("/system", "system"),
-            ("/vendor", "vendor"),
-            ("/apex", "apex"),
-            ("/system_ext", "system_ext"),
-            ("/linkerconfig", "linkerconfig"),
-        )
-        for source, relative in android_views:
-            source_exists = adb_shell(f"test -e {source}", as_root=True)
-            if source_exists.returncode != 0:
-                continue
-            destination = f"{DEVICE_ROOTFS_MOUNT}/{relative}"
-            adb_shell(f"mkdir -p {destination}", as_root=True)
-            result = adb_shell(
-                f"mount | grep -q \" {destination} \" || "
-                f"mount --rbind {source} {destination}",
-                as_root=True,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"Android runtime bind failed ({source} -> {destination}): " +
-                    result.stderr.strip()
-                )
-            make_mount_rslave(destination)
-
-        # Some Android mount implementations accept --rbind but only expose the
-        # /apex tmpfs in the chroot, omitting the independently mounted APEX
-        # packages below it. Bind every currently mounted package explicitly so
-        # /system/bin/linker64 can resolve its /apex/com.android.runtime target.
-        apex_mounts: list[str] = []
-        mounts = adb_shell("cat /proc/mounts", as_root=True)
-        for line in mounts.stdout.splitlines():
-            fields = line.split()
-            if len(fields) >= 2 and fields[1].startswith("/apex/"):
-                apex_mounts.append(fields[1].replace("\\040", " "))
-        for source in sorted(set(apex_mounts), key=lambda path: (path.count("/"), path)):
-            destination = f"{DEVICE_ROOTFS_MOUNT}{source}"
-            adb_shell(f"mkdir -p {shlex.quote(destination)}", as_root=True)
-            result = adb_shell(
-                f"mount | grep -q \" {destination} \" || "
-                f"mount --bind {shlex.quote(source)} {shlex.quote(destination)}",
-                as_root=True,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"Android APEX bind failed ({source} -> {destination}): " +
-                    result.stderr.strip()
-                )
-            make_mount_rslave(destination)
-
-        native_root = f"{DEVICE_ROOTFS_MOUNT}/AndroidClients"
-        adb_shell(f"mkdir -p {native_root}", as_root=True)
-        result = adb_shell(
-            f"mount --bind {DEVICE_NATIVE_CLIENT_DIR} {native_root}",
-            as_root=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                "Android native-client directory bind failed: " +
-                (result.stderr.strip() or result.stdout.strip())
-            )
-        make_mount_rslave(native_root)
-        wrapper_targets = (
-            f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-desktop-shell",
-            f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-mobile-shell",
-            f"{DEVICE_ROOTFS_MOUNT}/System/Core/lcl-js",
-            f"{DEVICE_ROOTFS_MOUNT}/System/Applications/Terminal.app/Executables/Terminal",
-            f"{DEVICE_ROOTFS_MOUNT}/System/Applications/Settings.app/Executables/Settings",
-        )
-        for target in wrapper_targets:
-            result = adb_shell(
-                f"mount --bind {DEVICE_NATIVE_CLIENT_WRAPPER} {target}",
-                as_root=True,
-            )
-            if result.returncode != 0:
-                detail = result.stderr.strip() or result.stdout.strip()
-                raise RuntimeError(
-                    f"Android native-client wrapper bind failed ({target}): {detail}"
-                )
-            make_mount_rslave(target)
-
-        native_probe = adb_shell(
-            f"ANDROID_DATA=/data LD_LIBRARY_PATH={ANDROID_NATIVE_LD_LIBRARY_PATH} "
-            f"chroot {DEVICE_ROOTFS_MOUNT} /system/bin/linker64 --list "
-            f"/AndroidClients/lcl-desktop-shell >/dev/null",
-            as_root=True,
-        )
-        if native_probe.returncode != 0:
-            raise RuntimeError(
-                "Android native-client runtime probe failed: " +
-                (native_probe.stderr.strip() or native_probe.stdout.strip())
-            )
-        log("Rootfs graphics clients routed to the Android AHardwareBuffer backend.")
-
     probe = adb_shell(
         f"chroot {DEVICE_ROOTFS_MOUNT} /System/Tools/bash -c \""
         f"test -S /Runtime/lcl-compositor.sock -o -d /Runtime; "
@@ -953,7 +807,8 @@ def prepare_runtime_for_launch() -> None:
     """Stop an existing LCL session, then clear its private runtime sockets."""
     process_names = (
         "lcl-core-android", "lcl-sessiond", "lcl-sandboxd", "lcl-securityd",
-        "lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal", "lcl-settings",
+        "lcl-admind", "lcl-sudo",
+        "lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal",
     )
 
     def active_processes() -> list[str]:
@@ -973,7 +828,6 @@ def prepare_runtime_for_launch() -> None:
         stop_rootfs_session()
         stop_lcl_process()
         unmount_rootfs()
-        remove_native_clients()
 
         remaining = active_processes()
         if remaining:
@@ -1099,8 +953,8 @@ def push_runtime_fonts() -> None:
 
 
 def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
+               logcat_system: bool = False,
                use_rootfs: bool = False, force_rootfs: bool = False,
-               native_clients: bool = True,
                no_build: bool = False,
                gestalt_path: Path | None = None) -> None:
     """Main deployment logic: push binary, stop SysUI, launch LCL compositor."""
@@ -1123,11 +977,6 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
     log(f"Device: {info['model']} | Android {info['android_version']} (SDK {info['sdk_version']}) | ABI: {info['abi']}")
     configure_target_for_abi(info["abi"])
     log(f"Selected {TARGET_ARCH} ADB deployment artifacts from {BUILD_ANDROID_DIR}.")
-    if TARGET_ARCH == "x86_64" and native_clients:
-        # The existing x86_64 Android build contains the compositor; canonical
-        # glibc clients come from the x86_64 rootfs and use the SHM path.
-        native_clients = False
-        log("Using canonical x86_64 rootfs clients (Android-native client bundle is not required).")
 
     selected_gestalt_path = gestalt_path
     if selected_gestalt_path is None:
@@ -1158,16 +1007,12 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
     if use_rootfs:
         try:
             push_rootfs_image(force=force_rootfs, allow_build=not no_build)
-            if native_clients:
-                push_native_clients()
-            mount_rootfs(native_clients=native_clients)
+            mount_rootfs()
             push_rootfs_session_launcher()
         except Exception:
             # These steps run before the main session try/finally. Do not leave
             # loop or bind mounts behind when rootfs preparation fails early.
             unmount_rootfs()
-            if native_clients:
-                remove_native_clients()
             raise
 
     # 5. Stop System UI for display takeover (unless suppressed)
@@ -1186,11 +1031,23 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
     lc_proc = None
     lcl_proc = None
     session_proc = None
+    session_trace_proc = None
 
     try:
         if logcat:
+            # Core/rasterd write their primary diagnostic stream directly to
+            # DEVICE_LOG_PATH and this host terminal. Do not also subscribe to
+            # every Android warning: after SurfaceFlinger is intentionally
+            # stopped for takeover, ServiceManager retry warnings can flood
+            # logcat and hide LCL diagnostics. The broad system stream remains
+            # available on demand for platform-service investigations.
+            logcat_filters = ["LCL:V", "lcl:V"]
+            if logcat_system:
+                logcat_filters.append("*:W")
+            else:
+                logcat_filters.append("*:S")
             lc_proc = subprocess.Popen(
-                ["adb", "logcat", "-s", "LCL:V", "lcl:V", "*:W"],
+                ["adb", "logcat", "-v", "threadtime", "-s", *logcat_filters],
                 stdout=None, stderr=None
             )
 
@@ -1220,11 +1077,25 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
                     "LCL compositor did not expose a live listening IPC socket "
                     "before the rootfs session timeout."
                 )
+            session_trace_env = (
+                "LCL_TRACE_FRAMES=1 "
+                if os.environ.get("LCL_TRACE_FRAMES") == "1" else ""
+            )
             session_proc = subprocess.Popen(adb_shell_command(
-                f"{DEVICE_SESSION_LAUNCHER} 2>&1",
+                f"{session_trace_env}{DEVICE_SESSION_LAUNCHER} 2>&1",
                 as_root=True,
             ))
             log(f"Canonical {TARGET_ARCH} rootfs session launched.")
+            if os.environ.get("LCL_TRACE_FRAMES") == "1":
+                # The canonical session deliberately keeps application stderr
+                # in its private Runtime log.  Forward that one log when frame
+                # tracing is explicitly enabled, rather than widening logcat
+                # to Android framework warnings while SurfaceFlinger is down.
+                session_trace_proc = subprocess.Popen(adb_shell_command(
+                    f"tail -n 0 -F {runtime_dir}/lcl-sessiond.log 2>&1",
+                    as_root=True,
+                ))
+                log("Streaming rootfs frame traces from lcl-sessiond.log.")
 
         lcl_proc.wait()
 
@@ -1237,14 +1108,14 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
     finally:
         if use_rootfs:
             stop_rootfs_session()
+            if session_trace_proc is not None and session_trace_proc.poll() is None:
+                session_trace_proc.terminate()
             if session_proc is not None and session_proc.poll() is None:
                 session_proc.terminate()
         stop_lcl_process()
 
         if use_rootfs:
             unmount_rootfs()
-            if native_clients:
-                remove_native_clients()
 
         # Always restore System UI
         if not no_stop_sysui:
@@ -1266,7 +1137,6 @@ def restore_only() -> None:
     stop_rootfs_session()
     stop_lcl_process()
     unmount_rootfs()
-    remove_native_clients()
     restore_system_ui()
     log("Done.")
 
@@ -1288,7 +1158,13 @@ def main() -> None:
     parser.add_argument(
         "--logcat",
         action="store_true",
-        help="Show Android logcat output alongside LCL compositor logs"
+        help="Show only LCL-tagged Android logcat output alongside compositor logs"
+    )
+    parser.add_argument(
+        "--logcat-system",
+        action="store_true",
+        help=("Also show all Android warnings/errors (very noisy while "
+              "SurfaceFlinger is stopped; implies --logcat)")
     )
     parser.add_argument(
         "--rootfs",
@@ -1306,11 +1182,6 @@ def main() -> None:
         help="Require existing artifacts matching the connected target ABI"
     )
     parser.add_argument(
-        "--software-clients",
-        action="store_true",
-        help="Keep canonical glibc SHM clients instead of Android AHardwareBuffer clients"
-    )
-    parser.add_argument(
         "--gestalt",
         type=Path,
         metavar="JSON",
@@ -1324,10 +1195,10 @@ def main() -> None:
 
     launch_lcl(
         no_stop_sysui=args.no_stop_sysui,
-        logcat=args.logcat,
+        logcat=args.logcat or args.logcat_system,
+        logcat_system=args.logcat_system,
         use_rootfs=args.rootfs or args.push_rootfs,
         force_rootfs=args.push_rootfs,
-        native_clients=not args.software_clients,
         no_build=args.no_build,
         gestalt_path=args.gestalt,
     )
