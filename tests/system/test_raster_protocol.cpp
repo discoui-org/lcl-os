@@ -187,6 +187,62 @@ TEST(RasterProtocolTest, RequiredCredentialsFailClosedWhenMissing) {
     close(sockets[1]);
 }
 
+TEST(RasterProtocolTest, NativeBufferV12MessagesRoundTripWithDescriptor) {
+    EXPECT_EQ(kVersion, 12u);
+    EXPECT_EQ(static_cast<uint32_t>(
+                  ExternalBufferTransport::AndroidHardwareBufferRgba8888),
+              2u);
+    int sockets[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+    int sideband[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sideband), 0);
+
+    RegisterNativeBufferChannel registration{};
+    ASSERT_TRUE(sendPacket(sockets[0], Opcode::RegisterNativeBufferChannel,
+                           registration, sideband[1]));
+    Header header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_EQ(receivePacket(sockets[1], header, payload, receivedFd),
+              ReceiveStatus::Received);
+    ASSERT_NE(payloadAs<RegisterNativeBufferChannel>(
+                  header, payload, Opcode::RegisterNativeBufferChannel),
+              nullptr);
+    EXPECT_GE(receivedFd, 0);
+    if (receivedFd >= 0) close(receivedFd);
+
+    CommitBufferFrame commit{};
+    commit.grant = {9, 42, 0, 11, 13};
+    commit.bufferId = 21;
+    commit.contentRevision = 22;
+    commit.configureSerial = 23;
+    commit.frameSerial = 24;
+    commit.geometryGeneration = 25;
+    commit.logicalWidth = 320.0f;
+    commit.logicalHeight = 200.0f;
+    commit.bufferScale = 2.0f;
+    commit.damageWidth = 320.0f;
+    commit.damageHeight = 200.0f;
+    commit.flags = kBufferFrameOpaque;
+    ASSERT_TRUE(sendPacket(sockets[0], Opcode::CommitBufferFrame, commit));
+    receivedFd = -1;
+    ASSERT_EQ(receivePacket(sockets[1], header, payload, receivedFd),
+              ReceiveStatus::Received);
+    const auto* decoded = payloadAs<CommitBufferFrame>(
+        header, payload, Opcode::CommitBufferFrame);
+    ASSERT_NE(decoded, nullptr);
+    EXPECT_EQ(decoded->bufferId, commit.bufferId);
+    EXPECT_EQ(decoded->configureSerial, commit.configureSerial);
+    EXPECT_EQ(decoded->frameSerial, commit.frameSerial);
+    EXPECT_EQ(decoded->flags, kBufferFrameOpaque);
+    EXPECT_EQ(receivedFd, -1);
+
+    close(sideband[0]);
+    close(sideband[1]);
+    close(sockets[0]);
+    close(sockets[1]);
+}
+
 TEST(RasterProtocolTest, RejectsExtraOrTruncatedDescriptorsWithoutLeaking) {
     const auto descriptorCount = [] {
         return std::distance(std::filesystem::directory_iterator("/proc/self/fd"),

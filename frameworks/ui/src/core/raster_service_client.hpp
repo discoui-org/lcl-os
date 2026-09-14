@@ -4,6 +4,7 @@
 #include "core/retained_render_tree.hpp"
 #include "lcl-graphics/canvas.hpp"
 #include "lcl-ui/widgets/external_buffer.hpp"
+#include "lcl-client/raster_connection.hpp"
 
 #include <cstdint>
 #include <string>
@@ -57,22 +58,17 @@ public:
     /** Drain discard, external-release, and animation-result events together. */
     std::vector<RasterServiceEvent> pollEvents();
     bool isConfigured() const noexcept;
-    bool isConnected() const noexcept { return m_fd >= 0; }
+    bool isConnected() const noexcept { return m_connection.isConnected(); }
     uint64_t connectionGeneration() const noexcept {
-        return m_connectionGeneration;
+        return m_connection.connectionGeneration();
     }
     const raster_protocol::SurfaceGrant& surfaceGrant() const noexcept {
-        return m_grant;
+        return m_connection.surfaceGrant();
     }
 
 private:
     bool connectIfNeeded();
-    int createSealedMemfd(const char* name, const void* data, size_t bytes);
-
-    std::string m_socketPath;
-    raster_protocol::SurfaceGrant m_grant{};
-    int m_fd{-1};
-    uint64_t m_connectionGeneration{0};
+    lcl::client::RasterConnection m_connection;
 };
 
 } // namespace lcl::ui

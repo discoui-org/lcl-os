@@ -8,11 +8,10 @@
 namespace lcl::raster_protocol {
 
 inline constexpr uint32_t kMagic = 0x5254434c; // "LCTR"
-// v11 adds an atomic retained-presentation manifest.  A LayerReady packet
-// only makes immutable storage importable; it never makes that storage
-// visible.  The compositor promotes storage exclusively after receiving the
-// complete PresentationFrameReady manifest that references it.
-inline constexpr uint32_t kVersion = 11;
+// v12 adds toolkit-independent native-buffer producers. A LayerReady packet
+// still only makes immutable storage importable; visibility changes only via
+// the complete PresentationFrameReady manifest that follows it.
+inline constexpr uint32_t kVersion = 12;
 inline constexpr uint32_t kMaxPayload = 1024u * 1024u;
 
 enum class Opcode : uint32_t {
@@ -30,6 +29,8 @@ enum class Opcode : uint32_t {
     PresentationFrameReady = 12,
     PresentationAnimation = 13,
     PresentationAnimationResult = 14,
+    RegisterNativeBufferChannel = 15,
+    CommitBufferFrame = 16,
 };
 
 enum class ReceiveStatus {
@@ -71,6 +72,16 @@ struct UploadImage {
 enum class ExternalBufferTransport : uint32_t {
     ImmutableShmArgb8888 = 0,
     DmaBufArgb8888 = 1,
+    AndroidHardwareBufferRgba8888 = 2,
+};
+
+/**
+ * Registers a SOCK_SEQPACKET sideband socket on this raster connection. The
+ * socket descriptor is carried by SCM_RIGHTS. Android native handles are
+ * queued on it before their UploadExternalBuffer metadata is sent.
+ */
+struct RegisterNativeBufferChannel {
+    uint32_t reserved{0};
 };
 
 struct UploadExternalBuffer {
@@ -187,6 +198,29 @@ struct CommitTransaction {
 };
 
 inline constexpr uint32_t kTransactionReplacesTree = 1u << 0;
+
+/** A DisplayList-free commit of one previously uploaded native buffer. */
+struct CommitBufferFrame {
+    SurfaceGrant grant{};
+    uint64_t bufferId{0};
+    uint64_t contentRevision{0};
+    uint64_t configureSerial{0};
+    uint64_t frameSerial{0};
+    uint64_t geometryGeneration{0};
+    float logicalWidth{0.0f};
+    float logicalHeight{0.0f};
+    float bufferScale{1.0f};
+    float damageX{0.0f};
+    float damageY{0.0f};
+    float damageWidth{0.0f};
+    float damageHeight{0.0f};
+    uint32_t flags{0};
+    uint32_t reserved{0};
+    uint64_t clientFrameStartNs{0};
+    uint64_t clientSubmitNs{0};
+};
+
+inline constexpr uint32_t kBufferFrameOpaque = 1u << 0;
 
 enum class LayerTransport : uint32_t {
     Shm = 0,

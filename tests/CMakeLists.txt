@@ -15,6 +15,7 @@ add_executable(lcl_unit_tests
     frameworks/motion/test_motion.cpp
     system/test_lcl_protocol.cpp
     system/test_raster_protocol.cpp
+    frameworks/client/test_surface_client.cpp
     integration/test_raster_service_integration.cpp
     system/test_app_bundle_parser.cpp
     system/test_app_data_store.cpp
@@ -107,7 +108,7 @@ target_include_directories(lcl_unit_tests PRIVATE
 )
 target_link_libraries(lcl_unit_tests PRIVATE
     gtest_main gtest Threads::Threads lcl-ui lcl-window-chrome lcl-raster lcl-security
-    lcl-platform-desktop lcl-protocol lcl-raster-protocol lcl-session qjs
+    lcl-platform-desktop lcl-client lcl-protocol lcl-raster-protocol lcl-session qjs
     ${LIBINPUT_LIBRARIES} ${UDEV_LIBRARIES}
 )
 

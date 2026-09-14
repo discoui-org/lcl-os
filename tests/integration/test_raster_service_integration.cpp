@@ -7,12 +7,17 @@
 #include "lcl-ui/widgets/navigation_split_view.hpp"
 #include "lcl-ui/widgets/progress_view.hpp"
 #include "system/render/raster_canvas.hpp"
+#include "system/render/client_egl_context.hpp"
+#include "lcl-client/surface_client.hpp"
 #include "apps/sandbox_probe/producer_grant_probe.hpp"
+
+#include <GLES2/gl2.h>
 
 #include <chrono>
 #include <csignal>
 #include <cstring>
 #include <filesystem>
+#include <fcntl.h>
 #include <poll.h>
 #include <string>
 #include <sys/socket.h>
@@ -381,6 +386,144 @@ TEST(RasterServiceIntegrationTest, ProducerGrantRejectsTamperingAndRevocation) {
         revoked = checkGrant(owner.get(), grant, raster::DiscardReason::InvalidGrant);
     }
     EXPECT_TRUE(revoked);
+}
+
+TEST(RasterServiceIntegrationTest, NativeUploadRejectsNonDmaBufDescriptor) {
+    using namespace lcl::sandbox_probe;
+    RasterDaemon daemon;
+    ASSERT_TRUE(daemon.start());
+    const raster::SurfaceGrant grant{
+        12, static_cast<int32_t>(getpid()), 0, 151, 157};
+    ASSERT_TRUE(daemon.registerSurface(grant));
+    ProbeFd owner(connectRaster(daemon.socketPath()));
+    ASSERT_GE(owner.get(), 0);
+    const int notDmaBuf = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    ASSERT_GE(notDmaBuf, 0);
+    raster::UploadExternalBuffer upload{};
+    upload.grant = grant;
+    upload.bufferId = 9;
+    upload.contentRevision = 1;
+    upload.transport = raster::ExternalBufferTransport::DmaBufArgb8888;
+    upload.width = 64;
+    upload.height = 48;
+    upload.stride = 64 * sizeof(uint32_t);
+    upload.format = lcl::platform::kDmaBufFormatArgb8888;
+    ASSERT_TRUE(raster::sendPacket(
+        owner.get(), raster::Opcode::UploadExternalBuffer, upload, notDmaBuf));
+    close(notDmaBuf);
+    pollfd descriptor{owner.get(), POLLIN, 0};
+    ASSERT_GT(poll(&descriptor, 1, 1000), 0);
+    raster::Header header{};
+    std::vector<uint8_t> payload;
+    int receivedFd = -1;
+    ASSERT_EQ(raster::receivePacket(
+                  owner.get(), header, payload, receivedFd),
+              raster::ReceiveStatus::Received);
+    const auto* released = raster::payloadAs<raster::ExternalBufferReleased>(
+        header, payload, raster::Opcode::ExternalBufferReleased);
+    ASSERT_NE(released, nullptr);
+    EXPECT_EQ(released->reason,
+              raster::ExternalBufferReleaseReason::Rejected);
+    EXPECT_EQ(receivedFd, -1);
+}
+
+TEST(RasterServiceIntegrationTest,
+     SurfaceClientPublishesDmaBufWithoutDisplayListAndReceivesRelease) {
+    RasterDaemon daemon;
+    ASSERT_TRUE(daemon.start());
+    FakeCompositorSocket compositor;
+    ASSERT_TRUE(compositor.listenForClient());
+
+    lcl::client::SurfaceOptions options{};
+    options.surfaceId = 17;
+    options.appId = "org.lcl.test.native-client";
+    options.title = "Native client integration";
+    options.bounds = {0.0f, 0.0f, 64.0f, 48.0f};
+    lcl::client::SurfaceClient surface;
+    ASSERT_TRUE(surface.connect(options, compositor.path(), daemon.socketPath()));
+    ASSERT_TRUE(compositor.acceptClient());
+    protocol::LCLMsgSurfaceCreate create{};
+    pid_t ownerPid = 0;
+    ASSERT_TRUE(compositor.receiveSurfaceCreate(create, ownerPid));
+    const raster::SurfaceGrant grant{
+        create.surfaceId, static_cast<int32_t>(ownerPid), 0, 201, 203};
+    ASSERT_TRUE(daemon.registerSurface(grant));
+    ASSERT_TRUE(compositor.configure(grant, 64.0f, 48.0f));
+
+    const auto connectDeadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(2);
+    while ((!surface.hasConfigure() || surface.rasterFd() < 0) &&
+           std::chrono::steady_clock::now() < connectDeadline) {
+        (void)surface.dispatch();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(surface.hasConfigure());
+    ASSERT_GE(surface.rasterFd(), 0);
+
+    lcl::render::ClientEGLContext context;
+    if (!context.initialize(64, 48) || !context.hasDmaBufPool()) {
+        GTEST_SKIP() << "No EGL DMA-BUF export device in this test environment";
+    }
+    const auto target = context.acquireDmaBufTarget();
+    ASSERT_TRUE(target.has_value());
+    glBindFramebuffer(GL_FRAMEBUFFER, target->framebuffer);
+    glViewport(0, 0, 64, 48);
+    glClearColor(0.2f, 0.5f, 0.9f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    const auto exported = context.exportCurrentDmaBuf();
+    ASSERT_TRUE(exported.has_value());
+    ASSERT_FALSE(exported->androidHardwareBuffer);
+    ASSERT_GE(exported->fd, 0);
+
+    lcl::client::DmaBufFrame frame{};
+    frame.bufferId = exported->bufferId;
+    frame.contentRevision = 1;
+    frame.width = exported->width;
+    frame.height = exported->height;
+    frame.stride = exported->stride;
+    frame.format = exported->format;
+    frame.modifier = exported->modifier;
+    frame.damage = {0.0f, 0.0f, 64.0f, 48.0f};
+    frame.opaque = true;
+    frame.buffer = lcl::client::OwnedFd(exported->fd);
+    frame.acquireFence = lcl::client::OwnedFd(exported->acquireFenceFd);
+    ASSERT_TRUE(surface.submitFrame(std::move(frame)));
+
+    raster::LayerReady ready{};
+    int layerFd = -1;
+    ASSERT_TRUE(daemon.takeLayer(ready, layerFd, 3000));
+    ASSERT_GE(layerFd, 0);
+    EXPECT_EQ(ready.transport, raster::LayerTransport::DmaBuf);
+    EXPECT_EQ(ready.frameSerial, 1u);
+    EXPECT_EQ(ready.configureSerial, 1u);
+    EXPECT_EQ(ready.width, 64u);
+    EXPECT_EQ(ready.height, 48u);
+    close(layerFd);
+    ASSERT_TRUE(daemon.releaseLayer(ready.layerId));
+    ASSERT_TRUE(compositor.present(ready));
+
+    bool presented = false;
+    bool released = false;
+    const auto releaseDeadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(2);
+    while (!(presented && released) &&
+           std::chrono::steady_clock::now() < releaseDeadline) {
+        for (auto& event : surface.dispatch()) {
+            if (std::get_if<lcl::client::FramePresentedEvent>(&event)) {
+                presented = true;
+            } else if (auto* buffer =
+                           std::get_if<lcl::client::BufferReleasedEvent>(&event)) {
+                EXPECT_EQ(buffer->bufferId, exported->bufferId);
+                context.releaseDmaBuf(
+                    static_cast<uint32_t>(buffer->bufferId),
+                    buffer->releaseFence.release());
+                released = true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_TRUE(presented);
+    EXPECT_TRUE(released);
 }
 
 TEST(RasterServiceIntegrationTest,

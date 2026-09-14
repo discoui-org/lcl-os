@@ -54,6 +54,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 add_subdirectory(frameworks)
 add_subdirectory(platforms/common)
 add_subdirectory(system)
+add_subdirectory(frameworks/client)
 add_subdirectory(frameworks/ui)
 
 if(ANDROID)

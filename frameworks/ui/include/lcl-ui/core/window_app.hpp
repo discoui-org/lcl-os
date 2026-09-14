@@ -20,6 +20,8 @@
 #include <utility>
 #include <unordered_map>
 
+namespace lcl::client { class CompositorConnection; }
+
 namespace lcl::ui {
 
 class RasterServiceClient;
@@ -291,6 +293,9 @@ private:
     // client owns only the producer grant and the raster-service connection;
     // widgets remain backend-neutral DisplayList producers.
     std::unique_ptr<RasterServiceClient> m_rasterClient;
+    // Compatibility transport only; surface semantics are now implemented by
+    // lcl-client and new integrations use SurfaceClient directly.
+    std::unique_ptr<lcl::client::CompositorConnection> m_compositorClient;
 
     RawKeyCallback m_onRawKey{nullptr};
     RawPointerCallback m_onRawPointer{nullptr};
@@ -305,7 +310,6 @@ private:
     std::vector<uint32_t> m_pixelBuffer;
     int m_socketFd{-1};
     bool m_ipcConnected{false};
-    bool m_ownsSocketFd{true};
     uint32_t m_surfaceId{1};
     std::string m_appId;
     std::string m_compositorSocketPath{"/Runtime/lcl-compositor.sock"};

@@ -70,6 +70,7 @@ target_link_libraries(lcl-ui PUBLIC
     lcl-graphics
     lcl-theme
     lcl-window-chrome
+    lcl-client
     lcl-protocol
     lcl-raster-protocol
     lcl-font-metrics

@@ -34,7 +34,15 @@
 #include <unistd.h>
 
 #if defined(__linux__)
+#include <linux/dma-buf.h>
 #include <linux/memfd.h>
+#include <linux/sync_file.h>
+#include <sys/ioctl.h>
+#endif
+
+#if defined(__ANDROID__)
+#include "platforms/android/ahardware_native_buffer.hpp"
+#include <android/hardware_buffer.h>
 #endif
 
 namespace {
@@ -107,6 +115,7 @@ struct ExternalBufferResource {
     int acquireFenceFd{-1};
     int clientFd{-1};
     std::vector<uint32_t> pixels{};
+    std::unique_ptr<lcl::platform::INativeBuffer> nativeBuffer{};
 
     ExternalBufferResource() = default;
     ExternalBufferResource(const ExternalBufferResource&) = delete;
@@ -127,6 +136,7 @@ struct ExternalBufferResource {
         acquireFenceFd = other.acquireFenceFd;
         clientFd = other.clientFd;
         pixels = std::move(other.pixels);
+        nativeBuffer = std::move(other.nativeBuffer);
         other.bufferFd = -1;
         other.acquireFenceFd = -1;
         other.clientFd = -1;
@@ -140,6 +150,12 @@ struct ExternalBufferResource {
         bufferFd = -1;
         acquireFenceFd = -1;
     }
+};
+
+enum class ProducerMode : uint8_t {
+    Unset,
+    DisplayList,
+    NativeBuffer,
 };
 
 struct LayerSlot {
@@ -185,6 +201,7 @@ struct LayerSlot {
 
 struct SurfaceState {
     SurfaceGrant grant{};
+    ProducerMode producerMode{ProducerMode::Unset};
     std::unordered_map<uint64_t, RetainedNodeState> retainedNodes;
     uint64_t retainedRootId{0};
     lcl::render::RetainedScrollTileCache scrollTiles;
@@ -203,6 +220,10 @@ struct SurfaceState {
     std::unique_ptr<lcl::render::ClientEGLContext> gpuContext;
     std::unique_ptr<lcl::render::RasterRenderer> gpuRenderer;
     std::unordered_map<uint64_t, uint32_t> gpuLayers;
+    // Native producer layers are forwarded without raster replay. The map
+    // keeps the client buffer alive until compositor ReleaseLayer returns.
+    std::unordered_map<uint64_t, ExternalKey> nativeLayers;
+    std::unordered_map<uint64_t, uint64_t> nativeBufferIds;
     // Storage identities in the last complete presentation snapshot.  A
     // transform-only transaction republishes only its manifest and reuses
     // these immutable buffers; it never allocates another root target.
@@ -225,6 +246,7 @@ struct SurfaceState {
 
 struct Client {
     int fd{-1};
+    int nativeBufferFd{-1};
     pid_t pid{0};
     uid_t uid{0};
     gid_t gid{0};
@@ -264,6 +286,29 @@ bool isImmutableMemfd(int fd, size_t expectedBytes) {
     return seals >= 0 && (seals & required) == required;
 #else
     return true;
+#endif
+}
+
+bool isDmaBufDescriptor(int fd) noexcept {
+#if defined(__linux__)
+    if (fd < 0) return false;
+    dma_buf_sync sync{};
+    sync.flags = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_START;
+    if (ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) != 0) return false;
+    sync.flags = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END;
+    return ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) == 0;
+#else
+    return fd >= 0;
+#endif
+}
+
+bool isSyncFenceDescriptor(int fd) noexcept {
+#if defined(__linux__)
+    if (fd < 0) return false;
+    sync_file_info info{};
+    return ioctl(fd, SYNC_IOC_FILE_INFO, &info) == 0;
+#else
+    return fd >= 0;
 #endif
 }
 
@@ -321,6 +366,32 @@ bool hasValidRetainedFrameMetadata(
             submit.logicalHeight - kTolerance;
 }
 
+bool hasValidBufferFrameMetadata(
+        const lcl::raster_protocol::CommitBufferFrame& submit) noexcept {
+    constexpr float kTolerance = 0.001f;
+    constexpr float kMaxPixelExtent = 16384.0f;
+    const bool finite = std::isfinite(submit.logicalWidth) &&
+        std::isfinite(submit.logicalHeight) &&
+        std::isfinite(submit.bufferScale) &&
+        std::isfinite(submit.damageX) && std::isfinite(submit.damageY) &&
+        std::isfinite(submit.damageWidth) &&
+        std::isfinite(submit.damageHeight);
+    return finite && submit.bufferId != 0 && submit.contentRevision != 0 &&
+        submit.configureSerial != 0 && submit.frameSerial != 0 &&
+        submit.logicalWidth > 0.0f && submit.logicalHeight > 0.0f &&
+        submit.bufferScale >= 0.5f && submit.bufferScale <= 4.0f &&
+        submit.logicalWidth * submit.bufferScale <= kMaxPixelExtent &&
+        submit.logicalHeight * submit.bufferScale <= kMaxPixelExtent &&
+        submit.damageX >= 0.0f && submit.damageY >= 0.0f &&
+        submit.damageWidth > 0.0f && submit.damageHeight > 0.0f &&
+        submit.damageX + submit.damageWidth <=
+            submit.logicalWidth + kTolerance &&
+        submit.damageY + submit.damageHeight <=
+            submit.logicalHeight + kTolerance &&
+        (submit.flags & ~lcl::raster_protocol::kBufferFrameOpaque) == 0 &&
+        submit.reserved == 0;
+}
+
 bool retainedBaseMatches(const CommitTransaction& submit, uint64_t frameSerial,
                          uint64_t geometryGeneration, uint32_t width,
                          uint32_t height, float scale) noexcept {
@@ -344,6 +415,21 @@ struct PixelDamage {
 
 PixelDamage pixelDamageFor(const CommitTransaction& submit, uint32_t width,
                            uint32_t height) noexcept {
+    const uint32_t left = std::min(width, static_cast<uint32_t>(std::floor(
+        submit.damageX * submit.bufferScale)));
+    const uint32_t top = std::min(height, static_cast<uint32_t>(std::floor(
+        submit.damageY * submit.bufferScale)));
+    const uint32_t right = std::min(width, static_cast<uint32_t>(std::ceil(
+        (submit.damageX + submit.damageWidth) * submit.bufferScale)));
+    const uint32_t bottom = std::min(height, static_cast<uint32_t>(std::ceil(
+        (submit.damageY + submit.damageHeight) * submit.bufferScale)));
+    return {left, top, right > left ? right - left : 0,
+            bottom > top ? bottom - top : 0};
+}
+
+PixelDamage pixelDamageFor(
+        const lcl::raster_protocol::CommitBufferFrame& submit,
+        uint32_t width, uint32_t height) noexcept {
     const uint32_t left = std::min(width, static_cast<uint32_t>(std::floor(
         submit.damageX * submit.bufferScale)));
     const uint32_t top = std::min(height, static_cast<uint32_t>(std::floor(
@@ -1099,7 +1185,10 @@ public:
     ~RasterService() {
         for (auto& frame : m_systemFrames) if (frame.displayListFd >= 0) close(frame.displayListFd);
         for (auto& frame : m_appFrames) if (frame.displayListFd >= 0) close(frame.displayListFd);
-        for (const auto& client : m_clients) if (client.fd >= 0) close(client.fd);
+        for (const auto& client : m_clients) {
+            if (client.fd >= 0) close(client.fd);
+            if (client.nativeBufferFd >= 0) close(client.nativeBufferFd);
+        }
         if (m_listenerFd >= 0) close(m_listenerFd);
         if (m_compositorFd >= 0) close(m_compositorFd);
         if (m_nativeBufferFd >= 0) close(m_nativeBufferFd);
@@ -1154,7 +1243,8 @@ private:
                 close(fd);
                 continue;
             }
-            m_clients.push_back({fd, credentials.pid, credentials.uid, credentials.gid});
+            m_clients.push_back(
+                {fd, -1, credentials.pid, credentials.uid, credentials.gid});
         }
     }
 
@@ -1245,14 +1335,28 @@ private:
             }
             if (!alive) {
                 for (auto& [_, surface] : m_surfaces) {
-                    for (auto& [key, resource] : surface.externalBuffers) {
-                        (void)key;
-                        if (resource.clientFd == it->fd) {
-                            resource.clientFd = -1;
+                    for (auto resource = surface.externalBuffers.begin();
+                         resource != surface.externalBuffers.end();) {
+                        if (resource->second.clientFd != it->fd) {
+                            ++resource;
+                            continue;
+                        }
+                        const bool inFlight = std::any_of(
+                            surface.nativeLayers.begin(),
+                            surface.nativeLayers.end(),
+                            [&resource](const auto& layer) {
+                                return layer.second == resource->first;
+                            });
+                        if (inFlight) {
+                            resource->second.clientFd = -1;
+                            ++resource;
+                        } else {
+                            resource = surface.externalBuffers.erase(resource);
                         }
                     }
                 }
                 close(it->fd);
+                if (it->nativeBufferFd >= 0) close(it->nativeBufferFd);
                 it = m_clients.erase(it);
             } else {
                 ++it;
@@ -1272,9 +1376,27 @@ private:
         return &found->second;
     }
 
-    void handleClientPacket(const Client& client,
+    void handleClientPacket(Client& client,
                             const lcl::raster_protocol::Header& header,
                             std::span<const uint8_t> payload, int receivedFd) {
+        if (const auto* registration = lcl::raster_protocol::payloadAs<
+                lcl::raster_protocol::RegisterNativeBufferChannel>(
+                header, payload, Opcode::RegisterNativeBufferChannel)) {
+            int socketType = 0;
+            socklen_t socketTypeSize = sizeof(socketType);
+            const bool valid = registration->reserved == 0 && receivedFd >= 0 &&
+                client.nativeBufferFd < 0 &&
+                getsockopt(receivedFd, SOL_SOCKET, SO_TYPE, &socketType,
+                           &socketTypeSize) == 0 &&
+                socketType == SOCK_SEQPACKET && setNonBlocking(receivedFd);
+            if (!valid) {
+                if (receivedFd >= 0) close(receivedFd);
+                return;
+            }
+            client.nativeBufferFd = receivedFd;
+            return;
+        }
+
         if (const auto* upload = lcl::raster_protocol::payloadAs<
                 lcl::raster_protocol::UploadImage>(
                 header, payload, Opcode::UploadImage)) {
@@ -1315,7 +1437,10 @@ private:
             constexpr uint64_t kMaxByteSize =
                 512ull * 1024ull * 1024ull;
             const ExternalKey key{upload->bufferId, upload->contentRevision};
-            if (surface) {
+            const bool ahb = upload->transport ==
+                lcl::raster_protocol::ExternalBufferTransport::
+                    AndroidHardwareBufferRgba8888;
+            if (surface && !ahb) {
                 const auto existing = surface->externalBuffers.find(key);
                 if (existing != surface->externalBuffers.end() &&
                     existing->second.transport == upload->transport &&
@@ -1329,7 +1454,7 @@ private:
                     return;
                 }
             }
-            const bool commonValid = surface && receivedFd >= 0 &&
+            const bool commonValid = surface &&
                 upload->bufferId != 0 && upload->contentRevision != 0 &&
                 upload->width > 0 && upload->height > 0 &&
                 upload->width <= kMaxDimension &&
@@ -1337,7 +1462,6 @@ private:
                 upload->stride >= upload->width * sizeof(uint32_t) &&
                 upload->stride % sizeof(uint32_t) == 0 &&
                 upload->stride <= kMaxDimension * sizeof(uint32_t) &&
-                upload->format == lcl::platform::kDmaBufFormatArgb8888 &&
                 upload->byteSize <= kMaxByteSize &&
                 upload->flags == 0 && upload->reserved == 0 &&
                 !surface->externalBuffers.contains(key);
@@ -1346,11 +1470,27 @@ private:
                     ImmutableShmArgb8888;
             const bool dmaBuf = upload->transport ==
                 lcl::raster_protocol::ExternalBufferTransport::DmaBufArgb8888;
-            const bool transportValid = shm
-                ? upload->byteSize ==
-                      static_cast<uint64_t>(upload->stride) * upload->height &&
-                      isImmutableMemfd(receivedFd, upload->byteSize)
-                : dmaBuf && upload->byteSize == 0;
+            bool transportValid = false;
+            if (shm) {
+                transportValid = receivedFd >= 0 &&
+                    upload->format == lcl::platform::kDmaBufFormatArgb8888 &&
+                    upload->byteSize ==
+                        static_cast<uint64_t>(upload->stride) * upload->height &&
+                    isImmutableMemfd(receivedFd, upload->byteSize);
+            } else if (dmaBuf) {
+                transportValid = receivedFd >= 0 && upload->byteSize == 0 &&
+                    upload->format == lcl::platform::kDmaBufFormatArgb8888 &&
+                    isDmaBufDescriptor(receivedFd);
+            } else if (ahb) {
+#if defined(__ANDROID__)
+                transportValid = receivedFd < 0 && upload->byteSize == 0 &&
+                    upload->modifier == ~uint64_t{0} &&
+                    upload->format == AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM &&
+                    client.nativeBufferFd >= 0;
+#else
+                transportValid = false;
+#endif
+            }
             if (!commonValid || !transportValid) {
                 if (receivedFd >= 0) close(receivedFd);
                 lcl::raster_protocol::ExternalBufferReleased released{};
@@ -1360,6 +1500,15 @@ private:
                     lcl::raster_protocol::ExternalBufferReleaseReason::Rejected;
                 (void)lcl::raster_protocol::sendPacket(
                     client.fd, Opcode::ExternalBufferReleased, released);
+                if (ahb) {
+                    // The corresponding opaque handle may already be queued.
+                    // Never let it pair with later metadata.
+                    if (client.nativeBufferFd >= 0) {
+                        close(client.nativeBufferFd);
+                        client.nativeBufferFd = -1;
+                    }
+                    shutdown(client.fd, SHUT_RDWR);
+                }
                 return;
             }
 
@@ -1388,8 +1537,45 @@ private:
                     return;
                 }
                 close(receivedFd);
-            } else {
+            } else if (dmaBuf) {
                 resource.bufferFd = receivedFd;
+            } else {
+#if defined(__ANDROID__)
+                AHardwareBuffer* handle = nullptr;
+                const int result = AHardwareBuffer_recvHandleFromUnixSocket(
+                    client.nativeBufferFd, &handle);
+                AHardwareBuffer_Desc description{};
+                if (result == 0 && handle) {
+                    AHardwareBuffer_describe(handle, &description);
+                }
+                const bool validHandle = result == 0 && handle &&
+                    description.width == upload->width &&
+                    description.height == upload->height &&
+                    description.layers == 1 &&
+                    description.format == AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM &&
+                    description.stride * sizeof(uint32_t) == upload->stride &&
+                    (description.usage &
+                     AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE) != 0;
+                if (!validHandle) {
+                    if (handle) AHardwareBuffer_release(handle);
+                    lcl::raster_protocol::ExternalBufferReleased released{};
+                    released.bufferId = upload->bufferId;
+                    released.contentRevision = upload->contentRevision;
+                    released.reason = lcl::raster_protocol::
+                        ExternalBufferReleaseReason::Rejected;
+                    (void)lcl::raster_protocol::sendPacket(
+                        client.fd, Opcode::ExternalBufferReleased, released);
+                    close(client.nativeBufferFd);
+                    client.nativeBufferFd = -1;
+                    shutdown(client.fd, SHUT_RDWR);
+                    return;
+                }
+                resource.nativeBuffer = std::make_unique<
+                    lcl::platform::android::AHardwareNativeBuffer>(
+                        handle,
+                        lcl::platform::android::AHardwareNativeBuffer::
+                            ReferenceMode::Adopt);
+#endif
             }
             surface->externalBuffers.emplace(key, std::move(resource));
             return;
@@ -1400,15 +1586,19 @@ private:
                 header, payload, Opcode::SetExternalBufferFence)) {
             auto* surface = authorizedSurface(client, fence->grant);
             const ExternalKey key{fence->bufferId, fence->contentRevision};
-            if (!surface || receivedFd < 0) {
+            if (!surface || receivedFd < 0 ||
+                !isSyncFenceDescriptor(receivedFd)) {
                 if (receivedFd >= 0) close(receivedFd);
                 return;
             }
             const auto found = surface->externalBuffers.find(key);
             if (found == surface->externalBuffers.end() ||
-                found->second.transport !=
-                    lcl::raster_protocol::ExternalBufferTransport::
-                        DmaBufArgb8888) {
+                (found->second.transport !=
+                     lcl::raster_protocol::ExternalBufferTransport::
+                         DmaBufArgb8888 &&
+                 found->second.transport !=
+                     lcl::raster_protocol::ExternalBufferTransport::
+                         AndroidHardwareBufferRgba8888)) {
                 close(receivedFd);
                 return;
             }
@@ -1416,6 +1606,53 @@ private:
                 close(found->second.acquireFenceFd);
             }
             found->second.acquireFenceFd = receivedFd;
+            return;
+        }
+
+        if (const auto* commit = lcl::raster_protocol::payloadAs<
+                lcl::raster_protocol::CommitBufferFrame>(
+                header, payload, Opcode::CommitBufferFrame)) {
+            auto* surface = authorizedSurface(client, commit->grant);
+            const ExternalKey key{commit->bufferId, commit->contentRevision};
+            ExternalBufferResource* resource = nullptr;
+            if (surface) {
+                const auto found = surface->externalBuffers.find(key);
+                if (found != surface->externalBuffers.end()) {
+                    resource = &found->second;
+                }
+            }
+            const bool validMetadata = hasValidBufferFrameMetadata(*commit);
+            const uint32_t contentWidth = validMetadata
+                ? std::max(1u, static_cast<uint32_t>(
+                      std::ceil(commit->logicalWidth * commit->bufferScale)))
+                : 0;
+            const uint32_t contentHeight = validMetadata
+                ? std::max(1u, static_cast<uint32_t>(
+                      std::ceil(commit->logicalHeight * commit->bufferScale)))
+                : 0;
+            bool bufferInFlight = false;
+            if (surface) {
+                bufferInFlight = std::any_of(
+                    surface->nativeLayers.begin(), surface->nativeLayers.end(),
+                    [&key](const auto& item) { return item.second == key; });
+            }
+            const bool valid = receivedFd < 0 && surface &&
+                validMetadata &&
+                surface->producerMode != ProducerMode::DisplayList &&
+                resource && resource->clientFd == client.fd &&
+                resource->transport != lcl::raster_protocol::
+                    ExternalBufferTransport::ImmutableShmArgb8888 &&
+                contentWidth <= resource->width &&
+                contentHeight <= resource->height && !bufferInFlight;
+            if (!valid || !publishNativeBufferFrame(
+                    *surface, *commit, *resource)) {
+                if (receivedFd >= 0) close(receivedFd);
+                discard(client.fd, *commit,
+                        surface ? lcl::raster_protocol::DiscardReason::InvalidFrame
+                                : lcl::raster_protocol::DiscardReason::InvalidGrant);
+                return;
+            }
+            surface->producerMode = ProducerMode::NativeBuffer;
             return;
         }
 
@@ -1452,7 +1689,7 @@ private:
             const bool validPropertyOnlyCommit = hasDisplayList ||
                 (surface && isRetainedPropertyOnly(
                     transaction, mutations, surface->retainedNodes));
-            if (!surface ||
+            if (!surface || surface->producerMode == ProducerMode::NativeBuffer ||
                 !hasValidRetainedFrameMetadata(transaction) ||
                 !validDisplayListDescriptor || !validPropertyOnlyCommit ||
                 (replacesRetainedScene(transaction) && !hasDisplayList)) {
@@ -1462,6 +1699,7 @@ private:
                                 : lcl::raster_protocol::DiscardReason::InvalidGrant);
                 return;
             }
+            surface->producerMode = ProducerMode::DisplayList;
             auto& queue = (transaction.grant.flags &
                            lcl::raster_protocol::kGrantInteractiveSystem) != 0
                 ? m_systemFrames : m_appFrames;
@@ -2478,8 +2716,142 @@ private:
         return true;
     }
 
+    bool publishNativeBufferFrame(
+            SurfaceState& surface,
+            const lcl::raster_protocol::CommitBufferFrame& submit,
+            ExternalBufferResource& resource) {
+        const uint32_t width = std::max(1u, static_cast<uint32_t>(
+            std::ceil(submit.logicalWidth * submit.bufferScale)));
+        const uint32_t height = std::max(1u, static_cast<uint32_t>(
+            std::ceil(submit.logicalHeight * submit.bufferScale)));
+        const PixelDamage damage = pixelDamageFor(submit, width, height);
+        if (damage.width == 0 || damage.height == 0) return false;
+
+        if (resource.transport == lcl::raster_protocol::
+                ExternalBufferTransport::DmaBufArgb8888 &&
+            resource.acquireFenceFd >= 0) {
+            pollfd fence{resource.acquireFenceFd, POLLIN, 0};
+            int result = -1;
+            do {
+                result = poll(&fence, 1, 3000);
+            } while (result < 0 && errno == EINTR);
+            close(resource.acquireFenceFd);
+            resource.acquireFenceFd = -1;
+            if (result <= 0) return false;
+        }
+
+        const uint64_t layerId =
+            (static_cast<uint64_t>(static_cast<uint32_t>(getpid())) << 32u) |
+            m_nextLayerId++;
+        auto [identity, inserted] = surface.nativeBufferIds.try_emplace(
+            submit.bufferId, 0);
+        if (inserted) {
+            identity->second =
+                (static_cast<uint64_t>(static_cast<uint32_t>(getpid())) << 32u) |
+                m_nextBufferId++;
+        }
+
+        LayerReady ready{};
+        ready.grant = submit.grant;
+        ready.layerId = layerId;
+        ready.role = lcl::raster_protocol::LayerRole::Root;
+        ready.nodeId = 1;
+        ready.contentRevision = submit.contentRevision;
+        ready.bufferId = identity->second;
+        ready.configureSerial = submit.configureSerial;
+        ready.frameSerial = submit.frameSerial;
+        ready.geometryGeneration = submit.geometryGeneration;
+        ready.width = width;
+        ready.height = height;
+        ready.backingWidth = resource.width;
+        ready.backingHeight = resource.height;
+        ready.stride = resource.stride;
+        ready.damageX = damage.x;
+        ready.damageY = damage.y;
+        ready.damageWidth = damage.width;
+        ready.damageHeight = damage.height;
+        ready.transport = resource.transport == lcl::raster_protocol::
+                ExternalBufferTransport::AndroidHardwareBufferRgba8888
+            ? lcl::raster_protocol::LayerTransport::AndroidHardwareBuffer
+            : lcl::raster_protocol::LayerTransport::DmaBuf;
+        ready.format = resource.format;
+        ready.modifier = resource.modifier;
+        ready.clientFrameStartNs = submit.clientFrameStartNs;
+        ready.clientSubmitNs = submit.clientSubmitNs;
+        ready.rasterStartNs = monotonicNowNs();
+        ready.rasterReadyNs = monotonicNowNs();
+
+        int descriptor = resource.bufferFd;
+#if defined(__ANDROID__)
+        if (resource.transport == lcl::raster_protocol::ExternalBufferTransport::
+                AndroidHardwareBufferRgba8888) {
+            auto* native = dynamic_cast<
+                lcl::platform::android::AHardwareNativeBuffer*>(
+                    resource.nativeBuffer.get());
+            if (!native || !native->getHandle() ||
+                AHardwareBuffer_sendHandleToUnixSocket(
+                    native->getHandle(), m_nativeBufferFd) != 0) {
+                m_running = false;
+                return false;
+            }
+            descriptor = std::exchange(resource.acquireFenceFd, -1);
+        }
+#endif
+        if (!lcl::raster_protocol::sendPacket(
+                m_compositorFd, Opcode::LayerReady, ready, descriptor)) {
+            if (descriptor >= 0 && descriptor != resource.bufferFd) {
+                close(descriptor);
+            }
+#if defined(__ANDROID__)
+            if (resource.transport == lcl::raster_protocol::
+                    ExternalBufferTransport::AndroidHardwareBufferRgba8888) {
+                m_running = false;
+            }
+#endif
+            return false;
+        }
+        if (descriptor >= 0 && descriptor != resource.bufferFd) close(descriptor);
+        surface.nativeLayers.emplace(
+            layerId, ExternalKey{submit.bufferId, submit.contentRevision});
+
+        lcl::raster_protocol::PresentationLayerState layer{};
+        layer.nodeId = ready.nodeId;
+        layer.layerId = ready.layerId;
+        layer.contentRevision = ready.contentRevision;
+        layer.width = submit.logicalWidth;
+        layer.height = submit.logicalHeight;
+        if ((submit.flags & lcl::raster_protocol::kBufferFrameOpaque) != 0) {
+            layer.flags |= lcl::raster_protocol::kPresentationLayerOpaque;
+        }
+        lcl::raster_protocol::PresentationFrameReady frame{};
+        frame.grant = submit.grant;
+        frame.configureSerial = submit.configureSerial;
+        frame.frameSerial = submit.frameSerial;
+        frame.geometryGeneration = submit.geometryGeneration;
+        frame.rootNodeId = ready.nodeId;
+        frame.layerCount = 1;
+        return lcl::raster_protocol::sendPresentationFrameReady(
+            m_compositorFd, frame,
+            std::span<const lcl::raster_protocol::PresentationLayerState>(
+                &layer, 1));
+    }
+
     void discard(int clientFd, const CommitTransaction& submit,
                  lcl::raster_protocol::DiscardReason reason) {
+        FrameDiscarded discarded{};
+        discarded.surfaceId = submit.grant.surfaceId;
+        discarded.configureSerial = submit.configureSerial;
+        discarded.frameSerial = submit.frameSerial;
+        discarded.geometryGeneration = submit.geometryGeneration;
+        discarded.reason = reason;
+        (void)lcl::raster_protocol::sendPacket(
+            clientFd, Opcode::FrameDiscarded, discarded);
+    }
+
+    void discard(
+            int clientFd,
+            const lcl::raster_protocol::CommitBufferFrame& submit,
+            lcl::raster_protocol::DiscardReason reason) {
         FrameDiscarded discarded{};
         discarded.surfaceId = submit.grant.surfaceId;
         discarded.configureSerial = submit.configureSerial;
@@ -2495,6 +2867,32 @@ private:
             lcl::raster_protocol::LayerReleaseReason reason,
             int releaseFenceFd) {
         for (auto& [_, surface] : m_surfaces) {
+            const auto native = surface.nativeLayers.find(layerId);
+            if (native != surface.nativeLayers.end()) {
+                const ExternalKey key = native->second;
+                const auto resource = surface.externalBuffers.find(key);
+                if (resource != surface.externalBuffers.end()) {
+                    lcl::raster_protocol::ExternalBufferReleased released{};
+                    released.bufferId = key.id;
+                    released.contentRevision = key.revision;
+                    released.reason = reason ==
+                            lcl::raster_protocol::LayerReleaseReason::Presented
+                        ? lcl::raster_protocol::ExternalBufferReleaseReason::
+                              Superseded
+                        : lcl::raster_protocol::ExternalBufferReleaseReason::
+                              Rejected;
+                    if (resource->second.clientFd >= 0) {
+                        (void)lcl::raster_protocol::sendPacket(
+                            resource->second.clientFd,
+                            Opcode::ExternalBufferReleased, released,
+                            releaseFenceFd);
+                    }
+                    surface.externalBuffers.erase(resource);
+                }
+                surface.nativeLayers.erase(native);
+                if (releaseFenceFd >= 0) close(releaseFenceFd);
+                return;
+            }
             const auto gpu = surface.gpuLayers.find(layerId);
             if (gpu != surface.gpuLayers.end()) {
                 if (surface.gpuContext) {
@@ -2539,9 +2937,11 @@ private:
         released.bufferId = key.id;
         released.contentRevision = key.revision;
         released.reason = reason;
-        (void)lcl::raster_protocol::sendPacket(
-            resource.clientFd, Opcode::ExternalBufferReleased, released,
-            releaseFenceFd);
+        if (resource.clientFd >= 0) {
+            (void)lcl::raster_protocol::sendPacket(
+                resource.clientFd, Opcode::ExternalBufferReleased, released,
+                releaseFenceFd);
+        }
         if (releaseFenceFd >= 0) close(releaseFenceFd);
     }
 

@@ -5,6 +5,7 @@
 #include "lcl-graphics/display_list_wire.hpp"
 #include "lcl-ui/widgets/scroll_view.hpp"
 #include "lcl-ui/widgets/external_buffer.hpp"
+#include "lcl-client/compositor_connection.hpp"
 #include <iostream>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -669,7 +670,9 @@ WindowApp::WindowApp(std::unique_ptr<graphics::Canvas> canvas, float width, floa
     : m_width(width), m_height(height), m_title(title),
       m_privateRenderState(std::make_unique<PrivateRenderState>()),
       m_canvas(std::move(canvas)),
-      m_rasterClient(std::make_unique<RasterServiceClient>()) {
+      m_rasterClient(std::make_unique<RasterServiceClient>()),
+      m_compositorClient(
+          std::make_unique<lcl::client::CompositorConnection>()) {
     setupAppSignalHandlers();
     updateLayoutEnvironment();
     if (!m_canvas) return;
@@ -711,11 +714,8 @@ WindowApp::~WindowApp() {
     m_transients.setWindowRoot(nullptr);
     m_hostedSurfaces.clear();
     if (m_windowRoot) m_windowRoot->setMotionCoordinator(nullptr);
-    if (m_socketFd >= 0 && m_ownsSocketFd) {
-        lcl::protocol::discardPendingWrites(m_socketFd);
-        close(m_socketFd);
-        m_socketFd = -1;
-    }
+    if (m_compositorClient) m_compositorClient->disconnect();
+    m_socketFd = -1;
 }
 
 uint32_t WindowApp::getPixelWidth() const {
@@ -883,19 +883,10 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
             effectiveSocketPath = envSocket;
         }
     }
-    for (int i = 0; i < 50; ++i) {
-        m_socketFd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
-        if (m_socketFd >= 0) {
-            struct sockaddr_un addr{};
-            addr.sun_family = AF_UNIX;
-            std::strncpy(addr.sun_path, effectiveSocketPath.c_str(), sizeof(addr.sun_path) - 1);
-            if (connect(m_socketFd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
-                break;
-            }
-            close(m_socketFd);
-            m_socketFd = -1;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (!m_compositorClient->connect(effectiveSocketPath, 50, 100)) {
+        m_socketFd = -1;
+    } else {
+        m_socketFd = m_compositorClient->fd();
     }
 
     if (m_socketFd < 0) {
@@ -909,12 +900,6 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     // logical; ConfigureBounds supplies the buffer mapping scale.
     m_bufferScale = 1.0f;
     updateCanvasRenderTarget();
-
-    // Set non-blocking socket reads
-    int flags = fcntl(m_socketFd, F_GETFL, 0);
-    if (flags >= 0) {
-        fcntl(m_socketFd, F_SETFL, flags | O_NONBLOCK);
-    }
 
     if (!isPopupSurface() && !isAttachedSurface() &&
         m_systemSurfaceKind != lcl::protocol::LCLSystemSurfaceKind::None) {
@@ -982,7 +967,6 @@ bool WindowApp::connectCompositor(const std::string& socketPath) {
     }
 
     m_ipcConnected = true;
-    m_ownsSocketFd = true;
     m_uploadedImageRevisions.clear();
     m_uploadedExternalBuffers.clear();
     m_backingWidth = m_width;
@@ -1195,7 +1179,7 @@ void WindowApp::pollIPC() {
         std::vector<uint8_t> payload;
         int receivedFd = -1;
         const auto receiveStatus =
-            lcl::protocol::recvPacketWithFd(m_socketFd, header, payload, receivedFd);
+            m_compositorClient->receive(header, payload, receivedFd);
         if (receiveStatus == lcl::protocol::ReceiveStatus::Received) {
             bool receivedFdConsumed = false;
             if (header.opcode == lcl::protocol::LCLOpcode::InputEvent &&
@@ -1529,11 +1513,8 @@ void WindowApp::runEventLoop() {
         }
     }
     m_running = false;
-    if (m_socketFd >= 0 && m_ownsSocketFd) {
-        lcl::protocol::discardPendingWrites(m_socketFd);
-        close(m_socketFd);
-        m_socketFd = -1;
-    }
+    if (m_compositorClient) m_compositorClient->disconnect();
+    m_socketFd = -1;
 }
 
 bool WindowApp::tick() {
@@ -1818,10 +1799,12 @@ bool WindowApp::hasActiveAnimations() const noexcept {
 
 void WindowApp::setExternalIpcSocket(int socketFd) {
     if (socketFd < 0) return;
-    m_socketFd = socketFd;
+    if (!m_compositorClient->adopt(
+            socketFd,
+            lcl::client::CompositorConnection::Ownership::Borrowed)) return;
+    m_socketFd = m_compositorClient->fd();
     m_ipcConnected = true;
     m_surfaceEnded = false;
-    m_ownsSocketFd = false;
     m_uploadedImageRevisions.clear();
     m_uploadedExternalBuffers.clear();
 }
@@ -1873,12 +1856,10 @@ bool WindowApp::requestSurfaceDestroy(uint32_t surfaceId) {
 bool WindowApp::sendProtocolMessage(lcl::protocol::LCLOpcode opcode, const void* payload,
                                     uint32_t payloadSize, int passedFd) {
     if (m_socketFd < 0) return false;
-    lcl::protocol::LCLHeader header{};
-    header.opcode = opcode;
-    header.requestId = m_nextRequestId++;
+    const uint32_t requestId = m_nextRequestId++;
     if (m_nextRequestId == 0) m_nextRequestId = 1;
-    header.payloadSize = payloadSize;
-    return lcl::protocol::sendMsgWithFd(m_socketFd, header, payload, passedFd);
+    return m_compositorClient->send(
+        opcode, requestId, payload, payloadSize, passedFd);
 }
 
 bool WindowApp::uploadImageResource(const graphics::ImageResourceView& resource) {

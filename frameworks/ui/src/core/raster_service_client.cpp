@@ -1,21 +1,8 @@
 #include "raster_service_client.hpp"
 
 #include <chrono>
-#include <cerrno>
-#include <cstring>
-#include <fcntl.h>
 #include <limits>
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/un.h>
-#include <unistd.h>
 #include <utility>
-
-#if defined(__linux__)
-#include <linux/memfd.h>
-#include <sys/syscall.h>
-#endif
 
 namespace lcl::ui {
 namespace {
@@ -105,78 +92,19 @@ RasterServiceClient::~RasterServiceClient() {
 
 void RasterServiceClient::configure(
         std::string socketPath, const raster_protocol::SurfaceGrant& grant) {
-    const bool changed = socketPath != m_socketPath ||
-        grant.tokenHigh != m_grant.tokenHigh || grant.tokenLow != m_grant.tokenLow;
-    if (changed) disconnect();
-    m_socketPath = std::move(socketPath);
-    m_grant = grant;
+    m_connection.configure(std::move(socketPath), grant);
 }
 
 void RasterServiceClient::disconnect() noexcept {
-    if (m_fd >= 0) close(m_fd);
-    m_fd = -1;
+    m_connection.disconnect();
 }
 
 bool RasterServiceClient::isConfigured() const noexcept {
-    return !m_socketPath.empty() && m_grant.surfaceId != 0 &&
-        (m_grant.tokenHigh != 0 || m_grant.tokenLow != 0);
+    return m_connection.isConfigured();
 }
 
 bool RasterServiceClient::connectIfNeeded() {
-    if (m_fd >= 0) return true;
-    if (!isConfigured()) return false;
-    const int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
-    if (fd < 0) return false;
-    sockaddr_un address{};
-    address.sun_family = AF_UNIX;
-    if (m_socketPath.size() >= sizeof(address.sun_path)) {
-        close(fd);
-        return false;
-    }
-    std::strncpy(address.sun_path, m_socketPath.c_str(),
-                 sizeof(address.sun_path) - 1);
-    if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-        close(fd);
-        return false;
-    }
-    const int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0) (void)fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    m_fd = fd;
-    ++m_connectionGeneration;
-    if (m_connectionGeneration == 0) m_connectionGeneration = 1;
-    return true;
-}
-
-int RasterServiceClient::createSealedMemfd(
-        const char* name, const void* data, size_t bytes) {
-    if (!data || bytes == 0) return -1;
-#if defined(SYS_memfd_create)
-    const int fd = static_cast<int>(syscall(
-        SYS_memfd_create, name, MFD_CLOEXEC | MFD_ALLOW_SEALING));
-    if (fd < 0 || ftruncate(fd, static_cast<off_t>(bytes)) != 0) {
-        if (fd >= 0) close(fd);
-        return -1;
-    }
-    void* mapping = mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                         MAP_SHARED, fd, 0);
-    if (mapping == MAP_FAILED) {
-        close(fd);
-        return -1;
-    }
-    std::memcpy(mapping, data, bytes);
-    munmap(mapping, bytes);
-#if defined(F_ADD_SEALS) && defined(F_SEAL_WRITE) && defined(F_SEAL_GROW) && defined(F_SEAL_SHRINK)
-    constexpr int seals = F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK;
-    if (fcntl(fd, F_ADD_SEALS, seals) != 0) {
-        close(fd);
-        return -1;
-    }
-#endif
-    return fd;
-#else
-    (void)name;
-    return -1;
-#endif
+    return m_connection.prepare();
 }
 
 bool RasterServiceClient::uploadImage(
@@ -184,25 +112,14 @@ bool RasterServiceClient::uploadImage(
     if (!connectIfNeeded() || resource.id == 0 || resource.contentRevision == 0 ||
         resource.width <= 0 || resource.height <= 0 ||
         resource.stridePixels < resource.width || !resource.pixels) return false;
-    const size_t bytes = static_cast<size_t>(resource.stridePixels) *
-        static_cast<size_t>(resource.height) * sizeof(uint32_t);
-    const int memfd = createSealedMemfd(
-        "lcl-raster-image", resource.pixels, bytes);
-    if (memfd < 0) return false;
-    raster_protocol::UploadImage upload{};
-    upload.grant = m_grant;
-    upload.resourceId = resource.id;
-    upload.contentRevision = resource.contentRevision;
-    upload.width = static_cast<uint32_t>(resource.width);
-    upload.height = static_cast<uint32_t>(resource.height);
-    upload.stridePixels = static_cast<uint32_t>(resource.stridePixels);
-    upload.opaque = resource.opaque ? 1u : 0u;
-    upload.byteSize = bytes;
-    const bool sent = raster_protocol::sendPacket(
-        m_fd, raster_protocol::Opcode::UploadImage, upload, memfd);
-    close(memfd);
-    if (!sent && errno != EAGAIN && errno != EWOULDBLOCK) disconnect();
-    return sent;
+    const size_t count = static_cast<size_t>(resource.stridePixels) *
+        static_cast<size_t>(resource.height);
+    return m_connection.uploadImage({
+        resource.id, resource.contentRevision,
+        static_cast<uint32_t>(resource.width),
+        static_cast<uint32_t>(resource.height),
+        static_cast<uint32_t>(resource.stridePixels), resource.opaque,
+        std::span<const uint32_t>(resource.pixels, count)});
 }
 
 bool RasterServiceClient::uploadExternalBuffer(
@@ -219,7 +136,6 @@ bool RasterServiceClient::uploadExternalBuffer(
         return false;
     }
     raster_protocol::UploadExternalBuffer upload{};
-    upload.grant = m_grant;
     upload.bufferId = frame.bufferId;
     upload.contentRevision = frame.contentRevision;
     upload.transport = frame.transport ==
@@ -232,25 +148,8 @@ bool RasterServiceClient::uploadExternalBuffer(
     upload.format = frame.format;
     upload.modifier = frame.modifier;
     upload.byteSize = frame.byteSize;
-    if (!raster_protocol::sendPacket(
-            m_fd, raster_protocol::Opcode::UploadExternalBuffer,
-            upload, frame.bufferFd)) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) disconnect();
-        return false;
-    }
-    if (frame.acquireFenceFd < 0) return true;
-
-    raster_protocol::SetExternalBufferFence fence{};
-    fence.grant = m_grant;
-    fence.bufferId = frame.bufferId;
-    fence.contentRevision = frame.contentRevision;
-    if (!raster_protocol::sendPacket(
-            m_fd, raster_protocol::Opcode::SetExternalBufferFence,
-            fence, frame.acquireFenceFd)) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) disconnect();
-        return false;
-    }
-    return true;
+    return m_connection.uploadExternalBuffer(
+        upload, frame.bufferFd, frame.acquireFenceFd);
 }
 
 bool RasterServiceClient::commitTransaction(
@@ -266,13 +165,7 @@ bool RasterServiceClient::commitTransaction(
         damage.isEmpty()) return false;
     const auto mutations = toProtocolMutations(renderTreeTransaction);
     if (mutations.size() > std::numeric_limits<uint32_t>::max()) return false;
-    const int memfd = displayList.empty()
-        ? -1
-        : createSealedMemfd(
-              "lcl-raster-frame", displayList.data(), displayList.size());
-    if (!displayList.empty() && memfd < 0) return false;
     raster_protocol::CommitTransaction transaction{};
-    transaction.grant = m_grant;
     transaction.configureSerial = configureSerial;
     transaction.frameSerial = frameSerial;
     transaction.baseFrameSerial = renderTreeTransaction.replacesTree
@@ -293,72 +186,48 @@ bool RasterServiceClient::commitTransaction(
         transaction.clientFrameStartNs = clientFrameStartNs;
         transaction.clientSubmitNs = monotonicNowNs();
     }
-    const bool sent = raster_protocol::sendCommitTransaction(
-        m_fd, transaction, mutations, memfd);
-    if (memfd >= 0) close(memfd);
-    if (!sent && errno != EAGAIN && errno != EWOULDBLOCK) disconnect();
-    return sent;
+    return m_connection.commitRetained(
+        transaction, mutations, displayList);
 }
 
 bool RasterServiceClient::submitPresentationAnimation(
         const raster_protocol::PresentationAnimation& animation) {
-    if (!connectIfNeeded() || animation.grant.surfaceId != m_grant.surfaceId ||
-        animation.grant.ownerPid != m_grant.ownerPid ||
-        animation.grant.flags != m_grant.flags ||
-        animation.grant.tokenHigh != m_grant.tokenHigh ||
-        animation.grant.tokenLow != m_grant.tokenLow ||
+    const auto& grant = m_connection.surfaceGrant();
+    if (!connectIfNeeded() || animation.grant.surfaceId != grant.surfaceId ||
+        animation.grant.ownerPid != grant.ownerPid ||
+        animation.grant.flags != grant.flags ||
+        animation.grant.tokenHigh != grant.tokenHigh ||
+        animation.grant.tokenLow != grant.tokenLow ||
         animation.transactionId == 0 || animation.nodeId == 0 ||
         animation.propertyMask == 0) {
         return false;
     }
-    const bool sent = raster_protocol::sendPresentationAnimation(m_fd, animation);
-    if (!sent && errno != EAGAIN && errno != EWOULDBLOCK) disconnect();
-    return sent;
+    return m_connection.submitPresentationAnimation(animation);
 }
 
 std::vector<RasterServiceEvent> RasterServiceClient::pollEvents() {
     std::vector<RasterServiceEvent> result;
-    if (m_fd < 0) return result;
-    while (true) {
-        raster_protocol::Header header{};
-        std::vector<uint8_t> payload;
-        int receivedFd = -1;
-        const auto status = raster_protocol::receivePacket(
-            m_fd, header, payload, receivedFd);
-        if (status == raster_protocol::ReceiveStatus::WouldBlock) break;
-        if (status == raster_protocol::ReceiveStatus::Closed ||
-            status == raster_protocol::ReceiveStatus::Error) {
-            disconnect();
-            if (receivedFd >= 0) close(receivedFd);
-            break;
-        }
-        if (status != raster_protocol::ReceiveStatus::Received) continue;
-        if (const auto* discarded = raster_protocol::payloadAs<
-                raster_protocol::FrameDiscarded>(
-                header, payload, raster_protocol::Opcode::FrameDiscarded)) {
+    for (auto& raw : m_connection.dispatch()) {
+        if (const auto* discarded = std::get_if<
+                raster_protocol::FrameDiscarded>(&raw)) {
             RasterServiceEvent event{};
             event.kind = RasterServiceEvent::Kind::FrameDiscarded;
             event.discarded = *discarded;
             result.push_back(event);
-        } else if (const auto* released = raster_protocol::payloadAs<
-                       raster_protocol::ExternalBufferReleased>(
-                       header, payload,
-                       raster_protocol::Opcode::ExternalBufferReleased)) {
+        } else if (auto* released = std::get_if<
+                       lcl::client::RasterBufferReleased>(&raw)) {
             RasterServiceEvent event{};
             event.kind = RasterServiceEvent::Kind::ExternalBufferReleased;
-            event.externalBufferRelease = {*released, receivedFd};
+            event.externalBufferRelease = {
+                released->message, released->releaseFence.release()};
             result.push_back(event);
-            receivedFd = -1;
-        } else if (const auto* animation = raster_protocol::payloadAs<
-                       raster_protocol::PresentationAnimationResult>(
-                       header, payload,
-                       raster_protocol::Opcode::PresentationAnimationResult)) {
+        } else if (const auto* animation = std::get_if<
+                       raster_protocol::PresentationAnimationResult>(&raw)) {
             RasterServiceEvent event{};
             event.kind = RasterServiceEvent::Kind::PresentationAnimationResult;
             event.animation = *animation;
             result.push_back(event);
         }
-        if (receivedFd >= 0) close(receivedFd);
     }
     return result;
 }

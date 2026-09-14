@@ -80,6 +80,19 @@ set_target_properties(test_android_client_raster PROPERTIES
 add_executable(test_android_window_client
     ${PROJECT_SOURCE_DIR}/tests/android/test_android_window_client.cpp
 )
+
+add_executable(test_android_native_surface_client
+    ${PROJECT_SOURCE_DIR}/tests/android/test_android_native_surface_client.cpp
+)
+target_include_directories(test_android_native_surface_client PRIVATE
+    ${PROJECT_SOURCE_DIR}
+)
+target_link_libraries(test_android_native_surface_client PRIVATE
+    lcl-client lcl-raster EGL GLESv3 android Threads::Threads
+)
+set_target_properties(test_android_native_surface_client PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
 target_include_directories(test_android_window_client PRIVATE
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/frameworks/ui/include
