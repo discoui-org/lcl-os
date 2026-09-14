@@ -1541,13 +1541,16 @@ def launch_qemu(
         ]
         log(f"SPICE render node matched to viewer EGL device: {render_node}")
     elif host_os() == "darwin":
+        cocoa_options = ["cocoa"]
+        if want_gl:
+            cocoa_options.append("gl=on")
+        cocoa_options.append("zoom-to-fit=on")
         if native:
-            disp = "cocoa,full-screen=on,zoom-to-fit=on"
+            cocoa_options.append("full-screen=on")
             extra_qemu = ["-full-screen"]
         elif mobile:
-            disp = "cocoa,zoom-to-fit=on,show-cursor=on"
-        else:
-            disp = "cocoa"
+            cocoa_options.append("show-cursor=on")
+        disp = ",".join(cocoa_options)
         display = ["-display", disp]
     else:
         # Linux: prefer software path (no gl) — reliable DRM/KMS in guest
