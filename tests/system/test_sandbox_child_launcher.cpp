@@ -9,15 +9,51 @@
 #include <fstream>
 #include <cstring>
 #include <fcntl.h>
+#include <linux/securebits.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
 
 namespace lcl::security {
 namespace {
+
+TEST(SandboxChildCredentialsTest, AcceptsKeepCapsAlreadyDisabledAndLocked) {
+    if (geteuid() != 0) {
+        GTEST_SKIP() << "securebit credential-drop coverage requires root";
+    }
+
+    const pid_t child = fork();
+    ASSERT_GE(child, 0);
+    if (child == 0) {
+        const int currentSecureBits = prctl(PR_GET_SECUREBITS, 0, 0, 0, 0);
+        if (currentSecureBits < 0 ||
+            (currentSecureBits & (SECBIT_KEEP_CAPS | SECBIT_KEEP_CAPS_LOCKED)) != 0 ||
+            prctl(PR_SET_SECUREBITS, currentSecureBits | SECBIT_KEEP_CAPS_LOCKED,
+                  0, 0, 0) != 0) {
+            _exit(77);
+        }
+
+        errno = 0;
+        if (prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) == 0 || errno != EPERM) {
+            _exit(2);
+        }
+        std::string error;
+        _exit(ensureSandboxKeepCapabilitiesDisabled(error) ? 0 : 3);
+    }
+
+    int status = 0;
+    ASSERT_EQ(waitpid(child, &status, 0), child);
+    ASSERT_TRUE(WIFEXITED(status));
+    if (WEXITSTATUS(status) == 77) {
+        GTEST_SKIP() << "test environment cannot lock disabled KEEP_CAPS";
+    }
+    EXPECT_EQ(WEXITSTATUS(status), 0);
+}
 
 class SandboxChildLauncherTest : public ::testing::Test {
 protected:

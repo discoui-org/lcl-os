@@ -45,6 +45,13 @@ struct SandboxChildLaunchSpec {
 
 bool validateSandboxChildLaunchSpec(const SandboxChildLaunchSpec& spec, std::string& error);
 
+/**
+ * Ensures a sandbox child cannot retain capabilities across its UID drop.
+ * Some Android root brokers lock an already-disabled KEEPCAPS setting and
+ * reject even a redundant PR_SET_KEEPCAPS(0).
+ */
+bool ensureSandboxKeepCapabilitiesDisabled(std::string& error);
+
 using SandboxChildReadyCallback =
     std::function<bool(pid_t processGroupId, std::string& error)>;
 

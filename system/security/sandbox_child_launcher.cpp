@@ -211,7 +211,7 @@ void closeLandlockDescriptors(SandboxLandlockRules& rules) {
     const pid_t expectedParent = getppid();
     const gid_t runtimeGroup = kApplicationRuntimeGid;
     if (!applyPortableResourceLimits(spec.hardening.resourceLimits) ||
-        prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0 || setgroups(1, &runtimeGroup) != 0 ||
+        !ensureSandboxKeepCapabilitiesDisabled(error) || setgroups(1, &runtimeGroup) != 0 ||
         setresgid(spec.identity.gid, spec.identity.gid, spec.identity.gid) != 0 ||
         setresuid(spec.identity.uid, spec.identity.uid, spec.identity.uid) != 0 ||
         prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != expectedParent ||
@@ -299,6 +299,25 @@ void waitForInnerSandboxChildAndExit(pid_t child) {
 }
 
 } // namespace
+
+bool ensureSandboxKeepCapabilitiesDisabled(std::string& error) {
+    error.clear();
+    const int keepCapabilities = prctl(PR_GET_KEEPCAPS, 0, 0, 0, 0);
+    if (keepCapabilities < 0) {
+        error = std::string("could not read sandbox KEEPCAPS state: ") +
+                std::strerror(errno);
+        return false;
+    }
+    if (keepCapabilities == 0) {
+        return true;
+    }
+    if (prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0) {
+        error = std::string("could not disable sandbox KEEPCAPS state: ") +
+                std::strerror(errno);
+        return false;
+    }
+    return true;
+}
 
 bool validateSandboxChildLaunchSpec(const SandboxChildLaunchSpec& spec, std::string& error) {
     error.clear();
