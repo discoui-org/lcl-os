@@ -5,8 +5,11 @@
 namespace lcl::security {
 namespace {
 
-constexpr std::array<PermissionDefinition, 9> kPermissionDefinitions{{
+constexpr std::array<PermissionDefinition, 11> kPermissionDefinitions{{
     {"network.client", PermissionEvaluationPhase::LaunchTime, true, false},
+    // Grants access to LCL's brokered GPU service, never to a host DRM node.
+    {"graphics.gpu", PermissionEvaluationPhase::LaunchTime, true, false},
+    {"graphics.render-node", PermissionEvaluationPhase::LaunchTime, true, false},
     {"files.user-selected", PermissionEvaluationPhase::BrokerTime, false, false},
     {"files.documents.read", PermissionEvaluationPhase::BrokerTime, false, false},
     {"files.documents.write", PermissionEvaluationPhase::BrokerTime, false, false},

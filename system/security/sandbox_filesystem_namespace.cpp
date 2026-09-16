@@ -145,6 +145,35 @@ bool bindMountFromDirectoryDescriptor(int sourceDescriptor, const std::string& t
     return false;
 }
 
+bool bindMountTrustedSysfs(int sourceDescriptor, const std::string& target,
+                           std::string& error) {
+    // sysfs rejects the fchdir(".") bind pattern used for ordinary
+    // directories on the QEMU kernel.  The descriptor was opened and
+    // filesystem-type validated by sandboxd before namespace isolation; bind
+    // the immutable kernel mountpoint only after inode-matching it to that FD.
+    struct stat pinned {};
+    struct stat current {};
+    if (fstat(sourceDescriptor, &pinned) != 0 || stat("/sys", &current) != 0 ||
+        !S_ISDIR(pinned.st_mode) || pinned.st_dev != current.st_dev ||
+        pinned.st_ino != current.st_ino) {
+        error = "trusted graphics sysfs mount changed before sandbox bind";
+        return false;
+    }
+    if (mount("/sys", target.c_str(), nullptr, MS_BIND, nullptr) != 0) {
+        error = std::string("could not bind trusted graphics sysfs: ") +
+                std::strerror(errno);
+        return false;
+    }
+    const unsigned long flags = MS_BIND | MS_REMOUNT | MS_RDONLY | MS_NOSUID |
+                                MS_NODEV | MS_NOEXEC;
+    if (mount(nullptr, target.c_str(), nullptr, flags, nullptr) == 0) {
+        return true;
+    }
+    error = std::string("could not harden trusted graphics sysfs bind: ") +
+            std::strerror(errno);
+    return false;
+}
+
 struct SandboxDirectorySourcePaths final {
     std::string appBundle;
     std::string system;
@@ -153,6 +182,7 @@ struct SandboxDirectorySourcePaths final {
     std::string preferences;
     std::string compositorSocket;
     std::string rasterSocket;
+    std::string gpuSocket;
 };
 
 bool capturePinnedDirectoryPath(int descriptor, std::string& path, std::string& error) {
@@ -179,7 +209,9 @@ bool captureSandboxDirectorySourcePaths(const SandboxFilesystemSources& sources,
            capturePinnedDirectoryPath(sources.cacheDescriptor, paths.cache, error) &&
            capturePinnedDirectoryPath(sources.preferencesDescriptor, paths.preferences, error) &&
            capturePinnedDirectoryPath(sources.compositorSocketDescriptor, paths.compositorSocket, error) &&
-           capturePinnedDirectoryPath(sources.rasterSocketDescriptor, paths.rasterSocket, error);
+           capturePinnedDirectoryPath(sources.rasterSocketDescriptor, paths.rasterSocket, error) &&
+           (sources.gpuSocketDescriptor < 0 ||
+            capturePinnedDirectoryPath(sources.gpuSocketDescriptor, paths.gpuSocket, error));
 }
 
 bool bindMountRuntimeSocket(int sourceDescriptor, const std::string& sourcePath,
@@ -248,6 +280,31 @@ bool createMinimalDeviceTree(const std::string& target, std::string& error) {
         major(status.st_rdev) != 1 || minor(status.st_rdev) != 3 || status.st_uid != 0 ||
         status.st_gid != 0 || chmod(nullDevice.c_str(), 0666) != 0) {
         error = "sandbox /dev/null is unsafe";
+        return false;
+    }
+    return true;
+}
+
+bool addPrivateRenderNode(int descriptor, const std::string& devices,
+                          const AppIdentity& identity, std::string& error) {
+    if (descriptor < 0) return true;
+    struct stat source {};
+    if (fstat(descriptor, &source) != 0 || !S_ISCHR(source.st_mode) ||
+        major(source.st_rdev) != 226 || minor(source.st_rdev) < 128 ||
+        minor(source.st_rdev) > 255) {
+        error = "trusted DRM render-node descriptor is invalid";
+        return false;
+    }
+    const std::string dri = devices + "/dri";
+    if (!ensureDirectory(dri, 0755, error)) return false;
+    const std::string node = dri + "/renderD" + std::to_string(minor(source.st_rdev));
+    if (mknod(node.c_str(), S_IFCHR | 0600, source.st_rdev) != 0) {
+        error = std::string("could not create private DRM render node: ") + std::strerror(errno);
+        return false;
+    }
+    if (chown(node.c_str(), identity.uid, identity.gid) != 0 ||
+        chmod(node.c_str(), 0600) != 0) {
+        error = std::string("could not assign private DRM render node: ") + std::strerror(errno);
         return false;
     }
     return true;
@@ -337,12 +394,18 @@ bool enterSandboxFilesystemNamespace(const SandboxFilesystemSources& sources,
     const std::string user = root + "/usr";
     const std::string devices = root + "/dev";
     const std::string proc = root + "/proc";
+    const std::string sysfs = root + "/sys";
+    const std::string share = user + "/share";
+    const std::string etc = root + "/etc";
     const std::string runtime = root + "/Runtime";
     for (const std::string* target : {&app, &system, &data, &cache, &preferences, &temporary,
                                       &user, &devices, &proc, &runtime}) {
         if (!ensureDirectory(*target, 0755, error)) {
             return false;
         }
+    }
+    if (sources.sysfsDescriptor >= 0 && !ensureDirectory(sysfs, 0755, error)) {
+        return false;
     }
 
     if (!bindMountFromDirectoryDescriptor(appSource.get(), app, true, false, error) ||
@@ -358,6 +421,19 @@ bool enterSandboxFilesystemNamespace(const SandboxFilesystemSources& sources,
                                 runtime + "/lcl-raster.sock", error)) {
         return false;
     }
+    if (sources.gpuSocketDescriptor >= 0 &&
+        !bindMountRuntimeSocket(sources.gpuSocketDescriptor, sourcePaths.gpuSocket,
+                                runtime + "/lcl-gpu.sock", error)) {
+        return false;
+    }
+    // Mesa/libdrm discovers the DRM device topology through sysfs.  This is a
+    // non-recursive bind of the verified sysfs root: it deliberately excludes
+    // subordinate mounts such as cgroup2, is read-only, and exists only for a
+    // bundle that holds graphics.render-node.
+    if (sources.sysfsDescriptor >= 0 &&
+        !bindMountTrustedSysfs(sources.sysfsDescriptor, sysfs, error)) {
+        return false;
+    }
     // The kernel resolves an ELF interpreter before it starts the app.  LCL's
     // canonical rootfs keeps that loader and shared objects under /System;
     // expose only root-owned links to that tree instead of bind-mounting the
@@ -368,11 +444,22 @@ bool enterSandboxFilesystemNamespace(const SandboxFilesystemSources& sources,
         !createSystemLibraryLink(user + "/lib64", "../System/Library/Libraries", error)) {
         return false;
     }
+    if (sources.renderNodeDescriptor >= 0) {
+        // GLVND discovers Mesa's EGL vendor JSON at /usr/share/glvnd.  The
+        // sandbox builds its own /usr, so restore only this root-controlled
+        // metadata path for the explicit graphics capability.
+        if (!ensureDirectory(share, 0755, error) || !ensureDirectory(etc, 0755, error) ||
+            !createSystemLibraryLink(share + "/glvnd", "../../System/Library/EGL/glvnd", error) ||
+            !createSystemLibraryLink(etc + "/glvnd", "../System/Library/EGL/glvnd", error)) {
+            return false;
+        }
+    }
     const std::string temporaryOptions = "mode=0700,uid=" + std::to_string(identity.uid) +
                                          ",gid=" + std::to_string(identity.gid) + "," +
                                          kSandboxTemporarySize;
     if (!mountTmpfs(temporary, temporaryOptions, false, error) ||
         !createMinimalDeviceTree(devices, error) ||
+        !addPrivateRenderNode(sources.renderNodeDescriptor, devices, identity, error) ||
         !mountPrivateProc(proc, error)) {
         return false;
     }
@@ -389,6 +476,13 @@ bool enterSandboxFilesystemNamespace(const SandboxFilesystemSources& sources,
     if (!deviceDescriptor.valid()) {
         return false;
     }
+    ScopedFd sysfsDescriptor;
+    if (sources.sysfsDescriptor >= 0) {
+        sysfsDescriptor = openSandboxDirectory("/sys", error);
+        if (!sysfsDescriptor.valid()) {
+            return false;
+        }
+    }
 
     SandboxLandlockRules prepared{};
     prepared.identity = identity;
@@ -396,12 +490,14 @@ bool enterSandboxFilesystemNamespace(const SandboxFilesystemSources& sources,
     prepared.executableDescriptor = executableDescriptor;
     prepared.temporaryDescriptor = temporaryDescriptor.get();
     prepared.deviceDescriptor = deviceDescriptor.get();
+    prepared.sysfsDescriptor = sysfsDescriptor.get();
     if (!validateSandboxLandlockRules(prepared, error)) {
         return false;
     }
     landlockRules = prepared;
     landlockRules.temporaryDescriptor = temporaryDescriptor.release();
     landlockRules.deviceDescriptor = deviceDescriptor.release();
+    landlockRules.sysfsDescriptor = sysfsDescriptor.release();
     return true;
 }
 

@@ -1390,6 +1390,7 @@ private:
                            &socketTypeSize) == 0 &&
                 socketType == SOCK_SEQPACKET && setNonBlocking(receivedFd);
             if (!valid) {
+                std::cerr << "[LCL Rasterd] rejected native-buffer sideband registration\n";
                 if (receivedFd >= 0) close(receivedFd);
                 return;
             }
@@ -1492,6 +1493,10 @@ private:
 #endif
             }
             if (!commonValid || !transportValid) {
+                if (ahb) {
+                    std::cerr << "[LCL Rasterd] rejected AHardwareBuffer metadata for buffer "
+                              << upload->bufferId << "\n";
+                }
                 if (receivedFd >= 0) close(receivedFd);
                 lcl::raster_protocol::ExternalBufferReleased released{};
                 released.bufferId = upload->bufferId;
@@ -1557,6 +1562,8 @@ private:
                     (description.usage &
                      AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE) != 0;
                 if (!validHandle) {
+                    std::cerr << "[LCL Rasterd] rejected AHardwareBuffer handle for buffer "
+                              << upload->bufferId << "\n";
                     if (handle) AHardwareBuffer_release(handle);
                     lcl::raster_protocol::ExternalBufferReleased released{};
                     released.bufferId = upload->bufferId;
@@ -1588,6 +1595,7 @@ private:
             const ExternalKey key{fence->bufferId, fence->contentRevision};
             if (!surface || receivedFd < 0 ||
                 !isSyncFenceDescriptor(receivedFd)) {
+                std::cerr << "[LCL Rasterd] rejected external-buffer acquire fence\n";
                 if (receivedFd >= 0) close(receivedFd);
                 return;
             }
@@ -1644,8 +1652,21 @@ private:
                     ExternalBufferTransport::ImmutableShmArgb8888 &&
                 contentWidth <= resource->width &&
                 contentHeight <= resource->height && !bufferInFlight;
-            if (!valid || !publishNativeBufferFrame(
-                    *surface, *commit, *resource)) {
+            const bool published = valid && publishNativeBufferFrame(
+                *surface, *commit, *resource);
+            if (!published) {
+                std::cerr << "[LCL Rasterd] rejected native-buffer commit for buffer "
+                          << commit->bufferId
+                          << " valid=" << valid
+                          << " metadata=" << validMetadata
+                          << " surface=" << static_cast<bool>(surface)
+                          << " resource=" << static_cast<bool>(resource)
+                          << " extent=" << contentWidth << "x" << contentHeight
+                          << " resourceExtent="
+                          << (resource ? std::to_string(resource->width) + "x" +
+                                             std::to_string(resource->height)
+                                       : std::string{"none"})
+                          << " inFlight=" << bufferInFlight << "\n";
                 if (receivedFd >= 0) close(receivedFd);
                 discard(client.fd, *commit,
                         surface ? lcl::raster_protocol::DiscardReason::InvalidFrame
@@ -2791,6 +2812,7 @@ private:
             if (!native || !native->getHandle() ||
                 AHardwareBuffer_sendHandleToUnixSocket(
                     native->getHandle(), m_nativeBufferFd) != 0) {
+                std::cerr << "[LCL Rasterd] could not forward AHardwareBuffer to compositor\n";
                 m_running = false;
                 return false;
             }
@@ -2799,6 +2821,7 @@ private:
 #endif
         if (!lcl::raster_protocol::sendPacket(
                 m_compositorFd, Opcode::LayerReady, ready, descriptor)) {
+            std::cerr << "[LCL Rasterd] could not publish native LayerReady\n";
             if (descriptor >= 0 && descriptor != resource.bufferFd) {
                 close(descriptor);
             }
@@ -2830,10 +2853,14 @@ private:
         frame.geometryGeneration = submit.geometryGeneration;
         frame.rootNodeId = ready.nodeId;
         frame.layerCount = 1;
-        return lcl::raster_protocol::sendPresentationFrameReady(
+        const bool frameReady = lcl::raster_protocol::sendPresentationFrameReady(
             m_compositorFd, frame,
             std::span<const lcl::raster_protocol::PresentationLayerState>(
                 &layer, 1));
+        if (!frameReady) {
+            std::cerr << "[LCL Rasterd] could not publish native PresentationFrameReady\n";
+        }
+        return frameReady;
     }
 
     void discard(int clientFd, const CommitTransaction& submit,

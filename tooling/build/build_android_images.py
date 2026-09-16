@@ -133,7 +133,7 @@ def parse_gpt_partitions(disk_path: Path) -> list[dict]:
 
 
 def modify_system_image(system_ext4_path: Path, android_core: Path,
-                        rasterd: Path) -> None:
+                        rasterd: Path, gpud: Path) -> None:
     """Modifies the unpacked ext4 system.img using debugfs for platform substrate only."""
     log("Modifying system.img (configuring LCL Android substrate & init services)...")
 
@@ -210,9 +210,10 @@ service lcl-bootstrap /system/bin/lcl-bootstrap.sh
 
 BOOT_PID=$$
 CORE_PID=""
+GPUD_PID=""
 SESSION_RUNNER_PID=""
 
-trap 'EXIT_CODE=$?; echo "[LCL BOOT] BOOTSTRAP EXIT rc=$EXIT_CODE (core_pid=$CORE_PID session_runner_pid=$SESSION_RUNNER_PID)" >> /data/local/tmp/lcl-bootstrap.log; echo "[LCL BOOT] BOOTSTRAP EXIT rc=$EXIT_CODE"' EXIT
+trap 'EXIT_CODE=$?; echo "[LCL BOOT] BOOTSTRAP EXIT rc=$EXIT_CODE (core_pid=$CORE_PID gpud_pid=$GPUD_PID session_runner_pid=$SESSION_RUNNER_PID)" >> /data/local/tmp/lcl-bootstrap.log; echo "[LCL BOOT] BOOTSTRAP EXIT rc=$EXIT_CODE"' EXIT
 
 log_boot() {
     echo "[LCL BOOT] $1"
@@ -235,8 +236,9 @@ if mount | grep -q " /Runtime "; then
     chmod 0755 /Runtime 2>/dev/null
     chmod 0700 /Runtime/Sessions/Rei 2>/dev/null
     chmod 1777 /Runtime/Temporary 2>/dev/null
-    rm -f /Runtime/lcl-compositor.sock /Runtime/lcl-sessiond.sock 2>/dev/null
+    rm -f /Runtime/lcl-compositor.sock /Runtime/lcl-gpu.sock /Runtime/lcl-sessiond.sock 2>/dev/null
     : > /Runtime/lcl-core.log 2>/dev/null
+    : > /Runtime/lcl-gpud.log 2>/dev/null
     : > /Runtime/lcl-sessiond.log 2>/dev/null
     : > /Runtime/lcl-shell.log 2>/dev/null
     : > /Runtime/lcl-session-runner.log 2>/dev/null
@@ -377,7 +379,12 @@ else
     log_boot "/mnt/lcl/Runtime already bound = REUSED"
 fi
 
-# 5. Start Android Platform Compositor in background
+# 5. Start the optional Android Vulkan broker, then the platform compositor.
+if [ -x /system/bin/lcl-gpud-android ]; then
+    /system/bin/lcl-gpud-android > /Runtime/lcl-gpud.log 2>&1 &
+    GPUD_PID=$!
+    log_boot "step=gpud-spawn pid=$GPUD_PID (optional)"
+fi
 log_boot "step=core-spawn begin"
 /system/bin/lcl-core-android > /Runtime/lcl-core.log 2>&1 &
 CORE_PID=$!
@@ -554,6 +561,11 @@ log_boot "--- /Runtime/lcl-core.log ---"
 cat /Runtime/lcl-core.log 2>/dev/null | while read -r line; do log_boot "  $line"; done
 log_boot "-----------------------------"
 
+if [ -n "$GPUD_PID" ] && kill -0 $GPUD_PID 2>/dev/null; then
+    kill -TERM $GPUD_PID 2>/dev/null || true
+    wait $GPUD_PID 2>/dev/null || true
+fi
+
 sleep 5
 """
     lcl_bootstrap_path = tmp_dir / "lcl-bootstrap.sh"
@@ -612,6 +624,9 @@ sleep 5
         "rm lcl-rasterd-android",
         f"write {rasterd} lcl-rasterd-android",
         "sif lcl-rasterd-android mode 0100755",
+        "rm lcl-gpud-android",
+        f"write {gpud} lcl-gpud-android",
+        "sif lcl-gpud-android mode 0100755",
         "rm lcl-bootstrap.sh",
         f"write {lcl_bootstrap_path} lcl-bootstrap.sh",
         "sif lcl-bootstrap.sh mode 0100755",
@@ -697,6 +712,10 @@ def build_android_images() -> tuple[Path, Path]:
     if not rasterd.is_file():
         raise FileNotFoundError(f"Android raster service ({rasterd}) not found.")
     log(f"  Android Raster Service SHA-256: {get_sha256(rasterd)}")
+    gpud = BUILD_ANDROID_DIR / "lcl-gpud-android"
+    if not gpud.is_file():
+        raise FileNotFoundError(f"Android GPU broker ({gpud}) not found.")
+    log(f"  Android GPU Broker SHA-256: {get_sha256(gpud)}")
 
     # 3. Parse GPT partitions dynamically
     partitions = parse_gpt_partitions(paths.stock_system)
@@ -730,7 +749,7 @@ def build_android_images() -> tuple[Path, Path]:
 
     # 6. Modify ONLY system.img (vendor.img, product.img, system_ext.img, system_dlkm.img stay 100% stock)
     system_img = unpacked_dir / "system.img"
-    modify_system_image(system_img, android_core, rasterd)
+    modify_system_image(system_img, android_core, rasterd, gpud)
 
     # 7. Rebuild dynamic super partition with lpmake
     log("Rebuilding dynamic super partition with lpmake...")

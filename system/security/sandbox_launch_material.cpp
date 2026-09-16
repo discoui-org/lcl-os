@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -77,12 +78,26 @@ void closeSources(SandboxFilesystemSources& sources) {
     for (int* descriptor : {&sources.appBundleDescriptor, &sources.systemDescriptor,
                             &sources.dataDescriptor, &sources.cacheDescriptor,
                             &sources.preferencesDescriptor, &sources.compositorSocketDescriptor,
-                            &sources.rasterSocketDescriptor}) {
+                            &sources.rasterSocketDescriptor, &sources.gpuSocketDescriptor,
+                            &sources.renderNodeDescriptor,
+                            &sources.sysfsDescriptor}) {
         if (*descriptor >= 0) {
             close(*descriptor);
             *descriptor = -1;
         }
     }
+}
+
+bool hasRenderNodePermission(const SandboxProfile& profile) {
+    return std::binary_search(profile.effectivePermissions.begin(),
+                              profile.effectivePermissions.end(),
+                              std::string{"graphics.render-node"});
+}
+
+bool hasGpuPermission(const SandboxProfile& profile) {
+    return std::binary_search(profile.effectivePermissions.begin(),
+                              profile.effectivePermissions.end(),
+                              std::string{"graphics.gpu"});
 }
 
 } // namespace
@@ -168,6 +183,16 @@ bool SandboxLaunchMaterialRegistry::registerMaterial(const SandboxLaunchMaterial
         duplicateDescriptor(input.filesystemSources.compositorSocketDescriptor, error);
     material->filesystemSources.rasterSocketDescriptor =
         duplicateDescriptor(input.filesystemSources.rasterSocketDescriptor, error);
+    if (input.filesystemSources.gpuSocketDescriptor >= 0) {
+        material->filesystemSources.gpuSocketDescriptor =
+            duplicateDescriptor(input.filesystemSources.gpuSocketDescriptor, error);
+    }
+    if (input.filesystemSources.renderNodeDescriptor >= 0) {
+        material->filesystemSources.renderNodeDescriptor =
+            duplicateDescriptor(input.filesystemSources.renderNodeDescriptor, error);
+        material->filesystemSources.sysfsDescriptor =
+            duplicateDescriptor(input.filesystemSources.sysfsDescriptor, error);
+    }
     material->executableDescriptor = duplicateDescriptor(input.executableDescriptor, error);
     if (input.application.runtime == SandboxRuntime::JavaScript) {
         material->runtimeDescriptor = duplicateDescriptor(input.runtimeDescriptor, error);
@@ -282,6 +307,25 @@ bool SandboxLaunchMaterialRegistry::makeChildLaunchSpec(const SandboxLaunchPlan&
     spec.executableDescriptor = material.executableDescriptor;
     spec.runtimeDescriptor = material.runtimeDescriptor;
     spec.arguments = material.arguments;
+    const bool needsRenderNode = hasRenderNodePermission(plan.profile);
+    if (needsRenderNode != (spec.filesystemSources.renderNodeDescriptor >= 0) ||
+        needsRenderNode != (spec.filesystemSources.sysfsDescriptor >= 0)) {
+        error = needsRenderNode
+            ? "graphics.render-node was granted without trusted DRM/sysfs sources"
+            : "sandbox launch material retains ungranted graphics sources";
+        return false;
+    }
+    const bool needsGpu = hasGpuPermission(plan.profile);
+    if (needsGpu && spec.filesystemSources.gpuSocketDescriptor < 0) {
+        error = "graphics.gpu was granted without an lcl-gpud endpoint";
+        return false;
+    }
+    // Material remains descriptor-pinned in sandboxd so a later permission
+    // decision can be evaluated at launch. The child receives this endpoint
+    // only with the effective capability; no app gets a global Runtime mount.
+    if (!needsGpu) {
+        spec.filesystemSources.gpuSocketDescriptor = -1;
+    }
     return validateSandboxChildLaunchSpec(spec, error);
 }
 

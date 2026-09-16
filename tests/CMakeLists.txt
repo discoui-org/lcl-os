@@ -30,6 +30,7 @@ add_executable(lcl_unit_tests
     system/test_bundle_launch_gate.cpp
     system/test_bundle_signature_verifier.cpp
     system/test_permission_policy.cpp
+    system/test_system_permission_profile.cpp
     system/test_permission_store.cpp
     system/test_portal_elevation_authority.cpp
     system/test_session_user.cpp
@@ -114,6 +115,52 @@ target_link_libraries(lcl_unit_tests PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(lcl_unit_tests WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+add_executable(lcl_gpu_protocol_tests system/test_gpu_protocol.cpp)
+target_include_directories(lcl_gpu_protocol_tests PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(lcl_gpu_protocol_tests PRIVATE
+    gtest_main lcl-gpu-protocol Threads::Threads
+)
+set_target_properties(lcl_gpu_protocol_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+add_test(NAME GpuProtocol COMMAND lcl_gpu_protocol_tests)
+set_tests_properties(GpuProtocol PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+add_executable(lcl_gpu_client_tests frameworks/gpu/test_gpu_client.cpp)
+target_include_directories(lcl_gpu_client_tests PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(lcl_gpu_client_tests PRIVATE
+    gtest_main lcl-gpu-client Threads::Threads
+)
+set_target_properties(lcl_gpu_client_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+add_test(NAME GpuClient COMMAND lcl_gpu_client_tests)
+set_tests_properties(GpuClient PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+# Upstream gfxstream headers and the adapter are deliberately Android-only.
+# Android production builds disable BUILD_TESTS, so this target exists only in
+# an explicit Android backend test configuration.
+if(TARGET lcl-gfxstream-guest-adapter)
+    add_executable(lcl_gfxstream_guest_adapter_tests
+        frameworks/gfxstream/test_guest_socket_iostream.cpp
+    )
+    target_include_directories(lcl_gfxstream_guest_adapter_tests PRIVATE ${PROJECT_SOURCE_DIR})
+    target_link_libraries(lcl_gfxstream_guest_adapter_tests PRIVATE
+        gtest_main lcl-gfxstream-guest-adapter lcl-gpu-client Threads::Threads
+    )
+    set_target_properties(lcl_gfxstream_guest_adapter_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+    add_test(NAME GfxstreamGuestAdapter COMMAND lcl_gfxstream_guest_adapter_tests)
+    set_tests_properties(GfxstreamGuestAdapter PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+endif()
+
+if(TARGET lcl_vulkan_icd_tests)
+    add_test(NAME LclVulkanIcd COMMAND lcl_vulkan_icd_tests)
+    set_tests_properties(LclVulkanIcd PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+endif()
+
 add_test(NAME LclUiBoundarySmoke COMMAND lcl_ui_boundary_smoke)
 set_tests_properties(LclUiBoundarySmoke PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
@@ -141,3 +188,9 @@ add_test(
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tooling/test_skia_packages.py
 )
 set_tests_properties(SkiaPackageRelease PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+add_test(
+    NAME RootfsBuilder
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tooling/test_build_rootfs.py
+)
+set_tests_properties(RootfsBuilder PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})

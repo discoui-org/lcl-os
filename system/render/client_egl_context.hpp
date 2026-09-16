@@ -74,6 +74,10 @@ public:
     int createNativeFence() override;
 
     bool hasDmaBufPool() const { return !m_dmaBufs.empty(); }
+    /** Diagnostic for a failed exportable-native-buffer allocation. */
+    const std::string& dmaBufError() const { return m_dmaBufError; }
+    /** Diagnostic for a failed EGL/GBM initialization. */
+    const std::string& initializationError() const { return m_initializationError; }
     bool usesAndroidHardwareBuffer() const {
 #if defined(__ANDROID__)
         return hasDmaBufPool();
@@ -135,6 +139,8 @@ private:
     uint32_t m_dmaBufCapacityWidth{0};
     uint32_t m_dmaBufCapacityHeight{0};
     bool m_dmaBufTransportLogged{false};
+    std::string m_dmaBufError;
+    std::string m_initializationError;
     std::unordered_map<uint32_t, EGLImageKHR> m_importedDmaBufImages;
 };
 

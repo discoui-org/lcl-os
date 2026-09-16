@@ -21,7 +21,7 @@ class AndroidBuildTargetsTest(unittest.TestCase):
             lcl_main.ROOT_DIR / "out" / "android" / "aarch64",
         )
 
-    def test_normal_android_build_includes_core_and_raster_service(self) -> None:
+    def test_normal_android_build_includes_core_raster_and_gpu_broker(self) -> None:
         args = argparse.Namespace(
             jobs=4,
             rebuild=False,
@@ -48,7 +48,7 @@ class AndroidBuildTargetsTest(unittest.TestCase):
         target_end = build_command.index("-j")
         self.assertEqual(
             build_command[target_start:target_end],
-            ["lcl-core-android", "lcl-rasterd-android"],
+            ["lcl-core-android", "lcl-rasterd-android", "lcl-gpud-android"],
         )
 
     def test_arm64_rootfs_build_does_not_build_android_app_binaries(self) -> None:
@@ -75,7 +75,7 @@ class AndroidBuildTargetsTest(unittest.TestCase):
         target_end = build_command.index("-j")
         self.assertEqual(
             build_command[target_start:target_end],
-            ["lcl-core-android", "lcl-rasterd-android"],
+            ["lcl-core-android", "lcl-rasterd-android", "lcl-gpud-android"],
         )
 
 

@@ -8,6 +8,7 @@
 #include "system/security/bundle_signature_backend.hpp"
 #include "system/security/bundle_signature_verifier.hpp"
 #include "system/security/session_user.hpp"
+#include "system/security/system_permission_profile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -593,9 +594,11 @@ SessionService::launchSandboxed(const core::AppBundleMetadata &app,
       return response;
     }
   }
-  const std::vector<std::string> grantedPermissions =
-      m_permissionStore.grantedPermissions(permissionSubject,
-                                           app.requestedPermissions, error);
+  const std::vector<std::string> grantedPermissions = isSystemImageApplication(app)
+      ? lcl::security::staticSystemImagePermissionGrants(app.appId,
+                                                          app.requestedPermissions)
+      : m_permissionStore.grantedPermissions(permissionSubject,
+                                             app.requestedPermissions, error);
   if (!error.empty()) {
     response.status = 3;
     response.message = "lcl-sandboxd launch rejected because permission policy is unavailable: " +

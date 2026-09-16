@@ -1,0 +1,10 @@
+{
+  "id": "org.lcl.client-gpu-probe",
+  "name": "GPU Transport Probe",
+  "version": "1.0.0",
+  "executable": "Executables/ClientGpuProbe",
+  "icon": "Resources/Icon.png",
+  "runtime": "org.lcl.native",
+  "type": "gui",
+  "requestedPermissions": ["graphics.render-node"]
+}

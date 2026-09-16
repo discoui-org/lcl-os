@@ -20,6 +20,8 @@ struct SandboxLandlockRules {
     int executableDescriptor{-1};
     int temporaryDescriptor{-1};
     int deviceDescriptor{-1};
+    /** Read-only sysfs view paired with graphics.render-node, if present. */
+    int sysfsDescriptor{-1};
 };
 
 /** Verifies ownership and descriptor shape before a Landlock ruleset is built. */

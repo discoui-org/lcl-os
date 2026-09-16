@@ -13,10 +13,20 @@ struct StaticProfile {
 };
 
 constexpr std::array<std::string_view, 0> kNoGrants{};
-constexpr std::array<StaticProfile, 3> kProfiles{{
+constexpr std::array<std::string_view, 1> kGpuTransportProbeGrants{{"graphics.render-node"}};
+constexpr std::array<std::string_view, 1> kGpuPresentationProbeGrants{{"graphics.gpu"}};
+// Qt Smoke is the sole current system-image consumer of the brokered GPU
+// capability.  It still explicitly requests the capability in its manifest;
+// this profile only decides whether that request is granted for the image.
+constexpr std::array<std::string_view, 2> kQtSmokeGrants{{"graphics.gpu",
+                                                           "graphics.render-node"}};
+constexpr std::array<StaticProfile, 6> kProfiles{{
     {"org.lcl.settings", kNoGrants},
     {"org.lcl.sandbox-probe", kNoGrants},
     {"org.lcl.sandbox-test", kNoGrants},
+    {"org.lcl.client-gpu-probe", kGpuTransportProbeGrants},
+    {"org.lcl.gpu-presentation-probe", kGpuPresentationProbeGrants},
+    {"org.lcl.qt.smoke", kQtSmokeGrants},
 }};
 
 } // namespace

@@ -4,6 +4,10 @@ target_include_directories(lcl-protocol PUBLIC ${PROJECT_SOURCE_DIR})
 add_library(lcl-raster-protocol STATIC ipc/raster_protocol.cpp)
 target_include_directories(lcl-raster-protocol PUBLIC ${PROJECT_SOURCE_DIR})
 
+add_library(lcl-gpu-protocol STATIC ipc/gpu_protocol.cpp)
+target_include_directories(lcl-gpu-protocol PUBLIC ${PROJECT_SOURCE_DIR})
+set_target_properties(lcl-gpu-protocol PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(lcl-path-raster STATIC render/path_rasterizer.cpp)
 target_include_directories(lcl-path-raster PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(lcl-path-raster PUBLIC lcl-graphics)
@@ -136,6 +140,23 @@ target_link_libraries(lcl-core-engine PUBLIC
 )
 
 if(ANDROID)
+    add_executable(lcl-gpud-android
+        gpu/gpud_main.cpp
+        gpu/vulkan_clear_renderer.cpp
+    )
+    target_link_libraries(lcl-gpud-android PRIVATE
+        lcl-gpu-protocol vulkan android Threads::Threads
+    )
+    set_target_properties(lcl-gpud-android PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+
+    add_executable(lcl-gpu-control-probe gpu/gpu_control_probe.cpp)
+    target_link_libraries(lcl-gpu-control-probe PRIVATE lcl-gpu-protocol Threads::Threads)
+    set_target_properties(lcl-gpu-control-probe PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+
     add_executable(lcl-rasterd-android
         render/rasterd_main.cpp
         render/client_egl_context.cpp
@@ -163,6 +184,28 @@ else()
         ${DRM_CFLAGS_OTHER} ${GBM_CFLAGS_OTHER} ${EGL_CFLAGS_OTHER} ${GLES2_CFLAGS_OTHER}
     )
     set_target_properties(lcl-rasterd PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+
+    # Deliberately standalone canonical-client diagnostic. It verifies the
+    # same GBM/EGL/DMA-BUF path that a same-binary Qt Quick client must use on
+    # both Linux and Android substrates, without involving Qt or lcl-ui.
+    add_executable(lcl-client-gpu-probe
+        ${PROJECT_SOURCE_DIR}/tooling/probes/client_gpu_probe.cpp
+    )
+    target_include_directories(lcl-client-gpu-probe PRIVATE
+        ${PROJECT_SOURCE_DIR} ${DRM_INCLUDE_DIRS} ${GBM_INCLUDE_DIRS}
+        ${EGL_INCLUDE_DIRS} ${GLES2_INCLUDE_DIRS}
+    )
+    target_link_libraries(lcl-client-gpu-probe PRIVATE
+        ${DRM_LIBRARIES} ${GBM_LIBRARIES} ${EGL_LIBRARIES}
+        ${GLES2_LIBRARIES}
+    )
+    target_compile_options(lcl-client-gpu-probe PRIVATE
+        ${DRM_CFLAGS_OTHER} ${GBM_CFLAGS_OTHER} ${EGL_CFLAGS_OTHER}
+        ${GLES2_CFLAGS_OTHER}
+    )
+    set_target_properties(lcl-client-gpu-probe PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     )
 endif()

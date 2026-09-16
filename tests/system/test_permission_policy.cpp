@@ -12,6 +12,12 @@ TEST(PermissionPolicyTest, HasAClosedVocabularyWithExplicitEnforcementPhase) {
     EXPECT_TRUE(network->requiresProcessRestart);
     EXPECT_FALSE(network->requiresVisibleConsent);
 
+    const PermissionDefinition* gpu = findPermissionDefinition("graphics.gpu");
+    ASSERT_NE(gpu, nullptr);
+    EXPECT_EQ(gpu->evaluationPhase, PermissionEvaluationPhase::LaunchTime);
+    EXPECT_TRUE(gpu->requiresProcessRestart);
+    EXPECT_FALSE(gpu->requiresVisibleConsent);
+
     const PermissionDefinition* documents = findPermissionDefinition("files.documents.write");
     ASSERT_NE(documents, nullptr);
     EXPECT_EQ(documents->evaluationPhase, PermissionEvaluationPhase::BrokerTime);

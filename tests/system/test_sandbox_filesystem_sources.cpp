@@ -28,8 +28,10 @@ protected:
     int preferencesDescriptor_{-1};
     int compositorSocketDescriptor_{-1};
     int rasterSocketDescriptor_{-1};
+    int gpuSocketDescriptor_{-1};
     int compositorSocketFd_{-1};
     int rasterSocketFd_{-1};
+    int gpuSocketFd_{-1};
     int executableDescriptor_{-1};
     int temporaryDescriptor_{-1};
     int deviceDescriptor_{-1};
@@ -62,6 +64,7 @@ protected:
         };
         makeRuntimeSocket("compositor.sock", compositorSocketFd_, compositorSocketDescriptor_);
         makeRuntimeSocket("raster.sock", rasterSocketFd_, rasterSocketDescriptor_);
+        makeRuntimeSocket("gpu.sock", gpuSocketFd_, gpuSocketDescriptor_);
         std::ofstream executable(root_ / "App" / "app");
         executable << "sandbox executable";
         executable.close();
@@ -91,7 +94,8 @@ protected:
                                      cacheDescriptor_, preferencesDescriptor_, temporaryDescriptor_,
                                      executableDescriptor_, deviceDescriptor_,
                                      compositorSocketDescriptor_, rasterSocketDescriptor_,
-                                     compositorSocketFd_, rasterSocketFd_}) {
+                                     gpuSocketDescriptor_, compositorSocketFd_, rasterSocketFd_,
+                                     gpuSocketFd_}) {
             if (descriptor >= 0) {
                 close(descriptor);
             }
@@ -134,6 +138,24 @@ TEST_F(SandboxFilesystemSourcesTest, RejectsAStorageDirectoryWithLoosePermission
     std::string error;
     EXPECT_FALSE(validateSandboxFilesystemSources(validSources(), identity_, error));
     EXPECT_NE(error.find("app-owned 0700"), std::string::npos);
+}
+
+TEST_F(SandboxFilesystemSourcesTest, AcceptsAnOptionalPinnedGpuEndpoint) {
+    SandboxFilesystemSources sources = validSources();
+    sources.gpuSocketDescriptor = gpuSocketDescriptor_;
+
+    std::string error;
+    EXPECT_TRUE(validateSandboxFilesystemSources(sources, identity_, error)) << error;
+    EXPECT_TRUE(validateSandboxRuntimeEndpointGeneration(sources, error)) << error;
+}
+
+TEST_F(SandboxFilesystemSourcesTest, RejectsAnUnsafeOptionalGpuEndpoint) {
+    SandboxFilesystemSources sources = validSources();
+    sources.gpuSocketDescriptor = dataDescriptor_;
+
+    std::string error;
+    EXPECT_FALSE(validateSandboxFilesystemSources(sources, identity_, error));
+    EXPECT_EQ(error, "sandbox GPU source is not a protected application runtime socket");
 }
 
 TEST(SandboxFilesystemSourcesPathTest, AcceptsOnlySafeBundleRelativeExecutablePaths) {

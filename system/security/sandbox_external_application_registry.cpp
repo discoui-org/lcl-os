@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -93,6 +94,16 @@ ScopedFd openRuntimeSocket(const std::string& path, std::string& error) {
     return descriptor;
 }
 
+ScopedFd openOptionalRuntimeSocket(const std::string& path) {
+    if (path.empty()) return ScopedFd{};
+    return ScopedFd(open(path.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW));
+}
+
+bool requestsPermission(const std::vector<std::string>& permissions,
+                        std::string_view permission) {
+    return std::binary_search(permissions.begin(), permissions.end(), permission);
+}
+
 ScopedFd openExecutable(const std::string& path, std::string& error) {
     ScopedFd descriptor(open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
     struct stat status {};
@@ -169,6 +180,7 @@ bool SandboxExternalApplicationRegistry::registerSnapshot(
     ScopedFd preferences = openDirectory(directories.preferences, error);
     ScopedFd compositorSocket = openRuntimeSocket(config_.compositorSocketPath, error);
     ScopedFd rasterSocket = openRuntimeSocket(config_.rasterSocketPath, error);
+    ScopedFd gpuSocket = openOptionalRuntimeSocket(config_.gpuSocketPath);
     if (!system.valid() || !data.valid() || !cache.valid() || !preferences.valid() ||
         !compositorSocket.valid() || !rasterSocket.valid() ||
         !isRootControlledDirectory(system.get())) {
@@ -209,6 +221,12 @@ bool SandboxExternalApplicationRegistry::registerSnapshot(
         .compositorSocketDescriptor = compositorSocket.get(),
         .rasterSocketDescriptor = rasterSocket.get(),
     };
+    // Permission-store decisions are evaluated again at each launch. Retain
+    // a pinned endpoint only for bundles that explicitly declare graphics.gpu;
+    // makeChildLaunchSpec removes it unless that decision is effective.
+    if (requestsPermission(registration.requestedPermissions, "graphics.gpu")) {
+        material.filesystemSources.gpuSocketDescriptor = gpuSocket.get();
+    }
     material.executableBundlePath = registration.executableBundlePath;
     material.executableDescriptor = executableDescriptor;
     material.runtimeDescriptor = runtimeDescriptor.get();

@@ -21,6 +21,12 @@ struct SandboxFilesystemSources {
     int preferencesDescriptor{-1};
     int compositorSocketDescriptor{-1};
     int rasterSocketDescriptor{-1};
+    /** Optional brokered GPU endpoint; absent unless a future policy grants it. */
+    int gpuSocketDescriptor{-1};
+    /** Optional DRM render node, present only for graphics.render-node. */
+    int renderNodeDescriptor{-1};
+    /** Descriptor-pinned host sysfs, present only beside a render node. */
+    int sysfsDescriptor{-1};
 };
 
 /**

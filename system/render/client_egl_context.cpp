@@ -9,6 +9,8 @@
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 #include <poll.h>
 #include <string>
 #include <unistd.h>
@@ -22,12 +24,18 @@ namespace lcl::render {
 namespace {
 
 #if !defined(__ANDROID__)
-int openRenderNode() {
+int openRenderNode(std::string& error) {
+    std::ostringstream failures;
     for (int index = 128; index <= 143; ++index) {
         const std::string path = "/dev/dri/renderD" + std::to_string(index);
         const int fd = open(path.c_str(), O_RDWR | O_CLOEXEC);
         if (fd >= 0) return fd;
+        if (failures.tellp() > 0) failures << "; ";
+        failures << path << ": " << std::strerror(errno);
     }
+    error = failures.tellp() <= 0
+        ? "no DRM render-node candidates were checked"
+        : failures.str();
     return -1;
 }
 #endif
@@ -52,6 +60,12 @@ bool hasExtension(const char* extensions, const char* wanted) {
         start = end + 1;
     }
     return false;
+}
+
+std::string eglErrorText() {
+    std::ostringstream output;
+    output << "EGL error 0x" << std::hex << std::uppercase << eglGetError();
+    return output.str();
 }
 
 } // namespace
@@ -87,28 +101,36 @@ bool ClientEGLContext::createSurface(uint32_t width, uint32_t height) {
 }
 
 bool ClientEGLContext::initialize(uint32_t width, uint32_t height) {
+    m_initializationError.clear();
+    const auto fail = [this](const std::string& reason) {
+        m_initializationError = reason;
+        return unavailable(reason);
+    };
 #if defined(__ANDROID__)
     if (m_initialized) return resize(width, height);
-    if (width == 0 || height == 0) return unavailable("invalid surface size");
+    if (width == 0 || height == 0) return fail("invalid surface size");
     m_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (m_display == EGL_NO_DISPLAY || !eglInitialize(m_display, nullptr, nullptr)) {
         shutdown();
-        return unavailable("could not initialize Android EGL");
+        return fail("could not initialize Android EGL");
     }
     if (!eglBindAPI(EGL_OPENGL_ES_API)) {
         shutdown();
-        return unavailable("could not bind the OpenGL ES API");
+        return fail("could not bind the OpenGL ES API");
     }
 #else
     if (m_initialized) return resize(width, height);
-    if (width == 0 || height == 0) return unavailable("invalid surface size");
+    if (width == 0 || height == 0) return fail("invalid surface size");
 
-    m_renderFd = openRenderNode();
-    if (m_renderFd < 0) return unavailable("no accessible /dev/dri/renderD* node");
+    std::string renderNodeError;
+    m_renderFd = openRenderNode(renderNodeError);
+    if (m_renderFd < 0) {
+        return fail("no accessible /dev/dri/renderD* node (" + renderNodeError + ")");
+    }
     m_gbmDevice = gbm_create_device(m_renderFd);
     if (!m_gbmDevice) {
         shutdown();
-        return unavailable("gbm_create_device failed");
+        return fail("gbm_create_device failed");
     }
 
     const auto getPlatformDisplayExt = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(
@@ -117,8 +139,16 @@ bool ClientEGLContext::initialize(uint32_t width, uint32_t height) {
         eglGetProcAddress("eglGetPlatformDisplay"));
     const EGLint emptyAttributes[] = {EGL_NONE};
     const EGLAttrib emptyAttributesModern[] = {EGL_NONE};
-    const auto tryDisplay = [this](EGLDisplay display) {
-        if (display == EGL_NO_DISPLAY || !eglInitialize(display, nullptr, nullptr)) return false;
+    std::string eglInitializationError;
+    const auto tryDisplay = [this, &eglInitializationError](EGLDisplay display) {
+        if (display == EGL_NO_DISPLAY) {
+            eglInitializationError = "eglGetPlatformDisplay returned EGL_NO_DISPLAY (" + eglErrorText() + ")";
+            return false;
+        }
+        if (!eglInitialize(display, nullptr, nullptr)) {
+            eglInitializationError = "eglInitialize failed (" + eglErrorText() + ")";
+            return false;
+        }
         m_display = display;
         return true;
     };
@@ -134,12 +164,12 @@ bool ClientEGLContext::initialize(uint32_t width, uint32_t height) {
     }
     if (!displayReady) {
         shutdown();
-        return unavailable("could not initialize EGL on the render node");
+        return fail("could not initialize EGL on the render node: " + eglInitializationError);
     }
 
     if (!eglBindAPI(EGL_OPENGL_ES_API)) {
         shutdown();
-        return unavailable("could not bind the OpenGL ES API");
+        return fail("could not bind the OpenGL ES API");
     }
 #endif
     // The renderer draws exclusively into its own FBO. VirGL's GBM EGL
@@ -170,7 +200,7 @@ bool ClientEGLContext::initialize(uint32_t width, uint32_t height) {
         : pbufferConfigAttributes;
     if (!eglChooseConfig(m_display, configAttributes, &m_config, 1, &configCount) || configCount != 1) {
         shutdown();
-        return unavailable(m_surfaceless
+        return fail(m_surfaceless
             ? "no RGBA OpenGL ES configuration for a surfaceless context"
             : "no RGBA OpenGL ES pbuffer configuration");
     }
@@ -178,14 +208,14 @@ bool ClientEGLContext::initialize(uint32_t width, uint32_t height) {
     m_context = eglCreateContext(m_display, m_config, EGL_NO_CONTEXT, contextAttributes);
     if (m_context == EGL_NO_CONTEXT) {
         shutdown();
-        return unavailable("could not create the OpenGL ES context");
+        return fail("could not create the OpenGL ES context");
     }
     m_width = width;
     m_height = height;
     const bool targetReady = m_surfaceless ? makeCurrent() : createSurface(width, height);
     if (!targetReady) {
         shutdown();
-        return unavailable(m_surfaceless
+        return fail(m_surfaceless
             ? "could not make the surfaceless OpenGL ES context current"
             : "could not create the OpenGL ES pbuffer context");
     }
@@ -195,7 +225,7 @@ bool ClientEGLContext::initialize(uint32_t width, uint32_t height) {
     m_hardwareAccelerated = !isSoftwareRenderer(renderer);
     if (!m_hardwareAccelerated) {
         shutdown();
-        return unavailable("software GL renderer (" + m_rendererString + ")");
+        return fail("software GL renderer (" + m_rendererString + ")");
     }
 
     m_initialized = true;
@@ -241,10 +271,15 @@ bool ClientEGLContext::resize(uint32_t width, uint32_t height) {
 
 bool ClientEGLContext::createDmaBufPool(uint32_t width, uint32_t height) {
     destroyDmaBufPool();
-    return appendDmaBufPool(width, height);
+    if (appendDmaBufPool(width, height)) return true;
+    if (m_dmaBufError.empty()) {
+        m_dmaBufError = "could not allocate an exportable native buffer pool";
+    }
+    return false;
 }
 
 bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
+    m_dmaBufError.clear();
 #if defined(__ANDROID__)
     if (!m_initialized || width == 0 || height == 0 || !makeCurrent()) return false;
 
@@ -257,7 +292,10 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         eglGetProcAddress("eglDestroyImageKHR"));
     const auto imageTarget = reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(
         eglGetProcAddress("glEGLImageTargetTexture2DOES"));
-    if (!getNativeClientBuffer || !createImage || !destroyImage || !imageTarget) return false;
+    if (!getNativeClientBuffer || !createImage || !destroyImage || !imageTarget) {
+        m_dmaBufError = "required AHardwareBuffer EGL extensions are unavailable";
+        return false;
+    }
 
     for (size_t index = m_dmaBufs.size(); index > 0; --index) {
         auto& slot = m_dmaBufs[index - 1];
@@ -286,6 +324,7 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         desc.usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
                      AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
         if (AHardwareBuffer_allocate(&desc, &slot.ahb) != 0 || !slot.ahb) {
+            m_dmaBufError = "AHardwareBuffer allocation failed";
             while (m_dmaBufs.size() > retainedPoolSize) {
                 destroyDmaBufSlot(m_dmaBufs.back());
                 m_dmaBufs.pop_back();
@@ -299,6 +338,7 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         slot.image = createImage(m_display, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID,
                                  getNativeClientBuffer(slot.ahb), attributes);
         if (slot.image == EGL_NO_IMAGE_KHR) {
+            m_dmaBufError = "could not create an EGLImage for AHardwareBuffer";
             destroyDmaBufSlot(slot);
             while (m_dmaBufs.size() > retainedPoolSize) {
                 destroyDmaBufSlot(m_dmaBufs.back());
@@ -319,6 +359,7 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, slot.texture, 0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            m_dmaBufError = "AHardwareBuffer EGLImage is not a renderable framebuffer";
             destroyDmaBufSlot(slot);
             while (m_dmaBufs.size() > retainedPoolSize) {
                 destroyDmaBufSlot(m_dmaBufs.back());
@@ -339,7 +380,10 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
     }
     return true;
 #else
-    if (!m_initialized || !m_gbmDevice || width == 0 || height == 0 || !makeCurrent()) return false;
+    if (!m_initialized || !m_gbmDevice || width == 0 || height == 0 || !makeCurrent()) {
+        m_dmaBufError = "GBM/EGL context is unavailable";
+        return false;
+    }
 
     const auto createImage = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(
         eglGetProcAddress("eglCreateImageKHR"));
@@ -347,7 +391,10 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         eglGetProcAddress("eglDestroyImageKHR"));
     const auto imageTarget = reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(
         eglGetProcAddress("glEGLImageTargetTexture2DOES"));
-    if (!createImage || !destroyImage || !imageTarget) return false;
+    if (!createImage || !destroyImage || !imageTarget) {
+        m_dmaBufError = "required GBM EGLImage extensions are unavailable";
+        return false;
+    }
 
     // Four independent BOs retain root/current/previous presentation storage
     // plus one staging target. Every slot becomes reusable only via
@@ -372,6 +419,7 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         slot.bo = gbm_bo_create(m_gbmDevice, width, height, GBM_FORMAT_ARGB8888,
                                 GBM_BO_USE_RENDERING);
         if (!slot.bo) {
+            m_dmaBufError = "GBM could not allocate an ARGB8888 render buffer";
             while (m_dmaBufs.size() > retainedPoolSize) {
                 destroyDmaBufSlot(m_dmaBufs.back());
                 m_dmaBufs.pop_back();
@@ -383,6 +431,7 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         slot.image = createImage(m_display, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR,
                                  reinterpret_cast<EGLClientBuffer>(slot.bo), attributes);
         if (slot.image == EGL_NO_IMAGE_KHR) {
+            m_dmaBufError = "could not create an EGLImage for the GBM buffer";
             destroyDmaBufSlot(slot);
             while (m_dmaBufs.size() > retainedPoolSize) {
                 destroyDmaBufSlot(m_dmaBufs.back());
@@ -403,6 +452,7 @@ bool ClientEGLContext::appendDmaBufPool(uint32_t width, uint32_t height) {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                slot.texture, 0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            m_dmaBufError = "GBM EGLImage is not a renderable framebuffer";
             destroyDmaBufSlot(slot);
             while (m_dmaBufs.size() > retainedPoolSize) {
                 destroyDmaBufSlot(m_dmaBufs.back());

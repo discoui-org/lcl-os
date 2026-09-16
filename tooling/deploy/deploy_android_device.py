@@ -45,10 +45,12 @@ TARGET_ARCH = "aarch64"
 BUILD_ANDROID_DIR = android_build_dir("arm64-v8a")
 BINARY_NAME = "lcl-core-android"
 RASTERD_NAME = "lcl-rasterd-android"
+GPUD_NAME = "lcl-gpud-android"
 HIDL_BRIDGE_NAME = "liblcl-android-hidl-bridge.so"
 DEVICE_TMP_DIR = "/data/local/tmp"
 DEVICE_BINARY_PATH = f"{DEVICE_TMP_DIR}/{BINARY_NAME}"
 DEVICE_RASTERD_PATH = f"{DEVICE_TMP_DIR}/{RASTERD_NAME}"
+DEVICE_GPUD_PATH = f"{DEVICE_TMP_DIR}/{GPUD_NAME}"
 DEVICE_HIDL_BRIDGE_PATH = f"{DEVICE_TMP_DIR}/{HIDL_BRIDGE_NAME}"
 DEVICE_LOG_PATH = f"{DEVICE_TMP_DIR}/lcl-core.log"
 DEVICE_RUNTIME_DIR = f"{DEVICE_TMP_DIR}/lcl-runtime"
@@ -56,6 +58,7 @@ DEVICE_FONT_DIR = f"{DEVICE_RUNTIME_DIR}/fonts"
 DEVICE_GESTALT_UPLOAD_PATH = f"{DEVICE_TMP_DIR}/lcl-gestalt.json.upload"
 DEVICE_GESTALT_PATH = f"{DEVICE_RUNTIME_DIR}/gestalt.json"
 DEVICE_COMPOSITOR_SOCKET = f"{DEVICE_RUNTIME_DIR}/lcl-compositor.sock"
+DEVICE_GPU_SOCKET = f"{DEVICE_RUNTIME_DIR}/lcl-gpu.sock"
 DEVICE_SESSION_SOCKET = f"{DEVICE_RUNTIME_DIR}/lcl-sessiond.sock"
 ROOTFS_IMAGE = ROOTFS_DIR / "lcl-rootfs-aarch64.ext4"
 ROOTFS_ARCHIVE = ROOTFS_DIR / "lcl-rootfs-aarch64.ext4.zst"
@@ -325,16 +328,22 @@ def restore_system_ui() -> None:
 
 
 def stop_lcl_process() -> None:
-    """Stop only LCL Android processes left behind by a detached ADB shell."""
-    result = adb_shell("pidof lcl-core-android", as_root=True)
-    pids = [value for value in result.stdout.split() if value.isdigit()]
+    """Stop only LCL Android substrate processes left by a detached ADB shell."""
+    pids: list[str] = []
+    for name in ("lcl-core-android", "lcl-gpud-android"):
+        result = adb_shell(f"pidof {name}", as_root=True)
+        pids.extend(value for value in result.stdout.split() if value.isdigit())
+    pids = list(dict.fromkeys(pids))
     if not pids:
         return
-    log("Stopping remote LCL compositor...")
+    log("Stopping remote LCL Android substrate...")
     adb_shell("kill -TERM " + " ".join(pids), as_root=True)
     time.sleep(0.5)
-    remaining = adb_shell("pidof lcl-core-android", as_root=True).stdout.split()
-    remaining = [value for value in remaining if value.isdigit()]
+    remaining: list[str] = []
+    for name in ("lcl-core-android", "lcl-gpud-android"):
+        result = adb_shell(f"pidof {name}", as_root=True)
+        remaining.extend(value for value in result.stdout.split() if value.isdigit())
+    remaining = list(dict.fromkeys(remaining))
     if remaining:
         adb_shell("kill -KILL " + " ".join(remaining), as_root=True)
 
@@ -806,7 +815,7 @@ def push_rootfs_session_launcher() -> None:
 def prepare_runtime_for_launch() -> None:
     """Stop an existing LCL session, then clear its private runtime sockets."""
     process_names = (
-        "lcl-core-android", "lcl-sessiond", "lcl-sandboxd", "lcl-securityd",
+        "lcl-core-android", "lcl-gpud-android", "lcl-sessiond", "lcl-sandboxd", "lcl-securityd",
         "lcl-admind", "lcl-sudo",
         "lcl-desktop-shell", "lcl-mobile-shell", "lcl-terminal",
     )
@@ -836,7 +845,7 @@ def prepare_runtime_for_launch() -> None:
             )
 
     result = adb_shell(
-        f"rm -f {DEVICE_COMPOSITOR_SOCKET} {DEVICE_SESSION_SOCKET}",
+        f"rm -f {DEVICE_COMPOSITOR_SOCKET} {DEVICE_GPU_SOCKET} {DEVICE_SESSION_SOCKET}",
         as_root=True,
     )
     if result.returncode != 0:
@@ -868,7 +877,7 @@ def wait_for_compositor_socket(
 
 
 def push_binary() -> None:
-    """Push compositor, raster service and optional HIDL bridge to device."""
+    """Push compositor, raster service, GPU broker and optional HIDL bridge."""
     binary = BUILD_ANDROID_DIR / BINARY_NAME
     if not binary.is_file():
         err(f"Binary not found: {binary}")
@@ -887,6 +896,13 @@ def push_binary() -> None:
         sys.exit(1)
     run_adb("push", str(rasterd), DEVICE_TMP_DIR)
     adb_shell(f"chmod 755 {DEVICE_RASTERD_PATH}", as_root=True)
+    gpud = BUILD_ANDROID_DIR / GPUD_NAME
+    if not gpud.is_file():
+        err(f"GPU broker not found: {gpud}")
+        err(f"  -> Build target: {GPUD_NAME}")
+        sys.exit(1)
+    run_adb("push", str(gpud), DEVICE_TMP_DIR)
+    adb_shell(f"chmod 755 {DEVICE_GPUD_PATH}", as_root=True)
     bridge = BUILD_ANDROID_DIR / HIDL_BRIDGE_NAME
     if bridge.is_file():
         bridge_size_mb = bridge.stat().st_size / (1024 * 1024)
@@ -895,7 +911,7 @@ def push_binary() -> None:
         adb_shell(f"chmod 755 {DEVICE_HIDL_BRIDGE_PATH}", as_root=True)
     else:
         log("HIDL bridge not present; this deployment will support Composer3 AIDL only.")
-    log("Android runtime files pushed and marked executable.")
+    log("Android substrate files pushed and marked executable.")
 
 
 def setup_runtime_dir() -> str:
@@ -1030,6 +1046,7 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
 
     lc_proc = None
     lcl_proc = None
+    gpud_proc = None
     session_proc = None
     session_trace_proc = None
 
@@ -1065,6 +1082,14 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
             val = os.environ.get(var)
             if val:
                 launch_env += f" {var}={val}"
+        # lcl-gpud is optional for boot health. It owns only the Android Vulkan
+        # driver path; compositor/rasterd continue normally if it exits.
+        gpud_proc = subprocess.Popen(adb_shell_command(
+            f"{launch_env} {DEVICE_GPUD_PATH} --socket {DEVICE_GPU_SOCKET} "
+            f"> {DEVICE_RUNTIME_DIR}/lcl-gpud.log 2>&1",
+            as_root=True,
+        ))
+        log("Started optional lcl-gpud Vulkan broker.")
         lcl_proc = subprocess.Popen(adb_shell_command(
             f"{launch_env} {DEVICE_BINARY_PATH} 2>&1 | tee {DEVICE_LOG_PATH}",
             as_root=True,
@@ -1113,6 +1138,9 @@ def launch_lcl(no_stop_sysui: bool = False, logcat: bool = False,
             if session_proc is not None and session_proc.poll() is None:
                 session_proc.terminate()
         stop_lcl_process()
+
+        if gpud_proc is not None and gpud_proc.poll() is None:
+            gpud_proc.terminate()
 
         if use_rootfs:
             unmount_rootfs()

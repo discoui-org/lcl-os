@@ -19,6 +19,8 @@ struct SandboxExternalApplicationRegistryConfig {
     std::string javascriptRuntimePath{"/System/Core/lcl-js"};
     std::string compositorSocketPath{"/Runtime/lcl-compositor.sock"};
     std::string rasterSocketPath{"/Runtime/lcl-raster.sock"};
+    /** Optional native GPU broker; it is mounted only for graphics.gpu. */
+    std::string gpuSocketPath{"/Runtime/lcl-gpu.sock"};
     AppIdentityRegistryConfig identities{
         .registryPath = "/var/lib/lcl-security/app-identities.v1",
         .firstAppUid = 61000,

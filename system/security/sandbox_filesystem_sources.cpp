@@ -2,8 +2,11 @@
 #include "system/security/session_user.hpp"
 
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 
+#include <linux/magic.h>
 #include <array>
 #include <cerrno>
 #include <cstring>
@@ -35,6 +38,24 @@ bool isApplicationRuntimeSocket(int descriptor) {
            (status.st_mode & 0777) == 0660;
 }
 
+bool isDrmRenderNode(int descriptor) {
+    struct stat status {};
+    // DRM assigns render nodes to major 226 and reserves minor 128..255 for
+    // non-KMS render access. The descriptor itself is opened by sandboxd.
+    return descriptor >= 0 && fstat(descriptor, &status) == 0 &&
+           S_ISCHR(status.st_mode) && major(status.st_rdev) == 226 &&
+           minor(status.st_rdev) >= 128 && minor(status.st_rdev) <= 255;
+}
+
+bool isSysfsDirectory(int descriptor) {
+    struct stat status {};
+    struct statfs filesystem {};
+    return descriptor >= 0 && fstat(descriptor, &status) == 0 &&
+           fstatfs(descriptor, &filesystem) == 0 && S_ISDIR(status.st_mode) &&
+           status.st_uid == 0 && status.st_gid == 0 &&
+           filesystem.f_type == SYSFS_MAGIC;
+}
+
 bool endpointDescriptorStillNamesLinkedSocket(int descriptor, std::string& error) {
     struct stat expected {};
     if (!isApplicationRuntimeSocket(descriptor) || fstat(descriptor, &expected) != 0) {
@@ -51,7 +72,14 @@ bool endpointDescriptorStillNamesLinkedSocket(int descriptor, std::string& error
         return false;
     }
     const std::string path(bytes.data(), static_cast<std::size_t>(count));
-    if (path.empty() || path.front() != '/' || path.ends_with(" (deleted)")) {
+    if (path.ends_with(" (deleted)")) {
+        // unlink(2) leaves the retained descriptor usable but the endpoint has
+        // moved to a new socket generation. Treat this as the same stale
+        // generation condition as an inode mismatch.
+        error = "protected graphics endpoint generation changed";
+        return false;
+    }
+    if (path.empty() || path.front() != '/') {
         error = "protected graphics endpoint no longer has a stable path";
         return false;
     }
@@ -129,6 +157,24 @@ bool validateSandboxFilesystemSources(const SandboxFilesystemSources& sources,
         error = "sandbox graphics source is not a protected application runtime socket";
         return false;
     }
+    if (sources.gpuSocketDescriptor >= 0 &&
+        !isApplicationRuntimeSocket(sources.gpuSocketDescriptor)) {
+        error = "sandbox GPU source is not a protected application runtime socket";
+        return false;
+    }
+    const bool hasRenderNode = sources.renderNodeDescriptor >= 0;
+    if (hasRenderNode && !isDrmRenderNode(sources.renderNodeDescriptor)) {
+        error = "sandbox render-node source is not a DRM render device";
+        return false;
+    }
+    if (hasRenderNode != (sources.sysfsDescriptor >= 0)) {
+        error = "sandbox render-node and sysfs sources must be paired";
+        return false;
+    }
+    if (sources.sysfsDescriptor >= 0 && !isSysfsDirectory(sources.sysfsDescriptor)) {
+        error = "sandbox graphics sysfs source is not the trusted sysfs mount";
+        return false;
+    }
     return true;
 }
 
@@ -136,7 +182,9 @@ bool validateSandboxRuntimeEndpointGeneration(const SandboxFilesystemSources& so
                                               std::string& error) {
     error.clear();
     return endpointDescriptorStillNamesLinkedSocket(sources.compositorSocketDescriptor, error) &&
-           endpointDescriptorStillNamesLinkedSocket(sources.rasterSocketDescriptor, error);
+           endpointDescriptorStillNamesLinkedSocket(sources.rasterSocketDescriptor, error) &&
+           (sources.gpuSocketDescriptor < 0 ||
+            endpointDescriptorStillNamesLinkedSocket(sources.gpuSocketDescriptor, error));
 }
 
 } // namespace lcl::security

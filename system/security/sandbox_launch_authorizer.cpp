@@ -12,7 +12,10 @@ bool SandboxLaunchAuthorizer::registerVerifiedApplication(
     const std::vector<std::string>& grantedPermissions,
     std::string& error) {
     error.clear();
-    if (application.permissionSubject) {
+    // Rootfs bundles receive immutable grants from the trusted system-image
+    // profile. User decisions remain authoritative for every other publisher.
+    if (application.permissionSubject &&
+        application.permissionSubject->publisherIdentity != "system-image") {
         if (!validatePermissionSubject(*application.permissionSubject, error) ||
             application.permissionSubject->appId != application.appId ||
             application.permissionSubject->bundleRecordDigest != application.bundleRecordDigest) {
@@ -62,7 +65,8 @@ std::optional<SandboxLaunchPlan> SandboxLaunchAuthorizer::authorize(
         return std::nullopt;
     }
     std::vector<std::string> grantedPermissions = application.grantedPermissions;
-    if (application.application.permissionSubject) {
+    if (application.application.permissionSubject &&
+        application.application.permissionSubject->publisherIdentity != "system-image") {
         std::lock_guard permissionStoreLock(permissionStoreMutex_);
         grantedPermissions = permissionStore_.grantedPermissions(
             *application.application.permissionSubject,

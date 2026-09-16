@@ -40,7 +40,9 @@ class BuildRootfsTest(unittest.TestCase):
             cache_dir.mkdir()
             image = rootfs_dir / "lcl-rootfs-x86_64.ext4"
             fingerprint = cache_dir / "rootfs-x86_64.sha256"
+            gfxstream_guest = output / "libvulkan_gfxstream.so"
             image.touch()
+            gfxstream_guest.write_bytes(b"guest-icd")
             fingerprint.write_text("current\n", encoding="utf-8")
 
             with (
@@ -49,6 +51,9 @@ class BuildRootfsTest(unittest.TestCase):
                 mock.patch.object(
                     build_rootfs, "canonical_build_dir", return_value=output / "build"
                 ),
+                mock.patch.object(
+                    build_rootfs, "build_gfxstream_guest", return_value=gfxstream_guest
+                ) as build_guest,
                 mock.patch.object(build_rootfs, "ensure_binaries", return_value={}),
                 mock.patch.object(
                     build_rootfs, "rootfs_input_fingerprint", return_value="current"
@@ -58,10 +63,44 @@ class BuildRootfsTest(unittest.TestCase):
                     os.environ, {"LCL_QEMU_BUILDER_IMAGE_ID": "sha256:test"}
                 ),
             ):
-                result = build_rootfs.build_rootfs_ext4(inside_docker=True)
+                result = build_rootfs.build_rootfs_ext4(
+                    inside_docker=True, android_gfxstream_backend=True
+                )
 
             self.assertEqual(result, (rootfs_dir / "x86_64", image, {}))
+            build_guest.assert_called_once_with("x86_64")
             fix_permissions.assert_called_once_with(image)
+
+    def test_default_rootfs_does_not_build_the_android_only_guest_icd(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            rootfs_dir = output / "rootfs"
+            cache_dir = output / "cache"
+            rootfs_dir.mkdir()
+            cache_dir.mkdir()
+            image = rootfs_dir / "lcl-rootfs-x86_64.ext4"
+            image.touch()
+            (cache_dir / "rootfs-x86_64.sha256").write_text("current\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(build_rootfs, "ROOTFS_BASE_DIR", rootfs_dir),
+                mock.patch.object(build_rootfs, "QEMU_CACHE_DIR", cache_dir),
+                mock.patch.object(
+                    build_rootfs, "canonical_build_dir", return_value=output / "build"
+                ),
+                mock.patch.object(build_rootfs, "build_gfxstream_guest") as build_guest,
+                mock.patch.object(build_rootfs, "ensure_binaries", return_value={}),
+                mock.patch.object(
+                    build_rootfs, "rootfs_input_fingerprint", return_value="current"
+                ),
+                mock.patch.object(build_rootfs, "fix_permissions"),
+                mock.patch.dict(
+                    os.environ, {"LCL_QEMU_BUILDER_IMAGE_ID": "sha256:test"}
+                ),
+            ):
+                build_rootfs.build_rootfs_ext4(inside_docker=True)
+
+            build_guest.assert_not_called()
 
 
 if __name__ == "__main__":

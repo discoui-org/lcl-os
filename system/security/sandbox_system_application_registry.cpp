@@ -9,11 +9,14 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <linux/magic.h>
 #include <string>
 #include <utility>
 
@@ -50,6 +53,29 @@ private:
   int descriptor_{-1};
 };
 
+ScopedFd openTrustedRenderNode(std::string& error) {
+  for (int index = 128; index <= 143; ++index) {
+    const std::string path = "/dev/dri/renderD" + std::to_string(index);
+    ScopedFd descriptor(open(path.c_str(), O_RDWR | O_CLOEXEC | O_NOFOLLOW));
+    if (descriptor.valid()) return descriptor;
+  }
+  error = "graphics.render-node was granted but no DRM render node is available";
+  return ScopedFd{};
+}
+
+ScopedFd openTrustedSysfs(std::string& error) {
+  ScopedFd descriptor(open("/sys", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+  struct stat status {};
+  struct statfs filesystem {};
+  if (!descriptor.valid() || fstat(descriptor.get(), &status) != 0 ||
+      fstatfs(descriptor.get(), &filesystem) != 0 || !S_ISDIR(status.st_mode) ||
+      status.st_uid != 0 || status.st_gid != 0 || filesystem.f_type != SYSFS_MAGIC) {
+    error = "trusted graphics sysfs mount is unavailable";
+    return ScopedFd{};
+  }
+  return descriptor;
+}
+
 bool isRootControlledDirectory(const std::string &path, std::string &error) {
   struct stat status{};
   if (lstat(path.c_str(), &status) != 0 || !S_ISDIR(status.st_mode) ||
@@ -80,6 +106,15 @@ ScopedFd openRuntimeSocket(const std::string& path, std::string& error) {
             "': " + std::strerror(errno);
   }
   return descriptor;
+}
+
+ScopedFd openOptionalRuntimeSocket(const std::string& path) {
+  if (path.empty()) return ScopedFd{};
+  return ScopedFd(open(path.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW));
+}
+
+bool hasPermission(const std::vector<std::string>& permissions, std::string_view permission) {
+  return std::binary_search(permissions.begin(), permissions.end(), permission);
 }
 
 SandboxRuntime runtimeForBundle(const lcl::core::AppBundleMetadata &metadata,
@@ -117,6 +152,7 @@ bool registerOneSystemApplication(
     const ScopedFd &systemDescriptor,
     const ScopedFd &compositorSocketDescriptor,
     const ScopedFd &rasterSocketDescriptor,
+    const ScopedFd &gpuSocketDescriptor,
     const lcl::core::AppBundleMetadata &metadata, std::string &error) {
   if (!metadata.valid || !bundleIsInsideSystemApplications(metadata, config) ||
       !metadata.bundleHandle || !metadata.bundleHandle->valid() ||
@@ -176,6 +212,25 @@ bool registerOneSystemApplication(
   application.bundleRecordDigest = record->digest;
   application.permissionSubject = makeSystemImagePermissionSubject(
       kSessionUserUid, application.appId, application.bundleRecordDigest);
+  const std::vector<std::string> grantedPermissions =
+      staticSystemImagePermissionGrants(application.appId,
+                                        application.requestedPermissions);
+  ScopedFd renderNode;
+  ScopedFd sysfs;
+  if (std::find(grantedPermissions.begin(), grantedPermissions.end(),
+                "graphics.render-node") != grantedPermissions.end()) {
+    renderNode = openTrustedRenderNode(error);
+    // The canonical userspace is also used on Android, where the graphics
+    // substrate has no Linux DRM node. Keep the bundle catalog valid there;
+    // only a launch that actually needs this Linux capability will fail.
+    if (!renderNode.valid()) {
+      error.clear();
+    } else {
+      sysfs = openTrustedSysfs(error);
+      if (!sysfs.valid()) return false;
+    }
+  }
+
   SandboxLaunchMaterialInput material{};
   material.application = application;
   material.filesystemSources = {
@@ -187,13 +242,15 @@ bool registerOneSystemApplication(
       .compositorSocketDescriptor = compositorSocketDescriptor.get(),
       .rasterSocketDescriptor = rasterSocketDescriptor.get(),
   };
+  if (hasPermission(grantedPermissions, "graphics.gpu")) {
+    material.filesystemSources.gpuSocketDescriptor = gpuSocketDescriptor.get();
+  }
   material.executableBundlePath = metadata.executable;
   material.executableDescriptor = metadata.executableHandle->descriptor();
   material.runtimeDescriptor = runtimeDescriptor.get();
+  material.filesystemSources.renderNodeDescriptor = renderNode.get();
+  material.filesystemSources.sysfsDescriptor = sysfs.get();
 
-  const std::vector<std::string> grantedPermissions =
-      staticSystemImagePermissionGrants(application.appId,
-                                        application.requestedPermissions);
   if (!daemon.registerVerifiedApplication(application, grantedPermissions, error)) {
     return false;
   }
@@ -230,6 +287,7 @@ bool SandboxSystemApplicationRegistry::registerSystemApplications(
   ScopedFd systemDescriptor = openDirectory(config_.systemPath, error);
   ScopedFd compositorSocketDescriptor = openRuntimeSocket(config_.compositorSocketPath, error);
   ScopedFd rasterSocketDescriptor = openRuntimeSocket(config_.rasterSocketPath, error);
+  ScopedFd gpuSocketDescriptor = openOptionalRuntimeSocket(config_.gpuSocketPath);
   if (!systemDescriptor.valid() || !compositorSocketDescriptor.valid() ||
       !rasterSocketDescriptor.valid()) {
     return false;
@@ -239,7 +297,8 @@ bool SandboxSystemApplicationRegistry::registerSystemApplications(
   for (const lcl::core::AppBundleMetadata &bundle : bundles) {
     if (!registerOneSystemApplication(daemon, config_, identities, dataStore,
                                       systemDescriptor, compositorSocketDescriptor,
-                                      rasterSocketDescriptor, bundle, error)) {
+                                      rasterSocketDescriptor, gpuSocketDescriptor,
+                                      bundle, error)) {
       return false;
     }
   }

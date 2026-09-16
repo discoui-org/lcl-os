@@ -209,37 +209,46 @@ std::unique_ptr<lcl::ui::Container> makeLauncherTile(
         if (launchToken == 0) {
             launchToken = nextLaunchToken++ & kLaunchTokenMask;
         }
-        if (!home.beginLaunchPlaceholder(
-                launchToken, appId, origin, kIconRadius,
-                kIconPixelSize, kIconPixelSize, iconPixels)) {
-            std::cerr << "[LCL Mobile Shell] Could not begin launch visual for "
-                      << appId << "\n";
-            return;
+        const bool hasLaunchVisual = home.beginLaunchPlaceholder(
+            launchToken, appId, origin, kIconRadius,
+            kIconPixelSize, kIconPixelSize, iconPixels);
+        if (hasLaunchVisual) {
+            launcherState.hide(appId, launchToken);
+        } else {
+            // A presentation animation is optional.  Do not let a transient
+            // compositor handoff failure turn an otherwise valid app launch
+            // into a no-op; omit the token/origin so sessiond performs the
+            // ordinary sandbox launch without a placeholder to resolve.
+            std::cerr << "[LCL Mobile Shell] Launch visual unavailable for "
+                      << appId << "; falling back to normal launch\n";
         }
-        launcherState.hide(appId, launchToken);
 
         lcl::session::LaunchRequest request;
         request.target = appId;
         request.singleInstance = true;
-        request.launchToken = launchToken;
-        request.origin = {
-            .valid = !bounds.isEmpty(),
-            .x = origin.x,
-            .y = origin.y,
-            .width = kIconSize,
-            .height = kIconSize,
-            .cornerRadius = kIconRadius,
-        };
+        if (hasLaunchVisual) {
+            request.launchToken = launchToken;
+            request.origin = {
+                .valid = true,
+                .x = origin.x,
+                .y = origin.y,
+                .width = kIconSize,
+                .height = kIconSize,
+                .cornerRadius = kIconRadius,
+            };
+        }
         lcl::session::LaunchResponse response;
         std::string error;
         if (!session.launch(request, response, error)) {
-            home.cancelLaunchPlaceholder(launchToken);
-            launcherState.reveal(appId, launchToken);
+            if (hasLaunchVisual) {
+                home.cancelLaunchPlaceholder(launchToken);
+                launcherState.reveal(appId, launchToken);
+            }
             std::cerr << "[LCL Mobile Shell] Could not launch " << appId
                       << ": " << error << "\n";
             return;
         }
-        if (!home.resolveLaunchPlaceholder(
+        if (hasLaunchVisual && !home.resolveLaunchPlaceholder(
                 launchToken, response.instanceId, response.reused)) {
             home.cancelLaunchPlaceholder(launchToken);
             launcherState.reveal(appId, launchToken);

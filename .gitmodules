@@ -1,0 +1,6 @@
+[submodule "third_party/gfxstream"]
+	path = third_party/gfxstream
+	url = https://android.googlesource.com/platform/hardware/google/gfxstream
+[submodule "third_party/aemu"]
+	path = third_party/aemu
+	url = https://android.googlesource.com/platform/hardware/google/aemu

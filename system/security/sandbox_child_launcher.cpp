@@ -200,6 +200,10 @@ void closeLandlockDescriptors(SandboxLandlockRules& rules) {
         close(rules.deviceDescriptor);
         rules.deviceDescriptor = -1;
     }
+    if (rules.sysfsDescriptor >= 0) {
+        close(rules.sysfsDescriptor);
+        rules.sysfsDescriptor = -1;
+    }
 }
 
 [[noreturn]] void execSandboxChild(SandboxChildLaunchSpec spec, SandboxLandlockRules landlockRules) {
@@ -316,6 +320,21 @@ bool validateSandboxChildLaunchSpec(const SandboxChildLaunchSpec& spec, std::str
         return false;
     }
     if (!validateSandboxFilesystemSources(spec.filesystemSources, spec.identity, error)) {
+        return false;
+    }
+    const bool needsRenderNode = std::binary_search(
+        spec.plan.profile.effectivePermissions.begin(),
+        spec.plan.profile.effectivePermissions.end(), std::string{"graphics.render-node"});
+    if (needsRenderNode != (spec.filesystemSources.renderNodeDescriptor >= 0) ||
+        needsRenderNode != (spec.filesystemSources.sysfsDescriptor >= 0)) {
+        error = "sandbox graphics capability and DRM/sysfs material disagree";
+        return false;
+    }
+    const bool needsGpu = std::binary_search(
+        spec.plan.profile.effectivePermissions.begin(),
+        spec.plan.profile.effectivePermissions.end(), std::string{"graphics.gpu"});
+    if (needsGpu != (spec.filesystemSources.gpuSocketDescriptor >= 0)) {
+        error = "sandbox graphics.gpu capability and broker endpoint disagree";
         return false;
     }
     if (spec.plan.profile.runtime == SandboxRuntime::JavaScript &&

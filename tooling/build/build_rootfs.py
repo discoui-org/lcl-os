@@ -47,6 +47,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tooling.build.skia_package import host_skia_cmake_args
+from tooling.build.build_gfxstream_guest import build as build_gfxstream_guest
 from tooling.paths import OUT_ROOT, QEMU_CACHE_DIR, ROOTFS_DIR, qemu_build_dir
 
 BUILD_DIR = OUT_ROOT
@@ -54,7 +55,16 @@ ROOTFS_BASE_DIR = ROOTFS_DIR
 DOCKERFILE = SCRIPT_DIR / "Dockerfile.qemu"
 ROOTFS_FINGERPRINT_VERSION = 1
 
+# Most canonical targets are executables.  A Vulkan ICD is a shared object,
+# but it must still be built from this exact tree before the rootfs is staged.
+CANONICAL_ARTIFACT_FILENAMES = {
+    "lcl-vulkan-icd": "liblcl_vulkan_icd.so",
+}
+
 CANONICAL_TARGETS = (
+    "lcl-vulkan-icd",
+    "lcl-gpu-presentation-probe",
+    "lcl-qt-smoke",
     "lcl-desktop-shell",
     "lcl-mobile-shell",
     "lcl-shell-launcher",
@@ -66,6 +76,7 @@ CANONICAL_TARGETS = (
     "lcl-sudo",
     "lcl-sandbox-probe",
     "lcl-sandbox-test",
+    "lcl-client-gpu-probe",
     "lcl-rasterd",
     "lcl-open",
     "lcl-core",
@@ -193,6 +204,7 @@ def find_built_binary(name: str, arch: str | None = None) -> Path | None:
     for root in roots:
         for cand in [
             root / name,
+            root / CANONICAL_ARTIFACT_FILENAMES.get(name, name),
             root / "apps" / name / name,
         ]:
             if not cand.is_file():
@@ -263,7 +275,9 @@ def _hash_input_path(digest, path: Path) -> None:
     digest.update(b"\0")
 
 
-def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
+def rootfs_input_fingerprint(
+    arch: str, binaries: dict[str, Path], gfxstream_guest: Path | None = None
+) -> str:
     """Hash every project-controlled input embedded in the canonical rootfs."""
     norm_arch = normalize_arch(arch)
     digest = hashlib.sha256()
@@ -281,6 +295,8 @@ def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
         PROJECT_ROOT / "apps" / "terminal" / "Manifest.json",
         PROJECT_ROOT / "apps" / "terminal" / "Resources" / "Icon.png",
         PROJECT_ROOT / "apps" / "sandbox_test" / "Manifest.json",
+        PROJECT_ROOT / "frameworks" / "qt" / "smoke" / "Manifest.json",
+        PROJECT_ROOT / "tooling" / "probes" / "gpu_presentation" / "Manifest.json",
     )
     for source_input in source_inputs:
         if source_input.is_dir():
@@ -297,6 +313,12 @@ def rootfs_input_fingerprint(arch: str, binaries: dict[str, Path]) -> str:
         digest.update(f"binary:{name}\0".encode("utf-8"))
         digest.update(get_sha256(binaries[name]).encode("ascii"))
         digest.update(b"\0")
+    digest.update(b"android-gfxstream-backend\0")
+    if gfxstream_guest is not None:
+        digest.update(get_sha256(gfxstream_guest).encode("ascii"))
+    else:
+        digest.update(b"disabled")
+    digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -312,6 +334,7 @@ def stage_canonical_rootfs(
     staging_dir: Path,
     arch: str = "x86_64",
     binaries: dict[str, Path] | None = None,
+    gfxstream_guest: Path | None = None,
 ) -> dict[str, str]:
     """Populates the deterministic canonical userspace filesystem layout."""
     norm_arch = normalize_arch(arch)
@@ -601,11 +624,53 @@ def stage_canonical_rootfs(
         shutil.copytree(libinput_src, dest_system_input, dirs_exist_ok=True)
 
     # Compatibility symlinks in /usr/share and /etc for third-party libraries (GLVND & libinput)
+    (usr_dir / "share").mkdir(parents=True, exist_ok=True)
+    (staging_dir / "etc").mkdir(parents=True, exist_ok=True)
     (usr_dir / "share" / "glvnd").symlink_to("../../System/Library/EGL/glvnd")
     (usr_dir / "share" / "libinput").symlink_to("../../System/Library/Input/libinput")
     if (dest_system_egl / "drirc.d").is_dir():
         (usr_dir / "share" / "drirc.d").symlink_to("../../System/Library/EGL/drirc.d")
     (staging_dir / "etc" / "glvnd").symlink_to("../System/Library/EGL/glvnd")
+
+    # Vulkan is deliberately separate from the legacy Mesa EGL path.  The
+    # loader and the LCL ICD are present in the immutable image, while no
+    # global ICD search path is installed: a sandbox must have graphics.gpu
+    # and explicitly opt into this JSON when its renderer is ready.
+    vulkan_loader = next((candidate for candidate in (
+        Path(f"/usr/lib/{triplet}/libvulkan.so.1"), Path("/usr/lib64/libvulkan.so.1"),
+        Path("/usr/lib/libvulkan.so.1"),
+    ) if candidate.is_file()), None)
+    if vulkan_loader is None:
+        raise RuntimeError("Vulkan loader is required for the LCL virtual ICD")
+    shutil.copy2(vulkan_loader.resolve(), dest_system_lib / "libvulkan.so.1")
+    copy_ldd_deps(vulkan_loader, dest_system_lib)
+    vulkan_root = staging_dir / "System" / "Library" / "Vulkan"
+    vulkan_root.mkdir(parents=True, exist_ok=True)
+    vulkan_icd = binaries["lcl-vulkan-icd"]
+    shutil.copy2(vulkan_icd, vulkan_root / "liblcl_vulkan_icd.so")
+    (vulkan_root / "liblcl_vulkan_icd.so").chmod(0o755)
+    copy_ldd_deps(vulkan_icd, dest_system_lib)
+    vulkan_icd_dir = vulkan_root / "icd.d"
+    vulkan_icd_dir.mkdir(parents=True, exist_ok=True)
+    (vulkan_icd_dir / "lcl_icd.json").write_text(json.dumps({
+        "file_format_version": "1.0.0",
+        "ICD": {
+            "library_path": "/System/Library/Vulkan/liblcl_vulkan_icd.so",
+            "api_version": "1.1.0",
+        },
+    }, indent=4), encoding="utf-8")
+    # gfxstream is carried only by the Android flavour. It remains dormant
+    # until the LCL IOStream transport and native decoder bridge are enabled;
+    # in particular, no global Vulkan ICD search path points here.
+    if gfxstream_guest is not None:
+        if not gfxstream_guest.is_file():
+            raise RuntimeError("Pinned gfxstream guest ICD is unavailable for rootfs staging")
+        gfxstream_root = staging_dir / "System" / "Library" / "Gfxstream"
+        gfxstream_root.mkdir(parents=True, exist_ok=True)
+        gfxstream_destination = gfxstream_root / "libvulkan_gfxstream.so"
+        shutil.copy2(gfxstream_guest, gfxstream_destination)
+        gfxstream_destination.chmod(0o755)
+        copy_ldd_deps(gfxstream_guest, dest_system_lib)
     (staging_dir / "etc" / "libinput").symlink_to("../System/Library/Input/libinput")
 
     # 9. System Fonts (/System/Library/Fonts/)
@@ -664,6 +729,80 @@ def stage_canonical_rootfs(
     sha_map["Sandbox Test.app"] = get_sha256(
         sandbox_test_dst / "Executables" / "SandboxTest")
     copy_ldd_deps(sandbox_test_dst / "Executables" / "SandboxTest", dest_system_lib)
+
+    # GPU Transport Probe.app is an integration-only system bundle. It runs
+    # the canonical glibc GBM/EGL/DMA-BUF producer under the same restricted
+    # render-node sandbox as Qt Smoke, without adding diagnostics to Qt.
+    gpu_probe_dst = dest_system_apps / "GPU Transport Probe.app"
+    gpu_probe_dst.mkdir(parents=True, exist_ok=True)
+    (gpu_probe_dst / "Executables").mkdir(parents=True, exist_ok=True)
+    (gpu_probe_dst / "Resources").mkdir(parents=True, exist_ok=True)
+    gpu_probe_manifest = PROJECT_ROOT / "tooling" / "probes" / "client_gpu_probe" / "Manifest.json"
+    if not gpu_probe_manifest.is_file() or not term_icon.is_file():
+        raise RuntimeError("Missing GPU Transport Probe.app source files")
+    shutil.copy2(gpu_probe_manifest, gpu_probe_dst / "Manifest.json")
+    shutil.copy2(term_icon, gpu_probe_dst / "Resources" / "Icon.png")
+    gpu_probe_bin = binaries["lcl-client-gpu-probe"]
+    shutil.copy2(gpu_probe_bin, gpu_probe_dst / "Executables" / "ClientGpuProbe")
+    (gpu_probe_dst / "Executables" / "ClientGpuProbe").chmod(0o755)
+    sha_map["GPU Transport Probe.app"] = get_sha256(
+        gpu_probe_dst / "Executables" / "ClientGpuProbe")
+    copy_ldd_deps(gpu_probe_dst / "Executables" / "ClientGpuProbe", dest_system_lib)
+
+    # Qt Smoke.app is an integration-only system bundle. It exercises the
+    # toolkit-independent lcl-client transport through Qt's event loop before
+    # an existing product application is migrated to QML.
+    qt_smoke_dst = dest_system_apps / "Qt Smoke.app"
+    qt_smoke_dst.mkdir(parents=True, exist_ok=True)
+    (qt_smoke_dst / "Executables").mkdir(parents=True, exist_ok=True)
+    (qt_smoke_dst / "Resources").mkdir(parents=True, exist_ok=True)
+    qt_smoke_manifest = PROJECT_ROOT / "frameworks" / "qt" / "smoke" / "Manifest.json"
+    if not qt_smoke_manifest.is_file() or not term_icon.is_file():
+        raise RuntimeError("Missing Qt Smoke.app source files")
+    shutil.copy2(qt_smoke_manifest, qt_smoke_dst / "Manifest.json")
+    shutil.copy2(term_icon, qt_smoke_dst / "Resources" / "Icon.png")
+    qt_smoke_bin = binaries["lcl-qt-smoke"]
+    shutil.copy2(qt_smoke_bin, qt_smoke_dst / "Executables" / "QtSmoke")
+    (qt_smoke_dst / "Executables" / "QtSmoke").chmod(0o755)
+    sha_map["Qt Smoke.app"] = get_sha256(qt_smoke_dst / "Executables" / "QtSmoke")
+    copy_ldd_deps(qt_smoke_dst / "Executables" / "QtSmoke", dest_system_lib)
+
+    # GPU Presentation PoC.app proves the brokered Android Vulkan -> AHB ->
+    # rasterd route without Qt, Mesa, or a general Vulkan ICD.
+    gpu_presentation_dst = dest_system_apps / "GPU Presentation PoC.app"
+    gpu_presentation_dst.mkdir(parents=True, exist_ok=True)
+    (gpu_presentation_dst / "Executables").mkdir(parents=True, exist_ok=True)
+    (gpu_presentation_dst / "Resources").mkdir(parents=True, exist_ok=True)
+    gpu_presentation_manifest = PROJECT_ROOT / "tooling" / "probes" / "gpu_presentation" / "Manifest.json"
+    if not gpu_presentation_manifest.is_file() or not term_icon.is_file():
+        raise RuntimeError("Missing GPU Presentation PoC.app source files")
+    shutil.copy2(gpu_presentation_manifest, gpu_presentation_dst / "Manifest.json")
+    shutil.copy2(term_icon, gpu_presentation_dst / "Resources" / "Icon.png")
+    gpu_presentation_bin = binaries["lcl-gpu-presentation-probe"]
+    shutil.copy2(gpu_presentation_bin, gpu_presentation_dst / "Executables" / "GpuPresentationProbe")
+    (gpu_presentation_dst / "Executables" / "GpuPresentationProbe").chmod(0o755)
+    sha_map["GPU Presentation PoC.app"] = get_sha256(
+        gpu_presentation_dst / "Executables" / "GpuPresentationProbe")
+    copy_ldd_deps(gpu_presentation_dst / "Executables" / "GpuPresentationProbe", dest_system_lib)
+
+    # Qt finds its ELF libraries through the normal rootfs link tree, while
+    # QPA plugins and QML modules are dlopen/import assets. Keep their native
+    # layout under /System and collect each module/plugin's ELF dependencies.
+    qt_source_root = next((candidate for candidate in (
+        Path(f"/usr/lib/{triplet}/qt6"), Path("/usr/lib/qt6"), Path("/usr/lib64/qt6")
+    ) if candidate.is_dir()), None)
+    if qt_source_root is None:
+        raise RuntimeError("Qt runtime was requested but its qt6 runtime directory is unavailable")
+    qt_destination_root = staging_dir / "System" / "Library" / "Qt"
+    for runtime_directory in ("plugins", "qml"):
+        source = qt_source_root / runtime_directory
+        if not source.is_dir():
+            raise RuntimeError(f"Qt runtime directory is unavailable: {source}")
+        destination = qt_destination_root / runtime_directory
+        shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
+        for runtime_file in destination.rglob("*"):
+            if runtime_file.is_file() and ".so" in runtime_file.name:
+                copy_ldd_deps(runtime_file, dest_system_lib)
 
     # Validate all app bundles
     validate_app_bundles(staging_dir)
@@ -1134,10 +1273,25 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Applications/Sandbox Test.app/Manifest.json",
         "/System/Applications/Sandbox Test.app/Executables/SandboxTest",
         "/System/Applications/Sandbox Test.app/Resources/Icon.png",
+        "/System/Applications/GPU Transport Probe.app/Manifest.json",
+        "/System/Applications/GPU Transport Probe.app/Executables/ClientGpuProbe",
+        "/System/Applications/GPU Transport Probe.app/Resources/Icon.png",
+        "/System/Applications/Qt Smoke.app/Manifest.json",
+        "/System/Applications/Qt Smoke.app/Executables/QtSmoke",
+        "/System/Applications/Qt Smoke.app/Resources/Icon.png",
+        "/System/Applications/GPU Presentation PoC.app/Manifest.json",
+        "/System/Applications/GPU Presentation PoC.app/Executables/GpuPresentationProbe",
+        "/System/Applications/GPU Presentation PoC.app/Resources/Icon.png",
+        "/System/Library/Qt/plugins/platforms/libqoffscreen.so",
+        "/System/Library/Qt/qml/QtQuick/qmldir",
         "/System/Library/Fonts/inter",
         "/System/Library/Gestalt/default.json",
         "/System/Library/Wallpapers/wallpaper.jpg",
         "/System/Library/EGL/glvnd/egl_vendor.d/50_mesa.json",
+        "/System/Library/Libraries/libvulkan.so.1",
+        "/System/Library/Vulkan/liblcl_vulkan_icd.so",
+        "/System/Library/Vulkan/icd.d/lcl_icd.json",
+        "/System/Library/Gfxstream/libvulkan_gfxstream.so",
         "/System/Library/Input/libinput",
         "/Users/Rei/.bashrc",
         "/Users/Rei/Library/Containers/org.lcl.terminal/Data",
@@ -1252,6 +1406,7 @@ def run_inside_docker(
     arch: str = "aarch64",
     image_size_mb: int = 1024,
     force: bool = False,
+    android_gfxstream_backend: bool = False,
 ) -> tuple[Path, Path, dict[str, str]]:
     """Dispatches rootfs generation inside multi-arch Docker container."""
     norm_arch = normalize_arch(arch)
@@ -1320,6 +1475,8 @@ def run_inside_docker(
     ]
     if force:
         cmd.append("--force")
+    if android_gfxstream_backend:
+        cmd.append("--android-gfxstream-backend")
     subprocess.run(cmd, check=True)
 
     staging_dir = ROOTFS_BASE_DIR / norm_arch
@@ -1350,6 +1507,7 @@ def build_rootfs_ext4(
     image_size_mb: int = 1024,
     inside_docker: bool = False,
     force: bool = False,
+    android_gfxstream_backend: bool = False,
 ) -> tuple[Path, Path, dict[str, str]]:
     """Builds the canonical ext4 rootfs image from the staging tree."""
     norm_arch = normalize_arch(arch)
@@ -1358,7 +1516,10 @@ def build_rootfs_ext4(
     # configured at /src/out inside Docker from being reopened through the
     # host checkout's absolute path.
     if not inside_docker:
-        return run_inside_docker(norm_arch, image_size_mb, force=force)
+        return run_inside_docker(
+            norm_arch, image_size_mb, force=force,
+            android_gfxstream_backend=android_gfxstream_backend,
+        )
 
     ROOTFS_BASE_DIR.mkdir(parents=True, exist_ok=True)
     staging_dir = ROOTFS_BASE_DIR / norm_arch
@@ -1368,7 +1529,8 @@ def build_rootfs_ext4(
         log(f"Removing canonical QEMU build tree for forced rebuild: {target_build_dir}")
         shutil.rmtree(target_build_dir)
     binaries = ensure_binaries(norm_arch)
-    fingerprint = rootfs_input_fingerprint(norm_arch, binaries)
+    gfxstream_guest = build_gfxstream_guest(norm_arch) if android_gfxstream_backend else None
+    fingerprint = rootfs_input_fingerprint(norm_arch, binaries, gfxstream_guest)
     fingerprint_path = rootfs_fingerprint_path(norm_arch)
     cache_allowed = inside_docker and bool(os.environ.get("LCL_QEMU_BUILDER_IMAGE_ID"))
 
@@ -1381,7 +1543,9 @@ def build_rootfs_ext4(
             fix_permissions(out_ext4)
             return staging_dir, out_ext4, {}
 
-    sha_map = stage_canonical_rootfs(staging_dir, norm_arch, binaries=binaries)
+    sha_map = stage_canonical_rootfs(
+        staging_dir, norm_arch, binaries=binaries, gfxstream_guest=gfxstream_guest
+    )
 
     log(f"Creating ext4 rootfs image at {out_ext4} ({image_size_mb} MB)...")
     if out_ext4.exists():
@@ -1427,6 +1591,10 @@ def main() -> None:
     parser.add_argument("--size", type=int, default=1024, help="Filesystem size in MB (default: 1024)")
     parser.add_argument("--inside-docker", action="store_true", help="Internal flag when running inside container")
     parser.add_argument("--force", action="store_true", help="Ignore cached input fingerprints and rebuild the rootfs")
+    parser.add_argument(
+        "--android-gfxstream-backend", action="store_true",
+        help="Stage the optional Android-only gfxstream guest ICD",
+    )
     args = parser.parse_args()
 
     norm_arch = normalize_arch(args.arch)
@@ -1435,6 +1603,7 @@ def main() -> None:
         image_size_mb=args.size,
         inside_docker=args.inside_docker,
         force=args.force,
+        android_gfxstream_backend=args.android_gfxstream_backend,
     )
     print("\n--- Summary ---")
     print(f"Target architecture: {norm_arch}")

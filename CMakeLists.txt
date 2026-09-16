@@ -7,6 +7,17 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
 
+# The gfxstream/AEMU decoder is an Android-only implementation detail of the
+# brokered GPU service.  Keep it out of the common build graph (and out of
+# every Linux build) unless an Android image explicitly enables it.
+if(ANDROID)
+    option(LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND
+           "Build the optional Android lcl-gpud gfxstream decoder backend" OFF)
+else()
+    set(LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND OFF CACHE BOOL
+        "Build the optional Android lcl-gpud gfxstream decoder backend" FORCE)
+endif()
+
 if(NOT ANDROID)
     find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 endif()
@@ -55,6 +66,34 @@ add_subdirectory(frameworks)
 add_subdirectory(platforms/common)
 add_subdirectory(system)
 add_subdirectory(frameworks/client)
+add_subdirectory(frameworks/gpu)
+if(LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND)
+    if(NOT ANDROID)
+        message(FATAL_ERROR "LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND is valid only for Android")
+    endif()
+    if(NOT EXISTS "${PROJECT_SOURCE_DIR}/third_party/gfxstream/guest/iostream/include/gfxstream/guest/IOStream.h" OR
+       NOT EXISTS "${PROJECT_SOURCE_DIR}/third_party/aemu/CMakeLists.txt")
+        message(FATAL_ERROR
+            "LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND requires initialized pinned "
+            "third_party/gfxstream and third_party/aemu submodules")
+    endif()
+    include(cmake/LclAndroidAemu.cmake)
+    lcl_add_android_aemu()
+    add_subdirectory(frameworks/gfxstream)
+endif()
+if(NOT ANDROID)
+    add_subdirectory(frameworks/vulkan)
+endif()
+
+# Qt Quick is LCL's supported Linux application UI stack. Canonical rootfs
+# builds provide it through the pinned builder image. Android currently builds
+# its native compositor substrate only; its Qt application runtime arrives in
+# the later Android integration stage and must not be an NDK prerequisite.
+if(NOT ANDROID)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick)
+    add_subdirectory(frameworks/qt)
+endif()
+
 add_subdirectory(frameworks/ui)
 
 if(ANDROID)

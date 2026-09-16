@@ -64,8 +64,14 @@ constexpr __u64 kWritableAppAccess = LANDLOCK_ACCESS_FS_READ_FILE |
                                       LANDLOCK_ACCESS_FS_MAKE_FIFO |
                                       LANDLOCK_ACCESS_FS_MAKE_SYM |
                                       LANDLOCK_ACCESS_FS_REFER;
+// The private /dev tree contains /dev/dri/renderD*.  READ_DIR is required
+// for Landlock to permit traversal of that nested directory; it exposes no
+// additional host devices because the sandbox's /dev is its own tmpfs.
 constexpr __u64 kDeviceAccess = LANDLOCK_ACCESS_FS_READ_FILE |
+                                 LANDLOCK_ACCESS_FS_READ_DIR |
                                  LANDLOCK_ACCESS_FS_WRITE_FILE;
+constexpr __u64 kReadOnlyAccess = LANDLOCK_ACCESS_FS_READ_FILE |
+                                  LANDLOCK_ACCESS_FS_READ_DIR;
 constexpr __u64 kHandledAccess = kReadExecuteAccess | kWritableAppAccess | kDeviceAccess;
 
 bool addPathRule(int rulesetDescriptor, int parentDescriptor, __u64 allowedAccess,
@@ -100,6 +106,12 @@ bool validateSandboxLandlockRules(const SandboxLandlockRules& rules, std::string
     }
     if (!isRootControlledDirectory(rules.deviceDescriptor)) {
         error = "sandbox device source is not a root-controlled directory";
+        return false;
+    }
+    const bool hasRenderNode = rules.filesystemSources.renderNodeDescriptor >= 0;
+    if (hasRenderNode != (rules.sysfsDescriptor >= 0) ||
+        (rules.sysfsDescriptor >= 0 && !isRootControlledDirectory(rules.sysfsDescriptor))) {
+        error = "sandbox graphics sysfs Landlock source is invalid";
         return false;
     }
     return true;
@@ -153,7 +165,9 @@ bool installSandboxLandlockRules(const SandboxLandlockRules& rules, std::string&
                     kWritableAppAccess, error) &&
         addPathRule(rulesetDescriptor, rules.executableDescriptor, kExecutableAccess, error) &&
         addPathRule(rulesetDescriptor, rules.temporaryDescriptor, kWritableAppAccess, error) &&
-        addPathRule(rulesetDescriptor, rules.deviceDescriptor, kDeviceAccess, error);
+        addPathRule(rulesetDescriptor, rules.deviceDescriptor, kDeviceAccess, error) &&
+        (rules.sysfsDescriptor < 0 ||
+         addPathRule(rulesetDescriptor, rules.sysfsDescriptor, kReadOnlyAccess, error));
     if (!rulesAdded) {
         close(rulesetDescriptor);
         return false;

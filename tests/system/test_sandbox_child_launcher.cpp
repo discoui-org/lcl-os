@@ -3,6 +3,7 @@
 #include "system/security/sandbox_child_launcher.hpp"
 #include "system/security/sandbox_launch_material.hpp"
 #include "system/security/session_user.hpp"
+#include "system/security/system_permission_profile.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -29,8 +30,10 @@ protected:
     int preferencesDescriptor_{-1};
     int compositorSocketDescriptor_{-1};
     int rasterSocketDescriptor_{-1};
+    int gpuSocketDescriptor_{-1};
     int compositorSocketFd_{-1};
     int rasterSocketFd_{-1};
+    int gpuSocketFd_{-1};
     int replacementCompositorSocketFd_{-1};
 
     void SetUp() override {
@@ -55,6 +58,7 @@ protected:
         };
         makeRuntimeSocket("compositor.sock", compositorSocketFd_, compositorSocketDescriptor_);
         makeRuntimeSocket("raster.sock", rasterSocketFd_, rasterSocketDescriptor_);
+        makeRuntimeSocket("gpu.sock", gpuSocketFd_, gpuSocketDescriptor_);
         executablePath_ = directory / "app";
         std::ofstream executable(executablePath_);
         executable << "#!/bin/sh\nexit 0\n";
@@ -85,7 +89,8 @@ protected:
             }
         }
         for (const int descriptor : {compositorSocketDescriptor_, rasterSocketDescriptor_,
-                                     compositorSocketFd_, rasterSocketFd_,
+                                     gpuSocketDescriptor_, compositorSocketFd_, rasterSocketFd_,
+                                     gpuSocketFd_,
                                      replacementCompositorSocketFd_}) {
             if (descriptor >= 0) close(descriptor);
         }
@@ -161,6 +166,103 @@ TEST_F(SandboxChildLauncherTest, RejectsUnsafeArgumentsAndNonExecutableDescripto
     spec = validSpec();
     spec.executableBundlePath = "../outside";
     EXPECT_FALSE(validateSandboxChildLaunchSpec(spec, error));
+}
+
+TEST_F(SandboxChildLauncherTest, DeniesGpuEndpointWithoutGraphicsGpuCapability) {
+    SandboxChildLaunchSpec spec = validSpec();
+    spec.filesystemSources.gpuSocketDescriptor = gpuSocketDescriptor_;
+
+    std::string error;
+    EXPECT_FALSE(validateSandboxChildLaunchSpec(spec, error));
+    EXPECT_EQ(error, "sandbox graphics.gpu capability and broker endpoint disagree");
+}
+
+TEST_F(SandboxChildLauncherTest, GivesGpuEndpointOnlyToAnEffectiveCapability) {
+    SandboxChildLaunchSpec seed = validSpec();
+    VerifiedApplication application{};
+    application.appId = seed.identity.appId;
+    application.identity = seed.identity;
+    application.runtime = SandboxRuntime::Native;
+    application.requestedPermissions = {"graphics.gpu"};
+    application.bundleRecordDigest = seed.plan.request.bundleRecordDigest;
+
+    std::string error;
+    const auto deniedPlan = makeThirdPartySandboxLaunchPlan(application, {}, 43, error);
+    ASSERT_TRUE(deniedPlan.has_value()) << error;
+    const auto grantedPlan = makeThirdPartySandboxLaunchPlan(
+        application, {"graphics.gpu"}, 44, error);
+    ASSERT_TRUE(grantedPlan.has_value()) << error;
+
+    SandboxLaunchMaterialInput input{
+        .application = application,
+        .filesystemSources = seed.filesystemSources,
+        .executableBundlePath = seed.executableBundlePath,
+        .executableDescriptor = seed.executableDescriptor,
+        .arguments = seed.arguments,
+    };
+    input.filesystemSources.gpuSocketDescriptor = gpuSocketDescriptor_;
+    SandboxLaunchMaterialRegistry registry;
+    ASSERT_TRUE(registry.registerMaterial(input, error)) << error;
+
+    SandboxPlatformHardening hardening{};
+    hardening.requireCgroupResourceAccounting = false;
+    SandboxChildLaunchSpec deniedSpec{};
+    ASSERT_TRUE(registry.makeChildLaunchSpec(*deniedPlan, hardening, std::nullopt,
+                                             deniedSpec, error)) << error;
+    EXPECT_EQ(deniedSpec.filesystemSources.gpuSocketDescriptor, -1);
+
+    SandboxChildLaunchSpec grantedSpec{};
+    ASSERT_TRUE(registry.makeChildLaunchSpec(*grantedPlan, hardening, std::nullopt,
+                                             grantedSpec, error)) << error;
+    EXPECT_GE(grantedSpec.filesystemSources.gpuSocketDescriptor, 0);
+    EXPECT_TRUE(validateSandboxChildLaunchSpec(grantedSpec, error)) << error;
+}
+
+TEST_F(SandboxChildLauncherTest, QtSmokeGpuGrantControlsPrivateBrokerEndpoint) {
+    SandboxChildLaunchSpec seed = validSpec();
+    VerifiedApplication application{};
+    application.appId = "org.lcl.qt.smoke";
+    application.identity = {application.appId, seed.identity.uid, seed.identity.gid};
+    application.runtime = SandboxRuntime::Native;
+    application.requestedPermissions = {"graphics.gpu", "graphics.render-node"};
+    application.bundleRecordDigest = seed.plan.request.bundleRecordDigest;
+
+    const auto systemGrants = staticSystemImagePermissionGrants(
+        application.appId, application.requestedPermissions);
+    EXPECT_EQ(systemGrants,
+              std::vector<std::string>({"graphics.gpu", "graphics.render-node"}));
+
+    std::string error;
+    // Model the normal policy result with only graphics.gpu effective here:
+    // this isolates the broker endpoint from the separately-tested DRM grant.
+    const auto gpuGrantedPlan = makeThirdPartySandboxLaunchPlan(
+        application, {"graphics.gpu"}, 45, error);
+    ASSERT_TRUE(gpuGrantedPlan.has_value()) << error;
+    const auto gpuRemovedPlan = makeThirdPartySandboxLaunchPlan(application, {}, 46, error);
+    ASSERT_TRUE(gpuRemovedPlan.has_value()) << error;
+
+    SandboxLaunchMaterialInput input{
+        .application = application,
+        .filesystemSources = seed.filesystemSources,
+        .executableBundlePath = seed.executableBundlePath,
+        .executableDescriptor = seed.executableDescriptor,
+        .arguments = seed.arguments,
+    };
+    input.filesystemSources.gpuSocketDescriptor = gpuSocketDescriptor_;
+    SandboxLaunchMaterialRegistry registry;
+    ASSERT_TRUE(registry.registerMaterial(input, error)) << error;
+
+    SandboxPlatformHardening hardening{};
+    hardening.requireCgroupResourceAccounting = false;
+    SandboxChildLaunchSpec grantedSpec{};
+    ASSERT_TRUE(registry.makeChildLaunchSpec(*gpuGrantedPlan, hardening, std::nullopt,
+                                             grantedSpec, error)) << error;
+    EXPECT_GE(grantedSpec.filesystemSources.gpuSocketDescriptor, 0);
+
+    SandboxChildLaunchSpec removedSpec{};
+    ASSERT_TRUE(registry.makeChildLaunchSpec(*gpuRemovedPlan, hardening, std::nullopt,
+                                             removedSpec, error)) << error;
+    EXPECT_EQ(removedSpec.filesystemSources.gpuSocketDescriptor, -1);
 }
 
 TEST_F(SandboxChildLauncherTest, RefusesToSpawnWhenTheCallerIsNotRoot) {
@@ -261,6 +363,7 @@ TEST_F(SandboxChildLauncherTest, RejectsRetainedMaterialAfterGraphicsEndpointRes
 
     SandboxChildLaunchSpec rebuilt{};
     SandboxPlatformHardening hardening{};
+    hardening.requireCgroupResourceAccounting = false;
     EXPECT_FALSE(registry.runtimeEndpointsCurrent(error));
     EXPECT_NE(error.find("generation changed"), std::string::npos);
     EXPECT_FALSE(registry.makeChildLaunchSpec(protectedSpec.plan, hardening, std::nullopt,

@@ -44,6 +44,7 @@ ANDROID_BUILD_DIR = android_build_dir("arm64-v8a")
 ANDROID_PLATFORM_TARGETS = (
     "lcl-core-android",
     "lcl-rasterd-android",
+    "lcl-gpud-android",
 )
 
 
@@ -282,6 +283,7 @@ def build_android_phone_artifacts(
         f"-DANDROID_ABI={abi}",
         f"-DANDROID_PLATFORM={android_platform}",
         "-DBUILD_TESTS=OFF",
+        "-DLCL_ENABLE_ANDROID_GFXSTREAM_BACKEND=ON",
         *android_skia_cmake_args(ROOT_DIR, abi),
     ]
     if is_arm64:
@@ -304,6 +306,7 @@ def build_android_phone_artifacts(
             [
                 sys.executable, str(BUILD_TOOL_DIR / "build_rootfs.py"),
                 "--arch", target_arch, "--size", str(args.size),
+                "--android-gfxstream-backend",
             ],
             cwd=ROOT_DIR,
         )
