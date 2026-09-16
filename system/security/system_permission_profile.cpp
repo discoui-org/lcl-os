@@ -13,7 +13,8 @@ struct StaticProfile {
 };
 
 constexpr std::array<std::string_view, 0> kNoGrants{};
-constexpr std::array<std::string_view, 1> kVulkanGearsGrants{{"graphics.gpu"}};
+constexpr std::array<std::string_view, 2> kVulkanGearsGrants{{
+    "graphics.gpu", "graphics.render-node"}};
 constexpr std::array<StaticProfile, 3> kProfiles{{
     {"org.lcl.settings", kNoGrants},
     {"org.lcl.sandbox-probe", kNoGrants},

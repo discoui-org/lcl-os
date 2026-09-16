@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-dev \
     libgles2-mesa-dev \
     mesa-common-dev \
+    mesa-vulkan-drivers \
     libegl-mesa0 \
     libglx-mesa0 \
     libinput-dev \

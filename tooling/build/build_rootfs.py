@@ -63,6 +63,7 @@ CANONICAL_ARTIFACT_FILENAMES = {
 
 CANONICAL_TARGETS = (
     "lcl-vulkan-icd",
+    "lcl-vulkan-gears",
     "lcl-desktop-shell",
     "lcl-mobile-shell",
     "lcl-shell-launcher",
@@ -168,6 +169,57 @@ def copy_ldd_deps(binary: Path, dest_lib: Path) -> None:
                 shutil.copy2(lib_path, target, follow_symlinks=True)
 
 
+def stage_native_vulkan_icds(vulkan_root: Path, triplet: str,
+                             dest_system_lib: Path, *,
+                             qemu_venus_backend: bool = False) -> int:
+    """Stage the selected Linux-platform ICDs without a global loader path."""
+    source_dir = Path("/usr/share/vulkan/icd.d")
+    if not source_dir.is_dir():
+        return 0
+    manifest_dir = vulkan_root / "native" / "icd.d"
+    driver_dir = vulkan_root / "native" / "drivers"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    driver_dir.mkdir(parents=True, exist_ok=True)
+    staged = 0
+    for source_manifest in sorted(source_dir.glob("*.json")):
+        # The QEMU image gets only Venus. Physical Linux gets native
+        # hardware/software ICDs and never inherits a virtualization driver.
+        if qemu_venus_backend:
+            if source_manifest.name != "virtio_icd.json":
+                continue
+        elif source_manifest.name in {"gfxstream_vk_icd.json", "virtio_icd.json"}:
+            continue
+        try:
+            manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+            library_path = manifest["ICD"]["library_path"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(library_path, str) or not library_path:
+            continue
+        configured = Path(library_path)
+        candidates = ([configured] if configured.is_absolute() else [
+            source_manifest.parent / configured,
+            Path(f"/usr/lib/{triplet}") / configured.name,
+            Path("/usr/lib64") / configured.name,
+            Path("/usr/lib") / configured.name,
+        ])
+        source_driver = next((path for path in candidates if path.is_file()), None)
+        if source_driver is None:
+            continue
+        destination_name = configured.name
+        destination_driver = driver_dir / destination_name
+        shutil.copy2(source_driver.resolve(), destination_driver)
+        destination_driver.chmod(0o755)
+        copy_ldd_deps(source_driver.resolve(), dest_system_lib)
+        manifest["ICD"]["library_path"] = (
+            f"/System/Library/Vulkan/native/drivers/{destination_name}"
+        )
+        (manifest_dir / source_manifest.name).write_text(
+            json.dumps(manifest, indent=4) + "\n", encoding="utf-8")
+        staged += 1
+    return staged
+
+
 def is_binary_matching_arch(binary_path: Path | None, arch: str) -> bool:
     if not binary_path or not binary_path.is_file():
         return False
@@ -257,8 +309,10 @@ def ensure_binaries(arch: str = "x86_64", *, android_gfxstream_guest_transport: 
         "-DCMAKE_BUILD_TYPE=Release",
         *skia_args,
     ]
-    if android_gfxstream_guest_transport:
-        configure.append("-DLCL_BUILD_ANDROID_GFXSTREAM_GUEST_TRANSPORT=ON")
+    configure.append(
+        "-DLCL_BUILD_ANDROID_GFXSTREAM_GUEST_TRANSPORT=" +
+        ("ON" if android_gfxstream_guest_transport else "OFF")
+    )
     if not cache_exists:
         if shutil.which("ninja"):
             configure.extend(["-G", "Ninja"])
@@ -271,8 +325,7 @@ def ensure_binaries(arch: str = "x86_64", *, android_gfxstream_guest_transport: 
     log(f"Updating canonical targets for {norm_arch}...")
     build_targets = list(CANONICAL_TARGETS)
     if android_gfxstream_guest_transport:
-        build_targets.extend(("lcl-gfxstream-guest-adapter", "lcl-gfxstream-vulkan-test",
-                              "lcl-vulkan-gears"))
+        build_targets.extend(("lcl-gfxstream-guest-adapter", "lcl-gfxstream-vulkan-test"))
     subprocess.run(
         ["cmake", "--build", str(target_build_dir),
          "--parallel", str(os.cpu_count() or 4), "--target"] +
@@ -293,11 +346,6 @@ def ensure_binaries(arch: str = "x86_64", *, android_gfxstream_guest_transport: 
         if not gfxstream_test or not gfxstream_test.is_file():
             raise RuntimeError("Android-flavour gfxstream Vulkan test app was not built")
         binaries["lcl-gfxstream-vulkan-test"] = gfxstream_test
-        vulkan_gears = find_built_binary("lcl-vulkan-gears", norm_arch)
-        if not vulkan_gears or not vulkan_gears.is_file():
-            raise RuntimeError("Android-flavour Vulkan gears app was not built")
-        binaries["lcl-vulkan-gears"] = vulkan_gears
-
     return binaries
 
 
@@ -319,7 +367,8 @@ def _hash_input_path(digest, path: Path) -> None:
 
 
 def rootfs_input_fingerprint(
-    arch: str, binaries: dict[str, Path], gfxstream_guest: Path | None = None
+    arch: str, binaries: dict[str, Path], gfxstream_guest: Path | None = None,
+    *, qemu_venus_backend: bool = False,
 ) -> str:
     """Hash every project-controlled input embedded in the canonical rootfs."""
     norm_arch = normalize_arch(arch)
@@ -337,10 +386,10 @@ def rootfs_input_fingerprint(
         PROJECT_ROOT / "config" / "gestalt" / "default.json",
         PROJECT_ROOT / "apps" / "terminal" / "Manifest.json",
         PROJECT_ROOT / "apps" / "terminal" / "Resources" / "Icon.png",
+        PROJECT_ROOT / "apps" / "vulkan_gears",
     ]
     if gfxstream_guest is not None:
         source_inputs.append(PROJECT_ROOT / "apps" / "gfxstream_vulkan_test" / "Manifest.json")
-        source_inputs.append(PROJECT_ROOT / "apps" / "vulkan_gears")
     for source_input in source_inputs:
         if source_input.is_dir():
             for child in sorted(source_input.rglob("*")):
@@ -362,6 +411,9 @@ def rootfs_input_fingerprint(
     else:
         digest.update(b"disabled")
     digest.update(b"\0")
+    digest.update(b"qemu-venus-backend\0")
+    digest.update(b"enabled" if qemu_venus_backend else b"disabled")
+    digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -378,6 +430,8 @@ def stage_canonical_rootfs(
     arch: str = "x86_64",
     binaries: dict[str, Path] | None = None,
     gfxstream_guest: Path | None = None,
+    *,
+    qemu_venus_backend: bool = False,
 ) -> dict[str, str]:
     """Populates the deterministic canonical userspace filesystem layout."""
     norm_arch = normalize_arch(arch)
@@ -675,10 +729,10 @@ def stage_canonical_rootfs(
         (usr_dir / "share" / "drirc.d").symlink_to("../../System/Library/EGL/drirc.d")
     (staging_dir / "etc" / "glvnd").symlink_to("../System/Library/EGL/glvnd")
 
-    # Vulkan is deliberately separate from the legacy Mesa EGL path.  The
-    # loader and the LCL ICD are present in the immutable image, while no
-    # global ICD search path is installed: a sandbox must have graphics.gpu
-    # and explicitly opt into this JSON when its renderer is ready.
+    # Vulkan is deliberately separate from the legacy Mesa EGL path. No global
+    # ICD search path is installed: the common lcl-gpu presentation layer
+    # selects either the native Linux manifests or the Android gfxstream ICD
+    # after the matching sandbox capability has been granted.
     vulkan_loader = next((candidate for candidate in (
         Path(f"/usr/lib/{triplet}/libvulkan.so.1"), Path("/usr/lib64/libvulkan.so.1"),
         Path("/usr/lib/libvulkan.so.1"),
@@ -702,6 +756,18 @@ def stage_canonical_rootfs(
             "api_version": "1.1.0",
         },
     }, indent=4), encoding="utf-8")
+    if gfxstream_guest is None:
+        native_icd_count = stage_native_vulkan_icds(
+            vulkan_root, triplet, dest_system_lib,
+            qemu_venus_backend=qemu_venus_backend)
+        if native_icd_count == 0:
+            if qemu_venus_backend:
+                raise RuntimeError(
+                    "No Venus ICD was staged; install a Mesa package that "
+                    "provides virtio_icd.json and libvulkan_virtio.so")
+            raise RuntimeError(
+                "No native Vulkan ICD was staged; install mesa-vulkan-drivers "
+                "or a vendor Vulkan driver in the rootfs builder")
     # gfxstream is carried only by the Android flavour. It remains dormant
     # until the LCL IOStream transport and native decoder bridge are enabled;
     # in particular, no global Vulkan ICD search path points here.
@@ -780,21 +846,28 @@ def stage_canonical_rootfs(
             gfxstream_test_dst / "Executables" / "GfxstreamVulkanTest")
         copy_ldd_deps(gfxstream_test_dst / "Executables" / "GfxstreamVulkanTest", dest_system_lib)
 
-        vulkan_gears_dst = dest_system_apps / "Vulkan Gears.app"
-        vulkan_gears_dst.mkdir(parents=True, exist_ok=True)
-        (vulkan_gears_dst / "Executables").mkdir(parents=True, exist_ok=True)
-        (vulkan_gears_dst / "Resources").mkdir(parents=True, exist_ok=True)
-        vulkan_gears_manifest = PROJECT_ROOT / "apps" / "vulkan_gears" / "Manifest.json"
-        if not vulkan_gears_manifest.is_file() or not term_icon.is_file():
-            raise RuntimeError("Missing Vulkan Gears.app source files")
-        shutil.copy2(vulkan_gears_manifest, vulkan_gears_dst / "Manifest.json")
-        shutil.copy2(term_icon, vulkan_gears_dst / "Resources" / "Icon.png")
-        vulkan_gears_bin = binaries["lcl-vulkan-gears"]
-        shutil.copy2(vulkan_gears_bin, vulkan_gears_dst / "Executables" / "VulkanGears")
-        (vulkan_gears_dst / "Executables" / "VulkanGears").chmod(0o755)
-        sha_map["Vulkan Gears.app"] = get_sha256(
-            vulkan_gears_dst / "Executables" / "VulkanGears")
-        copy_ldd_deps(vulkan_gears_dst / "Executables" / "VulkanGears", dest_system_lib)
+    vulkan_gears_dst = dest_system_apps / "Vulkan Gears.app"
+    vulkan_gears_dst.mkdir(parents=True, exist_ok=True)
+    (vulkan_gears_dst / "Executables").mkdir(parents=True, exist_ok=True)
+    (vulkan_gears_dst / "Resources").mkdir(parents=True, exist_ok=True)
+    vulkan_gears_manifest = PROJECT_ROOT / "apps" / "vulkan_gears" / "Manifest.json"
+    if not vulkan_gears_manifest.is_file() or not term_icon.is_file():
+        raise RuntimeError("Missing Vulkan Gears.app source files")
+    manifest = json.loads(vulkan_gears_manifest.read_text(encoding="utf-8"))
+    # The application and lcl-gpu ABI are identical. Only the packaged native
+    # resource capability follows the selected Vulkan/presentation backend.
+    manifest["requestedPermissions"] = [
+        "graphics.gpu" if gfxstream_guest is not None else "graphics.render-node"
+    ]
+    (vulkan_gears_dst / "Manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    shutil.copy2(term_icon, vulkan_gears_dst / "Resources" / "Icon.png")
+    vulkan_gears_bin = binaries["lcl-vulkan-gears"]
+    shutil.copy2(vulkan_gears_bin, vulkan_gears_dst / "Executables" / "VulkanGears")
+    (vulkan_gears_dst / "Executables" / "VulkanGears").chmod(0o755)
+    sha_map["Vulkan Gears.app"] = get_sha256(
+        vulkan_gears_dst / "Executables" / "VulkanGears")
+    copy_ldd_deps(vulkan_gears_dst / "Executables" / "VulkanGears", dest_system_lib)
 
     # Qt finds its ELF libraries through the normal rootfs link tree, while
     # QPA plugins and QML modules are dlopen/import assets. Keep their native
@@ -1254,7 +1327,9 @@ def validate_app_bundles(staging_dir: Path) -> None:
         raise RuntimeError("No app bundles were found or validated in the staging tree.")
 
 
-def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64", *, has_gfxstream: bool = False) -> None:
+def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64", *,
+                        has_gfxstream: bool = False,
+                        has_qemu_venus: bool = False) -> None:
     """Verifies that key canonical userspace files exist inside the generated ext4 image."""
     norm_arch = normalize_arch(arch)
     meta = ARCH_META[norm_arch]
@@ -1281,6 +1356,9 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64", *, has_gfxstream:
         "/System/Applications/Terminal.app/Manifest.json",
         "/System/Applications/Terminal.app/Executables/Terminal",
         "/System/Applications/Terminal.app/Resources/Icon.png",
+        "/System/Applications/Vulkan Gears.app/Manifest.json",
+        "/System/Applications/Vulkan Gears.app/Executables/VulkanGears",
+        "/System/Applications/Vulkan Gears.app/Resources/Icon.png",
         "/System/Library/Qt/plugins/platforms/libqoffscreen.so",
         "/System/Library/Qt/qml/QtQuick/qmldir",
         "/System/Library/Fonts/inter",
@@ -1304,10 +1382,17 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64", *, has_gfxstream:
             "/System/Applications/Gfxstream Vulkan Test.app/Manifest.json",
             "/System/Applications/Gfxstream Vulkan Test.app/Executables/GfxstreamVulkanTest",
             "/System/Applications/Gfxstream Vulkan Test.app/Resources/Icon.png",
-            "/System/Applications/Vulkan Gears.app/Manifest.json",
-            "/System/Applications/Vulkan Gears.app/Executables/VulkanGears",
-            "/System/Applications/Vulkan Gears.app/Resources/Icon.png",
         ))
+    else:
+        required_files.extend((
+            "/System/Library/Vulkan/native/icd.d",
+            "/System/Library/Vulkan/native/drivers",
+        ))
+        if has_qemu_venus:
+            required_files.extend((
+                "/System/Library/Vulkan/native/icd.d/virtio_icd.json",
+                "/System/Library/Vulkan/native/drivers/libvulkan_virtio.so",
+            ))
 
     for req in required_files:
         # debugfs tokenizes its -R command independently of subprocess.  App
@@ -1416,6 +1501,7 @@ def run_inside_docker(
     image_size_mb: int = 1024,
     force: bool = False,
     android_gfxstream_backend: bool = False,
+    qemu_venus_backend: bool = False,
 ) -> tuple[Path, Path, dict[str, str]]:
     """Dispatches rootfs generation inside multi-arch Docker container."""
     norm_arch = normalize_arch(arch)
@@ -1486,6 +1572,8 @@ def run_inside_docker(
         cmd.append("--force")
     if android_gfxstream_backend:
         cmd.append("--android-gfxstream-backend")
+    if qemu_venus_backend:
+        cmd.append("--qemu-venus-backend")
     subprocess.run(cmd, check=True)
 
     staging_dir = ROOTFS_BASE_DIR / norm_arch
@@ -1517,6 +1605,7 @@ def build_rootfs_ext4(
     inside_docker: bool = False,
     force: bool = False,
     android_gfxstream_backend: bool = False,
+    qemu_venus_backend: bool = False,
 ) -> tuple[Path, Path, dict[str, str]]:
     """Builds the canonical ext4 rootfs image from the staging tree."""
     norm_arch = normalize_arch(arch)
@@ -1528,7 +1617,11 @@ def build_rootfs_ext4(
         return run_inside_docker(
             norm_arch, image_size_mb, force=force,
             android_gfxstream_backend=android_gfxstream_backend,
+            qemu_venus_backend=qemu_venus_backend,
         )
+
+    if android_gfxstream_backend and qemu_venus_backend:
+        raise ValueError("Android gfxstream and QEMU Venus rootfs flavors are exclusive")
 
     ROOTFS_BASE_DIR.mkdir(parents=True, exist_ok=True)
     staging_dir = ROOTFS_BASE_DIR / norm_arch
@@ -1544,7 +1637,9 @@ def build_rootfs_ext4(
         build_gfxstream_guest(norm_arch, gfxstream_guest_adapter_archive(norm_arch))
         if android_gfxstream_backend else None
     )
-    fingerprint = rootfs_input_fingerprint(norm_arch, binaries, gfxstream_guest)
+    fingerprint = rootfs_input_fingerprint(
+        norm_arch, binaries, gfxstream_guest,
+        qemu_venus_backend=qemu_venus_backend)
     fingerprint_path = rootfs_fingerprint_path(norm_arch)
     cache_allowed = inside_docker and bool(os.environ.get("LCL_QEMU_BUILDER_IMAGE_ID"))
 
@@ -1558,7 +1653,8 @@ def build_rootfs_ext4(
             return staging_dir, out_ext4, {}
 
     sha_map = stage_canonical_rootfs(
-        staging_dir, norm_arch, binaries=binaries, gfxstream_guest=gfxstream_guest
+        staging_dir, norm_arch, binaries=binaries, gfxstream_guest=gfxstream_guest,
+        qemu_venus_backend=qemu_venus_backend,
     )
 
     log(f"Creating ext4 rootfs image at {out_ext4} ({image_size_mb} MB)...")
@@ -1585,7 +1681,9 @@ def build_rootfs_ext4(
     log(f"✓ Built {out_ext4.name} ({img_size} bytes / {img_size / (1024*1024):.1f} MB)")
 
     # Verify content inside ext4 image using debugfs
-    verify_rootfs_image(out_ext4, norm_arch, has_gfxstream=gfxstream_guest is not None)
+    verify_rootfs_image(
+        out_ext4, norm_arch, has_gfxstream=gfxstream_guest is not None,
+        has_qemu_venus=qemu_venus_backend)
 
     if cache_allowed:
         fingerprint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1609,6 +1707,10 @@ def main() -> None:
         "--android-gfxstream-backend", action="store_true",
         help="Stage the optional Android-only gfxstream guest ICD",
     )
+    parser.add_argument(
+        "--qemu-venus-backend", action="store_true",
+        help="Stage the QEMU-only Mesa Venus guest ICD",
+    )
     args = parser.parse_args()
 
     norm_arch = normalize_arch(args.arch)
@@ -1618,6 +1720,7 @@ def main() -> None:
         inside_docker=args.inside_docker,
         force=args.force,
         android_gfxstream_backend=args.android_gfxstream_backend,
+        qemu_venus_backend=args.qemu_venus_backend,
     )
     print("\n--- Summary ---")
     print(f"Target architecture: {norm_arch}")

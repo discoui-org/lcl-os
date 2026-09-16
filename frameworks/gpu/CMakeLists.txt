@@ -3,6 +3,24 @@ add_library(lcl-gpu-client STATIC
     src/gfxstream_packet_stream.cpp
 )
 
+# Vulkan command execution always remains in the selected platform ICD.  This
+# layer only creates exportable presentation targets and translates them into
+# the common SurfaceClient contract. Android-native binaries do not embed the
+# rootfs Vulkan presentation bridge.
+if(NOT ANDROID)
+    find_package(Vulkan REQUIRED)
+    target_sources(lcl-gpu-client PRIVATE src/vulkan_presentation.cpp)
+    target_link_libraries(lcl-gpu-client PUBLIC Vulkan::Vulkan)
+    if(LCL_BUILD_ANDROID_GFXSTREAM_GUEST_TRANSPORT)
+        target_compile_definitions(lcl-gpu-client PRIVATE
+            LCL_HAS_GFXSTREAM_VULKAN_PRESENTATION=1
+        )
+        target_include_directories(lcl-gpu-client PRIVATE
+            ${PROJECT_SOURCE_DIR}/third_party/gfxstream/common/vulkan/include
+        )
+    endif()
+endif()
+
 target_include_directories(lcl-gpu-client PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/frameworks/client/include

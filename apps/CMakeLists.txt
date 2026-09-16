@@ -106,9 +106,7 @@ foreach(root_runtime_target IN ITEMS
     )
 endforeach()
 
-# This is an Android-gfxstream integration executable, not a normal Linux
-# application.  It is built only into the rootfs flavour that packages the
-# guest ICD and has an Android lcl-gpud decoder counterpart.
+# The diagnostic test remains Android-gfxstream-specific.
 if(NOT ANDROID AND LCL_BUILD_ANDROID_GFXSTREAM_GUEST_TRANSPORT)
     add_executable(lcl-gfxstream-vulkan-test gfxstream_vulkan_test/main.cpp)
     target_include_directories(lcl-gfxstream-vulkan-test PRIVATE
@@ -119,11 +117,13 @@ if(NOT ANDROID AND LCL_BUILD_ANDROID_GFXSTREAM_GUEST_TRANSPORT)
     set_target_properties(lcl-gfxstream-vulkan-test PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     )
+endif()
 
+# One application source is used with either the native Linux ICD or the
+# Android-rootfs gfxstream ICD. Platform-native buffer handling stays inside
+# lcl-gpu-client's VulkanPresentation implementation.
+if(NOT ANDROID)
     add_executable(lcl-vulkan-gears vulkan_gears/main.cpp)
-    target_include_directories(lcl-vulkan-gears PRIVATE
-        ${PROJECT_SOURCE_DIR}/third_party/gfxstream/common/vulkan/include
-    )
     target_link_libraries(lcl-vulkan-gears PRIVATE Vulkan::Vulkan lcl-gpu-client)
     target_compile_features(lcl-vulkan-gears PRIVATE cxx_std_20)
     set_target_properties(lcl-vulkan-gears PROPERTIES

@@ -909,6 +909,7 @@ def package_inside_docker(args: argparse.Namespace) -> Path:
         arch=args.arch,
         inside_docker=True,
         force=args.rebuild,
+        qemu_venus_backend=args.gpu,
     )
     kernel = locate_kernel()
     log(f"Docker image kernel: {kernel}")
@@ -944,6 +945,8 @@ def prepare_artifacts(args: argparse.Namespace, arch: str = "x86_64") -> Path:
         diagnostic_args.append("--debug-overlay")
     if args.rebuild:
         diagnostic_args.append("--rebuild")
+    if args.gpu:
+        diagnostic_args.append("--gpu")
     return docker_build_and_package(diagnostic_args, arch=arch)
 
 
@@ -1497,6 +1500,32 @@ def launch_qemu(
     has_virtio_gpu_gl = "virtio-gpu-gl" in dev_help or "virtio-gpu-gl-pci" in dev_help
     has_virtio_vga = "virtio-vga" in dev_help
 
+    venus_enabled = False
+    venus_options = ""
+    if want_gl and has_virtio_gpu_gl:
+        venus_probe_device = (
+            "virtio-gpu-gl-pci" if arch == "aarch64" else "virtio-vga-gl"
+        )
+        try:
+            gpu_property_help = subprocess.check_output(
+                [qemu, "-device", f"{venus_probe_device},help"],
+                text=True,
+                stderr=subprocess.STDOUT,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            gpu_property_help = ""
+        venus_enabled = all(
+            option in gpu_property_help
+            for option in ("venus=<bool>", "blob=<bool>", "hostmem=<size>")
+        )
+        if venus_enabled:
+            # A 4G PCI BAR is accepted by x86 QEMU but exceeds the aperture
+            # that the bundled aarch64 EDK2 firmware can enumerate.
+            venus_hostmem = "256M" if arch == "aarch64" else "4G"
+            venus_options = f",venus=on,blob=on,hostmem={venus_hostmem}"
+        else:
+            log("WARNING: QEMU GPU has no Venus properties; Vulkan will be unavailable in the guest.")
+
     if spice_unix is not None and (
         (arch == "x86_64" and not has_virtio_vga_gl)
         or (arch == "aarch64" and not has_virtio_gpu_gl)
@@ -1507,14 +1536,14 @@ def launch_qemu(
     if arch == "aarch64":
         # On aarch64 virt machine, set explicit resolution on virtio-gpu-pci to initialize FB immediately
         if want_gl and has_virtio_gpu_gl:
-            gpu = ["-device", f"virtio-gpu-gl-pci,xres={width},yres={height}"]
+            gpu = ["-device", f"virtio-gpu-gl-pci,xres={width},yres={height}{venus_options}"]
         else:
             gpu = ["-device", f"virtio-gpu-pci,xres={width},yres={height}"]
     else:
         # x86_64
         if want_gl:
             if has_virtio_vga_gl:
-                gpu = ["-vga", "none", "-device", "virtio-vga-gl"]
+                gpu = ["-vga", "none", "-device", f"virtio-vga-gl{venus_options}"]
             else:
                 log("virtio-vga-gl is not available on host QEMU (e.g. macOS); falling back to virtio-vga.")
                 gpu = ["-vga", "none", "-device", "virtio-vga" if has_virtio_vga else f"virtio-gpu-pci,xres={width},yres={height}"]
@@ -1602,6 +1631,8 @@ def launch_qemu(
     print(f"  - Boot Mode: {'ISO CD-ROM (' + ('UEFI' if uefi_mode else 'BIOS') + ')' if iso_mode else 'Direct Kernel Boot'}")
     print(f"  - Accelerator: {' '.join(accel)}")
     print(f"  - GPU: {' '.join(gpu)}{'  (LCL_QEMU_GL=1 for VirGL)' if not want_gl else ''}")
+    if venus_enabled:
+        print(f"  - Vulkan: Venus (virtio-gpu blob resources, {venus_hostmem} host-visible aperture)")
     print(f"  - Display: {display[1]}")
     if spice_unix is not None:
         print(f"  - SPICE Unix socket: {spice_unix}")
@@ -1731,6 +1762,18 @@ def launch_qemu(
         "-no-reboot",
     ])
     log("QEMU cmdline: " + " ".join(cmd))
+    if venus_enabled and host_os() == "darwin":
+        qemu_prefix = Path(qemu).resolve().parent.parent
+        host_icd = qemu_prefix / "share" / "vulkan" / "icd.d" / "libkosmickrisp_icd.json"
+        if host_icd.is_file():
+            os.environ["VK_DRIVER_FILES"] = str(host_icd)
+            os.environ["VK_ICD_FILENAMES"] = str(host_icd)
+            log(f"Venus host Vulkan ICD: {host_icd}")
+        else:
+            log("WARNING: QEMU Venus is enabled but its bundled host Vulkan ICD is missing.")
+    test_venus_compat = os.environ.get("LCL_TEST_VENUS_COMPAT")
+    if test_venus_compat:
+        os.environ["DYLD_INSERT_LIBRARIES"] = test_venus_compat
     os.execvp(qemu, cmd)
 
 
@@ -1802,7 +1845,7 @@ def main() -> None:
         "--gpu",
         "-g",
         action="store_true",
-        help="Enable 3D VirGL GPU acceleration in QEMU",
+        help="Enable VirGL OpenGL and, when supported, Venus Vulkan in QEMU",
     )
     parser.add_argument(
         "--spice-unix",

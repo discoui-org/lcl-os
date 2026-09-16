@@ -14,13 +14,13 @@ TEST(SystemPermissionProfileTest, DeniesGpuToRemovedIntegrationBundles) {
     }
 }
 
-TEST(SystemPermissionProfileTest, GrantsOnlyVulkanGearsExplicitGpuRequest) {
+TEST(SystemPermissionProfileTest, GrantsOnlyVulkanGearsExplicitGpuRequests) {
     EXPECT_EQ(staticSystemImagePermissionGrants(
                   "org.lcl.vulkan-gears", {"graphics.gpu", "graphics.render-node"}),
-              std::vector<std::string>({"graphics.gpu"}));
-    EXPECT_TRUE(staticSystemImagePermissionGrants(
-                    "org.lcl.vulkan-gears", {"graphics.render-node"})
-                    .empty());
+              (std::vector<std::string>{"graphics.gpu", "graphics.render-node"}));
+    EXPECT_EQ(staticSystemImagePermissionGrants(
+                  "org.lcl.vulkan-gears", {"graphics.render-node"}),
+              std::vector<std::string>({"graphics.render-node"}));
     EXPECT_TRUE(staticSystemImagePermissionGrants(
                     "org.lcl.gfxstream-vulkan-test", {"graphics.gpu"})
                     .empty());

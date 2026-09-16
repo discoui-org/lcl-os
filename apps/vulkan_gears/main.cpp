@@ -1,8 +1,7 @@
 #include <vulkan/vulkan.h>
-#include <vulkan/vk_android_native_buffer.h>
 
 #include "lcl-client/surface_client.hpp"
-#include "lcl-gpu/gpu_client.hpp"
+#include "lcl-gpu/vulkan_presentation.hpp"
 #include "shaders.hpp"
 
 #include <algorithm>
@@ -29,7 +28,6 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using Seconds = std::chrono::duration<double>;
 
-constexpr char kIcdPath[] = "/System/Library/Gfxstream/icd.d/lcl_gfxstream.json";
 constexpr uint32_t kBufferCount = 6;
 constexpr uint32_t kRenderAheadCount = 2;
 constexpr float kPi = 3.14159265358979323846f;
@@ -91,25 +89,6 @@ bool readEnvironmentUint64(const char* name, uint64_t& value) {
     if (end == text || *end != '\0' || parsed == 0) return false;
     value = static_cast<uint64_t>(parsed);
     return true;
-}
-
-bool completeHandshake(lcl::gpu::GpuClient& client, const RunLog& log) {
-    if (!client.connect() || !client.beginHandshake(0x564b474541525331ULL)) {
-        log.stage("gpu_broker_connect_failed");
-        return false;
-    }
-    lcl::gpu::DeviceCapabilities capabilities{};
-    for (;;) {
-        const auto status = client.dispatch(capabilities);
-        if (status == lcl::gpu::HandshakeStatus::Ready) {
-            return capabilities.supportsAndroidHardwareBuffer;
-        }
-        if (status != lcl::gpu::HandshakeStatus::Pending) return false;
-        pollfd readable{client.fd(), POLLIN, 0};
-        int result = -1;
-        do result = poll(&readable, 1, 3'000); while (result < 0 && errno == EINTR);
-        if (result != 1 || (readable.revents & POLLIN) == 0) return false;
-    }
 }
 
 struct Mat4 {
@@ -295,8 +274,7 @@ FencePoll pollReleaseFence(lcl::client::OwnedFd& fence) {
 }
 
 struct PresentSlot {
-    lcl::gpu::GfxstreamColorBuffer target{};
-    VkImage image{VK_NULL_HANDLE};
+    lcl::gpu::VulkanPresentTarget target{};
     VkImageView view{VK_NULL_HANDLE};
     VkFramebuffer framebuffer{VK_NULL_HANDLE};
     VkCommandBuffer commandBuffer{VK_NULL_HANDLE};
@@ -319,8 +297,9 @@ static_assert(sizeof(PushConstants) == 128);
 
 class VulkanRenderer final {
 public:
-    VulkanRenderer(lcl::gpu::GpuClient& broker, const RunLog& log)
-        : broker_(broker), log_(log) {}
+    VulkanRenderer(lcl::gpu::VulkanPresentation& presentation,
+                   const RunLog& log)
+        : presentation_(presentation), log_(log) {}
     ~VulkanRenderer() { destroy(); }
 
     bool initialize(uint32_t width, uint32_t height) {
@@ -370,7 +349,7 @@ public:
 
     PresentSlot* slotFor(uint64_t bufferId) {
         const auto found = std::find_if(slots_.begin(), slots_.end(),
-            [bufferId](const PresentSlot& slot) { return slot.target.targetId == bufferId; });
+            [bufferId](const PresentSlot& slot) { return slot.target.bufferId == bufferId; });
         return found == slots_.end() ? nullptr : &*found;
     }
 
@@ -381,13 +360,15 @@ public:
                 case FencePoll::Pending:
                     continue;
                 case FencePoll::Error:
-                    log_.syncError(slot.target.targetId);
+                    log_.syncError(slot.target.bufferId);
                     return false;
                 case FencePoll::Ready:
                     break;
             }
-            if (!broker_.releasePresentedBuffer(slot.target.targetId, {})) {
-                log_.stage("broker_release_failed");
+            std::string error;
+            if (!presentation_.releasePresentedBuffer(
+                    slot.target.bufferId, error)) {
+                log_.stage("presentation_release_failed");
                 return false;
             }
             slot.releaseFence.reset();
@@ -526,7 +507,11 @@ private:
         std::vector<VkPhysicalDevice> devices(count);
         result = vkEnumeratePhysicalDevices(instance_, &count, devices.data());
         if (result != VK_SUCCESS) return fail("vkEnumeratePhysicalDevices", result);
-        physicalDevice_ = devices.front();
+        std::string selectionError;
+        if (!presentation_.selectPhysicalDevice(
+                devices, physicalDevice_, selectionError)) {
+            return stageFailure("presentation_device_missing");
+        }
         uint32_t familyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &familyCount, nullptr);
         std::vector<VkQueueFamilyProperties> families(familyCount);
@@ -546,6 +531,10 @@ private:
         VkDeviceCreateInfo deviceInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
         deviceInfo.queueCreateInfoCount = 1;
         deviceInfo.pQueueCreateInfos = &queueInfo;
+        const auto extensions = presentation_.requiredDeviceExtensions();
+        deviceInfo.enabledExtensionCount =
+            static_cast<uint32_t>(extensions.size());
+        deviceInfo.ppEnabledExtensionNames = extensions.data();
         result = vkCreateDevice(physicalDevice_, &deviceInfo, nullptr, &device_);
         if (result != VK_SUCCESS) return fail("vkCreateDevice", result);
         vkGetDeviceQueue(device_, queueFamily_, 0, &queue_);
@@ -626,7 +615,7 @@ private:
             return stageFailure("depth_format_missing");
         }
         std::array<VkAttachmentDescription, 2> attachments{};
-        attachments[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+        attachments[0].format = presentation_.colorFormat();
         attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
         attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -706,41 +695,19 @@ private:
     bool createTargets() {
         slots_.resize(kBufferCount);
         for (auto& slot : slots_) {
-            if (!broker_.createGfxstreamColorBuffer(
-                    width_, height_, lcl::gpu_protocol::kAndroidHardwareBufferRgba8888,
-                    slot.target)) return false;
-            VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-            imageInfo.imageType = VK_IMAGE_TYPE_2D;
-            imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-            imageInfo.extent = {width_, height_, 1};
-            imageInfo.mipLevels = 1;
-            imageInfo.arrayLayers = 1;
-            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-            imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            VkResult result = vkCreateImage(device_, &imageInfo, nullptr, &slot.image);
-            if (result != VK_SUCCESS) return fail("vkCreateImage_color", result);
-            const VkNativeBufferANDROID nativeBuffer{
-                .sType = VK_STRUCTURE_TYPE_NATIVE_BUFFER_ANDROID,
-                .handle = &slot.target.colorBufferHandle,
-                .stride = static_cast<int>(slot.target.stride),
-                .format = 1,
-            };
-            const VkBindImageMemoryInfo bindInfo{
-                .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
-                .pNext = &nativeBuffer,
-                .image = slot.image,
-                .memory = VK_NULL_HANDLE,
-            };
-            result = vkBindImageMemory2(device_, 1, &bindInfo);
-            if (result != VK_SUCCESS) return fail("vkBindImageMemory2_native_buffer", result);
+            std::string error;
+            if (!presentation_.createTarget(
+                    physicalDevice_, device_, width_, height_, slot.target,
+                    error)) {
+                return stageFailure("presentation_target_create_failed");
+            }
             VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            viewInfo.image = slot.image;
+            viewInfo.image = slot.target.image;
             viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+            viewInfo.format = presentation_.colorFormat();
             viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            result = vkCreateImageView(device_, &viewInfo, nullptr, &slot.view);
+            VkResult result = vkCreateImageView(
+                device_, &viewInfo, nullptr, &slot.view);
             if (result != VK_SUCCESS) return fail("vkCreateImageView_color", result);
             const std::array<VkImageView, 2> attachments{slot.view, depthView_};
             VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
@@ -896,8 +863,7 @@ private:
                 if (slot.renderFence) vkDestroyFence(device_, slot.renderFence, nullptr);
                 if (slot.framebuffer) vkDestroyFramebuffer(device_, slot.framebuffer, nullptr);
                 if (slot.view) vkDestroyImageView(device_, slot.view, nullptr);
-                if (slot.image) vkDestroyImage(device_, slot.image, nullptr);
-                if (slot.target.targetId) broker_.destroyGfxstreamColorBuffer(slot.target.targetId);
+                presentation_.destroyTarget(device_, slot.target);
             }
             if (commandPool_) vkDestroyCommandPool(device_, commandPool_, nullptr);
             if (depthView_) vkDestroyImageView(device_, depthView_, nullptr);
@@ -913,7 +879,7 @@ private:
         if (instance_) vkDestroyInstance(instance_, nullptr);
     }
 
-    lcl::gpu::GpuClient& broker_;
+    lcl::gpu::VulkanPresentation& presentation_;
     const RunLog& log_;
     uint32_t width_{0};
     uint32_t height_{0};
@@ -960,13 +926,13 @@ struct Metrics {
 
 int main() {
     RunLog log;
-    if (setenv("VK_ICD_FILENAMES", kIcdPath, 1) != 0) return 10;
-    log.stage("loader_configured");
-    lcl::gpu::GpuClient broker;
-    if (!completeHandshake(broker, log)) {
-        log.stage("gpu_broker_handshake_failed");
-        return 11;
+    auto presentation = lcl::gpu::createVulkanPresentation();
+    std::string presentationError;
+    if (!presentation || !presentation->prepare(presentationError)) {
+        log.stage("presentation_prepare_failed");
+        return 10;
     }
+    log.stage("loader_configured");
 
     lcl::client::SurfaceOptions options{};
     options.surfaceId = 1;
@@ -1005,7 +971,7 @@ int main() {
     }
     const uint32_t width = static_cast<uint32_t>(scaledWidth);
     const uint32_t height = static_cast<uint32_t>(scaledHeight);
-    VulkanRenderer renderer(broker, log);
+    VulkanRenderer renderer(*presentation, log);
     if (!renderer.initialize(width, height)) return 15;
 
     Metrics metrics{};
@@ -1098,20 +1064,13 @@ int main() {
         if (running && surface.hasFrameCredit()) {
             PresentSlot* slot = renderer.readySlot();
             if (slot) {
-                lcl::client::PlatformNativeFrame frame{};
-                frame.bufferId = slot->target.targetId;
-                frame.contentRevision = slot->revision;
-                frame.width = slot->target.width;
-                frame.height = slot->target.height;
-                frame.stride = slot->target.stride * sizeof(uint32_t);
-                frame.format = lcl::gpu_protocol::kAndroidHardwareBufferRgba8888;
-                frame.damage = {0.0f, 0.0f, configure.bounds.width, configure.bounds.height};
-                frame.opaque = true;
-                frame.writeHandle = [&broker, id = slot->target.targetId](int sidebandFd) {
-                    return broker.deliverNativeBuffer(id, sidebandFd);
-                };
                 const auto presentStart = Clock::now();
-                if (!surface.submitFrame(std::move(frame))) {
+                std::string submitError;
+                if (!presentation->submitFrame(
+                        surface, slot->target, slot->revision,
+                        {0.0f, 0.0f, configure.bounds.width,
+                         configure.bounds.height},
+                        true, submitError)) {
                     ++metrics.rejected;
                     log.stage("surface_submit_failed");
                     break;
