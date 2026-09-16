@@ -2,6 +2,7 @@
 
 #include "lcl-gpu/gpu_client.hpp"
 #include "lcl-gpu/gfxstream_packet_stream.hpp"
+#include "lcl-gpu/gl_presentation.hpp"
 #include "system/ipc/gpu_protocol.hpp"
 
 #include <array>
@@ -18,6 +19,23 @@
 
 namespace lcl::gpu {
 namespace {
+
+TEST(GlPresentationTest, CreatesNonOwningTargetsWithoutPlatformBranching) {
+    auto presentation = createGlPresentation();
+    ASSERT_NE(presentation, nullptr);
+    GlPresentTarget target{};
+    std::string error;
+    EXPECT_FALSE(presentation->createTarget(0, 0, 32, target, error));
+    EXPECT_EQ(target.bufferId, 0u);
+    ASSERT_TRUE(presentation->createTarget(7, 64, 32, target, error)) << error;
+    EXPECT_NE(target.bufferId, 0u);
+    EXPECT_EQ(target.framebuffer, 7u);
+    EXPECT_EQ(target.width, 64u);
+    EXPECT_EQ(target.height, 32u);
+    presentation->destroyTarget(target);
+    EXPECT_EQ(target.bufferId, 0u);
+    EXPECT_EQ(target.framebuffer, 0u);
+}
 
 class GpuClientTest : public ::testing::Test {
 protected:

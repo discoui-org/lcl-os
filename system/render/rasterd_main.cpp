@@ -1541,7 +1541,10 @@ private:
                         client.fd, Opcode::ExternalBufferReleased, released);
                     return;
                 }
-                close(receivedFd);
+                // Retain the sealed descriptor for direct buffer-frame
+                // presentation. The CPU copy remains available to the
+                // retained display-list external-buffer path.
+                resource.bufferFd = receivedFd;
             } else if (dmaBuf) {
                 resource.bufferFd = receivedFd;
             } else {
@@ -1648,8 +1651,6 @@ private:
                 validMetadata &&
                 surface->producerMode != ProducerMode::DisplayList &&
                 resource && resource->clientFd == client.fd &&
-                resource->transport != lcl::raster_protocol::
-                    ExternalBufferTransport::ImmutableShmArgb8888 &&
                 contentWidth <= resource->width &&
                 contentHeight <= resource->height && !bufferInFlight;
             const bool published = valid && publishNativeBufferFrame(
@@ -2778,7 +2779,9 @@ private:
         ready.role = lcl::raster_protocol::LayerRole::Root;
         ready.nodeId = 1;
         ready.contentRevision = submit.contentRevision;
-        ready.bufferId = identity->second;
+        const bool sharedMemory = resource.transport == lcl::raster_protocol::
+            ExternalBufferTransport::ImmutableShmArgb8888;
+        ready.bufferId = sharedMemory ? 0 : identity->second;
         ready.configureSerial = submit.configureSerial;
         ready.frameSerial = submit.frameSerial;
         ready.geometryGeneration = submit.geometryGeneration;
@@ -2791,12 +2794,17 @@ private:
         ready.damageY = damage.y;
         ready.damageWidth = damage.width;
         ready.damageHeight = damage.height;
-        ready.transport = resource.transport == lcl::raster_protocol::
-                ExternalBufferTransport::AndroidHardwareBufferRgba8888
-            ? lcl::raster_protocol::LayerTransport::AndroidHardwareBuffer
-            : lcl::raster_protocol::LayerTransport::DmaBuf;
-        ready.format = resource.format;
+        ready.transport = sharedMemory
+            ? lcl::raster_protocol::LayerTransport::Shm
+            : resource.transport == lcl::raster_protocol::
+                    ExternalBufferTransport::AndroidHardwareBufferRgba8888
+                ? lcl::raster_protocol::LayerTransport::AndroidHardwareBuffer
+                : lcl::raster_protocol::LayerTransport::DmaBuf;
+        ready.format = sharedMemory ? 0 : resource.format;
         ready.modifier = resource.modifier;
+        ready.byteSize = sharedMemory
+            ? static_cast<uint64_t>(resource.stride) * resource.height
+            : 0;
         ready.clientFrameStartNs = submit.clientFrameStartNs;
         ready.clientSubmitNs = submit.clientSubmitNs;
         ready.rasterStartNs = monotonicNowNs();

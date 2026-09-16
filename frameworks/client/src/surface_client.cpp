@@ -353,6 +353,10 @@ bool SurfaceClient::Impl::submitNative(
     upload.stride = stride;
     upload.format = format;
     upload.modifier = modifier;
+    upload.byteSize = transport == raster_protocol::ExternalBufferTransport::
+            ImmutableShmArgb8888
+        ? static_cast<uint64_t>(stride) * height
+        : 0;
     if (!sendRaster(raster_protocol::Opcode::UploadExternalBuffer,
                     &upload, sizeof(upload), bufferFd)) {
         // Once an Android handle has entered FIFO, metadata failure makes the
@@ -641,6 +645,15 @@ std::vector<Event> SurfaceClient::dispatch() {
         m_impl->pendingEvents.clear();
     }
     return events;
+}
+
+bool SurfaceClient::submitFrame(SharedMemoryFrame&& frame) {
+    OwnedFd buffer = std::move(frame.buffer);
+    return m_impl && m_impl->submitNative(
+        frame.bufferId, frame.contentRevision, frame.width, frame.height,
+        frame.stride, frame.format, ~uint64_t{0}, frame.damage, frame.opaque,
+        raster_protocol::ExternalBufferTransport::ImmutableShmArgb8888,
+        buffer.get(), -1, {});
 }
 
 bool SurfaceClient::submitFrame(DmaBufFrame&& frame) {

@@ -129,6 +129,23 @@ struct DmaBufFrame {
     OwnedFd acquireFence{};
 };
 
+/**
+ * Immutable CPU-backed ARGB8888 frame. The descriptor must name a sealed
+ * memfd whose size is exactly stride * height. This is the portable fallback
+ * for producers which cannot export a platform-native GPU buffer.
+ */
+struct SharedMemoryFrame {
+    uint64_t bufferId{0};
+    uint64_t contentRevision{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t stride{0};
+    uint32_t format{0};
+    Rect damage{};
+    bool opaque{false};
+    OwnedFd buffer{};
+};
+
 struct PlatformNativeFrame {
     uint64_t bufferId{0};
     uint64_t contentRevision{0};
@@ -173,6 +190,7 @@ public:
     /** Drains currently available packets only; never blocks. */
     std::vector<Event> dispatch();
 
+    bool submitFrame(SharedMemoryFrame&& frame);
     bool submitFrame(DmaBufFrame&& frame);
     bool submitFrame(PlatformNativeFrame&& frame);
 

@@ -13,23 +13,67 @@
 
 #include <GLES2/gl2.h>
 
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstring>
 #include <filesystem>
 #include <fcntl.h>
 #include <poll.h>
+#include <span>
 #include <string>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 
+#if defined(__linux__)
+#include <linux/memfd.h>
+#endif
+
 namespace {
 
 namespace protocol = lcl::protocol;
 namespace raster = lcl::raster_protocol;
+
+int createImmutableFrameFd(std::span<const uint32_t> pixels) {
+#if defined(SYS_memfd_create)
+    const size_t bytes = pixels.size_bytes();
+    const int fd = static_cast<int>(syscall(
+        SYS_memfd_create, "lcl-test-gl-frame",
+        MFD_CLOEXEC | MFD_ALLOW_SEALING));
+    if (fd < 0 || ftruncate(fd, static_cast<off_t>(bytes)) != 0) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
+    size_t written = 0;
+    const auto* data = reinterpret_cast<const uint8_t*>(pixels.data());
+    while (written < bytes) {
+        const ssize_t count = pwrite(
+            fd, data + written, bytes - written,
+            static_cast<off_t>(written));
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) {
+            close(fd);
+            return -1;
+        }
+        written += static_cast<size_t>(count);
+    }
+#if defined(F_ADD_SEALS) && defined(F_SEAL_WRITE) && defined(F_SEAL_GROW) && defined(F_SEAL_SHRINK)
+    constexpr int seals = F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK;
+    if (fcntl(fd, F_ADD_SEALS, seals) != 0) {
+        close(fd);
+        return -1;
+    }
+#endif
+    return fd;
+#else
+    (void)pixels;
+    return -1;
+#endif
+}
 
 const std::filesystem::path& runtimeDirectory() {
     static const auto directory = std::filesystem::path("/tmp") /
@@ -517,6 +561,94 @@ TEST(RasterServiceIntegrationTest,
                 context.releaseDmaBuf(
                     static_cast<uint32_t>(buffer->bufferId),
                     buffer->releaseFence.release());
+                released = true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_TRUE(presented);
+    EXPECT_TRUE(released);
+}
+
+TEST(RasterServiceIntegrationTest,
+     SurfaceClientPublishesImmutableSharedMemoryFrame) {
+    RasterDaemon daemon;
+    ASSERT_TRUE(daemon.start());
+    FakeCompositorSocket compositor;
+    ASSERT_TRUE(compositor.listenForClient());
+
+    lcl::client::SurfaceOptions options{};
+    options.surfaceId = 18;
+    options.appId = "org.lcl.test.gl-readback-client";
+    options.title = "GL readback integration";
+    options.bounds = {0.0f, 0.0f, 64.0f, 48.0f};
+    lcl::client::SurfaceClient surface;
+    ASSERT_TRUE(surface.connect(options, compositor.path(), daemon.socketPath()));
+    ASSERT_TRUE(compositor.acceptClient());
+    protocol::LCLMsgSurfaceCreate create{};
+    pid_t ownerPid = 0;
+    ASSERT_TRUE(compositor.receiveSurfaceCreate(create, ownerPid));
+    const raster::SurfaceGrant grant{
+        create.surfaceId, static_cast<int32_t>(ownerPid), 0, 211, 223};
+    ASSERT_TRUE(daemon.registerSurface(grant));
+    ASSERT_TRUE(compositor.configure(grant, 64.0f, 48.0f));
+
+    const auto connectDeadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(2);
+    while ((!surface.hasConfigure() || surface.rasterFd() < 0) &&
+           std::chrono::steady_clock::now() < connectDeadline) {
+        (void)surface.dispatch();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(surface.hasConfigure());
+    ASSERT_GE(surface.rasterFd(), 0);
+
+    constexpr uint32_t color = 0xff3366ccu;
+    std::vector<uint32_t> pixels(64u * 48u, color);
+    const int frameFd = createImmutableFrameFd(pixels);
+    ASSERT_GE(frameFd, 0);
+    lcl::client::SharedMemoryFrame frame{};
+    frame.bufferId = 71;
+    frame.contentRevision = 1;
+    frame.width = 64;
+    frame.height = 48;
+    frame.stride = 64 * sizeof(uint32_t);
+    frame.format = lcl::platform::kDmaBufFormatArgb8888;
+    frame.damage = {0.0f, 0.0f, 64.0f, 48.0f};
+    frame.opaque = true;
+    frame.buffer = lcl::client::OwnedFd(frameFd);
+    ASSERT_TRUE(surface.submitFrame(std::move(frame)));
+
+    raster::LayerReady ready{};
+    int layerFd = -1;
+    ASSERT_TRUE(daemon.takeLayer(ready, layerFd, 3000));
+    ASSERT_GE(layerFd, 0);
+    EXPECT_EQ(ready.transport, raster::LayerTransport::Shm);
+    EXPECT_EQ(ready.bufferId, 0u);
+    EXPECT_EQ(ready.byteSize, pixels.size() * sizeof(uint32_t));
+    EXPECT_EQ(ready.stride, 64u * sizeof(uint32_t));
+    uint32_t observed = 0;
+    ASSERT_EQ(pread(layerFd, &observed, sizeof(observed), 0),
+              static_cast<ssize_t>(sizeof(observed)));
+    EXPECT_EQ(observed, color);
+    close(layerFd);
+    ASSERT_TRUE(daemon.releaseLayer(ready.layerId));
+    ASSERT_TRUE(compositor.present(ready));
+
+    bool presented = false;
+    bool released = false;
+    const auto releaseDeadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(2);
+    while (!(presented && released) &&
+           std::chrono::steady_clock::now() < releaseDeadline) {
+        for (auto& event : surface.dispatch()) {
+            if (std::get_if<lcl::client::FramePresentedEvent>(&event)) {
+                presented = true;
+            } else if (const auto* buffer =
+                           std::get_if<lcl::client::BufferReleasedEvent>(&event)) {
+                EXPECT_EQ(buffer->bufferId, 71u);
+                EXPECT_EQ(buffer->contentRevision, 1u);
+                EXPECT_FALSE(buffer->releaseFence);
                 released = true;
             }
         }

@@ -285,6 +285,88 @@ TEST(SurfaceClientTest, NativeHandleIsQueuedBeforeBufferMetadata) {
     if (receivedFd >= 0) close(receivedFd);
 }
 
+TEST(SurfaceClientTest, SharedMemorySubmissionCarriesExactByteSize) {
+    SeqPacketListener compositor("lcl-client-shm-compositor");
+    SeqPacketListener rasterListener("lcl-client-shm-raster");
+    ASSERT_TRUE(compositor.valid());
+    ASSERT_TRUE(rasterListener.valid());
+    client::SurfaceClient surface;
+    ASSERT_TRUE(surface.connect(basicOptions(client::SurfaceRole::Toplevel),
+                                compositor.path, rasterListener.path));
+    ASSERT_TRUE(compositor.acceptPeer());
+    protocol::LCLHeader ignoredHeader{};
+    std::vector<uint8_t> ignoredPayload;
+    ASSERT_TRUE(receiveCompositorPacket(
+        compositor.peer, ignoredHeader, ignoredPayload));
+
+    protocol::LCLMsgSurfaceProducerGrant grant{};
+    grant.surfaceId = 7;
+    grant.ownerPid = static_cast<int32_t>(getpid());
+    grant.tokenHigh = 127;
+    grant.tokenLow = 131;
+    ASSERT_TRUE(sendCompositorPacket(
+        compositor.peer, protocol::LCLOpcode::SurfaceProducerGrant, grant));
+    protocol::LCLMsgConfigureBounds configure{};
+    configure.surfaceId = 7;
+    configure.configureSerial = 4;
+    configure.geometryGeneration = 1;
+    configure.width = configure.backingWidth = 32.0f;
+    configure.height = configure.backingHeight = 24.0f;
+    configure.bufferScale = 1.0f;
+    ASSERT_TRUE(sendCompositorPacket(
+        compositor.peer, protocol::LCLOpcode::ConfigureBounds, configure));
+    (void)surface.dispatch();
+    ASSERT_TRUE(rasterListener.acceptPeer());
+
+    raster::Header rasterHeader{};
+    std::vector<uint8_t> rasterPayload;
+    int receivedFd = -1;
+    ASSERT_EQ(raster::receivePacket(rasterListener.peer, rasterHeader,
+                                    rasterPayload, receivedFd),
+              raster::ReceiveStatus::Received);
+    ASSERT_NE(raster::payloadAs<raster::RegisterNativeBufferChannel>(
+                  rasterHeader, rasterPayload,
+                  raster::Opcode::RegisterNativeBufferChannel),
+              nullptr);
+    ASSERT_GE(receivedFd, 0);
+    close(receivedFd);
+
+    client::SharedMemoryFrame frame{};
+    frame.bufferId = 41;
+    frame.contentRevision = 3;
+    frame.width = 32;
+    frame.height = 24;
+    frame.stride = 32 * sizeof(uint32_t);
+    frame.format = lcl::platform::kDmaBufFormatArgb8888;
+    frame.damage = {0.0f, 0.0f, 32.0f, 24.0f};
+    frame.buffer = client::OwnedFd(open("/dev/null", O_RDONLY | O_CLOEXEC));
+    ASSERT_TRUE(surface.submitFrame(std::move(frame)));
+
+    receivedFd = -1;
+    ASSERT_EQ(raster::receivePacket(rasterListener.peer, rasterHeader,
+                                    rasterPayload, receivedFd),
+              raster::ReceiveStatus::Received);
+    const auto* upload = raster::payloadAs<raster::UploadExternalBuffer>(
+        rasterHeader, rasterPayload, raster::Opcode::UploadExternalBuffer);
+    ASSERT_NE(upload, nullptr);
+    EXPECT_EQ(upload->transport,
+              raster::ExternalBufferTransport::ImmutableShmArgb8888);
+    EXPECT_EQ(upload->byteSize,
+              static_cast<uint64_t>(frame.stride) * frame.height);
+    ASSERT_GE(receivedFd, 0);
+    close(receivedFd);
+
+    receivedFd = -1;
+    ASSERT_EQ(raster::receivePacket(rasterListener.peer, rasterHeader,
+                                    rasterPayload, receivedFd),
+              raster::ReceiveStatus::Received);
+    EXPECT_NE(raster::payloadAs<raster::CommitBufferFrame>(
+                  rasterHeader, rasterPayload,
+                  raster::Opcode::CommitBufferFrame),
+              nullptr);
+    if (receivedFd >= 0) close(receivedFd);
+}
+
 TEST(SurfaceClientTest, NativeSubmissionUsesOneCreditAndReleaseOwnsFence) {
     SeqPacketListener compositor("lcl-client-credit-compositor");
     SeqPacketListener rasterListener("lcl-client-credit-raster");

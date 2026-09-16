@@ -9,8 +9,13 @@ add_library(lcl-gpu-client STATIC
 # rootfs Vulkan presentation bridge.
 if(NOT ANDROID)
     find_package(Vulkan REQUIRED)
-    target_sources(lcl-gpu-client PRIVATE src/vulkan_presentation.cpp)
+    target_sources(lcl-gpu-client PRIVATE
+        src/gl_presentation.cpp
+        src/vulkan_presentation.cpp
+    )
+    target_include_directories(lcl-gpu-client PRIVATE ${GLES2_INCLUDE_DIRS})
     target_link_libraries(lcl-gpu-client PUBLIC Vulkan::Vulkan)
+    target_link_libraries(lcl-gpu-client PRIVATE ${GLES2_LIBRARIES})
     if(LCL_BUILD_ANDROID_GFXSTREAM_GUEST_TRANSPORT)
         target_compile_definitions(lcl-gpu-client PRIVATE
             LCL_HAS_GFXSTREAM_VULKAN_PRESENTATION=1
