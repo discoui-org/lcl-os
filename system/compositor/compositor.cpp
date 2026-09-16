@@ -368,20 +368,12 @@ void Compositor::run() {
         bool willDraw = m_needsRedraw || m_windowManager.isAnyWindowDirty() || m_showFpsOverlay;
 
         if (willDraw) {
-            // Hardware-backed displays provide the authoritative presentation
-            // cadence. Waiting here keeps compositor spring frames from
-            // free-running across an active scanout.
-            const bool gotVsync = display.waitForVsync(
-                std::chrono::nanoseconds(m_refreshIntervalNs * 2));
+            // HWC callbacks arrive on the scanout edge, too late to begin the
+            // frame that targets that edge. Pace compositor frame starts from
+            // the active mode period; HWC presentation and release fences
+            // remain the authority for actual scanout and buffer reuse.
             renderFrame();
-
-            // When hardware vSync cadence governs presentation, the hardware
-            // vertical retrace edge already paced the frame. Avoid sleeping
-            // unconditionally on software timers, which could overshoot the next
-            // scanout and drop framerate.
-            if (!gotVsync) {
-                m_frameScheduler.waitForFrame(frameStart, targetFrameDuration);
-            }
+            m_frameScheduler.waitForFrame(frameStart, targetFrameDuration);
         } else {
             m_frameScheduler.waitIdle();
         }
@@ -576,7 +568,6 @@ void Compositor::renderFrame() {
         hasActiveTransitions);
     m_lastComposeMs = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - composeStart).count();
-
     // Old raster layers are released only after the frame that stopped
     // referencing them has been handed to the platform presenter. A pending
     // atomic group still presents its retained old snapshot, so its sources

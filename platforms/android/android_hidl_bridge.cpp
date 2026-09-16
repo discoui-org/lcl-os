@@ -400,6 +400,15 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale,
     m_displayId = m_impl->hotplugDisplayId;
     m_displayConnected = true;
 
+    // A newly connected physical display is reported in PowerMode::OFF. Some
+    // vendor composers restore their default config while transitioning to ON,
+    // so power the panel before selecting the Gestalt-requested mode.
+    const auto powerResult = m_impl->client->setPowerMode(
+        m_displayId, composer21::IComposerClient::PowerMode::ON);
+    if (!powerResult.isOk() || !isNone(powerResult)) {
+        std::cerr << "[AndroidHidlDisplayBackend] setPowerMode(ON) failed\n";
+    }
+
     // Client targets have a display-scoped buffer cache separate from layer
     // buffers. Reserve the slots before any SET_CLIENT_TARGET command; older
     // Composer 2.2 services reject otherwise valid handles as BAD_PARAMETER.
@@ -492,42 +501,22 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale,
                   << targetWidth << "x" << targetHeight << " @" << targetRefreshHz
                   << "Hz is unavailable; using Composer active mode\n";
     } else {
-        bool switched = false;
-        if (m_impl->composerMinorVersion >= 4) {
-            auto castResult = composer24::IComposerClient::castFrom(m_impl->client);
-            if (castResult.isOk()) {
-                sp<composer24::IComposerClient> client24 = castResult;
-                if (client24) {
-                    composer24::IComposerClient::VsyncPeriodChangeConstraints constraints{};
-                    constraints.seamlessRequired = false;
-                    constraints.desiredTimeNanos = 0;
-                    client24->setActiveConfigWithConstraints(
-                        m_displayId, preferredConfig, constraints,
-                        [&](composer24::Error error,
-                            const composer24::VsyncPeriodChangeTimeline& /*timeline*/) {
-                            if (error == composer24::Error::NONE) {
-                                activeConfig = preferredConfig;
-                                switched = true;
-                                std::cerr << "[AndroidHidlDisplayBackend] Configured display 120Hz mode (config "
-                                          << preferredConfig << ") via setActiveConfigWithConstraints\n";
-                            } else {
-                                std::cerr << "[AndroidHidlDisplayBackend] setActiveConfigWithConstraints status: "
-                                          << composer24::toString(error) << "\n";
-                            }
-                        });
-                }
-            }
-        }
-        if (!switched) {
-            const auto setResult = m_impl->client->setActiveConfig(m_displayId, preferredConfig);
-            if (setResult.isOk() && isNone(setResult)) {
-                activeConfig = preferredConfig;
-                std::cerr << "[AndroidHidlDisplayBackend] Configured display (config "
-                          << preferredConfig << ") via setActiveConfig\n";
-            } else {
-                std::cerr << "[AndroidHidlDisplayBackend] Composer rejected Gestalt mode config "
-                          << preferredConfig << "\n";
-            }
+        // Startup mode selection does not need a seamless, asynchronously timed
+        // transition. setActiveConfig() guarantees that the complete config,
+        // including its vsync period, is active when the call returns. Treating
+        // setActiveConfigWithConstraints() success as immediate used the target
+        // config's static VSYNC_PERIOD while the vendor HAL was still delivering
+        // callbacks at the old period.
+        const auto setResult = m_impl->client->setActiveConfig(
+            m_displayId, preferredConfig);
+        if (setResult.isOk() && isNone(setResult)) {
+            activeConfig = preferredConfig;
+            std::cerr << "[AndroidHidlDisplayBackend] Configured display "
+                      << targetRefreshHz << "Hz mode (config "
+                      << preferredConfig << ") via synchronous setActiveConfig\n";
+        } else {
+            std::cerr << "[AndroidHidlDisplayBackend] Composer rejected Gestalt mode config "
+                      << preferredConfig << "\n";
         }
     }
 
@@ -542,22 +531,37 @@ bool AndroidHidlDisplayBackend::initialize(float outputScale,
         shutdown();
         return false;
     }
-    (void)readAttribute(activeConfig, composer21::IComposerClient::Attribute::VSYNC_PERIOD,
+    (void)readAttribute(activeConfig,
+                        composer21::IComposerClient::Attribute::VSYNC_PERIOD,
                         &vsyncPeriod);
+    if (m_impl->composerMinorVersion >= 4) {
+        const auto castResult = composer24::IComposerClient::castFrom(
+            m_impl->client);
+        if (castResult.isOk()) {
+            sp<composer24::IComposerClient> client24 = castResult;
+            if (client24) {
+                client24->getDisplayVsyncPeriod(
+                    m_displayId,
+                    [&](composer24::Error error, uint32_t currentPeriod) {
+                        if (error == composer24::Error::NONE &&
+                            currentPeriod > 0) {
+                            vsyncPeriod = static_cast<int32_t>(currentPeriod);
+                        }
+                    });
+            }
+        }
+    }
     m_activeMode.width = width;
     m_activeMode.height = height;
     if (vsyncPeriod > 0) {
         m_activeMode.refreshRateHz = 1000000000 / vsyncPeriod;
         m_activeMode.refreshRate = m_activeMode.refreshRateHz;
+        std::cerr << "[AndroidHidlDisplayBackend] Active display vsync period: "
+                  << vsyncPeriod << " ns ("
+                  << m_activeMode.refreshRateHz << " Hz)\n";
     }
     m_activeMode.name = "Android HIDL Display " + std::to_string(m_displayId) + " (" +
                         std::to_string(width) + "x" + std::to_string(height) + ")";
-
-    const auto powerResult = m_impl->client->setPowerMode(
-        m_displayId, composer21::IComposerClient::PowerMode::ON);
-    if (!powerResult.isOk() || !isNone(powerResult)) {
-        std::cerr << "[AndroidHidlDisplayBackend] setPowerMode(ON) failed\n";
-    }
 
     const auto vsyncResult = m_impl->client->setVsyncEnabled(
         m_displayId, composer21::IComposerClient::Vsync::ENABLE);
