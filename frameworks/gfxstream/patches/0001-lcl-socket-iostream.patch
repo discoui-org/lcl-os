@@ -1,0 +1,135 @@
+From 6247388dea0ce60c1dcb9cfc3572c05e0e912697 Mon Sep 17 00:00:00 2001
+Subject: [LCL] add an optional external guest IOStream hook
+
+This patch is applied only to an out-of-tree build overlay by
+tooling/build/build_gfxstream_guest.py.  It is never applied to the pinned
+third_party checkout.  Vulkan encoding and command definitions stay upstream;
+the hook replaces only the guest transport and suppresses virtio capability
+probing in that mode.
+
+diff --git a/guest/OpenglSystemCommon/HostConnection.cpp b/guest/OpenglSystemCommon/HostConnection.cpp
+index f514562a..6c2fc9c3 100644
+--- a/guest/OpenglSystemCommon/HostConnection.cpp
++++ b/guest/OpenglSystemCommon/HostConnection.cpp
+@@ -16,4 +16,8 @@
+ #include "HostConnection.h"
+ 
++#if defined(LCL_GFXSTREAM_SOCKET_TRANSPORT)
++extern "C" gfxstream::guest::IOStream* lcl_gfxstream_open_socket_iostream();
++#endif
++
+ #include "GoldfishAddressSpaceStream.h"
+ #include "VirtioGpuAddressSpaceStream.h"
+@@ -161,5 +165,19 @@ HostConnection::~HostConnection()
+ // static
+ std::unique_ptr<HostConnection> HostConnection::connect(enum VirtGpuCapset capset) {
++#if defined(LCL_GFXSTREAM_SOCKET_TRANSPORT)
++    // The LCL adapter has already checked the descriptor-capability and
++    // switched the socket into gfxstream byte-stream mode.  Do not probe
++    // virtio, DRM, or a render node from rootfs userspace.
++    const enum HostConnectionType connType = HOST_CONNECTION_QEMU_PIPE;
++    uint32_t noRenderControlEnc = 1;
++    auto con = std::unique_ptr<HostConnection>(new HostConnection);
++    con->m_connectionType = connType;
++    con->m_stream = lcl_gfxstream_open_socket_iostream();
++    if (!con->m_stream) {
++        ALOGE("Failed to connect to host (LCL socket IOStream)\\n");
++        return nullptr;
++    }
++#else
+     const enum HostConnectionType connType = getConnectionTypeFromProperty(capset);
+     uint32_t noRenderControlEnc = 0;
+ 
+@@ -232,6 +251,7 @@ std::unique_ptr<HostConnection> HostConnection::connect(enum VirtGpuCapset caps
+         default:
+             break;
+     }
++#endif
+ 
+ #if defined(ANDROID)
+     con->m_grallocHelper.reset(gfxstream::createPlatformGralloc(con->m_rendernodeFd));
+@@ -252,6 +272,7 @@ std::unique_ptr<HostConnection> HostConnection::connect(enum VirtGpuCapset caps
+     *pClientFlags = 0;
+     con->m_stream->commitBuffer(sizeof(unsigned int));
+ 
++#if !defined(LCL_GFXSTREAM_SOCKET_TRANSPORT)
+     if (capset == kCapsetGfxStreamMagma) {
+         noRenderControlEnc = 1;
+     } else if (capset == kCapsetGfxStreamVulkan) {
+@@ -259,6 +280,7 @@ std::unique_ptr<HostConnection> HostConnection::connect(enum VirtGpuCapset caps
+         auto caps = instance->getCaps();
+         noRenderControlEnc = caps.vulkanCapset.noRenderControlEnc;
+     }
++#endif
+ 
+     auto handle = (connType == HOST_CONNECTION_VIRTIO_GPU_ADDRESS_SPACE) ? con->m_rendernodeFd : -1;
+     processPipeInit(handle, connType, noRenderControlEnc);
+diff --git a/guest/meson.build b/guest/meson.build
+index c53eb251..7f8d4fde 100644
+--- a/guest/meson.build
++++ b/guest/meson.build
+@@ -25,4 +25,8 @@ gfxstream_guest_args += '-DFUCHSIA_NO_TRACE'
+ # Include the gfxstream private VkStructureType definitions
+ gfxstream_guest_args += '-DVK_GFXSTREAM_STRUCTURE_TYPE_EXT'
+ 
++if get_option('lcl-socket-transport')
++  gfxstream_guest_args += '-DLCL_GFXSTREAM_SOCKET_TRANSPORT=1'
++endif
++
+ #===============#
+ # Dependencies  #
+diff --git a/guest/vulkan/meson.build b/guest/vulkan/meson.build
+index 7947b6bd..61699622 100644
+--- a/guest/vulkan/meson.build
++++ b/guest/vulkan/meson.build
+@@ -26,8 +26,9 @@ lib_vulkan_gfxstream = shared_library(
+                          inc_goldfish_address_space, inc_system, inc_include, inc_src,
+                          inc_platform_virtgpu, inc_codec_common],
+    link_with: [lib_android_compat, lib_emu_android_base, lib_stream,
+                libvulkan_wsi, libplatform_virtgpu],
+-   link_args: [vulkan_icd_link_args, ld_args_bsymbolic, ld_args_gc_sections],
++   link_args: [vulkan_icd_link_args, ld_args_bsymbolic, ld_args_gc_sections] +
++              get_option('lcl-guest-link-args'),
+    link_depends: vulkan_icd_link_depends,
+    dependencies: [dependency('libdrm'), idep_vulkan_wsi_headers,
+                   idep_vulkan_runtime_headers, idep_vulkan_runtime,
+diff --git a/guest/vulkan_enc/ResourceTracker.cpp b/guest/vulkan_enc/ResourceTracker.cpp
+index 6dfdca01..bdad6e9a 100644
+--- a/guest/vulkan_enc/ResourceTracker.cpp
++++ b/guest/vulkan_enc/ResourceTracker.cpp
+@@ -1406,4 +1406,14 @@ bool ResourceTracker::isValidMemoryRange(const VkMappedMemoryRange& range) {
+ }
+ 
+ void ResourceTracker::setupCaps(uint32_t& noRenderControlEnc) {
++#if defined(LCL_GFXSTREAM_SOCKET_TRANSPORT)
++    // LCL transports the upstream encoder byte stream over an authorized
++    // socket, not a guest-visible virtio GPU node.  The normal capability
++    // query would open that node before any Vulkan request is encoded.
++    memset(&mCaps, 0, sizeof(mCaps));
++    mCaps.vulkanCapset.protocolVersion = 1;
++    mCaps.vulkanCapset.noRenderControlEnc = 1;
++    noRenderControlEnc = 1;
++    return;
++#endif
+     VirtGpuDevice* instance = VirtGpuDevice::getInstance(kCapsetGfxStreamVulkan);
+diff --git a/meson_options.txt b/meson_options.txt
+index 3ff6b50d..02d1e3f5 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -1,2 +1,16 @@
++option(
++  'lcl-socket-transport',
++  type : 'boolean',
++  value : false,
++  description : 'Use an externally supplied LCL guest IOStream'
++)
++
++option(
++  'lcl-guest-link-args',
++  type : 'array',
++  value : [],
++  description : 'Link arguments used only by the LCL guest ICD'
++)
++
+ # 2023 Android Open Source Project
+ # Copyright © 2017-2019 Intel Corporation

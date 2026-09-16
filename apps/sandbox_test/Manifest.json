@@ -1,9 +1,0 @@
-{
-  "id": "org.lcl.sandbox-test",
-  "name": "Sandbox Test",
-  "version": "1.0.0",
-  "executable": "Executables/SandboxTest",
-  "icon": "Resources/Icon.png",
-  "runtime": "org.lcl.native",
-  "type": "gui"
-}

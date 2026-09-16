@@ -34,15 +34,6 @@ const char* nameFor(lcl::platform::ShellKind shell) {
     return shell == lcl::platform::ShellKind::Mobile ? "mobile" : "desktop";
 }
 
-void launchQtSmokeWhenRequested() {
-    constexpr const char* marker = "/System/Library/Qt/enable-smoke-autostart";
-    if (!std::filesystem::is_regular_file(marker)) return;
-    const pid_t child = fork();
-    if (child != 0) return;
-    execl("/System/Core/lcl-open", "open", "Qt Smoke", nullptr);
-    _exit(127);
-}
-
 } // namespace
 
 int main() {
@@ -60,11 +51,6 @@ int main() {
         std::cerr << "[LCL Shell Launcher] " << identityError << "\n";
         return 1;
     }
-
-    // The marker is injected only by the QEMU integration test. Starting from
-    // this session-owned process preserves sessiond's normal launch and
-    // sandbox/authentication contract; init never directly executes the app.
-    launchQtSmokeWhenRequested();
 
     const char* executable = executableFor(gestalt.gestalt.shell);
     if (!executable || !std::filesystem::is_regular_file(executable)) {

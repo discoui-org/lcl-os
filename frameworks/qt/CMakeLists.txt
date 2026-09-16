@@ -51,16 +51,3 @@ target_compile_options(lcl-qt PRIVATE
 )
 
 target_compile_features(lcl-qt PUBLIC cxx_std_20)
-
-add_executable(lcl-qt-smoke smoke/main.cpp)
-target_link_libraries(lcl-qt-smoke PRIVATE lcl-qt)
-qt_add_resources(lcl-qt-smoke "lcl_qt_smoke_resources"
-    PREFIX "/"
-    FILES qml/Main.qml
-)
-set_target_properties(lcl-qt-smoke PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-)
-if(NOT ANDROID)
-    target_link_options(lcl-qt-smoke PRIVATE -rdynamic)
-endif()

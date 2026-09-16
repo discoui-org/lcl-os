@@ -63,8 +63,6 @@ CANONICAL_ARTIFACT_FILENAMES = {
 
 CANONICAL_TARGETS = (
     "lcl-vulkan-icd",
-    "lcl-gpu-presentation-probe",
-    "lcl-qt-smoke",
     "lcl-desktop-shell",
     "lcl-mobile-shell",
     "lcl-shell-launcher",
@@ -75,8 +73,6 @@ CANONICAL_TARGETS = (
     "lcl-admind",
     "lcl-sudo",
     "lcl-sandbox-probe",
-    "lcl-sandbox-test",
-    "lcl-client-gpu-probe",
     "lcl-rasterd",
     "lcl-open",
     "lcl-core",
@@ -193,6 +189,29 @@ def is_binary_matching_arch(binary_path: Path | None, arch: str) -> bool:
     return False
 
 
+def is_static_archive_matching_arch(archive_path: Path | None, arch: str) -> bool:
+    """Verify that a static archive contains at least one target-architecture ELF member."""
+    if not archive_path or not archive_path.is_file():
+        return False
+    try:
+        contents = archive_path.read_bytes()
+        offset = 0
+        while True:
+            offset = contents.find(b"\x7fELF", offset)
+            if offset < 0:
+                return False
+            if offset + 20 <= len(contents):
+                import struct
+                e_machine = struct.unpack("<H", contents[offset + 18:offset + 20])[0]
+                if normalize_arch(arch) == "aarch64" and e_machine == 183:
+                    return True
+                if normalize_arch(arch) == "x86_64" and e_machine == 62:
+                    return True
+            offset += 4
+    except OSError:
+        return False
+
+
 def canonical_build_dir(arch: str) -> Path:
     # A dedicated QEMU tree permits Ninja without deleting a developer-owned
     # Unix Makefiles cache and keeps test builds out of the packaged binaries.
@@ -215,7 +234,14 @@ def find_built_binary(name: str, arch: str | None = None) -> Path | None:
     return None
 
 
-def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
+def gfxstream_guest_adapter_archive(arch: str) -> Path:
+    archive = canonical_build_dir(arch) / "frameworks" / "gfxstream" / "liblcl-gfxstream-guest-adapter.a"
+    if not is_static_archive_matching_arch(archive, arch):
+        raise RuntimeError("Android-flavour gfxstream guest transport adapter was not built for the rootfs ABI")
+    return archive
+
+
+def ensure_binaries(arch: str = "x86_64", *, android_gfxstream_guest_transport: bool = False) -> dict[str, Path]:
     """Ensures that required canonical LCL application and tool binaries exist for the target architecture."""
     norm_arch = normalize_arch(arch)
 
@@ -231,6 +257,8 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
         "-DCMAKE_BUILD_TYPE=Release",
         *skia_args,
     ]
+    if android_gfxstream_guest_transport:
+        configure.append("-DLCL_BUILD_ANDROID_GFXSTREAM_GUEST_TRANSPORT=ON")
     if not cache_exists:
         if shutil.which("ninja"):
             configure.extend(["-G", "Ninja"])
@@ -241,10 +269,13 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
             ])
     subprocess.run(configure, check=True)
     log(f"Updating canonical targets for {norm_arch}...")
+    build_targets = list(CANONICAL_TARGETS)
+    if android_gfxstream_guest_transport:
+        build_targets.append("lcl-gfxstream-guest-adapter")
     subprocess.run(
         ["cmake", "--build", str(target_build_dir),
          "--parallel", str(os.cpu_count() or 4), "--target"] +
-        list(CANONICAL_TARGETS),
+        build_targets,
         check=True,
     )
 
@@ -254,6 +285,9 @@ def ensure_binaries(arch: str = "x86_64") -> dict[str, Path]:
         if not p or not p.is_file():
             raise RuntimeError(f"Required canonical binary '{name}' was not found or is not {norm_arch} after build.")
         binaries[name] = p
+
+    if android_gfxstream_guest_transport:
+        gfxstream_guest_adapter_archive(norm_arch)
 
     return binaries
 
@@ -294,9 +328,6 @@ def rootfs_input_fingerprint(
         PROJECT_ROOT / "config" / "gestalt" / "default.json",
         PROJECT_ROOT / "apps" / "terminal" / "Manifest.json",
         PROJECT_ROOT / "apps" / "terminal" / "Resources" / "Icon.png",
-        PROJECT_ROOT / "apps" / "sandbox_test" / "Manifest.json",
-        PROJECT_ROOT / "frameworks" / "qt" / "smoke" / "Manifest.json",
-        PROJECT_ROOT / "tooling" / "probes" / "gpu_presentation" / "Manifest.json",
     )
     for source_input in source_inputs:
         if source_input.is_dir():
@@ -710,80 +741,6 @@ def stage_canonical_rootfs(
     (term_dst / "Executables" / "Terminal").chmod(0o755)
     sha_map["Terminal.app"] = get_sha256(term_dst / "Executables" / "Terminal")
     copy_ldd_deps(term_dst / "Executables" / "Terminal", dest_system_lib)
-
-    # Sandbox Test.app is a touch-only ordinary GUI app. It must launch through
-    # sandboxd and can reach only the compositor/raster endpoints mounted into
-    # its private /Runtime.
-    sandbox_test_dst = dest_system_apps / "Sandbox Test.app"
-    sandbox_test_dst.mkdir(parents=True, exist_ok=True)
-    (sandbox_test_dst / "Executables").mkdir(parents=True, exist_ok=True)
-    (sandbox_test_dst / "Resources").mkdir(parents=True, exist_ok=True)
-    sandbox_test_manifest = PROJECT_ROOT / "apps" / "sandbox_test" / "Manifest.json"
-    if not sandbox_test_manifest.is_file() or not term_icon.is_file():
-        raise RuntimeError("Missing Sandbox Test.app source files")
-    shutil.copy2(sandbox_test_manifest, sandbox_test_dst / "Manifest.json")
-    shutil.copy2(term_icon, sandbox_test_dst / "Resources" / "Icon.png")
-    sandbox_test_bin = binaries["lcl-sandbox-test"]
-    shutil.copy2(sandbox_test_bin, sandbox_test_dst / "Executables" / "SandboxTest")
-    (sandbox_test_dst / "Executables" / "SandboxTest").chmod(0o755)
-    sha_map["Sandbox Test.app"] = get_sha256(
-        sandbox_test_dst / "Executables" / "SandboxTest")
-    copy_ldd_deps(sandbox_test_dst / "Executables" / "SandboxTest", dest_system_lib)
-
-    # GPU Transport Probe.app is an integration-only system bundle. It runs
-    # the canonical glibc GBM/EGL/DMA-BUF producer under the same restricted
-    # render-node sandbox as Qt Smoke, without adding diagnostics to Qt.
-    gpu_probe_dst = dest_system_apps / "GPU Transport Probe.app"
-    gpu_probe_dst.mkdir(parents=True, exist_ok=True)
-    (gpu_probe_dst / "Executables").mkdir(parents=True, exist_ok=True)
-    (gpu_probe_dst / "Resources").mkdir(parents=True, exist_ok=True)
-    gpu_probe_manifest = PROJECT_ROOT / "tooling" / "probes" / "client_gpu_probe" / "Manifest.json"
-    if not gpu_probe_manifest.is_file() or not term_icon.is_file():
-        raise RuntimeError("Missing GPU Transport Probe.app source files")
-    shutil.copy2(gpu_probe_manifest, gpu_probe_dst / "Manifest.json")
-    shutil.copy2(term_icon, gpu_probe_dst / "Resources" / "Icon.png")
-    gpu_probe_bin = binaries["lcl-client-gpu-probe"]
-    shutil.copy2(gpu_probe_bin, gpu_probe_dst / "Executables" / "ClientGpuProbe")
-    (gpu_probe_dst / "Executables" / "ClientGpuProbe").chmod(0o755)
-    sha_map["GPU Transport Probe.app"] = get_sha256(
-        gpu_probe_dst / "Executables" / "ClientGpuProbe")
-    copy_ldd_deps(gpu_probe_dst / "Executables" / "ClientGpuProbe", dest_system_lib)
-
-    # Qt Smoke.app is an integration-only system bundle. It exercises the
-    # toolkit-independent lcl-client transport through Qt's event loop before
-    # an existing product application is migrated to QML.
-    qt_smoke_dst = dest_system_apps / "Qt Smoke.app"
-    qt_smoke_dst.mkdir(parents=True, exist_ok=True)
-    (qt_smoke_dst / "Executables").mkdir(parents=True, exist_ok=True)
-    (qt_smoke_dst / "Resources").mkdir(parents=True, exist_ok=True)
-    qt_smoke_manifest = PROJECT_ROOT / "frameworks" / "qt" / "smoke" / "Manifest.json"
-    if not qt_smoke_manifest.is_file() or not term_icon.is_file():
-        raise RuntimeError("Missing Qt Smoke.app source files")
-    shutil.copy2(qt_smoke_manifest, qt_smoke_dst / "Manifest.json")
-    shutil.copy2(term_icon, qt_smoke_dst / "Resources" / "Icon.png")
-    qt_smoke_bin = binaries["lcl-qt-smoke"]
-    shutil.copy2(qt_smoke_bin, qt_smoke_dst / "Executables" / "QtSmoke")
-    (qt_smoke_dst / "Executables" / "QtSmoke").chmod(0o755)
-    sha_map["Qt Smoke.app"] = get_sha256(qt_smoke_dst / "Executables" / "QtSmoke")
-    copy_ldd_deps(qt_smoke_dst / "Executables" / "QtSmoke", dest_system_lib)
-
-    # GPU Presentation PoC.app proves the brokered Android Vulkan -> AHB ->
-    # rasterd route without Qt, Mesa, or a general Vulkan ICD.
-    gpu_presentation_dst = dest_system_apps / "GPU Presentation PoC.app"
-    gpu_presentation_dst.mkdir(parents=True, exist_ok=True)
-    (gpu_presentation_dst / "Executables").mkdir(parents=True, exist_ok=True)
-    (gpu_presentation_dst / "Resources").mkdir(parents=True, exist_ok=True)
-    gpu_presentation_manifest = PROJECT_ROOT / "tooling" / "probes" / "gpu_presentation" / "Manifest.json"
-    if not gpu_presentation_manifest.is_file() or not term_icon.is_file():
-        raise RuntimeError("Missing GPU Presentation PoC.app source files")
-    shutil.copy2(gpu_presentation_manifest, gpu_presentation_dst / "Manifest.json")
-    shutil.copy2(term_icon, gpu_presentation_dst / "Resources" / "Icon.png")
-    gpu_presentation_bin = binaries["lcl-gpu-presentation-probe"]
-    shutil.copy2(gpu_presentation_bin, gpu_presentation_dst / "Executables" / "GpuPresentationProbe")
-    (gpu_presentation_dst / "Executables" / "GpuPresentationProbe").chmod(0o755)
-    sha_map["GPU Presentation PoC.app"] = get_sha256(
-        gpu_presentation_dst / "Executables" / "GpuPresentationProbe")
-    copy_ldd_deps(gpu_presentation_dst / "Executables" / "GpuPresentationProbe", dest_system_lib)
 
     # Qt finds its ELF libraries through the normal rootfs link tree, while
     # QPA plugins and QML modules are dlopen/import assets. Keep their native
@@ -1270,18 +1227,6 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Applications/Terminal.app/Manifest.json",
         "/System/Applications/Terminal.app/Executables/Terminal",
         "/System/Applications/Terminal.app/Resources/Icon.png",
-        "/System/Applications/Sandbox Test.app/Manifest.json",
-        "/System/Applications/Sandbox Test.app/Executables/SandboxTest",
-        "/System/Applications/Sandbox Test.app/Resources/Icon.png",
-        "/System/Applications/GPU Transport Probe.app/Manifest.json",
-        "/System/Applications/GPU Transport Probe.app/Executables/ClientGpuProbe",
-        "/System/Applications/GPU Transport Probe.app/Resources/Icon.png",
-        "/System/Applications/Qt Smoke.app/Manifest.json",
-        "/System/Applications/Qt Smoke.app/Executables/QtSmoke",
-        "/System/Applications/Qt Smoke.app/Resources/Icon.png",
-        "/System/Applications/GPU Presentation PoC.app/Manifest.json",
-        "/System/Applications/GPU Presentation PoC.app/Executables/GpuPresentationProbe",
-        "/System/Applications/GPU Presentation PoC.app/Resources/Icon.png",
         "/System/Library/Qt/plugins/platforms/libqoffscreen.so",
         "/System/Library/Qt/qml/QtQuick/qmldir",
         "/System/Library/Fonts/inter",
@@ -1528,8 +1473,13 @@ def build_rootfs_ext4(
     if force and target_build_dir.exists():
         log(f"Removing canonical QEMU build tree for forced rebuild: {target_build_dir}")
         shutil.rmtree(target_build_dir)
-    binaries = ensure_binaries(norm_arch)
-    gfxstream_guest = build_gfxstream_guest(norm_arch) if android_gfxstream_backend else None
+    binaries = ensure_binaries(
+        norm_arch, android_gfxstream_guest_transport=android_gfxstream_backend
+    )
+    gfxstream_guest = (
+        build_gfxstream_guest(norm_arch, gfxstream_guest_adapter_archive(norm_arch))
+        if android_gfxstream_backend else None
+    )
     fingerprint = rootfs_input_fingerprint(norm_arch, binaries, gfxstream_guest)
     fingerprint_path = rootfs_fingerprint_path(norm_arch)
     cache_allowed = inside_docker and bool(os.environ.get("LCL_QEMU_BUILDER_IMAGE_ID"))

@@ -147,6 +147,10 @@ if(ANDROID)
     target_link_libraries(lcl-gpud-android PRIVATE
         lcl-gpu-protocol vulkan android Threads::Threads
     )
+    if(LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND)
+        target_link_libraries(lcl-gpud-android PRIVATE lcl-gfxstream-android-host-adapter)
+        target_compile_definitions(lcl-gpud-android PRIVATE LCL_HAS_GFXSTREAM_ANDROID_HOST=1)
+    endif()
     set_target_properties(lcl-gpud-android PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     )
@@ -187,27 +191,6 @@ else()
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     )
 
-    # Deliberately standalone canonical-client diagnostic. It verifies the
-    # same GBM/EGL/DMA-BUF path that a same-binary Qt Quick client must use on
-    # both Linux and Android substrates, without involving Qt or lcl-ui.
-    add_executable(lcl-client-gpu-probe
-        ${PROJECT_SOURCE_DIR}/tooling/probes/client_gpu_probe.cpp
-    )
-    target_include_directories(lcl-client-gpu-probe PRIVATE
-        ${PROJECT_SOURCE_DIR} ${DRM_INCLUDE_DIRS} ${GBM_INCLUDE_DIRS}
-        ${EGL_INCLUDE_DIRS} ${GLES2_INCLUDE_DIRS}
-    )
-    target_link_libraries(lcl-client-gpu-probe PRIVATE
-        ${DRM_LIBRARIES} ${GBM_LIBRARIES} ${EGL_LIBRARIES}
-        ${GLES2_LIBRARIES}
-    )
-    target_compile_options(lcl-client-gpu-probe PRIVATE
-        ${DRM_CFLAGS_OTHER} ${GBM_CFLAGS_OTHER} ${EGL_CFLAGS_OTHER}
-        ${GLES2_CFLAGS_OTHER}
-    )
-    set_target_properties(lcl-client-gpu-probe PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-    )
 endif()
 
 add_library(lcl-raster STATIC

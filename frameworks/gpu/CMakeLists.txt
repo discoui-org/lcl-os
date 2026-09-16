@@ -16,12 +16,3 @@ target_link_libraries(lcl-gpu-client PUBLIC
 
 target_compile_features(lcl-gpu-client PUBLIC cxx_std_20)
 set_target_properties(lcl-gpu-client PROPERTIES POSITION_INDEPENDENT_CODE ON)
-
-if(NOT ANDROID)
-    add_executable(lcl-gpu-presentation-probe gpu_presentation_probe.cpp)
-    target_link_libraries(lcl-gpu-presentation-probe PRIVATE lcl-gpu-client lcl-client)
-    target_compile_features(lcl-gpu-presentation-probe PRIVATE cxx_std_20)
-    set_target_properties(lcl-gpu-presentation-probe PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-    )
-endif()

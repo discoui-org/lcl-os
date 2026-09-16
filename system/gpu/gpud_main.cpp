@@ -2,6 +2,10 @@
 #include "system/security/session_user.hpp"
 #include "system/gpu/vulkan_clear_renderer.hpp"
 
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+#include "lcl-gfxstream/android_host_ingress.hpp"
+#endif
+
 #ifndef VK_USE_PLATFORM_ANDROID_KHR
 #define VK_USE_PLATFORM_ANDROID_KHR
 #endif
@@ -137,7 +141,11 @@ void sendError(int client, uint32_t code, const char* message) {
 }
 
 void handleClient(int client, const DeviceInfo& device,
-                  lcl::gpu::VulkanClearRenderer& renderer) {
+                  lcl::gpu::VulkanClearRenderer& renderer
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+                  , lcl::gfxstream::AndroidHostIngress* gfxstreamIngress
+#endif
+                  ) {
     lcl::gpu_protocol::Header header{};
     std::vector<uint8_t> payload;
     int receivedFd = -1;
@@ -219,12 +227,31 @@ void handleClient(int client, const DeviceInfo& device,
             if (open->transportVersion != lcl::gpu_protocol::kGfxstreamTransportVersion ||
                 open->flags != 0) {
                 sendError(client, 5, "unsupported gfxstream transport version");
-            } else {
-                // Do not expose a half-wired guest Vulkan route.  The socket
-                // was capability-gated before this point, but stays
-                // fail-closed until the native gfxstream decoder adapter owns
-                // it and can preserve the existing AHB presentation bridge.
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+            } else if (!gfxstreamIngress) {
                 sendError(client, 6, "gfxstream decoder unavailable");
+            } else {
+                std::string error;
+                if (!gfxstreamIngress->initialize(error)) {
+                    std::cerr << "[LCL Gpud] gfxstream initialization failed: " << error << '\n';
+                    sendError(client, 6, "gfxstream decoder unavailable");
+                } else {
+                    const lcl::gpu_protocol::GfxstreamStreamReady ready{};
+                    if (!lcl::gpu_protocol::sendPacket(
+                            client, lcl::gpu_protocol::Opcode::GfxstreamStreamReady,
+                            &ready, sizeof(ready))) {
+                        break;
+                    }
+                    // From this point on the socket carries only bounded opaque
+                    // gfxstream bytes.  The adapter owns the native decoder
+                    // lifetime; no LCL Vulkan command protocol is introduced.
+                    gfxstreamIngress->serve(client);
+                    return;
+                }
+#else
+            } else {
+                sendError(client, 6, "gfxstream decoder unavailable");
+#endif
             }
             break;
         } else {
@@ -279,6 +306,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     lcl::gpu::VulkanClearRenderer renderer;
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+    lcl::gfxstream::AndroidHostIngress gfxstreamIngress;
+#endif
     std::cout << "[LCL Gpud] control plane ready at " << socketPath << '\n';
     for (;;) {
         const int client = accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
@@ -291,7 +321,11 @@ int main(int argc, char** argv) {
             break;
         }
         std::cerr << "[LCL Gpud] client connected\n";
-        handleClient(client, *device, renderer);
+        handleClient(client, *device, renderer
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+                     , &gfxstreamIngress
+#endif
+        );
         std::cerr << "[LCL Gpud] client disconnected\n";
         close(client);
     }

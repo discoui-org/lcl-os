@@ -18,6 +18,13 @@ else()
         "Build the optional Android lcl-gpud gfxstream decoder backend" FORCE)
 endif()
 
+# This is deliberately distinct from the Android-native decoder option above.
+# The rootfs is built as Linux userspace, but an Android system image may opt
+# in to linking the guest-side LCL IOStream adapter into its gfxstream ICD.
+# A regular Linux build never enables this packaging-only switch.
+option(LCL_BUILD_ANDROID_GFXSTREAM_GUEST_TRANSPORT
+       "Build the Android-flavour rootfs gfxstream guest socket adapter" OFF)
+
 if(NOT ANDROID)
     find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 endif()
@@ -67,18 +74,26 @@ add_subdirectory(platforms/common)
 add_subdirectory(system)
 add_subdirectory(frameworks/client)
 add_subdirectory(frameworks/gpu)
+if(LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND OR LCL_BUILD_ANDROID_GFXSTREAM_GUEST_TRANSPORT)
+    if(NOT EXISTS "${PROJECT_SOURCE_DIR}/third_party/gfxstream/guest/iostream/include/gfxstream/guest/IOStream.h")
+        message(FATAL_ERROR
+            "The optional Android gfxstream path requires initialized pinned third_party/gfxstream")
+    endif()
+endif()
 if(LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND)
     if(NOT ANDROID)
         message(FATAL_ERROR "LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND is valid only for Android")
     endif()
-    if(NOT EXISTS "${PROJECT_SOURCE_DIR}/third_party/gfxstream/guest/iostream/include/gfxstream/guest/IOStream.h" OR
-       NOT EXISTS "${PROJECT_SOURCE_DIR}/third_party/aemu/CMakeLists.txt")
+    if(NOT EXISTS "${PROJECT_SOURCE_DIR}/third_party/aemu/CMakeLists.txt")
         message(FATAL_ERROR
             "LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND requires initialized pinned "
             "third_party/gfxstream and third_party/aemu submodules")
     endif()
     include(cmake/LclAndroidAemu.cmake)
     lcl_add_android_aemu()
+    lcl_add_android_gfxstream_host()
+    add_subdirectory(frameworks/gfxstream)
+elseif(LCL_BUILD_ANDROID_GFXSTREAM_GUEST_TRANSPORT)
     add_subdirectory(frameworks/gfxstream)
 endif()
 if(NOT ANDROID)

@@ -218,19 +218,14 @@ TEST_F(SandboxChildLauncherTest, GivesGpuEndpointOnlyToAnEffectiveCapability) {
     EXPECT_TRUE(validateSandboxChildLaunchSpec(grantedSpec, error)) << error;
 }
 
-TEST_F(SandboxChildLauncherTest, QtSmokeGpuGrantControlsPrivateBrokerEndpoint) {
+TEST_F(SandboxChildLauncherTest, ExplicitGpuGrantControlsPrivateBrokerEndpoint) {
     SandboxChildLaunchSpec seed = validSpec();
     VerifiedApplication application{};
-    application.appId = "org.lcl.qt.smoke";
+    application.appId = "org.lcl.test.gpu-endpoint";
     application.identity = {application.appId, seed.identity.uid, seed.identity.gid};
     application.runtime = SandboxRuntime::Native;
     application.requestedPermissions = {"graphics.gpu", "graphics.render-node"};
     application.bundleRecordDigest = seed.plan.request.bundleRecordDigest;
-
-    const auto systemGrants = staticSystemImagePermissionGrants(
-        application.appId, application.requestedPermissions);
-    EXPECT_EQ(systemGrants,
-              std::vector<std::string>({"graphics.gpu", "graphics.render-node"}));
 
     std::string error;
     // Model the normal policy result with only graphics.gpu effective here:

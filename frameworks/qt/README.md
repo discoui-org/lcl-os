@@ -14,13 +14,13 @@ Keyboard, text input, mouse, wheel, focus, and close events are translated to
 public Qt events. Touch currently follows Qt's primary-pointer mouse path;
 multi-touch delivery belongs in the later QPA/input-device integration.
 
-Canonical Linux builds install Qt in the pinned QEMU Docker builder and always
-compile both `lcl-qt` and `lcl-qt-smoke`; the host machine does not need Qt.
-The current Android compositor build intentionally does not require a Qt SDK;
-Qt's Android runtime integration is a later migration stage. For a standalone
-Linux host build, provide Qt through `CMAKE_PREFIX_PATH`.
+Canonical Linux builds install Qt in the pinned QEMU Docker builder and compile
+`lcl-qt`; the host machine does not need Qt. The current Android compositor
+build intentionally does not require a Qt SDK; Qt's Android runtime integration
+is a later migration stage. For a standalone Linux host build, provide Qt
+through `CMAKE_PREFIX_PATH`.
 
 ```sh
 cmake -S . -B out/qt -DCMAKE_PREFIX_PATH=/path/to/Qt/6.4/gcc_64
-cmake --build out/qt --target lcl-qt-smoke
+cmake --build out/qt --target lcl-qt
 ```

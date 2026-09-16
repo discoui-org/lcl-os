@@ -41,8 +41,10 @@ class BuildRootfsTest(unittest.TestCase):
             image = rootfs_dir / "lcl-rootfs-x86_64.ext4"
             fingerprint = cache_dir / "rootfs-x86_64.sha256"
             gfxstream_guest = output / "libvulkan_gfxstream.so"
+            gfxstream_adapter = output / "liblcl-gfxstream-guest-adapter.a"
             image.touch()
             gfxstream_guest.write_bytes(b"guest-icd")
+            gfxstream_adapter.write_bytes(b"guest-adapter")
             fingerprint.write_text("current\n", encoding="utf-8")
 
             with (
@@ -54,6 +56,9 @@ class BuildRootfsTest(unittest.TestCase):
                 mock.patch.object(
                     build_rootfs, "build_gfxstream_guest", return_value=gfxstream_guest
                 ) as build_guest,
+                mock.patch.object(
+                    build_rootfs, "gfxstream_guest_adapter_archive", return_value=gfxstream_adapter
+                ),
                 mock.patch.object(build_rootfs, "ensure_binaries", return_value={}),
                 mock.patch.object(
                     build_rootfs, "rootfs_input_fingerprint", return_value="current"
@@ -68,7 +73,7 @@ class BuildRootfsTest(unittest.TestCase):
                 )
 
             self.assertEqual(result, (rootfs_dir / "x86_64", image, {}))
-            build_guest.assert_called_once_with("x86_64")
+            build_guest.assert_called_once_with("x86_64", gfxstream_adapter)
             fix_permissions.assert_called_once_with(image)
 
     def test_default_rootfs_does_not_build_the_android_only_guest_icd(self) -> None:

@@ -1,0 +1,237 @@
+From 6247388dea0ce60c1dcb9cfc3572c05e0e912697 Mon Sep 17 00:00:00 2001
+Subject: [LCL] provide an optional Android Vulkan-only host build
+
+This patch is applied only in LCL's hash-pinned build overlay. It keeps the
+upstream checkout pristine and changes no default gfxstream build. The LCL
+option is deliberately Android-only at the LCL CMake call site.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 47c21f862ff50bdf165f7a8aee2fc257da17696c..51713da4a422a03d5f1b7f6f08b112ae82420386 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -31,6 +31,9 @@ endif()
+ 
+ option(BUILD_GRAPHICS_DETECTOR "Build the graphics detector utility" OFF)
+ 
++option(LCL_GFXSTREAM_HEADLESS_HOST
++       "Build the LCL Android Vulkan-only headless host backend" OFF)
++
+ if (WIN32)
+     add_definitions("-DUNICODE -D_UNICODE -DNOMINMAX -DEMUGL_BUILD -DVK_USE_PLATFORM_WIN32_KHR -DBUILDING_EMUGL_COMMON_SHARED")
+ endif()
+@@ -40,7 +43,11 @@ if(VIRGL_RENDERER_UNSTABLE_APIS)
+     add_definitions(-DVIRGL_RENDERER_UNSTABLE_APIS)
+ endif()
+ 
+-add_definitions(-DGFXSTREAM_ENABLE_HOST_GLES=1)
++if(LCL_GFXSTREAM_HEADLESS_HOST)
++    add_definitions(-DGFXSTREAM_ENABLE_HOST_GLES=0)
++else()
++    add_definitions(-DGFXSTREAM_ENABLE_HOST_GLES=1)
++endif()
+ 
+ option(ASTC_CPU_DECODING "Enable decoding ASTC textures on the CPU" OFF)
+ 
+@@ -85,7 +92,7 @@ if (APPLE)
+ elseif(QNX)
+     # TODO(jsimonot): fix build error
+     # add_compile_definitions(VK_USE_PLATFORM_SCREEN_QNX)
+-elseif(UNIX)
++elseif(UNIX AND NOT ANDROID)
+     # TODO(kaiyili, b/179477624): Add Linux specific Vulkan platform macro definitions
+     # Use X11 version of EGL platform specific definitions.
+     add_compile_definitions(USE_X11)
+diff --git a/host/CMakeLists.txt b/host/CMakeLists.txt
+index 77fc69ce21f3641c975b934749a0bca5e8890a45..b1eab9cd6315b955ba070483751e3a277cbae71f 100644
+--- a/host/CMakeLists.txt
++++ b/host/CMakeLists.txt
+@@ -5,17 +5,25 @@ add_subdirectory(features)
+ add_subdirectory(apigen-codec-common)
+ add_subdirectory(compressedTextureFormats)
+ 
+-# GL
+-add_subdirectory(gl)
++# Vulkan still needs the small GL host-common utility library, but the LCL
++# Android backend does not create a GLES translator or native window.
++add_subdirectory(gl/gl-host-common)
++if(NOT LCL_GFXSTREAM_HEADLESS_HOST)
++    add_subdirectory(gl)
++endif()
+ 
+ # Vulkan
+ add_subdirectory(vulkan)
+ 
+-# RenderControl decoder
+-add_subdirectory(renderControl_dec)
++if(NOT LCL_GFXSTREAM_HEADLESS_HOST)
++    # RenderControl is tied to the classic GLES pipe and is not part of the
++    # Vulkan-only LCL ingress.
++    add_subdirectory(renderControl_dec)
++endif()
+ 
+-# Magma decoder
+-add_subdirectory(magma)
++if(NOT LCL_GFXSTREAM_HEADLESS_HOST)
++    add_subdirectory(magma)
++endif()
+ 
+ if(CONFIG_AEMU)
+     add_compile_definitions(GFXSTREAM_ENABLE_HOST_VK_SNAPSHOT)
+@@ -35,26 +43,31 @@ set(stream-server-core-sources
+     DisplaySurfaceUser.cpp
+     Hwc2.cpp
+     PostWorker.cpp
+-    PostWorkerGl.cpp
+     ReadBuffer.cpp
+     RenderChannelImpl.cpp
+     RenderThreadInfo.cpp
+-    RenderThreadInfoGl.cpp
+-    RenderThreadInfoMagma.cpp
+     RingStream.cpp
+     SyncThread.cpp
+     RenderThread.cpp
+-    RenderControl.cpp
+     RenderWindow.cpp
+     RenderLibImpl.cpp
+     RendererImpl.cpp
+     FrameBuffer.cpp)
++if(NOT LCL_GFXSTREAM_HEADLESS_HOST)
++    list(APPEND stream-server-core-sources
++        PostWorkerGl.cpp
++        RenderThreadInfoGl.cpp
++        RenderThreadInfoMagma.cpp
++        RenderControl.cpp)
++endif()
+ if (APPLE)
+     set(stream-server-core-platform-sources NativeSubWindow_cocoa.mm)
+ elseif (WIN32)
+     set(stream-server-core-platform-sources NativeSubWindow_win32.cpp)
+ elseif (QNX)
+     set(stream-server-core-platform-sources NativeSubWindow_qnx.cpp)
++elseif(LCL_GFXSTREAM_HEADLESS_HOST)
++    set(stream-server-core-platform-sources NativeSubWindow_stub.cpp)
+ else()
+     set(stream-server-core-platform-sources NativeSubWindow_x11.cpp)
+ endif()
+@@ -77,19 +90,22 @@ add_library(
+ target_link_libraries(
+         gfxstream_backend_static
+         PUBLIC
+-        GLES_CM_translator_static
+-        OpenGLESDispatch
+-        renderControl_dec
+         gfxstream_backend_common
+         gfxstream_features
+-        gfxstream-gl-server
+-        gfxstream-magma-server
+         gfxstream-vulkan-server
+         gfxstream_egl_headers
+         gfxstream-snapshot
+         apigen-codec-common
+         ${GFXSTREAM_HOST_COMMON_LIB}
+         ${GFXSTREAM_BASE_LIB})
++if(NOT LCL_GFXSTREAM_HEADLESS_HOST)
++    target_link_libraries(gfxstream_backend_static PUBLIC
++        GLES_CM_translator_static
++        OpenGLESDispatch
++        renderControl_dec
++        gfxstream-gl-server
++        gfxstream-magma-server)
++endif()
+ 
+ target_include_directories(
+         gfxstream_backend_static
+@@ -122,8 +138,12 @@ target_compile_options(
+     -Wno-invalid-offsetof
+     -Wno-free-nonheap-object
+     -Wno-attributes
+-    -DGFXSTREAM_ENABLE_HOST_GLES=1
+     )
++if(LCL_GFXSTREAM_HEADLESS_HOST)
++    target_compile_definitions(gfxstream_backend_static PRIVATE GFXSTREAM_ENABLE_HOST_GLES=0)
++else()
++    target_compile_definitions(gfxstream_backend_static PRIVATE GFXSTREAM_ENABLE_HOST_GLES=1)
++endif()
+ 
+ # gfxstream_backend.dll
+ add_library(
+diff --git a/host/FrameBuffer.cpp b/host/FrameBuffer.cpp
+index 004a90a799c129fbf821c7eaea66360c6b6b8a0c..7e13df426861eb63ed5c4d7a0d81c22b4bd93f5d 100644
+--- a/host/FrameBuffer.cpp
++++ b/host/FrameBuffer.cpp
+@@ -972,8 +972,13 @@ bool FrameBuffer::setupSubWindow(FBNativeWindowType p_window,
+ 
+ 
+             if (m_displayVk) {
++#if GFXSTREAM_ENABLE_HOST_GLES
+                 m_displaySurface =
+                     vk::createDisplaySurface(m_subWin, m_windowWidth * dpr, m_windowHeight * dpr);
++#else
++                // LCL uses no native window: Vulkan command execution remains headless.
++                m_displaySurface.reset();
++#endif
+             } else if (m_emulationGl) {
+ #if GFXSTREAM_ENABLE_HOST_GLES
+                 m_displaySurface = m_emulationGl->createWindowSurface(m_windowWidth * dpr,
+@@ -1147,7 +1152,9 @@ HandleType FrameBuffer::genHandle_locked() {
+ bool FrameBuffer::isFormatSupported(GLenum format) {
+     bool supported = true;
+     if (m_emulationGl) {
++#if GFXSTREAM_ENABLE_HOST_GLES
+         supported &= m_emulationGl->isFormatSupported(format);
++#endif
+     }
+     if (m_emulationVk) {
+         supported &= vk::isFormatSupported(format);
+diff --git a/third-party/CMakeLists.txt b/third-party/CMakeLists.txt
+index f7257003af6ff01c00350c5f11083ca2ffca532f..0e6423838ee670bea26bd9c54c3f118ffedf5400 100644
+--- a/third-party/CMakeLists.txt
++++ b/third-party/CMakeLists.txt
+@@ -162,6 +162,11 @@ if(NOT TARGET gfxstream_vulkan_headers)
+ endif()
+ 
+ if(NOT TARGET flatbuffers)
++    if(LCL_GFXSTREAM_HEADLESS_HOST)
++        # No headless host source uses FlatBuffers, but the upstream target graph
++        # still names this dependency.
++        add_library(flatbuffers INTERFACE)
++    else()
+     set(FLATBUFFERS_BUILD_TESTS OFF)
+     set(FLATBUFFERS_BUILD_CPP17 ON)
+ 
+@@ -178,6 +183,7 @@ if(NOT TARGET flatbuffers)
+         add_executable(flatc IMPORTED GLOBAL)
+         set_property(TARGET flatc PROPERTY IMPORTED_LOCATION ${FLATC})
+     endif()
++    endif()
+ endif()
+ 
+ if (QNX) # QNX SDP provides EGL headers
+@@ -186,7 +192,11 @@ if (QNX) # QNX SDP provides EGL headers
+ endif()
+ 
+ if(NOT TARGET gfxstream_egl_headers)
+-    if(DEPENDENCY_RESOLUTION STREQUAL "AOSP")
++    if(LCL_GFXSTREAM_HEADLESS_HOST)
++        # The NDK already exposes EGL headers.  Keep the target so the
++        # Vulkan-only host retains upstream target relationships.
++        add_library(gfxstream_egl_headers INTERFACE)
++    elseif(DEPENDENCY_RESOLUTION STREQUAL "AOSP")
+         # ANGLE provides the EGL headers for us.
+         set(ANGLE_PATH ${PROJECT_SOURCE_DIR}/../../../external/angle)
+         if(NOT EXISTS ${ANGLE_PATH})
+@@ -218,7 +228,13 @@ if(WITH_BENCHMARK)
+ endif()
+ 
+ if(NOT TARGET libdrm_headers)
+-    if(DEPENDENCY_RESOLUTION STREQUAL "AOSP")
++    if(LCL_GFXSTREAM_HEADLESS_HOST)
++        # Vulkan ingress needs the DRM UAPI declarations generated into the
++        # codecs, but never opens a DRM device on Android.
++        add_library(libdrm_headers INTERFACE)
++        target_include_directories(libdrm_headers INTERFACE
++            ${GFXSTREAM_REPO_ROOT}/guest/mesa/include/drm-uapi)
++    elseif(DEPENDENCY_RESOLUTION STREQUAL "AOSP")
+         set(LIBDRM_PATH ${PROJECT_SOURCE_DIR}/../../../external/libdrm)
+         if(NOT EXISTS ${LIBDRM_PATH})
+             message(FATAL_ERROR "LIBDRM is not found.")

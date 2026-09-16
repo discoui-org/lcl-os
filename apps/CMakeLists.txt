@@ -71,15 +71,6 @@ target_link_libraries(lcl-terminal PRIVATE
     lcl-ui lcl-raster lcl-protocol Threads::Threads
 )
 
-add_executable(lcl-sandbox-test sandbox_test/main.cpp)
-target_include_directories(lcl-sandbox-test PRIVATE
-    ${PROJECT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/frameworks/ui/include
-)
-target_link_libraries(lcl-sandbox-test PRIVATE
-    lcl-ui lcl-raster lcl-protocol Threads::Threads
-)
-
 add_executable(lcl-js
     ${PROJECT_SOURCE_DIR}/system/javascript/main.cpp
     ${PROJECT_SOURCE_DIR}/system/javascript/js_runtime.cpp
@@ -109,7 +100,6 @@ foreach(root_runtime_target IN ITEMS
         lcl-desktop-shell
         lcl-mobile-shell
         lcl-terminal
-        lcl-sandbox-test
         lcl-js)
     set_target_properties(${root_runtime_target} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
