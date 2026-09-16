@@ -29,6 +29,14 @@ enum class Opcode : uint32_t {
     /** Switches one already-authorized socket into the opaque gfxstream stream mode. */
     OpenGfxstreamStream = 20,
     GfxstreamStreamReady = 21,
+    /**
+     * Allocates an opaque, gfxstream-owned render target.  This is a
+     * presentation-resource control operation, not a Vulkan command: guest
+     * Vulkan reaches the target through upstream VK_ANDROID_native_buffer.
+     */
+    CreateGfxstreamColorBuffer = 30,
+    GfxstreamColorBufferReady = 31,
+    DestroyGfxstreamColorBuffer = 32,
 };
 
 struct Header {
@@ -105,6 +113,26 @@ struct GfxstreamStreamReady {
     uint32_t transportVersion{kGfxstreamTransportVersion};
     uint32_t reserved{0};
 };
+
+/** Restricted to a single-plane RGBA8888 target in the initial bridge. */
+struct CreateGfxstreamColorBuffer {
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t format{0};
+    uint32_t flags{0};
+};
+
+/** colorBufferHandle is an opaque upstream gfxstream identifier, never a pointer. */
+struct GfxstreamColorBufferReady {
+    uint64_t targetId{0};
+    uint32_t colorBufferHandle{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t format{0};
+    uint32_t stride{0};
+};
+
+struct DestroyGfxstreamColorBuffer { uint64_t targetId{0}; };
 
 enum class ReceiveStatus { Received, WouldBlock, Closed, Invalid, Error };
 

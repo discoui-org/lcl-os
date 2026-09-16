@@ -22,8 +22,8 @@ if(ANDROID AND LCL_ENABLE_ANDROID_GFXSTREAM_BACKEND)
     )
     target_include_directories(lcl-gfxstream-android-host-adapter PRIVATE
         ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/third_party/gfxstream/host
-        ${PROJECT_SOURCE_DIR}/third_party/gfxstream/include
+        ${LCL_GFXSTREAM_HOST_SOURCE_DIR}/host
+        ${LCL_GFXSTREAM_HOST_SOURCE_DIR}/include
     )
     target_include_directories(lcl-gfxstream-android-host-adapter PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include

@@ -13,9 +13,11 @@ struct StaticProfile {
 };
 
 constexpr std::array<std::string_view, 0> kNoGrants{};
-constexpr std::array<StaticProfile, 2> kProfiles{{
+constexpr std::array<std::string_view, 1> kVulkanGearsGrants{{"graphics.gpu"}};
+constexpr std::array<StaticProfile, 3> kProfiles{{
     {"org.lcl.settings", kNoGrants},
     {"org.lcl.sandbox-probe", kNoGrants},
+    {"org.lcl.vulkan-gears", kVulkanGearsGrants},
 }};
 
 } // namespace

@@ -235,3 +235,243 @@ index f7257003af6ff01c00350c5f11083ca2ffca532f..0e6423838ee670bea26bd9c54c3f118f
          set(LIBDRM_PATH ${PROJECT_SOURCE_DIR}/../../../external/libdrm)
          if(NOT EXISTS ${LIBDRM_PATH})
              message(FATAL_ERROR "LIBDRM is not found.")
+ 
+diff --git a/host/vulkan/VkDecoderGlobalState.cpp b/host/vulkan/VkDecoderGlobalState.cpp
+--- a/host/vulkan/VkDecoderGlobalState.cpp
++++ b/host/vulkan/VkDecoderGlobalState.cpp
+@@ -7438,6 +7438,15 @@ class VkDecoderGlobalState::Impl {
+         if (hasDeviceExtension(properties, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
+             res.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+         }
++#elif defined(__ANDROID__)
++        constexpr const char* kAndroidHardwareBufferExtension =
++            "VK_ANDROID_external_memory_android_hardware_buffer";
++        if (hasDeviceExtension(properties, kAndroidHardwareBufferExtension)) {
++            res.push_back(kAndroidHardwareBufferExtension);
++        }
++        if (hasDeviceExtension(properties, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
++            res.push_back(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
++        }
+ #elif __unix__
+         if (hasDeviceExtension(properties, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME)) {
+             res.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+
+diff --git a/host/vulkan/VkAndroidNativeBuffer.h b/host/vulkan/VkAndroidNativeBuffer.h
+index 5822ea6a2..b9e3f48c0 100644
+--- a/host/vulkan/VkAndroidNativeBuffer.h
++++ b/host/vulkan/VkAndroidNativeBuffer.h
+@@ -13,7 +13,13 @@
+ // limitations under the License.
+ #pragma once
+ 
++#if defined(__ANDROID__) && !defined(VK_USE_PLATFORM_ANDROID_KHR)
++#define VK_USE_PLATFORM_ANDROID_KHR
++#endif
+ #include <vulkan/vulkan.h>
++#if defined(__ANDROID__)
++#include <android/hardware_buffer.h>
++#endif
+ 
+ #include <atomic>
+ #include <deque>
+@@ -44,3 +44,13 @@
+ void teardownAndroidNativeBufferImage(VulkanDispatch* vk, AndroidNativeBufferInfo* anbInfo);
+ 
++#if defined(__ANDROID__)
++// Android-only, headless-host registry for an externally brokered native
++// target. Handles stay opaque to the guest; each lookup returns an acquired
++// reference so guest image lifetime cannot race raster presentation.
++bool registerAndroidHardwareBufferForColorBuffer(uint32_t colorBufferHandle,
++                                                 AHardwareBuffer* hardwareBuffer);
++void unregisterAndroidHardwareBufferForColorBuffer(uint32_t colorBufferHandle);
++AHardwareBuffer* acquireAndroidHardwareBufferForColorBuffer(uint32_t colorBufferHandle);
++#endif
++
+ struct AndroidNativeBufferInfo {
+@@ -60,6 +70,9 @@
+     uint32_t colorBufferHandle;
+     bool externallyBacked = false;
+     bool useVulkanNativeImage = false;
++#if defined(__ANDROID__)
++    AHardwareBuffer* brokeredHardwareBuffer = nullptr;
++#endif
+ 
+     // We will be using separate allocations for image versus staging memory,
+     // because not all host Vulkan drivers will support directly rendering to
+diff --git a/host/vulkan/VkAndroidNativeBuffer.cpp b/host/vulkan/VkAndroidNativeBuffer.cpp
+index 4d29439e7..d388a1e8f 100644
+--- a/host/vulkan/VkAndroidNativeBuffer.cpp
++++ b/host/vulkan/VkAndroidNativeBuffer.cpp
+@@ -15,6 +15,12 @@
+ 
+ #include <future>
+ 
++#include <mutex>
++#include <unordered_map>
++#if defined(__ANDROID__)
++#include <android/hardware_buffer.h>
++#endif
++
+ #include "GrallocDefs.h"
+ #include "SyncThread.h"
+ #include "VkCommonOperations.h"
+@@ -31,6 +37,41 @@
+ namespace gfxstream {
+ namespace vk {
+ 
++#if defined(__ANDROID__)
++namespace {
++std::mutex sBrokeredHardwareBuffersMutex;
++std::unordered_map<uint32_t, AHardwareBuffer*> sBrokeredHardwareBuffers;
++}  // namespace
++
++bool registerAndroidHardwareBufferForColorBuffer(uint32_t colorBufferHandle,
++                                                 AHardwareBuffer* hardwareBuffer) {
++    if (!colorBufferHandle || !hardwareBuffer) return false;
++    std::lock_guard lock(sBrokeredHardwareBuffersMutex);
++    if (sBrokeredHardwareBuffers.find(colorBufferHandle) != sBrokeredHardwareBuffers.end()) {
++        return false;
++    }
++    AHardwareBuffer_acquire(hardwareBuffer);
++    sBrokeredHardwareBuffers.emplace(colorBufferHandle, hardwareBuffer);
++    return true;
++}
++
++void unregisterAndroidHardwareBufferForColorBuffer(uint32_t colorBufferHandle) {
++    std::lock_guard lock(sBrokeredHardwareBuffersMutex);
++    const auto found = sBrokeredHardwareBuffers.find(colorBufferHandle);
++    if (found == sBrokeredHardwareBuffers.end()) return;
++    AHardwareBuffer_release(found->second);
++    sBrokeredHardwareBuffers.erase(found);
++}
++
++AHardwareBuffer* acquireAndroidHardwareBufferForColorBuffer(uint32_t colorBufferHandle) {
++    std::lock_guard lock(sBrokeredHardwareBuffersMutex);
++    const auto found = sBrokeredHardwareBuffers.find(colorBufferHandle);
++    if (found == sBrokeredHardwareBuffers.end()) return nullptr;
++    AHardwareBuffer_acquire(found->second);
++    return found->second;
++}
++#endif
++
+ #define VK_ANB_ERR(fmt, ...) fprintf(stderr, "%s:%d " fmt "\n", __func__, __LINE__, ##__VA_ARGS__);
+ 
+ #define ENABLE_VK_ANB_DEBUG 0
+@@ -138,18 +174,74 @@ VkResult prepareAndroidNativeBufferImage(VulkanDispatch* vk, VkDevice device,
+     out->stride = nativeBufferANDROID->stride;
+     out->colorBufferHandle = *static_cast<const uint32_t*>(nativeBufferANDROID->handle);
+ 
++#if defined(__ANDROID__)
++    // LCL's headless host registers presentation targets before the guest
++    // binds them. Import that exact AHardwareBuffer into the decoder device:
++    // no CPU copy and no native window are involved.
++    out->brokeredHardwareBuffer =
++        acquireAndroidHardwareBufferForColorBuffer(out->colorBufferHandle);
++    if (out->brokeredHardwareBuffer) {
++        const auto getProperties = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(
++            vk->vkGetDeviceProcAddr(device, "vkGetAndroidHardwareBufferPropertiesANDROID"));
++        if (!getProperties) {
++            teardownAndroidNativeBufferImage(vk, out);
++            return VK_ERROR_EXTENSION_NOT_PRESENT;
++        }
++        VkExternalMemoryImageCreateInfo externalImage{
++            VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO, nullptr,
++            VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID};
++        VkImageCreateInfo imageCreateInfo = *pCreateInfo;
++        imageCreateInfo.pNext = &externalImage;
++        VkResult createResult = vk->vkCreateImage(device, &imageCreateInfo, pAllocator,
++                                                   &out->image);
++        if (createResult != VK_SUCCESS) {
++            teardownAndroidNativeBufferImage(vk, out);
++            return createResult;
++        }
++        VkAndroidHardwareBufferPropertiesANDROID properties{
++            VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID};
++        if (getProperties(device, out->brokeredHardwareBuffer, &properties) != VK_SUCCESS) {
++            teardownAndroidNativeBufferImage(vk, out);
++            return VK_ERROR_INITIALIZATION_FAILED;
++        }
++        uint32_t memoryType = 0;
++        while (memoryType < memProps->memoryTypeCount &&
++               (properties.memoryTypeBits & (uint32_t{1} << memoryType)) == 0) {
++            ++memoryType;
++        }
++        if (memoryType == memProps->memoryTypeCount) {
++            teardownAndroidNativeBufferImage(vk, out);
++            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
++        }
++        VkImportAndroidHardwareBufferInfoANDROID imported{
++            VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID, nullptr,
++            out->brokeredHardwareBuffer};
++        VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &imported,
++                                        properties.allocationSize, memoryType};
++        if (vk->vkAllocateMemory(device, &allocation, pAllocator, &out->imageMemory) != VK_SUCCESS ||
++            vk->vkBindImageMemory(device, out->image, out->imageMemory, 0) != VK_SUCCESS) {
++            teardownAndroidNativeBufferImage(vk, out);
++            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
++        }
++        vk->vkGetImageMemoryRequirements(device, out->image, &out->memReqs);
++        out->externallyBacked = true;
++        out->useVulkanNativeImage = true;
++    }
++#endif
++
+     auto emu = getGlobalVkEmulation();
+ 
+-    if (!getColorBufferShareInfo(out->colorBufferHandle, &colorBufferExportedToGl,
++    if (!out->externallyBacked &&
++        !getColorBufferShareInfo(out->colorBufferHandle, &colorBufferExportedToGl,
+                                  &externalMemoryCompatible)) {
+         VK_ANB_ERR("Failed to query if ColorBuffer:%d exported to GL.", out->colorBufferHandle);
+         return VK_ERROR_INITIALIZATION_FAILED;
+     }
+ 
+-    if (externalMemoryCompatible) {
++    if (!out->externallyBacked && externalMemoryCompatible) {
+         releaseColorBufferForGuestUse(out->colorBufferHandle);
+         out->externallyBacked = true;
+     }
+ 
+-    out->useVulkanNativeImage =
++    if (!out->externallyBacked) out->useVulkanNativeImage =
+         (emu && emu->live && emu->guestVulkanOnly) || colorBufferExportedToGl;
+@@ -181,3 +279,9 @@ VkResult prepareAndroidNativeBufferImage(VulkanDispatch* vk, VkDevice device,
+     VkDeviceSize bindOffset = 0;
+     if (out->externallyBacked) {
++#if defined(__ANDROID__)
++        if (out->brokeredHardwareBuffer) {
++            // The exact AHardwareBuffer is already imported above.
++        } else
++#endif
++        {
+         VkImageCreateInfo createImageCi;
+@@ -234,3 +337,4 @@ VkResult prepareAndroidNativeBufferImage(VulkanDispatch* vk, VkDevice device,
+ 
+         bindOffset = memInfo.bindOffset;
++        }
+     } else {
+@@ -285,7 +389,14 @@ VkResult prepareAndroidNativeBufferImage(VulkanDispatch* vk, VkDevice device,
+     if (VK_SUCCESS != vk->vkBindImageMemory(device, out->image, out->imageMemory, bindOffset)) {
++#if defined(__ANDROID__)
++        if (out->brokeredHardwareBuffer) {
++            // It was bound during direct AHardwareBuffer import above.
++        } else
++#endif
++        {
+         VK_ANB_ERR(
+             "VK_ANDROID_native_buffer: could not bind "
+             "image memory.");
+         teardownAndroidNativeBufferImage(vk, out);
+         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
++        }
+     }
+@@ -417,3 +528,9 @@ void teardownAndroidNativeBufferImage(VulkanDispatch* vk, AndroidNativeBufferInf
+     anbInfo->stagingMemory = VK_NULL_HANDLE;
++#if defined(__ANDROID__)
++    if (anbInfo->brokeredHardwareBuffer) {
++        AHardwareBuffer_release(anbInfo->brokeredHardwareBuffer);
++        anbInfo->brokeredHardwareBuffer = nullptr;
++    }
++#endif
+ 
+     anbInfo->qsriWaitFencePool = nullptr;

@@ -152,6 +152,56 @@ std::optional<GfxstreamPacketStream> GpuClient::openGfxstreamStream() {
     return GfxstreamPacketStream(client::OwnedFd(std::exchange(fd_, -1)));
 }
 
+bool GpuClient::createGfxstreamColorBuffer(const uint32_t width, const uint32_t height,
+                                           const uint32_t format,
+                                           GfxstreamColorBuffer& result) {
+    result = {};
+    if (fd_ < 0 || handshakeRequested_ || !handshakeComplete_ || width == 0 || height == 0 ||
+        format != lcl::gpu_protocol::kAndroidHardwareBufferRgba8888) {
+        return false;
+    }
+    const lcl::gpu_protocol::CreateGfxstreamColorBuffer request{
+        .width = width,
+        .height = height,
+        .format = format,
+        .flags = 0,
+    };
+    if (!lcl::gpu_protocol::sendPacket(
+            fd_, lcl::gpu_protocol::Opcode::CreateGfxstreamColorBuffer,
+            &request, sizeof(request))) {
+        return false;
+    }
+    lcl::gpu_protocol::Header header{};
+    std::vector<uint8_t> payload;
+    client::OwnedFd descriptor;
+    if (!receiveExpected(lcl::gpu_protocol::Opcode::GfxstreamColorBufferReady, 3'000,
+                         header, payload, descriptor) || descriptor) {
+        return false;
+    }
+    const auto* ready = lcl::gpu_protocol::payloadAs<lcl::gpu_protocol::GfxstreamColorBufferReady>(
+        header, payload, lcl::gpu_protocol::Opcode::GfxstreamColorBufferReady);
+    if (!ready || ready->targetId == 0 || ready->colorBufferHandle == 0 ||
+        ready->width != width || ready->height != height || ready->format != format ||
+        ready->stride < width) {
+        return false;
+    }
+    result.targetId = ready->targetId;
+    result.colorBufferHandle = ready->colorBufferHandle;
+    result.width = ready->width;
+    result.height = ready->height;
+    result.format = ready->format;
+    result.stride = ready->stride;
+    return true;
+}
+
+bool GpuClient::destroyGfxstreamColorBuffer(const uint64_t targetId) {
+    if (fd_ < 0 || handshakeRequested_ || !handshakeComplete_ || targetId == 0) return false;
+    const lcl::gpu_protocol::DestroyGfxstreamColorBuffer request{targetId};
+    return lcl::gpu_protocol::sendPacket(
+        fd_, lcl::gpu_protocol::Opcode::DestroyGfxstreamColorBuffer,
+        &request, sizeof(request));
+}
+
 bool GpuClient::receiveExpected(lcl::gpu_protocol::Opcode expected,
                                 uint32_t timeoutMs,
                                 lcl::gpu_protocol::Header& header,

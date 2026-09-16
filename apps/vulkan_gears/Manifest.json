@@ -1,0 +1,10 @@
+{
+  "id": "org.lcl.vulkan-gears",
+  "name": "Vulkan Gears",
+  "version": "1.0.0",
+  "executable": "Executables/VulkanGears",
+  "icon": "Resources/Icon.png",
+  "runtime": "org.lcl.native",
+  "type": "gui",
+  "requestedPermissions": ["graphics.gpu"]
+}

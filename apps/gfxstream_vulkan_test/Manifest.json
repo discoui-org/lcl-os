@@ -1,0 +1,10 @@
+{
+  "id": "org.lcl.gfxstream-vulkan-test",
+  "name": "Gfxstream Vulkan Test",
+  "version": "1.0.0",
+  "executable": "Executables/GfxstreamVulkanTest",
+  "icon": "Resources/Icon.png",
+  "runtime": "org.lcl.native",
+  "type": "gui",
+  "requestedPermissions": []
+}

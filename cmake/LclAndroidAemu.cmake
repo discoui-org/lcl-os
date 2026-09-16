@@ -59,6 +59,8 @@ function(lcl_add_android_gfxstream_host)
     string(SUBSTRING "${_lcl_gfxstream_patch_hash}" 0 16 _lcl_gfxstream_patch_key)
     set(_lcl_gfxstream_overlay
         "${CMAKE_BINARY_DIR}/third_party/gfxstream-host-${_lcl_gfxstream_patch_key}")
+    set(LCL_GFXSTREAM_HOST_SOURCE_DIR "${_lcl_gfxstream_overlay}" CACHE INTERNAL
+        "Patched Android-only gfxstream host source directory" FORCE)
     if(NOT EXISTS "${_lcl_gfxstream_overlay}/CMakeLists.txt")
         execute_process(
             COMMAND git -C "${_lcl_gfxstream_source}" worktree add --detach

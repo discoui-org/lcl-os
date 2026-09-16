@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace lcl::gfxstream {
@@ -23,6 +24,20 @@ public:
 
     /** Initializes the headless upstream Vulkan decoder exactly once. */
     bool initialize(std::string& error);
+
+    struct ColorBufferTarget {
+        uint32_t colorBufferHandle{0};
+        uint32_t stride{0};
+    };
+
+    /**
+     * Android-only AHardwareBuffer-backed target used by
+     * VK_ANDROID_native_buffer. The upstream handle remains opaque to LCL.
+     */
+    std::optional<ColorBufferTarget> createColorBuffer(uint32_t width, uint32_t height);
+    /** Queues the target's AHardwareBuffer on one already registered raster sideband. */
+    bool deliverColorBuffer(uint32_t colorBufferHandle, int sidebandFd) noexcept;
+    void destroyColorBuffer(uint32_t colorBufferHandle) noexcept;
 
     /**
      * Pumps one upgraded SOCK_SEQPACKET client until it disconnects.  The

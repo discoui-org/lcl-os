@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
@@ -23,6 +24,8 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <thread>
+#include <unordered_map>
 #include <unistd.h>
 #include <vector>
 
@@ -146,6 +149,21 @@ void handleClient(int client, const DeviceInfo& device,
                   , lcl::gfxstream::AndroidHostIngress* gfxstreamIngress
 #endif
                   ) {
+    const char* traceFrameSetting = std::getenv("LCL_GPU_TRACE_FRAMES");
+    const bool traceFrames = traceFrameSetting && traceFrameSetting[0] == '1';
+    // Keep brokered gfxstream targets disjoint from ClearColor's legacy
+    // buffer IDs; both still use the same authorized raster sideband method.
+    uint64_t nextGfxstreamTargetId = uint64_t{1} << 63;
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+    std::unordered_map<uint64_t, uint32_t> gfxstreamTargets;
+    const auto destroyGfxstreamTargets = [&]() noexcept {
+        if (!gfxstreamIngress) return;
+        for (const auto& [_, colorBufferHandle] : gfxstreamTargets) {
+            gfxstreamIngress->destroyColorBuffer(colorBufferHandle);
+        }
+        gfxstreamTargets.clear();
+    };
+#endif
     lcl::gpu_protocol::Header header{};
     std::vector<uint8_t> payload;
     int receivedFd = -1;
@@ -204,7 +222,17 @@ void handleClient(int client, const DeviceInfo& device,
         } else if (const auto* delivery =
                        lcl::gpu_protocol::payloadAs<lcl::gpu_protocol::DeliverNativeBuffer>(
                            header, payload, lcl::gpu_protocol::Opcode::DeliverNativeBuffer)) {
-            const bool delivered = receivedFd >= 0 && renderer.deliver(delivery->bufferId, receivedFd);
+            bool delivered = false;
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+            if (const auto target = gfxstreamTargets.find(delivery->bufferId);
+                target != gfxstreamTargets.end()) {
+                delivered = receivedFd >= 0 &&
+                    gfxstreamIngress->deliverColorBuffer(target->second, receivedFd);
+            } else
+#endif
+            {
+                delivered = receivedFd >= 0 && renderer.deliver(delivery->bufferId, receivedFd);
+            }
             if (receivedFd >= 0) close(receivedFd);
             lcl::gpu_protocol::DeliveryComplete complete{};
             complete.bufferId = delivery->bufferId;
@@ -213,13 +241,27 @@ void handleClient(int client, const DeviceInfo& device,
                                                 lcl::gpu_protocol::Opcode::DeliveryComplete,
                                                 &complete, sizeof(complete))) break;
             if (!delivered) break;
-            std::cerr << "[LCL Gpud] delivered buffer " << delivery->bufferId << "\n";
+            if (traceFrames) {
+                std::cerr << "[LCL Gpud] delivered buffer " << delivery->bufferId << "\n";
+            }
         } else if (const auto* release =
                        lcl::gpu_protocol::payloadAs<lcl::gpu_protocol::ReleasePresentedBuffer>(
                            header, payload, lcl::gpu_protocol::Opcode::ReleasePresentedBuffer)) {
-            renderer.release(release->bufferId, receivedFd);
-            receivedFd = -1;
-            std::cerr << "[LCL Gpud] released buffer " << release->bufferId << "\n";
+            bool isGfxstreamTarget = false;
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+            isGfxstreamTarget = gfxstreamTargets.contains(release->bufferId);
+#endif
+            if (isGfxstreamTarget) {
+                // The compositor owns this release fence. The PoC waits for
+                // guest submit before delivery, so gpud need only consume it.
+                if (receivedFd >= 0) close(receivedFd);
+            } else {
+                renderer.release(release->bufferId, receivedFd);
+                receivedFd = -1;
+            }
+            if (traceFrames) {
+                std::cerr << "[LCL Gpud] released buffer " << release->bufferId << "\n";
+            }
         } else if (const auto* open =
                        lcl::gpu_protocol::payloadAs<lcl::gpu_protocol::OpenGfxstreamStream>(
                            header, payload, lcl::gpu_protocol::Opcode::OpenGfxstreamStream)) {
@@ -254,12 +296,79 @@ void handleClient(int client, const DeviceInfo& device,
 #endif
             }
             break;
+        } else if (const auto* request =
+                       lcl::gpu_protocol::payloadAs<
+                           lcl::gpu_protocol::CreateGfxstreamColorBuffer>(
+                           header, payload,
+                           lcl::gpu_protocol::Opcode::CreateGfxstreamColorBuffer)) {
+            if (receivedFd >= 0) close(receivedFd);
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+            if (!gfxstreamIngress || request->flags != 0 ||
+                request->format != lcl::gpu_protocol::kAndroidHardwareBufferRgba8888 ||
+                request->width == 0 || request->height == 0 || request->width > 16'384 ||
+                request->height > 16'384) {
+                sendError(client, 7, "invalid gfxstream target request");
+                break;
+            }
+            std::string error;
+            if (!gfxstreamIngress->initialize(error)) {
+                sendError(client, 6, "gfxstream decoder unavailable");
+                break;
+            }
+            const auto colorBuffer = gfxstreamIngress->createColorBuffer(
+                request->width, request->height);
+            if (!colorBuffer || nextGfxstreamTargetId == 0) {
+                sendError(client, 8, "could not allocate gfxstream target");
+                break;
+            }
+            const uint64_t targetId = nextGfxstreamTargetId++;
+            gfxstreamTargets.emplace(targetId, colorBuffer->colorBufferHandle);
+            const lcl::gpu_protocol::GfxstreamColorBufferReady ready{
+                .targetId = targetId,
+                .colorBufferHandle = colorBuffer->colorBufferHandle,
+                .width = request->width,
+                .height = request->height,
+                .format = request->format,
+                .stride = colorBuffer->stride,
+            };
+            if (!lcl::gpu_protocol::sendPacket(
+                    client, lcl::gpu_protocol::Opcode::GfxstreamColorBufferReady,
+                    &ready, sizeof(ready))) {
+                gfxstreamIngress->destroyColorBuffer(colorBuffer->colorBufferHandle);
+                gfxstreamTargets.erase(targetId);
+                break;
+            }
+#else
+            sendError(client, 6, "gfxstream decoder unavailable");
+            break;
+#endif
+        } else if (const auto* destroy =
+                       lcl::gpu_protocol::payloadAs<
+                           lcl::gpu_protocol::DestroyGfxstreamColorBuffer>(
+                           header, payload,
+                           lcl::gpu_protocol::Opcode::DestroyGfxstreamColorBuffer)) {
+            if (receivedFd >= 0) close(receivedFd);
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+            const auto found = gfxstreamTargets.find(destroy->targetId);
+            if (found == gfxstreamTargets.end()) {
+                sendError(client, 9, "unknown gfxstream target");
+                break;
+            }
+            gfxstreamIngress->destroyColorBuffer(found->second);
+            gfxstreamTargets.erase(found);
+#else
+            sendError(client, 6, "gfxstream decoder unavailable");
+            break;
+#endif
         } else {
             if (receivedFd >= 0) close(receivedFd);
             sendError(client, 4, "unsupported gfxstream PoC command");
             break;
         }
     }
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+    destroyGfxstreamTargets();
+#endif
     renderer.releaseAll();
 }
 
@@ -321,13 +430,22 @@ int main(int argc, char** argv) {
             break;
         }
         std::cerr << "[LCL Gpud] client connected\n";
-        handleClient(client, *device, renderer
+        // The control connection deliberately stays alive while a guest ICD
+        // uses its separate opaque gfxstream stream.  Serving synchronously
+        // would deadlock that second authorized connection at vkCreateInstance.
+        std::thread([client, &renderer, device
 #if LCL_HAS_GFXSTREAM_ANDROID_HOST
                      , &gfxstreamIngress
 #endif
-        );
-        std::cerr << "[LCL Gpud] client disconnected\n";
-        close(client);
+        ]() {
+            handleClient(client, *device, renderer
+#if LCL_HAS_GFXSTREAM_ANDROID_HOST
+                         , &gfxstreamIngress
+#endif
+            );
+            std::cerr << "[LCL Gpud] client disconnected\n";
+            close(client);
+        }).detach();
     }
     close(listener);
     unlink(socketPath.c_str());

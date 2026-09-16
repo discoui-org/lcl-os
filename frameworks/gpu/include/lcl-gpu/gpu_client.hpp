@@ -41,6 +41,20 @@ struct ClearedNativeBuffer {
 };
 
 /**
+ * An opaque gfxstream ColorBuffer selected by the native broker.  Its handle
+ * is valid only as VkNativeBufferANDROID::handle in the matching gfxstream
+ * stream; it is neither an Android native handle nor host memory.
+ */
+struct GfxstreamColorBuffer {
+    uint64_t targetId{0};
+    uint32_t colorBufferHandle{0};
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t format{0};
+    uint32_t stride{0};
+};
+
+/**
  * Minimal non-blocking control-plane client for lcl-gpud.
  *
  * This deliberately exposes no Vulkan commands or native GPU handles. The
@@ -73,6 +87,15 @@ public:
      * no Vulkan opcode is added to lcl-gpu-protocol.
      */
     std::optional<GfxstreamPacketStream> openGfxstreamStream();
+
+    /**
+     * Allocates a broker-owned upstream render target for an upcoming
+     * VK_ANDROID_native_buffer image.  The control socket remains separate
+     * from the opaque gfxstream stream and is cleaned on disconnect.
+     */
+    bool createGfxstreamColorBuffer(uint32_t width, uint32_t height,
+                                    uint32_t format, GfxstreamColorBuffer& result);
+    bool destroyGfxstreamColorBuffer(uint64_t targetId);
 
     /**
      * PoC-only gfxstream-shaped command. It asks native gpud to clear one

@@ -271,7 +271,8 @@ def ensure_binaries(arch: str = "x86_64", *, android_gfxstream_guest_transport: 
     log(f"Updating canonical targets for {norm_arch}...")
     build_targets = list(CANONICAL_TARGETS)
     if android_gfxstream_guest_transport:
-        build_targets.append("lcl-gfxstream-guest-adapter")
+        build_targets.extend(("lcl-gfxstream-guest-adapter", "lcl-gfxstream-vulkan-test",
+                              "lcl-vulkan-gears"))
     subprocess.run(
         ["cmake", "--build", str(target_build_dir),
          "--parallel", str(os.cpu_count() or 4), "--target"] +
@@ -288,6 +289,14 @@ def ensure_binaries(arch: str = "x86_64", *, android_gfxstream_guest_transport: 
 
     if android_gfxstream_guest_transport:
         gfxstream_guest_adapter_archive(norm_arch)
+        gfxstream_test = find_built_binary("lcl-gfxstream-vulkan-test", norm_arch)
+        if not gfxstream_test or not gfxstream_test.is_file():
+            raise RuntimeError("Android-flavour gfxstream Vulkan test app was not built")
+        binaries["lcl-gfxstream-vulkan-test"] = gfxstream_test
+        vulkan_gears = find_built_binary("lcl-vulkan-gears", norm_arch)
+        if not vulkan_gears or not vulkan_gears.is_file():
+            raise RuntimeError("Android-flavour Vulkan gears app was not built")
+        binaries["lcl-vulkan-gears"] = vulkan_gears
 
     return binaries
 
@@ -319,7 +328,7 @@ def rootfs_input_fingerprint(
     digest.update(os.environ.get("LCL_QEMU_BUILDER_IMAGE_ID", "unmanaged-host").encode("utf-8"))
     digest.update(b"\0")
 
-    source_inputs = (
+    source_inputs = [
         Path(__file__).resolve(),
         PROJECT_ROOT / "assets" / "fonts",
         PROJECT_ROOT / "assets" / "wallpapers" / "default.jpg",
@@ -328,7 +337,10 @@ def rootfs_input_fingerprint(
         PROJECT_ROOT / "config" / "gestalt" / "default.json",
         PROJECT_ROOT / "apps" / "terminal" / "Manifest.json",
         PROJECT_ROOT / "apps" / "terminal" / "Resources" / "Icon.png",
-    )
+    ]
+    if gfxstream_guest is not None:
+        source_inputs.append(PROJECT_ROOT / "apps" / "gfxstream_vulkan_test" / "Manifest.json")
+        source_inputs.append(PROJECT_ROOT / "apps" / "vulkan_gears")
     for source_input in source_inputs:
         if source_input.is_dir():
             for child in sorted(source_input.rglob("*")):
@@ -702,6 +714,15 @@ def stage_canonical_rootfs(
         shutil.copy2(gfxstream_guest, gfxstream_destination)
         gfxstream_destination.chmod(0o755)
         copy_ldd_deps(gfxstream_guest, dest_system_lib)
+        gfxstream_icd_dir = gfxstream_root / "icd.d"
+        gfxstream_icd_dir.mkdir(parents=True, exist_ok=True)
+        (gfxstream_icd_dir / "lcl_gfxstream.json").write_text(json.dumps({
+            "file_format_version": "1.0.0",
+            "ICD": {
+                "library_path": "/System/Library/Gfxstream/libvulkan_gfxstream.so",
+                "api_version": "1.1.0",
+            },
+        }, indent=4), encoding="utf-8")
     (staging_dir / "etc" / "libinput").symlink_to("../System/Library/Input/libinput")
 
     # 9. System Fonts (/System/Library/Fonts/)
@@ -741,6 +762,39 @@ def stage_canonical_rootfs(
     (term_dst / "Executables" / "Terminal").chmod(0o755)
     sha_map["Terminal.app"] = get_sha256(term_dst / "Executables" / "Terminal")
     copy_ldd_deps(term_dst / "Executables" / "Terminal", dest_system_lib)
+
+    if gfxstream_guest is not None:
+        gfxstream_test_dst = dest_system_apps / "Gfxstream Vulkan Test.app"
+        gfxstream_test_dst.mkdir(parents=True, exist_ok=True)
+        (gfxstream_test_dst / "Executables").mkdir(parents=True, exist_ok=True)
+        (gfxstream_test_dst / "Resources").mkdir(parents=True, exist_ok=True)
+        gfxstream_test_manifest = PROJECT_ROOT / "apps" / "gfxstream_vulkan_test" / "Manifest.json"
+        if not gfxstream_test_manifest.is_file() or not term_icon.is_file():
+            raise RuntimeError("Missing Gfxstream Vulkan Test.app source files")
+        shutil.copy2(gfxstream_test_manifest, gfxstream_test_dst / "Manifest.json")
+        shutil.copy2(term_icon, gfxstream_test_dst / "Resources" / "Icon.png")
+        gfxstream_test_bin = binaries["lcl-gfxstream-vulkan-test"]
+        shutil.copy2(gfxstream_test_bin, gfxstream_test_dst / "Executables" / "GfxstreamVulkanTest")
+        (gfxstream_test_dst / "Executables" / "GfxstreamVulkanTest").chmod(0o755)
+        sha_map["Gfxstream Vulkan Test.app"] = get_sha256(
+            gfxstream_test_dst / "Executables" / "GfxstreamVulkanTest")
+        copy_ldd_deps(gfxstream_test_dst / "Executables" / "GfxstreamVulkanTest", dest_system_lib)
+
+        vulkan_gears_dst = dest_system_apps / "Vulkan Gears.app"
+        vulkan_gears_dst.mkdir(parents=True, exist_ok=True)
+        (vulkan_gears_dst / "Executables").mkdir(parents=True, exist_ok=True)
+        (vulkan_gears_dst / "Resources").mkdir(parents=True, exist_ok=True)
+        vulkan_gears_manifest = PROJECT_ROOT / "apps" / "vulkan_gears" / "Manifest.json"
+        if not vulkan_gears_manifest.is_file() or not term_icon.is_file():
+            raise RuntimeError("Missing Vulkan Gears.app source files")
+        shutil.copy2(vulkan_gears_manifest, vulkan_gears_dst / "Manifest.json")
+        shutil.copy2(term_icon, vulkan_gears_dst / "Resources" / "Icon.png")
+        vulkan_gears_bin = binaries["lcl-vulkan-gears"]
+        shutil.copy2(vulkan_gears_bin, vulkan_gears_dst / "Executables" / "VulkanGears")
+        (vulkan_gears_dst / "Executables" / "VulkanGears").chmod(0o755)
+        sha_map["Vulkan Gears.app"] = get_sha256(
+            vulkan_gears_dst / "Executables" / "VulkanGears")
+        copy_ldd_deps(vulkan_gears_dst / "Executables" / "VulkanGears", dest_system_lib)
 
     # Qt finds its ELF libraries through the normal rootfs link tree, while
     # QPA plugins and QML modules are dlopen/import assets. Keep their native
@@ -1200,7 +1254,7 @@ def validate_app_bundles(staging_dir: Path) -> None:
         raise RuntimeError("No app bundles were found or validated in the staging tree.")
 
 
-def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
+def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64", *, has_gfxstream: bool = False) -> None:
     """Verifies that key canonical userspace files exist inside the generated ext4 image."""
     norm_arch = normalize_arch(arch)
     meta = ARCH_META[norm_arch]
@@ -1236,7 +1290,6 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/System/Library/Libraries/libvulkan.so.1",
         "/System/Library/Vulkan/liblcl_vulkan_icd.so",
         "/System/Library/Vulkan/icd.d/lcl_icd.json",
-        "/System/Library/Gfxstream/libvulkan_gfxstream.so",
         "/System/Library/Input/libinput",
         "/Users/Rei/.bashrc",
         "/Users/Rei/Library/Containers/org.lcl.terminal/Data",
@@ -1244,6 +1297,17 @@ def verify_rootfs_image(ext4_path: Path, arch: str = "x86_64") -> None:
         "/etc/profile",
         "/init",
     ]
+    if has_gfxstream:
+        required_files.extend((
+            "/System/Library/Gfxstream/libvulkan_gfxstream.so",
+            "/System/Library/Gfxstream/icd.d/lcl_gfxstream.json",
+            "/System/Applications/Gfxstream Vulkan Test.app/Manifest.json",
+            "/System/Applications/Gfxstream Vulkan Test.app/Executables/GfxstreamVulkanTest",
+            "/System/Applications/Gfxstream Vulkan Test.app/Resources/Icon.png",
+            "/System/Applications/Vulkan Gears.app/Manifest.json",
+            "/System/Applications/Vulkan Gears.app/Executables/VulkanGears",
+            "/System/Applications/Vulkan Gears.app/Resources/Icon.png",
+        ))
 
     for req in required_files:
         # debugfs tokenizes its -R command independently of subprocess.  App
@@ -1521,7 +1585,7 @@ def build_rootfs_ext4(
     log(f"✓ Built {out_ext4.name} ({img_size} bytes / {img_size / (1024*1024):.1f} MB)")
 
     # Verify content inside ext4 image using debugfs
-    verify_rootfs_image(out_ext4, norm_arch)
+    verify_rootfs_image(out_ext4, norm_arch, has_gfxstream=gfxstream_guest is not None)
 
     if cache_allowed:
         fingerprint_path.parent.mkdir(parents=True, exist_ok=True)
